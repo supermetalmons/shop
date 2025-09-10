@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mons.shop</title>
+    <meta name="description" content="mons.shop" />
+    <style>
+      :root {
+        --bg: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b0c0e;
+        }
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+      /* Remove default spacing to allow true centering */
+      html,
+      body {
+        margin: 0;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--bg);
+        color-scheme: light dark;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      img {
+        display: block;
+        width: clamp(220px, 50vw, 960px);
+        max-width: 90vw;
+        height: auto;
+        max-height: 85svh;
+        object-fit: contain;
+        border-radius: 12px;
+        /* Disable selection and dragging */
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        user-select: none;
+        -webkit-user-drag: none;
+        user-drag: none;
+        -webkit-touch-callout: none;
+      }
+    </style>
+  </head>
+  <body>
+    <img src="./lsw.jpg" alt="mons.shop" draggable="false" />
+  </body>
+</html>
