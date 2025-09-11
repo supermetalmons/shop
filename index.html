@@ -55,5 +55,24 @@
   </head>
   <body>
     <img src="./lsw.jpg" alt="mons.shop" draggable="false" />
+    <script>
+      (function () {
+        var targetUrl = "https://x.com/supermetalx";
+        var hasNavigated = false;
+        var navigate = function () {
+          if (hasNavigated) return;
+          hasNavigated = true;
+          window.location.assign(targetUrl);
+        };
+        document.addEventListener("click", navigate, { capture: true });
+        document.addEventListener("touchend", navigate, {
+          capture: true,
+          passive: true,
+        });
+        window.addEventListener("pageshow", function () {
+          hasNavigated = false;
+        });
+      })();
+    </script>
   </body>
 </html>
