@@ -13,10 +13,12 @@
     <style>
       :root {
         --bg: #ffffff;
+        --fg: #0b0c0e;
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #0b0c0e;
+          --fg: #e7e7e7;
         }
       }
 
@@ -32,22 +34,30 @@
 
       body {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        gap: 12px;
+        padding: 16px;
         background-color: var(--bg);
+        color: var(--fg);
         color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          Roboto, Ubuntu, Cantarell, "Noto Sans", Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
       }
 
       img {
         display: block;
-        width: clamp(220px, 50vw, 960px);
+        width: clamp(220px, 48vw, 960px);
         max-width: 90vw;
         height: auto;
-        max-height: 85svh;
+        max-height: 56svh;
         object-fit: contain;
         border-radius: 12px;
+        cursor: pointer;
         /* Disable selection and dragging */
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -56,28 +66,51 @@
         user-drag: none;
         -webkit-touch-callout: none;
       }
+
+      #signup {
+        width: min(600px, 92vw);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .tagline {
+        margin: 0;
+        text-align: center;
+        font-weight: 600;
+        font-size: clamp(18px, 2.2vw, 24px);
+        letter-spacing: 0.2px;
+      }
+
+      @media (max-width: 480px) {
+        img {
+          max-height: 42svh;
+          width: clamp(220px, 92vw, 640px);
+        }
+        body {
+          gap: 10px;
+          padding: 12px;
+        }
+      }
     </style>
   </head>
   <body>
-    <img src="./lsw.jpg" alt="mons.shop" draggable="false" />
-    <script>
-      (function () {
-        var targetUrl = "https://x.com/supermetalx";
-        var hasNavigated = false;
-        var navigate = function () {
-          if (hasNavigated) return;
-          hasNavigated = true;
-          window.location.assign(targetUrl);
-        };
-        document.addEventListener("click", navigate, { capture: true });
-        document.addEventListener("touchend", navigate, {
-          capture: true,
-          passive: true,
-        });
-        window.addEventListener("pageshow", function () {
-          hasNavigated = false;
-        });
-      })();
-    </script>
+    <a
+      id="hero-link"
+      href="https://x.com/supermetalx"
+      aria-label="Visit @supermetalx on X"
+    >
+      <img src="./lsw.jpg" alt="mons.shop" draggable="false" />
+    </a>
+    <div id="signup">
+      <h2 class="tagline">Get notified of the first drop 🥱</h2>
+      <script
+        async
+        src="https://eomail5.com/form/578237fe-8fb4-11f0-8bba-a35988c2be69.js"
+        data-form="578237fe-8fb4-11f0-8bba-a35988c2be69"
+      ></script>
+    </div>
+    
   </body>
 </html>
