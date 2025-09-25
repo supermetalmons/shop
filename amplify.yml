@@ -1,0 +1,17 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - echo "No build step"
+    build:
+      commands:
+        - echo "Preparing artifacts"
+  artifacts:
+    baseDirectory: .
+    files:
+      - '**/*'
+      - '!helpers/**'
+  cache:
+    paths: []
+
