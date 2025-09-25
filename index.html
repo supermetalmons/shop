@@ -106,6 +106,7 @@
       aria-label="Visit @supermetalx on X"
     >
       <video
+        id="hero-video"
         autoplay
         muted
         playsinline
@@ -122,6 +123,38 @@
           type="video/webm"
         />
       </video>
+      <script>
+        (function () {
+          var video = document.getElementById("hero-video");
+          if (!video) return;
+          var names = [
+            "camo hood lsw",
+            "monster energy delivery",
+            "gold lsw",
+            "reaper lsw",
+            "melmut",
+            "shinegus red",
+            "mimikyu lsw",
+            "steelix",
+            "mon head lsw",
+            "winged helmet lsw",
+          ];
+          var pick = names[Math.floor(Math.random() * names.length)];
+          var base = "https://assets.mons.link/shop/";
+          var movSrc = base + encodeURIComponent(pick) + ".mov";
+          var webmSrc = base + encodeURIComponent(pick) + ".webm";
+          var sources = video.querySelectorAll("source");
+          if (sources[0]) sources[0].setAttribute("src", movSrc);
+          if (sources[1]) sources[1].setAttribute("src", webmSrc);
+          video.load();
+          var play = function () {
+            var p = video.play();
+            if (p && typeof p.then === "function") p.catch(function () {});
+          };
+          if (document.readyState === "complete") play();
+          else window.addEventListener("load", play, { once: true });
+        })();
+      </script>
     </a>
     <div id="signup">
       <script
