@@ -49,7 +49,8 @@
         -moz-osx-font-smoothing: grayscale;
       }
 
-      img {
+      img,
+      video {
         display: block;
         max-width: min(90vw, 960px);
         height: auto;
@@ -61,7 +62,6 @@
         -moz-user-select: none;
         user-select: none;
         -webkit-user-drag: none;
-        user-drag: none;
         -webkit-touch-callout: none;
       }
 
@@ -87,7 +87,8 @@
       }
 
       @media (max-width: 480px) {
-        img {
+        img,
+        video {
           max-height: 42svh;
           max-width: 92vw;
         }
@@ -104,7 +105,23 @@
       href="https://x.com/supermetalx"
       aria-label="Visit @supermetalx on X"
     >
-      <img src="./lsw.jpg" alt="mons.shop" draggable="false" />
+      <video
+        autoplay
+        muted
+        playsinline
+        preload="metadata"
+        loop
+        draggable="false"
+      >
+        <source
+          src="https://assets.mons.link/shop/camo%20hood%20lsw.mov"
+          type='video/quicktime; codecs="hvc1"'
+        />
+        <source
+          src="https://assets.mons.link/shop/camo%20hood%20lsw.webm"
+          type="video/webm"
+        />
+      </video>
     </a>
     <div id="signup">
       <script
