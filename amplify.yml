@@ -11,7 +11,6 @@ frontend:
     baseDirectory: .
     files:
       - '**/*'
-      - '!helpers/**'
   cache:
     paths: []
 
