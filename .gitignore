@@ -416,3 +416,12 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Vite / Firebase
+dist/
+.vite/
+.env.local
+.env
+firebase-debug.log
+functions/node_modules/
+functions/lib/

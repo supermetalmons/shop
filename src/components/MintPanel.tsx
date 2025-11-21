@@ -1,0 +1,63 @@
+import { FormEvent, useState } from 'react';
+import { MintStats } from '../types';
+import { ProgressBar } from './ProgressBar';
+
+interface MintPanelProps {
+  stats?: MintStats;
+  onMint: (quantity: number) => Promise<void>;
+  busy: boolean;
+}
+
+export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
+  const minted = stats?.minted ?? 0;
+  const total = stats?.total ?? 333;
+  const remaining = total - minted;
+  const [quantity, setQuantity] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleMint = async (evt: FormEvent) => {
+    evt.preventDefault();
+    if (quantity < 1 || quantity > 20) return;
+    setError(null);
+    try {
+      await onMint(quantity);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to mint');
+    }
+  };
+
+  const soldOut = remaining <= 0;
+
+  return (
+    <section className="card">
+      <div className="card__title">Mint blind boxes</div>
+      {stats ? <ProgressBar minted={minted} total={total} /> : <p className="muted">Loading progress…</p>}
+      {soldOut ? (
+        <p className="muted">Sold out. Jump to secondary or standby for next drop.</p>
+      ) : (
+        <form className="mint" onSubmit={handleMint}>
+          <label>
+            <span className="muted">Quantity (1-20 per tx)</span>
+            <input
+              type="range"
+              min={1}
+              max={Math.min(20, remaining)}
+              value={quantity}
+              onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
+            />
+          </label>
+          <div className="mint__qty">
+            <div>
+              <div className="muted small">Selected</div>
+              <div className="big">{quantity}</div>
+            </div>
+            <button type="submit" disabled={busy}>
+              {busy ? 'Minting…' : 'Mint now'}
+            </button>
+          </div>
+          {error ? <div className="error">{error}</div> : null}
+        </form>
+      )}
+    </section>
+  );
+}

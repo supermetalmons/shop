@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /profiles/{wallet} {
+      allow read, write: if request.auth != null && request.auth.uid == wallet;
+      match /addresses/{addressId} {
+        allow read, write: if request.auth != null && request.auth.uid == wallet;
+      }
+    }
+
+    match /boxAssignments/{boxId} {
+      allow read, write: if false; // only via cloud functions
+    }
+
+    match /meta/{docId} {
+      allow read, write: if false; // stats + dude pools locked for backend only
+    }
+
+    match /claimCodes/{code} {
+      allow read, write: if false; // claim codes are redeemed server-side only
+    }
+  }
+}

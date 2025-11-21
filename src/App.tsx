@@ -1,0 +1,231 @@
+import { useEffect, useMemo, useState } from 'react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { MintPanel } from './components/MintPanel';
+import { InventoryGrid } from './components/InventoryGrid';
+import { DeliveryForm } from './components/DeliveryForm';
+import { DeliveryPanel } from './components/DeliveryPanel';
+import { ClaimForm } from './components/ClaimForm';
+import { EmailSubscribe } from './components/EmailSubscribe';
+import { useMintProgress } from './hooks/useMintProgress';
+import { useInventory } from './hooks/useInventory';
+import { useSolanaAuth } from './hooks/useSolanaAuth';
+import {
+  requestClaimTx,
+  requestDeliveryTx,
+  requestMintTx,
+  requestOpenBoxTx,
+  saveEncryptedAddress,
+} from './lib/api';
+import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from './lib/solana';
+import { InventoryItem } from './types';
+
+function App() {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const { publicKey, sendTransaction } = wallet;
+  const { data: mintStats, refetch: refetchStats } = useMintProgress();
+  const {
+    profile,
+    token,
+    loading: authLoading,
+    error: authError,
+    signIn,
+    updateProfile,
+  } = useSolanaAuth();
+  const { data: inventory = [], refetch: refetchInventory } = useInventory(token);
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [minting, setMinting] = useState(false);
+  const [openLoading, setOpenLoading] = useState<string | null>(null);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
+  const [status, setStatus] = useState<string>('');
+
+  const mintedOut = useMemo(() => {
+    if (!mintStats) return false;
+    return mintStats.remaining <= 0;
+  }, [mintStats]);
+
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const copy = new Set(prev);
+      if (copy.has(id)) copy.delete(id);
+      else copy.add(id);
+      return copy;
+    });
+  };
+
+  const handleMint = async (quantity: number) => {
+    if (!publicKey) throw new Error('Connect wallet to mint');
+    setMinting(true);
+    setStatus('');
+    try {
+      const resp = await requestMintTx(publicKey.toBase58(), quantity, token || undefined);
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
+        sendTransaction(tx, connection, { skipPreflight: false }),
+      );
+      setStatus(`Minted ${quantity} boxes · ${sig}`);
+      await Promise.all([refetchStats(), refetchInventory()]);
+    } finally {
+      setMinting(false);
+    }
+  };
+
+  const handleOpenBox = async (item: InventoryItem) => {
+    if (!publicKey) throw new Error('Connect wallet to open a box');
+    setOpenLoading(item.id);
+    setStatus('');
+    try {
+      const resp = await requestOpenBoxTx(publicKey.toBase58(), item.id, token || undefined);
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
+        sendTransaction(tx, connection, { skipPreflight: false }),
+      );
+      setStatus(`Opened box · ${sig}`);
+      await refetchInventory();
+    } finally {
+      setOpenLoading(null);
+    }
+  };
+
+  const handleSaveAddress = async ({ formatted, country, label }: { formatted: string; country: string; label: string }) => {
+    const session = token ? { token, profile } : await signIn();
+    const idToken = session?.token || token;
+    const encryptionKey = import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '';
+    if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
+    const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
+    if (!idToken) throw new Error('Missing auth token');
+    const saved = await saveEncryptedAddress(cipherText, country, label, idToken);
+    if (updateProfile && (session?.profile || profile)) {
+      const base = session?.profile || profile!;
+      updateProfile({ ...base, addresses: [...base.addresses, { ...saved, hint }] });
+    }
+    setStatus('Address saved and encrypted');
+  };
+
+  const handleRequestDelivery = async (addressId: string | null) => {
+    if (!publicKey) throw new Error('Connect wallet first');
+    const session = token ? { token, profile } : await signIn();
+    const idToken = session?.token || token;
+    if (!addressId) throw new Error('Select a delivery address');
+    const itemIds = Array.from(selected);
+    if (!itemIds.length) throw new Error('Select items to deliver');
+
+    setDeliveryLoading(true);
+    setStatus('');
+    try {
+      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds, addressId }, idToken || '');
+      setDeliveryCost(resp.deliveryLamports);
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
+        sendTransaction(tx, connection, { skipPreflight: false }),
+      );
+      setStatus(`Delivery requested · ${sig}`);
+      setSelected(new Set());
+      await refetchInventory();
+    } finally {
+      setDeliveryLoading(false);
+    }
+  };
+
+  const handleClaim = async ({ code, certificateId }: { code: string; certificateId: string }) => {
+    if (!publicKey) throw new Error('Connect wallet to claim');
+    const session = token ? { token, profile } : await signIn();
+    const idToken = session?.token || token;
+    const resp = await requestClaimTx(publicKey.toBase58(), code, certificateId, idToken || '');
+    const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
+      sendTransaction(tx, connection, { skipPreflight: false }),
+    );
+    setStatus(`Claimed certificates · ${sig}`);
+  };
+
+  const secondaryLinks = [
+    { label: 'Tensor', href: import.meta.env.VITE_SECONDARY_TENSOR || 'https://www.tensor.trade/trade/mons' },
+    { label: 'Magic Eden', href: import.meta.env.VITE_SECONDARY_MAGICEDEN || 'https://magiceden.io/' },
+  ];
+
+  const savedAddresses = profile?.addresses || [];
+  const [addressId, setAddressId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!addressId && savedAddresses.length) {
+      setAddressId(savedAddresses[0].id);
+    }
+  }, [addressId, savedAddresses]);
+
+  return (
+    <div className="page">
+      <header className="top">
+        <div className="brand">
+          <h1>mons.shop drop</h1>
+          <p className="sub">
+            Mint IRL blind boxes, open for dudes, request delivery, and claim certificates on-chain. Devnet + testnet
+            ready.
+          </p>
+        </div>
+        <WalletMultiButton />
+      </header>
+
+      <div className="hero">
+        <img src="/lsw.jpg" alt="mons drop" />
+        <div className="card">
+          <div className="card__title">How it works</div>
+          <ul className="muted small">
+            <li>Mint 1-20 compressed blind boxes per tx until the 333 supply is gone (11 on dev/test).</li>
+            <li>Open a box to burn it and mint 3 dudes, co-signed by our cloud function.</li>
+            <li>Select boxes + dudes for delivery; pay shipping in SOL, burn items, receive certificates.</li>
+            <li>Use the IRL code inside a shipped box to mint dudes certificates for that specific box.</li>
+          </ul>
+        </div>
+      </div>
+
+      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} />
+
+      {mintedOut ? (
+        <section className="card">
+          <div className="card__title">Minted out</div>
+          <p className="muted">All boxes are gone. Grab them on secondary or drop your email for the next wave.</p>
+          <div className="row">
+            {secondaryLinks.map((link) => (
+              <a key={link.href} className="pill" href={link.href} target="_blank" rel="noreferrer">
+                {link.label}
+              </a>
+            ))}
+          </div>
+          <EmailSubscribe />
+        </section>
+      ) : null}
+
+      <section className="card">
+        <div className="card__title">Inventory</div>
+        <p className="muted small">Boxes, dudes, and certificates fetched via the Helius-powered cloud function.</p>
+        <InventoryGrid items={inventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
+        {openLoading ? <div className="muted">Opening {shortAddress(openLoading)}…</div> : null}
+      </section>
+
+      <div className="grid">
+        <DeliveryPanel
+          selectedCount={selected.size}
+          addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
+          addressId={addressId}
+          onSelectAddress={setAddressId}
+          onRequestDelivery={() => handleRequestDelivery(addressId)}
+          loading={deliveryLoading}
+          costLamports={deliveryCost}
+        />
+        <DeliveryForm onSave={handleSaveAddress} />
+      </div>
+
+      <ClaimForm onClaim={handleClaim} />
+
+      {authError ? <div className="error">{authError}</div> : null}
+      {status ? <div className="success">{status}</div> : null}
+
+      <footer className="muted small">
+        {publicKey ? `Connected: ${shortAddress(publicKey.toBase58())}` : 'Connect a wallet to start'} ·
+        {authLoading ? ' Signing in…' : profile ? ` Signed in as ${shortAddress(profile.wallet)}` : ' Sign in for delivery'}
+      </footer>
+    </div>
+  );
+}
+
+export default App;

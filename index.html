@@ -1,167 +1,17 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>mons.shop</title>
-    <meta name="description" content="mons.shop" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mons.shop drop</title>
+    <meta name="description" content="IRL blind boxes NFT drop on Solana" />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <style>
-      :root {
-        --bg: #ffffff;
-        --fg: #0b0c0e;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #000000;
-          --fg: #e7e7e7;
-        }
-      }
-
-      html,
-      body {
-        height: 100%;
-      }
-      /* Remove default spacing to allow true centering */
-      html,
-      body {
-        margin: 0;
-      }
-
-      body {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 16px;
-        background-color: var(--bg);
-        color: var(--fg);
-        color-scheme: light dark;
-        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-          Ubuntu, Cantarell, "Noto Sans", Arial, "Apple Color Emoji",
-          "Segoe UI Emoji";
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-      }
-
-      img,
-      video {
-        display: block;
-        max-width: min(90vw, 960px);
-        height: auto;
-        max-height: 56svh;
-        border-radius: 0px;
-        cursor: pointer;
-        /* Disable selection and dragging */
-        -webkit-user-select: none;
-        -moz-user-select: none;
-        user-select: none;
-        -webkit-user-drag: none;
-        -webkit-touch-callout: none;
-      }
-
-      #hero-link {
-        display: inline-block;
-      }
-
-      #signup {
-        width: min(600px, 92vw);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        min-height: clamp(220px, 28vh, 360px);
-        gap: 12px;
-      }
-
-      .tagline {
-        margin: 0;
-        text-align: center;
-        font-weight: 600;
-        font-size: clamp(18px, 2.2vw, 24px);
-        letter-spacing: 0.2px;
-      }
-
-      @media (max-width: 480px) {
-        img,
-        video {
-          max-height: 42svh;
-          max-width: 92vw;
-        }
-        body {
-          gap: 10px;
-          padding: 12px;
-        }
-      }
-    </style>
   </head>
   <body>
-    <a
-      id="hero-link"
-      href="https://x.com/supermetalx"
-      aria-label="Visit @supermetalx on X"
-    >
-      <video
-        id="hero-video"
-        autoplay
-        muted
-        playsinline
-        preload="metadata"
-        loop
-        draggable="false"
-      >
-        <source
-          src="https://assets.mons.link/shop/camo%20hood%20lsw.mov"
-          type='video/quicktime; codecs="hvc1"'
-        />
-        <source
-          src="https://assets.mons.link/shop/camo%20hood%20lsw.webm"
-          type="video/webm"
-        />
-      </video>
-      <script>
-        (function () {
-          var video = document.getElementById("hero-video");
-          if (!video) return;
-          var names = [
-            "camo hood lsw",
-            "monster energy delivery",
-            "gold lsw",
-            "reaper lsw",
-            "melmut",
-            "shinegus red",
-            "mimikyu lsw",
-            "steelix",
-            "mon head lsw",
-            "winged helmet lsw",
-          ];
-          var pick = names[Math.floor(Math.random() * names.length)];
-          var base = "https://assets.mons.link/shop/";
-          var movSrc = base + encodeURIComponent(pick) + ".mov";
-          var webmSrc = base + encodeURIComponent(pick) + ".webm";
-          var sources = video.querySelectorAll("source");
-          if (sources[0]) sources[0].setAttribute("src", movSrc);
-          if (sources[1]) sources[1].setAttribute("src", webmSrc);
-          video.load();
-          var play = function () {
-            var p = video.play();
-            if (p && typeof p.then === "function") p.catch(function () {});
-          };
-          if (document.readyState === "complete") play();
-          else window.addEventListener("load", play, { once: true });
-        })();
-      </script>
-    </a>
-    <div id="signup">
-      <script
-        async
-        src="https://eomail5.com/form/578237fe-8fb4-11f0-8bba-a35988c2be69.js"
-        data-form="578237fe-8fb4-11f0-8bba-a35988c2be69"
-      ></script>
-    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
