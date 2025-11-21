@@ -1,8 +1,9 @@
 implement irl blind boxes nft drop updating existing shop website, and implementing onchain logic and helper firebase cloud functions
 
-// TODO: update for cloud function randomness flow
 
 # website
+
+use react and typescript to implement, make it simple and efficient.
 
 connect solana wallet
 
@@ -22,37 +23,38 @@ you can select multiple items for delivery (any number of dudes and blind boxes)
 
 one last thing possible to do will be entering a code for claiming dudes certificates found in an irl blind box.
 
-# onchain api
+
+# onchain txs
 
 - mint tx. 1-20 cnft boxes in a single transaction.
 
-total boxes supply will be 333 boxes. during a development let's test it with 11 boxes.
+total boxes supply will be 333 boxes. during the development let's test it with 11 boxes on devnet and then on testnet.
 
 each box contains 3 dudes. so in prod there will be 999 dudes total, and for test 33 dudes total.
 
-the specific unclaimed dudes ids should be stored onchain.
 
-- open tx. open 1 specific blind box: blind box cnft gets deleted, 3 dudes cfts created with 3 random unclaimed ids. unclaimed ids get updated removing picked ones.
+- open blind box tx. open 1 specific blind box: blind box cnft gets deleted, 3 dudes cfts created with ids and data prepared by the cloud function. this tx has to be co-signed by a cloud function.
 
-no random picking onchain, only assigning what's picked by cloud function, failing to proceed if was marked as picked already
 
-- request delivery tx
+- request delivery tx. pass in blind boxes cnfts and dudes cnfts that need to be deleted. these dudes and boxes are the ones that will be delivered. in exchange for each burned cnft, give user another unique certificate cnft. there will be unique certificate cnft for each separate dude and blind box sent for delivery. this tx should also contain sol payment for amount determined by cloud function depending on destination country.
 
-receive a designated certificate cnft in place for each dude cnft or box nft — this happens in the same tx with the delivery payment
+
+- claim certificates for irl dudes tx. this will mint specific dudes certificates cnfts after user opens their blind box delivered irl and passes the secret code from the box to the cloud function.
+
+
 
 # firebase cloud functions
 
-- get nfts: blind boxes, dudes, certificates
+- get nfts to display in the inventory: blind boxes, dudes, certificates — all displayed in the same grid.
 
-- save an encrpypted delivery address: cloud function only receives a string encrypted on a website with TweetNaCl. it should save it in firebase database then corresponding to passed solana address, and an id should get assigned for that delivery address, only one team member will have a key to decrypt these and send to these addresses. country should be stored there unencrypted though, we will need it for delivery price calculation.
+- sign in with solana — get existing profile if any, profile will only have a delivery id now, some unencrypted hint for it like first and last letters, unecrupted country, and an email address. there should be a single email address for a profile and should be possible to have a multiple irl addresses in different countries, should be possible to set a label sting for delivery address like home / etc. making it possible to request deliveries for different addresses while keeping them remembered and available on the next sign in.
 
-- prepare an open box tx: assign random dudes corresponding for that box id deterministically from available dudes ids to avoid it being gamed
+- save an encrpypted delivery address: cloud function only receives a string encrypted on a website with TweetNaCl. it should save it in firebase database then corresponding to passed solana address, and an id should get assigned for that delivery address, only one team member will have a key to decrypt these and send to these addresses. country should be stored there unencrypted though, we will need it for delivery price calculation. gotta be signed in somehow to allow saving this corresponding to signed in address.
 
-- prepare a delivery tx:
+- prepare an open box tx: assign random dudes corresponding for that box id from available dudes ids. remember dudes ids assigned for that box, so if user does not actually send a prepared tx and this function gets called again for that box, then same dudes ids will be returned.
 
-calculate payment cost. based on their destination and shipment size, cloud function decides how much they pay for delivery, and it's cosignature is required for that delivery tx to go through.
+- prepare a delivery tx: calculate delivery cost. this will be payed in delivery request tx with sol. based on their destination and shipment size, cloud function decides how much they pay for delivery, and it's cosignature is required for that delivery tx to go through. this tx should burn cnfts corresponding to what will be delivered and mint cnfts certificates for these items. when there is a blind box in the delivery, this cloud function should silently assign dudes ids that will be sent in that blind box (same way as dudes get assigned for a box on open tx preparation — make sure not to reassign them if they are already there).
 
-after a successful delivery tx we will need to send a transaction assigning dudes ids for that blind box. we can do it batch for all pending boxes too.
-so this will be a separate admin cloud function and a separate onchain api. there will be a special logic for blind box delivery assignments favoring already produced items
+- prepare irl certificate claim tx: mint specific dudes ids cnfts that we stored for that specific blind box claim code. will also check if the blind box certificate is there on an address that is trying to claim dudes certificates so only the person with both secret code and blind box cnft will be able to claim certificates for dudes inside the box.
 
-- prepare irl certificate claim tx: mint specific dudes ids cnfts that we stored for that specific blind box claim code. will also check if the blind box certificate is there on an address that is trying to claim dudes certificates.
+create secure firebase database rules file as well — we want to keep data private, only exposing cloud functions to be called from the shop website.
