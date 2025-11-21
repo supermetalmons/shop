@@ -1,9 +1,14 @@
+import { Buffer } from 'buffer';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
+
+if (!window.Buffer) {
+  window.Buffer = Buffer;
+}
 
 const queryClient = new QueryClient();
 
