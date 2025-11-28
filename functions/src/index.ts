@@ -166,21 +166,75 @@ async function buildMintInstructions(owner: PublicKey, quantity: number, kind: '
   return instructions;
 }
 
-async function getMintedCount(): Promise<number> {
+async function getMintStats() {
   const snap = await db.doc('meta/stats').get();
-  return snap.exists ? Number((snap.data() as any).minted || 0) : 0;
+  const data = snap.exists ? (snap.data() as any) : {};
+  const minted = Number(data.minted || 0);
+  const remaining = Math.max(0, totalSupply - minted);
+  return { minted, remaining, total: totalSupply };
 }
 
-async function incrementMinted(by: number) {
-  const ref = db.doc('meta/stats');
+async function recordMintedBoxes(signature: string, owner: string, minted: number) {
+  if (minted <= 0) return;
+  const statsRef = db.doc('meta/stats');
+  const txRef = db.doc(`mintTxs/${signature}`);
   await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    const current = snap.exists ? Number((snap.data() as any).minted || 0) : 0;
-    if (current + by > totalSupply) {
-      throw new functions.https.HttpsError('failed-precondition', 'Mint supply exceeded');
-    }
-    tx.set(ref, { minted: current + by, total: totalSupply }, { merge: true });
+    const existing = await tx.get(txRef);
+    if (existing.exists) return;
+    const statsSnap = await tx.get(statsRef);
+    const stats = statsSnap.exists ? (statsSnap.data() as any) : {};
+    const currentMinted = Number(stats.minted || 0);
+    tx.set(
+      statsRef,
+      {
+        minted: currentMinted + minted,
+        total: totalSupply,
+      },
+      { merge: true },
+    );
+    tx.set(txRef, {
+      signature,
+      owner,
+      minted,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
   });
+}
+
+async function processMintSignature(signature: string) {
+  const exists = await db.doc(`mintTxs/${signature}`).get();
+  if (exists.exists) return null;
+  const txInfo = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  if (!txInfo || txInfo.meta?.err) return null;
+  if (!hasMintMemo(txInfo)) return null;
+  const payer = getPayerFromTx(txInfo);
+  if (!payer) return null;
+  const mintCount = countMintInstructions(txInfo, payer);
+  if (mintCount <= 0) return null;
+  await recordMintedBoxes(signature, payer.toBase58(), mintCount);
+  return { mintCount, payer: payer.toBase58() };
+}
+
+async function syncMintedFromChain(limit = 100) {
+  const conn = connection();
+  let before: string | undefined;
+  let processed = 0;
+  while (processed < limit) {
+    const sigs = await conn.getSignaturesForAddress(treeAuthority().publicKey, {
+      limit: 20,
+      before,
+    });
+    if (!sigs.length) break;
+    for (const sig of sigs) {
+      before = sig.signature;
+      if (sig.err) continue;
+      const already = await db.doc(`mintTxs/${sig.signature}`).get();
+      if (already.exists) continue;
+      const result = await processMintSignature(sig.signature);
+      if (result) processed += 1;
+    }
+    if (sigs.length < 20) break;
+  }
 }
 
 async function fetchAssetsOwned(owner: string) {
@@ -206,8 +260,24 @@ async function fetchAsset(assetId: string) {
   return json[0];
 }
 
-async function createBurnIx(assetId: string, owner: PublicKey) {
+function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' {
+  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'type');
+  return (kindAttr?.value || 'box') as 'box' | 'dude' | 'certificate';
+}
+
+function getBoxIdFromAsset(asset: any): string | undefined {
+  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'box_id');
+  return boxAttr?.value;
+}
+
+async function fetchAssetWithProof(assetId: string) {
   const [asset, proof] = await Promise.all([fetchAsset(assetId), fetchAssetProof(assetId)]);
+  return { asset, proof };
+}
+
+async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?: any; proof?: any }) {
+  const asset = cached?.asset ?? (await fetchAsset(assetId));
+  const proof = cached?.proof ?? (await fetchAssetProof(assetId));
   const leafNonce = proof.leaf?.nonce ?? asset.compression?.leaf_id ?? 0;
   const merkle = new PublicKey(asset.compression?.tree || proof.merkleTree);
   const proofPath = (proof.proof || []).map((p: string) => ({
@@ -293,6 +363,49 @@ async function verifyAuth(req: functions.Request) {
   return decoded.uid;
 }
 
+function resolveInstructionAccounts(tx: any): PublicKey[] {
+  if (!tx?.transaction?.message) return [];
+  const accountKeys = tx.transaction.message.getAccountKeys({
+    accountKeysFromLookups: tx.meta?.loadedAddresses,
+  });
+  const lookupWritable = (accountKeys?.accountKeysFromLookups?.writable || []).map((k: any) => new PublicKey(k));
+  const lookupReadonly = (accountKeys?.accountKeysFromLookups?.readonly || []).map((k: any) => new PublicKey(k));
+  const staticKeys = (accountKeys?.staticAccountKeys || []).map((k: any) => new PublicKey(k));
+  return [...staticKeys, ...lookupWritable, ...lookupReadonly];
+}
+
+function getPayerFromTx(tx: any): PublicKey | null {
+  const accounts = resolveInstructionAccounts(tx);
+  return accounts.length ? accounts[0] : null;
+}
+
+function hasMintMemo(tx: any) {
+  const keys = resolveInstructionAccounts(tx);
+  return (tx?.transaction?.message?.compiledInstructions || []).some((ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(MEMO_PROGRAM_ID)) return false;
+    const dataField = (ix as any).data;
+    const dataBuffer =
+      typeof dataField === 'string'
+        ? Buffer.from(bs58.decode(dataField))
+        : Buffer.from(dataField || []);
+    return dataBuffer.toString() === 'mint:boxes';
+  });
+}
+
+function countMintInstructions(tx: any, ownerPk: PublicKey) {
+  const keys = resolveInstructionAccounts(tx);
+  return (tx?.transaction?.message?.compiledInstructions || []).reduce((count: number, ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(BUBBLEGUM_PROGRAM_ID)) return count;
+    const accountIndexes = ix.accounts || ix.accountKeyIndexes || [];
+    const ixAccounts = accountIndexes.map((idx: number) => keys[idx]);
+    const touchesTree = ixAccounts.some((k: PublicKey) => k.equals(merkleTree));
+    const touchesOwner = ixAccounts.some((k: PublicKey) => k.equals(ownerPk));
+    return touchesTree && touchesOwner ? count + 1 : count;
+  }, 0);
+}
+
 export const solanaAuth = functions.https.onRequest(async (req, res) => {
   if (maybeHandleCors(req, res)) return;
   if (req.method !== 'POST') {
@@ -308,7 +421,7 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  const userRecord = await admin.auth().getUserByEmail(`${wallet}@mons.shop`).catch(() => null);
+  const userRecord = await admin.auth().getUser(wallet).catch(() => null);
   if (!userRecord) {
     await admin.auth().createUser({ uid: wallet, email: `${wallet}@mons.shop` }).catch(() => undefined);
   }
@@ -317,15 +430,24 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
   const snap = await profileRef.get();
   const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
   const addresses = addressesSnap.docs.map((doc) => doc.data());
-  const profile = snap.exists ? snap.data() : { wallet };
-  if (!snap.exists) await profileRef.set(profile);
-  res.json({ customToken, profile: { ...profile, addresses } });
+  const profileData = snap.exists ? (snap.data() as any) : { wallet };
+  if (!snap.exists) await profileRef.set(profileData);
+  res.json({
+    customToken,
+    profile: {
+      ...profileData,
+      wallet,
+      email: profileData.email || userRecord?.email,
+      addresses,
+    },
+  });
 });
 
 export const stats = functions.https.onRequest(async (req, res) => {
   if (maybeHandleCors(req, res)) return;
-  const minted = await getMintedCount();
-  res.json({ minted, total: totalSupply, remaining: Math.max(0, totalSupply - minted) });
+  await syncMintedFromChain();
+  const stats = await getMintStats();
+  res.json(stats);
 });
 
 export const inventory = functions.https.onRequest(async (req, res) => {
@@ -347,13 +469,29 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     return;
   }
   const uid = await verifyAuth(req);
-  const schema = z.object({ encrypted: z.string(), country: z.string(), label: z.string().default('Home') });
+  const schema = z.object({
+    encrypted: z.string(),
+    country: z.string(),
+    label: z.string().default('Home'),
+    hint: z.string(),
+    email: z.string().email().optional(),
+  });
   const body = schema.parse(req.body);
   const id = db.collection('tmp').doc().id;
-  const hint = body.encrypted.slice(0, 6) + '…';
   const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
-  await addressRef.set({ ...body, id, hint, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-  res.json({ id, label: body.label, country: body.country, encrypted: body.encrypted, hint });
+  await addressRef.set({ ...body, id, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  await db.doc(`profiles/${uid}`).set(
+    { wallet: uid, ...(body.email ? { email: body.email } : {}) },
+    { merge: true },
+  );
+  res.json({
+    id,
+    label: body.label,
+    country: body.country,
+    encrypted: body.encrypted,
+    hint: body.hint,
+    email: body.email,
+  });
 });
 
 export const prepareMintTx = functions.https.onRequest(async (req, res) => {
@@ -362,17 +500,44 @@ export const prepareMintTx = functions.https.onRequest(async (req, res) => {
     res.status(405).send('Method not allowed');
     return;
   }
+  await syncMintedFromChain();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
   const { owner, quantity } = schema.parse(req.body);
   const ownerPk = new PublicKey(owner);
-  await incrementMinted(quantity);
+  const stats = await getMintStats();
+  const remaining = Math.max(0, stats.remaining);
+  if (remaining <= 0) {
+    throw new functions.https.HttpsError('failed-precondition', 'Minted out');
+  }
+  const mintQty = Math.min(quantity, remaining);
   const conn = connection();
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 })];
-  const mintedSoFar = await getMintedCount();
-  instructions.push(...(await buildMintInstructions(ownerPk, quantity, 'box', mintedSoFar - quantity + 1)));
+  const instructions: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }),
+    memoInstruction('mint:boxes'),
+  ];
+  instructions.push(...(await buildMintInstructions(ownerPk, mintQty, 'box', stats.minted + 1)));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
-  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64') });
+  res.json({
+    encodedTx: Buffer.from(tx.serialize()).toString('base64'),
+    allowedQuantity: mintQty,
+  });
+});
+
+export const finalizeMintTx = functions.https.onRequest(async (req, res) => {
+  if (maybeHandleCors(req, res)) return;
+  if (req.method !== 'POST') {
+    res.status(405).send('Method not allowed');
+    return;
+  }
+  const schema = z.object({ owner: z.string(), signature: z.string() });
+  const { owner, signature } = schema.parse(req.body);
+  const processed = await processMintSignature(signature);
+  if (!processed) {
+    throw new functions.https.HttpsError('failed-precondition', 'Mint transaction not found or already recorded');
+  }
+  const stats = await getMintStats();
+  res.json({ ...stats, recorded: processed.mintCount });
 });
 
 export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
@@ -385,13 +550,14 @@ export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
   const { owner, boxAssetId } = schema.parse(req.body);
   const ownerPk = new PublicKey(owner);
   const conn = connection();
+  const { asset, proof } = await fetchAssetWithProof(boxAssetId);
+  const kind = getAssetKind(asset);
+  if (kind !== 'box') {
+    throw new functions.https.HttpsError('failed-precondition', 'Only blind boxes can be opened');
+  }
   const dudeIds = await assignDudes(boxAssetId);
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
-  try {
-    instructions.push(await createBurnIx(boxAssetId, ownerPk));
-  } catch (err) {
-    instructions.push(memoInstruction(`open-box:${boxAssetId}`));
-  }
+  instructions.push(await createBurnIx(boxAssetId, ownerPk, { asset, proof }));
   instructions.push(...(await buildMintInstructions(ownerPk, DUDES_PER_BOX, 'dude', dudeIds[0], { boxId: boxAssetId, dudeIds })));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
@@ -410,18 +576,22 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const conn = connection();
+  const addressSnap = await db.doc(`profiles/${uid}/addresses/${addressId}`).get();
+  if (!addressSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Address not found');
+  }
+  const addressData = addressSnap.data();
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
   for (let i = 0; i < itemIds.length; i += 1) {
     const id = itemIds[i];
-    try {
-      instructions.push(await createBurnIx(id, ownerPk));
-    } catch (err) {
-      instructions.push(memoInstruction(`burn:${id}`));
+    const assetData = await fetchAssetWithProof(id);
+    const kind = getAssetKind(assetData.asset);
+    if (kind === 'box') {
+      await assignDudes(id);
     }
+    instructions.push(await createBurnIx(id, ownerPk, assetData));
     instructions.push(...(await buildMintInstructions(ownerPk, 1, 'certificate', i + 1, { boxId: id })));
   }
-  const addressSnap = await db.doc(`profiles/${uid}/addresses/${addressId}`).get();
-  const addressData = addressSnap.data();
   const deliveryPrice = shippingLamports(addressData?.country || 'unknown', itemIds.length);
   instructions.unshift(SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: shippingVault, lamports: deliveryPrice }));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
@@ -440,24 +610,62 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
   const { owner, code, blindBoxCertificateId } = schema.parse(req.body);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
-  const claimDoc = await db.doc(`claimCodes/${code}`).get();
+  const claimRef = db.doc(`claimCodes/${code}`);
+  const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
     res.status(404).json({ error: 'Invalid claim code' });
     return;
   }
   const claim = claimDoc.data() as any;
-  const assets = await fetchAssetsOwned(owner);
-  const ownsCertificate = (assets || []).some((a: any) => a.id === blindBoxCertificateId);
-  if (!ownsCertificate) {
+  if (claim.redeemedAt) {
+    res.status(409).json({ error: 'Claim code already redeemed' });
+    return;
+  }
+  const certificate = await fetchAsset(blindBoxCertificateId);
+  if (!certificate) {
+    res.status(404).json({ error: 'Certificate asset not found' });
+    return;
+  }
+  const certificateOwner = certificate?.ownership?.owner;
+  if (certificateOwner !== owner) {
     res.status(403).json({ error: 'Certificate not found in wallet' });
+    return;
+  }
+  const kind = getAssetKind(certificate);
+  if (kind !== 'certificate') {
+    res.status(400).json({ error: 'Provided asset is not a certificate' });
+    return;
+  }
+  const certificateBoxId = getBoxIdFromAsset(certificate);
+  if (claim.boxId && certificateBoxId && claim.boxId !== certificateBoxId) {
+    res.status(403).json({ error: 'Certificate does not match claim box' });
     return;
   }
 
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 })];
   instructions.push(memoInstruction(`claim:${code}`));
   const dudeIds: number[] = claim.dudeIds || [];
+  if (!dudeIds.length) {
+    res.status(400).json({ error: 'Claim has no dudes assigned' });
+    return;
+  }
   instructions.push(...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', dudeIds[0] || 1, { boxId: claim.boxId, dudeIds })));
   const { blockhash } = await connection().getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
+  await db.runTransaction(async (txRef) => {
+    const fresh = await txRef.get(claimRef);
+    if (!fresh.exists) {
+      throw new functions.https.HttpsError('not-found', 'Invalid claim code');
+    }
+    const data = fresh.data() as any;
+    if (data.redeemedAt) {
+      throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
+    }
+    txRef.update(claimRef, {
+      redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+      redeemedBy: owner,
+      redeemedCertificateId: blindBoxCertificateId,
+    });
+  });
   res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), certificates: dudeIds });
 });

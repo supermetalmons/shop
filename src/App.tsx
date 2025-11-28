@@ -15,6 +15,7 @@ import {
   requestDeliveryTx,
   requestMintTx,
   requestOpenBoxTx,
+  finalizeMintTx,
   saveEncryptedAddress,
 } from './lib/api';
 import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from './lib/solana';
@@ -65,7 +66,14 @@ function App() {
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
         sendTransaction(tx, connection, { skipPreflight: false }),
       );
-      setStatus(`Minted ${quantity} boxes · ${sig}`);
+      try {
+        await finalizeMintTx(publicKey.toBase58(), sig, token || undefined);
+        setStatus(`Minted ${resp.allowedQuantity || quantity} boxes · ${sig}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to record mint';
+        console.error(err);
+        setStatus(`Minted ${resp.allowedQuantity || quantity} boxes · ${sig} (finalize warning: ${msg})`);
+      }
       await Promise.all([refetchStats(), refetchInventory()]);
     } finally {
       setMinting(false);
@@ -88,17 +96,31 @@ function App() {
     }
   };
 
-  const handleSaveAddress = async ({ formatted, country, label }: { formatted: string; country: string; label: string }) => {
+  const handleSaveAddress = async ({
+    formatted,
+    country,
+    label,
+    email,
+  }: {
+    formatted: string;
+    country: string;
+    label: string;
+    email: string;
+  }) => {
     const session = token ? { token, profile } : await signIn();
     const idToken = session?.token || token;
     const encryptionKey = import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '';
     if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
     const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
     if (!idToken) throw new Error('Missing auth token');
-    const saved = await saveEncryptedAddress(cipherText, country, label, idToken);
+    const saved = await saveEncryptedAddress(cipherText, country, label, idToken, hint, email);
     if (updateProfile && (session?.profile || profile)) {
       const base = session?.profile || profile!;
-      updateProfile({ ...base, addresses: [...base.addresses, { ...saved, hint }] });
+      updateProfile({
+        ...base,
+        email: email || base.email,
+        addresses: [...(base.addresses || []), { ...saved, hint }],
+      });
     }
     setStatus('Address saved and encrypted');
   };
@@ -212,7 +234,7 @@ function App() {
           loading={deliveryLoading}
           costLamports={deliveryCost}
         />
-        <DeliveryForm onSave={handleSaveAddress} />
+        <DeliveryForm onSave={handleSaveAddress} initialEmail={profile?.email || ''} />
       </div>
 
       <ClaimForm onClaim={handleClaim} />

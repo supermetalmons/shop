@@ -11,7 +11,7 @@ interface MintPanelProps {
 export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? 333;
-  const remaining = total - minted;
+  const remaining = stats?.remaining ?? Math.max(0, total - minted);
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +31,11 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   return (
     <section className="card">
       <div className="card__title">Mint blind boxes</div>
-      {stats ? <ProgressBar minted={minted} total={total} /> : <p className="muted">Loading progress…</p>}
+      {stats ? (
+        <ProgressBar minted={minted} total={total} remaining={remaining} />
+      ) : (
+        <p className="muted">Loading progress…</p>
+      )}
       {soldOut ? (
         <p className="muted">Sold out. Jump to secondary or standby for next drop.</p>
       ) : (

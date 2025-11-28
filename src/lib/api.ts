@@ -75,11 +75,13 @@ export async function saveEncryptedAddress(
   country: string,
   label: string,
   token: string,
+  hint: string,
+  email?: string,
 ): Promise<ProfileAddress> {
   return apiFetch<ProfileAddress>('/saveAddress', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ encrypted, country, label }),
+    body: JSON.stringify({ encrypted, country, label, hint, email }),
   });
 }
 
@@ -116,5 +118,17 @@ export async function solanaAuth(
   return apiFetch('/solanaAuth', {
     method: 'POST',
     body: JSON.stringify({ wallet, message, signature: Array.from(signature) }),
+  });
+}
+
+export async function finalizeMintTx(
+  owner: string,
+  signature: string,
+  token?: string,
+): Promise<MintStats> {
+  return apiFetch('/finalizeMintTx', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: JSON.stringify({ owner, signature }),
   });
 }

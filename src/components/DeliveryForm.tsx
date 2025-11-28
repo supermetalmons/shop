@@ -1,10 +1,11 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 
 interface DeliveryFormProps {
-  onSave: (payload: { formatted: string; country: string; label: string }) => Promise<void>;
+  onSave: (payload: { formatted: string; country: string; label: string; email: string }) => Promise<void>;
+  initialEmail?: string;
 }
 
-export function DeliveryForm({ onSave }: DeliveryFormProps) {
+export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
   const [fullName, setFullName] = useState('');
   const [line1, setLine1] = useState('');
   const [line2, setLine2] = useState('');
@@ -13,8 +14,13 @@ export function DeliveryForm({ onSave }: DeliveryFormProps) {
   const [postalCode, setPostalCode] = useState('');
   const [country, setCountry] = useState('');
   const [label, setLabel] = useState('Home');
+  const [email, setEmail] = useState(initialEmail || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEmail(initialEmail || '');
+  }, [initialEmail]);
 
   const handleSubmit = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -30,7 +36,7 @@ export function DeliveryForm({ onSave }: DeliveryFormProps) {
       ]
         .filter(Boolean)
         .join('\n');
-      await onSave({ formatted, country, label });
+      await onSave({ formatted, country, label, email });
       setSaving(false);
     } catch (err) {
       setSaving(false);
@@ -42,6 +48,16 @@ export function DeliveryForm({ onSave }: DeliveryFormProps) {
     <form className="card" onSubmit={handleSubmit}>
       <div className="card__title">Save a delivery address</div>
       <div className="grid">
+        <label>
+          <span className="muted">Email</span>
+          <input
+            required
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+          />
+        </label>
         <label>
           <span className="muted">Full name</span>
           <input required value={fullName} onChange={(e) => setFullName(e.target.value)} />

@@ -23,6 +23,7 @@ export interface ProfileAddress {
   country: string;
   hint: string;
   encrypted: string;
+  email?: string;
 }
 
 export interface Profile {
@@ -38,6 +39,8 @@ export interface PreparedTxResponse {
   assignedDudeIds?: string[];
   certificates?: string[];
   message?: string;
+  allowedQuantity?: number;
+  recorded?: number;
 }
 
 export interface DeliverySelection {

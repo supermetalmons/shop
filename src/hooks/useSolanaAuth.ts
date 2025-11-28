@@ -32,8 +32,9 @@ export function useSolanaAuth() {
       const { customToken, profile } = await solanaAuth(publicKey.toBase58(), message, signature);
       const credential = await signInWithCustomToken(auth, customToken);
       const token = await credential.user.getIdToken();
-      setState({ profile, token, loading: false });
-      return { profile, token };
+      const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
+      setState({ profile: normalizedProfile, token, loading: false });
+      return { profile: normalizedProfile, token };
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to sign in');
