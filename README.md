@@ -1,4 +1,4 @@
-# mons.shop drop
+# mons.shop
 
 React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions back the Helius lookups, tx prep, and encrypted deliveries.
 
