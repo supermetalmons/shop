@@ -33,9 +33,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
       <div className="card__title">Mint blind boxes</div>
       {stats ? (
         <ProgressBar minted={minted} total={total} remaining={remaining} />
-      ) : (
-        <p className="muted">Loading progress…</p>
-      )}
+      ) : null}
       {soldOut ? (
         <p className="muted">Sold out. Jump to secondary or standby for next drop.</p>
       ) : (

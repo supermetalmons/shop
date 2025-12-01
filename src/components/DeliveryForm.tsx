@@ -13,7 +13,7 @@ export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [countryCode, setCountryCode] = useState('US');
+  const [countryCode, setCountryCode] = useState('INTL');
   const [label, setLabel] = useState('Home');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

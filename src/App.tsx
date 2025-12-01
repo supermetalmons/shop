@@ -248,11 +248,7 @@ function App() {
     <div className="page">
       <header className="top">
         <div className="brand">
-          <h1>mons.shop</h1>
-          <p className="sub">
-            Mint IRL blind boxes, open for dudes, request delivery, and claim certificates on-chain. Devnet + testnet
-            ready.
-          </p>
+          <h1><img src="/favicon.svg" alt="" className="brand-icon" />mons.shop</h1>
         </div>
         <WalletMultiButton />
       </header>
