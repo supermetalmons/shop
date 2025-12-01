@@ -1,12 +1,12 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 
 interface DeliveryFormProps {
   onSave: (payload: { formatted: string; country: string; countryCode: string; label: string; email: string }) => Promise<void>;
-  initialEmail?: string;
+  contactEmail: string;
 }
 
-export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
+export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
   const [fullName, setFullName] = useState('');
   const [line1, setLine1] = useState('');
   const [line2, setLine2] = useState('');
@@ -15,18 +15,18 @@ export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
   const [postalCode, setPostalCode] = useState('');
   const [countryCode, setCountryCode] = useState('US');
   const [label, setLabel] = useState('Home');
-  const [email, setEmail] = useState(initialEmail || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const countryOption = useMemo(() => findCountryByCode(countryCode) || findCountryByCode('INTL'), [countryCode]);
   const countryName = countryOption?.name || countryCode;
 
-  useEffect(() => {
-    setEmail(initialEmail || '');
-  }, [initialEmail]);
-
   const handleSubmit = async (evt: FormEvent) => {
     evt.preventDefault();
+    const email = contactEmail.trim();
+    if (!email) {
+      setError('Add a contact email first.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -50,17 +50,8 @@ export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
   return (
     <form className="card" onSubmit={handleSubmit}>
       <div className="card__title">Save a delivery address</div>
+      <p className="muted small">Addresses use your contact email for shipping updates.</p>
       <div className="grid">
-        <label>
-          <span className="muted">Email</span>
-          <input
-            required
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-          />
-        </label>
         <label>
           <span className="muted">Full name</span>
           <input required value={fullName} onChange={(e) => setFullName(e.target.value)} />

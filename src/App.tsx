@@ -5,6 +5,7 @@ import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { DeliveryPanel } from './components/DeliveryPanel';
+import { ContactEmail } from './components/ContactEmail';
 import { ClaimForm } from './components/ClaimForm';
 import { EmailSubscribe } from './components/EmailSubscribe';
 import { useMintProgress } from './hooks/useMintProgress';
@@ -45,6 +46,7 @@ function App() {
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
   const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
+  const [contactEmail, setContactEmail] = useState(profile?.email || '');
 
   const mintedOut = useMemo(() => {
     if (!mintStats) return false;
@@ -134,6 +136,15 @@ function App() {
     setStatus('Address saved and encrypted');
   };
 
+  const handleSaveEmail = async (value: string) => {
+    const normalized = value.trim();
+    setContactEmail(normalized);
+    if (updateProfile && profile) {
+      updateProfile({ ...profile, email: normalized });
+    }
+    setStatus('Contact email updated for deliveries');
+  };
+
   const handleRequestDelivery = async (addressId: string | null) => {
     if (!publicKey) throw new Error('Connect wallet first');
     const session = token ? { token, profile } : await signIn();
@@ -216,6 +227,10 @@ function App() {
   }, [addressId, savedAddresses]);
 
   useEffect(() => {
+    setContactEmail(profile?.email || '');
+  }, [profile?.email]);
+
+  useEffect(() => {
     const addr = savedAddresses.find((a) => a.id === addressId);
     const deliverableIds = Array.from(selected).filter((id) => {
       const item = inventory.find((inv) => inv.id === id);
@@ -233,7 +248,7 @@ function App() {
     <div className="page">
       <header className="top">
         <div className="brand">
-          <h1>mons.shop drop</h1>
+          <h1>mons.shop</h1>
           <p className="sub">
             Mint IRL blind boxes, open for dudes, request delivery, and claim certificates on-chain. Devnet + testnet
             ready.
@@ -243,9 +258,13 @@ function App() {
       </header>
 
       <div className="hero">
-        <img src="/lsw.jpg" alt="mons drop" />
-        <div className="card">
-          <div className="card__title">How it works</div>
+        <div className="hero__media">
+          <img src="https://assets.mons.link/shop/drops/1/box.webp" alt="mons blind box" />
+        </div>
+        <div className="card hero__copy">
+          <div className="eyebrow">Mint drop</div>
+          <div className="card__title">IRL blind boxes, digital certificates</div>
+          <p className="muted small">Mint boxes on-chain, reveal dudes, then burn for delivery and certificates.</p>
           <ul className="muted small">
             <li>Mint 1-20 compressed blind boxes per tx until the 333 supply is gone (11 on dev/test).</li>
             <li>Open a box to burn it and mint 3 dudes, co-signed by our cloud function.</li>
@@ -297,6 +316,7 @@ function App() {
       ) : null}
 
       <div className="grid">
+        <ContactEmail email={contactEmail} onChange={setContactEmail} onSave={handleSaveEmail} />
         <DeliveryPanel
           selectedCount={selected.size}
           addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
@@ -306,7 +326,7 @@ function App() {
           loading={deliveryLoading}
           costLamports={deliveryCost}
         />
-        <DeliveryForm onSave={handleSaveAddress} initialEmail={profile?.email || ''} />
+        <DeliveryForm onSave={handleSaveAddress} contactEmail={contactEmail} />
       </div>
 
       <ClaimForm onClaim={handleClaim} />
