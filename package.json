@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "collection:create": "tsx scripts/create-collection.ts",
     "tree:create": "tsx scripts/create-tree.ts",
     "tree:derive-collection": "tsx scripts/derive-collection.ts",
     "keygen": "node scripts/keygen.js"
@@ -25,8 +26,10 @@
   },
   "homepage": "https://github.com/supermetalmons/shop#readme",
   "dependencies": {
-    "@metaplex-foundation/mpl-bubblegum": "^5.0.2",
+    "@metaplex-foundation/mpl-bubblegum": "^0.11.0",
+    "@metaplex-foundation/mpl-token-metadata": "^2.3.3",
     "@solana/spl-account-compression": "^0.4.1",
+    "@solana/spl-token": "^0.4.8",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",
     "@solana/wallet-adapter-react-ui": "^0.9.39",

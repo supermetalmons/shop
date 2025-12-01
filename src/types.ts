@@ -5,8 +5,9 @@ export interface InventoryItem {
   name: string;
   kind: AssetKind;
   image?: string;
-  attributes?: string[];
+  attributes?: { trait_type: string; value: string }[];
   boxId?: string;
+  dudeId?: number;
   assignedDudes?: string[];
   status?: 'minted' | 'opened' | 'delivered' | 'pending';
 }
@@ -36,8 +37,8 @@ export interface PreparedTxResponse {
   encodedTx: string;
   feeLamports?: number;
   deliveryLamports?: number;
-  assignedDudeIds?: string[];
-  certificates?: string[];
+  assignedDudeIds?: number[];
+  certificates?: number[];
   message?: string;
   allowedQuantity?: number;
   recorded?: number;

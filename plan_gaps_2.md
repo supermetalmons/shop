@@ -1,7 +1,0 @@
-# Potential gaps vs `plan_clean.md`
-
-1. **No immediate reveal of the three dudes after opening a box.** The plan explicitly states that “when tx succeeds we show 3 dudes.” In `src/App.tsx` the `handleOpenBox` handler ignores the `assignedDudeIds` returned by `requestOpenBoxTx`, merely showing a status message before refetching the inventory. We never surface which three dudes were minted, so the “show 3 dudes” requirement is unmet.
-
-2. **Inventory cloud function includes every NFT in the wallet.** The plan calls for the inventory grid to show blind boxes, dudes, and certificates for this drop. The `inventory` endpoint in `functions/src/index.ts` (`fetchAssetsOwned` → `transformInventoryItem`) forwards the entire Helius response without filtering by the mons collection or `type` trait. Assets without the `type` attribute default to `kind: 'box'`, so unrelated NFTs (e.g., an Orcana NFT) would appear as “blind boxes” that can be selected or “opened,” which diverges from the plan’s scoped inventory.
-
-3. **Destination-based shipping pricing is unreliable.** Shipping is supposed to depend on the destination country, but `shippingLamports` (`functions/src/index.ts`) only checks whether `country.toLowerCase().includes('us')` to decide between the domestic/international base rates. Any country whose name contains the letters “us” (Australia, Austria, Russia, etc.) is incorrectly billed at the US rate, which breaks the “based on their destination” rule in the plan.

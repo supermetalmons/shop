@@ -24,7 +24,7 @@ import { SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
-import { randomInt } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { z } from 'zod';
 
 admin.initializeApp();
@@ -66,6 +66,7 @@ const collectionUpdateAuthority = new PublicKey(
 const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
 const metadataBase = process.env.METADATA_BASE || 'https://assets.mons.link/metadata';
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
 const treeAuthority = () =>
   Keypair.fromSecretKey(bs58.decode(process.env.TREE_AUTHORITY_SECRET || ''));
@@ -101,21 +102,41 @@ function parseSignature(sig: number[] | string) {
   return Uint8Array.from(sig);
 }
 
-function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extra?: { boxId?: string; dudeId?: number }): MetadataArgs {
-  const nameMap = {
-    box: `mons blind box #${index}`,
-    dude: `mons dude #${extra?.dudeId ?? index}`,
-    certificate: `mons authenticity #${index}`,
-  } as const;
-  const uriSuffix = kind === 'box' ? 'box.json' : kind === 'dude' ? 'dude.json' : 'certificate.json';
+function buildMetadata(
+  kind: 'box' | 'dude' | 'certificate',
+  index: number,
+  extra?: { boxId?: string; dudeId?: number },
+): MetadataArgs {
+  const dudeId = extra?.dudeId ?? index;
+  const certificateTarget = kind === 'certificate' ? (extra?.dudeId ? 'dude' : extra?.boxId ? 'box' : undefined) : undefined;
+  const name = (() => {
+    if (kind === 'box') return `mons blind box #${index}`;
+    if (kind === 'dude') return `mons dude #${dudeId}`;
+    if (certificateTarget === 'dude') return `mons certificate · dude #${dudeId}`;
+    if (certificateTarget === 'box') return `mons certificate · box ${extra?.boxId?.slice(0, 6)}`;
+    return `mons authenticity #${index}`;
+  })();
+
+  const uriSuffix =
+    kind === 'box'
+      ? 'box.json'
+      : kind === 'dude'
+        ? `dude/${dudeId}.json`
+        : certificateTarget === 'dude'
+          ? `certificate/dude-${dudeId}.json`
+          : certificateTarget === 'box' && extra?.boxId
+            ? `certificate/box-${extra.boxId}.json`
+            : 'certificate.json';
+
   const attrs = [
     { trait_type: 'type', value: kind },
     extra?.boxId ? { trait_type: 'box_id', value: extra.boxId } : null,
     extra?.dudeId ? { trait_type: 'dude_id', value: `${extra.dudeId}` } : null,
+    certificateTarget ? { trait_type: 'certificate_for', value: certificateTarget } : null,
   ].filter(Boolean) as { trait_type: string; value: string }[];
 
   return {
-    name: nameMap[kind],
+    name,
     symbol: 'MONS',
     uri: `${metadataBase}/${uriSuffix}`,
     sellerFeeBasisPoints: 0,
@@ -260,14 +281,29 @@ async function fetchAsset(assetId: string) {
   return json[0];
 }
 
-function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' {
+function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
   const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'type');
-  return (kindAttr?.value || 'box') as 'box' | 'dude' | 'certificate';
+  const value = kindAttr?.value;
+  return value === 'box' || value === 'dude' || value === 'certificate' ? value : null;
 }
 
 function getBoxIdFromAsset(asset: any): string | undefined {
   const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'box_id');
   return boxAttr?.value;
+}
+
+function getDudeIdFromAsset(asset: any): number | undefined {
+  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'dude_id');
+  const num = Number(dudeAttr?.value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function isMonsAsset(asset: any): boolean {
+  const inCollection =
+    !collectionMintStr ||
+    (asset?.grouping || []).some((g: any) => g.group_key === 'collection' && g.group_value === collectionMintStr);
+  const kind = getAssetKind(asset);
+  return Boolean(inCollection && kind);
 }
 
 async function fetchAssetWithProof(assetId: string) {
@@ -329,6 +365,37 @@ async function assignDudes(boxId: string): Promise<number[]> {
   });
 }
 
+async function reserveCertificateNumbers(count: number): Promise<number[]> {
+  if (count <= 0) return [];
+  const ref = db.doc('meta/certificates');
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const next = Number((snap.data() as any)?.next || 1);
+    const numbers = Array.from({ length: count }, (_, i) => next + i);
+    tx.set(ref, { next: next + count }, { merge: true });
+    return numbers;
+  });
+}
+
+async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) {
+  const existing = await db.collection('claimCodes').where('boxId', '==', boxId).limit(1).get();
+  if (!existing.empty) return existing.docs[0].id;
+  let code = '';
+  let ref = db.doc(`claimCodes/placeholder`);
+  do {
+    code = randomBytes(4).toString('hex').toUpperCase();
+    ref = db.doc(`claimCodes/${code}`);
+  } while ((await ref.get()).exists);
+
+  await ref.set({
+    boxId,
+    dudeIds,
+    owner,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  return code;
+}
+
 function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
@@ -337,12 +404,16 @@ function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recen
 }
 
 function transformInventoryItem(asset: any) {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'type');
-  const kind = (kindAttr?.value || 'box') as 'box' | 'dude' | 'certificate';
+  const kind = getAssetKind(asset);
+  if (!kind) return null;
+  const boxId = getBoxIdFromAsset(asset);
+  const dudeId = getDudeIdFromAsset(asset);
   return {
     id: asset.id,
     name: asset.content?.metadata?.name || asset.id,
     kind,
+    boxId,
+    dudeId,
     image: asset.content?.links?.image,
     attributes: asset.content?.metadata?.attributes || [],
     status: asset.compression?.compressed ? 'minted' : 'unknown',
@@ -350,7 +421,15 @@ function transformInventoryItem(asset: any) {
 }
 
 function shippingLamports(country: string, items: number) {
-  const base = country.toLowerCase().includes('us') ? 0.15 : 0.32;
+  const normalized = (country || '').trim().toLowerCase();
+  const compact = normalized.replace(/[\s.]/g, '');
+  const isUS =
+    compact === 'us' ||
+    compact === 'usa' ||
+    compact === 'unitedstates' ||
+    compact === 'unitedstatesofamerica' ||
+    normalized.includes('united states');
+  const base = isUS ? 0.15 : 0.32;
   const multiplier = Math.max(1, items * 0.35);
   return Math.round(base * multiplier * LAMPORTS_PER_SOL);
 }
@@ -458,7 +537,10 @@ export const inventory = functions.https.onRequest(async (req, res) => {
     return;
   }
   const assets = await fetchAssetsOwned(owner);
-  const items = (assets || []).map(transformInventoryItem);
+  const items = (assets || [])
+    .filter(isMonsAsset)
+    .map(transformInventoryItem)
+    .filter(Boolean);
   res.json(items);
 });
 
@@ -555,6 +637,9 @@ export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
   if (kind !== 'box') {
     throw new functions.https.HttpsError('failed-precondition', 'Only blind boxes can be opened');
   }
+  if (!isMonsAsset(asset)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+  }
   const dudeIds = await assignDudes(boxAssetId);
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
   instructions.push(await createBurnIx(boxAssetId, ownerPk, { asset, proof }));
@@ -582,15 +667,39 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
   }
   const addressData = addressSnap.data();
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
+  const certificateNumbers = await reserveCertificateNumbers(itemIds.length);
   for (let i = 0; i < itemIds.length; i += 1) {
     const id = itemIds[i];
     const assetData = await fetchAssetWithProof(id);
     const kind = getAssetKind(assetData.asset);
-    if (kind === 'box') {
-      await assignDudes(id);
+    if (!kind) {
+      throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type');
     }
+    if (!isMonsAsset(assetData.asset)) {
+      throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+    }
+    if (kind === 'certificate') {
+      throw new functions.https.HttpsError('failed-precondition', 'Certificates are already delivery outputs');
+    }
+    let dudeIds: number[] | undefined;
+    if (kind === 'box') {
+      const assigned = await assignDudes(id);
+      dudeIds = assigned;
+      await ensureClaimCode(id, assigned, owner);
+    }
+    if (kind === 'dude') {
+      const dudeId = getDudeIdFromAsset(assetData.asset);
+      dudeIds = dudeId ? [dudeId] : undefined;
+    }
+    const certIndex = certificateNumbers[i] ?? certificateNumbers[0] ?? i + 1;
+    const boxRef = getBoxIdFromAsset(assetData.asset) || (kind === 'box' ? id : undefined);
     instructions.push(await createBurnIx(id, ownerPk, assetData));
-    instructions.push(...(await buildMintInstructions(ownerPk, 1, 'certificate', i + 1, { boxId: id })));
+    instructions.push(
+      ...(await buildMintInstructions(ownerPk, 1, 'certificate', certIndex, {
+        boxId: boxRef,
+        dudeIds,
+      })),
+    );
   }
   const deliveryPrice = shippingLamports(addressData?.country || 'unknown', itemIds.length);
   instructions.unshift(SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: shippingVault, lamports: deliveryPrice }));
@@ -637,8 +746,16 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     return;
   }
   const certificateBoxId = getBoxIdFromAsset(certificate);
-  if (claim.boxId && certificateBoxId && claim.boxId !== certificateBoxId) {
+  if (!certificateBoxId) {
+    res.status(400).json({ error: 'Certificate missing box reference' });
+    return;
+  }
+  if (claim.boxId && claim.boxId !== certificateBoxId) {
     res.status(403).json({ error: 'Certificate does not match claim box' });
+    return;
+  }
+  if (!isMonsAsset(certificate)) {
+    res.status(400).json({ error: 'Certificate is outside the Mons collection' });
     return;
   }
 
@@ -649,7 +766,13 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     res.status(400).json({ error: 'Claim has no dudes assigned' });
     return;
   }
-  instructions.push(...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', dudeIds[0] || 1, { boxId: claim.boxId, dudeIds })));
+  const certificateNumbers = await reserveCertificateNumbers(dudeIds.length);
+  instructions.push(
+    ...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', certificateNumbers[0] || 1, {
+      boxId: claim.boxId || certificateBoxId,
+      dudeIds,
+    })),
+  );
   const { blockhash } = await connection().getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
   await db.runTransaction(async (txRef) => {

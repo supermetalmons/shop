@@ -16,6 +16,10 @@ service cloud.firestore {
       allow read, write: if false; // stats + dude pools locked for backend only
     }
 
+    match /mintTxs/{signature} {
+      allow read, write: if false; // mint tracking is backend-only
+    }
+
     match /claimCodes/{code} {
       allow read, write: if false; // claim codes are redeemed server-side only
     }

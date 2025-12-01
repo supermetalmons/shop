@@ -8,6 +8,7 @@ function pda(seeds: (Buffer | Uint8Array)[]): string {
 
 function main() {
   const mintArg = process.argv.find((arg) => arg.startsWith('--mint='))?.split('=')[1] || process.argv[2];
+  const updateAuthority = process.argv.find((arg) => arg.startsWith('--authority='))?.split('=')[1];
   if (!mintArg) {
     console.error('Usage: npm run tree:derive-collection -- --mint <mintAddress>');
     process.exit(1);
@@ -28,6 +29,10 @@ function main() {
   console.log(`COLLECTION_MINT=${mint.toBase58()}`);
   console.log(`COLLECTION_METADATA=${metadata}`);
   console.log(`COLLECTION_MASTER_EDITION=${masterEdition}`);
+  console.log(`COLLECTION_UPDATE_AUTHORITY=${updateAuthority || '<update-authority-pubkey>'}`);
+  if (!updateAuthority) {
+    console.log('# pass --authority=<pubkey> to include your update authority above');
+  }
 }
 
 main();

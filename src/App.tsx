@@ -42,6 +42,7 @@ function App() {
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
+  const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
 
   const mintedOut = useMemo(() => {
     if (!mintStats) return false;
@@ -84,12 +85,16 @@ function App() {
     if (!publicKey) throw new Error('Connect wallet to open a box');
     setOpenLoading(item.id);
     setStatus('');
+    setLastOpen(null);
     try {
       const resp = await requestOpenBoxTx(publicKey.toBase58(), item.id, token || undefined);
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
         sendTransaction(tx, connection, { skipPreflight: false }),
       );
-      setStatus(`Opened box · ${sig}`);
+      const revealedDudes = (resp.assignedDudeIds || []).map((id) => Number(id));
+      setLastOpen({ boxId: item.id, dudeIds: revealedDudes, signature: sig });
+      const revealCopy = revealedDudes.length ? ` · dudes ${revealedDudes.join(', ')}` : '';
+      setStatus(`Opened box · ${sig}${revealCopy}`);
       await refetchInventory();
     } finally {
       setOpenLoading(null);
@@ -223,6 +228,23 @@ function App() {
         <InventoryGrid items={inventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
         {openLoading ? <div className="muted">Opening {shortAddress(openLoading)}…</div> : null}
       </section>
+
+      {lastOpen ? (
+        <section className="card subtle">
+          <div className="card__title">Revealed dudes</div>
+          <p className="muted small">
+            Box {shortAddress(lastOpen.boxId)} revealed:
+          </p>
+          <div className="row">
+            {lastOpen.dudeIds.map((id) => (
+              <span key={id} className="pill">
+                Dude #{id}
+              </span>
+            ))}
+          </div>
+          <p className="muted small">Tx {shortAddress(lastOpen.signature)}</p>
+        </section>
+      ) : null}
 
       <div className="grid">
         <DeliveryPanel
