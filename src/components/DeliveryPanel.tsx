@@ -29,7 +29,9 @@ export function DeliveryPanel({
       </p>
       <div className="pill-row">
         <span className="pill">{selectedCount} selected</span>
-        {typeof costLamports === 'number' ? <span className="pill">Ship: {lamportsToSol(costLamports)} ◎</span> : null}
+        {typeof costLamports === 'number' ? (
+          <span className="pill">Est. ship: {lamportsToSol(costLamports)} ◎</span>
+        ) : null}
       </div>
       <label>
         <span className="muted">Send to</span>

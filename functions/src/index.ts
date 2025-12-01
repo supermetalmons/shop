@@ -48,6 +48,7 @@ function maybeHandleCors(req: functions.Request, res: functions.Response) {
 const DUDES_PER_BOX = 3;
 const devSupply = Number(process.env.TEST_SUPPLY || 11);
 const prodSupply = Number(process.env.TOTAL_SUPPLY || 333);
+const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 
 const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
 const totalSupply = cluster === 'mainnet-beta' ? prodSupply : devSupply;
@@ -97,6 +98,10 @@ function connection() {
   return new Connection(rpcUrl, 'confirmed');
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseSignature(sig: number[] | string) {
   if (typeof sig === 'string') return bs58.decode(sig);
   return Uint8Array.from(sig);
@@ -105,15 +110,19 @@ function parseSignature(sig: number[] | string) {
 function buildMetadata(
   kind: 'box' | 'dude' | 'certificate',
   index: number,
-  extra?: { boxId?: string; dudeId?: number },
+  extra?: { boxId?: string; dudeIds?: number[] },
 ): MetadataArgs {
-  const dudeId = extra?.dudeId ?? index;
-  const certificateTarget = kind === 'certificate' ? (extra?.dudeId ? 'dude' : extra?.boxId ? 'box' : undefined) : undefined;
+  const dudes = (extra?.dudeIds || []).filter((id) => Number.isFinite(id)) as number[];
+  const primaryDudeId = dudes[0] ?? index;
+  const certificateTarget = kind === 'certificate' ? (extra?.boxId ? 'box' : dudes.length === 1 ? 'dude' : undefined) : undefined;
   const name = (() => {
     if (kind === 'box') return `mons blind box #${index}`;
-    if (kind === 'dude') return `mons dude #${dudeId}`;
-    if (certificateTarget === 'dude') return `mons certificate · dude #${dudeId}`;
-    if (certificateTarget === 'box') return `mons certificate · box ${extra?.boxId?.slice(0, 6)}`;
+    if (kind === 'dude') return `mons dude #${primaryDudeId}`;
+    if (certificateTarget === 'dude') return `mons certificate · dude #${primaryDudeId}`;
+    if (certificateTarget === 'box') {
+      const dudesSuffix = dudes.length > 1 ? ` · dudes ${dudes.map((d) => `#${d}`).join('/')}` : '';
+      return `mons certificate · box ${extra?.boxId?.slice(0, 6) || index}${dudesSuffix}`;
+    }
     return `mons authenticity #${index}`;
   })();
 
@@ -121,9 +130,9 @@ function buildMetadata(
     kind === 'box'
       ? 'box.json'
       : kind === 'dude'
-        ? `dude/${dudeId}.json`
+        ? `dude/${primaryDudeId}.json`
         : certificateTarget === 'dude'
-          ? `certificate/dude-${dudeId}.json`
+          ? `certificate/dude-${primaryDudeId}.json`
           : certificateTarget === 'box' && extra?.boxId
             ? `certificate/box-${extra.boxId}.json`
             : 'certificate.json';
@@ -131,7 +140,8 @@ function buildMetadata(
   const attrs = [
     { trait_type: 'type', value: kind },
     extra?.boxId ? { trait_type: 'box_id', value: extra.boxId } : null,
-    extra?.dudeId ? { trait_type: 'dude_id', value: `${extra.dudeId}` } : null,
+    dudes.length === 1 ? { trait_type: 'dude_id', value: `${primaryDudeId}` } : null,
+    dudes.length > 1 ? { trait_type: 'dude_ids', value: dudes.join(',') } : null,
     certificateTarget ? { trait_type: 'certificate_for', value: certificateTarget } : null,
   ].filter(Boolean) as { trait_type: string; value: string }[];
 
@@ -158,8 +168,12 @@ async function buildMintInstructions(owner: PublicKey, quantity: number, kind: '
   const treeAuthorityKey = treeAuthority();
 
   for (let i = 0; i < quantity; i += 1) {
-    const dudeId = extra?.dudeIds ? extra.dudeIds[i] : undefined;
-    const metadataArgs = buildMetadata(kind, startIndex + i, { boxId: extra?.boxId, dudeId });
+    const perMintDudeIds =
+      extra?.dudeIds && (quantity > 1 || kind === 'dude') ? [extra.dudeIds[i]] : extra?.dudeIds;
+    const metadataArgs = buildMetadata(kind, startIndex + i, {
+      boxId: extra?.boxId,
+      dudeIds: perMintDudeIds?.filter((id) => Number.isFinite(id)) as number[] | undefined,
+    });
     instructions.push(
       createMintToCollectionV1Instruction(
         {
@@ -258,26 +272,44 @@ async function syncMintedFromChain(limit = 100) {
   }
 }
 
+async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
+  let attempt = 0;
+  let lastError: unknown;
+  while (attempt <= retries) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.json();
+      const retriable = res.status === 429 || res.status >= 500;
+      if (!retriable || attempt === retries) {
+        throw new Error(`${label} ${res.status}`);
+      }
+      await sleep(backoffMs * 2 ** attempt);
+    } catch (err) {
+      lastError = err;
+      if (attempt === retries) break;
+      await sleep(backoffMs * 2 ** attempt);
+    }
+    attempt += 1;
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function fetchAssetsOwned(owner: string) {
   const helius = process.env.HELIUS_API_KEY;
   const url = `https://api.helius.xyz/v0/addresses/${owner}/nfts?api-key=${helius}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Helius assets error ${res.status}`);
-  return await res.json();
+  return heliusJson(url, 'Helius assets error');
 }
 
 async function fetchAssetProof(assetId: string) {
   const helius = process.env.HELIUS_API_KEY;
-  const res = await fetch(`https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}`);
-  if (!res.ok) throw new Error(`Helius proof error ${res.status}`);
-  return await res.json();
+  const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}`;
+  return heliusJson(url, 'Helius proof error');
 }
 
 async function fetchAsset(assetId: string) {
   const helius = process.env.HELIUS_API_KEY;
-  const res = await fetch(`https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}`);
-  if (!res.ok) throw new Error(`Helius asset error ${res.status}`);
-  const json = await res.json();
+  const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}`;
+  const json = await heliusJson(url, 'Helius asset error');
   return json[0];
 }
 
@@ -362,18 +394,6 @@ async function assignDudes(boxId: string): Promise<number[]> {
     tx.set(poolRef, { available: pool }, { merge: true });
     tx.set(ref, { dudeIds: chosen, createdAt: admin.firestore.FieldValue.serverTimestamp() });
     return chosen;
-  });
-}
-
-async function reserveCertificateNumbers(count: number): Promise<number[]> {
-  if (count <= 0) return [];
-  const ref = db.doc('meta/certificates');
-  return db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    const next = Number((snap.data() as any)?.next || 1);
-    const numbers = Array.from({ length: count }, (_, i) => next + i);
-    tx.set(ref, { next: next + count }, { merge: true });
-    return numbers;
   });
 }
 
@@ -483,6 +503,44 @@ function countMintInstructions(tx: any, ownerPk: PublicKey) {
     const touchesOwner = ixAccounts.some((k: PublicKey) => k.equals(ownerPk));
     return touchesTree && touchesOwner ? count + 1 : count;
   }, 0);
+}
+
+function extractMemos(tx: any): string[] {
+  const keys = resolveInstructionAccounts(tx);
+  return (tx?.transaction?.message?.compiledInstructions || []).reduce((memos: string[], ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(MEMO_PROGRAM_ID)) return memos;
+    const dataField = (ix as any).data;
+    const dataBuffer =
+      typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
+    const text = dataBuffer.toString();
+    return text ? [...memos, text] : memos;
+  }, []);
+}
+
+function findClaimMemo(tx: any, code: string) {
+  const memos = extractMemos(tx);
+  return memos.find((m) => m === `claim:${code}` || m.startsWith(`claim:${code}:`));
+}
+
+async function processClaimSignature(code: string, signature: string, owner: string) {
+  const tx = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  if (!tx || tx.meta?.err) return null;
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== owner) return null;
+  const memo = findClaimMemo(tx, code);
+  if (!memo) return null;
+  return { signature, payer: payer.toBase58(), memo };
+}
+
+async function detectClaimOnChain(code: string, owner: string, limit = 20): Promise<string | null> {
+  const sigs = await connection().getSignaturesForAddress(new PublicKey(owner), { limit });
+  for (const sig of sigs) {
+    if (sig.err) continue;
+    const processed = await processClaimSignature(code, sig.signature, owner);
+    if (processed) return processed.signature;
+  }
+  return null;
 }
 
 export const solanaAuth = functions.https.onRequest(async (req, res) => {
@@ -614,9 +672,17 @@ export const finalizeMintTx = functions.https.onRequest(async (req, res) => {
   }
   const schema = z.object({ owner: z.string(), signature: z.string() });
   const { owner, signature } = schema.parse(req.body);
+  const authHeader = req.headers.authorization || '';
+  if (authHeader) {
+    const uid = await verifyAuth(req);
+    if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  }
   const processed = await processMintSignature(signature);
   if (!processed) {
     throw new functions.https.HttpsError('failed-precondition', 'Mint transaction not found or already recorded');
+  }
+  if (processed.payer !== owner) {
+    throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
   }
   const stats = await getMintStats();
   res.json({ ...stats, recorded: processed.mintCount });
@@ -639,6 +705,10 @@ export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
   }
   if (!isMonsAsset(asset)) {
     throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+  }
+  const assetOwner = asset?.ownership?.owner;
+  if (assetOwner !== owner) {
+    throw new functions.https.HttpsError('failed-precondition', 'Box not owned by wallet');
   }
   const dudeIds = await assignDudes(boxAssetId);
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
@@ -667,7 +737,6 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
   }
   const addressData = addressSnap.data();
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
-  const certificateNumbers = await reserveCertificateNumbers(itemIds.length);
   for (let i = 0; i < itemIds.length; i += 1) {
     const id = itemIds[i];
     const assetData = await fetchAssetWithProof(id);
@@ -677,6 +746,10 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
     }
     if (!isMonsAsset(assetData.asset)) {
       throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+    }
+    const assetOwner = assetData.asset?.ownership?.owner;
+    if (assetOwner !== owner) {
+      throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
     }
     if (kind === 'certificate') {
       throw new functions.https.HttpsError('failed-precondition', 'Certificates are already delivery outputs');
@@ -691,7 +764,7 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
       const dudeId = getDudeIdFromAsset(assetData.asset);
       dudeIds = dudeId ? [dudeId] : undefined;
     }
-    const certIndex = certificateNumbers[i] ?? certificateNumbers[0] ?? i + 1;
+    const certIndex = i + 1;
     const boxRef = getBoxIdFromAsset(assetData.asset) || (kind === 'box' ? id : undefined);
     instructions.push(await createBurnIx(id, ownerPk, assetData));
     instructions.push(
@@ -726,8 +799,21 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     return;
   }
   const claim = claimDoc.data() as any;
-  if (claim.redeemedAt) {
+  if (claim.redeemedAt || claim.redeemedSignature) {
     res.status(409).json({ error: 'Claim code already redeemed' });
+    return;
+  }
+  const alreadyRedeemedSig = await detectClaimOnChain(code, owner).catch(() => null);
+  if (alreadyRedeemedSig) {
+    await claimRef.set(
+      {
+        redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+        redeemedBy: owner,
+        redeemedSignature: alreadyRedeemedSig,
+      },
+      { merge: true },
+    );
+    res.status(409).json({ error: 'Claim already redeemed on-chain', signature: alreadyRedeemedSig });
     return;
   }
   const certificate = await fetchAsset(blindBoxCertificateId);
@@ -759,36 +845,119 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 })];
-  instructions.push(memoInstruction(`claim:${code}`));
   const dudeIds: number[] = claim.dudeIds || [];
   if (!dudeIds.length) {
     res.status(400).json({ error: 'Claim has no dudes assigned' });
     return;
   }
-  const certificateNumbers = await reserveCertificateNumbers(dudeIds.length);
+  const pending = claim.pendingAttempt;
+  const nowMs = Date.now();
+  const pendingExpiry = pending?.expiresAt?.toMillis ? pending.expiresAt.toMillis() : 0;
+  if (pending && pendingExpiry > nowMs) {
+    const message =
+      pending.owner === owner
+        ? 'Claim already has a pending transaction, please submit it or wait a few minutes.'
+        : 'Claim is locked by another wallet right now.';
+    res.status(409).json({ error: message, pending });
+    return;
+  }
+
+  const attemptId = randomBytes(8).toString('hex');
+  const expiresAt = admin.firestore.Timestamp.fromMillis(nowMs + CLAIM_LOCK_WINDOW_MS);
+  try {
+    await db.runTransaction(async (txRef) => {
+      const fresh = await txRef.get(claimRef);
+      if (!fresh.exists) {
+        throw new functions.https.HttpsError('not-found', 'Invalid claim code');
+      }
+      const data = fresh.data() as any;
+      const existingPending = data.pendingAttempt;
+      const existingPendingExpiry = existingPending?.expiresAt?.toMillis ? existingPending.expiresAt.toMillis() : 0;
+      if (data.redeemedAt || data.redeemedSignature) {
+        throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
+      }
+      if (existingPending && existingPendingExpiry > Date.now()) {
+        throw new functions.https.HttpsError('failed-precondition', 'Claim already has a pending transaction');
+      }
+      txRef.update(claimRef, {
+        pendingAttempt: {
+          owner,
+          attemptId,
+          certificateId: blindBoxCertificateId,
+          expiresAt,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      });
+    });
+  } catch (err) {
+    if (err instanceof functions.https.HttpsError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+
+  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 })];
+  instructions.push(memoInstruction(`claim:${code}:${attemptId}`));
   instructions.push(
-    ...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', certificateNumbers[0] || 1, {
+    ...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', 1, {
       boxId: claim.boxId || certificateBoxId,
       dudeIds,
     })),
   );
   const { blockhash } = await connection().getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
+  res.json({
+    encodedTx: Buffer.from(tx.serialize()).toString('base64'),
+    certificates: dudeIds,
+    attemptId,
+    lockExpiresAt: expiresAt.toMillis(),
+  });
+});
+
+export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
+  if (maybeHandleCors(req, res)) return;
+  if (req.method !== 'POST') {
+    res.status(405).send('Method not allowed');
+    return;
+  }
+  const uid = await verifyAuth(req);
+  const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
+  const { owner, code, signature } = schema.parse(req.body);
+  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  const claimRef = db.doc(`claimCodes/${code}`);
+  const claimDoc = await claimRef.get();
+  if (!claimDoc.exists) {
+    res.status(404).json({ error: 'Invalid claim code' });
+    return;
+  }
+  const claim = claimDoc.data() as any;
+  if (claim.redeemedAt || claim.redeemedSignature) {
+    res.status(409).json({ error: 'Claim already redeemed' });
+    return;
+  }
+
+  const processed = await processClaimSignature(code, signature, owner);
+  if (!processed) {
+    res.status(412).json({ error: 'Claim transaction not found or invalid' });
+    return;
+  }
+
   await db.runTransaction(async (txRef) => {
     const fresh = await txRef.get(claimRef);
     if (!fresh.exists) {
       throw new functions.https.HttpsError('not-found', 'Invalid claim code');
     }
     const data = fresh.data() as any;
-    if (data.redeemedAt) {
-      throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
-    }
+    if (data.redeemedAt || data.redeemedSignature) return;
     txRef.update(claimRef, {
       redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
       redeemedBy: owner,
-      redeemedCertificateId: blindBoxCertificateId,
+      redeemedSignature: signature,
+      redeemedCertificateId: data.pendingAttempt?.certificateId,
+      pendingAttempt: admin.firestore.FieldValue.delete(),
     });
   });
-  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), certificates: dudeIds });
+
+  res.json({ recorded: true, signature });
 });

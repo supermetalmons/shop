@@ -5,6 +5,21 @@ export function lamportsToSol(lamports = 0): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
 
+export function estimateDeliveryLamports(country: string, items: number): number {
+  if (!items) return 0;
+  const normalized = (country || '').trim().toLowerCase();
+  const compact = normalized.replace(/[\s.]/g, '');
+  const isUS =
+    compact === 'us' ||
+    compact === 'usa' ||
+    compact === 'unitedstates' ||
+    compact === 'unitedstatesofamerica' ||
+    normalized.includes('united states');
+  const base = isUS ? 0.15 : 0.32;
+  const multiplier = Math.max(1, items * 0.35);
+  return Math.round(base * multiplier * LAMPORTS_PER_SOL);
+}
+
 export async function sendPreparedTransaction(
   encodedTx: string,
   connection: Connection,

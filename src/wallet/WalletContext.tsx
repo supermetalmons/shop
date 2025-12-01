@@ -32,7 +32,7 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
       new TorusWalletAdapter({ params: { network } }),
       new UnsafeBurnerWalletAdapter(),
     ],
-    [network],
+    [],
   );
 
   return (

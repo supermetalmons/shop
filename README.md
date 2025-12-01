@@ -19,6 +19,14 @@ VITE_SECONDARY_TENSOR=...
 VITE_SECONDARY_MAGICEDEN=...
 ```
 
+#### Address encryption key
+- Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY`:
+  ```bash
+  node -e "const nacl=require('tweetnacl');const kp=nacl.box.keyPair();console.log('pub',Buffer.from(kp.publicKey).toString('base64'));console.log('secret',Buffer.from(kp.secretKey).toString('base64'));"
+  ```
+- Keep the secret key offline for ops to decrypt shipping addresses; never ship it to the frontend or Firebase config.
+- Only the public key is needed by the UI to encrypt addresses before they are stored.
+
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
 - Deploy/emulate with the Firebase CLI (`firebase emulators:start --only functions,firestore`).

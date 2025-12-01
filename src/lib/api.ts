@@ -110,6 +110,19 @@ export async function requestClaimTx(
   });
 }
 
+export async function finalizeClaimTx(
+  owner: string,
+  code: string,
+  signature: string,
+  token: string,
+): Promise<{ recorded: boolean; signature: string }> {
+  return apiFetch('/finalizeClaimTx', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ owner, code, signature }),
+  });
+}
+
 export async function solanaAuth(
   wallet: string,
   message: string,

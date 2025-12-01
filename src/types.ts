@@ -42,6 +42,8 @@ export interface PreparedTxResponse {
   message?: string;
   allowedQuantity?: number;
   recorded?: number;
+  attemptId?: string;
+  lockExpiresAt?: number;
 }
 
 export interface DeliverySelection {

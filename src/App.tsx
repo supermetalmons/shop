@@ -16,9 +16,10 @@ import {
   requestMintTx,
   requestOpenBoxTx,
   finalizeMintTx,
+  finalizeClaimTx,
   saveEncryptedAddress,
 } from './lib/api';
-import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from './lib/solana';
+import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 
 function App() {
@@ -137,12 +138,16 @@ function App() {
     if (!addressId) throw new Error('Select a delivery address');
     const itemIds = Array.from(selected);
     if (!itemIds.length) throw new Error('Select items to deliver');
+    const addr = savedAddresses.find((a) => a.id === addressId);
+    if (!addr) throw new Error('Select a delivery address');
+    if (!idToken) throw new Error('Missing auth token');
 
     setDeliveryLoading(true);
     setStatus('');
     try {
+      setDeliveryCost(estimateDeliveryLamports(addr.country, itemIds.length));
       const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds, addressId }, idToken || '');
-      setDeliveryCost(resp.deliveryLamports);
+      setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(addr.country, itemIds.length));
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
         sendTransaction(tx, connection, { skipPreflight: false }),
       );
@@ -158,11 +163,20 @@ function App() {
     if (!publicKey) throw new Error('Connect wallet to claim');
     const session = token ? { token, profile } : await signIn();
     const idToken = session?.token || token;
-    const resp = await requestClaimTx(publicKey.toBase58(), code, certificateId, idToken || '');
+    if (!idToken) throw new Error('Missing auth token');
+    setStatus('');
+    const resp = await requestClaimTx(publicKey.toBase58(), code, certificateId, idToken);
     const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
       sendTransaction(tx, connection, { skipPreflight: false }),
     );
-    setStatus(`Claimed certificates · ${sig}`);
+    try {
+      await finalizeClaimTx(publicKey.toBase58(), code, sig, idToken);
+      setStatus(`Claimed certificates · ${sig}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to record claim';
+      setStatus(`Claimed certificates · ${sig} (finalize warning: ${msg})`);
+    }
+    await refetchInventory();
   };
 
   const secondaryLinks = [
@@ -178,6 +192,15 @@ function App() {
       setAddressId(savedAddresses[0].id);
     }
   }, [addressId, savedAddresses]);
+
+  useEffect(() => {
+    const addr = savedAddresses.find((a) => a.id === addressId);
+    if (!addr || !selected.size) {
+      setDeliveryCost(undefined);
+      return;
+    }
+    setDeliveryCost(estimateDeliveryLamports(addr.country, selected.size));
+  }, [addressId, savedAddresses, selected]);
 
   return (
     <div className="page">
