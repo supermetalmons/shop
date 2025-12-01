@@ -18,6 +18,7 @@ import {
   finalizeMintTx,
   finalizeClaimTx,
   saveEncryptedAddress,
+  finalizeDeliveryTx,
 } from './lib/api';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
@@ -107,11 +108,13 @@ function App() {
     country,
     label,
     email,
+    countryCode,
   }: {
     formatted: string;
     country: string;
     label: string;
     email: string;
+    countryCode: string;
   }) => {
     const session = token ? { token, profile } : await signIn();
     const idToken = session?.token || token;
@@ -119,7 +122,7 @@ function App() {
     if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
     const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
     if (!idToken) throw new Error('Missing auth token');
-    const saved = await saveEncryptedAddress(cipherText, country, label, idToken, hint, email);
+    const saved = await saveEncryptedAddress(cipherText, country, label, idToken, hint, email, countryCode);
     if (updateProfile && (session?.profile || profile)) {
       const base = session?.profile || profile!;
       updateProfile({
@@ -141,17 +144,36 @@ function App() {
     const addr = savedAddresses.find((a) => a.id === addressId);
     if (!addr) throw new Error('Select a delivery address');
     if (!idToken) throw new Error('Missing auth token');
+    const deliverableIds = itemIds.filter((id) => {
+      const item = inventory.find((entry) => entry.id === id);
+      return item && item.kind !== 'certificate';
+    });
+    if (!deliverableIds.length) throw new Error('Select boxes or dudes to deliver');
+    if (deliverableIds.length !== itemIds.length) {
+      setSelected(new Set(deliverableIds));
+    }
+    const deliveryCountry = addr.countryCode || addr.country;
 
     setDeliveryLoading(true);
     setStatus('');
     try {
-      setDeliveryCost(estimateDeliveryLamports(addr.country, itemIds.length));
-      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds, addressId }, idToken || '');
-      setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(addr.country, itemIds.length));
+      setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
+      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId }, idToken || '');
+      setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
         sendTransaction(tx, connection, { skipPreflight: false }),
       );
-      setStatus(`Delivery requested · ${sig}`);
+      try {
+        if (resp.orderId) {
+          await finalizeDeliveryTx(publicKey.toBase58(), sig, resp.orderId, idToken);
+          setStatus(`Delivery recorded · ${sig}`);
+        } else {
+          setStatus(`Delivery requested · ${sig}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to record delivery';
+        setStatus(`Delivery requested · ${sig} (finalize warning: ${msg})`);
+      }
       setSelected(new Set());
       await refetchInventory();
     } finally {
@@ -159,13 +181,13 @@ function App() {
     }
   };
 
-  const handleClaim = async ({ code, certificateId }: { code: string; certificateId: string }) => {
+  const handleClaim = async ({ code }: { code: string }) => {
     if (!publicKey) throw new Error('Connect wallet to claim');
     const session = token ? { token, profile } : await signIn();
     const idToken = session?.token || token;
     if (!idToken) throw new Error('Missing auth token');
     setStatus('');
-    const resp = await requestClaimTx(publicKey.toBase58(), code, certificateId, idToken);
+    const resp = await requestClaimTx(publicKey.toBase58(), code, idToken);
     const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
       sendTransaction(tx, connection, { skipPreflight: false }),
     );
@@ -195,12 +217,17 @@ function App() {
 
   useEffect(() => {
     const addr = savedAddresses.find((a) => a.id === addressId);
-    if (!addr || !selected.size) {
+    const deliverableIds = Array.from(selected).filter((id) => {
+      const item = inventory.find((inv) => inv.id === id);
+      return item && item.kind !== 'certificate';
+    });
+    if (!addr || !deliverableIds.length) {
       setDeliveryCost(undefined);
       return;
     }
-    setDeliveryCost(estimateDeliveryLamports(addr.country, selected.size));
-  }, [addressId, savedAddresses, selected]);
+    const deliveryCountry = addr.countryCode || addr.country;
+    setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
+  }, [addressId, savedAddresses, selected, inventory]);
 
   return (
     <div className="page">

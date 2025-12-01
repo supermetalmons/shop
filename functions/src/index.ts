@@ -53,7 +53,7 @@ const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
 const totalSupply = cluster === 'mainnet-beta' ? prodSupply : devSupply;
 const totalDudes = totalSupply * DUDES_PER_BOX;
-const rpcUrl = process.env.SOLANA_RPC_URL || clusterApiUrl(cluster === 'testnet' ? 'testnet' : 'devnet');
+const rpcUrl = process.env.SOLANA_RPC_URL || clusterApiUrl(cluster);
 
 const merkleTree = new PublicKey(process.env.MERKLE_TREE || PublicKey.default.toBase58());
 const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
@@ -68,6 +68,15 @@ const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.defa
 const metadataBase = process.env.METADATA_BASE || 'https://assets.mons.link/metadata';
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
+
+function heliusRpcEndpoint() {
+  const custom = process.env.HELIUS_RPC_URL || process.env.HELIUS_RPC;
+  if (custom) return custom;
+  const helius = process.env.HELIUS_API_KEY;
+  if (!helius) throw new Error('Missing HELIUS_API_KEY');
+  const base = `https://rpc.helius.xyz/?api-key=${helius}`;
+  return cluster === 'mainnet-beta' ? base : `${base}&cluster=${cluster}`;
+}
 
 const treeAuthority = () =>
   Keypair.fromSecretKey(bs58.decode(process.env.TREE_AUTHORITY_SECRET || ''));
@@ -115,14 +124,12 @@ function buildMetadata(
   const dudes = (extra?.dudeIds || []).filter((id) => Number.isFinite(id)) as number[];
   const primaryDudeId = dudes[0] ?? index;
   const certificateTarget = kind === 'certificate' ? (extra?.boxId ? 'box' : dudes.length === 1 ? 'dude' : undefined) : undefined;
+  const allowDudeAttrs = kind !== 'certificate' || certificateTarget === 'dude';
   const name = (() => {
     if (kind === 'box') return `mons blind box #${index}`;
     if (kind === 'dude') return `mons dude #${primaryDudeId}`;
     if (certificateTarget === 'dude') return `mons certificate · dude #${primaryDudeId}`;
-    if (certificateTarget === 'box') {
-      const dudesSuffix = dudes.length > 1 ? ` · dudes ${dudes.map((d) => `#${d}`).join('/')}` : '';
-      return `mons certificate · box ${extra?.boxId?.slice(0, 6) || index}${dudesSuffix}`;
-    }
+    if (certificateTarget === 'box') return `mons certificate · box ${extra?.boxId?.slice(0, 6) || index}`;
     return `mons authenticity #${index}`;
   })();
 
@@ -140,8 +147,8 @@ function buildMetadata(
   const attrs = [
     { trait_type: 'type', value: kind },
     extra?.boxId ? { trait_type: 'box_id', value: extra.boxId } : null,
-    dudes.length === 1 ? { trait_type: 'dude_id', value: `${primaryDudeId}` } : null,
-    dudes.length > 1 ? { trait_type: 'dude_ids', value: dudes.join(',') } : null,
+    allowDudeAttrs && dudes.length === 1 ? { trait_type: 'dude_id', value: `${primaryDudeId}` } : null,
+    allowDudeAttrs && dudes.length > 1 ? { trait_type: 'dude_ids', value: dudes.join(',') } : null,
     certificateTarget ? { trait_type: 'certificate_for', value: certificateTarget } : null,
   ].filter(Boolean) as { trait_type: string; value: string }[];
 
@@ -294,21 +301,57 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+async function heliusRpc<T>(method: string, params: any, label: string): Promise<T> {
+  const url = heliusRpcEndpoint();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: label, method, params }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json?.error) {
+    const message = json?.error?.message || res.statusText || 'Unknown Helius RPC error';
+    throw new Error(`${label} ${message}`);
+  }
+  return json.result as T;
+}
+
 async function fetchAssetsOwned(owner: string) {
-  const helius = process.env.HELIUS_API_KEY;
-  const url = `https://api.helius.xyz/v0/addresses/${owner}/nfts?api-key=${helius}`;
-  return heliusJson(url, 'Helius assets error');
+  const grouping = collectionMintStr ? [{ groupKey: 'collection', groupValue: collectionMintStr }] : undefined;
+  const result = await heliusRpc<any>(
+    'searchAssets',
+    {
+      ownerAddress: owner,
+      grouping,
+      page: 1,
+      limit: 1000,
+      displayOptions: {
+        showCollectionMetadata: true,
+        showUnverifiedCollections: true,
+      },
+    },
+    'Helius assets error',
+  );
+  return Array.isArray(result?.items) ? result.items : [];
+}
+
+async function findCertificateForBox(owner: string, boxId: string) {
+  if (!boxId) return null;
+  const assets = await fetchAssetsOwned(owner);
+  return assets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxId) || null;
 }
 
 async function fetchAssetProof(assetId: string) {
   const helius = process.env.HELIUS_API_KEY;
-  const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}`;
+  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+  const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
   return heliusJson(url, 'Helius proof error');
 }
 
 async function fetchAsset(assetId: string) {
   const helius = process.env.HELIUS_API_KEY;
-  const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}`;
+  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+  const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}${clusterParam}`;
   const json = await heliusJson(url, 'Helius asset error');
   return json[0];
 }
@@ -416,6 +459,16 @@ async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) 
   return code;
 }
 
+function certificateIndexForItem(assetId: string, kind: 'box' | 'dude', dudeIds?: number[]) {
+  if (kind === 'dude' && dudeIds?.[0]) return dudeIds[0];
+  const input = `${kind}:${assetId}:${(dudeIds || []).join(',')}`;
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return (hash % 1_000_000) + 1;
+}
+
 function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
@@ -440,16 +493,26 @@ function transformInventoryItem(asset: any) {
   };
 }
 
-function shippingLamports(country: string, items: number) {
-  const normalized = (country || '').trim().toLowerCase();
+function normalizeCountryCode(country?: string) {
+  const normalized = (country || '').trim().toUpperCase();
+  if (!normalized) return '';
+  if (normalized.length === 2) return normalized;
   const compact = normalized.replace(/[\s.]/g, '');
-  const isUS =
-    compact === 'us' ||
-    compact === 'usa' ||
-    compact === 'unitedstates' ||
-    compact === 'unitedstatesofamerica' ||
-    normalized.includes('united states');
-  const base = isUS ? 0.15 : 0.32;
+  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA') return 'US';
+  return '';
+}
+
+function shippingZone(country?: string): 'us' | 'intl' {
+  const code = normalizeCountryCode(country);
+  if (code === 'US' || code === 'PR' || code === 'GU' || code === 'VI' || code === 'AS') return 'us';
+  const normalized = (country || '').trim().toLowerCase();
+  if (normalized.includes('united states')) return 'us';
+  return 'intl';
+}
+
+function shippingLamports(country: string, items: number) {
+  const zone = shippingZone(country);
+  const base = zone === 'us' ? 0.15 : 0.32;
   const multiplier = Math.max(1, items * 0.35);
   return Math.round(base * multiplier * LAMPORTS_PER_SOL);
 }
@@ -521,6 +584,26 @@ function extractMemos(tx: any): string[] {
 function findClaimMemo(tx: any, code: string) {
   const memos = extractMemos(tx);
   return memos.find((m) => m === `claim:${code}` || m.startsWith(`claim:${code}:`));
+}
+
+function extractCompressedAssetIds(tx: any) {
+  const logs: string[] = tx?.meta?.logMessages || [];
+  const regex = /asset(?:\s+|-)id[:\s]*([1-9A-HJ-NP-Za-km-z]{32,44})/i;
+  const found = new Set<string>();
+  logs.forEach((line) => {
+    const match = typeof line === 'string' ? line.match(regex) : null;
+    if (match?.[1]) found.add(match[1]);
+  });
+  return Array.from(found);
+}
+
+function lamportsDeltaForAccount(tx: any, account: PublicKey): number {
+  const keys = resolveInstructionAccounts(tx);
+  const idx = keys.findIndex((k) => k.equals(account));
+  if (idx === -1) return 0;
+  const pre = Number(tx?.meta?.preBalances?.[idx] || 0);
+  const post = Number(tx?.meta?.postBalances?.[idx] || 0);
+  return post - pre;
 }
 
 async function processClaimSignature(code: string, signature: string, owner: string) {
@@ -612,14 +695,24 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
   const schema = z.object({
     encrypted: z.string(),
     country: z.string(),
+    countryCode: z.string().optional(),
     label: z.string().default('Home'),
     hint: z.string(),
     email: z.string().email().optional(),
   });
   const body = schema.parse(req.body);
   const id = db.collection('tmp').doc().id;
+  const countryCode = normalizeCountryCode(body.countryCode || body.country);
   const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
-  await addressRef.set({ ...body, id, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+  await addressRef.set(
+    {
+      ...body,
+      countryCode: countryCode || body.countryCode,
+      id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
   await db.doc(`profiles/${uid}`).set(
     { wallet: uid, ...(body.email ? { email: body.email } : {}) },
     { merge: true },
@@ -628,6 +721,7 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     id,
     label: body.label,
     country: body.country,
+    countryCode: countryCode || body.countryCode,
     encrypted: body.encrypted,
     hint: body.hint,
     email: body.email,
@@ -736,7 +830,20 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
     throw new functions.https.HttpsError('not-found', 'Address not found');
   }
   const addressData = addressSnap.data();
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
+  const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
+  const orderId = db.collection('deliveryOrders').doc().id;
+  const instructions: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 }),
+    memoInstruction(`delivery:${orderId}`),
+  ];
+  const orderItems: {
+    assetId: string;
+    kind: 'box' | 'dude';
+    boxId?: string;
+    dudeIds?: number[];
+    certificateIndex: number;
+    claimCode?: string;
+  }[] = [];
   for (let i = 0; i < itemIds.length; i += 1) {
     const id = itemIds[i];
     const assetData = await fetchAssetWithProof(id);
@@ -755,17 +862,26 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
       throw new functions.https.HttpsError('failed-precondition', 'Certificates are already delivery outputs');
     }
     let dudeIds: number[] | undefined;
+    let claimCode: string | undefined;
     if (kind === 'box') {
       const assigned = await assignDudes(id);
       dudeIds = assigned;
-      await ensureClaimCode(id, assigned, owner);
+      claimCode = await ensureClaimCode(id, assigned, owner);
     }
     if (kind === 'dude') {
       const dudeId = getDudeIdFromAsset(assetData.asset);
       dudeIds = dudeId ? [dudeId] : undefined;
     }
-    const certIndex = i + 1;
     const boxRef = getBoxIdFromAsset(assetData.asset) || (kind === 'box' ? id : undefined);
+    const certIndex = certificateIndexForItem(boxRef || id, kind, dudeIds);
+    orderItems.push({
+      assetId: id,
+      kind,
+      boxId: boxRef,
+      dudeIds,
+      certificateIndex: certIndex,
+      claimCode,
+    });
     instructions.push(await createBurnIx(id, ownerPk, assetData));
     instructions.push(
       ...(await buildMintInstructions(ownerPk, 1, 'certificate', certIndex, {
@@ -774,11 +890,117 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
       })),
     );
   }
-  const deliveryPrice = shippingLamports(addressData?.country || 'unknown', itemIds.length);
+  const deliveryPrice = shippingLamports(addressCountry || 'unknown', itemIds.length);
   instructions.unshift(SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: shippingVault, lamports: deliveryPrice }));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
-  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice });
+  await db.doc(`deliveryOrders/${orderId}`).set({
+    status: 'prepared',
+    owner,
+    addressId,
+    addressSnapshot: {
+      ...addressData,
+      id: addressId,
+      countryCode: addressCountry || addressData?.countryCode,
+    },
+    itemIds,
+    items: orderItems,
+    shippingLamports: deliveryPrice,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId });
+});
+
+export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => {
+  if (maybeHandleCors(req, res)) return;
+  if (req.method !== 'POST') {
+    res.status(405).send('Method not allowed');
+    return;
+  }
+  const uid = await verifyAuth(req);
+  const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
+  const { owner, signature, orderId } = schema.parse(req.body);
+  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+
+  const orderRef = db.doc(`deliveryOrders/${orderId}`);
+  const orderSnap = await orderRef.get();
+  if (!orderSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Delivery order not found');
+  }
+  const order = orderSnap.data() as any;
+  if (order.owner && order.owner !== owner) {
+    throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
+  }
+  if (order.signature && order.signature !== signature && order.status === 'completed') {
+    res.status(409).json({ error: 'Order already finalized', signature: order.signature });
+    return;
+  }
+
+  const tx = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  if (!tx || tx.meta?.err) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction not found or failed');
+  }
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== owner) {
+    throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
+  }
+  const memo = extractMemos(tx).find((m) => m === `delivery:${orderId}`);
+  if (!memo) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery memo not found on transaction');
+  }
+  const shippingPaid = lamportsDeltaForAccount(tx, shippingVault);
+  if (order.shippingLamports && shippingPaid < order.shippingLamports) {
+    throw new functions.https.HttpsError('failed-precondition', 'Shipping payment missing or too low');
+  }
+  const mintedIds = extractCompressedAssetIds(tx);
+  const certificateSummary = (order.items || []).map(
+    (item: any, idx: number) => ({
+      assetId: item.assetId,
+      kind: item.kind,
+      boxId: item.boxId,
+      dudeIds: item.dudeIds,
+      certificateIndex: item.certificateIndex,
+      claimCode: item.claimCode,
+      mintedAssetId: mintedIds[idx] || null,
+    }),
+  );
+
+  let finalSignature = signature;
+  let finalShippingPaid = shippingPaid;
+  let finalCertificates = certificateSummary;
+  await db.runTransaction(async (trx) => {
+    const fresh = await trx.get(orderRef);
+    if (!fresh.exists) throw new functions.https.HttpsError('not-found', 'Delivery order not found');
+    const existing = fresh.data() as any;
+    if (existing.status === 'completed' && existing.signature) {
+      finalSignature = existing.signature;
+      finalShippingPaid = existing.shippingPaid || shippingPaid;
+      finalCertificates = existing.mintedCertificates || certificateSummary;
+      return;
+    }
+    trx.set(
+      orderRef,
+      {
+        status: 'completed',
+        signature,
+        payer: owner,
+        memoDetected: Boolean(memo),
+        shippingPaid,
+        mintedCertificates: certificateSummary,
+        burnedAssets: existing.itemIds || order.itemIds,
+        finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  res.json({
+    recorded: true,
+    signature: finalSignature,
+    orderId,
+    shippingPaid: finalShippingPaid,
+    certificates: finalCertificates,
+  });
 });
 
 export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
@@ -788,8 +1010,8 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     return;
   }
   const uid = await verifyAuth(req);
-  const schema = z.object({ owner: z.string(), code: z.string(), blindBoxCertificateId: z.string() });
-  const { owner, code, blindBoxCertificateId } = schema.parse(req.body);
+  const schema = z.object({ owner: z.string(), code: z.string() });
+  const { owner, code } = schema.parse(req.body);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const claimRef = db.doc(`claimCodes/${code}`);
@@ -816,9 +1038,9 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     res.status(409).json({ error: 'Claim already redeemed on-chain', signature: alreadyRedeemedSig });
     return;
   }
-  const certificate = await fetchAsset(blindBoxCertificateId);
+  const certificate = claim.boxId ? await findCertificateForBox(owner, claim.boxId) : null;
   if (!certificate) {
-    res.status(404).json({ error: 'Certificate asset not found' });
+    res.status(403).json({ error: 'Blind box certificate not found in wallet' });
     return;
   }
   const certificateOwner = certificate?.ownership?.owner;
@@ -844,6 +1066,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     res.status(400).json({ error: 'Certificate is outside the Mons collection' });
     return;
   }
+  const certificateId = certificate.id;
 
   const dudeIds: number[] = claim.dudeIds || [];
   if (!dudeIds.length) {
@@ -883,7 +1106,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
         pendingAttempt: {
           owner,
           attemptId,
-          certificateId: blindBoxCertificateId,
+          certificateId,
           expiresAt,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
@@ -912,6 +1135,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     certificates: dudeIds,
     attemptId,
     lockExpiresAt: expiresAt.toMillis(),
+    certificateId,
   });
 });
 
@@ -949,14 +1173,14 @@ export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
       throw new functions.https.HttpsError('not-found', 'Invalid claim code');
     }
     const data = fresh.data() as any;
-    if (data.redeemedAt || data.redeemedSignature) return;
-    txRef.update(claimRef, {
-      redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
-      redeemedBy: owner,
-      redeemedSignature: signature,
-      redeemedCertificateId: data.pendingAttempt?.certificateId,
-      pendingAttempt: admin.firestore.FieldValue.delete(),
-    });
+      if (data.redeemedAt || data.redeemedSignature) return;
+      txRef.update(claimRef, {
+        redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+        redeemedBy: owner,
+        redeemedSignature: signature,
+        redeemedCertificateId: data.pendingAttempt?.certificateId,
+        pendingAttempt: admin.firestore.FieldValue.delete(),
+      });
   });
 
   res.json({ recorded: true, signature });

@@ -17,7 +17,7 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 
 const network = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet') as WalletAdapterNetwork;
 const rpcEndpoint =
-  import.meta.env.VITE_RPC_URL || clusterApiUrl(network === 'testnet' ? 'testnet' : 'devnet');
+  import.meta.env.VITE_RPC_URL || clusterApiUrl(network);
 
 interface Props {
   children: ReactNode;

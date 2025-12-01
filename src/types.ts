@@ -22,6 +22,8 @@ export interface ProfileAddress {
   id: string;
   label: string;
   country: string;
+  countryCode?: string;
+  countryName?: string;
   hint: string;
   encrypted: string;
   email?: string;
@@ -44,6 +46,8 @@ export interface PreparedTxResponse {
   recorded?: number;
   attemptId?: string;
   lockExpiresAt?: number;
+  orderId?: string;
+  certificateId?: string;
 }
 
 export interface DeliverySelection {

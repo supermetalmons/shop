@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 
 interface DeliveryFormProps {
-  onSave: (payload: { formatted: string; country: string; label: string; email: string }) => Promise<void>;
+  onSave: (payload: { formatted: string; country: string; countryCode: string; label: string; email: string }) => Promise<void>;
   initialEmail?: string;
 }
 
@@ -12,11 +13,13 @@ export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [country, setCountry] = useState('');
+  const [countryCode, setCountryCode] = useState('US');
   const [label, setLabel] = useState('Home');
   const [email, setEmail] = useState(initialEmail || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const countryOption = useMemo(() => findCountryByCode(countryCode) || findCountryByCode('INTL'), [countryCode]);
+  const countryName = countryOption?.name || countryCode;
 
   useEffect(() => {
     setEmail(initialEmail || '');
@@ -32,11 +35,11 @@ export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
         line1,
         line2,
         `${city}, ${state} ${postalCode}`.trim(),
-        country,
+        countryName,
       ]
         .filter(Boolean)
         .join('\n');
-      await onSave({ formatted, country, label, email });
+      await onSave({ formatted, country: countryName, countryCode, label, email });
       setSaving(false);
     } catch (err) {
       setSaving(false);
@@ -84,7 +87,13 @@ export function DeliveryForm({ onSave, initialEmail }: DeliveryFormProps) {
         </label>
         <label>
           <span className="muted">Country</span>
-          <input required value={country} onChange={(e) => setCountry(e.target.value)} />
+          <select required value={countryCode} onChange={(e) => setCountryCode(e.target.value)}>
+            {COUNTRIES.map((option) => (
+              <option key={option.code} value={option.code}>
+                {countryLabel(option)}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           <span className="muted">Label</span>

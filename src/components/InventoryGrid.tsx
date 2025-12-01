@@ -22,7 +22,8 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
     <div className="inventory">
       {items.map((item) => {
         const isBox = item.kind === 'box';
-        const checked = selected.has(item.id);
+        const canSelect = item.kind !== 'certificate';
+        const checked = canSelect ? selected.has(item.id) : false;
         return (
           <article key={item.id} className="inventory__item">
             <header>
@@ -31,7 +32,8 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
                 <input
                   type="checkbox"
                   checked={checked}
-                  onChange={() => onToggle(item.id)}
+                  disabled={!canSelect}
+                  onChange={canSelect ? () => onToggle(item.id) : undefined}
                   aria-label={`Select ${item.name}`}
                 />
                 <span />
@@ -59,6 +61,7 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
                 ) : null}
                 <span className="muted small">{item.id.slice(0, 4)}…{item.id.slice(-4)}</span>
               </div>
+              {!canSelect ? <p className="muted small">Certificates are already delivery outputs.</p> : null}
             </div>
           </article>
         );

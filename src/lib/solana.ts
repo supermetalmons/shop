@@ -5,17 +5,27 @@ export function lamportsToSol(lamports = 0): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
 
+export function normalizeCountryCode(country?: string) {
+  const normalized = (country || '').trim().toUpperCase();
+  if (!normalized) return '';
+  if (normalized.length === 2) return normalized;
+  const compact = normalized.replace(/[\s.]/g, '');
+  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA') return 'US';
+  return '';
+}
+
+export function shippingZone(country?: string): 'us' | 'intl' {
+  const code = normalizeCountryCode(country);
+  if (code === 'US' || code === 'PR' || code === 'GU' || code === 'VI' || code === 'AS') return 'us';
+  const normalized = (country || '').trim().toLowerCase();
+  if (normalized.includes('united states')) return 'us';
+  return 'intl';
+}
+
 export function estimateDeliveryLamports(country: string, items: number): number {
   if (!items) return 0;
-  const normalized = (country || '').trim().toLowerCase();
-  const compact = normalized.replace(/[\s.]/g, '');
-  const isUS =
-    compact === 'us' ||
-    compact === 'usa' ||
-    compact === 'unitedstates' ||
-    compact === 'unitedstatesofamerica' ||
-    normalized.includes('united states');
-  const base = isUS ? 0.15 : 0.32;
+  const zone = shippingZone(country);
+  const base = zone === 'us' ? 0.15 : 0.32;
   const multiplier = Math.max(1, items * 0.35);
   return Math.round(base * multiplier * LAMPORTS_PER_SOL);
 }

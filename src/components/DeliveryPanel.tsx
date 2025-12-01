@@ -1,5 +1,6 @@
 import { ProfileAddress } from '../types';
-import { lamportsToSol } from '../lib/solana';
+import { lamportsToSol, normalizeCountryCode } from '../lib/solana';
+import { countryLabel, findCountryByCode } from '../lib/countries';
 
 interface DeliveryPanelProps {
   selectedCount: number;
@@ -20,6 +21,13 @@ export function DeliveryPanel({
   loading,
   costLamports,
 }: DeliveryPanelProps) {
+  const formatCountry = (addr: ProfileAddress) => {
+    const code = addr.countryCode || normalizeCountryCode(addr.country);
+    const option = findCountryByCode(code);
+    if (option) return countryLabel(option);
+    return addr.country || code || 'Unknown';
+  };
+
   return (
     <section className="card">
       <div className="card__title">Delivery</div>
@@ -41,7 +49,7 @@ export function DeliveryPanel({
           </option>
           {addresses.map((addr) => (
             <option key={addr.id} value={addr.id}>
-              {addr.label} · {addr.country} · {addr.hint}
+              {addr.label} · {formatCountry(addr)} · {addr.hint}
             </option>
           ))}
         </select>

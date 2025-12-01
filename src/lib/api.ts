@@ -77,11 +77,12 @@ export async function saveEncryptedAddress(
   token: string,
   hint: string,
   email?: string,
+  countryCode?: string,
 ): Promise<ProfileAddress> {
   return apiFetch<ProfileAddress>('/saveAddress', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ encrypted, country, label, hint, email }),
+    body: JSON.stringify({ encrypted, country, countryCode, label, hint, email }),
   });
 }
 
@@ -100,13 +101,12 @@ export async function requestDeliveryTx(
 export async function requestClaimTx(
   owner: string,
   code: string,
-  blindBoxCertificateId: string,
   token: string,
 ): Promise<PreparedTxResponse> {
   return apiFetch<PreparedTxResponse>('/prepareIrlClaimTx', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ owner, code, blindBoxCertificateId }),
+    body: JSON.stringify({ owner, code }),
   });
 }
 
@@ -143,5 +143,18 @@ export async function finalizeMintTx(
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     body: JSON.stringify({ owner, signature }),
+  });
+}
+
+export async function finalizeDeliveryTx(
+  owner: string,
+  signature: string,
+  orderId: string,
+  token: string,
+): Promise<{ recorded: boolean; signature: string; orderId: string }> {
+  return apiFetch('/finalizeDeliveryTx', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ owner, signature, orderId }),
   });
 }

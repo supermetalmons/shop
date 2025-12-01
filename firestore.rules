@@ -23,5 +23,9 @@ service cloud.firestore {
     match /claimCodes/{code} {
       allow read, write: if false; // claim codes are redeemed server-side only
     }
+
+    match /deliveryOrders/{orderId} {
+      allow read, write: if false; // delivery orders are tracked server-side only
+    }
   }
 }
