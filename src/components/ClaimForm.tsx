@@ -17,7 +17,7 @@ export function ClaimForm({ onClaim }: ClaimFormProps) {
     setSuccess(null);
     try {
       await onClaim({ code: code.trim() });
-      setSuccess('Claim request sent. We auto-selected your blind box certificate.');
+      setSuccess('Claim submitted successfully! Your dude certificates are being minted.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

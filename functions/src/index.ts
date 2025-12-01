@@ -49,6 +49,9 @@ const DUDES_PER_BOX = 3;
 const devSupply = Number(process.env.TEST_SUPPLY || 11);
 const prodSupply = Number(process.env.TOTAL_SUPPLY || 333);
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
+const MINT_SYNC_TTL_MS = 30_000;
+let lastMintSyncAttemptMs = 0;
+let mintSyncInFlight: Promise<void> | null = null;
 
 const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
 const totalSupply = cluster === 'mainnet-beta' ? prodSupply : devSupply;
@@ -277,6 +280,25 @@ async function syncMintedFromChain(limit = 100) {
     }
     if (sigs.length < 20) break;
   }
+}
+
+async function maybeSyncMintedFromChain(force = false) {
+  const now = Date.now();
+  const recentlyAttempted = now - lastMintSyncAttemptMs < MINT_SYNC_TTL_MS;
+  if (!force && recentlyAttempted) {
+    return mintSyncInFlight || Promise.resolve();
+  }
+  if (mintSyncInFlight) return mintSyncInFlight;
+  lastMintSyncAttemptMs = now;
+  mintSyncInFlight = syncMintedFromChain()
+    .catch((err) => {
+      functions.logger.error('syncMintedFromChain failed', err);
+    })
+    .finally(() => {
+      lastMintSyncAttemptMs = Date.now();
+      mintSyncInFlight = null;
+    });
+  return mintSyncInFlight;
 }
 
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
@@ -665,7 +687,7 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
 
 export const stats = functions.https.onRequest(async (req, res) => {
   if (maybeHandleCors(req, res)) return;
-  await syncMintedFromChain();
+  await maybeSyncMintedFromChain();
   const stats = await getMintStats();
   res.json(stats);
 });
@@ -734,7 +756,7 @@ export const prepareMintTx = functions.https.onRequest(async (req, res) => {
     res.status(405).send('Method not allowed');
     return;
   }
-  await syncMintedFromChain();
+  await maybeSyncMintedFromChain();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
   const { owner, quantity } = schema.parse(req.body);
   const ownerPk = new PublicKey(owner);
