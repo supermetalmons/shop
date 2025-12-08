@@ -11,12 +11,12 @@
   "dependencies": {
     "@metaplex-foundation/mpl-bubblegum": "^0.11.0",
     "@metaplex-foundation/mpl-token-metadata": "^2.3.3",
-    "@solana/spl-account-compression": "^0.4.1",
+    "@solana/spl-account-compression": "^0.1.10",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
     "cross-fetch": "^4.1.0",
     "firebase-admin": "^12.7.0",
-    "firebase-functions": "^5.1.0",
+    "firebase-functions": "^7.0.1",
     "tweetnacl": "^1.0.3",
     "zod": "^3.25.76"
   },

@@ -1,4 +1,7 @@
-import * as admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import type { Request, Response } from 'express';
 import * as functions from 'firebase-functions';
 import {
   ComputeBudgetProgram,
@@ -27,8 +30,9 @@ import nacl from 'tweetnacl';
 import { randomBytes, randomInt } from 'crypto';
 import { z } from 'zod';
 
-admin.initializeApp();
-const db = admin.firestore();
+const app = initializeApp();
+const db = getFirestore(app);
+const auth = getAuth(app);
 const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 const corsHeaders = {
@@ -36,7 +40,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-function maybeHandleCors(req: functions.Request, res: functions.Response) {
+function maybeHandleCors(req: Request, res: Response) {
   res.set(corsHeaders);
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
@@ -241,7 +245,7 @@ async function recordMintedBoxes(signature: string, owner: string, minted: numbe
       signature,
       owner,
       minted,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   });
 }
@@ -457,7 +461,7 @@ async function assignDudes(boxId: string): Promise<number[]> {
       pool.splice(pick, 1);
     }
     tx.set(poolRef, { available: pool }, { merge: true });
-    tx.set(ref, { dudeIds: chosen, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+    tx.set(ref, { dudeIds: chosen, createdAt: FieldValue.serverTimestamp() });
     return chosen;
   });
 }
@@ -476,7 +480,7 @@ async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) 
     boxId,
     dudeIds,
     owner,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
   return code;
 }
@@ -539,11 +543,11 @@ function shippingLamports(country: string, items: number) {
   return Math.round(base * multiplier * LAMPORTS_PER_SOL);
 }
 
-async function verifyAuth(req: functions.Request) {
+async function verifyAuth(req: Request) {
   const header = req.headers.authorization || '';
   const token = header.replace('Bearer ', '');
   if (!token) throw new functions.https.HttpsError('unauthenticated', 'Missing auth token');
-  const decoded = await admin.auth().verifyIdToken(token);
+  const decoded = await auth.verifyIdToken(token);
   return decoded.uid;
 }
 
@@ -663,11 +667,11 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  const userRecord = await admin.auth().getUser(wallet).catch(() => null);
+  const userRecord = await auth.getUser(wallet).catch(() => null);
   if (!userRecord) {
-    await admin.auth().createUser({ uid: wallet, email: `${wallet}@mons.shop` }).catch(() => undefined);
+    await auth.createUser({ uid: wallet, email: `${wallet}@mons.shop` }).catch(() => undefined);
   }
-  const customToken = await admin.auth().createCustomToken(wallet);
+  const customToken = await auth.createCustomToken(wallet);
   const profileRef = db.doc(`profiles/${wallet}`);
   const snap = await profileRef.get();
   const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
@@ -731,7 +735,7 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
       ...body,
       countryCode: countryCode || body.countryCode,
       id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     },
     { merge: true },
   );
@@ -928,7 +932,7 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
     itemIds,
     items: orderItems,
     shippingLamports: deliveryPrice,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
   res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId });
 });
@@ -1010,7 +1014,7 @@ export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => 
         shippingPaid,
         mintedCertificates: certificateSummary,
         burnedAssets: existing.itemIds || order.itemIds,
-        finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+        finalizedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     );
@@ -1051,7 +1055,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
   if (alreadyRedeemedSig) {
     await claimRef.set(
       {
-        redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+        redeemedAt: FieldValue.serverTimestamp(),
         redeemedBy: owner,
         redeemedSignature: alreadyRedeemedSig,
       },
@@ -1108,7 +1112,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
   }
 
   const attemptId = randomBytes(8).toString('hex');
-  const expiresAt = admin.firestore.Timestamp.fromMillis(nowMs + CLAIM_LOCK_WINDOW_MS);
+  const expiresAt = Timestamp.fromMillis(nowMs + CLAIM_LOCK_WINDOW_MS);
   try {
     await db.runTransaction(async (txRef) => {
       const fresh = await txRef.get(claimRef);
@@ -1130,7 +1134,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
           attemptId,
           certificateId,
           expiresAt,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         },
       });
     });
@@ -1197,11 +1201,11 @@ export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
     const data = fresh.data() as any;
       if (data.redeemedAt || data.redeemedSignature) return;
       txRef.update(claimRef, {
-        redeemedAt: admin.firestore.FieldValue.serverTimestamp(),
+        redeemedAt: FieldValue.serverTimestamp(),
         redeemedBy: owner,
         redeemedSignature: signature,
         redeemedCertificateId: data.pendingAttempt?.certificateId,
-        pendingAttempt: admin.firestore.FieldValue.delete(),
+        pendingAttempt: FieldValue.delete(),
       });
   });
 
