@@ -41,13 +41,19 @@ All commands run from repo root unless noted.
 Record all outputs for the function environment in step 2.
 
 ## 2) Function runtime environment
-Set these as deployed Function env vars (use `firebase functions:env:set` for 2nd-gen, or Cloud Console env vars if preferred; use `firebase functions:secrets:set` for secrets):
+Use `functions/.env.example` as the template for both local emulation and deployment. Copy and fill it:
+```bash
+cd functions
+cp .env.example .env.local   # for emulators
+cp .env.example .env.deploy  # for deployment; edit with real values
+```
+Keys in the template:
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (devnet|testnet|mainnet-beta)
 - `SOLANA_RPC_URL` (match the cluster; can be Helius RPC)
 - `MERKLE_TREE`
 - `TREE_AUTHORITY_SECRET`
-- `COSIGNER_SECRET` (optional, defaults to tree authority)
+- `COSIGNER_SECRET` (optional, defaults to tree authority if left blank)
 - `COLLECTION_MINT`
 - `COLLECTION_METADATA`
 - `COLLECTION_MASTER_EDITION`
@@ -56,28 +62,12 @@ Set these as deployed Function env vars (use `firebase functions:env:set` for 2n
 - `METADATA_BASE`
 - `TEST_SUPPLY` (dev cap) and `TOTAL_SUPPLY` (prod cap)
 
-Example (run inside `functions/`):
+Push the filled deployment file to Cloud Functions env vars (2nd-gen):
 ```bash
-firebase functions:env:set \
-  HELIUS_API_KEY="..." \
-  SOLANA_CLUSTER="devnet" \
-  SOLANA_RPC_URL="https://api.devnet.solana.com" \
-  MERKLE_TREE="..." \
-  TREE_AUTHORITY_SECRET="..." \
-  COLLECTION_MINT="..." \
-  COLLECTION_METADATA="..." \
-  COLLECTION_MASTER_EDITION="..." \
-  COLLECTION_UPDATE_AUTHORITY="..." \
-  DELIVERY_VAULT="..." \
-  METADATA_BASE="https://<metadata-host>/metadata" \
-  TEST_SUPPLY="11" \
-  TOTAL_SUPPLY="333"
-# Optional
-firebase functions:env:set COSIGNER_SECRET="..."
-# For secrets you prefer to hide from env:get, use: firebase functions:secrets:set HELIUS_API_KEY
+cd functions
+xargs -a .env.deploy firebase functions:env:set
+# Optional: firebase functions:secrets:set HELIUS_API_KEY
 ```
-
-For local emulation, export these vars in your shell or create a `.env.local` in `functions/` with the same keys.
 
 ## 3) Firebase services deployment
 1. Point CLI at the project: `firebase use <project-id>`.
