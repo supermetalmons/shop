@@ -15,7 +15,7 @@ All commands run from repo root unless noted.
        --keypair ~/.config/solana/id.json \
        --name "test boxes" \
        --symbol testboxes \
-       --uri https://<metadata-base>/collection.json
+       --uri https://assets.mons.link/collection.json
      ```
      Outputs: `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`.
    - If a collection mint already exists: `npm run tree:derive-collection -- --mint <mint> [--authority <update-auth-pubkey>]`.

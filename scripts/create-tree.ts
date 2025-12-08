@@ -8,7 +8,11 @@ import {
   sendAndConfirmTransaction,
   Transaction,
 } from '@solana/web3.js';
-import { createAllocTreeIx, createInitEmptyMerkleTreeIx, ValidDepthSizePair } from '@solana/spl-account-compression';
+import {
+  createAllocTreeIx,
+  createInitEmptyMerkleTreeIx,
+  ValidDepthSizePair,
+} from '@solana/spl-account-compression';
 import bs58 from 'bs58';
 
 function getArg(flag: string, fallback?: string) {
@@ -53,7 +57,8 @@ async function main() {
   tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
   tx.partialSign(tree);
 
-  const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
+  // Tree account is also a signer; include it so the transaction is fully signed.
+  const sig = await sendAndConfirmTransaction(connection, tx, [payer, tree], { commitment: 'confirmed' });
 
   console.log('✅ Tree created');
   console.log('  Signature:', sig);
