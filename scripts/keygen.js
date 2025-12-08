@@ -1,5 +1,5 @@
-const { Keypair } = require('@solana/web3.js');
-const bs58 = require('bs58');
+import { Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 const kp = Keypair.generate();
 console.log('Public key:', kp.publicKey.toBase58());
