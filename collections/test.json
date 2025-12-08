@@ -1,0 +1,25 @@
+{
+  "name": "test boxes",
+  "symbol": "testboxes",
+  "description": "test boxes and certs collection",
+  "image": "https://<metadata-base>/collection.png",
+  "external_url": "https://mons.shop",
+  "seller_fee_basis_points": 0,
+  "attributes": [],
+  "properties": {
+    "files": [
+      {
+        "uri": "https://<metadata-base>/collection.png",
+        "type": "image/png"
+      }
+    ],
+    "category": "image",
+    "creators": [
+      {
+        "address": "<update-authority-pubkey>",
+        "share": 100
+      }
+    ]
+  }
+}
+

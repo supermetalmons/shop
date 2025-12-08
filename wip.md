@@ -13,8 +13,8 @@ All commands run from repo root unless noted.
      npm run collection:create -- \
        --cluster devnet \
        --keypair ~/.config/solana/id.json \
-       --name "mons collection" \
-       --symbol MONS \
+       --name "test boxes" \
+       --symbol testboxes \
        --uri https://<metadata-base>/collection.json
      ```
      Outputs: `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`.
