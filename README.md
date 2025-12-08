@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions back the Helius lookups, tx prep, and encrypted deliveries.
+React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions back the Helius lookups, tx prep, and encrypted deliveries. See `deployment-plan.md` for full end-to-end deployment steps.
 
 ## Frontend
 - Install deps: `npm install`
@@ -29,7 +29,8 @@ VITE_SECONDARY_MAGICEDEN=...
 
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
-- Deploy/emulate with the Firebase CLI (`firebase emulators:start --only functions,firestore`).
+- Set env vars (see `deployment-plan.md`), then deploy: `firebase deploy --only firestore:rules,functions`
+- Emulate locally with `firebase emulators:start --only functions,firestore`.
 - Firestore rules live in `firestore.rules` (profiles+addresses are user-restricted, everything else locked down).
 
 ### Function env (set as runtime config or shell env)
