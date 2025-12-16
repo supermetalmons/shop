@@ -2,7 +2,7 @@ import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profil
 
 const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 const defaultBase = projectId ? `https://us-central1-${projectId}.cloudfunctions.net` : '';
-const BASE_URL = import.meta.env.VITE_FUNCTIONS_BASE_URL || defaultBase;
+const BASE_URL = defaultBase;
 
 interface ApiError {
   error: string;
@@ -10,7 +10,7 @@ interface ApiError {
 }
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (!BASE_URL) throw new Error('Missing VITE_FUNCTIONS_BASE_URL or project id');
+  if (!BASE_URL) throw new Error('Missing project id');
   const url = `${BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
   const res = await fetch(url, {
     headers: {

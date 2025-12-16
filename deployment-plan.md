@@ -100,7 +100,6 @@ xargs -L1 firebase functions:env:set < .env.deploy
    ```
    VITE_SOLANA_CLUSTER=devnet
    VITE_RPC_URL=https://api.devnet.solana.com
-   VITE_FUNCTIONS_BASE_URL=https://us-central1-<project-id>.cloudfunctions.net
    VITE_FIREBASE_API_KEY=<api-key>
    VITE_FIREBASE_AUTH_DOMAIN=<project-id>.firebaseapp.com
    VITE_FIREBASE_PROJECT_ID=<project-id>

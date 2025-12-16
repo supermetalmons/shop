@@ -12,7 +12,6 @@ React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes
 ```
 VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
 VITE_RPC_URL=https://your-rpc
-VITE_FUNCTIONS_BASE_URL=https://us-central1-<project>.cloudfunctions.net
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 VITE_SECONDARY_TENSOR=...
