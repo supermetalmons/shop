@@ -21,6 +21,7 @@ import {
   TokenStandard,
   createBurnInstruction,
   createMintToCollectionV1Instruction,
+  mintToCollectionV1InstructionDiscriminator,
 } from '@metaplex-foundation/mpl-bubblegum';
 import { SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana/spl-account-compression';
 import bs58 from 'bs58';
@@ -106,6 +107,12 @@ let mintSyncInFlight: Promise<void> | null = null;
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
 const totalDudes = totalSupply * DUDES_PER_BOX;
 const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
+
+function treeAuthorityPda(tree: PublicKey) {
+  // Bubblegum expects the tree authority (TreeConfig) PDA, not the wallet that created/delegates the tree.
+  // PDA seed is the Merkle tree pubkey.
+  return PublicKey.findProgramAddressSync([tree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
+}
 
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
@@ -377,6 +384,7 @@ async function buildMintInstructions(
   const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
   const collectionAuthorityRecord = collectionAuthorityRecordPda();
   const treeAuthorityKey = treeAuthority();
+  const treeAuthorityConfig = treeAuthorityPda(merkleTree);
 
   for (let i = 0; i < quantity; i += 1) {
     const perMintDudeIds =
@@ -391,7 +399,7 @@ async function buildMintInstructions(
         {
           payer: owner,
           merkleTree,
-          treeAuthority: treeAuthorityKey.publicKey,
+          treeAuthority: treeAuthorityConfig,
           treeDelegate: treeAuthorityKey.publicKey,
           leafOwner: owner,
           leafDelegate: owner,
@@ -674,7 +682,7 @@ async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?
 
   const ix = createBurnInstruction(
     {
-      treeAuthority: treeAuthority().publicKey,
+      treeAuthority: treeAuthorityPda(merkle),
       leafOwner: new PublicKey(asset.ownership.owner),
       leafDelegate: owner,
       merkleTree: merkle,
@@ -824,9 +832,14 @@ function hasMintMemo(tx: any) {
 
 function countMintInstructions(tx: any, ownerPk: PublicKey) {
   const keys = resolveInstructionAccounts(tx);
+  const mintDisc = Buffer.from(mintToCollectionV1InstructionDiscriminator);
   return (tx?.transaction?.message?.compiledInstructions || []).reduce((count: number, ix: any) => {
     const program = keys[ix.programIdIndex];
     if (!program || !program.equals(BUBBLEGUM_PROGRAM_ID)) return count;
+    const dataField = (ix as any).data;
+    const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
+    if (dataBuffer.length < mintDisc.length) return count;
+    if (!dataBuffer.subarray(0, mintDisc.length).equals(mintDisc)) return count;
     const accountIndexes = ix.accounts || ix.accountKeyIndexes || [];
     const ixAccounts = accountIndexes.map((idx: number) => keys[idx]);
     const touchesTree = ixAccounts.some((k: PublicKey) => k.equals(merkleTree));

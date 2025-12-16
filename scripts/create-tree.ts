@@ -4,18 +4,22 @@ import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
   clusterApiUrl,
   sendAndConfirmTransaction,
   Transaction,
 } from '@solana/web3.js';
 import {
   createAllocTreeIx,
-  createInitEmptyMerkleTreeIx,
+  SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+  SPL_NOOP_PROGRAM_ID,
   ValidDepthSizePair,
 } from '@solana/spl-account-compression';
+import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID, createCreateTreeInstruction } from '@metaplex-foundation/mpl-bubblegum';
 import bs58 from 'bs58';
 
-function getArg(flag: string, fallback?: string) {
+function getArg(flag: string, fallback = ''): string {
   const idx = process.argv.indexOf(flag);
   if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1];
   return fallback;
@@ -50,9 +54,22 @@ async function main() {
 
   const depthSize: ValidDepthSizePair = { maxDepth: depth, maxBufferSize: bufferSize } as ValidDepthSizePair;
   const allocIx = await createAllocTreeIx(connection, tree.publicKey, payer.publicKey, depthSize, canopy);
-  const initIx = createInitEmptyMerkleTreeIx(tree.publicKey, payer.publicKey, depthSize);
+  const [treeAuthorityPda] = PublicKey.findProgramAddressSync([tree.publicKey.toBuffer()], BUBBLEGUM_PROGRAM_ID);
+  const createTreeIx = createCreateTreeInstruction(
+    {
+      treeAuthority: treeAuthorityPda,
+      merkleTree: tree.publicKey,
+      payer: payer.publicKey,
+      treeCreator: payer.publicKey,
+      logWrapper: SPL_NOOP_PROGRAM_ID,
+      compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    },
+    { maxDepth: depth, maxBufferSize: bufferSize, public: null },
+  );
 
-  const tx = new Transaction().add(allocIx, initIx);
+  // Allocate the Merkle tree account (system + compression program), then initialize Bubblegum TreeConfig (PDA).
+  const tx = new Transaction().add(allocIx, createTreeIx);
   tx.feePayer = payer.publicKey;
   tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
   tx.partialSign(tree);
@@ -63,6 +80,7 @@ async function main() {
   console.log('✅ Tree created');
   console.log('  Signature:', sig);
   console.log('  Merkle tree address:', tree.publicKey.toBase58());
+  console.log('  Bubblegum tree authority (TreeConfig PDA):', treeAuthorityPda.toBase58());
   console.log('  Tree keypair (base58, keep only if you really need it):', bs58.encode(tree.secretKey));
   console.log('  Tree authority (payer) pubkey:', payer.publicKey.toBase58());
   console.log('--- env for functions ---');
