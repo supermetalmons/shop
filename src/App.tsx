@@ -255,7 +255,7 @@ function App() {
 
       <div className="hero">
         <div className="hero__media">
-          <img src="https://assets.mons.link/shop/drops/1/box.webp" alt="mons blind box" />
+          <img src="https://assets.mons.link/shop/drops/1/box/default.webp" alt="mons blind box" />
         </div>
         <div className="card hero__copy">
           <div className="eyebrow">Mint drop</div>
