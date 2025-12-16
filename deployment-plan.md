@@ -76,10 +76,10 @@ Keys in the template:
 - `METADATA_BASE`
 - `TOTAL_SUPPLY` (default 333; global cap)
 
-Push the filled deployment file to Cloud Functions env vars (2nd-gen):
+Push the filled deployment file to Cloud Functions env vars (2nd-gen). Requires `firebase-tools` with `functions:env:*` support (update with `npm i -g firebase-tools@latest` if the command is missing):
 ```bash
 cd functions
-xargs -a .env.deploy firebase functions:env:set
+xargs -L1 firebase functions:env:set < .env.deploy
 # Optional: firebase functions:secrets:set HELIUS_API_KEY
 ```
 
