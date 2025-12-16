@@ -421,6 +421,7 @@ FodyWeavers.xsd
 dist/
 .vite/
 .env.local
+.env.deploy
 .env
 firebase-debug.log
 functions/node_modules/
