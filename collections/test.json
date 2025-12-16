@@ -2,21 +2,21 @@
   "name": "test boxes",
   "symbol": "testboxes",
   "description": "test boxes and certs collection",
-  "image": "https://<metadata-base>/collection.png",
+  "image": "https://assets.mons.link/shop/drops/1/box/default.webp",
   "external_url": "https://mons.shop",
   "seller_fee_basis_points": 0,
   "attributes": [],
   "properties": {
     "files": [
       {
-        "uri": "https://<metadata-base>/collection.png",
+        "uri": "https://assets.mons.link/shop/drops/1/box/default.webp",
         "type": "image/png"
       }
     ],
     "category": "image",
     "creators": [
       {
-        "address": "<update-authority-pubkey>",
+        "address": "Aj42b5TrjeZyAVeZVxpjV8nxQ7CSExjmYV42NwuFcjqa",
         "share": 100
       }
     ]
