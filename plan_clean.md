@@ -28,9 +28,9 @@ one last thing possible to do will be entering a code for claiming dudes certifi
 
 - mint tx. 1-20 cnft boxes in a single transaction.
 
-total boxes supply will be 333 boxes. during the development let's test it with 11 boxes on devnet and then on testnet.
+total boxes supply will be 333 boxes.
 
-each box contains 3 dudes. so in prod there will be 999 dudes total, and for test 33 dudes total.
+each box contains 3 dudes, so there will be 999 dudes total.
 
 
 - open blind box tx. open 1 specific blind box: blind box cnft gets deleted, 3 dudes cfts created with ids and data prepared by the cloud function. this tx has to be co-signed by a cloud function.

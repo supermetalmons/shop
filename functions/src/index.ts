@@ -50,15 +50,13 @@ function maybeHandleCors(req: Request, res: Response) {
 }
 
 const DUDES_PER_BOX = 3;
-const devSupply = Number(process.env.TEST_SUPPLY || 11);
-const prodSupply = Number(process.env.TOTAL_SUPPLY || 333);
+const totalSupply = Number(process.env.TOTAL_SUPPLY || 333);
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 const MINT_SYNC_TTL_MS = 30_000;
 let lastMintSyncAttemptMs = 0;
 let mintSyncInFlight: Promise<void> | null = null;
 
 const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
-const totalSupply = cluster === 'mainnet-beta' ? prodSupply : devSupply;
 const totalDudes = totalSupply * DUDES_PER_BOX;
 const rpcUrl = process.env.SOLANA_RPC_URL || clusterApiUrl(cluster);
 

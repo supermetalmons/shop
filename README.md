@@ -42,10 +42,10 @@ VITE_SECONDARY_MAGICEDEN=...
 - `MERKLE_TREE`, `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`
 - `DELIVERY_VAULT` (SOL recipient for shipping)
 - `METADATA_BASE` (base URI with box/dude/certificate JSON)
-- `TEST_SUPPLY` (defaults 11) and `TOTAL_SUPPLY` (defaults 333)
+- `TOTAL_SUPPLY` (defaults 333; global cap across all clusters)
 
 ### What the functions do
-- `stats`: mint progress (dev/test cap 11, prod cap 333).
+- `stats`: mint progress (cap 333 boxes → 999 dudes).
 - `inventory`: Helius lookup for boxes/dudes/certificates shown in the grid.
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
 - `saveAddress`: stores an encrypted address blob + country/label under the wallet.
@@ -60,6 +60,6 @@ VITE_SECONDARY_MAGICEDEN=...
 - Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).
 
 ## Notes
-- Supply is capped by cluster: 11 on dev/test, 333 on mainnet. Adjust via env above.
+- Supply is capped at 333 boxes (999 dudes). Adjust via `TOTAL_SUPPLY` if needed.
 - Delivery addresses are encrypted client-side with TweetNaCl; only country + label are stored in clear.
 - Secondary links & email form swap in automatically once the drop is minted out.

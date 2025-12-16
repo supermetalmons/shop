@@ -35,7 +35,7 @@ All commands run from repo root unless noted.
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
 5. Decide supplies & metadata:
    - `METADATA_BASE` should host `box.json`, `dude/<id>.json`, `certificate/...`.
-   - `TEST_SUPPLY` (dev/test, default 11) and `TOTAL_SUPPLY` (prod, default 333).
+   - `TOTAL_SUPPLY` (default 333; global cap across all clusters).
 6. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 
 Record all outputs for the function environment in step 2.
@@ -60,7 +60,7 @@ Keys in the template:
 - `COLLECTION_UPDATE_AUTHORITY`
 - `DELIVERY_VAULT`
 - `METADATA_BASE`
-- `TEST_SUPPLY` (dev cap) and `TOTAL_SUPPLY` (prod cap)
+- `TOTAL_SUPPLY` (default 333; global cap)
 
 Push the filled deployment file to Cloud Functions env vars (2nd-gen):
 ```bash
@@ -112,7 +112,7 @@ xargs -a .env.deploy firebase functions:env:set
 6. Create a claim code via delivery, then test `/prepareIrlClaimTx` + `/finalizeClaimTx` with the same wallet and certificate present.
 
 ## 6) Production cutover checklist
-- Switch `SOLANA_CLUSTER`, `SOLANA_RPC_URL`, `TOTAL_SUPPLY`, metadata base, and any secondary links to mainnet values.
+- Switch `SOLANA_CLUSTER`, `SOLANA_RPC_URL`, metadata base, and any secondary links to mainnet values.
 - Re-run collection/tree/vault steps on mainnet; update function env vars accordingly.
 - Fund the tree authority and shipping vault with sufficient SOL.
 - Monitor Helius usage/limits; set alerts.
