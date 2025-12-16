@@ -72,13 +72,26 @@ async function main() {
     TOKEN_METADATA_PROGRAM_ID,
   )[0];
   const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-  const collectionAuthorityRecordPda = PublicKey.findProgramAddressSync(
+  const bubblegumCollectionAuthorityRecordPda = PublicKey.findProgramAddressSync(
     [
       Buffer.from('metadata'),
       TOKEN_METADATA_PROGRAM_ID.toBuffer(),
       mint.publicKey.toBuffer(),
       Buffer.from('collection_authority'),
       bubblegumSigner.toBuffer(),
+    ],
+    TOKEN_METADATA_PROGRAM_ID,
+  )[0];
+  // Bubblegum's MintToCollectionV1 requires `collectionAuthority` to be a real signer.
+  // We pre-build transactions in Cloud Functions, so we approve the same payer/update-authority keypair
+  // as a delegated collection authority too (this creates the record PDA Bubblegum expects).
+  const payerCollectionAuthorityRecordPda = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('metadata'),
+      TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+      mint.publicKey.toBuffer(),
+      Buffer.from('collection_authority'),
+      payer.publicKey.toBuffer(),
     ],
     TOKEN_METADATA_PROGRAM_ID,
   )[0];
@@ -132,8 +145,17 @@ async function main() {
       { createMasterEditionArgs: { maxSupply: 0 } },
     ),
     createApproveCollectionAuthorityInstruction({
-      collectionAuthorityRecord: collectionAuthorityRecordPda,
+      collectionAuthorityRecord: bubblegumCollectionAuthorityRecordPda,
       newCollectionAuthority: bubblegumSigner,
+      updateAuthority: payer.publicKey,
+      payer: payer.publicKey,
+      metadata: metadataPda,
+      mint: mint.publicKey,
+      systemProgram: SystemProgram.programId,
+    }),
+    createApproveCollectionAuthorityInstruction({
+      collectionAuthorityRecord: payerCollectionAuthorityRecordPda,
+      newCollectionAuthority: payer.publicKey,
       updateAuthority: payer.publicKey,
       payer: payer.publicKey,
       metadata: metadataPda,
@@ -155,7 +177,8 @@ async function main() {
   console.log('  Master edition PDA:', masterEditionPda.toBase58());
   console.log('  Update authority:', payer.publicKey.toBase58());
   console.log('  Bubblegum collection_cpi signer:', bubblegumSigner.toBase58());
-  console.log('  Collection authority record (for bubblegum signer):', collectionAuthorityRecordPda.toBase58());
+  console.log('  Collection authority record (for bubblegum signer):', bubblegumCollectionAuthorityRecordPda.toBase58());
+  console.log('  Collection authority record (for payer signer):', payerCollectionAuthorityRecordPda.toBase58());
   console.log('--- env for functions ---');
   console.log(`COLLECTION_MINT=${mint.publicKey.toBase58()}`);
   console.log(`COLLECTION_METADATA=${metadataPda.toBase58()}`);

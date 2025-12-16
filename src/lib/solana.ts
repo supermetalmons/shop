@@ -38,6 +38,29 @@ async function extractSendTransactionLogs(err: unknown): Promise<string[] | unde
   return undefined;
 }
 
+function isZeroSignature(sig: Uint8Array | null | undefined): boolean {
+  if (!sig || !(sig instanceof Uint8Array)) return true;
+  for (let i = 0; i < sig.length; i += 1) {
+    if (sig[i] !== 0) return false;
+  }
+  return true;
+}
+
+function describeRequiredSigners(tx: VersionedTransaction): { required: string[]; missingNonPayer: string[] } | null {
+  const msg: any = (tx as any).message;
+  const header = msg?.header;
+  const staticKeys = msg?.staticAccountKeys;
+  const num = header?.numRequiredSignatures;
+  if (!Array.isArray(staticKeys) || typeof num !== 'number' || num <= 0) return null;
+
+  const required = staticKeys.slice(0, num).map((k: any) => (typeof k?.toBase58 === 'function' ? k.toBase58() : String(k)));
+  const missingNonPayer: string[] = [];
+  for (let i = 1; i < Math.min(required.length, tx.signatures.length); i += 1) {
+    if (isZeroSignature(tx.signatures[i])) missingNonPayer.push(required[i]);
+  }
+  return { required, missingNonPayer };
+}
+
 export function lamportsToSol(lamports = 0): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
@@ -79,6 +102,13 @@ export async function sendPreparedTransaction(
     throw new Error(`Invalid transaction payload (decode failed): ${unwrapTxErrorMessage(err)}`);
   }
 
+  // If the backend forgot to include a required non-wallet signature, preflight will fail with
+  // "Transaction signature verification failure" before any program logs exist. Surface this up-front.
+  const signerInfo = describeRequiredSigners(tx);
+  if (signerInfo?.missingNonPayer?.length) {
+    console.error('[mons/solana] prepared transaction is missing required server signatures', signerInfo);
+  }
+
   try {
     const signature = await signer(tx);
     // Confirm by signature to avoid mismatched blockhash strategy (backend pre-signs v0 txs).
@@ -93,9 +123,9 @@ export async function sendPreparedTransaction(
     }
     if (logs?.length) {
       // Keep this noisy output limited to failures; these logs are essential for diagnosing on-chain issues.
-      console.error('[mons/solana] transaction failed', { message: msg, logs });
+      console.error('[mons/solana] transaction failed', { message: msg, logs, ...(signerInfo ? { signerInfo } : {}) });
     } else {
-      console.error('[mons/solana] transaction failed', err);
+      console.error('[mons/solana] transaction failed', { error: err, ...(signerInfo ? { signerInfo } : {}) });
     }
     const hint =
       /blockhash not found|transaction expired|expired blockhash|signature has expired/i.test(msg)

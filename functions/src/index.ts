@@ -153,7 +153,7 @@ const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.defa
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
-// Bubblegum's program signer PDA. We delegate collection authority to this address when running scripts/create-collection.ts.
+// Bubblegum program signer PDA used for CPI into Token Metadata during MintToCollectionV1.
 const bubblegumCollectionSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
@@ -179,9 +179,10 @@ function treeAuthority() {
 }
 
 function ensureAuthorityKeys() {
-  // The only server-held signing key required for prepared transactions is the tree delegate.
-  // Collection verification is delegated to the Bubblegum signer PDA (see scripts/create-collection.ts).
+  // Prepared transactions require server-side signatures for the tree delegate and the collection authority.
+  // Note: Bubblegum's `collectionAuthority` account IS a required signer (see mpl-bubblegum instruction builder).
   treeAuthority();
+  collectionAuthority();
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -336,7 +337,8 @@ async function ensureOnchainMintConfig(force = false) {
   assertConfiguredPublicKey(collectionMetadata, 'COLLECTION_METADATA');
   assertConfiguredPublicKey(collectionMasterEdition, 'COLLECTION_MASTER_EDITION');
 
-  const recordPda = collectionAuthorityRecordPda(bubblegumCollectionSigner);
+  const collectionAuthoritySigner = collectionAuthority();
+  const recordPda = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
   const pubkeys = [merkleTree, collectionMint, collectionMetadata, collectionMasterEdition, recordPda];
   const infos = await withTimeout(
     connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
@@ -369,6 +371,7 @@ async function ensureOnchainMintConfig(force = false) {
       {
         missing,
         bubblegumSigner: bubblegumCollectionSigner.toBase58(),
+        collectionAuthority: collectionAuthoritySigner.publicKey.toBase58(),
         expectedCollectionAuthorityRecordPda: recordPda.toBase58(),
       },
     );
@@ -457,8 +460,8 @@ async function buildMintInstructions(
   // Fail fast with a helpful error if env/on-chain prereqs don't match the current deployment.
   await ensureOnchainMintConfig();
   const instructions: TransactionInstruction[] = [];
-  // Collection authority is delegated to Bubblegum's signer PDA by scripts/create-collection.ts.
-  const collectionAuthorityRecord = collectionAuthorityRecordPda(bubblegumCollectionSigner);
+  const collectionAuthoritySigner = collectionAuthority();
+  const collectionAuthorityRecord = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
   const treeAuthorityKey = treeAuthority();
   const treeAuthorityConfig = treeAuthorityPda(merkleTree);
 
@@ -479,7 +482,7 @@ async function buildMintInstructions(
           treeDelegate: treeAuthorityKey.publicKey,
           leafOwner: owner,
           leafDelegate: owner,
-          collectionAuthority: bubblegumCollectionSigner,
+          collectionAuthority: collectionAuthoritySigner.publicKey,
           collectionMint,
           collectionMetadata,
           editionAccount: collectionMasterEdition,
@@ -832,6 +835,10 @@ function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recen
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
   const signers: Keypair[] = [treeAuthority()];
+  const ca = collectionAuthority();
+  if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
+    signers.push(ca);
+  }
   tx.sign(signers);
   return tx;
 }
