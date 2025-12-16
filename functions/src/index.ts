@@ -761,26 +761,61 @@ async function findCertificateForBox(owner: string, boxId: string) {
 }
 
 async function fetchAssetProof(assetId: string) {
-  const helius = process.env.HELIUS_API_KEY;
-  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-  const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
-  const proof = await heliusJson(url, 'Helius proof error');
-  if (!proof || typeof proof !== 'object' || !(proof as any)?.root) {
+  // Use DAS RPC to keep behavior consistent with `searchAssets` (inventory).
+  // REST endpoints can lag or behave differently across clusters.
+  let proof: any;
+  try {
+    proof = await heliusRpc<any>('getAssetProof', { id: assetId }, 'Helius proof error');
+  } catch (err) {
+    const anyErr = err as any;
+    const upstreamCode = anyErr?.details?.upstreamCode;
+    const msg = String(anyErr?.message || '');
+    const looksLikeRpcMethodMismatch =
+      upstreamCode === -32601 || upstreamCode === -32602 || /method not found|invalid params/i.test(msg);
+    if (!looksLikeRpcMethodMismatch) throw err;
+    // Fallback to legacy REST endpoint if RPC method signature isn't supported.
+    const helius = process.env.HELIUS_API_KEY;
+    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+    const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
+    proof = await heliusJson(url, 'Helius proof error');
+  }
+  const tree =
+    (proof as any)?.merkleTree ||
+    (proof as any)?.merkle_tree ||
+    (proof as any)?.tree_id ||
+    (proof as any)?.treeId ||
+    (proof as any)?.tree;
+  if (!proof || typeof proof !== 'object' || !(proof as any)?.root || !(proof as any)?.proof || !tree) {
     throw new functions.https.HttpsError(
       'not-found',
       'Asset proof not available yet. If you just minted/transferred/opened this item, wait a few seconds and retry.',
       { assetId },
     );
   }
+  // Normalize tree field so downstream code can rely on it.
+  if (!(proof as any).merkleTree && tree) (proof as any).merkleTree = tree;
   return proof;
 }
 
 async function fetchAsset(assetId: string) {
-  const helius = process.env.HELIUS_API_KEY;
-  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-  const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}${clusterParam}`;
-  const json = await heliusJson(url, 'Helius asset error');
-  const asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
+  // Use DAS RPC to keep behavior consistent with `searchAssets` (inventory).
+  let asset: any;
+  try {
+    asset = await heliusRpc<any>('getAsset', { id: assetId }, 'Helius asset error');
+  } catch (err) {
+    const anyErr = err as any;
+    const upstreamCode = anyErr?.details?.upstreamCode;
+    const msg = String(anyErr?.message || '');
+    const looksLikeRpcMethodMismatch =
+      upstreamCode === -32601 || upstreamCode === -32602 || /method not found|invalid params/i.test(msg);
+    if (!looksLikeRpcMethodMismatch) throw err;
+    // Fallback to legacy REST endpoint if RPC method signature isn't supported.
+    const helius = process.env.HELIUS_API_KEY;
+    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+    const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}${clusterParam}`;
+    const json = await heliusJson(url, 'Helius asset error');
+    asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
+  }
   if (!asset) {
     throw new functions.https.HttpsError(
       'not-found',
@@ -878,8 +913,34 @@ function isMonsAsset(asset: any): boolean {
 }
 
 async function fetchAssetWithProof(assetId: string) {
-  const [asset, proof] = await Promise.all([fetchAsset(assetId), fetchAssetProof(assetId)]);
-  return { asset, proof };
+  // DAS can be briefly inconsistent right after mint/transfer. Retry a few times so a newly minted
+  // box that already shows in inventory can still be opened immediately.
+  const startedAt = Date.now();
+  const maxWaitMs = 12_000;
+  const maxAttempts = 6;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts && Date.now() - startedAt < maxWaitMs; attempt++) {
+    try {
+      const [asset, proof] = await Promise.all([fetchAsset(assetId), fetchAssetProof(assetId)]);
+      return { asset, proof };
+    } catch (err) {
+      lastErr = err;
+      const anyErr = err as any;
+      const isHttpsError = anyErr && typeof anyErr === 'object' && typeof anyErr.code === 'string' && anyErr.code !== 'UNKNOWN';
+      // Only retry on transient upstream/indexing failures.
+      const retriable =
+        !isHttpsError ||
+        anyErr.code === 'not-found' ||
+        anyErr.code === 'unavailable' ||
+        anyErr.code === 'resource-exhausted' ||
+        anyErr.code === 'deadline-exceeded';
+      if (!retriable) throw err;
+      if (attempt < maxAttempts - 1) {
+        await sleep(300 * 2 ** attempt);
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?: any; proof?: any }) {
