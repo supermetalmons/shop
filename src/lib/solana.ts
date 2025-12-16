@@ -1,6 +1,17 @@
 import { Connection, LAMPORTS_PER_SOL, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 
+function unwrapTxErrorMessage(err: unknown): string {
+  if (!err) return 'Unexpected error';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error && err.message) return err.message;
+  const anyErr = err as any;
+  if (typeof anyErr?.message === 'string' && anyErr.message) return anyErr.message;
+  if (typeof anyErr?.error?.message === 'string' && anyErr.error.message) return anyErr.error.message;
+  if (typeof anyErr?.error === 'string' && anyErr.error) return anyErr.error;
+  return 'Unexpected error';
+}
+
 export function lamportsToSol(lamports = 0): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
@@ -35,11 +46,26 @@ export async function sendPreparedTransaction(
   connection: Connection,
   signer: (tx: VersionedTransaction) => Promise<string>,
 ): Promise<string> {
-  const tx = VersionedTransaction.deserialize(Buffer.from(encodedTx, 'base64'));
-  const signature = await signer(tx);
-  const latestBlockhash = await connection.getLatestBlockhash();
-  await connection.confirmTransaction({ ...latestBlockhash, signature }, 'confirmed');
-  return signature;
+  let tx: VersionedTransaction;
+  try {
+    tx = VersionedTransaction.deserialize(Buffer.from(encodedTx, 'base64'));
+  } catch (err) {
+    throw new Error(`Invalid transaction payload (decode failed): ${unwrapTxErrorMessage(err)}`);
+  }
+
+  try {
+    const signature = await signer(tx);
+    // Confirm by signature to avoid mismatched blockhash strategy (backend pre-signs v0 txs).
+    await connection.confirmTransaction(signature, 'confirmed');
+    return signature;
+  } catch (err) {
+    const msg = unwrapTxErrorMessage(err);
+    const hint =
+      /blockhash not found|transaction expired|expired blockhash|signature has expired/i.test(msg)
+        ? ' (try again; also ensure your wallet network matches the app cluster)'
+        : '';
+    throw new Error(`${msg || 'Transaction failed'}${hint}`);
+  }
 }
 
 export function encryptAddressPayload(

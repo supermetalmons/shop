@@ -15,9 +15,10 @@ import {
 import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-const network = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet') as WalletAdapterNetwork;
-const rpcEndpoint =
-  import.meta.env.VITE_RPC_URL || clusterApiUrl(network);
+// Hardcode devnet for now to avoid cluster mismatches while iterating.
+const network = WalletAdapterNetwork.Devnet;
+const envRpc = import.meta.env.VITE_RPC_URL || '';
+const rpcEndpoint = /devnet/i.test(envRpc) ? envRpc : clusterApiUrl(network);
 
 interface Props {
   children: ReactNode;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import type { VersionedTransaction } from '@solana/web3.js';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -48,6 +49,21 @@ function App() {
   const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [contactEmail, setContactEmail] = useState(profile?.email || '');
 
+  // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
+  // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
+  const signAndSendViaConnection = async (tx: VersionedTransaction) => {
+    if (wallet.signTransaction) {
+      const signed = await wallet.signTransaction(tx);
+      const raw = signed.serialize();
+      return connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+        maxRetries: 3,
+      });
+    }
+    return sendTransaction(tx, connection, { skipPreflight: false });
+  };
+
   const mintedOut = useMemo(() => {
     if (!mintStats) return false;
     return mintStats.remaining <= 0;
@@ -68,9 +84,7 @@ function App() {
     setStatus('');
     try {
       const resp = await requestMintTx(publicKey.toBase58(), quantity, token || undefined);
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
-        sendTransaction(tx, connection, { skipPreflight: false }),
-      );
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       try {
         await finalizeMintTx(publicKey.toBase58(), sig, token || undefined);
         setStatus(`Minted ${resp.allowedQuantity || quantity} boxes · ${sig}`);
@@ -92,14 +106,15 @@ function App() {
     setLastOpen(null);
     try {
       const resp = await requestOpenBoxTx(publicKey.toBase58(), item.id, token || undefined);
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
-        sendTransaction(tx, connection, { skipPreflight: false }),
-      );
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       const revealedDudes = (resp.assignedDudeIds || []).map((id) => Number(id));
       setLastOpen({ boxId: item.id, dudeIds: revealedDudes, signature: sig });
       const revealCopy = revealedDudes.length ? ` · dudes ${revealedDudes.join(', ')}` : '';
       setStatus(`Opened box · ${sig}${revealCopy}`);
       await refetchInventory();
+    } catch (err) {
+      console.error(err);
+      setStatus(err instanceof Error ? err.message : 'Failed to open box');
     } finally {
       setOpenLoading(null);
     }
@@ -171,9 +186,7 @@ function App() {
       setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
       const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId }, idToken || '');
       setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
-        sendTransaction(tx, connection, { skipPreflight: false }),
-      );
+      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       try {
         if (resp.orderId) {
           await finalizeDeliveryTx(publicKey.toBase58(), sig, resp.orderId, idToken);
@@ -187,6 +200,9 @@ function App() {
       }
       setSelected(new Set());
       await refetchInventory();
+    } catch (err) {
+      console.error(err);
+      setStatus(err instanceof Error ? err.message : 'Failed to request delivery');
     } finally {
       setDeliveryLoading(false);
     }
@@ -199,9 +215,7 @@ function App() {
     if (!idToken) throw new Error('Missing auth token');
     setStatus('');
     const resp = await requestClaimTx(publicKey.toBase58(), code, idToken);
-    const sig = await sendPreparedTransaction(resp.encodedTx, connection, (tx) =>
-      sendTransaction(tx, connection, { skipPreflight: false }),
-    );
+    const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
     try {
       await finalizeClaimTx(publicKey.toBase58(), code, sig, idToken);
       setStatus(`Claimed certificates · ${sig}`);

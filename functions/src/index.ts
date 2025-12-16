@@ -102,6 +102,7 @@ const MINT_SYNC_TIMEOUT_MS = 8_000;
 let lastMintSyncAttemptMs = 0;
 let mintSyncInFlight: Promise<void> | null = null;
 
+// Hardcode devnet for now to avoid cluster mismatches while iterating.
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
 const totalDudes = totalSupply * DUDES_PER_BOX;
 const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
