@@ -86,6 +86,9 @@ async function main() {
   console.log('--- env for functions ---');
   console.log(`MERKLE_TREE=${tree.publicKey.toBase58()}`);
   console.log(`TREE_AUTHORITY_SECRET=${bs58.encode(payer.secretKey)}`);
+  console.log(`# Use these from collection script output:`);
+  console.log(`# COLLECTION_UPDATE_AUTHORITY=<collection update authority pubkey>`);
+  console.log(`# COLLECTION_UPDATE_AUTHORITY_SECRET=<base58 secret of that authority>`);
 }
 
 main().catch((err) => {

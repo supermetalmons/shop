@@ -136,6 +136,8 @@ async function main() {
   console.log(`COLLECTION_METADATA=${metadataPda.toBase58()}`);
   console.log(`COLLECTION_MASTER_EDITION=${masterEditionPda.toBase58()}`);
   console.log(`COLLECTION_UPDATE_AUTHORITY=${payer.publicKey.toBase58()}`);
+  console.log(`COLLECTION_UPDATE_AUTHORITY_SECRET=${bs58.encode(payer.secretKey)}`);
+  console.log('Note: COLLECTION_UPDATE_AUTHORITY_SECRET is sensitive; store it only in functions env/secrets.');
 }
 
 main().catch((err) => {

@@ -114,6 +114,25 @@ function treeAuthorityPda(tree: PublicKey) {
   return PublicKey.findProgramAddressSync([tree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
+function collectionAuthority() {
+  const secret = process.env.COLLECTION_UPDATE_AUTHORITY_SECRET;
+  if (secret) {
+    const kp = Keypair.fromSecretKey(decodeSecretKey(secret, 'COLLECTION_UPDATE_AUTHORITY_SECRET'));
+    if (!kp.publicKey.equals(collectionUpdateAuthority)) {
+      throw new Error(
+        `COLLECTION_UPDATE_AUTHORITY_SECRET pubkey ${kp.publicKey.toBase58()} does not match COLLECTION_UPDATE_AUTHORITY ${collectionUpdateAuthority.toBase58()}`,
+      );
+    }
+    return kp;
+  }
+  // Fallback: allow tree authority to act as collection authority if they match.
+  const treeAuth = treeAuthority();
+  if (treeAuth.publicKey.equals(collectionUpdateAuthority)) return treeAuth;
+  throw new Error(
+    'Missing COLLECTION_UPDATE_AUTHORITY_SECRET; set it to the collection update authority keypair used for the collection.',
+  );
+}
+
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
@@ -128,9 +147,8 @@ const collectionMetadata = new PublicKey(process.env.COLLECTION_METADATA || Publ
 const collectionMasterEdition = new PublicKey(
   process.env.COLLECTION_MASTER_EDITION || PublicKey.default.toBase58(),
 );
-const collectionUpdateAuthority = new PublicKey(
-  process.env.COLLECTION_UPDATE_AUTHORITY || PublicKey.default.toBase58(),
-);
+const collectionUpdateAuthorityEnv = process.env.COLLECTION_UPDATE_AUTHORITY || PublicKey.default.toBase58();
+const collectionUpdateAuthority = new PublicKey(collectionUpdateAuthorityEnv);
 const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
@@ -275,14 +293,14 @@ function memoInstruction(data: string) {
   });
 }
 
-function collectionAuthorityRecordPda() {
+function collectionAuthorityRecordPda(authority: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [
       Buffer.from('metadata'),
       TOKEN_METADATA_PROGRAM_ID.toBuffer(),
       collectionMint.toBuffer(),
       Buffer.from('collection_authority'),
-      collectionUpdateAuthority.toBuffer(),
+      authority.toBuffer(),
     ],
     TOKEN_METADATA_PROGRAM_ID,
   )[0];
@@ -382,7 +400,8 @@ async function buildMintInstructions(
 ) {
   const instructions: TransactionInstruction[] = [];
   const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-  const collectionAuthorityRecord = collectionAuthorityRecordPda();
+  const collectionAuthoritySigner = collectionAuthority();
+  const collectionAuthorityRecord = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
   const treeAuthorityKey = treeAuthority();
   const treeAuthorityConfig = treeAuthorityPda(merkleTree);
 
@@ -403,7 +422,7 @@ async function buildMintInstructions(
           treeDelegate: treeAuthorityKey.publicKey,
           leafOwner: owner,
           leafDelegate: owner,
-          collectionAuthority: collectionUpdateAuthority,
+          collectionAuthority: collectionAuthoritySigner.publicKey,
           collectionMint,
           collectionMetadata,
           editionAccount: collectionMasterEdition,
@@ -755,7 +774,16 @@ function certificateIndexForItem(assetId: string, kind: 'box' | 'dude', dudeIds?
 function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
-  tx.sign([treeAuthority(), cosigner()]);
+  const signers = [treeAuthority(), cosigner()];
+  try {
+    const ca = collectionAuthority();
+    if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
+      signers.push(ca);
+    }
+  } catch {
+    // collectionAuthority throws if misconfigured; callers will surface errors when building tx.
+  }
+  tx.sign(signers);
   return tx;
 }
 
