@@ -176,18 +176,9 @@ function treeAuthority() {
   return cachedTreeAuthority;
 }
 
-let cachedCosigner: Keypair | null = null;
-function cosigner() {
-  if (!cachedCosigner) {
-    const secret = process.env.COSIGNER_SECRET || process.env.TREE_AUTHORITY_SECRET;
-    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(secret, 'COSIGNER_SECRET or TREE_AUTHORITY_SECRET'));
-  }
-  return cachedCosigner;
-}
-
 function ensureAuthorityKeys() {
   treeAuthority();
-  cosigner();
+  collectionAuthority();
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -774,14 +765,10 @@ function certificateIndexForItem(assetId: string, kind: 'box' | 'dude', dudeIds?
 function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
-  const signers = [treeAuthority(), cosigner()];
-  try {
-    const ca = collectionAuthority();
-    if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
-      signers.push(ca);
-    }
-  } catch {
-    // collectionAuthority throws if misconfigured; callers will surface errors when building tx.
+  const signers: Keypair[] = [treeAuthority()];
+  const ca = collectionAuthority();
+  if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
+    signers.push(ca);
   }
   tx.sign(signers);
   return tx;

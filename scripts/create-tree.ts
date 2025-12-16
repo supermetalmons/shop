@@ -81,14 +81,15 @@ async function main() {
   console.log('  Signature:', sig);
   console.log('  Merkle tree address:', tree.publicKey.toBase58());
   console.log('  Bubblegum tree authority (TreeConfig PDA):', treeAuthorityPda.toBase58());
-  console.log('  Tree keypair (base58, keep only if you really need it):', bs58.encode(tree.secretKey));
-  console.log('  Tree authority (payer) pubkey:', payer.publicKey.toBase58());
+  console.log('  Tree delegate (payer) pubkey:', payer.publicKey.toBase58());
+  console.log('');
   console.log('--- env for functions ---');
   console.log(`MERKLE_TREE=${tree.publicKey.toBase58()}`);
   console.log(`TREE_AUTHORITY_SECRET=${bs58.encode(payer.secretKey)}`);
-  console.log(`# Use these from collection script output:`);
-  console.log(`# COLLECTION_UPDATE_AUTHORITY=<collection update authority pubkey>`);
-  console.log(`# COLLECTION_UPDATE_AUTHORITY_SECRET=<base58 secret of that authority>`);
+  console.log('');
+  console.log('⚠️  IMPORTANT: The payer keypair used here must be the SAME keypair');
+  console.log('   used as update authority when creating the collection NFT.');
+  console.log('   Run create-collection.ts with the same --keypair to ensure this.');
 }
 
 main().catch((err) => {

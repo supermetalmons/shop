@@ -21,9 +21,11 @@ import {
 } from '@solana/spl-token';
 import {
   PROGRAM_ID as TOKEN_METADATA_PROGRAM_ID,
+  createApproveCollectionAuthorityInstruction,
   createCreateMasterEditionV3Instruction,
   createCreateMetadataAccountV3Instruction,
 } from '@metaplex-foundation/mpl-token-metadata';
+import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID } from '@metaplex-foundation/mpl-bubblegum';
 import bs58 from 'bs58';
 
 function getArg(flag: string, fallback?: string) {
@@ -51,6 +53,7 @@ async function main() {
   const defaultMetadataBase = 'https://assets.mons.link/shop/drops/1';
   const metadataBase = (process.env.METADATA_BASE || defaultMetadataBase).replace(/\/$/, '');
   const uri = getArg('--uri', `${metadataBase}/collection.json`);
+  const collectionSize = parseInt(getArg('--collection-size', process.env.COLLECTION_SIZE || '10000'), 10);
 
   const payer = loadKeypair(keypairPath);
   const connection = new Connection(rpc, { commitment: 'confirmed' });
@@ -66,6 +69,17 @@ async function main() {
   )[0];
   const masterEditionPda = PublicKey.findProgramAddressSync(
     [Buffer.from('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.publicKey.toBuffer(), Buffer.from('edition')],
+    TOKEN_METADATA_PROGRAM_ID,
+  )[0];
+  const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
+  const collectionAuthorityRecordPda = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from('metadata'),
+      TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+      mint.publicKey.toBuffer(),
+      Buffer.from('collection_authority'),
+      bubblegumSigner.toBuffer(),
+    ],
     TOKEN_METADATA_PROGRAM_ID,
   )[0];
   const ata = await getAssociatedTokenAddress(mint.publicKey, payer.publicKey);
@@ -102,7 +116,7 @@ async function main() {
             uses: null,
           },
           isMutable: true,
-          collectionDetails: null,
+          collectionDetails: { __kind: 'V1', size: collectionSize },
         },
       },
     ),
@@ -117,6 +131,15 @@ async function main() {
       },
       { createMasterEditionArgs: { maxSupply: 0 } },
     ),
+    createApproveCollectionAuthorityInstruction({
+      collectionAuthorityRecord: collectionAuthorityRecordPda,
+      newCollectionAuthority: bubblegumSigner,
+      updateAuthority: payer.publicKey,
+      payer: payer.publicKey,
+      metadata: metadataPda,
+      mint: mint.publicKey,
+      systemProgram: SystemProgram.programId,
+    }),
   );
 
   tx.feePayer = payer.publicKey;
@@ -131,6 +154,8 @@ async function main() {
   console.log('  Metadata PDA:', metadataPda.toBase58());
   console.log('  Master edition PDA:', masterEditionPda.toBase58());
   console.log('  Update authority:', payer.publicKey.toBase58());
+  console.log('  Bubblegum collection_cpi signer:', bubblegumSigner.toBase58());
+  console.log('  Collection authority record (for bubblegum signer):', collectionAuthorityRecordPda.toBase58());
   console.log('--- env for functions ---');
   console.log(`COLLECTION_MINT=${mint.publicKey.toBase58()}`);
   console.log(`COLLECTION_METADATA=${metadataPda.toBase58()}`);
