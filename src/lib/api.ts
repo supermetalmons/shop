@@ -5,11 +5,79 @@ import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profil
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
+const DEBUG_FUNCTIONS =
+  import.meta.env.DEV ||
+  import.meta.env.VITE_DEBUG_FUNCTIONS === 'true' ||
+  (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugFunctions') === '1');
+
+function summarizeValue(value: unknown) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value === 'string') return `string(${value.length})`;
+  return typeof value;
+}
+
+function summarizePayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return { type: summarizeValue(payload) };
+  const obj = payload as Record<string, unknown>;
+  const allKeys = Object.keys(obj);
+  const keys = allKeys.slice(0, 30);
+  const types: Record<string, string> = {};
+  keys.forEach((k) => {
+    types[k] = summarizeValue(obj[k]);
+  });
+  return { keys, types, truncated: allKeys.length > keys.length };
+}
+
+function summarizeError(err: unknown) {
+  const anyErr = err as any;
+  if (anyErr && typeof anyErr === 'object') {
+    return {
+      name: anyErr.name,
+      code: anyErr.code,
+      message: anyErr.message,
+      details: anyErr.details,
+      stack: anyErr.stack,
+    };
+  }
+  return { message: String(err) };
+}
+
+function makeCallId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   if (!functionsInstance) throw new Error('Firebase client is not configured');
   const callable = httpsCallable<Req, Res>(functionsInstance, name);
-  const result = await callable(data ?? ({} as Req));
-  return result.data;
+  const startedAt = Date.now();
+  const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;
+  const basePayload = (data ?? ({} as Req)) as any;
+  const payload =
+    DEBUG_FUNCTIONS && basePayload && typeof basePayload === 'object' && !Array.isArray(basePayload)
+      ? ({ ...basePayload, __debug: { callId, fn: name, ts: new Date().toISOString() } } as Req)
+      : (basePayload as Req);
+
+  if (DEBUG_FUNCTIONS) {
+    console.info(`[mons/functions] → ${name}`, { callId, payload: summarizePayload(payload) });
+  }
+
+  try {
+    const result = await callable(payload);
+    if (DEBUG_FUNCTIONS) {
+      console.info(`[mons/functions] ← ${name}`, {
+        callId,
+        ms: Date.now() - startedAt,
+        data: summarizePayload(result.data),
+      });
+    }
+    return result.data;
+  } catch (err) {
+    if (DEBUG_FUNCTIONS) {
+      console.error(`[mons/functions] ✖ ${name}`, { callId, ms: Date.now() - startedAt, error: summarizeError(err) });
+    }
+    throw err;
+  }
 }
 
 export async function fetchMintStats(): Promise<MintStats> {

@@ -27,7 +27,54 @@ import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
 import { randomBytes, randomInt } from 'crypto';
+import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
+import { fileURLToPath } from 'url';
+
+function loadLocalEnv() {
+  const envPaths = [
+    fileURLToPath(new URL('../.env', import.meta.url)),
+    fileURLToPath(new URL('../.env.local', import.meta.url)),
+  ];
+
+  // Prefer Node's built-in loader when available.
+  const loadEnvFile = (process as any).loadEnvFile as ((path: string) => void) | undefined;
+
+  for (const envPath of envPaths) {
+    if (!existsSync(envPath)) continue;
+
+    try {
+      if (typeof loadEnvFile === 'function') {
+        loadEnvFile(envPath);
+        continue;
+      }
+    } catch {
+      // Fall back to the minimal parser below.
+    }
+
+    try {
+      const content = readFileSync(envPath, 'utf8');
+      const lines = content.split(/\r?\n/);
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#')) continue;
+        const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
+        const eq = withoutExport.indexOf('=');
+        if (eq <= 0) continue;
+        const key = withoutExport.slice(0, eq).trim();
+        let value = withoutExport.slice(eq + 1).trim();
+        if (!key) continue;
+        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+        if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+        if (!(key in process.env)) process.env[key] = value;
+      }
+    } catch {
+      // Ignore env loading failures; missing vars will be caught by runtime checks.
+    }
+  }
+}
+
+loadLocalEnv();
 
 const app = initializeApp();
 const db = getFirestore(app);
@@ -55,7 +102,7 @@ const MINT_SYNC_TIMEOUT_MS = 8_000;
 let lastMintSyncAttemptMs = 0;
 let mintSyncInFlight: Promise<void> | null = null;
 
-const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
+const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
 const totalDudes = totalSupply * DUDES_PER_BOX;
 const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
 
@@ -128,6 +175,86 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
   return parsed.data;
 }
 
+function summarizeValue(value: unknown) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value === 'string') return `string(${value.length})`;
+  return typeof value;
+}
+
+function summarizePayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return { type: summarizeValue(payload) };
+  const obj = payload as Record<string, unknown>;
+  const allKeys = Object.keys(obj);
+  const keys = allKeys.slice(0, 30);
+  const types: Record<string, string> = {};
+  keys.forEach((k) => {
+    types[k] = summarizeValue(obj[k]);
+  });
+  return { keys, types, truncated: allKeys.length > keys.length };
+}
+
+function callableMeta(request: CallableReq<any>) {
+  const raw = (request as any).rawRequest as any;
+  const headers = raw?.headers || {};
+  const forwarded = headers['x-forwarded-for'];
+  const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : raw?.ip;
+  return {
+    uid: request.auth?.uid || null,
+    origin: headers.origin || null,
+    referer: headers.referer || null,
+    userAgent: headers['user-agent'] || null,
+    ip: ip || null,
+    trace: headers['x-cloud-trace-context'] || null,
+  };
+}
+
+function summarizeError(err: unknown) {
+  const anyErr = err as any;
+  const isHttpsError = anyErr && typeof anyErr === 'object' && typeof anyErr.code === 'string' && anyErr.code !== 'UNKNOWN';
+  if (isHttpsError) {
+    return {
+      kind: 'HttpsError',
+      code: anyErr.code,
+      message: anyErr.message,
+      details: anyErr.details,
+    };
+  }
+  if (err instanceof Error) {
+    return { kind: err.name, message: err.message, stack: err.stack };
+  }
+  return { kind: typeof err, message: String(err) };
+}
+
+function onCallLogged<TReq, TRes>(
+  name: string,
+  handler: (request: CallableReq<TReq>) => Promise<TRes>,
+) {
+  return functions.https.onCall(async (request: CallableReq<TReq>) => {
+    const startedAt = Date.now();
+    const debug = (request as any)?.data?.__debug as any;
+    const debugCallId = typeof debug?.callId === 'string' ? debug.callId : null;
+    functions.logger.info(`${name}:call`, {
+      ...callableMeta(request),
+      debugCallId,
+      data: summarizePayload((request as any).data),
+    });
+    try {
+      const result = await handler(request);
+      functions.logger.info(`${name}:ok`, { ...callableMeta(request), debugCallId, ms: Date.now() - startedAt });
+      return result;
+    } catch (err) {
+      functions.logger.error(`${name}:error`, {
+        ...callableMeta(request),
+        debugCallId,
+        ms: Date.now() - startedAt,
+        error: summarizeError(err),
+      });
+      throw err;
+    }
+  });
+}
+
 function heliusRpcEndpoint() {
   return heliusRpcUrl();
 }
@@ -154,7 +281,7 @@ function collectionAuthorityRecordPda() {
 }
 
 function connection() {
-  return new Connection(rpcUrl, 'confirmed');
+  return new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 }
 
 function sleep(ms: number) {
@@ -720,7 +847,11 @@ function lamportsDeltaForAccount(tx: any, account: PublicKey): number {
 }
 
 async function processClaimSignature(code: string, signature: string, owner: string) {
-  const tx = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  const tx = await withTimeout(
+    connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    'getTransaction',
+  );
   if (!tx || tx.meta?.err) return null;
   const payer = getPayerFromTx(tx);
   if (!payer || payer.toBase58() !== owner) return null;
@@ -730,7 +861,11 @@ async function processClaimSignature(code: string, signature: string, owner: str
 }
 
 async function detectClaimOnChain(code: string, owner: string, limit = 20): Promise<string | null> {
-  const sigs = await connection().getSignaturesForAddress(new PublicKey(owner), { limit });
+  const sigs = await withTimeout(
+    connection().getSignaturesForAddress(new PublicKey(owner), { limit }),
+    RPC_TIMEOUT_MS,
+    'getSignaturesForAddress',
+  );
   for (const sig of sigs) {
     if (sig.err) continue;
     const processed = await processClaimSignature(code, sig.signature, owner);
@@ -739,7 +874,7 @@ async function detectClaimOnChain(code: string, owner: string, limit = 20): Prom
   return null;
 }
 
-export const solanaAuth = functions.https.onCall(async (request) => {
+export const solanaAuth = onCallLogged('solanaAuth', async (request) => {
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
   const { wallet, message, signature } = parseRequest(schema, request.data);
   const pubkey = new PublicKey(wallet);
@@ -768,12 +903,12 @@ export const solanaAuth = functions.https.onCall(async (request) => {
   };
 });
 
-export const stats = functions.https.onCall(async (_request) => {
+export const stats = onCallLogged('stats', async (_request) => {
   await waitForMintSync();
   return getMintStats();
 });
 
-export const inventory = functions.https.onCall(async (request) => {
+export const inventory = onCallLogged('inventory', async (request) => {
   const schema = z.object({ owner: z.string() });
   const { owner } = parseRequest(schema, request.data);
   const assets = await fetchAssetsOwned(owner);
@@ -784,7 +919,7 @@ export const inventory = functions.https.onCall(async (request) => {
   return items;
 });
 
-export const saveAddress = functions.https.onCall(async (request) => {
+export const saveAddress = onCallLogged('saveAddress', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({
     encrypted: z.string(),
@@ -822,10 +957,10 @@ export const saveAddress = functions.https.onCall(async (request) => {
   };
 });
 
-export const prepareMintTx = functions.https.onCall(async (request) => {
-  await waitForMintSync();
+export const prepareMintTx = onCallLogged('prepareMintTx', async (request) => {
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
   const { owner, quantity } = parseRequest(schema, request.data);
+  await waitForMintSync();
   const ownerPk = new PublicKey(owner);
   const stats = await getMintStats();
   const remaining = Math.max(0, stats.remaining);
@@ -851,7 +986,7 @@ export const prepareMintTx = functions.https.onCall(async (request) => {
   };
 });
 
-export const finalizeMintTx = functions.https.onCall(async (request) => {
+export const finalizeMintTx = onCallLogged('finalizeMintTx', async (request) => {
   const schema = z.object({ owner: z.string(), signature: z.string() });
   const { owner, signature } = parseRequest(schema, request.data);
   const uid = uidFromRequest(request);
@@ -867,7 +1002,7 @@ export const finalizeMintTx = functions.https.onCall(async (request) => {
   return { ...stats, recorded: processed.mintCount };
 });
 
-export const prepareOpenBoxTx = functions.https.onCall(async (request) => {
+export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
   const ownerPk = new PublicKey(owner);
@@ -888,12 +1023,16 @@ export const prepareOpenBoxTx = functions.https.onCall(async (request) => {
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
   instructions.push(await createBurnIx(boxAssetId, ownerPk, { asset, proof }));
   instructions.push(...(await buildMintInstructions(ownerPk, DUDES_PER_BOX, 'dude', dudeIds[0], { boxId: boxAssetId, dudeIds })));
-  const { blockhash } = await conn.getLatestBlockhash('confirmed');
+  const { blockhash } = await withTimeout(
+    conn.getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash',
+  );
   const tx = buildTx(instructions, ownerPk, blockhash);
   return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), assignedDudeIds: dudeIds };
 });
 
-export const prepareDeliveryTx = functions.https.onCall(async (request) => {
+export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
   const { owner, itemIds, addressId } = parseRequest(schema, request.data);
@@ -968,7 +1107,11 @@ export const prepareDeliveryTx = functions.https.onCall(async (request) => {
   }
   const deliveryPrice = shippingLamports(addressCountry || 'unknown', itemIds.length);
   instructions.unshift(SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: shippingVault, lamports: deliveryPrice }));
-  const { blockhash } = await conn.getLatestBlockhash('confirmed');
+  const { blockhash } = await withTimeout(
+    conn.getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash',
+  );
   const tx = buildTx(instructions, ownerPk, blockhash);
   await db.doc(`deliveryOrders/${orderId}`).set({
     status: 'prepared',
@@ -987,7 +1130,7 @@ export const prepareDeliveryTx = functions.https.onCall(async (request) => {
   return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId };
 });
 
-export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
+export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
   const { owner, signature, orderId } = parseRequest(schema, request.data);
@@ -1006,7 +1149,11 @@ export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
     throw new functions.https.HttpsError('already-exists', 'Order already finalized');
   }
 
-  const tx = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  const tx = await withTimeout(
+    connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    'getTransaction',
+  );
   if (!tx || tx.meta?.err) {
     throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction not found or failed');
   }
@@ -1073,7 +1220,7 @@ export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
   };
 });
 
-export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
+export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string() });
   const { owner, code } = parseRequest(schema, request.data);
@@ -1175,7 +1322,11 @@ export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
       receiptTarget: 'figure',
     })),
   );
-  const { blockhash } = await connection().getLatestBlockhash('confirmed');
+  const { blockhash } = await withTimeout(
+    connection().getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash',
+  );
   const tx = buildTx(instructions, ownerPk, blockhash);
   return {
     encodedTx: Buffer.from(tx.serialize()).toString('base64'),
@@ -1186,7 +1337,7 @@ export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
   };
 });
 
-export const finalizeClaimTx = functions.https.onCall(async (request) => {
+export const finalizeClaimTx = onCallLogged('finalizeClaimTx', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
   const { owner, code, signature } = parseRequest(schema, request.data);
