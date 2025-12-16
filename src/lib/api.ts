@@ -73,9 +73,12 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
     }
     return result.data;
   } catch (err) {
-    if (DEBUG_FUNCTIONS) {
-      console.error(`[mons/functions] ✖ ${name}`, { callId, ms: Date.now() - startedAt, error: summarizeError(err) });
-    }
+    // Always log callable failures on the client; they're rare and essential for debugging prod issues.
+    console.error(`[mons/functions] ✖ ${name}`, {
+      ...(callId ? { callId } : {}),
+      ms: Date.now() - startedAt,
+      error: summarizeError(err),
+    });
     throw err;
   }
 }

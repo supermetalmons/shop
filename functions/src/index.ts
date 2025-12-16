@@ -153,6 +153,8 @@ const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.defa
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+// Bubblegum's program signer PDA. We delegate collection authority to this address when running scripts/create-collection.ts.
+const bubblegumCollectionSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
 function decodeSecretKey(secret: string | undefined, label: string) {
@@ -177,8 +179,9 @@ function treeAuthority() {
 }
 
 function ensureAuthorityKeys() {
+  // The only server-held signing key required for prepared transactions is the tree delegate.
+  // Collection verification is delegated to the Bubblegum signer PDA (see scripts/create-collection.ts).
   treeAuthority();
-  collectionAuthority();
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -312,6 +315,68 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   return Promise.race([promise, timeout]);
 }
 
+function assertConfiguredPublicKey(key: PublicKey, label: string) {
+  if (key.equals(PublicKey.default)) {
+    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (missing env var)`);
+  }
+}
+
+const ONCHAIN_CONFIG_CHECK_TTL_MS = 5 * 60 * 1000;
+let lastOnchainConfigCheckMs = 0;
+let onchainConfigOk = false;
+
+async function ensureOnchainMintConfig(force = false) {
+  const now = Date.now();
+  if (!force && onchainConfigOk && now - lastOnchainConfigCheckMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return;
+  lastOnchainConfigCheckMs = now;
+
+  ensureAuthorityKeys();
+  assertConfiguredPublicKey(merkleTree, 'MERKLE_TREE');
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+  assertConfiguredPublicKey(collectionMetadata, 'COLLECTION_METADATA');
+  assertConfiguredPublicKey(collectionMasterEdition, 'COLLECTION_MASTER_EDITION');
+
+  const recordPda = collectionAuthorityRecordPda(bubblegumCollectionSigner);
+  const pubkeys = [merkleTree, collectionMint, collectionMetadata, collectionMasterEdition, recordPda];
+  const infos = await withTimeout(
+    connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+    RPC_TIMEOUT_MS,
+    'getMultipleAccountsInfo',
+  );
+
+  const missing: Record<string, string> = {};
+  for (let i = 0; i < pubkeys.length; i += 1) {
+    if (infos[i]) continue;
+    const key = pubkeys[i];
+    const label =
+      key.equals(merkleTree)
+        ? 'MERKLE_TREE'
+        : key.equals(collectionMint)
+          ? 'COLLECTION_MINT'
+          : key.equals(collectionMetadata)
+            ? 'COLLECTION_METADATA'
+            : key.equals(collectionMasterEdition)
+              ? 'COLLECTION_MASTER_EDITION'
+              : 'COLLECTION_AUTHORITY_RECORD_PDA';
+    missing[label] = key.toBase58();
+  }
+
+  if (Object.keys(missing).length) {
+    onchainConfigOk = false;
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'On-chain mint config is missing or mismatched. Re-run scripts/create-collection.ts + scripts/create-tree.ts, update functions env, and redeploy.',
+      {
+        missing,
+        bubblegumSigner: bubblegumCollectionSigner.toBase58(),
+        expectedCollectionAuthorityRecordPda: recordPda.toBase58(),
+      },
+    );
+  }
+
+  onchainConfigOk = true;
+}
+
 function isTxSizeError(err: unknown) {
   const anyErr = err as any;
   const message = typeof anyErr?.message === 'string' ? anyErr.message : '';
@@ -389,10 +454,11 @@ async function buildMintInstructions(
   startIndex = 1,
   extra?: MetadataExtra,
 ) {
+  // Fail fast with a helpful error if env/on-chain prereqs don't match the current deployment.
+  await ensureOnchainMintConfig();
   const instructions: TransactionInstruction[] = [];
-  const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-  const collectionAuthoritySigner = collectionAuthority();
-  const collectionAuthorityRecord = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
+  // Collection authority is delegated to Bubblegum's signer PDA by scripts/create-collection.ts.
+  const collectionAuthorityRecord = collectionAuthorityRecordPda(bubblegumCollectionSigner);
   const treeAuthorityKey = treeAuthority();
   const treeAuthorityConfig = treeAuthorityPda(merkleTree);
 
@@ -413,11 +479,11 @@ async function buildMintInstructions(
           treeDelegate: treeAuthorityKey.publicKey,
           leafOwner: owner,
           leafDelegate: owner,
-          collectionAuthority: collectionAuthoritySigner.publicKey,
+          collectionAuthority: bubblegumCollectionSigner,
           collectionMint,
           collectionMetadata,
           editionAccount: collectionMasterEdition,
-          bubblegumSigner,
+          bubblegumSigner: bubblegumCollectionSigner,
           compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
           logWrapper: SPL_NOOP_PROGRAM_ID,
           collectionAuthorityRecordPda: collectionAuthorityRecord,
@@ -766,10 +832,6 @@ function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recen
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
   const signers: Keypair[] = [treeAuthority()];
-  const ca = collectionAuthority();
-  if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
-    signers.push(ca);
-  }
   tx.sign(signers);
   return tx;
 }

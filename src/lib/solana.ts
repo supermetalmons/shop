@@ -12,6 +12,32 @@ function unwrapTxErrorMessage(err: unknown): string {
   return 'Unexpected error';
 }
 
+async function extractSendTransactionLogs(err: unknown): Promise<string[] | undefined> {
+  if (!err) return undefined;
+  const anyErr = err as any;
+
+  const directLogs = anyErr?.logs;
+  if (Array.isArray(directLogs) && directLogs.every((l: any) => typeof l === 'string')) {
+    return directLogs as string[];
+  }
+
+  const getLogs = anyErr?.getLogs;
+  if (typeof getLogs === 'function') {
+    try {
+      const result = await getLogs.call(anyErr);
+      if (Array.isArray(result) && result.every((l: any) => typeof l === 'string')) {
+        return result as string[];
+      }
+    } catch {
+      // Ignore getLogs failures; we'll fall back to message-only errors.
+    }
+  }
+
+  // Some adapters wrap the underlying SendTransactionError under `cause`.
+  if (anyErr?.cause) return extractSendTransactionLogs(anyErr.cause);
+  return undefined;
+}
+
 export function lamportsToSol(lamports = 0): string {
   return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
@@ -59,12 +85,24 @@ export async function sendPreparedTransaction(
     await connection.confirmTransaction(signature, 'confirmed');
     return signature;
   } catch (err) {
-    const msg = unwrapTxErrorMessage(err);
+    const logs = await extractSendTransactionLogs(err);
+    let msg = unwrapTxErrorMessage(err);
+    if (logs?.length) {
+      const idx = msg.indexOf('Logs:');
+      if (idx !== -1) msg = msg.slice(0, idx).trim();
+    }
+    if (logs?.length) {
+      // Keep this noisy output limited to failures; these logs are essential for diagnosing on-chain issues.
+      console.error('[mons/solana] transaction failed', { message: msg, logs });
+    } else {
+      console.error('[mons/solana] transaction failed', err);
+    }
     const hint =
       /blockhash not found|transaction expired|expired blockhash|signature has expired/i.test(msg)
         ? ' (try again; also ensure your wallet network matches the app cluster)'
         : '';
-    throw new Error(`${msg || 'Transaction failed'}${hint}`);
+    const logHint = logs?.length ? ' (see console for full program logs)' : '';
+    throw new Error(`${msg || 'Transaction failed'}${hint}${logHint}`);
   }
 }
 
