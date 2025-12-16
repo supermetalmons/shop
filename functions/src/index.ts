@@ -40,6 +40,14 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+function requestData<T = any>(req: Request): T {
+  const body = req.body;
+  if (body && typeof body === 'object' && 'data' in body) {
+    return (body as any).data as T;
+  }
+  return body as T;
+}
+
 function maybeHandleCors(req: Request, res: Response) {
   res.set(corsHeaders);
   if (req.method === 'OPTIONS') {
@@ -670,7 +678,7 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
     return;
   }
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
-  const { wallet, message, signature } = schema.parse(req.body);
+  const { wallet, message, signature } = schema.parse(requestData(req));
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
   if (!verified) {
@@ -709,7 +717,8 @@ export const stats = functions.https.onRequest(async (req, res) => {
 
 export const inventory = functions.https.onRequest(async (req, res) => {
   if (maybeHandleCors(req, res)) return;
-  const owner = (req.query.owner as string) || '';
+  const body = requestData<{ owner?: string }>(req);
+  const owner = (req.query.owner as string) || body?.owner || '';
   if (!owner) {
     res.status(400).json({ error: 'owner required' });
     return;
@@ -737,7 +746,7 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     hint: z.string(),
     email: z.string().email().optional(),
   });
-  const body = schema.parse(req.body);
+  const body = schema.parse(requestData(req));
   const id = db.collection('tmp').doc().id;
   const countryCode = normalizeCountryCode(body.countryCode || body.country);
   const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
@@ -773,7 +782,7 @@ export const prepareMintTx = functions.https.onRequest(async (req, res) => {
   }
   await maybeSyncMintedFromChain();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
-  const { owner, quantity } = schema.parse(req.body);
+  const { owner, quantity } = schema.parse(requestData(req));
   const ownerPk = new PublicKey(owner);
   const stats = await getMintStats();
   const remaining = Math.max(0, stats.remaining);
@@ -802,7 +811,7 @@ export const finalizeMintTx = functions.https.onRequest(async (req, res) => {
     return;
   }
   const schema = z.object({ owner: z.string(), signature: z.string() });
-  const { owner, signature } = schema.parse(req.body);
+  const { owner, signature } = schema.parse(requestData(req));
   const authHeader = req.headers.authorization || '';
   if (authHeader) {
     const uid = await verifyAuth(req);
@@ -826,7 +835,7 @@ export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
     return;
   }
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
-  const { owner, boxAssetId } = schema.parse(req.body);
+  const { owner, boxAssetId } = schema.parse(requestData(req));
   const ownerPk = new PublicKey(owner);
   const conn = connection();
   const { asset, proof } = await fetchAssetWithProof(boxAssetId);
@@ -858,7 +867,7 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
   }
   const uid = await verifyAuth(req);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
-  const { owner, itemIds, addressId } = schema.parse(req.body);
+  const { owner, itemIds, addressId } = schema.parse(requestData(req));
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const conn = connection();
@@ -957,7 +966,7 @@ export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => 
   }
   const uid = await verifyAuth(req);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
-  const { owner, signature, orderId } = schema.parse(req.body);
+  const { owner, signature, orderId } = schema.parse(requestData(req));
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
 
   const orderRef = db.doc(`deliveryOrders/${orderId}`);
@@ -1049,7 +1058,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
   }
   const uid = await verifyAuth(req);
   const schema = z.object({ owner: z.string(), code: z.string() });
-  const { owner, code } = schema.parse(req.body);
+  const { owner, code } = schema.parse(requestData(req));
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const claimRef = db.doc(`claimCodes/${code}`);
@@ -1186,7 +1195,7 @@ export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
   }
   const uid = await verifyAuth(req);
   const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
-  const { owner, code, signature } = schema.parse(req.body);
+  const { owner, code, signature } = schema.parse(requestData(req));
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();

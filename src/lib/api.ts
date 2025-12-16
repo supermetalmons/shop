@@ -1,67 +1,41 @@
-import { getFunctions } from 'firebase/functions';
+import { getFunctions, httpsCallableFromURL } from 'firebase/functions';
 import { firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
-function getFunctionsBase(): string {
+function callableUrl(name: string): string {
   const envOrigin = import.meta.env.VITE_FUNCTIONS_ORIGIN || import.meta.env.VITE_FUNCTIONS_BASE_URL;
   const projectId = firebaseApp?.options.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID;
   const emulatorOrigin = (functionsInstance as { emulatorOrigin?: string } | undefined)?.emulatorOrigin;
   const customDomain = (functionsInstance as { customDomain?: string } | undefined)?.customDomain;
   const targetRegion = (functionsInstance as { region?: string } | undefined)?.region || region;
-  if (envOrigin) return envOrigin.replace(/\/$/, '');
+  if (envOrigin) return `${envOrigin.replace(/\/$/, '')}/${name}`;
   if (!projectId) throw new Error('Missing Firebase project id');
   if (emulatorOrigin) {
-    return `${emulatorOrigin.replace(/\/$/, '')}/${projectId}/${targetRegion}`;
+    return `${emulatorOrigin.replace(/\/$/, '')}/${projectId}/${targetRegion}/${name}`;
   }
   if (customDomain) {
-    return customDomain.replace(/\/$/, '');
+    return `${customDomain.replace(/\/$/, '')}/${name}`;
   }
-  return `https://${targetRegion}-${projectId}.cloudfunctions.net`;
+  return `https://${targetRegion}-${projectId}.cloudfunctions.net/${name}`;
 }
 
-interface ApiError {
-  error: string;
-  status?: number;
-}
-
-async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const base = getFunctionsBase();
-  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-  const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
-    ...init,
-  });
-
-  const text = await res.text();
-  let data: T | ApiError;
-  try {
-    data = JSON.parse(text);
-  } catch (err) {
-    throw new Error(`Unexpected response from ${path}: ${text}`);
-  }
-
-  if (!res.ok) {
-    const message = (data as ApiError).error || res.statusText;
-    throw new Error(`${message} (${res.status})`);
-  }
-
-  return data as T;
+async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
+  if (!functionsInstance) throw new Error('Firebase client is not configured');
+  const callable = httpsCallableFromURL<Req, Res>(functionsInstance, callableUrl(name));
+  const result = await callable(data ?? ({} as Req));
+  return result.data;
 }
 
 export async function fetchMintStats(): Promise<MintStats> {
-  return apiFetch<MintStats>('/stats');
+  return callFunction<void, MintStats>('stats');
 }
 
 export async function fetchInventory(owner: string, token?: string): Promise<InventoryItem[]> {
-  return apiFetch<InventoryItem[]>(`/inventory?owner=${encodeURIComponent(owner)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+  // token retained for backwards compatibility; callable uses current Firebase auth session.
+  return callFunction<{ owner: string }, InventoryItem[]>('inventory', { owner });
 }
 
 export async function requestMintTx(
@@ -69,10 +43,9 @@ export async function requestMintTx(
   quantity: number,
   token?: string,
 ): Promise<PreparedTxResponse> {
-  return apiFetch<PreparedTxResponse>('/prepareMintTx', {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: JSON.stringify({ owner, quantity }),
+  return callFunction<{ owner: string; quantity: number }, PreparedTxResponse>('prepareMintTx', {
+    owner,
+    quantity,
   });
 }
 
@@ -81,10 +54,9 @@ export async function requestOpenBoxTx(
   boxAssetId: string,
   token?: string,
 ): Promise<PreparedTxResponse> {
-  return apiFetch<PreparedTxResponse>('/prepareOpenBoxTx', {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: JSON.stringify({ owner, boxAssetId }),
+  return callFunction<{ owner: string; boxAssetId: string }, PreparedTxResponse>('prepareOpenBoxTx', {
+    owner,
+    boxAssetId,
   });
 }
 
@@ -97,11 +69,10 @@ export async function saveEncryptedAddress(
   email?: string,
   countryCode?: string,
 ): Promise<ProfileAddress> {
-  return apiFetch<ProfileAddress>('/saveAddress', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ encrypted, country, countryCode, label, hint, email }),
-  });
+  return callFunction<
+    { encrypted: string; country: string; countryCode?: string; label: string; hint: string; email?: string },
+    ProfileAddress
+  >('saveAddress', { encrypted, country, countryCode, label, hint, email });
 }
 
 export async function requestDeliveryTx(
@@ -109,10 +80,9 @@ export async function requestDeliveryTx(
   selection: DeliverySelection,
   token: string,
 ): Promise<PreparedTxResponse> {
-  return apiFetch<PreparedTxResponse>('/prepareDeliveryTx', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ owner, ...selection }),
+  return callFunction<{ owner: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', {
+    owner,
+    ...selection,
   });
 }
 
@@ -121,11 +91,7 @@ export async function requestClaimTx(
   code: string,
   token: string,
 ): Promise<PreparedTxResponse> {
-  return apiFetch<PreparedTxResponse>('/prepareIrlClaimTx', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ owner, code }),
-  });
+  return callFunction<{ owner: string; code: string }, PreparedTxResponse>('prepareIrlClaimTx', { owner, code });
 }
 
 export async function finalizeClaimTx(
@@ -134,11 +100,10 @@ export async function finalizeClaimTx(
   signature: string,
   token: string,
 ): Promise<{ recorded: boolean; signature: string }> {
-  return apiFetch('/finalizeClaimTx', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ owner, code, signature }),
-  });
+  return callFunction<{ owner: string; code: string; signature: string }, { recorded: boolean; signature: string }>(
+    'finalizeClaimTx',
+    { owner, code, signature },
+  );
 }
 
 export async function solanaAuth(
@@ -146,10 +111,10 @@ export async function solanaAuth(
   message: string,
   signature: Uint8Array,
 ): Promise<{ customToken: string; profile: Profile }> {
-  return apiFetch('/solanaAuth', {
-    method: 'POST',
-    body: JSON.stringify({ wallet, message, signature: Array.from(signature) }),
-  });
+  return callFunction<{ wallet: string; message: string; signature: number[] }, { customToken: string; profile: Profile }>(
+    'solanaAuth',
+    { wallet, message, signature: Array.from(signature) },
+  );
 }
 
 export async function finalizeMintTx(
@@ -157,11 +122,7 @@ export async function finalizeMintTx(
   signature: string,
   token?: string,
 ): Promise<MintStats> {
-  return apiFetch('/finalizeMintTx', {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: JSON.stringify({ owner, signature }),
-  });
+  return callFunction<{ owner: string; signature: string }, MintStats>('finalizeMintTx', { owner, signature });
 }
 
 export async function finalizeDeliveryTx(
@@ -170,9 +131,8 @@ export async function finalizeDeliveryTx(
   orderId: string,
   token: string,
 ): Promise<{ recorded: boolean; signature: string; orderId: string }> {
-  return apiFetch('/finalizeDeliveryTx', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ owner, signature, orderId }),
-  });
+  return callFunction<{ owner: string; signature: string; orderId: string }, { recorded: boolean; signature: string; orderId: string }>(
+    'finalizeDeliveryTx',
+    { owner, signature, orderId },
+  );
 }
