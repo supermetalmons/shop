@@ -72,6 +72,52 @@ const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replac
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
+function decodeSecretKey(secret: string | undefined, label: string) {
+  const value = (secret || '').trim();
+  if (!value) throw new Error(`${label} is not set`);
+  let decoded: Uint8Array;
+  try {
+    decoded = bs58.decode(value);
+  } catch (err) {
+    throw new Error(`${label} must be valid base58: ${String(err)}`);
+  }
+  if (decoded.length !== 64) throw new Error(`${label} must decode to 64 bytes (got ${decoded.length})`);
+  return decoded;
+}
+
+let cachedTreeAuthority: Keypair | null = null;
+function treeAuthority() {
+  if (!cachedTreeAuthority) {
+    cachedTreeAuthority = Keypair.fromSecretKey(decodeSecretKey(process.env.TREE_AUTHORITY_SECRET, 'TREE_AUTHORITY_SECRET'));
+  }
+  return cachedTreeAuthority;
+}
+
+let cachedCosigner: Keypair | null = null;
+function cosigner() {
+  if (!cachedCosigner) {
+    const secret = process.env.COSIGNER_SECRET || process.env.TREE_AUTHORITY_SECRET;
+    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(secret, 'COSIGNER_SECRET or TREE_AUTHORITY_SECRET'));
+  }
+  return cachedCosigner;
+}
+
+function ensureAuthorityKeys() {
+  treeAuthority();
+  cosigner();
+}
+
+function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    const details = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
+      .join('; ');
+    throw new functions.https.HttpsError('invalid-argument', details || 'Invalid request payload');
+  }
+  return parsed.data;
+}
+
 function heliusRpcEndpoint() {
   const custom = process.env.HELIUS_RPC_URL || process.env.HELIUS_RPC;
   if (custom) return custom;
@@ -80,10 +126,6 @@ function heliusRpcEndpoint() {
   const base = `https://rpc.helius.xyz/?api-key=${helius}`;
   return cluster === 'mainnet-beta' ? base : `${base}&cluster=${cluster}`;
 }
-
-const treeAuthority = () =>
-  Keypair.fromSecretKey(bs58.decode(process.env.TREE_AUTHORITY_SECRET || ''));
-const cosigner = () => Keypair.fromSecretKey(bs58.decode(process.env.COSIGNER_SECRET || process.env.TREE_AUTHORITY_SECRET || ''));
 
 function memoInstruction(data: string) {
   return new TransactionInstruction({
@@ -301,6 +343,12 @@ async function maybeSyncMintedFromChain(force = false) {
     return mintSyncInFlight || Promise.resolve();
   }
   if (mintSyncInFlight) return mintSyncInFlight;
+  try {
+    ensureAuthorityKeys();
+  } catch (err) {
+    functions.logger.error('Skipping syncMintedFromChain: authority keys missing or invalid', err);
+    return Promise.resolve();
+  }
   lastMintSyncAttemptMs = now;
   mintSyncInFlight = syncMintedFromChain()
     .catch((err) => {
@@ -654,7 +702,7 @@ async function detectClaimOnChain(code: string, owner: string, limit = 20): Prom
 
 export const solanaAuth = functions.https.onCall(async (request) => {
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
-  const { wallet, message, signature } = schema.parse(request.data);
+  const { wallet, message, signature } = parseRequest(schema, request.data);
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
   if (!verified) throw new functions.https.HttpsError('unauthenticated', 'Invalid signature');
@@ -688,7 +736,7 @@ export const stats = functions.https.onCall(async (_request) => {
 
 export const inventory = functions.https.onCall(async (request) => {
   const schema = z.object({ owner: z.string() });
-  const { owner } = schema.parse(request.data);
+  const { owner } = parseRequest(schema, request.data);
   const assets = await fetchAssetsOwned(owner);
   const items = (assets || [])
     .filter(isMonsAsset)
@@ -707,7 +755,7 @@ export const saveAddress = functions.https.onCall(async (request) => {
     hint: z.string(),
     email: z.string().email().optional(),
   });
-  const body = schema.parse(request.data);
+  const body = parseRequest(schema, request.data);
   const id = db.collection('tmp').doc().id;
   const countryCode = normalizeCountryCode(body.countryCode || body.country);
   const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
@@ -738,7 +786,7 @@ export const saveAddress = functions.https.onCall(async (request) => {
 export const prepareMintTx = functions.https.onCall(async (request) => {
   await maybeSyncMintedFromChain();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
-  const { owner, quantity } = schema.parse(request.data);
+  const { owner, quantity } = parseRequest(schema, request.data);
   const ownerPk = new PublicKey(owner);
   const stats = await getMintStats();
   const remaining = Math.max(0, stats.remaining);
@@ -762,7 +810,7 @@ export const prepareMintTx = functions.https.onCall(async (request) => {
 
 export const finalizeMintTx = functions.https.onCall(async (request) => {
   const schema = z.object({ owner: z.string(), signature: z.string() });
-  const { owner, signature } = schema.parse(request.data);
+  const { owner, signature } = parseRequest(schema, request.data);
   const uid = uidFromRequest(request);
   if (uid && uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const processed = await processMintSignature(signature);
@@ -778,7 +826,7 @@ export const finalizeMintTx = functions.https.onCall(async (request) => {
 
 export const prepareOpenBoxTx = functions.https.onCall(async (request) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
-  const { owner, boxAssetId } = schema.parse(request.data);
+  const { owner, boxAssetId } = parseRequest(schema, request.data);
   const ownerPk = new PublicKey(owner);
   const conn = connection();
   const { asset, proof } = await fetchAssetWithProof(boxAssetId);
@@ -805,7 +853,7 @@ export const prepareOpenBoxTx = functions.https.onCall(async (request) => {
 export const prepareDeliveryTx = functions.https.onCall(async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
-  const { owner, itemIds, addressId } = schema.parse(request.data);
+  const { owner, itemIds, addressId } = parseRequest(schema, request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const conn = connection();
@@ -899,7 +947,7 @@ export const prepareDeliveryTx = functions.https.onCall(async (request) => {
 export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
-  const { owner, signature, orderId } = schema.parse(request.data);
+  const { owner, signature, orderId } = parseRequest(schema, request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
 
   const orderRef = db.doc(`deliveryOrders/${orderId}`);
@@ -985,7 +1033,7 @@ export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
 export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string() });
-  const { owner, code } = schema.parse(request.data);
+  const { owner, code } = parseRequest(schema, request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const claimRef = db.doc(`claimCodes/${code}`);
@@ -1098,7 +1146,7 @@ export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
 export const finalizeClaimTx = functions.https.onCall(async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
-  const { owner, code, signature } = schema.parse(request.data);
+  const { owner, code, signature } = parseRequest(schema, request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
