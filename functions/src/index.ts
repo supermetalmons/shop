@@ -1,7 +1,6 @@
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
-import type { Request, Response } from 'express';
 import * as functions from 'firebase-functions';
 import {
   ComputeBudgetProgram,
@@ -35,26 +34,16 @@ const db = getFirestore(app);
 const auth = getAuth(app);
 const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+type CallableReq<T = any> = functions.https.CallableRequest<T>;
 
-function requestData<T = any>(req: Request): T {
-  const body = req.body;
-  if (body && typeof body === 'object' && 'data' in body) {
-    return (body as any).data as T;
-  }
-  return body as T;
+function uidFromRequest(request: CallableReq<any>): string | null {
+  return request.auth?.uid || null;
 }
 
-function maybeHandleCors(req: Request, res: Response) {
-  res.set(corsHeaders);
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('');
-    return true;
-  }
-  return false;
+function requireAuth(request: CallableReq<any>): string {
+  const uid = uidFromRequest(request);
+  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Missing auth token');
+  return uid;
 }
 
 const DUDES_PER_BOX = 3;
@@ -562,14 +551,6 @@ function shippingLamports(country: string, items: number) {
   return Math.round(base * multiplier * LAMPORTS_PER_SOL);
 }
 
-async function verifyAuth(req: Request) {
-  const header = req.headers.authorization || '';
-  const token = header.replace('Bearer ', '');
-  if (!token) throw new functions.https.HttpsError('unauthenticated', 'Missing auth token');
-  const decoded = await auth.verifyIdToken(token);
-  return decoded.uid;
-}
-
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -671,20 +652,12 @@ async function detectClaimOnChain(code: string, owner: string, limit = 20): Prom
   return null;
 }
 
-export const solanaAuth = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
+export const solanaAuth = functions.https.onCall(async (request) => {
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
-  const { wallet, message, signature } = schema.parse(requestData(req));
+  const { wallet, message, signature } = schema.parse(request.data);
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
-  if (!verified) {
-    res.status(401).json({ error: 'Invalid signature' });
-    return;
-  }
+  if (!verified) throw new functions.https.HttpsError('unauthenticated', 'Invalid signature');
 
   const userRecord = await auth.getUser(wallet).catch(() => null);
   if (!userRecord) {
@@ -697,7 +670,7 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
   const addresses = addressesSnap.docs.map((doc) => doc.data());
   const profileData = snap.exists ? (snap.data() as any) : { wallet };
   if (!snap.exists) await profileRef.set(profileData);
-  res.json({
+  return {
     customToken,
     profile: {
       ...profileData,
@@ -705,39 +678,27 @@ export const solanaAuth = functions.https.onRequest(async (req, res) => {
       email: profileData.email || userRecord?.email,
       addresses,
     },
-  });
+  };
 });
 
-export const stats = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
+export const stats = functions.https.onCall(async (_request) => {
   await maybeSyncMintedFromChain();
-  const stats = await getMintStats();
-  res.json(stats);
+  return getMintStats();
 });
 
-export const inventory = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  const body = requestData<{ owner?: string }>(req);
-  const owner = (req.query.owner as string) || body?.owner || '';
-  if (!owner) {
-    res.status(400).json({ error: 'owner required' });
-    return;
-  }
+export const inventory = functions.https.onCall(async (request) => {
+  const schema = z.object({ owner: z.string() });
+  const { owner } = schema.parse(request.data);
   const assets = await fetchAssetsOwned(owner);
   const items = (assets || [])
     .filter(isMonsAsset)
     .map(transformInventoryItem)
     .filter(Boolean);
-  res.json(items);
+  return items;
 });
 
-export const saveAddress = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
-  const uid = await verifyAuth(req);
+export const saveAddress = functions.https.onCall(async (request) => {
+  const uid = requireAuth(request);
   const schema = z.object({
     encrypted: z.string(),
     country: z.string(),
@@ -746,7 +707,7 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     hint: z.string(),
     email: z.string().email().optional(),
   });
-  const body = schema.parse(requestData(req));
+  const body = schema.parse(request.data);
   const id = db.collection('tmp').doc().id;
   const countryCode = normalizeCountryCode(body.countryCode || body.country);
   const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
@@ -763,7 +724,7 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     { wallet: uid, ...(body.email ? { email: body.email } : {}) },
     { merge: true },
   );
-  res.json({
+  return {
     id,
     label: body.label,
     country: body.country,
@@ -771,18 +732,13 @@ export const saveAddress = functions.https.onRequest(async (req, res) => {
     encrypted: body.encrypted,
     hint: body.hint,
     email: body.email,
-  });
+  };
 });
 
-export const prepareMintTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
+export const prepareMintTx = functions.https.onCall(async (request) => {
   await maybeSyncMintedFromChain();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
-  const { owner, quantity } = schema.parse(requestData(req));
+  const { owner, quantity } = schema.parse(request.data);
   const ownerPk = new PublicKey(owner);
   const stats = await getMintStats();
   const remaining = Math.max(0, stats.remaining);
@@ -798,25 +754,17 @@ export const prepareMintTx = functions.https.onRequest(async (req, res) => {
   instructions.push(...(await buildMintInstructions(ownerPk, mintQty, 'box', stats.minted + 1)));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
-  res.json({
+  return {
     encodedTx: Buffer.from(tx.serialize()).toString('base64'),
     allowedQuantity: mintQty,
-  });
+  };
 });
 
-export const finalizeMintTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
+export const finalizeMintTx = functions.https.onCall(async (request) => {
   const schema = z.object({ owner: z.string(), signature: z.string() });
-  const { owner, signature } = schema.parse(requestData(req));
-  const authHeader = req.headers.authorization || '';
-  if (authHeader) {
-    const uid = await verifyAuth(req);
-    if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  }
+  const { owner, signature } = schema.parse(request.data);
+  const uid = uidFromRequest(request);
+  if (uid && uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const processed = await processMintSignature(signature);
   if (!processed) {
     throw new functions.https.HttpsError('failed-precondition', 'Mint transaction not found or already recorded');
@@ -825,17 +773,12 @@ export const finalizeMintTx = functions.https.onRequest(async (req, res) => {
     throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
   }
   const stats = await getMintStats();
-  res.json({ ...stats, recorded: processed.mintCount });
+  return { ...stats, recorded: processed.mintCount };
 });
 
-export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
+export const prepareOpenBoxTx = functions.https.onCall(async (request) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
-  const { owner, boxAssetId } = schema.parse(requestData(req));
+  const { owner, boxAssetId } = schema.parse(request.data);
   const ownerPk = new PublicKey(owner);
   const conn = connection();
   const { asset, proof } = await fetchAssetWithProof(boxAssetId);
@@ -856,18 +799,13 @@ export const prepareOpenBoxTx = functions.https.onRequest(async (req, res) => {
   instructions.push(...(await buildMintInstructions(ownerPk, DUDES_PER_BOX, 'dude', dudeIds[0], { boxId: boxAssetId, dudeIds })));
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
-  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), assignedDudeIds: dudeIds });
+  return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), assignedDudeIds: dudeIds };
 });
 
-export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
-  const uid = await verifyAuth(req);
+export const prepareDeliveryTx = functions.https.onCall(async (request) => {
+  const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
-  const { owner, itemIds, addressId } = schema.parse(requestData(req));
+  const { owner, itemIds, addressId } = schema.parse(request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const conn = connection();
@@ -955,18 +893,13 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
     shippingLamports: deliveryPrice,
     createdAt: FieldValue.serverTimestamp(),
   });
-  res.json({ encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId });
+  return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId };
 });
 
-export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
-  const uid = await verifyAuth(req);
+export const finalizeDeliveryTx = functions.https.onCall(async (request) => {
+  const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
-  const { owner, signature, orderId } = schema.parse(requestData(req));
+  const { owner, signature, orderId } = schema.parse(request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
 
   const orderRef = db.doc(`deliveryOrders/${orderId}`);
@@ -979,8 +912,7 @@ export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => 
     throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
   }
   if (order.signature && order.signature !== signature && order.status === 'completed') {
-    res.status(409).json({ error: 'Order already finalized', signature: order.signature });
-    return;
+    throw new functions.https.HttpsError('already-exists', 'Order already finalized');
   }
 
   const tx = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
@@ -1041,36 +973,29 @@ export const finalizeDeliveryTx = functions.https.onRequest(async (req, res) => 
     );
   });
 
-  res.json({
+  return {
     recorded: true,
     signature: finalSignature,
     orderId,
     shippingPaid: finalShippingPaid,
     certificates: finalCertificates,
-  });
+  };
 });
 
-export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
-  const uid = await verifyAuth(req);
+export const prepareIrlClaimTx = functions.https.onCall(async (request) => {
+  const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string() });
-  const { owner, code } = schema.parse(requestData(req));
+  const { owner, code } = schema.parse(request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(owner);
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
-    res.status(404).json({ error: 'Invalid claim code' });
-    return;
+    throw new functions.https.HttpsError('not-found', 'Invalid claim code');
   }
   const claim = claimDoc.data() as any;
   if (claim.redeemedAt || claim.redeemedSignature) {
-    res.status(409).json({ error: 'Claim code already redeemed' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Claim code already redeemed');
   }
   const alreadyRedeemedSig = await detectClaimOnChain(code, owner).catch(() => null);
   if (alreadyRedeemedSig) {
@@ -1082,43 +1007,35 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
       },
       { merge: true },
     );
-    res.status(409).json({ error: 'Claim already redeemed on-chain', signature: alreadyRedeemedSig });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed on-chain');
   }
   const certificate = claim.boxId ? await findCertificateForBox(owner, claim.boxId) : null;
   if (!certificate) {
-    res.status(403).json({ error: 'Blind box certificate not found in wallet' });
-    return;
+    throw new functions.https.HttpsError('permission-denied', 'Blind box certificate not found in wallet');
   }
   const certificateOwner = certificate?.ownership?.owner;
   if (certificateOwner !== owner) {
-    res.status(403).json({ error: 'Certificate not found in wallet' });
-    return;
+    throw new functions.https.HttpsError('permission-denied', 'Certificate not found in wallet');
   }
   const kind = getAssetKind(certificate);
   if (kind !== 'certificate') {
-    res.status(400).json({ error: 'Provided asset is not a certificate' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Provided asset is not a certificate');
   }
   const certificateBoxId = getBoxIdFromAsset(certificate);
   if (!certificateBoxId) {
-    res.status(400).json({ error: 'Certificate missing box reference' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Certificate missing box reference');
   }
   if (claim.boxId && claim.boxId !== certificateBoxId) {
-    res.status(403).json({ error: 'Certificate does not match claim box' });
-    return;
+    throw new functions.https.HttpsError('permission-denied', 'Certificate does not match claim box');
   }
   if (!isMonsAsset(certificate)) {
-    res.status(400).json({ error: 'Certificate is outside the Mons collection' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Certificate is outside the Mons collection');
   }
   const certificateId = certificate.id;
 
   const dudeIds: number[] = claim.dudeIds || [];
   if (!dudeIds.length) {
-    res.status(400).json({ error: 'Claim has no dudes assigned' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Claim has no dudes assigned');
   }
   const pending = claim.pendingAttempt;
   const nowMs = Date.now();
@@ -1128,44 +1045,35 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
       pending.owner === owner
         ? 'Claim already has a pending transaction, please submit it or wait a few minutes.'
         : 'Claim is locked by another wallet right now.';
-    res.status(409).json({ error: message, pending });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', message);
   }
 
   const attemptId = randomBytes(8).toString('hex');
   const expiresAt = Timestamp.fromMillis(nowMs + CLAIM_LOCK_WINDOW_MS);
-  try {
-    await db.runTransaction(async (txRef) => {
-      const fresh = await txRef.get(claimRef);
-      if (!fresh.exists) {
-        throw new functions.https.HttpsError('not-found', 'Invalid claim code');
-      }
-      const data = fresh.data() as any;
-      const existingPending = data.pendingAttempt;
-      const existingPendingExpiry = existingPending?.expiresAt?.toMillis ? existingPending.expiresAt.toMillis() : 0;
-      if (data.redeemedAt || data.redeemedSignature) {
-        throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
-      }
-      if (existingPending && existingPendingExpiry > Date.now()) {
-        throw new functions.https.HttpsError('failed-precondition', 'Claim already has a pending transaction');
-      }
-      txRef.update(claimRef, {
-        pendingAttempt: {
-          owner,
-          attemptId,
-          certificateId,
-          expiresAt,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-      });
-    });
-  } catch (err) {
-    if (err instanceof functions.https.HttpsError) {
-      res.status(409).json({ error: err.message });
-      return;
+  await db.runTransaction(async (txRef) => {
+    const fresh = await txRef.get(claimRef);
+    if (!fresh.exists) {
+      throw new functions.https.HttpsError('not-found', 'Invalid claim code');
     }
-    throw err;
-  }
+    const data = fresh.data() as any;
+    const existingPending = data.pendingAttempt;
+    const existingPendingExpiry = existingPending?.expiresAt?.toMillis ? existingPending.expiresAt.toMillis() : 0;
+    if (data.redeemedAt || data.redeemedSignature) {
+      throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
+    }
+    if (existingPending && existingPendingExpiry > Date.now()) {
+      throw new functions.https.HttpsError('failed-precondition', 'Claim already has a pending transaction');
+    }
+    txRef.update(claimRef, {
+      pendingAttempt: {
+        owner,
+        attemptId,
+        certificateId,
+        expiresAt,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+    });
+  });
 
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 })];
   instructions.push(memoInstruction(`claim:${code}:${attemptId}`));
@@ -1178,41 +1086,33 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
   );
   const { blockhash } = await connection().getLatestBlockhash('confirmed');
   const tx = buildTx(instructions, ownerPk, blockhash);
-  res.json({
+  return {
     encodedTx: Buffer.from(tx.serialize()).toString('base64'),
     certificates: dudeIds,
     attemptId,
     lockExpiresAt: expiresAt.toMillis(),
     certificateId,
-  });
+  };
 });
 
-export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
-  if (maybeHandleCors(req, res)) return;
-  if (req.method !== 'POST') {
-    res.status(405).send('Method not allowed');
-    return;
-  }
-  const uid = await verifyAuth(req);
+export const finalizeClaimTx = functions.https.onCall(async (request) => {
+  const uid = requireAuth(request);
   const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
-  const { owner, code, signature } = schema.parse(requestData(req));
+  const { owner, code, signature } = schema.parse(request.data);
   if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
-    res.status(404).json({ error: 'Invalid claim code' });
-    return;
+    throw new functions.https.HttpsError('not-found', 'Invalid claim code');
   }
   const claim = claimDoc.data() as any;
   if (claim.redeemedAt || claim.redeemedSignature) {
-    res.status(409).json({ error: 'Claim already redeemed' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
   }
 
   const processed = await processClaimSignature(code, signature, owner);
   if (!processed) {
-    res.status(412).json({ error: 'Claim transaction not found or invalid' });
-    return;
+    throw new functions.https.HttpsError('failed-precondition', 'Claim transaction not found or invalid');
   }
 
   await db.runTransaction(async (txRef) => {
@@ -1221,15 +1121,15 @@ export const finalizeClaimTx = functions.https.onRequest(async (req, res) => {
       throw new functions.https.HttpsError('not-found', 'Invalid claim code');
     }
     const data = fresh.data() as any;
-      if (data.redeemedAt || data.redeemedSignature) return;
-      txRef.update(claimRef, {
-        redeemedAt: FieldValue.serverTimestamp(),
-        redeemedBy: owner,
-        redeemedSignature: signature,
-        redeemedCertificateId: data.pendingAttempt?.certificateId,
-        pendingAttempt: FieldValue.delete(),
-      });
+    if (data.redeemedAt || data.redeemedSignature) return;
+    txRef.update(claimRef, {
+      redeemedAt: FieldValue.serverTimestamp(),
+      redeemedBy: owner,
+      redeemedSignature: signature,
+      redeemedCertificateId: data.pendingAttempt?.certificateId,
+      pendingAttempt: FieldValue.delete(),
+    });
   });
 
-  res.json({ recorded: true, signature });
+  return { recorded: true, signature };
 });

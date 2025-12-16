@@ -1,30 +1,13 @@
-import { getFunctions, httpsCallableFromURL } from 'firebase/functions';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
-function callableUrl(name: string): string {
-  const envOrigin = import.meta.env.VITE_FUNCTIONS_ORIGIN || import.meta.env.VITE_FUNCTIONS_BASE_URL;
-  const projectId = firebaseApp?.options.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID;
-  const emulatorOrigin = (functionsInstance as { emulatorOrigin?: string } | undefined)?.emulatorOrigin;
-  const customDomain = (functionsInstance as { customDomain?: string } | undefined)?.customDomain;
-  const targetRegion = (functionsInstance as { region?: string } | undefined)?.region || region;
-  if (envOrigin) return `${envOrigin.replace(/\/$/, '')}/${name}`;
-  if (!projectId) throw new Error('Missing Firebase project id');
-  if (emulatorOrigin) {
-    return `${emulatorOrigin.replace(/\/$/, '')}/${projectId}/${targetRegion}/${name}`;
-  }
-  if (customDomain) {
-    return `${customDomain.replace(/\/$/, '')}/${name}`;
-  }
-  return `https://${targetRegion}-${projectId}.cloudfunctions.net/${name}`;
-}
-
 async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   if (!functionsInstance) throw new Error('Firebase client is not configured');
-  const callable = httpsCallableFromURL<Req, Res>(functionsInstance, callableUrl(name));
+  const callable = httpsCallable<Req, Res>(functionsInstance, name);
   const result = await callable(data ?? ({} as Req));
   return result.data;
 }
