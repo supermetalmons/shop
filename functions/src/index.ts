@@ -679,21 +679,32 @@ async function heliusRpc<T>(method: string, params: any, label: string): Promise
 async function fetchAssetsOwned(owner: string) {
   // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
   // (assets returned by the API use objects like { group_key, group_value }).
-  const grouping = collectionMintStr ? (['collection', collectionMintStr] as const) : undefined;
-  const result = await heliusRpc<any>(
-    'searchAssets',
-    {
-      ownerAddress: owner,
-      grouping,
-      page: 1,
-      limit: 1000,
-      displayOptions: {
-        showCollectionMetadata: true,
-        showUnverifiedCollections: true,
-      },
+  //
+  // NOTE: Newly minted compressed NFTs can briefly miss collection-group indexing on devnet.
+  // We first try the collection-group query (fast/small), then fall back to an ungrouped query
+  // and filter locally by merkle tree + metadata patterns.
+  const baseParams = {
+    ownerAddress: owner,
+    page: 1,
+    limit: 1000,
+    displayOptions: {
+      showCollectionMetadata: true,
+      showUnverifiedCollections: true,
     },
-    'Helius assets error',
-  );
+  };
+
+  if (collectionMintStr) {
+    const grouping = ['collection', collectionMintStr] as const;
+    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping }, 'Helius assets error');
+    const items = Array.isArray(grouped?.items) ? grouped.items : [];
+    if (items.length) return items;
+    functions.logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
+      owner,
+      collection: collectionMintStr,
+    });
+  }
+
+  const result = await heliusRpc<any>('searchAssets', baseParams, 'Helius assets error');
   return Array.isArray(result?.items) ? result.items : [];
 }
 
@@ -719,28 +730,89 @@ async function fetchAsset(assetId: string) {
 }
 
 function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'type');
+  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'type');
   const value = kindAttr?.value;
-  return value === 'box' || value === 'dude' || value === 'certificate' ? value : null;
+  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
+  if (lowerUri.includes('/json/boxes/')) return 'box';
+  if (lowerUri.includes('/json/figures/')) return 'dude';
+  if (lowerUri.includes('/json/receipts/')) return 'certificate';
+
+  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
+  const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
+  if (lowerName.includes('blind box')) return 'box';
+  if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
+  if (lowerName.includes('figure')) return 'dude';
+  return null;
 }
 
 function getBoxIdFromAsset(asset: any): string | undefined {
-  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'box_id');
-  return boxAttr?.value;
+  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'box_id');
+  const value = boxAttr?.value;
+  if (typeof value === 'string' && value) return value;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  if (typeof uri === 'string' && uri) {
+    const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
+    if (matchBoxes?.[1]) return matchBoxes[1];
+    const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
+    if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
+  }
+  return undefined;
 }
 
 function getDudeIdFromAsset(asset: any): number | undefined {
-  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a.trait_type === 'dude_id');
+  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'dude_id');
   const num = Number(dudeAttr?.value);
-  return Number.isFinite(num) ? num : undefined;
+  if (Number.isFinite(num)) return num;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  if (typeof uri === 'string' && uri) {
+    const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
+    const n = Number(match?.[1]);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }
 
 function isMonsAsset(asset: any): boolean {
-  const inCollection =
-    !collectionMintStr ||
-    (asset?.grouping || []).some((g: any) => g.group_key === 'collection' && g.group_value === collectionMintStr);
   const kind = getAssetKind(asset);
-  return Boolean(inCollection && kind);
+  if (!kind) return false;
+
+  // Primary: collection grouping match.
+  const groupingMatch =
+    !collectionMintStr ||
+    (asset?.grouping || []).some((g: any) => g?.group_key === 'collection' && g?.group_value === collectionMintStr);
+  if (groupingMatch) return true;
+
+  // Fallbacks: allow inventory to work during collection-indexing delays.
+  const tree = asset?.compression?.tree || asset?.compression?.treeId;
+  if (typeof tree === 'string' && tree === merkleTree.toBase58()) return true;
+
+  const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
+  if (typeof uri === 'string' && uri && uri.startsWith(metadataBase)) return true;
+
+  return false;
 }
 
 async function fetchAssetWithProof(assetId: string) {
@@ -848,13 +920,18 @@ function transformInventoryItem(asset: any) {
   if (!kind) return null;
   const boxId = getBoxIdFromAsset(asset);
   const dudeId = getDudeIdFromAsset(asset);
+  const image =
+    asset?.content?.links?.image ||
+    asset?.content?.metadata?.image ||
+    asset?.content?.files?.[0]?.uri ||
+    asset?.content?.files?.[0]?.cdn_uri;
   return {
     id: asset.id,
     name: asset.content?.metadata?.name || asset.id,
     kind,
     boxId,
     dudeId,
-    image: asset.content?.links?.image,
+    image,
     attributes: asset.content?.metadata?.attributes || [],
     status: asset.compression?.compressed ? 'minted' : 'unknown',
   };
