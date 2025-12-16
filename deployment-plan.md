@@ -4,7 +4,7 @@ Step-by-step guide to ship mons.shop end-to-end (Solana + Firebase Cloud Functio
 
 ## Prerequisites
 - Tooling: Node 20+, npm, `firebase-tools` (latest), Solana CLI, and `tsx` is installed via dev deps.
-- Accounts/keys: Firebase project with billing enabled (functions call external APIs), funded Solana keypair on the target cluster (devnet/testnet/mainnet-beta), Helius API key, RPC URL (can be Helius), address-encryption Curve25519 public key (see README snippet), hosting for metadata JSON (`METADATA_BASE`), and a place to host the built web app (Amplify/Netlify/Vercel/etc.).
+- Accounts/keys: Firebase project with billing enabled (functions call external APIs), funded Solana keypair on the target cluster (devnet/testnet/mainnet-beta), Helius API key, RPC URL (can be Helius), address-encryption Curve25519 public key (see README snippet), hosting for drop metadata (`METADATA_BASE`, e.g. `https://assets.mons.link/shop/drops/1`), and a place to host the built web app (Amplify/Netlify/Vercel/etc.).
 - Clone & install:
   ```bash
   cd /Users/ivan/.cursor/worktrees/shop/oov
@@ -29,7 +29,7 @@ All commands run from repo root unless noted.
        --keypair ~/.config/solana/id.json \
        --name "mons collection" \
        --symbol MONS \
-       --uri https://<metadata-base>/collection.json
+      --uri https://assets.mons.link/shop/drops/1/collection.json
      ```
      Outputs: `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`.
    - If a collection mint already exists: `npm run tree:derive-collection -- --mint <mint> [--authority <update-auth-pubkey>]`.
@@ -48,7 +48,7 @@ All commands run from repo root unless noted.
    ```
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
 5. Decide supplies & metadata:
-   - `METADATA_BASE` should host `box.json`, `dude/<id>.json`, `certificate/...`.
+   - `METADATA_BASE` should host the drop under one root (e.g. `https://assets.mons.link/shop/drops/1`) with `collection.json`, `json/boxes/<id>.json`, `json/figures/<id>.json`, and `json/receipts/{boxes|figures}/<id>.json`.
    - `TOTAL_SUPPLY` (default 333; global cap across all clusters).
 6. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 

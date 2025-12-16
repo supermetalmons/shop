@@ -70,7 +70,8 @@ const collectionUpdateAuthority = new PublicKey(
   process.env.COLLECTION_UPDATE_AUTHORITY || PublicKey.default.toBase58(),
 );
 const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
-const metadataBase = process.env.METADATA_BASE || 'https://assets.mons.link/metadata';
+const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
+const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
@@ -121,41 +122,46 @@ function parseSignature(sig: number[] | string) {
   return Uint8Array.from(sig);
 }
 
-function buildMetadata(
-  kind: 'box' | 'dude' | 'certificate',
-  index: number,
-  extra?: { boxId?: string; dudeIds?: number[] },
-): MetadataArgs {
+type MetadataExtra = {
+  boxId?: string;
+  dudeIds?: number[];
+  receiptTarget?: 'box' | 'figure';
+};
+
+function normalizeBoxId(boxId?: string) {
+  if (!boxId) return undefined;
+  const numeric = Number(boxId);
+  if (Number.isFinite(numeric) && numeric > 0) return String(numeric);
+  const match = `${boxId}`.match(/\d+/);
+  return match?.[0];
+}
+
+function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extra?: MetadataExtra): MetadataArgs {
   const dudes = (extra?.dudeIds || []).filter((id) => Number.isFinite(id)) as number[];
   const primaryDudeId = dudes[0] ?? index;
-  const certificateTarget = kind === 'certificate' ? (extra?.boxId ? 'box' : dudes.length === 1 ? 'dude' : undefined) : undefined;
-  const allowDudeAttrs = kind !== 'certificate' || certificateTarget === 'dude';
+  const boxRef = normalizeBoxId(extra?.boxId);
+  const certificateTarget =
+    kind === 'certificate'
+      ? extra?.receiptTarget || (dudes.length ? 'figure' : boxRef ? 'box' : undefined)
+      : undefined;
   const name = (() => {
     if (kind === 'box') return `mons blind box #${index}`;
-    if (kind === 'dude') return `mons dude #${primaryDudeId}`;
-    if (certificateTarget === 'dude') return `mons certificate · dude #${primaryDudeId}`;
-    if (certificateTarget === 'box') return `mons certificate · box ${extra?.boxId?.slice(0, 6) || index}`;
+    if (kind === 'dude') return `mons figure #${primaryDudeId}`;
+    if (certificateTarget === 'figure') return `mons receipt · figure #${primaryDudeId}`;
+    if (certificateTarget === 'box') return `mons receipt · box ${boxRef || extra?.boxId?.slice(0, 6) || index}`;
     return `mons authenticity #${index}`;
   })();
 
   const uriSuffix =
     kind === 'box'
-      ? 'box.json'
+      ? `json/boxes/${index}.json`
       : kind === 'dude'
-        ? `dude/${primaryDudeId}.json`
-        : certificateTarget === 'dude'
-          ? `certificate/dude-${primaryDudeId}.json`
-          : certificateTarget === 'box' && extra?.boxId
-            ? `certificate/box-${extra.boxId}.json`
-            : 'certificate.json';
-
-  const attrs = [
-    { trait_type: 'type', value: kind },
-    extra?.boxId ? { trait_type: 'box_id', value: extra.boxId } : null,
-    allowDudeAttrs && dudes.length === 1 ? { trait_type: 'dude_id', value: `${primaryDudeId}` } : null,
-    allowDudeAttrs && dudes.length > 1 ? { trait_type: 'dude_ids', value: dudes.join(',') } : null,
-    certificateTarget ? { trait_type: 'certificate_for', value: certificateTarget } : null,
-  ].filter(Boolean) as { trait_type: string; value: string }[];
+        ? `json/figures/${primaryDudeId}.json`
+        : certificateTarget === 'box'
+          ? `json/receipts/boxes/${boxRef || index}.json`
+          : certificateTarget === 'figure'
+            ? `json/receipts/figures/${primaryDudeId}.json`
+            : `json/receipts/${index}.json`;
 
   return {
     name,
@@ -173,7 +179,13 @@ function buildMetadata(
   };
 }
 
-async function buildMintInstructions(owner: PublicKey, quantity: number, kind: 'box' | 'dude' | 'certificate', startIndex = 1, extra?: { boxId?: string; dudeIds?: number[] }) {
+async function buildMintInstructions(
+  owner: PublicKey,
+  quantity: number,
+  kind: 'box' | 'dude' | 'certificate',
+  startIndex = 1,
+  extra?: MetadataExtra,
+) {
   const instructions: TransactionInstruction[] = [];
   const bubblegumSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
   const collectionAuthorityRecord = collectionAuthorityRecordPda();
@@ -185,6 +197,7 @@ async function buildMintInstructions(owner: PublicKey, quantity: number, kind: '
     const metadataArgs = buildMetadata(kind, startIndex + i, {
       boxId: extra?.boxId,
       dudeIds: perMintDudeIds?.filter((id) => Number.isFinite(id)) as number[] | undefined,
+      receiptTarget: extra?.receiptTarget,
     });
     instructions.push(
       createMintToCollectionV1Instruction(
@@ -911,6 +924,7 @@ export const prepareDeliveryTx = functions.https.onRequest(async (req, res) => {
       ...(await buildMintInstructions(ownerPk, 1, 'certificate', certIndex, {
         boxId: boxRef,
         dudeIds,
+        receiptTarget: kind === 'box' ? 'box' : 'figure',
       })),
     );
   }
@@ -1150,6 +1164,7 @@ export const prepareIrlClaimTx = functions.https.onRequest(async (req, res) => {
     ...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', 1, {
       boxId: claim.boxId || certificateBoxId,
       dudeIds,
+      receiptTarget: 'figure',
     })),
   );
   const { blockhash } = await connection().getLatestBlockhash('confirmed');

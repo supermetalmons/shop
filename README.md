@@ -41,7 +41,7 @@ VITE_SECONDARY_MAGICEDEN=...
 - `COSIGNER_SECRET` (optional, defaults to tree authority)
 - `MERKLE_TREE`, `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`
 - `DELIVERY_VAULT` (SOL recipient for shipping)
-- `METADATA_BASE` (base URI with box/dude/certificate JSON)
+- `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 - `TOTAL_SUPPLY` (defaults 333; global cap across all clusters)
 
 ### What the functions do

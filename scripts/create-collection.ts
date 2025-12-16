@@ -48,7 +48,8 @@ async function main() {
   const keypairPath = getArg('--keypair', `${homedir()}/.config/solana/id.json`);
   const name = getArg('--name', process.env.COLLECTION_NAME || 'mons collection');
   const symbol = getArg('--symbol', process.env.COLLECTION_SYMBOL || 'MONS');
-  const metadataBase = process.env.METADATA_BASE || 'https://assets.mons.link/metadata';
+  const defaultMetadataBase = 'https://assets.mons.link/shop/drops/1';
+  const metadataBase = (process.env.METADATA_BASE || defaultMetadataBase).replace(/\/$/, '');
   const uri = getArg('--uri', `${metadataBase}/collection.json`);
 
   const payer = loadKeypair(keypairPath);
