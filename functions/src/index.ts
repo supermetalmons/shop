@@ -255,22 +255,34 @@ function onCallLogged<TReq, TRes>(
     const startedAt = Date.now();
     const debug = (request as any)?.data?.__debug as any;
     const debugCallId = typeof debug?.callId === 'string' ? debug.callId : null;
-    functions.logger.info(`${name}:call`, {
-      ...callableMeta(request),
-      debugCallId,
-      data: summarizePayload((request as any).data),
-    });
+    const baseMeta = { ...callableMeta(request), debugCallId };
+    try {
+      functions.logger.info(`${name}:call`, { ...baseMeta, data: summarizePayload((request as any).data) });
+    } catch (logErr) {
+      // Never fail the function because structured logging couldn't serialize something.
+      console.error(`${name}:call logger failed`, { logError: summarizeError(logErr), meta: baseMeta });
+    }
     try {
       const result = await handler(request);
-      functions.logger.info(`${name}:ok`, { ...callableMeta(request), debugCallId, ms: Date.now() - startedAt });
+      const ms = Date.now() - startedAt;
+      try {
+        functions.logger.info(`${name}:ok`, { ...baseMeta, ms });
+      } catch (logErr) {
+        console.error(`${name}:ok logger failed`, { logError: summarizeError(logErr), meta: baseMeta, ms });
+      }
       return result;
     } catch (err) {
-      functions.logger.error(`${name}:error`, {
-        ...callableMeta(request),
-        debugCallId,
-        ms: Date.now() - startedAt,
-        error: summarizeError(err),
-      });
+      const ms = Date.now() - startedAt;
+      try {
+        functions.logger.error(`${name}:error`, { ...baseMeta, ms, error: summarizeError(err) });
+      } catch (logErr) {
+        console.error(`${name}:error logger failed`, {
+          logError: summarizeError(logErr),
+          meta: baseMeta,
+          ms,
+          error: summarizeError(err),
+        });
+      }
       throw err;
     }
   });
@@ -624,25 +636,59 @@ async function waitForMintSync(timeoutMs = MINT_SYNC_TIMEOUT_MS) {
 }
 
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
-  let attempt = 0;
-  let lastError: unknown;
-  while (attempt <= retries) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url);
+      const res = await withTimeout(fetch(url), RPC_TIMEOUT_MS, `heliusJson:${label}`);
       if (res.ok) return await res.json();
-      const retriable = res.status === 429 || res.status >= 500;
-      if (!retriable || attempt === retries) {
-        throw new Error(`${label} ${res.status}`);
+
+      const status = res.status;
+      // 404 can be transient right after mint/transfer while the asset indexes.
+      const retriable = status === 429 || status >= 500 || status === 404;
+      if (retriable && attempt < retries) {
+        await sleep(backoffMs * 2 ** attempt);
+        continue;
+      }
+
+      if (status === 404) {
+        throw new functions.https.HttpsError('not-found', `${label}: not found (Helius 404)`, { status });
+      }
+      if (status === 400) {
+        throw new functions.https.HttpsError('invalid-argument', `${label}: bad request (Helius 400)`, { status });
+      }
+      if (status === 401 || status === 403) {
+        throw new functions.https.HttpsError('failed-precondition', `${label}: unauthorized (check Helius API key)`, {
+          status,
+        });
+      }
+      if (status === 429) {
+        throw new functions.https.HttpsError('resource-exhausted', `${label}: rate limited`, { status });
+      }
+      if (status >= 500) {
+        throw new functions.https.HttpsError('unavailable', `${label}: upstream unavailable`, { status });
+      }
+      throw new functions.https.HttpsError('unknown', `${label}: HTTP ${status}`, { status });
+    } catch (err) {
+      const anyErr = err as any;
+      const isHttpsError = anyErr && typeof anyErr === 'object' && typeof anyErr.code === 'string' && anyErr.code !== 'UNKNOWN';
+      if (isHttpsError) {
+        const code = String(anyErr.code);
+        const retriableCode =
+          code === 'unavailable' || code === 'resource-exhausted' || code === 'deadline-exceeded' || code === 'unknown';
+        if (!retriableCode || attempt === retries) throw err;
+        await sleep(backoffMs * 2 ** attempt);
+        continue;
+      }
+
+      if (attempt === retries) {
+        throw new functions.https.HttpsError('unavailable', `${label}: request failed`, {
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
       await sleep(backoffMs * 2 ** attempt);
-    } catch (err) {
-      lastError = err;
-      if (attempt === retries) break;
-      await sleep(backoffMs * 2 ** attempt);
     }
-    attempt += 1;
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  // Unreachable, but keeps TS happy.
+  throw new functions.https.HttpsError('unavailable', `${label}: request failed`);
 }
 
 async function heliusRpc<T>(method: string, params: any, label: string): Promise<T> {
@@ -718,7 +764,15 @@ async function fetchAssetProof(assetId: string) {
   const helius = process.env.HELIUS_API_KEY;
   const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
   const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
-  return heliusJson(url, 'Helius proof error');
+  const proof = await heliusJson(url, 'Helius proof error');
+  if (!proof || typeof proof !== 'object' || !(proof as any)?.root) {
+    throw new functions.https.HttpsError(
+      'not-found',
+      'Asset proof not available yet. If you just minted/transferred/opened this item, wait a few seconds and retry.',
+      { assetId },
+    );
+  }
+  return proof;
 }
 
 async function fetchAsset(assetId: string) {
@@ -726,7 +780,15 @@ async function fetchAsset(assetId: string) {
   const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
   const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}${clusterParam}`;
   const json = await heliusJson(url, 'Helius asset error');
-  return json[0];
+  const asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
+  if (!asset) {
+    throw new functions.https.HttpsError(
+      'not-found',
+      'Asset not found. If you just minted/transferred/opened this item, wait a few seconds and retry.',
+      { assetId },
+    );
+  }
+  return asset;
 }
 
 function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
@@ -1243,7 +1305,21 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
   const { owner, boxAssetId } = parseRequest(schema, request.data);
   const ownerPk = new PublicKey(owner);
   const conn = connection();
-  const { asset, proof } = await fetchAssetWithProof(boxAssetId);
+  let asset: any;
+  let proof: any;
+  try {
+    ({ asset, proof } = await fetchAssetWithProof(boxAssetId));
+  } catch (err) {
+    const anyErr = err as any;
+    if (anyErr && typeof anyErr === 'object' && anyErr.code === 'not-found') {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'Box not found. If you already opened this box, it has been burned. If you just minted/transferred it, wait a few seconds and try again.',
+        { boxAssetId, cluster },
+      );
+    }
+    throw err;
+  }
   const kind = getAssetKind(asset);
   if (kind !== 'box') {
     throw new functions.https.HttpsError('failed-precondition', 'Only blind boxes can be opened');
