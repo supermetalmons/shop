@@ -64,7 +64,6 @@ cp .env.example .env.deploy  # for deployment; edit with real values
 Keys in the template:
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (devnet|testnet|mainnet-beta)
-- `SOLANA_RPC_URL` (match the cluster; can be Helius RPC)
 - `MERKLE_TREE`
 - `TREE_AUTHORITY_SECRET`
 - `COSIGNER_SECRET` (optional, defaults to tree authority if left blank)

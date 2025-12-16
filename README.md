@@ -35,7 +35,6 @@ VITE_SECONDARY_MAGICEDEN=...
 ### Function env (set as runtime config or shell env)
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (`devnet`/`testnet`/`mainnet-beta`)
-- `SOLANA_RPC_URL`
 - `TREE_AUTHORITY_SECRET` (bs58 secret key that owns the cNFT tree)
 - `COSIGNER_SECRET` (optional, defaults to tree authority)
 - `MERKLE_TREE`, `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`

@@ -50,13 +50,22 @@ const DUDES_PER_BOX = 3;
 const totalSupply = Number(process.env.TOTAL_SUPPLY || 333);
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 const MINT_SYNC_TTL_MS = 30_000;
+const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
 const MINT_SYNC_TIMEOUT_MS = 8_000;
 let lastMintSyncAttemptMs = 0;
 let mintSyncInFlight: Promise<void> | null = null;
 
 const cluster = (process.env.SOLANA_CLUSTER || 'devnet') as 'devnet' | 'testnet' | 'mainnet-beta';
 const totalDudes = totalSupply * DUDES_PER_BOX;
-const rpcUrl = process.env.SOLANA_RPC_URL || clusterApiUrl(cluster);
+const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
+
+function heliusRpcUrl() {
+  const apiKey = (process.env.HELIUS_API_KEY || '').trim();
+  if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
+  return `${HELIUS_DEVNET_RPC}/?api-key=${apiKey}`;
+}
+
+const rpcUrl = heliusRpcUrl();
 
 const merkleTree = new PublicKey(process.env.MERKLE_TREE || PublicKey.default.toBase58());
 const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
@@ -120,12 +129,7 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
 }
 
 function heliusRpcEndpoint() {
-  const custom = process.env.HELIUS_RPC_URL || process.env.HELIUS_RPC;
-  if (custom) return custom;
-  const helius = process.env.HELIUS_API_KEY;
-  if (!helius) throw new Error('Missing HELIUS_API_KEY');
-  const base = `https://rpc.helius.xyz/?api-key=${helius}`;
-  return cluster === 'mainnet-beta' ? base : `${base}&cluster=${cluster}`;
+  return heliusRpcUrl();
 }
 
 function memoInstruction(data: string) {
@@ -155,6 +159,13 @@ function connection() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  const timeout = sleep(ms).then(() => {
+    throw new functions.https.HttpsError('deadline-exceeded', `${label} timed out after ${ms}ms`);
+  });
+  return Promise.race([promise, timeout]);
 }
 
 function parseSignature(sig: number[] | string) {
@@ -304,7 +315,11 @@ async function recordMintedBoxes(signature: string, owner: string, minted: numbe
 async function processMintSignature(signature: string) {
   const exists = await db.doc(`mintTxs/${signature}`).get();
   if (exists.exists) return null;
-  const txInfo = await connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+  const txInfo = await withTimeout(
+    connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    'getTransaction',
+  );
   if (!txInfo || txInfo.meta?.err) return null;
   if (!hasMintMemo(txInfo)) return null;
   const payer = getPayerFromTx(txInfo);
@@ -325,10 +340,17 @@ async function syncMintedFromChain(limit = 100, abortAfterMs?: number) {
       functions.logger.warn('syncMintedFromChain stopping early due to timeout', { processed, limit, abortAfterMs });
       break;
     }
-    const sigs = await conn.getSignaturesForAddress(treeAuthority().publicKey, {
-      limit: 20,
-      before,
-    });
+    const remainingBudget = abortAfterMs ? abortAfterMs - (Date.now() - startedAt) : undefined;
+    if (remainingBudget !== undefined && remainingBudget <= 0) break;
+    const rpcBudget = remainingBudget !== undefined ? Math.max(500, remainingBudget) : RPC_TIMEOUT_MS;
+    const sigs = await withTimeout(
+      conn.getSignaturesForAddress(treeAuthority().publicKey, {
+        limit: 20,
+        before,
+      }),
+      rpcBudget,
+      'getSignaturesForAddress',
+    );
     if (!sigs.length) break;
     for (const sig of sigs) {
       before = sig.signature;
@@ -817,7 +839,11 @@ export const prepareMintTx = functions.https.onCall(async (request) => {
     memoInstruction('mint:boxes'),
   ];
   instructions.push(...(await buildMintInstructions(ownerPk, mintQty, 'box', stats.minted + 1)));
-  const { blockhash } = await conn.getLatestBlockhash('confirmed');
+  const { blockhash } = await withTimeout(
+    conn.getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash',
+  );
   const tx = buildTx(instructions, ownerPk, blockhash);
   return {
     encodedTx: Buffer.from(tx.serialize()).toString('base64'),
