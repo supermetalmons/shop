@@ -50,6 +50,7 @@ const DUDES_PER_BOX = 3;
 const totalSupply = Number(process.env.TOTAL_SUPPLY || 333);
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 const MINT_SYNC_TTL_MS = 30_000;
+const MINT_SYNC_TIMEOUT_MS = 8_000;
 let lastMintSyncAttemptMs = 0;
 let mintSyncInFlight: Promise<void> | null = null;
 
@@ -314,11 +315,16 @@ async function processMintSignature(signature: string) {
   return { mintCount, payer: payer.toBase58() };
 }
 
-async function syncMintedFromChain(limit = 100) {
+async function syncMintedFromChain(limit = 100, abortAfterMs?: number) {
   const conn = connection();
+  const startedAt = Date.now();
   let before: string | undefined;
   let processed = 0;
   while (processed < limit) {
+    if (abortAfterMs && Date.now() - startedAt >= abortAfterMs) {
+      functions.logger.warn('syncMintedFromChain stopping early due to timeout', { processed, limit, abortAfterMs });
+      break;
+    }
     const sigs = await conn.getSignaturesForAddress(treeAuthority().publicKey, {
       limit: 20,
       before,
@@ -336,7 +342,7 @@ async function syncMintedFromChain(limit = 100) {
   }
 }
 
-async function maybeSyncMintedFromChain(force = false) {
+async function maybeSyncMintedFromChain(force = false, abortAfterMs?: number) {
   const now = Date.now();
   const recentlyAttempted = now - lastMintSyncAttemptMs < MINT_SYNC_TTL_MS;
   if (!force && recentlyAttempted) {
@@ -350,7 +356,7 @@ async function maybeSyncMintedFromChain(force = false) {
     return Promise.resolve();
   }
   lastMintSyncAttemptMs = now;
-  mintSyncInFlight = syncMintedFromChain()
+  mintSyncInFlight = syncMintedFromChain(undefined, abortAfterMs)
     .catch((err) => {
       functions.logger.error('syncMintedFromChain failed', err);
     })
@@ -359,6 +365,17 @@ async function maybeSyncMintedFromChain(force = false) {
       mintSyncInFlight = null;
     });
   return mintSyncInFlight;
+}
+
+async function waitForMintSync(timeoutMs = MINT_SYNC_TIMEOUT_MS) {
+  const syncPromise = maybeSyncMintedFromChain(false, timeoutMs);
+  const timedOut = await Promise.race([
+    syncPromise.then(() => false),
+    sleep(timeoutMs).then(() => true),
+  ]);
+  if (timedOut) {
+    functions.logger.warn('maybeSyncMintedFromChain timed out; proceeding with cached stats', { timeoutMs });
+  }
 }
 
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
@@ -730,7 +747,7 @@ export const solanaAuth = functions.https.onCall(async (request) => {
 });
 
 export const stats = functions.https.onCall(async (_request) => {
-  await maybeSyncMintedFromChain();
+  await waitForMintSync();
   return getMintStats();
 });
 
@@ -784,7 +801,7 @@ export const saveAddress = functions.https.onCall(async (request) => {
 });
 
 export const prepareMintTx = functions.https.onCall(async (request) => {
-  await maybeSyncMintedFromChain();
+  await waitForMintSync();
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
   const { owner, quantity } = parseRequest(schema, request.data);
   const ownerPk = new PublicKey(owner);
