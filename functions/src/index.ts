@@ -295,6 +295,14 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
   return Promise.race([promise, timeout]);
 }
 
+function isTxSizeError(err: unknown) {
+  const anyErr = err as any;
+  const message = typeof anyErr?.message === 'string' ? anyErr.message : '';
+  if (anyErr instanceof RangeError && message.includes('encoding overruns Uint8Array')) return true;
+  const lower = message.toLowerCase();
+  return lower.includes('transaction too large') || lower.includes('encoding overruns') || lower.includes('too large');
+}
+
 function parseSignature(sig: number[] | string) {
   if (typeof sig === 'string') return bs58.decode(sig);
   return Uint8Array.from(sig);
@@ -551,21 +559,39 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
 
 async function heliusRpc<T>(method: string, params: any, label: string): Promise<T> {
   const url = heliusRpcEndpoint();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: label, method, params }),
-  });
+  const res = await withTimeout(
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: label, method, params }),
+    }),
+    RPC_TIMEOUT_MS,
+    `heliusRpc:${method}`,
+  );
   const json = await res.json().catch(() => ({}));
   if (!res.ok || json?.error) {
     const message = json?.error?.message || res.statusText || 'Unknown Helius RPC error';
-    throw new Error(`${label} ${message}`);
+    const upstreamCode = json?.error?.code;
+    functions.logger.warn('Helius RPC error', {
+      method,
+      label,
+      status: res.status,
+      upstreamCode,
+      message,
+    });
+    throw new functions.https.HttpsError('unavailable', `${label}: ${message}`, {
+      method,
+      status: res.status,
+      upstreamCode,
+    });
   }
   return json.result as T;
 }
 
 async function fetchAssetsOwned(owner: string) {
-  const grouping = collectionMintStr ? [{ groupKey: 'collection', groupValue: collectionMintStr }] : undefined;
+  // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
+  // (assets returned by the API use objects like { group_key, group_value }).
+  const grouping = collectionMintStr ? (['collection', collectionMintStr] as const) : undefined;
   const result = await heliusRpc<any>(
     'searchAssets',
     {
@@ -967,23 +993,58 @@ export const prepareMintTx = onCallLogged('prepareMintTx', async (request) => {
   if (remaining <= 0) {
     throw new functions.https.HttpsError('failed-precondition', 'Minted out');
   }
-  const mintQty = Math.min(quantity, remaining);
+  const requestedQty = Math.min(quantity, remaining);
   const conn = connection();
-  const instructions: TransactionInstruction[] = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }),
-    memoInstruction('mint:boxes'),
-  ];
-  instructions.push(...(await buildMintInstructions(ownerPk, mintQty, 'box', stats.minted + 1)));
   const { blockhash } = await withTimeout(
     conn.getLatestBlockhash('confirmed'),
     RPC_TIMEOUT_MS,
     'getLatestBlockhash',
   );
-  const tx = buildTx(instructions, ownerPk, blockhash);
-  return {
-    encodedTx: Buffer.from(tx.serialize()).toString('base64'),
-    allowedQuantity: mintQty,
-  };
+
+  let attemptQty = requestedQty;
+  while (attemptQty > 0) {
+    try {
+      const instructions: TransactionInstruction[] = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }),
+        memoInstruction('mint:boxes'),
+      ];
+      instructions.push(...(await buildMintInstructions(ownerPk, attemptQty, 'box', stats.minted + 1)));
+
+      const tx = buildTx(instructions, ownerPk, blockhash);
+      const encodedTx = Buffer.from(tx.serialize()).toString('base64');
+
+      if (attemptQty !== requestedQty) {
+        functions.logger.warn('prepareMintTx reduced quantity to fit tx size', {
+          requestedQty,
+          allowedQty: attemptQty,
+        });
+      }
+
+      return {
+        encodedTx,
+        allowedQuantity: attemptQty,
+      };
+    } catch (err) {
+      if (!isTxSizeError(err)) throw err;
+
+      functions.logger.warn('prepareMintTx tx too large; reducing quantity', {
+        requestedQty,
+        attemptQty,
+        error: summarizeError(err),
+      });
+
+      if (attemptQty <= 1) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'Mint transaction is too large to build. Try minting 1 item, or try again later.',
+        );
+      }
+
+      attemptQty = Math.max(1, Math.floor(attemptQty / 2));
+    }
+  }
+
+  throw new functions.https.HttpsError('failed-precondition', 'Requested quantity is too large to fit into one transaction.');
 });
 
 export const finalizeMintTx = onCallLogged('finalizeMintTx', async (request) => {
