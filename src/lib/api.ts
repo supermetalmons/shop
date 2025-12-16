@@ -1,8 +1,26 @@
+import { getFunctions } from 'firebase/functions';
+import { firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 
-const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
-const defaultBase = projectId ? `https://us-central1-${projectId}.cloudfunctions.net` : '';
-const BASE_URL = defaultBase;
+const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
+const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
+
+function getFunctionsBase(): string {
+  const envOrigin = import.meta.env.VITE_FUNCTIONS_ORIGIN || import.meta.env.VITE_FUNCTIONS_BASE_URL;
+  const projectId = firebaseApp?.options.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  const emulatorOrigin = (functionsInstance as { emulatorOrigin?: string } | undefined)?.emulatorOrigin;
+  const customDomain = (functionsInstance as { customDomain?: string } | undefined)?.customDomain;
+  const targetRegion = (functionsInstance as { region?: string } | undefined)?.region || region;
+  if (envOrigin) return envOrigin.replace(/\/$/, '');
+  if (!projectId) throw new Error('Missing Firebase project id');
+  if (emulatorOrigin) {
+    return `${emulatorOrigin.replace(/\/$/, '')}/${projectId}/${targetRegion}`;
+  }
+  if (customDomain) {
+    return customDomain.replace(/\/$/, '');
+  }
+  return `https://${targetRegion}-${projectId}.cloudfunctions.net`;
+}
 
 interface ApiError {
   error: string;
@@ -10,8 +28,8 @@ interface ApiError {
 }
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (!BASE_URL) throw new Error('Missing project id');
-  const url = `${BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+  const base = getFunctionsBase();
+  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
