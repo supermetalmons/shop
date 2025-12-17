@@ -1,9 +1,25 @@
+import { signInAnonymously } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { firebaseApp } from './firebase';
+import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
+
+let authReadyPromise: Promise<string> | null = null;
+
+async function ensureAuthenticated(): Promise<string> {
+  if (!auth) throw new Error('Firebase client is not configured');
+  if (auth.currentUser) return auth.currentUser.uid;
+  if (!authReadyPromise) {
+    authReadyPromise = signInAnonymously(auth)
+      .then((credential) => credential.user.uid)
+      .finally(() => {
+        authReadyPromise = null;
+      });
+  }
+  return authReadyPromise;
+}
 
 const DEBUG_FUNCTIONS =
   import.meta.env.DEV ||
@@ -49,6 +65,7 @@ function makeCallId() {
 
 async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   if (!functionsInstance) throw new Error('Firebase client is not configured');
+  await ensureAuthenticated();
   const callable = httpsCallable<Req, Res>(functionsInstance, name);
   const startedAt = Date.now();
   const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;

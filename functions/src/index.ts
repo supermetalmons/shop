@@ -90,7 +90,9 @@ function uidFromRequest(request: CallableReq<any>): string | null {
 
 function requireAuth(request: CallableReq<any>): string {
   const uid = uidFromRequest(request);
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Missing auth token');
+  if (!request.auth || !uid) {
+    throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+  }
   return uid;
 }
 
@@ -285,6 +287,16 @@ function onCallLogged<TReq, TRes>(
       }
       throw err;
     }
+  });
+}
+
+function onCallAuthed<TReq, TRes>(
+  name: string,
+  handler: (request: CallableReq<TReq>, uid: string) => Promise<TRes>,
+) {
+  return onCallLogged<TReq, TRes>(name, async (request: CallableReq<TReq>) => {
+    const uid = requireAuth(request);
+    return handler(request, uid);
   });
 }
 
@@ -1198,7 +1210,7 @@ async function detectClaimOnChain(code: string, owner: string, limit = 20): Prom
   return null;
 }
 
-export const solanaAuth = onCallLogged('solanaAuth', async (request) => {
+export const solanaAuth = onCallAuthed('solanaAuth', async (request, _uid) => {
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
   const { wallet, message, signature } = parseRequest(schema, request.data);
   const pubkey = new PublicKey(wallet);
@@ -1227,14 +1239,17 @@ export const solanaAuth = onCallLogged('solanaAuth', async (request) => {
   };
 });
 
-export const stats = onCallLogged('stats', async (_request) => {
+export const stats = onCallAuthed('stats', async (_request, _uid) => {
   await waitForMintSync();
   return getMintStats();
 });
 
-export const inventory = onCallLogged('inventory', async (request) => {
+export const inventory = onCallAuthed('inventory', async (request, uid) => {
   const schema = z.object({ owner: z.string() });
   const { owner } = parseRequest(schema, request.data);
+  if (uid !== owner) {
+    throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  }
   const assets = await fetchAssetsOwned(owner);
   const items = (assets || [])
     .filter(isMonsAsset)
@@ -1281,9 +1296,12 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
-export const prepareMintTx = onCallLogged('prepareMintTx', async (request) => {
+export const prepareMintTx = onCallAuthed('prepareMintTx', async (request, uid) => {
   const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
   const { owner, quantity } = parseRequest(schema, request.data);
+  if (uid !== owner) {
+    throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  }
   await waitForMintSync();
   const ownerPk = new PublicKey(owner);
   const stats = await getMintStats();
@@ -1345,11 +1363,10 @@ export const prepareMintTx = onCallLogged('prepareMintTx', async (request) => {
   throw new functions.https.HttpsError('failed-precondition', 'Requested quantity is too large to fit into one transaction.');
 });
 
-export const finalizeMintTx = onCallLogged('finalizeMintTx', async (request) => {
+export const finalizeMintTx = onCallAuthed('finalizeMintTx', async (request, uid) => {
   const schema = z.object({ owner: z.string(), signature: z.string() });
   const { owner, signature } = parseRequest(schema, request.data);
-  const uid = uidFromRequest(request);
-  if (uid && uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const processed = await processMintSignature(signature);
   if (!processed) {
     throw new functions.https.HttpsError('failed-precondition', 'Mint transaction not found or already recorded');
@@ -1361,9 +1378,12 @@ export const finalizeMintTx = onCallLogged('finalizeMintTx', async (request) => 
   return { ...stats, recorded: processed.mintCount };
 });
 
-export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request) => {
+export const prepareOpenBoxTx = onCallAuthed('prepareOpenBoxTx', async (request, uid) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
+  if (uid !== owner) {
+    throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  }
   const ownerPk = new PublicKey(owner);
   const conn = connection();
   let asset: any;
