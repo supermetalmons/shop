@@ -106,8 +106,6 @@ xargs -L1 firebase functions:env:set < .env.deploy
    VITE_FIREBASE_MESSAGING_SENDER_ID=<sender-id>
    VITE_FIREBASE_APP_ID=<app-id>
    VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey>
-   VITE_SECONDARY_TENSOR=<tensor-url>
-   VITE_SECONDARY_MAGICEDEN=<magic-eden-url>
    ```
 2. Run locally: `npm run dev`.
 3. Build: `npm run build` (outputs to `dist/`).

@@ -226,9 +226,10 @@ function App() {
     await refetchInventory();
   };
 
+  // TODO: fix links
   const secondaryLinks = [
-    { label: 'Tensor', href: import.meta.env.VITE_SECONDARY_TENSOR || 'https://www.tensor.trade/trade/mons' },
-    { label: 'Magic Eden', href: import.meta.env.VITE_SECONDARY_MAGICEDEN || 'https://magiceden.io/' },
+    { label: 'Tensor', href: 'https://www.tensor.trade/trade/mons' },
+    { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
   const savedAddresses = profile?.addresses || [];
