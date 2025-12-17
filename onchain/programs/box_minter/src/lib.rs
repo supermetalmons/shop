@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use borsh::BorshSerialize;
 use core::fmt::Write;
 
-declare_id!("APkExhsEXWnNBVfF2LiC8eLrAkxnRmEXDk7gLw5waFbm");
+declare_id!("DWHX6UqqW1fay3PMyYnGSKshghRCyhD18oC286JNmB8P");
 
 // Bubblegum instruction discriminator for `mint_to_collection_v1` (mpl-bubblegum 2.1.1).
 const IX_MINT_TO_COLLECTION_V1: [u8; 8] = [153, 18, 178, 47, 197, 158, 86, 15];
@@ -189,7 +189,9 @@ pub mod box_minter {
             // Build name into a preallocated String to avoid per-mint heap allocations.
             name: String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12),
             symbol: cfg.symbol.clone(),
-            uri: cfg.uri_base.clone(),
+            // Build URI into a preallocated String to avoid per-mint heap allocations.
+            // `cfg.uri_base` is treated as a prefix, and we append `<idx>.json` (unless it already ends in `.json`).
+            uri: String::with_capacity(BoxMinterConfig::MAX_URI_BASE + 16),
             seller_fee_basis_points: 0,
             creators,
             primary_sale_happened: false,
@@ -216,6 +218,17 @@ pub mod box_minter {
                 metadata.name.push(' ');
             }
             write!(&mut metadata.name, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+            // Update uri in-place (no allocations).
+            metadata.uri.clear();
+            metadata.uri.push_str(&cfg.uri_base);
+            if !cfg.uri_base.is_empty() && !cfg.uri_base.ends_with(".json") {
+                if !cfg.uri_base.ends_with('/') {
+                    metadata.uri.push('/');
+                }
+                write!(&mut metadata.uri, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+                metadata.uri.push_str(".json");
+            }
 
             // Rebuild Bubblegum instruction data in-place: discriminator + borsh(metadata).
             ix.data.clear();
