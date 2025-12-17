@@ -104,9 +104,183 @@ export async function fetchMintStats(): Promise<MintStats> {
   return callFunction<void, MintStats>('stats');
 }
 
+const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
+const heliusApiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
+const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
+const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
+const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
+const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
+const heliusMerkleTree = (import.meta.env.VITE_MERKLE_TREE || '').trim();
+const heliusMetadataBase = ((import.meta.env.VITE_METADATA_BASE as string) || DEFAULT_METADATA_BASE).replace(/\/$/, '');
+
+type DasAsset = Record<string, any>;
+
+function heliusRpcUrl() {
+  if (!heliusApiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
+  if (heliusRpcBase) return `${heliusRpcBase}${heliusRpcBase.includes('?') ? '&' : '?'}api-key=${heliusApiKey}`;
+  return `https://${heliusSubdomain}.helius-rpc.com/?api-key=${heliusApiKey}`;
+}
+
+async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
+  const startedAt = Date.now();
+  const url = heliusRpcUrl();
+  const body = { jsonrpc: '2.0', id: method, method, params };
+  if (DEBUG_FUNCTIONS) {
+    console.info('[mons/helius] →', method, summarizePayload(params));
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (DEBUG_FUNCTIONS) {
+    console.info('[mons/helius] ←', method, {
+      ms: Date.now() - startedAt,
+      ok: res.ok,
+      status: res.status,
+      ...(json?.error ? { error: summarizeError(json?.error) } : { result: summarizePayload(json?.result) }),
+    });
+  }
+  if (!res.ok || (json as any)?.error) {
+    const message = (json as any)?.error?.message || res.statusText || `Helius ${method} failed`;
+    throw new Error(message);
+  }
+  return (json as any).result as T;
+}
+
+function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
+  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'type');
+  const value = kindAttr?.value;
+  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
+  if (lowerUri.includes('/json/boxes/')) return 'box';
+  if (lowerUri.includes('/json/figures/')) return 'dude';
+  if (lowerUri.includes('/json/receipts/')) return 'certificate';
+
+  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
+  const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
+  if (lowerName.includes('blind box')) return 'box';
+  if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
+  if (lowerName.includes('figure')) return 'dude';
+  return null;
+}
+
+function getBoxIdFromAsset(asset: DasAsset): string | undefined {
+  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'box_id');
+  const value = boxAttr?.value;
+  if (typeof value === 'string' && value) return value;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  if (typeof uri === 'string' && uri) {
+    const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
+    if (matchBoxes?.[1]) return matchBoxes[1];
+    const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
+    if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
+  }
+  return undefined;
+}
+
+function getDudeIdFromAsset(asset: DasAsset): number | undefined {
+  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'dude_id');
+  const num = Number(dudeAttr?.value);
+  if (Number.isFinite(num)) return num;
+
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  if (typeof uri === 'string' && uri) {
+    const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
+    const n = Number(match?.[1]);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function isMonsAsset(asset: DasAsset): boolean {
+  const kind = getAssetKind(asset);
+  if (!kind) return false;
+
+  const groupingMatch =
+    !heliusCollection ||
+    (asset?.grouping || []).some((g: any) => g?.group_key === 'collection' && g?.group_value === heliusCollection);
+  if (groupingMatch) return true;
+
+  const tree = asset?.compression?.tree || asset?.compression?.treeId;
+  if (heliusMerkleTree && typeof tree === 'string' && tree === heliusMerkleTree) return true;
+
+  const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
+  if (typeof uri === 'string' && uri && uri.startsWith(heliusMetadataBase)) return true;
+
+  return false;
+}
+
+function transformInventoryItem(asset: DasAsset): InventoryItem | null {
+  const kind = getAssetKind(asset);
+  if (!kind) return null;
+  const boxId = getBoxIdFromAsset(asset);
+  const dudeId = getDudeIdFromAsset(asset);
+  const image =
+    asset?.content?.links?.image ||
+    asset?.content?.metadata?.image ||
+    asset?.content?.files?.[0]?.uri ||
+    asset?.content?.files?.[0]?.cdn_uri;
+  return {
+    id: asset.id,
+    name: asset.content?.metadata?.name || asset.id,
+    kind,
+    boxId,
+    dudeId,
+    image,
+    attributes: asset.content?.metadata?.attributes || [],
+    status: asset.compression?.compressed ? 'minted' : undefined,
+  };
+}
+
+async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
+  const baseParams = {
+    ownerAddress: owner,
+    page: 1,
+    limit: 1000,
+    displayOptions: {
+      showCollectionMetadata: true,
+      showUnverifiedCollections: true,
+    },
+  };
+
+  if (heliusCollection) {
+    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
+    const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
+    if (groupedItems.length) return groupedItems.filter(isMonsAsset);
+  }
+
+  const ungrouped = await heliusRpc<any>('searchAssets', baseParams);
+  const items = Array.isArray(ungrouped?.items) ? ungrouped.items : [];
+  return items.filter(isMonsAsset);
+}
+
 export async function fetchInventory(owner: string, token?: string): Promise<InventoryItem[]> {
-  // token retained for backwards compatibility; callable uses current Firebase auth session.
-  return callFunction<{ owner: string }, InventoryItem[]>('inventory', { owner });
+  // token retained for backwards compatibility; it is no longer used (client fetches directly from Helius).
+  const assets = await fetchAssetsOwned(owner);
+  return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
 }
 
 export async function requestMintTx(

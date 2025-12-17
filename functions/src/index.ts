@@ -1050,28 +1050,6 @@ function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recen
   return tx;
 }
 
-function transformInventoryItem(asset: any) {
-  const kind = getAssetKind(asset);
-  if (!kind) return null;
-  const boxId = getBoxIdFromAsset(asset);
-  const dudeId = getDudeIdFromAsset(asset);
-  const image =
-    asset?.content?.links?.image ||
-    asset?.content?.metadata?.image ||
-    asset?.content?.files?.[0]?.uri ||
-    asset?.content?.files?.[0]?.cdn_uri;
-  return {
-    id: asset.id,
-    name: asset.content?.metadata?.name || asset.id,
-    kind,
-    boxId,
-    dudeId,
-    image,
-    attributes: asset.content?.metadata?.attributes || [],
-    status: asset.compression?.compressed ? 'minted' : 'unknown',
-  };
-}
-
 function normalizeCountryCode(country?: string) {
   const normalized = (country || '').trim().toUpperCase();
   if (!normalized) return '';
@@ -1242,20 +1220,6 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, _uid) => {
 export const stats = onCallAuthed('stats', async (_request, _uid) => {
   await waitForMintSync();
   return getMintStats();
-});
-
-export const inventory = onCallAuthed('inventory', async (request, uid) => {
-  const schema = z.object({ owner: z.string() });
-  const { owner } = parseRequest(schema, request.data);
-  if (uid !== owner) {
-    throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  }
-  const assets = await fetchAssetsOwned(owner);
-  const items = (assets || [])
-    .filter(isMonsAsset)
-    .map(transformInventoryItem)
-    .filter(Boolean);
-  return items;
 });
 
 export const saveAddress = onCallLogged('saveAddress', async (request) => {

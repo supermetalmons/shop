@@ -303,7 +303,7 @@ function App() {
 
       <section className="card">
         <div className="card__title">Inventory</div>
-        <p className="muted small">Boxes, dudes, and certificates fetched via the Helius-powered cloud function.</p>
+        <p className="muted small">Boxes, dudes, and certificates fetched directly from Helius.</p>
         <InventoryGrid items={inventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
         {openLoading ? <div className="muted">Opening {shortAddress(openLoading)}…</div> : null}
       </section>

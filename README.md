@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions back the Helius lookups, tx prep, and encrypted deliveries. See `deployment-plan.md` for full end-to-end deployment steps.
+React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions handle tx prep, proofs, and encrypted deliveries; inventory is fetched client-side via Helius. See `deployment-plan.md` for full end-to-end deployment steps.
 
 ## Frontend
 - Install deps: `npm install`
@@ -12,11 +12,13 @@ React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes
 ```
 VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
 VITE_RPC_URL=https://your-rpc
+VITE_HELIUS_API_KEY=<helius-api-key>
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 VITE_SECONDARY_TENSOR=...
 VITE_SECONDARY_MAGICEDEN=...
 ```
+- Optional (recommended for filtering inventory to this drop): `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE`, `VITE_METADATA_BASE`
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY`:
@@ -44,7 +46,6 @@ VITE_SECONDARY_MAGICEDEN=...
 
 ### What the functions do
 - `stats`: mint progress (cap 333 boxes → 999 dudes).
-- `inventory`: Helius lookup for boxes/dudes/certificates shown in the grid.
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
 - `saveAddress`: stores an encrypted address blob + country/label under the wallet.
 - `prepareMintTx`: checks supply, mints 1-20 compressed boxes in one tx (server pre-signs tree authority).
