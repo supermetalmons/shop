@@ -15,13 +15,12 @@ import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
   requestClaimTx,
   requestDeliveryTx,
-  requestMintTx,
   requestOpenBoxTx,
-  finalizeMintTx,
   finalizeClaimTx,
   saveEncryptedAddress,
   finalizeDeliveryTx,
 } from './lib/api';
+import { buildMintBoxesTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 
@@ -83,16 +82,11 @@ function App() {
     setMinting(true);
     setStatus('');
     try {
-      const resp = await requestMintTx(publicKey.toBase58(), quantity, token || undefined);
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
-      try {
-        await finalizeMintTx(publicKey.toBase58(), sig, token || undefined);
-        setStatus(`Minted ${resp.allowedQuantity || quantity} boxes · ${sig}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to record mint';
-        console.error(err);
-        setStatus(`Minted ${resp.allowedQuantity || quantity} boxes · ${sig} (finalize warning: ${msg})`);
-      }
+      const cfg = await fetchBoxMinterConfig(connection);
+      const tx = await buildMintBoxesTx(connection, cfg, publicKey, quantity);
+      const sig = await signAndSendViaConnection(tx);
+      await connection.confirmTransaction(sig, 'confirmed');
+      setStatus(`Minted ${quantity} boxes · ${sig}`);
       await Promise.all([refetchStats(), refetchInventory()]);
     } finally {
       setMinting(false);
@@ -277,7 +271,7 @@ function App() {
           <div className="card__title">IRL blind boxes, digital certificates</div>
           <p className="muted small">Mint boxes on-chain, reveal dudes, then burn for delivery and certificates.</p>
           <ul className="muted small">
-            <li>Mint 1-20 compressed blind boxes per tx until the 333 supply is gone.</li>
+            <li>Mint 1-30 compressed blind boxes per tx until the 333 supply is gone.</li>
             <li>Open a box to burn it and mint 3 dudes, co-signed by our cloud function.</li>
             <li>Select boxes + dudes for delivery; pay shipping in SOL, burn items, receive certificates.</li>
             <li>Use the IRL code inside a shipped box to mint dudes certificates for that specific box.</li>

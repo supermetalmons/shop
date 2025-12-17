@@ -21,7 +21,6 @@ import {
   TokenStandard,
   createBurnInstruction,
   createMintToCollectionV1Instruction,
-  mintToCollectionV1InstructionDiscriminator,
 } from '@metaplex-foundation/mpl-bubblegum';
 import { SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana/spl-account-compression';
 import bs58 from 'bs58';
@@ -99,11 +98,7 @@ function requireAuth(request: CallableReq<any>): string {
 const DUDES_PER_BOX = 3;
 const totalSupply = Number(process.env.TOTAL_SUPPLY || 333);
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
-const MINT_SYNC_TTL_MS = 30_000;
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
-const MINT_SYNC_TIMEOUT_MS = 8_000;
-let lastMintSyncAttemptMs = 0;
-let mintSyncInFlight: Promise<void> | null = null;
 
 // Hardcode devnet for now to avoid cluster mismatches while iterating.
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
@@ -524,129 +519,6 @@ async function buildMintInstructions(
   return instructions;
 }
 
-async function getMintStats() {
-  const snap = await db.doc('meta/stats').get();
-  const data = snap.exists ? (snap.data() as any) : {};
-  const minted = Number(data.minted || 0);
-  const remaining = Math.max(0, totalSupply - minted);
-  return { minted, remaining, total: totalSupply };
-}
-
-async function recordMintedBoxes(signature: string, owner: string, minted: number) {
-  if (minted <= 0) return;
-  const statsRef = db.doc('meta/stats');
-  const txRef = db.doc(`mintTxs/${signature}`);
-  await db.runTransaction(async (tx) => {
-    const existing = await tx.get(txRef);
-    if (existing.exists) return;
-    const statsSnap = await tx.get(statsRef);
-    const stats = statsSnap.exists ? (statsSnap.data() as any) : {};
-    const currentMinted = Number(stats.minted || 0);
-    tx.set(
-      statsRef,
-      {
-        minted: currentMinted + minted,
-        total: totalSupply,
-      },
-      { merge: true },
-    );
-    tx.set(txRef, {
-      signature,
-      owner,
-      minted,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-  });
-}
-
-async function processMintSignature(signature: string) {
-  const exists = await db.doc(`mintTxs/${signature}`).get();
-  if (exists.exists) return null;
-  const txInfo = await withTimeout(
-    connection().getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
-    RPC_TIMEOUT_MS,
-    'getTransaction',
-  );
-  if (!txInfo || txInfo.meta?.err) return null;
-  if (!hasMintMemo(txInfo)) return null;
-  const payer = getPayerFromTx(txInfo);
-  if (!payer) return null;
-  const mintCount = countMintInstructions(txInfo, payer);
-  if (mintCount <= 0) return null;
-  await recordMintedBoxes(signature, payer.toBase58(), mintCount);
-  return { mintCount, payer: payer.toBase58() };
-}
-
-async function syncMintedFromChain(limit = 100, abortAfterMs?: number) {
-  const conn = connection();
-  const startedAt = Date.now();
-  let before: string | undefined;
-  let processed = 0;
-  while (processed < limit) {
-    if (abortAfterMs && Date.now() - startedAt >= abortAfterMs) {
-      functions.logger.warn('syncMintedFromChain stopping early due to timeout', { processed, limit, abortAfterMs });
-      break;
-    }
-    const remainingBudget = abortAfterMs ? abortAfterMs - (Date.now() - startedAt) : undefined;
-    if (remainingBudget !== undefined && remainingBudget <= 0) break;
-    const rpcBudget = remainingBudget !== undefined ? Math.max(500, remainingBudget) : RPC_TIMEOUT_MS;
-    const sigs = await withTimeout(
-      conn.getSignaturesForAddress(treeAuthority().publicKey, {
-        limit: 20,
-        before,
-      }),
-      rpcBudget,
-      'getSignaturesForAddress',
-    );
-    if (!sigs.length) break;
-    for (const sig of sigs) {
-      before = sig.signature;
-      if (sig.err) continue;
-      const already = await db.doc(`mintTxs/${sig.signature}`).get();
-      if (already.exists) continue;
-      const result = await processMintSignature(sig.signature);
-      if (result) processed += 1;
-    }
-    if (sigs.length < 20) break;
-  }
-}
-
-async function maybeSyncMintedFromChain(force = false, abortAfterMs?: number) {
-  const now = Date.now();
-  const recentlyAttempted = now - lastMintSyncAttemptMs < MINT_SYNC_TTL_MS;
-  if (!force && recentlyAttempted) {
-    return mintSyncInFlight || Promise.resolve();
-  }
-  if (mintSyncInFlight) return mintSyncInFlight;
-  try {
-    ensureAuthorityKeys();
-  } catch (err) {
-    functions.logger.error('Skipping syncMintedFromChain: authority keys missing or invalid', err);
-    return Promise.resolve();
-  }
-  lastMintSyncAttemptMs = now;
-  mintSyncInFlight = syncMintedFromChain(undefined, abortAfterMs)
-    .catch((err) => {
-      functions.logger.error('syncMintedFromChain failed', err);
-    })
-    .finally(() => {
-      lastMintSyncAttemptMs = Date.now();
-      mintSyncInFlight = null;
-    });
-  return mintSyncInFlight;
-}
-
-async function waitForMintSync(timeoutMs = MINT_SYNC_TIMEOUT_MS) {
-  const syncPromise = maybeSyncMintedFromChain(false, timeoutMs);
-  const timedOut = await Promise.race([
-    syncPromise.then(() => false),
-    sleep(timeoutMs).then(() => true),
-  ]);
-  if (timedOut) {
-    functions.logger.warn('maybeSyncMintedFromChain timed out; proceeding with cached stats', { timeoutMs });
-  }
-}
-
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -860,6 +732,10 @@ function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
   if (lowerName.includes('blind box')) return 'box';
   if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
   if (lowerName.includes('figure')) return 'dude';
+
+  // New compact on-chain metadata: allow very short names like `b123` or `box123`.
+  const compact = lowerName.replace(/\s+/g, '');
+  if (/^(b|box)#?\d+$/.test(compact)) return 'box';
   return null;
 }
 
@@ -881,6 +757,11 @@ function getBoxIdFromAsset(asset: any): string | undefined {
     const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
     if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
   }
+
+  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
+  const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
+  const match = normalized.match(/^(b|box)#?(\d+)$/);
+  if (match?.[2]) return match[2];
   return undefined;
 }
 
@@ -1090,38 +971,6 @@ function getPayerFromTx(tx: any): PublicKey | null {
   return accounts.length ? accounts[0] : null;
 }
 
-function hasMintMemo(tx: any) {
-  const keys = resolveInstructionAccounts(tx);
-  return (tx?.transaction?.message?.compiledInstructions || []).some((ix: any) => {
-    const program = keys[ix.programIdIndex];
-    if (!program || !program.equals(MEMO_PROGRAM_ID)) return false;
-    const dataField = (ix as any).data;
-    const dataBuffer =
-      typeof dataField === 'string'
-        ? Buffer.from(bs58.decode(dataField))
-        : Buffer.from(dataField || []);
-    return dataBuffer.toString() === 'mint:boxes';
-  });
-}
-
-function countMintInstructions(tx: any, ownerPk: PublicKey) {
-  const keys = resolveInstructionAccounts(tx);
-  const mintDisc = Buffer.from(mintToCollectionV1InstructionDiscriminator);
-  return (tx?.transaction?.message?.compiledInstructions || []).reduce((count: number, ix: any) => {
-    const program = keys[ix.programIdIndex];
-    if (!program || !program.equals(BUBBLEGUM_PROGRAM_ID)) return count;
-    const dataField = (ix as any).data;
-    const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
-    if (dataBuffer.length < mintDisc.length) return count;
-    if (!dataBuffer.subarray(0, mintDisc.length).equals(mintDisc)) return count;
-    const accountIndexes = ix.accounts || ix.accountKeyIndexes || [];
-    const ixAccounts = accountIndexes.map((idx: number) => keys[idx]);
-    const touchesTree = ixAccounts.some((k: PublicKey) => k.equals(merkleTree));
-    const touchesOwner = ixAccounts.some((k: PublicKey) => k.equals(ownerPk));
-    return touchesTree && touchesOwner ? count + 1 : count;
-  }, 0);
-}
-
 function extractMemos(tx: any): string[] {
   const keys = resolveInstructionAccounts(tx);
   return (tx?.transaction?.message?.compiledInstructions || []).reduce((memos: string[], ix: any) => {
@@ -1217,11 +1066,6 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, _uid) => {
   };
 });
 
-export const stats = onCallAuthed('stats', async (_request, _uid) => {
-  await waitForMintSync();
-  return getMintStats();
-});
-
 export const saveAddress = onCallLogged('saveAddress', async (request) => {
   const uid = requireAuth(request);
   const schema = z.object({
@@ -1258,88 +1102,6 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
     hint: body.hint,
     email: body.email,
   };
-});
-
-export const prepareMintTx = onCallAuthed('prepareMintTx', async (request, uid) => {
-  const schema = z.object({ owner: z.string(), quantity: z.number().min(1).max(20) });
-  const { owner, quantity } = parseRequest(schema, request.data);
-  if (uid !== owner) {
-    throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  }
-  await waitForMintSync();
-  const ownerPk = new PublicKey(owner);
-  const stats = await getMintStats();
-  const remaining = Math.max(0, stats.remaining);
-  if (remaining <= 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Minted out');
-  }
-  const requestedQty = Math.min(quantity, remaining);
-  const conn = connection();
-  const { blockhash } = await withTimeout(
-    conn.getLatestBlockhash('confirmed'),
-    RPC_TIMEOUT_MS,
-    'getLatestBlockhash',
-  );
-
-  let attemptQty = requestedQty;
-  while (attemptQty > 0) {
-    try {
-      const instructions: TransactionInstruction[] = [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_000_000 }),
-        memoInstruction('mint:boxes'),
-      ];
-      instructions.push(...(await buildMintInstructions(ownerPk, attemptQty, 'box', stats.minted + 1)));
-
-      const tx = buildTx(instructions, ownerPk, blockhash);
-      const encodedTx = Buffer.from(tx.serialize()).toString('base64');
-
-      if (attemptQty !== requestedQty) {
-        functions.logger.warn('prepareMintTx reduced quantity to fit tx size', {
-          requestedQty,
-          allowedQty: attemptQty,
-        });
-      }
-
-      return {
-        encodedTx,
-        allowedQuantity: attemptQty,
-      };
-    } catch (err) {
-      if (!isTxSizeError(err)) throw err;
-
-      functions.logger.warn('prepareMintTx tx too large; reducing quantity', {
-        requestedQty,
-        attemptQty,
-        error: summarizeError(err),
-      });
-
-      if (attemptQty <= 1) {
-        throw new functions.https.HttpsError(
-          'failed-precondition',
-          'Mint transaction is too large to build. Try minting 1 item, or try again later.',
-        );
-      }
-
-      attemptQty = Math.max(1, Math.floor(attemptQty / 2));
-    }
-  }
-
-  throw new functions.https.HttpsError('failed-precondition', 'Requested quantity is too large to fit into one transaction.');
-});
-
-export const finalizeMintTx = onCallAuthed('finalizeMintTx', async (request, uid) => {
-  const schema = z.object({ owner: z.string(), signature: z.string() });
-  const { owner, signature } = parseRequest(schema, request.data);
-  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  const processed = await processMintSignature(signature);
-  if (!processed) {
-    throw new functions.https.HttpsError('failed-precondition', 'Mint transaction not found or already recorded');
-  }
-  if (processed.payer !== owner) {
-    throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
-  }
-  const stats = await getMintStats();
-  return { ...stats, recorded: processed.mintCount };
 });
 
 export const prepareOpenBoxTx = onCallAuthed('prepareOpenBoxTx', async (request, uid) => {

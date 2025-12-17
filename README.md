@@ -1,6 +1,8 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes per tx, open boxes for 3 dudes, request delivery that burns items & mints certificates, and claim IRL codes. Firebase Cloud Functions handle tx prep, proofs, and encrypted deliveries; inventory is fetched client-side via Helius. See `deployment-plan.md` for full end-to-end deployment steps.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is now fully on-chain** via a custom Solana program: mint **1–30** compressed boxes per tx, with mint progress read directly from the program state (no Firebase needed for mint/progress). Cloud Functions are still used for non-mint features (open box, delivery, IRL claim) that require off-chain coordination. Inventory is fetched client-side via Helius.
+
+Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per box**, **max 30 per tx**.
 
 ## Frontend
 - Install deps: `npm install`
@@ -13,6 +15,7 @@ React + TypeScript Solana dapp for the mons IRL blind boxes: mint up to 20 boxes
 VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
 VITE_RPC_URL=https://your-rpc
 VITE_HELIUS_API_KEY=<helius-api-key>
+VITE_BOX_MINTER_PROGRAM_ID=<deployed box minter program id>
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 ```
@@ -43,15 +46,18 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `TOTAL_SUPPLY` (defaults 333; global cap across all clusters)
 
 ### What the functions do
-- `stats`: mint progress (cap 333 boxes → 999 dudes).
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
 - `saveAddress`: stores an encrypted address blob + country/label under the wallet.
-- `prepareMintTx`: checks supply, mints 1-20 compressed boxes in one tx (server pre-signs tree authority).
 - `prepareOpenBoxTx`: burns a box (with proof) and mints 3 dudes; assigns dudes deterministically per box.
 - `prepareDeliveryTx`: burns selected boxes/dudes, charges SOL shipping, and mints per-item certificates.
 - `prepareIrlClaimTx`: validates IRL claim code + blind box certificate ownership, mints dudes certificates.
 
 ### Tree + address helpers
+- Deploy box minter (program + collection + tree + delegation):
+  - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
+  - Generate program keypair once: `solana-keygen new --no-bip39-passphrase -o onchain/target/deploy/box_minter-keypair.json`
+  - One-command deploy: `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com`
+  - Prints `VITE_BOX_MINTER_PROGRAM_ID`, `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE`.
 - Create a new Merkle tree (defaults depth 14 / buffer 64): `npm run tree:create -- --cluster devnet --keypair ~/.config/solana/id.json --depth 14 --buffer 64 --canopy 0 --rpc https://api.devnet.solana.com`. Prints MERKLE_TREE + TREE_AUTHORITY_SECRET for function env.
 - Derive collection PDAs from an existing mint: `npm run tree:derive-collection -- --mint <mintAddress>` (prints metadata + master edition for env).
 - Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).

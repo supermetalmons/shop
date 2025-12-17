@@ -11,6 +11,8 @@
     "collection:create": "tsx scripts/create-collection.ts",
     "tree:create": "tsx scripts/create-tree.ts",
     "tree:derive-collection": "tsx scripts/derive-collection.ts",
+    "box-minter:deploy": "tsx scripts/deploy-box-minter.ts",
+    "box-minter:deploy-all": "tsx scripts/deploy-all-box-minter.ts",
     "keygen": "node scripts/keygen.js"
   },
   "repository": {

@@ -16,6 +16,8 @@ export interface MintStats {
   minted: number;
   total: number;
   remaining: number;
+  maxPerTx?: number;
+  priceLamports?: number;
 }
 
 export interface ProfileAddress {

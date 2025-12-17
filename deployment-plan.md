@@ -12,7 +12,7 @@ Step-by-step guide to ship mons.shop end-to-end (Solana + Firebase Cloud Functio
   cd functions && npm install
   ```
 
-## 1) Solana setup (collection, cNFT tree, vault)
+## 1) Solana setup (box minter program, collection, cNFT tree, vault)
 All commands run from repo root unless noted.
 
 1. Pick a cluster and fund the payer keypair:
@@ -21,19 +21,21 @@ All commands run from repo root unless noted.
    solana config set --url https://api.devnet.solana.com
    solana airdrop 2
    ```
-2. Create the collection (or derive PDAs from an existing mint):
-   - Mint a new collection NFT:
+2. Deploy the **box minter program** (Anchor) + create collection + create cNFT tree + configure delegation:
+   - Generate program keypair once:
      ```bash
-     npm run collection:create -- \
+     solana-keygen new --no-bip39-passphrase -o onchain/target/deploy/box_minter-keypair.json
+     ```
+   - One-command deploy:
+     ```bash
+     npm run box-minter:deploy-all -- \
        --cluster devnet \
        --keypair ~/.config/solana/id.json \
-       --name "mons collection" \
-       --symbol MONS \
-      --uri https://assets.mons.link/shop/drops/1/collection.json
+       --rpc https://api.devnet.solana.com
      ```
-     Outputs: `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`.
-   - If a collection mint already exists: `npm run tree:derive-collection -- --mint <mint> [--authority <update-auth-pubkey>]`.
-3. Create the Bubblegum Merkle tree (defaults depth 14 / buffer 64):
+   Outputs: `VITE_BOX_MINTER_PROGRAM_ID`, `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE` (frontend env).
+
+3. (Optional / legacy) Create a separate Merkle tree for Cloud Functions mint flows:
    ```bash
    npm run tree:create -- \
      --cluster devnet \
@@ -41,15 +43,15 @@ All commands run from repo root unless noted.
      --depth 14 --buffer 64 --canopy 0 \
      --rpc https://api.devnet.solana.com
    ```
-   Outputs: `MERKLE_TREE` and `TREE_AUTHORITY_SECRET` (bs58 of payer secret). Keep the secret safe; it signs every mint/burn.
+   Outputs: `MERKLE_TREE` and `TREE_AUTHORITY_SECRET` (bs58 of payer secret).
 4. Generate the shipping vault:
    ```bash
    npm run keygen
    ```
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
 5. Decide supplies & metadata:
-   - `METADATA_BASE` should host the drop under one root (e.g. `https://assets.mons.link/shop/drops/1`) with `collection.json`, `json/boxes/<id>.json`, `json/figures/<id>.json`, and `json/receipts/{boxes|figures}/<id>.json`.
-   - `TOTAL_SUPPLY` (default 333; global cap across all clusters).
+   - Box minting parameters are set by `box-minter:deploy` (defaults: max supply 333, price 0.001 SOL, max 30/tx).
+   - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
 6. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 
 Record all outputs for the function environment in step 2.
@@ -116,7 +118,7 @@ xargs -L1 firebase functions:env:set < .env.deploy
 ## 5) End-to-end smoke test (after deploy)
 1. Connect a funded wallet on the chosen cluster.
 2. Sign in (wallet message) → verify profile created in Firestore.
-3. Mint a small quantity (≤20) → call `/prepareMintTx`, sign & submit → call `/finalizeMintTx`, confirm mint stats increments.
+3. Mint a small quantity (≤30) directly from the client → confirm the tx on-chain → refresh UI; mint progress is read from the box minter config PDA.
 4. Open one box via `/prepareOpenBoxTx` → sign → inventory shows 3 dudes.
 5. Save an encrypted address → request delivery for 1–2 items → sign `/prepareDeliveryTx` tx (burn + certificates) → finalize `/finalizeDeliveryTx` and confirm Firestore `deliveryOrders`.
 6. Create a claim code via delivery, then test `/prepareIrlClaimTx` + `/finalizeClaimTx` with the same wallet and certificate present.

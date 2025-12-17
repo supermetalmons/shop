@@ -1,0 +1,24 @@
+[package]
+name = "box_minter"
+version = "0.1.0"
+description = "mons.shop box minter – on-chain mint + supply cap for compressed NFTs"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "box_minter"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.32.1"
+
+# Bubblegum CPI + metadata types (Metaplex)
+mpl-bubblegum = "2.1.1"
+
+

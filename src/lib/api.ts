@@ -1,7 +1,7 @@
 import { signInAnonymously } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, firebaseApp } from './firebase';
-import { DeliverySelection, InventoryItem, MintStats, PreparedTxResponse, Profile, ProfileAddress } from '../types';
+import { DeliverySelection, InventoryItem, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -100,10 +100,6 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   }
 }
 
-export async function fetchMintStats(): Promise<MintStats> {
-  return callFunction<void, MintStats>('stats');
-}
-
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const heliusApiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
 const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
@@ -171,6 +167,10 @@ function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
   if (lowerName.includes('blind box')) return 'box';
   if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
   if (lowerName.includes('figure')) return 'dude';
+
+  // New compact on-chain metadata: allow very short names like `b123` or `box123`.
+  const compact = lowerName.replace(/\s+/g, '');
+  if (/^(b|box)#?\d+$/.test(compact)) return 'box';
   return null;
 }
 
@@ -192,6 +192,11 @@ function getBoxIdFromAsset(asset: DasAsset): string | undefined {
     const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
     if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
   }
+
+  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
+  const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
+  const match = normalized.match(/^(b|box)#?(\d+)$/);
+  if (match?.[2]) return match[2];
   return undefined;
 }
 
@@ -283,17 +288,6 @@ export async function fetchInventory(owner: string, token?: string): Promise<Inv
   return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
 }
 
-export async function requestMintTx(
-  owner: string,
-  quantity: number,
-  token?: string,
-): Promise<PreparedTxResponse> {
-  return callFunction<{ owner: string; quantity: number }, PreparedTxResponse>('prepareMintTx', {
-    owner,
-    quantity,
-  });
-}
-
 export async function requestOpenBoxTx(
   owner: string,
   boxAssetId: string,
@@ -360,14 +354,6 @@ export async function solanaAuth(
     'solanaAuth',
     { wallet, message, signature: Array.from(signature) },
   );
-}
-
-export async function finalizeMintTx(
-  owner: string,
-  signature: string,
-  token?: string,
-): Promise<MintStats> {
-  return callFunction<{ owner: string; signature: string }, MintStats>('finalizeMintTx', { owner, signature });
 }
 
 export async function finalizeDeliveryTx(

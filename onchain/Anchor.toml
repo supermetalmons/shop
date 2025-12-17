@@ -1,0 +1,27 @@
+[toolchain]
+
+[features]
+seeds = true
+skip-lint = false
+
+[programs.devnet]
+box_minter = "11111111111111111111111111111111"
+
+[programs.localnet]
+box_minter = "11111111111111111111111111111111"
+
+[programs.mainnet]
+box_minter = "11111111111111111111111111111111"
+
+[programs.testnet]
+box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Devnet"
+wallet = "/Users/ivan/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
