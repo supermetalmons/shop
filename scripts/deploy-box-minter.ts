@@ -193,8 +193,8 @@ async function main() {
   const symbol = getArg('--symbol', process.env.BOX_SYMBOL || 'B')!;
   const uriBase = getArg('--uri-base', process.env.BOX_URI_BASE || 'b')!;
 
-  const collectionName = getArg('--collection-name', process.env.COLLECTION_NAME || 'mons collection')!;
-  const collectionSymbol = getArg('--collection-symbol', process.env.COLLECTION_SYMBOL || 'MONS')!;
+  const collectionName = getArg('--collection-name', process.env.COLLECTION_NAME || 'little swag figures')!;
+  const collectionSymbol = getArg('--collection-symbol', process.env.COLLECTION_SYMBOL || 'LSF')!;
   const collectionSize = Number(getArg('--collection-size', process.env.COLLECTION_SIZE || String(maxSupply)));
   const collectionUri = getArg('--collection-uri', process.env.COLLECTION_URI || 'collection.json')!;
 

@@ -179,7 +179,7 @@ pub mod box_minter {
 
         let creator = mpl_bubblegum::types::Creator {
             address: ctx.accounts.config.key(),
-            verified: false,
+            verified: true,
             share: 100,
         };
         let mut creators = Vec::with_capacity(1);
@@ -198,7 +198,7 @@ pub mod box_minter {
             token_standard: Some(mpl_bubblegum::types::TokenStandard::NonFungible),
             collection: Some(mpl_bubblegum::types::Collection {
                 key: cfg.collection_mint,
-                verified: false,
+                verified: true,
             }),
             uses: None,
             token_program_version: mpl_bubblegum::types::TokenProgramVersion::Original,

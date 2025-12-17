@@ -48,8 +48,8 @@ async function main() {
   const cluster = getArg('--cluster', process.env.SOLANA_CLUSTER || 'devnet');
   const rpc = getArg('--rpc', process.env.SOLANA_RPC_URL || clusterApiUrl(cluster as any));
   const keypairPath = getArg('--keypair', `${homedir()}/.config/solana/id.json`);
-  const name = getArg('--name', process.env.COLLECTION_NAME || 'mons collection');
-  const symbol = getArg('--symbol', process.env.COLLECTION_SYMBOL || 'MONS');
+  const name = getArg('--name', process.env.COLLECTION_NAME || 'little swag figures');
+  const symbol = getArg('--symbol', process.env.COLLECTION_SYMBOL || 'LSF');
   const defaultMetadataBase = 'https://assets.mons.link/shop/drops/1';
   const metadataBase = (process.env.METADATA_BASE || defaultMetadataBase).replace(/\/$/, '');
   const uri = getArg('--uri', `${metadataBase}/collection.json`);
