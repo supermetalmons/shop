@@ -12,7 +12,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? 333;
   const remaining = stats?.remaining ?? Math.max(0, total - minted);
-  const maxPerTx = stats?.maxPerTx ?? 30;
+  const maxPerTx = stats?.maxPerTx ?? 15;
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
 

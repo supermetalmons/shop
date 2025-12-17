@@ -100,14 +100,11 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   }
 }
 
-const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const heliusApiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
 const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
 const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
 const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
-const heliusMerkleTree = (import.meta.env.VITE_MERKLE_TREE || '').trim();
-const heliusMetadataBase = ((import.meta.env.VITE_METADATA_BASE as string) || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 
 type DasAsset = Record<string, any>;
 
@@ -220,22 +217,27 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   return undefined;
 }
 
+function assetMatchesCollection(asset: DasAsset, collectionMint: string): boolean {
+  const grouped = asset?.grouping;
+  if (Array.isArray(grouped)) {
+    for (const g of grouped) {
+      if (g?.group_key === 'collection' && g?.group_value === collectionMint) return true;
+    }
+  }
+  // Fallback for alternate DAS shapes.
+  const contentCollectionKey = asset?.content?.metadata?.collection?.key;
+  if (typeof contentCollectionKey === 'string' && contentCollectionKey === collectionMint) return true;
+  return false;
+}
+
 function isMonsAsset(asset: DasAsset): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
-  const groupingMatch =
-    !heliusCollection ||
-    (asset?.grouping || []).some((g: any) => g?.group_key === 'collection' && g?.group_value === heliusCollection);
-  if (groupingMatch) return true;
-
-  const tree = asset?.compression?.tree || asset?.compression?.treeId;
-  if (heliusMerkleTree && typeof tree === 'string' && tree === heliusMerkleTree) return true;
-
-  const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
-  if (typeof uri === 'string' && uri && uri.startsWith(heliusMetadataBase)) return true;
-
-  return false;
+  // Strict filter: only show assets from the configured collection.
+  // This prevents leaking lookalike items from unrelated collections when the drop has 0 mints.
+  if (!heliusCollection) return false;
+  return assetMatchesCollection(asset, heliusCollection);
 }
 
 function transformInventoryItem(asset: DasAsset): InventoryItem | null {
@@ -271,11 +273,11 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
     },
   };
 
-  if (heliusCollection) {
-    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
-    const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
-    if (groupedItems.length) return groupedItems.filter(isMonsAsset);
-  }
+  if (!heliusCollection) return [];
+
+  const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
+  const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
+  if (groupedItems.length) return groupedItems.filter(isMonsAsset);
 
   const ungrouped = await heliusRpc<any>('searchAssets', baseParams);
   const items = Array.isArray(ungrouped?.items) ? ungrouped.items : [];

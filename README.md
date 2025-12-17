@@ -19,7 +19,7 @@ VITE_BOX_MINTER_PROGRAM_ID=<deployed box minter program id>
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 ```
-- Optional (recommended for filtering inventory to this drop): `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE`, `VITE_METADATA_BASE`
+- Required for strict inventory filtering: `VITE_COLLECTION_MINT`
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY`:

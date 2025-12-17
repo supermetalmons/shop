@@ -154,10 +154,10 @@ export async function fetchMintStatsFromProgram(connection: Connection): Promise
   return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
 }
 
-function encodeMintBoxesData(quantity: number): Uint8Array {
+function encodeMintBoxesData(quantity: number): Buffer {
   if (!Number.isFinite(quantity)) throw new Error('Invalid quantity');
   if (quantity < 1 || quantity > 30) throw new Error('Quantity must be between 1 and 30');
-  const data = new Uint8Array(IX_MINT_BOXES.length + 1);
+  const data = Buffer.alloc(IX_MINT_BOXES.length + 1);
   data.set(IX_MINT_BOXES, 0);
   data[8] = quantity & 0xff;
   return data;
