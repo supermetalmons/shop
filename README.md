@@ -63,6 +63,11 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).
 
 ## Notes
+- If you see an Apple Silicon error like `You installed esbuild for another platform than the one you're currently using` (e.g. `@esbuild/darwin-x64` vs `@esbuild/darwin-arm64`), your `node_modules` were installed under the wrong architecture (often via Rosetta). Fix with a clean reinstall under the same arch you run Node with:
+  - `node -p process.arch` (should match `uname -m`)
+  - `rm -rf node_modules package-lock.json && npm install`
+  - If you also run Cloud Functions locally, repeat inside `functions/`: `cd functions && rm -rf node_modules package-lock.json && npm install`
+- If `anchor build` fails with `lock file version 4 requires -Znext-lockfile-bump`, delete `onchain/Cargo.lock` and re-run. The bundled Cargo in Solana/Anchor toolchains can’t parse v4 lockfiles.
 - Supply is capped at 333 boxes (999 dudes). Adjust via `TOTAL_SUPPLY` if needed.
 - Delivery addresses are encrypted client-side with TweetNaCl; only country + label are stored in clear.
 - Secondary links & email form swap in automatically once the drop is minted out.

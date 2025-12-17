@@ -32,8 +32,8 @@ import {
   createAllocTreeIx,
   SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
   SPL_NOOP_PROGRAM_ID,
-  ValidDepthSizePair,
 } from '@solana/spl-account-compression';
+import type { ValidDepthSizePair } from '@solana/spl-account-compression';
 import { createCreateTreeInstruction } from '@metaplex-foundation/mpl-bubblegum';
 
 function getArg(flag: string, fallback?: string) {

@@ -14,8 +14,8 @@ import {
   createAllocTreeIx,
   SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
   SPL_NOOP_PROGRAM_ID,
-  ValidDepthSizePair,
 } from '@solana/spl-account-compression';
+import type { ValidDepthSizePair } from '@solana/spl-account-compression';
 import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID, createCreateTreeInstruction } from '@metaplex-foundation/mpl-bubblegum';
 import bs58 from 'bs58';
 

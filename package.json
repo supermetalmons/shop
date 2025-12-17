@@ -8,11 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "collection:create": "tsx scripts/create-collection.ts",
-    "tree:create": "tsx scripts/create-tree.ts",
-    "tree:derive-collection": "tsx scripts/derive-collection.ts",
-    "box-minter:deploy": "tsx scripts/deploy-box-minter.ts",
-    "box-minter:deploy-all": "tsx scripts/deploy-all-box-minter.ts",
+    "collection:create": "node --experimental-strip-types scripts/create-collection.ts",
+    "tree:create": "node --experimental-strip-types scripts/create-tree.ts",
+    "tree:derive-collection": "node --experimental-strip-types scripts/derive-collection.ts",
+    "box-minter:deploy": "node --experimental-strip-types scripts/deploy-box-minter.ts",
+    "box-minter:deploy-all": "node --experimental-strip-types scripts/deploy-all-box-minter.ts",
     "keygen": "node scripts/keygen.js"
   },
   "repository": {

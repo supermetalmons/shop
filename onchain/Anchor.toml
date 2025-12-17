@@ -5,13 +5,13 @@ seeds = true
 skip-lint = false
 
 [programs.devnet]
-box_minter = "11111111111111111111111111111111"
+box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
 
 [programs.localnet]
-box_minter = "11111111111111111111111111111111"
+box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
 
 [programs.mainnet]
-box_minter = "11111111111111111111111111111111"
+box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
 
 [programs.testnet]
 box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
