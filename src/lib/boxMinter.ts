@@ -149,7 +149,9 @@ export async function fetchMintStatsFromProgram(connection: Connection): Promise
   const minted = Number(cfg.minted || 0);
   const total = Number(cfg.maxSupply || 0);
   const remaining = Math.max(0, total - minted);
-  return { minted, total, remaining, maxPerTx: cfg.maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
+  // Hard cap (see on-chain MAX_SAFE_MINTS_PER_TX): Bubblegum hits Solana's max instruction trace length above 15.
+  const maxPerTx = Math.min(cfg.maxPerTx || 0, 15);
+  return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
 }
 
 function encodeMintBoxesData(quantity: number): Uint8Array {
@@ -219,12 +221,20 @@ export async function buildMintBoxesTx(
   payer: PublicKey,
   quantity: number,
 ): Promise<VersionedTransaction> {
+  const MAX_MINTS_PER_TX = 15;
+  if (quantity > MAX_MINTS_PER_TX) {
+    throw new Error(`Max ${MAX_MINTS_PER_TX} boxes per transaction.`);
+  }
+
   const mintIx = buildMintBoxesIx(cfg, payer, quantity);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const msg = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: blockhash,
     instructions: [
+      // Bubblegum CPI allocates; larger batches need a bigger heap frame to avoid OOM.
+      // 256 KiB is the max supported heap frame size.
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       // Optional: add setComputeUnitPrice here if you want priority fees.
       mintIx,

@@ -50,7 +50,7 @@ All commands run from repo root unless noted.
    ```
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
 5. Decide supplies & metadata:
-   - Box minting parameters are set by `box-minter:deploy` (defaults: max supply 333, price 0.001 SOL, max 30/tx).
+   - Box minting parameters are set by `box-minter:deploy` (defaults: max supply 333, price 0.001 SOL, max 15/tx).
    - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
 6. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 

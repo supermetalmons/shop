@@ -1,8 +1,8 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is now fully on-chain** via a custom Solana program: mint **1–30** compressed boxes per tx, with mint progress read directly from the program state (no Firebase needed for mint/progress). Cloud Functions are still used for non-mint features (open box, delivery, IRL claim) that require off-chain coordination. Inventory is fetched client-side via Helius.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is now fully on-chain** via a custom Solana program: mint **1–15** compressed boxes per tx, with mint progress read directly from the program state (no Firebase needed for mint/progress). Cloud Functions are still used for non-mint features (open box, delivery, IRL claim) that require off-chain coordination. Inventory is fetched client-side via Helius.
 
-Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per box**, **max 30 per tx**.
+Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per box**, **max 15 per tx**.
 
 ## Frontend
 - Install deps: `npm install`

@@ -186,7 +186,7 @@ async function main() {
   const priceSol = Number(getArg('--price-sol', process.env.BOX_PRICE_SOL || '0.001'));
   const priceLamports = BigInt(Math.round(priceSol * LAMPORTS_PER_SOL));
   const maxSupply = Number(getArg('--max-supply', process.env.TOTAL_SUPPLY || '333'));
-  const maxPerTx = Number(getArg('--max-per-tx', process.env.BOX_MAX_PER_TX || '30'));
+  const maxPerTx = Number(getArg('--max-per-tx', process.env.BOX_MAX_PER_TX || '15'));
 
   // Keep box metadata tiny to reduce compute when minting 30 in one go.
   const namePrefix = getArg('--name-prefix', process.env.BOX_NAME_PREFIX || 'b')!;

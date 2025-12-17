@@ -14,11 +14,20 @@ no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
+custom-heap = []
+custom-panic = []
+anchor-debug = []
+solana = []
 
 [dependencies]
 anchor-lang = "0.32.1"
 
 # Bubblegum CPI + metadata types (Metaplex)
 mpl-bubblegum = "2.1.1"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = ['cfg(target_os, values("solana"))']
 
 
