@@ -30,26 +30,17 @@ All commands run from repo root unless noted.
        --rpc https://api.devnet.solana.com
      ```
    - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
-   Outputs: `VITE_BOX_MINTER_PROGRAM_ID`, `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE` (frontend env).
+  Outputs: frontend env (`VITE_*`) + functions env (`MERKLE_TREE`, `COLLECTION_*`, `TREE_AUTHORITY_SECRET`).
 
-3. (Optional / legacy) Create a separate Merkle tree for Cloud Functions mint flows:
-   ```bash
-   npm run tree:create -- \
-     --cluster devnet \
-     --keypair ~/.config/solana/id.json \
-     --depth 14 --buffer 64 --canopy 0 \
-     --rpc https://api.devnet.solana.com
-   ```
-   Outputs: `MERKLE_TREE` and `TREE_AUTHORITY_SECRET` (bs58 of payer secret).
-4. Generate the shipping vault:
+3. Generate the shipping vault:
    ```bash
    npm run keygen
    ```
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
-5. Decide supplies & metadata:
-   - Box minting parameters are set by `box-minter:deploy` (defaults: max supply 333, price 0.001 SOL, max 15/tx).
+4. Decide supplies & metadata:
+   - Box minting parameters + collection metadata are hard-coded in `scripts/deploy-all-box-minter.ts` (edit there before deploying).
    - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
-6. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
+5. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 
 Record all outputs for the function environment in step 2.
 

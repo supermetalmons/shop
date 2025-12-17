@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use borsh::BorshSerialize;
 use core::fmt::Write;
 
-declare_id!("EejnjetQkTttS6vGWSFq5a24tYQq9iSfrCqL6f86Eb6g");
+declare_id!("APkExhsEXWnNBVfF2LiC8eLrAkxnRmEXDk7gLw5waFbm");
 
 // Bubblegum instruction discriminator for `mint_to_collection_v1` (mpl-bubblegum 2.1.1).
 const IX_MINT_TO_COLLECTION_V1: [u8; 8] = [153, 18, 178, 47, 197, 158, 86, 15];
@@ -212,6 +212,9 @@ pub mod box_minter {
             // Update name in-place (no allocations).
             metadata.name.clear();
             metadata.name.push_str(&cfg.name_prefix);
+            if !cfg.name_prefix.is_empty() && !cfg.name_prefix.ends_with(" ") {
+                metadata.name.push(' ');
+            }
             write!(&mut metadata.name, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             // Rebuild Bubblegum instruction data in-place: discriminator + borsh(metadata).

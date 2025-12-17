@@ -14,7 +14,7 @@ box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
 box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
 
 [programs.testnet]
-box_minter = "EejnjetQkTttS6vGWSFq5a24tYQq9iSfrCqL6f86Eb6g"
+box_minter = "APkExhsEXWnNBVfF2LiC8eLrAkxnRmEXDk7gLw5waFbm"
 
 [registry]
 url = "https://api.apr.dev"

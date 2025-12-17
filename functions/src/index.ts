@@ -386,7 +386,7 @@ async function ensureOnchainMintConfig(force = false) {
     onchainConfigOk = false;
     throw new functions.https.HttpsError(
       'failed-precondition',
-      'On-chain mint config is missing or mismatched. Re-run scripts/create-collection.ts + scripts/create-tree.ts, update functions env, and redeploy.',
+      'On-chain mint config is missing or mismatched. Re-run `npm run box-minter:deploy-all`, update functions env, and redeploy.',
       {
         missing,
         bubblegumSigner: bubblegumCollectionSigner.toBase58(),
