@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+import { Keypair } from '@solana/web3.js';
 
 function getArg(flag: string, fallback?: string) {
   const idx = process.argv.indexOf(flag);
@@ -79,6 +80,29 @@ function readProgramId(onchainDir: string): string {
   return match[1];
 }
 
+function generateFreshProgramKeypair(programKeypairPath: string): { programId: string; backupPath?: string } {
+  mkdirSync(path.dirname(programKeypairPath), { recursive: true });
+
+  let backupPath: string | undefined;
+  if (existsSync(programKeypairPath)) {
+    // Keep a copy so you can still upgrade older deployments if needed.
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    backupPath = programKeypairPath.replace(/\.json$/i, `.${ts}.bak.json`);
+    try {
+      renameSync(programKeypairPath, backupPath);
+    } catch {
+      // Fallback: best-effort unique name.
+      backupPath = programKeypairPath.replace(/\.json$/i, `.bak.${Date.now()}.json`);
+      renameSync(programKeypairPath, backupPath);
+    }
+  }
+
+  const kp = Keypair.generate();
+  // solana-cli expects a JSON array of 64 u8 values.
+  writeFileSync(programKeypairPath, JSON.stringify(Array.from(kp.secretKey)), { encoding: 'utf8', mode: 0o600 });
+  return { programId: kp.publicKey.toBase58(), backupPath };
+}
+
 function cargoLockHasPackage(onchainDir: string, name: string, version: string): boolean {
   const lockPath = path.join(onchainDir, 'Cargo.lock');
   if (!existsSync(lockPath)) return false;
@@ -92,7 +116,10 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const root = path.resolve(__dirname, '..');
   const onchainDir = path.join(root, 'onchain');
-  const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
+  const programKeypairArg = getArg('--program-keypair');
+  const programKeypair = programKeypairArg
+    ? path.resolve(programKeypairArg.replace(/^~\//, `${process.env.HOME || ''}/`))
+    : path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
 
   const cluster = (getArg('--cluster', process.env.SOLANA_CLUSTER || 'devnet') || 'devnet').toLowerCase();
@@ -110,13 +137,24 @@ async function main() {
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
 
-  if (!existsSync(programKeypair)) {
-    throw new Error(
-      `Missing program keypair: ${programKeypair}\n` +
-        `Generate it with:\n` +
-        `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n` +
-        `Then re-run this deploy script.`,
-    );
+  const reuseProgramId = process.argv.includes('--reuse-program-id') || process.argv.includes('--reuse-program-keypair');
+  let expectedProgramId: string | undefined;
+  if (reuseProgramId) {
+    if (!existsSync(programKeypair)) {
+      throw new Error(
+        `Missing program keypair: ${programKeypair}\n` +
+          `Either create it first, or omit --reuse-program-id to auto-generate a fresh program id.\n` +
+          `Generate it with:\n` +
+          `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n`,
+      );
+    }
+    console.log('Reusing existing program keypair:', programKeypair);
+  } else {
+    const { programId, backupPath } = generateFreshProgramKeypair(programKeypair);
+    expectedProgramId = programId;
+    console.log('Generated fresh program id:', programId);
+    console.log('Program keypair:', programKeypair);
+    if (backupPath) console.log('Backed up previous program keypair to:', backupPath);
   }
 
   const hasSolanaCargo = canRunSolanaCargo();
@@ -128,6 +166,19 @@ async function main() {
 
   // 1) Build + deploy program via Anchor.
   run('anchor', ['keys', 'sync'], { cwd: onchainDir, env: toolEnv });
+  if (expectedProgramId) {
+    const synced = readProgramId(onchainDir);
+    if (synced !== expectedProgramId) {
+      throw new Error(
+        `Program id sync mismatch.\n` +
+          `Expected: ${expectedProgramId}\n` +
+          `Synced  : ${synced}\n` +
+          `\n` +
+          `This usually means 'anchor keys sync' did not update the program source/Anchor.toml.\n` +
+          `Try running it manually in ${onchainDir} and re-run this script.`,
+      );
+    }
+  }
 
   // Ensure Cargo.lock is compatible with the Solana toolchain (cargo 1.72.x).
   const lockMoved = ensureAnchorCompatibleCargoLock(onchainDir);

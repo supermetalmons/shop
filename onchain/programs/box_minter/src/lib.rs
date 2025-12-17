@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use borsh::BorshSerialize;
 use core::fmt::Write;
 
-declare_id!("FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd");
+declare_id!("EejnjetQkTttS6vGWSFq5a24tYQq9iSfrCqL6f86Eb6g");
 
 // Bubblegum instruction discriminator for `mint_to_collection_v1` (mpl-bubblegum 2.1.1).
 const IX_MINT_TO_COLLECTION_V1: [u8; 8] = [153, 18, 178, 47, 197, 158, 86, 15];

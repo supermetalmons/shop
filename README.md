@@ -55,8 +55,8 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 ### Tree + address helpers
 - Deploy box minter (program + collection + tree + delegation):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
-  - Generate program keypair once: `solana-keygen new --no-bip39-passphrase -o onchain/target/deploy/box_minter-keypair.json`
-  - One-command deploy: `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com`
+  - One-command deploy (auto-generates a fresh program id each run): `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com`
+  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
   - Prints `VITE_BOX_MINTER_PROGRAM_ID`, `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE`.
 - Create a new Merkle tree (defaults depth 14 / buffer 64): `npm run tree:create -- --cluster devnet --keypair ~/.config/solana/id.json --depth 14 --buffer 64 --canopy 0 --rpc https://api.devnet.solana.com`. Prints MERKLE_TREE + TREE_AUTHORITY_SECRET for function env.
 - Derive collection PDAs from an existing mint: `npm run tree:derive-collection -- --mint <mintAddress>` (prints metadata + master edition for env).

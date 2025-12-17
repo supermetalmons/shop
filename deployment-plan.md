@@ -22,17 +22,14 @@ All commands run from repo root unless noted.
    solana airdrop 2
    ```
 2. Deploy the **box minter program** (Anchor) + create collection + create cNFT tree + configure delegation:
-   - Generate program keypair once:
-     ```bash
-     solana-keygen new --no-bip39-passphrase -o onchain/target/deploy/box_minter-keypair.json
-     ```
-   - One-command deploy:
+   - One-command deploy (auto-generates a fresh program id each run):
      ```bash
      npm run box-minter:deploy-all -- \
        --cluster devnet \
        --keypair ~/.config/solana/id.json \
        --rpc https://api.devnet.solana.com
      ```
+   - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
    Outputs: `VITE_BOX_MINTER_PROGRAM_ID`, `VITE_COLLECTION_MINT`, `VITE_MERKLE_TREE` (frontend env).
 
 3. (Optional / legacy) Create a separate Merkle tree for Cloud Functions mint flows:
