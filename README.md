@@ -36,6 +36,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - Firestore rules live in `firestore.rules` (profiles+addresses are user-restricted, everything else locked down).
 
 ### Function env (set as runtime config or shell env)
+- `BOX_MINTER_PROGRAM_ID` (same program id as `VITE_BOX_MINTER_PROGRAM_ID`)
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (`devnet`/`testnet`/`mainnet-beta`)
 - `TREE_AUTHORITY_SECRET` (bs58 secret key that owns the cNFT tree)
@@ -43,7 +44,6 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `MERKLE_TREE`, `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`
 - `DELIVERY_VAULT` (SOL recipient for shipping)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
-- `TOTAL_SUPPLY` (defaults 333; global cap across all clusters)
 
 ### What the functions do
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
@@ -66,6 +66,6 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
   - `rm -rf node_modules package-lock.json && npm install`
   - If you also run Cloud Functions locally, repeat inside `functions/`: `cd functions && rm -rf node_modules package-lock.json && npm install`
 - If `anchor build` fails with `lock file version 4 requires -Znext-lockfile-bump`, delete `onchain/Cargo.lock` and re-run. The bundled Cargo in Solana/Anchor toolchains can’t parse v4 lockfiles.
-- Supply is capped at 333 boxes (999 dudes). Adjust via `TOTAL_SUPPLY` if needed.
+- Supply is capped on-chain by the box minter config PDA (default deploy script: 333 boxes → 999 dudes).
 - Delivery addresses are encrypted client-side with TweetNaCl; only country + label are stored in clear.
 - Secondary links & email form swap in automatically once the drop is minted out.

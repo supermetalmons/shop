@@ -464,7 +464,10 @@ async function main() {
     // Merkle tree params (compressed mints)
     treeDepth: 14,
     treeBufferSize: 64,
-    treeCanopy: 0,
+    // IMPORTANT: non-zero canopy drastically reduces proof sizes for burn/transfer operations,
+    // keeping single-tx "open box" (burn + 3 mints) under Solana's 1232-byte tx limit.
+    // Canopy stores upper nodes on-chain so clients can omit them from proofs.
+    treeCanopy: 8,
   };
   // ---------------------------------------------------------------------------
 
@@ -493,6 +496,7 @@ async function main() {
     console.log(`VITE_MERKLE_TREE=${cfg.merkleTree.toBase58()}`);
     console.log('');
     console.log('--- env for functions ---');
+    console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
     console.log(`MERKLE_TREE=${cfg.merkleTree.toBase58()}`);
     console.log(`COLLECTION_MINT=${cfg.collectionMint.toBase58()}`);
     console.log(`COLLECTION_METADATA=${cfg.collectionMetadata.toBase58()}`);
@@ -674,6 +678,7 @@ async function main() {
   console.log(`VITE_MERKLE_TREE=${tree.publicKey.toBase58()}`);
   console.log('');
   console.log('--- env for functions ---');
+  console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
   console.log(`MERKLE_TREE=${tree.publicKey.toBase58()}`);
   console.log(`COLLECTION_MINT=${mint.publicKey.toBase58()}`);
   console.log(`COLLECTION_METADATA=${metadataPda.toBase58()}`);

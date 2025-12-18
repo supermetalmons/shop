@@ -22,7 +22,7 @@ import {
   createBurnInstruction,
   createMintToCollectionV1Instruction,
 } from '@metaplex-foundation/mpl-bubblegum';
-import { SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana/spl-account-compression';
+import { ConcurrentMerkleTreeAccount, SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana/spl-account-compression';
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
@@ -96,13 +96,12 @@ function requireAuth(request: CallableReq<any>): string {
 }
 
 const DUDES_PER_BOX = 3;
-const totalSupply = Number(process.env.TOTAL_SUPPLY || 333);
+const MAX_DUDE_ID = 999;
 const CLAIM_LOCK_WINDOW_MS = 5 * 60 * 1000;
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
 
 // Hardcode devnet for now to avoid cluster mismatches while iterating.
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
-const totalDudes = totalSupply * DUDES_PER_BOX;
 const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
 
 function treeAuthorityPda(tree: PublicKey) {
@@ -154,6 +153,17 @@ const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzj
 const bubblegumCollectionSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
+const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
+const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
+// Anchor discriminator = sha256("global:open_box")[0..8]
+const IX_OPEN_BOX = Buffer.from('e1dc0a68ad97d6c7', 'hex');
+
+function assertConfiguredProgramId(key: PublicKey, label: string) {
+  if (key.equals(PublicKey.default)) {
+    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (missing env var)`);
+  }
+}
+
 function decodeSecretKey(secret: string | undefined, label: string) {
   const value = (secret || '').trim();
   if (!value) throw new Error(`${label} is not set`);
@@ -173,6 +183,16 @@ function treeAuthority() {
     cachedTreeAuthority = Keypair.fromSecretKey(decodeSecretKey(process.env.TREE_AUTHORITY_SECRET, 'TREE_AUTHORITY_SECRET'));
   }
   return cachedTreeAuthority;
+}
+
+let cachedCosigner: Keypair | null = null;
+function cosigner() {
+  if (!cachedCosigner) {
+    const raw = (process.env.COSIGNER_SECRET || process.env.TREE_AUTHORITY_SECRET || '').trim();
+    const label = process.env.COSIGNER_SECRET ? 'COSIGNER_SECRET' : 'TREE_AUTHORITY_SECRET';
+    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(raw, label));
+  }
+  return cachedCosigner;
 }
 
 function ensureAuthorityKeys() {
@@ -836,16 +856,131 @@ async function fetchAssetWithProof(assetId: string) {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
+const TREE_PARAMS_CACHE_TTL_MS = 10 * 60 * 1000;
+const treeParamsCache = new Map<string, { canopyDepth: number; maxDepth: number; updatedAt: number }>();
+
+async function getTreeParams(tree: PublicKey): Promise<{ canopyDepth: number; maxDepth: number }> {
+  const key = tree.toBase58();
+  const cached = treeParamsCache.get(key);
+  const now = Date.now();
+  if (cached && now - cached.updatedAt < TREE_PARAMS_CACHE_TTL_MS) {
+    return { canopyDepth: cached.canopyDepth, maxDepth: cached.maxDepth };
+  }
+
+  const info = await withTimeout(connection().getAccountInfo(tree, { commitment: 'confirmed' }), RPC_TIMEOUT_MS, 'getAccountInfo:tree');
+  if (!info?.data) {
+    const params = { canopyDepth: 0, maxDepth: 0 };
+    treeParamsCache.set(key, { ...params, updatedAt: now });
+    return params;
+  }
+
+  const acct = ConcurrentMerkleTreeAccount.fromBuffer(info.data);
+  const canopyRaw = Number(acct.getCanopyDepth() || 0);
+  const canopyDepth = Number.isFinite(canopyRaw) && canopyRaw > 0 ? Math.round(canopyRaw) : 0;
+  const depthRaw = Number(acct.getMaxDepth() || 0);
+  const maxDepth = Number.isFinite(depthRaw) && depthRaw > 0 ? Math.round(depthRaw) : 0;
+  treeParamsCache.set(key, { canopyDepth, maxDepth, updatedAt: now });
+  return { canopyDepth, maxDepth };
+}
+
+function truncateProofByCanopy(proof: string[], canopyDepth: number): string[] {
+  const drop = Math.max(0, Math.floor(canopyDepth || 0));
+  if (!drop) return proof;
+  if (proof.length <= drop) return [];
+  return proof.slice(0, proof.length - drop);
+}
+
+function normalizeLeafIndex(args: { nodeIndex: number; maxDepth: number }): number {
+  const nodeIndex = Number(args.nodeIndex);
+  if (!Number.isFinite(nodeIndex) || nodeIndex < 0) return 0;
+
+  // Helius `node_index` is the index in the *full binary tree* where leaf nodes start at 2^depth.
+  // Bubblegum/compression expects the leaf index 0..(2^depth - 1).
+  const depth = Number(args.maxDepth || 0);
+  if (!depth) return nodeIndex >>> 0;
+  const leafOffset = Math.pow(2, depth);
+  const leafIndex = nodeIndex >= leafOffset ? nodeIndex - leafOffset : nodeIndex;
+  return leafIndex >>> 0;
+}
+
+function u16LE(value: number) {
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16LE(value & 0xffff, 0);
+  return buf;
+}
+
+function u32LE(value: number) {
+  const buf = Buffer.alloc(4);
+  buf.writeUInt32LE(value >>> 0, 0);
+  return buf;
+}
+
+function u64LE(value: bigint) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(value, 0);
+  return buf;
+}
+
+function normalizeU64(value: unknown, label: string): bigint {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return BigInt(Math.floor(value));
+  if (typeof value === 'string' && value) {
+    try {
+      const n = BigInt(value);
+      if (n >= 0n) return n;
+    } catch {
+      // handled below
+    }
+  }
+  throw new functions.https.HttpsError('invalid-argument', `${label} must be a non-negative u64`);
+}
+
+function encodeOpenBoxArgs(args: {
+  dudeIds: number[];
+  root: Uint8Array;
+  dataHash: Uint8Array;
+  creatorHash: Uint8Array;
+  nonce: bigint;
+  index: number;
+}): Buffer {
+  if (!Array.isArray(args.dudeIds) || args.dudeIds.length !== DUDES_PER_BOX) {
+    throw new functions.https.HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
+  }
+  const ids = args.dudeIds.map((n) => Number(n));
+  ids.forEach((id) => {
+    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+      throw new functions.https.HttpsError('invalid-argument', `Invalid dude id: ${id}`);
+    }
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new functions.https.HttpsError('invalid-argument', 'Duplicate dude ids');
+  }
+  if (args.root.length !== 32 || args.dataHash.length !== 32 || args.creatorHash.length !== 32) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
+  }
+
+  return Buffer.concat([
+    IX_OPEN_BOX,
+    ...ids.map(u16LE),
+    Buffer.from(args.root),
+    Buffer.from(args.dataHash),
+    Buffer.from(args.creatorHash),
+    u64LE(args.nonce),
+    u32LE(args.index),
+  ]);
+}
+
 async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?: any; proof?: any }) {
   const asset = cached?.asset ?? (await fetchAsset(assetId));
   const proof = cached?.proof ?? (await fetchAssetProof(assetId));
   const leafNonce = proof.leaf?.nonce ?? asset.compression?.leaf_id ?? 0;
   const merkle = new PublicKey(asset.compression?.tree || proof.merkleTree);
-  const proofPath = (proof.proof || []).map((p: string) => ({
-    pubkey: new PublicKey(p),
-    isSigner: false,
-    isWritable: false,
-  }));
+  const { canopyDepth, maxDepth } = await getTreeParams(merkle);
+  const proofNodes = Array.isArray(proof.proof) ? (proof.proof as any[]).filter((p) => typeof p === 'string') : [];
+  const truncated = truncateProofByCanopy(proofNodes as string[], canopyDepth);
+  const proofPath = truncated.map((p: string) => ({ pubkey: new PublicKey(p), isSigner: false, isWritable: false }));
+  const maxDepthUsed = maxDepth || proofNodes.length || 0;
+  const leafIndex = normalizeLeafIndex({ nodeIndex: Number(proof.node_index ?? asset.compression?.leaf_id ?? 0), maxDepth: maxDepthUsed });
 
   const ix = createBurnInstruction(
     {
@@ -863,7 +998,7 @@ async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?
       dataHash: Array.from(bs58.decode(asset.compression.data_hash)),
       creatorHash: Array.from(bs58.decode(asset.compression.creator_hash)),
       nonce: leafNonce,
-      index: proof.node_index ?? asset.compression?.leaf_id ?? 0,
+      index: leafIndex,
     },
   );
   return ix;
@@ -876,7 +1011,7 @@ async function assignDudes(boxId: string): Promise<number[]> {
     const existing = await tx.get(ref);
     if (existing.exists) return (existing.data() as any).dudeIds as number[];
     const poolSnap = await tx.get(poolRef);
-    const pool = (poolSnap.data() as any)?.available || Array.from({ length: totalDudes }, (_, i) => i + 1);
+    const pool = (poolSnap.data() as any)?.available || Array.from({ length: MAX_DUDE_ID }, (_, i) => i + 1);
     if (pool.length < DUDES_PER_BOX) throw new Error('No dudes remaining to assign');
     const chosen: number[] = [];
     for (let i = 0; i < DUDES_PER_BOX; i += 1) {
@@ -1104,14 +1239,10 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
-export const prepareOpenBoxTx = onCallAuthed('prepareOpenBoxTx', async (request, uid) => {
+export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
-  if (uid !== owner) {
-    throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  }
   const ownerPk = new PublicKey(owner);
-  const conn = connection();
   let asset: any;
   let proof: any;
   try {
@@ -1138,17 +1269,128 @@ export const prepareOpenBoxTx = onCallAuthed('prepareOpenBoxTx', async (request,
   if (assetOwner !== owner) {
     throw new functions.https.HttpsError('failed-precondition', 'Box not owned by wallet');
   }
-  const dudeIds = await assignDudes(boxAssetId);
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 })];
-  instructions.push(await createBurnIx(boxAssetId, ownerPk, { asset, proof }));
-  instructions.push(...(await buildMintInstructions(ownerPk, DUDES_PER_BOX, 'dude', dudeIds[0], { boxId: boxAssetId, dudeIds })));
-  const { blockhash } = await withTimeout(
-    conn.getLatestBlockhash('confirmed'),
+
+  assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+
+  // Ensure the provided COSIGNER_SECRET matches the on-chain box minter admin (config PDA).
+  const cfgInfo = await withTimeout(
+    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
-    'getLatestBlockhash',
+    'getAccountInfo:boxMinterConfig',
   );
-  const tx = buildTx(instructions, ownerPk, blockhash);
-  return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), assignedDudeIds: dudeIds };
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
+      { configPda: boxMinterConfigPda.toBase58() },
+    );
+  }
+  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const signer = cosigner();
+  if (!signer.publicKey.equals(cfgAdmin)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
+      { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
+    );
+  }
+
+  // Assign dudes deterministically per box, reserving globally unique IDs in Firestore.
+  const dudeIds = await assignDudes(boxAssetId);
+
+  // Normalize proof + truncate canopy nodes to keep the tx under the size limit.
+  const proofTreeStr = String((proof as any)?.merkleTree || (proof as any)?.merkle_tree || (proof as any)?.treeId || '');
+  if (proofTreeStr && proofTreeStr !== merkleTree.toBase58()) {
+    throw new functions.https.HttpsError('failed-precondition', 'Box is from a different Merkle tree than the configured drop', {
+      boxTree: proofTreeStr,
+      configuredTree: merkleTree.toBase58(),
+    });
+  }
+  const { canopyDepth, maxDepth } = await getTreeParams(merkleTree);
+  const fullProof = Array.isArray((proof as any)?.proof) ? ((proof as any).proof as any[]).filter((p) => typeof p === 'string') : [];
+  const truncatedProof = truncateProofByCanopy(fullProof as string[], canopyDepth);
+
+  const rootBytes = bs58.decode(String((proof as any).root || ''));
+  const dataHashBytes = bs58.decode(String(asset?.compression?.data_hash || ''));
+  const creatorHashBytes = bs58.decode(String(asset?.compression?.creator_hash || ''));
+  const nonce = normalizeU64((proof as any)?.leaf?.nonce ?? asset?.compression?.leaf_id ?? 0, 'nonce');
+  const maxDepthUsed = maxDepth || fullProof.length || 0;
+  const nodeIndex = Number((proof as any)?.node_index ?? asset?.compression?.leaf_id ?? 0);
+  const leafIndex = normalizeLeafIndex({ nodeIndex, maxDepth: maxDepthUsed });
+  const maxLeaves = maxDepthUsed ? Math.pow(2, maxDepthUsed) : 0;
+  if (maxLeaves && leafIndex >= maxLeaves) {
+    throw new functions.https.HttpsError('failed-precondition', 'Leaf index is out of bounds for the configured Merkle tree', {
+      nodeIndex,
+      leafIndex,
+      maxDepth: maxDepthUsed,
+      maxLeaves,
+      tree: merkleTree.toBase58(),
+    });
+  }
+
+  const openBoxIx = new TransactionInstruction({
+    programId: boxMinterProgramId,
+    keys: [
+      { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+      { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+      { pubkey: ownerPk, isSigner: true, isWritable: true },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
+      { pubkey: treeAuthorityPda(merkleTree), isSigner: false, isWritable: true },
+      { pubkey: collectionMint, isSigner: false, isWritable: false },
+      { pubkey: collectionMetadata, isSigner: false, isWritable: true },
+      { pubkey: collectionMasterEdition, isSigner: false, isWritable: false },
+      { pubkey: collectionAuthorityRecordPda(boxMinterConfigPda), isSigner: false, isWritable: false },
+      { pubkey: bubblegumCollectionSigner, isSigner: false, isWritable: false },
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...truncatedProof.map((p) => ({ pubkey: new PublicKey(p), isSigner: false, isWritable: false })),
+    ],
+    data: encodeOpenBoxArgs({
+      dudeIds,
+      root: rootBytes,
+      dataHash: dataHashBytes,
+      creatorHash: creatorHashBytes,
+      nonce,
+      index: leafIndex >>> 0,
+    }),
+  });
+
+  const conn = connection();
+  const instructions: TransactionInstruction[] = [
+    // Bubblegum CPI allocates; request the max heap frame to avoid OOM.
+    ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    openBoxIx,
+  ];
+
+  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
+  const msg = new TransactionMessage({ payerKey: ownerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
+  const tx = new VersionedTransaction(msg);
+  tx.sign([signer]);
+  const raw = tx.serialize();
+  // Solana hard cap: 1232 bytes for the serialized transaction.
+  // (Wallets often show a base64 cap too: 1644 chars.)
+  const MAX_RAW_TX_BYTES = 1232;
+  if (raw.length > MAX_RAW_TX_BYTES) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `Open box transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). This usually means the Merkle tree canopy is too small; redeploy the tree with a larger canopy (e.g. 8).`,
+      {
+        rawBytes: raw.length,
+        maxRawBytes: MAX_RAW_TX_BYTES,
+        base64Chars: Buffer.from(raw).toString('base64').length,
+        canopyDepth,
+        proofNodes: fullProof.length,
+        truncatedProofNodes: truncatedProof.length,
+        tree: merkleTree.toBase58(),
+      },
+    );
+  }
+
+  return { encodedTx: Buffer.from(raw).toString('base64'), assignedDudeIds: dudeIds };
 });
 
 export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {

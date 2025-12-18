@@ -30,7 +30,7 @@ All commands run from repo root unless noted.
        --rpc https://api.devnet.solana.com
      ```
    - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
-  Outputs: frontend env (`VITE_*`) + functions env (`MERKLE_TREE`, `COLLECTION_*`, `TREE_AUTHORITY_SECRET`).
+ Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `MERKLE_TREE`, `COLLECTION_*`, `TREE_AUTHORITY_SECRET`).
 
 3. Generate the shipping vault:
    ```bash
@@ -52,6 +52,7 @@ cp .env.example .env.local   # for emulators
 cp .env.example .env.deploy  # for deployment; edit with real values
 ```
 Keys in the template:
+- `BOX_MINTER_PROGRAM_ID`
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (devnet|testnet|mainnet-beta)
 - `MERKLE_TREE`
@@ -63,7 +64,6 @@ Keys in the template:
 - `COLLECTION_UPDATE_AUTHORITY`
 - `DELIVERY_VAULT`
 - `METADATA_BASE`
-- `TOTAL_SUPPLY` (default 333; global cap)
 
 Push the filled deployment file to Cloud Functions env vars (2nd-gen). Requires `firebase-tools` with `functions:env:*` support (update with `npm i -g firebase-tools@latest` if the command is missing):
 ```bash
