@@ -6,6 +6,7 @@ import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { DeliveryPanel } from './components/DeliveryPanel';
+import { Modal } from './components/Modal';
 import { ClaimForm } from './components/ClaimForm';
 import { EmailSubscribe } from './components/EmailSubscribe';
 import { useMintProgress } from './hooks/useMintProgress';
@@ -71,6 +72,8 @@ function App() {
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
   const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
+  const [addressId, setAddressId] = useState<string | null>(null);
+  const [addAddressOpen, setAddAddressOpen] = useState(false);
   const owner = publicKey?.toBase58();
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
 
@@ -193,7 +196,15 @@ function App() {
         addresses: [...(base.addresses || []), { ...saved, hint }],
       });
     }
+    setAddressId(saved.id);
+    setAddAddressOpen(false);
     setStatus('Address saved and encrypted');
+  };
+
+  const handleSignInForDelivery = async () => {
+    setStatus('');
+    await signIn();
+    setStatus('Signed in. Saved addresses loaded.');
   };
 
   const handleRequestDelivery = async (addressId: string | null) => {
@@ -271,7 +282,6 @@ function App() {
   ];
 
   const savedAddresses = profile?.addresses || [];
-  const [addressId, setAddressId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!addressId && savedAddresses.length) {
@@ -360,18 +370,29 @@ function App() {
         </section>
       ) : null}
 
-      <div className="grid">
-        <DeliveryPanel
-          selectedCount={selected.size}
-          addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
-          addressId={addressId}
-          onSelectAddress={setAddressId}
-          onRequestDelivery={() => handleRequestDelivery(addressId)}
-          loading={deliveryLoading}
-          costLamports={deliveryCost}
+      <DeliveryPanel
+        selectedCount={selected.size}
+        addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
+        addressId={addressId}
+        onSelectAddress={setAddressId}
+        onRequestDelivery={() => handleRequestDelivery(addressId)}
+        loading={deliveryLoading}
+        costLamports={deliveryCost}
+        signedIn={Boolean(profile)}
+        signingIn={authLoading}
+        walletConnected={Boolean(publicKey)}
+        onSignIn={handleSignInForDelivery}
+        onAddAddress={() => setAddAddressOpen(true)}
+      />
+
+      <Modal open={addAddressOpen} title="Add a delivery address" onClose={() => setAddAddressOpen(false)}>
+        <DeliveryForm
+          mode="modal"
+          onSave={handleSaveAddress}
+          defaultEmail={profile?.email || ''}
+          onCancel={() => setAddAddressOpen(false)}
         />
-        <DeliveryForm onSave={handleSaveAddress} defaultEmail={profile?.email || ''} />
-      </div>
+      </Modal>
 
       <ClaimForm onClaim={handleClaim} />
 

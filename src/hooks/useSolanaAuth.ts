@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { solanaAuth } from '../lib/api';
+import { getProfile, solanaAuth } from '../lib/api';
 import { Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
 
@@ -14,9 +14,48 @@ export function useSolanaAuth() {
     loading: false,
   });
   const [error, setError] = useState<string | null>(null);
+  const [sessionWalletChecked, setSessionWalletChecked] = useState<string | null>(null);
   const updateProfile = useCallback((profile: Profile | null) => {
     setState((prev) => ({ ...prev, profile }));
   }, []);
+
+  // On reload, restore the saved profile/addresses if this device already has a wallet session
+  // (set by a previous `solanaAuth` call). This avoids requiring another wallet signature just
+  // to *view* saved addresses.
+  useEffect(() => {
+    if (!auth || !connected || !publicKey) return;
+    const wallet = publicKey.toBase58();
+    if (sessionWalletChecked === wallet) return;
+    if (state.profile?.wallet === wallet) {
+      setSessionWalletChecked(wallet);
+      return;
+    }
+
+    let cancelled = false;
+    setState((prev) => ({ ...prev, loading: true }));
+    setError(null);
+    (async () => {
+      try {
+        const { profile } = await getProfile();
+        if (!profile || profile.wallet !== wallet) return;
+        const token = await auth.currentUser?.getIdToken();
+        if (!token) return;
+        const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
+        if (!cancelled) setState({ profile: normalizedProfile, token, loading: false });
+      } catch {
+        // No session (or expired) is totally normal on first visit; don't surface as an error.
+      } finally {
+        if (!cancelled) {
+          setState((prev) => ({ ...prev, loading: false }));
+          setSessionWalletChecked(wallet);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, publicKey, sessionWalletChecked, state.profile?.wallet]);
 
   const signIn = useCallback(async () => {
     if (!auth) throw new Error('Firebase client is not configured');
@@ -34,6 +73,7 @@ export function useSolanaAuth() {
       if (!token) throw new Error('Missing Firebase auth token');
       const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
       setState({ profile: normalizedProfile, token, loading: false });
+      setSessionWalletChecked(publicKey.toBase58());
       return { profile: normalizedProfile, token };
     } catch (err) {
       console.error(err);
@@ -53,6 +93,7 @@ export function useSolanaAuth() {
     if (!connected) {
       setState({ profile: null, token: null, loading: false });
       setError(null);
+      setSessionWalletChecked(null);
     }
   }, [connected]);
 

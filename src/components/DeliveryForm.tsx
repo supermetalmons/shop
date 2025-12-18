@@ -4,9 +4,11 @@ import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 interface DeliveryFormProps {
   onSave: (payload: { formatted: string; country: string; countryCode: string; label: string; email: string }) => Promise<void>;
   defaultEmail?: string;
+  mode?: 'card' | 'modal';
+  onCancel?: () => void;
 }
 
-export function DeliveryForm({ onSave, defaultEmail }: DeliveryFormProps) {
+export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: DeliveryFormProps) {
   const [email, setEmail] = useState(defaultEmail || '');
   const [emailTouched, setEmailTouched] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -54,9 +56,13 @@ export function DeliveryForm({ onSave, defaultEmail }: DeliveryFormProps) {
   };
 
   return (
-    <form className="card" onSubmit={handleSubmit}>
-      <div className="card__title">Save a delivery address</div>
-      <p className="muted small">We use your email for delivery updates.</p>
+    <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={handleSubmit}>
+      {mode === 'card' ? (
+        <>
+          <div className="card__title">Save a delivery address</div>
+          <p className="muted small">We use your email for delivery updates.</p>
+        </>
+      ) : null}
       <div className="grid">
         <label>
           <span className="muted">Email</span>
@@ -111,9 +117,16 @@ export function DeliveryForm({ onSave, defaultEmail }: DeliveryFormProps) {
         </label>
       </div>
       {error ? <div className="error">{error}</div> : null}
-      <button type="submit" disabled={saving}>
-        {saving ? 'Saving…' : 'Save encrypted address'}
-      </button>
+      <div className="row">
+        {onCancel ? (
+          <button type="button" className="ghost" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        ) : null}
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving…' : 'Save encrypted address'}
+        </button>
+      </div>
     </form>
   );
 }

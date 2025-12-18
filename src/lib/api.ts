@@ -1,4 +1,4 @@
-import { signInAnonymously } from 'firebase/auth';
+import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, PreparedTxResponse, Profile, ProfileAddress } from '../types';
@@ -7,12 +7,37 @@ const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
 let authReadyPromise: Promise<string> | null = null;
+let authStateReadyPromise: Promise<void> | null = null;
+
+async function waitForAuthStateReady(localAuth: Auth): Promise<void> {
+  // If a user is already present, we’re ready.
+  if (localAuth.currentUser) return;
+  if (!authStateReadyPromise) {
+    authStateReadyPromise = new Promise<void>((resolve) => {
+      const unsubscribe = onAuthStateChanged(localAuth, () => {
+        unsubscribe();
+        resolve();
+      });
+    }).finally(() => {
+      authStateReadyPromise = null;
+    });
+  }
+  return authStateReadyPromise;
+}
 
 async function ensureAuthenticated(): Promise<string> {
-  if (!auth) throw new Error('Firebase client is not configured');
-  if (auth.currentUser) return auth.currentUser.uid;
+  const localAuth = auth;
+  if (!localAuth) throw new Error('Firebase client is not configured');
+
+  // IMPORTANT: On page load, Firebase restores persisted auth asynchronously.
+  // If we call signInAnonymously() before that completes, we can create a *new* anon user each reload,
+  // which breaks our wallet-session mapping and makes users re-sign with Solana unnecessarily.
+  await waitForAuthStateReady(localAuth);
+  const user = localAuth.currentUser;
+  if (user) return user.uid;
+
   if (!authReadyPromise) {
-    authReadyPromise = signInAnonymously(auth)
+    authReadyPromise = signInAnonymously(localAuth)
       .then((credential) => credential.user.uid)
       .finally(() => {
         authReadyPromise = null;
@@ -377,6 +402,10 @@ export async function solanaAuth(
     message,
     signature: Array.from(signature),
   });
+}
+
+export async function getProfile(): Promise<{ profile: Profile }> {
+  return callFunction<{}, { profile: Profile }>('getProfile', {});
 }
 
 export async function finalizeDeliveryTx(

@@ -1238,6 +1238,24 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   };
 });
 
+export const getProfile = onCallLogged('getProfile', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const profileRef = db.doc(`profiles/${wallet}`);
+  const snap = await profileRef.get();
+  const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
+  const addresses = addressesSnap.docs.map((doc) => doc.data());
+  const profileData = snap.exists ? (snap.data() as any) : {};
+  if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
+  return {
+    profile: {
+      ...profileData,
+      wallet,
+      email: profileData.email,
+      addresses,
+    },
+  };
+});
+
 export const saveAddress = onCallLogged('saveAddress', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({
