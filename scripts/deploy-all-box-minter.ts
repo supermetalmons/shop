@@ -637,7 +637,7 @@ async function main() {
     treasury: undefined, // defaults to payer
     priceSol: 0.001,
     maxSupply: 333,
-    maxPerTx: 15,
+    maxPerTx: 10,
 
     // Box metadata (stored on-chain)
     namePrefix: 'swag box',

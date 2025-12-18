@@ -11,8 +11,8 @@ const IX_MINT_V2: [u8; 8] = [120, 121, 23, 146, 173, 110, 199, 205];
 // Bubblegum instruction discriminator for `burn_v2` (mpl-bubblegum 2.1.1).
 const IX_BURN_V2: [u8; 8] = [115, 210, 34, 240, 232, 143, 183, 16];
 // Hard safety cap: Bubblegum minting triggers multiple inner instructions per NFT, and Solana enforces
-// a max instruction trace length per transaction. Empirically on devnet this caps out at 15 mints/tx.
-const MAX_SAFE_MINTS_PER_TX: u8 = 15;
+// a max instruction trace length per transaction. Empirically on devnet this caps out at 10 mints/tx.
+const MAX_SAFE_MINTS_PER_TX: u8 = 10;
 // Delivery: each item burns + mints a receipt. Keep this conservative (trace-length + compute).
 const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 8;
 // Random delivery fee bounds (0.001..=0.003 SOL).

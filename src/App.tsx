@@ -321,7 +321,7 @@ function App() {
           <div className="card__title">IRL blind boxes, digital certificates</div>
           <p className="muted small">Mint boxes on-chain, reveal dudes, then burn for delivery and certificates.</p>
           <ul className="muted small">
-            <li>Mint 1-15 compressed blind boxes per tx until the 333 supply is gone.</li>
+            <li>Mint 1-10 compressed blind boxes per tx until the 333 supply is gone.</li>
             <li>Open a box to burn it and mint 3 dudes, co-signed by our cloud function.</li>
             <li>Select boxes + dudes for delivery; pay shipping in SOL, burn items, receive certificates.</li>
             <li>Use the IRL code inside a shipped box to mint dudes certificates for that specific box.</li>

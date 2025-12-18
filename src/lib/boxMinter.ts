@@ -160,8 +160,8 @@ export async function fetchMintStatsFromProgram(connection: Connection): Promise
   const minted = Number(cfg.minted || 0);
   const total = Number(cfg.maxSupply || 0);
   const remaining = Math.max(0, total - minted);
-  // Hard cap (see on-chain MAX_SAFE_MINTS_PER_TX): Bubblegum hits Solana's max instruction trace length above 15.
-  const maxPerTx = Math.min(cfg.maxPerTx || 0, 15);
+  // Hard cap (see on-chain MAX_SAFE_MINTS_PER_TX): Bubblegum hits Solana's max instruction trace length above 10.
+  const maxPerTx = Math.min(cfg.maxPerTx || 0, 10);
   return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
 }
 
@@ -330,7 +330,7 @@ export async function buildMintBoxesTx(
   payer: PublicKey,
   quantity: number,
 ): Promise<VersionedTransaction> {
-  const MAX_MINTS_PER_TX = 15;
+  const MAX_MINTS_PER_TX = 10;
   if (quantity > MAX_MINTS_PER_TX) {
     throw new Error(`Max ${MAX_MINTS_PER_TX} boxes per transaction.`);
   }
