@@ -21,18 +21,18 @@ const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb,
 
 // Canonical program IDs (pulled from Metaplex/SPL sources).
 export const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
-export const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
-export const SPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK');
-export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+// Bubblegum V2 uses the Metaplex noop + compression programs (not the legacy SPL ones).
+export const SPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+export const SPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+// Bubblegum V2 depends on MPL-Core (even if we don't use Core collections).
+export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
   admin: PublicKey;
   treasury: PublicKey;
   merkleTree: PublicKey;
-  collectionMint: PublicKey;
-  collectionMetadata: PublicKey;
-  collectionMasterEdition: PublicKey;
+  coreCollection: PublicKey;
   priceLamports: bigint;
   maxSupply: number;
   maxPerTx: number;
@@ -111,11 +111,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 32;
   const merkleTree = readPubkey(data, o);
   o += 32;
-  const collectionMint = readPubkey(data, o);
-  o += 32;
-  const collectionMetadata = readPubkey(data, o);
-  o += 32;
-  const collectionMasterEdition = readPubkey(data, o);
+  const coreCollection = readPubkey(data, o);
   o += 32;
 
   const priceLamports = readU64(data, o);
@@ -140,9 +136,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     admin,
     treasury,
     merkleTree,
-    collectionMint,
-    collectionMetadata,
-    collectionMasterEdition,
+    coreCollection,
     priceLamports,
     maxSupply,
     maxPerTx,
@@ -180,25 +174,12 @@ function encodeMintBoxesData(quantity: number): Buffer {
   return data;
 }
 
-function collectionAuthorityRecordPda(collectionMint: PublicKey, authority: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [
-      utf8('metadata'),
-      TOKEN_METADATA_PROGRAM_ID.toBytes(),
-      collectionMint.toBytes(),
-      utf8('collection_authority'),
-      authority.toBytes(),
-    ],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-}
-
-function bubblegumSignerPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([utf8('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-}
-
 function treeAuthorityPda(merkleTree: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([merkleTree.toBytes()], BUBBLEGUM_PROGRAM_ID)[0];
+}
+
+function mplCoreCpiSignerPda(): PublicKey {
+  return PublicKey.findProgramAddressSync([utf8('mpl_core_cpi_signer')], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
 function u32LE(value: number) {
@@ -279,8 +260,7 @@ export function buildDeliverIx(
   const [configPda] = boxMinterConfigPda(programId);
 
   const treeAuthority = treeAuthorityPda(cfg.merkleTree);
-  const bubblegumSigner = bubblegumSignerPda();
-  const collectionAuthorityRecord = collectionAuthorityRecordPda(cfg.collectionMint, configPda);
+  const mplCoreCpiSigner = mplCoreCpiSignerPda();
 
   const keys = [
     { pubkey: configPda, isSigner: false, isWritable: false },
@@ -290,15 +270,12 @@ export function buildDeliverIx(
     { pubkey: cfg.treasury, isSigner: false, isWritable: true },
     { pubkey: cfg.merkleTree, isSigner: false, isWritable: true },
     { pubkey: treeAuthority, isSigner: false, isWritable: true },
-    { pubkey: cfg.collectionMint, isSigner: false, isWritable: false },
-    { pubkey: cfg.collectionMetadata, isSigner: false, isWritable: true },
-    { pubkey: cfg.collectionMasterEdition, isSigner: false, isWritable: false },
-    { pubkey: collectionAuthorityRecord, isSigner: false, isWritable: false },
-    { pubkey: bubblegumSigner, isSigner: false, isWritable: false },
+    { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+    { pubkey: mplCoreCpiSigner, isSigner: false, isWritable: false },
     { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 
@@ -325,8 +302,7 @@ export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, 
   const [configPda] = boxMinterConfigPda(programId);
 
   const treeAuthority = treeAuthorityPda(cfg.merkleTree);
-  const bubblegumSigner = bubblegumSignerPda();
-  const collectionAuthorityRecord = collectionAuthorityRecordPda(cfg.collectionMint, configPda);
+  const mplCoreCpiSigner = mplCoreCpiSignerPda();
 
   return new TransactionInstruction({
     programId,
@@ -336,15 +312,12 @@ export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, 
       { pubkey: cfg.treasury, isSigner: false, isWritable: true },
       { pubkey: cfg.merkleTree, isSigner: false, isWritable: true },
       { pubkey: treeAuthority, isSigner: false, isWritable: true },
-      { pubkey: cfg.collectionMint, isSigner: false, isWritable: false },
-      { pubkey: cfg.collectionMetadata, isSigner: false, isWritable: true },
-      { pubkey: cfg.collectionMasterEdition, isSigner: false, isWritable: false },
-      { pubkey: collectionAuthorityRecord, isSigner: false, isWritable: false },
-      { pubkey: bubblegumSigner, isSigner: false, isWritable: false },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: mplCoreCpiSigner, isSigner: false, isWritable: false },
       { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: encodeMintBoxesData(quantity),

@@ -13,15 +13,8 @@ import {
   VersionedTransaction,
   clusterApiUrl,
 } from '@solana/web3.js';
-import {
-  PROGRAM_ID as BUBBLEGUM_PROGRAM_ID,
-  MetadataArgs,
-  TokenProgramVersion,
-  TokenStandard,
-  createBurnInstruction,
-  createMintToCollectionV1Instruction,
-} from '@metaplex-foundation/mpl-bubblegum';
-import { ConcurrentMerkleTreeAccount, SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, SPL_NOOP_PROGRAM_ID } from '@solana/spl-account-compression';
+import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID } from '@metaplex-foundation/mpl-bubblegum';
+import { ConcurrentMerkleTreeAccount } from '@solana/spl-account-compression';
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
@@ -142,24 +135,17 @@ function treeAuthorityPda(tree: PublicKey) {
   return PublicKey.findProgramAddressSync([tree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
-function collectionAuthority() {
-  const secret = process.env.COLLECTION_UPDATE_AUTHORITY_SECRET;
-  if (secret) {
-    const kp = Keypair.fromSecretKey(decodeSecretKey(secret, 'COLLECTION_UPDATE_AUTHORITY_SECRET'));
-    if (!kp.publicKey.equals(collectionUpdateAuthority)) {
-      throw new Error(
-        `COLLECTION_UPDATE_AUTHORITY_SECRET pubkey ${kp.publicKey.toBase58()} does not match COLLECTION_UPDATE_AUTHORITY ${collectionUpdateAuthority.toBase58()}`,
-      );
-    }
-    return kp;
-  }
-  // Fallback: allow tree authority to act as collection authority if they match.
-  const treeAuth = treeAuthority();
-  if (treeAuth.publicKey.equals(collectionUpdateAuthority)) return treeAuth;
-  throw new Error(
-    'Missing COLLECTION_UPDATE_AUTHORITY_SECRET; set it to the collection update authority keypair used for the collection.',
-  );
-}
+// Bubblegum V2 depends on MPL-Core (even when not using Core collections).
+const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+const MPL_CORE_CPI_SIGNER = PublicKey.findProgramAddressSync([Buffer.from('mpl_core_cpi_signer')], BUBBLEGUM_PROGRAM_ID)[0];
+// Bubblegum V2 expects the Metaplex noop + compression programs (not the legacy SPL ones).
+// Names kept for backwards compatibility with existing code paths.
+const SPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+const SPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+
+// Bubblegum V2 discriminators (mpl-bubblegum 2.1.1).
+const IX_MINT_V2 = Buffer.from([120, 121, 23, 146, 173, 110, 199, 205]);
+const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
@@ -170,20 +156,12 @@ function heliusRpcUrl() {
 const rpcUrl = heliusRpcUrl();
 
 const merkleTree = new PublicKey(process.env.MERKLE_TREE || PublicKey.default.toBase58());
+// Required: MPL-Core collection address used for Bubblegum V2 mint-to-collection (and for fast Helius `grouping: ['collection', ...]` queries).
 const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
-const collectionMetadata = new PublicKey(process.env.COLLECTION_METADATA || PublicKey.default.toBase58());
-const collectionMasterEdition = new PublicKey(
-  process.env.COLLECTION_MASTER_EDITION || PublicKey.default.toBase58(),
-);
-const collectionUpdateAuthorityEnv = process.env.COLLECTION_UPDATE_AUTHORITY || PublicKey.default.toBase58();
-const collectionUpdateAuthority = new PublicKey(collectionUpdateAuthorityEnv);
+const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
-const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
-// Bubblegum program signer PDA used for CPI into Token Metadata during MintToCollectionV1.
-const bubblegumCollectionSigner = PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 
 const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
@@ -233,10 +211,8 @@ function cosigner() {
 }
 
 function ensureAuthorityKeys() {
-  // Prepared transactions require server-side signatures for the tree delegate and the collection authority.
-  // Note: Bubblegum's `collectionAuthority` account IS a required signer (see mpl-bubblegum instruction builder).
+  // Prepared transactions require a server-side signature for the tree creator/delegate.
   treeAuthority();
-  collectionAuthority();
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -365,19 +341,6 @@ function memoInstruction(data: string) {
   });
 }
 
-function collectionAuthorityRecordPda(authority: PublicKey) {
-  return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from('metadata'),
-      TOKEN_METADATA_PROGRAM_ID.toBuffer(),
-      collectionMint.toBuffer(),
-      Buffer.from('collection_authority'),
-      authority.toBuffer(),
-    ],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-}
-
 function connection() {
   return new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 }
@@ -410,13 +373,8 @@ async function ensureOnchainMintConfig(force = false) {
 
   ensureAuthorityKeys();
   assertConfiguredPublicKey(merkleTree, 'MERKLE_TREE');
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
-  assertConfiguredPublicKey(collectionMetadata, 'COLLECTION_METADATA');
-  assertConfiguredPublicKey(collectionMasterEdition, 'COLLECTION_MASTER_EDITION');
-
-  const collectionAuthoritySigner = collectionAuthority();
-  const recordPda = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
-  const pubkeys = [merkleTree, collectionMint, collectionMetadata, collectionMasterEdition, recordPda];
+  const treeConfig = treeAuthorityPda(merkleTree);
+  const pubkeys = [merkleTree, treeConfig];
   const infos = await withTimeout(
     connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
     RPC_TIMEOUT_MS,
@@ -427,16 +385,7 @@ async function ensureOnchainMintConfig(force = false) {
   for (let i = 0; i < pubkeys.length; i += 1) {
     if (infos[i]) continue;
     const key = pubkeys[i];
-    const label =
-      key.equals(merkleTree)
-        ? 'MERKLE_TREE'
-        : key.equals(collectionMint)
-          ? 'COLLECTION_MINT'
-          : key.equals(collectionMetadata)
-            ? 'COLLECTION_METADATA'
-            : key.equals(collectionMasterEdition)
-              ? 'COLLECTION_MASTER_EDITION'
-              : 'COLLECTION_AUTHORITY_RECORD_PDA';
+    const label = key.equals(merkleTree) ? 'MERKLE_TREE' : 'BUBBLEGUM_TREE_CONFIG_PDA';
     missing[label] = key.toBase58();
   }
 
@@ -447,9 +396,7 @@ async function ensureOnchainMintConfig(force = false) {
       'On-chain mint config is missing or mismatched. Re-run `npm run box-minter:deploy-all`, update functions env, and redeploy.',
       {
         missing,
-        bubblegumSigner: bubblegumCollectionSigner.toBase58(),
-        collectionAuthority: collectionAuthoritySigner.publicKey.toBase58(),
-        expectedCollectionAuthorityRecordPda: recordPda.toBase58(),
+        treeConfig: treeConfig.toBase58(),
       },
     );
   }
@@ -476,6 +423,24 @@ type MetadataExtra = {
   receiptTarget?: 'box' | 'figure';
 };
 
+type BubblegumCreatorV2 = {
+  address: PublicKey;
+  verified: boolean;
+  share: number;
+};
+
+type BubblegumMetadataArgsV2 = {
+  name: string;
+  symbol: string;
+  uri: string;
+  sellerFeeBasisPoints: number;
+  primarySaleHappened: boolean;
+  isMutable: boolean;
+  tokenStandard: 'NonFungible';
+  creators: BubblegumCreatorV2[];
+  collection: PublicKey;
+};
+
 function normalizeBoxId(boxId?: string) {
   if (!boxId) return undefined;
   const numeric = Number(boxId);
@@ -484,7 +449,8 @@ function normalizeBoxId(boxId?: string) {
   return match?.[0];
 }
 
-function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extra?: MetadataExtra): MetadataArgs {
+function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extra?: MetadataExtra): BubblegumMetadataArgsV2 {
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   const dudes = (extra?.dudeIds || []).filter((id) => Number.isFinite(id)) as number[];
   const primaryDudeId = dudes[0] ?? index;
   const boxRef = normalizeBoxId(extra?.boxId);
@@ -519,12 +485,113 @@ function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extr
     creators: [{ address: treeAuthority().publicKey, verified: false, share: 100 }],
     primarySaleHappened: false,
     isMutable: true,
-    editionNonce: null,
-    tokenProgramVersion: TokenProgramVersion.Original,
-    tokenStandard: TokenStandard.NonFungible,
-    collection: { key: collectionMint, verified: false },
-    uses: null,
+    tokenStandard: 'NonFungible',
+    collection: collectionMint,
   };
+}
+
+function borshString(value: string): Buffer {
+  const bytes = Buffer.from(value, 'utf8');
+  return Buffer.concat([u32LE(bytes.length), bytes]);
+}
+
+function borshBool(value: boolean): Buffer {
+  return Buffer.from([value ? 1 : 0]);
+}
+
+function borshOptionBytes(value: Uint8Array | null | undefined): Buffer {
+  if (!value) return Buffer.from([0]);
+  const buf = Buffer.from(value);
+  return Buffer.concat([Buffer.from([1]), u32LE(buf.length), buf]);
+}
+
+function borshOptionU8(value: number | null | undefined): Buffer {
+  if (value === null || value === undefined) return Buffer.from([0]);
+  return Buffer.from([1, value & 0xff]);
+}
+
+function borshOptionPubkey(value: PublicKey | null | undefined): Buffer {
+  if (!value) return Buffer.from([0]);
+  return Buffer.concat([Buffer.from([1]), value.toBuffer()]);
+}
+
+function encodeCreatorsV2(creators: BubblegumCreatorV2[]): Buffer {
+  const parts: Buffer[] = [u32LE(creators.length)];
+  for (const c of creators) {
+    parts.push(c.address.toBuffer(), borshBool(Boolean(c.verified)), Buffer.from([c.share & 0xff]));
+  }
+  return Buffer.concat(parts);
+}
+
+function encodeMetadataArgsV2(metadata: BubblegumMetadataArgsV2): Buffer {
+  // TokenStandard enum (mpl-bubblegum): NonFungible = 0.
+  const tokenStandard = metadata.tokenStandard === 'NonFungible' ? 0 : 0;
+  const tokenStandardOpt = Buffer.from([1, tokenStandard]); // Some(TokenStandard)
+
+  return Buffer.concat([
+    borshString(metadata.name),
+    borshString(metadata.symbol),
+    borshString(metadata.uri),
+    u16LE(metadata.sellerFeeBasisPoints),
+    borshBool(Boolean(metadata.primarySaleHappened)),
+    borshBool(Boolean(metadata.isMutable)),
+    tokenStandardOpt,
+    encodeCreatorsV2(metadata.creators || []),
+    borshOptionPubkey(metadata.collection),
+  ]);
+}
+
+function encodeMintV2Args(metadata: BubblegumMetadataArgsV2): Buffer {
+  // MintV2InstructionArgs = { metadata, asset_data: Option<Vec<u8>>, asset_data_schema: Option<AssetDataSchema> }
+  // We omit asset_data + schema to keep the leaf schema defaults (smaller + consistent with burnV2).
+  return Buffer.concat([encodeMetadataArgsV2(metadata), borshOptionBytes(null), Buffer.from([0])]);
+}
+
+function encodeBurnV2Args(args: {
+  root: Uint8Array;
+  dataHash: Uint8Array;
+  creatorHash: Uint8Array;
+  nonce: bigint;
+  index: number;
+}): Buffer {
+  if (args.root.length !== 32 || args.dataHash.length !== 32 || args.creatorHash.length !== 32) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
+  }
+  // BurnV2InstructionArgs = { root, data_hash, creator_hash, asset_data_hash: Option<[32]>, flags: Option<u8>, nonce, index }
+  // We omit asset_data_hash + flags (defaults).
+  return Buffer.concat([
+    Buffer.from(args.root),
+    Buffer.from(args.dataHash),
+    Buffer.from(args.creatorHash),
+    Buffer.from([0]), // asset_data_hash: None
+    Buffer.from([0]), // flags: None
+    u64LE(args.nonce),
+    u32LE(args.index),
+  ]);
+}
+
+function createMintV2Ix(args: { payer: PublicKey; treeCreatorOrDelegate: PublicKey; metadata: BubblegumMetadataArgsV2 }) {
+  const treeConfig = treeAuthorityPda(merkleTree);
+  return new TransactionInstruction({
+    programId: BUBBLEGUM_PROGRAM_ID,
+    keys: [
+      { pubkey: treeConfig, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false },
+      // Bubblegum V2: collection authority must sign when minting into an MPL-Core collection.
+      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false }, // collection_authority (delegate)
+      { pubkey: args.payer, isSigner: false, isWritable: false }, // leaf_owner
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // leaf_delegate (None)
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
+      { pubkey: collectionMint, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([IX_MINT_V2, encodeMintV2Args(args.metadata)]),
+  });
 }
 
 async function buildMintInstructions(
@@ -537,40 +604,22 @@ async function buildMintInstructions(
   // Fail fast with a helpful error if env/on-chain prereqs don't match the current deployment.
   await ensureOnchainMintConfig();
   const instructions: TransactionInstruction[] = [];
-  const collectionAuthoritySigner = collectionAuthority();
-  const collectionAuthorityRecord = collectionAuthorityRecordPda(collectionAuthoritySigner.publicKey);
   const treeAuthorityKey = treeAuthority();
-  const treeAuthorityConfig = treeAuthorityPda(merkleTree);
 
   for (let i = 0; i < quantity; i += 1) {
     const perMintDudeIds =
       extra?.dudeIds && (quantity > 1 || kind === 'dude') ? [extra.dudeIds[i]] : extra?.dudeIds;
-    const metadataArgs = buildMetadata(kind, startIndex + i, {
+    const metadata = buildMetadata(kind, startIndex + i, {
       boxId: extra?.boxId,
       dudeIds: perMintDudeIds?.filter((id) => Number.isFinite(id)) as number[] | undefined,
       receiptTarget: extra?.receiptTarget,
     });
     instructions.push(
-      createMintToCollectionV1Instruction(
-        {
+      createMintV2Ix({
           payer: owner,
-          merkleTree,
-          treeAuthority: treeAuthorityConfig,
-          treeDelegate: treeAuthorityKey.publicKey,
-          leafOwner: owner,
-          leafDelegate: owner,
-          collectionAuthority: collectionAuthoritySigner.publicKey,
-          collectionMint,
-          collectionMetadata,
-          editionAccount: collectionMasterEdition,
-          bubblegumSigner: bubblegumCollectionSigner,
-          compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-          logWrapper: SPL_NOOP_PROGRAM_ID,
-          collectionAuthorityRecordPda: collectionAuthorityRecord,
-          tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
-        },
-        { metadataArgs },
-      ),
+        treeCreatorOrDelegate: treeAuthorityKey.publicKey,
+        metadata,
+      }),
     );
   }
 
@@ -847,11 +896,13 @@ function isMonsAsset(asset: any): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
-  // Primary: collection grouping match.
-  const groupingMatch =
-    !collectionMintStr ||
-    (asset?.grouping || []).some((g: any) => g?.group_key === 'collection' && g?.group_value === collectionMintStr);
+  // Primary: collection grouping match (if configured).
+  if (collectionMintStr) {
+    const groupingMatch = (asset?.grouping || []).some(
+      (g: any) => g?.group_key === 'collection' && g?.group_value === collectionMintStr,
+    );
   if (groupingMatch) return true;
+  }
 
   // Fallbacks: allow inventory to work during collection-indexing delays.
   const tree = asset?.compression?.tree || asset?.compression?.treeId;
@@ -1042,26 +1093,40 @@ async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?
   const maxDepthUsed = maxDepth || proofNodes.length || 0;
   const leafIndex = normalizeLeafIndex({ nodeIndex: Number(proof.node_index ?? asset.compression?.leaf_id ?? 0), maxDepth: maxDepthUsed });
 
-  const ix = createBurnInstruction(
-    {
-      treeAuthority: treeAuthorityPda(merkle),
-      leafOwner: new PublicKey(asset.ownership.owner),
-      leafDelegate: owner,
-      merkleTree: merkle,
-      logWrapper: SPL_NOOP_PROGRAM_ID,
-      compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      anchorRemainingAccounts: proofPath,
-    },
-    {
-      root: Array.from(bs58.decode(proof.root)),
-      dataHash: Array.from(bs58.decode(asset.compression.data_hash)),
-      creatorHash: Array.from(bs58.decode(asset.compression.creator_hash)),
-      nonce: leafNonce,
+  const rootBytes = bs58.decode(String(proof.root || ''));
+  const dataHashBytes = bs58.decode(String(asset?.compression?.data_hash || ''));
+  const creatorHashBytes = bs58.decode(String(asset?.compression?.creator_hash || ''));
+  const nonce = normalizeU64(leafNonce, 'nonce');
+  const leafOwner = new PublicKey(asset?.ownership?.owner);
+
+  return new TransactionInstruction({
+    programId: BUBBLEGUM_PROGRAM_ID,
+    keys: [
+      { pubkey: treeAuthorityPda(merkle), isSigner: false, isWritable: true }, // tree_config
+      { pubkey: owner, isSigner: true, isWritable: true }, // payer
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // authority (None)
+      { pubkey: leafOwner, isSigner: false, isWritable: false }, // leaf_owner
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // leaf_delegate (None)
+      { pubkey: merkle, isSigner: false, isWritable: true },
+      { pubkey: collectionMint, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...proofPath,
+    ],
+    data: Buffer.concat([
+      IX_BURN_V2,
+      encodeBurnV2Args({
+        root: rootBytes,
+        dataHash: dataHashBytes,
+        creatorHash: creatorHashBytes,
+        nonce,
       index: leafIndex,
-    },
-  );
-  return ix;
+      }),
+    ]),
+  });
 }
 
 async function assignDudes(boxId: string): Promise<number[]> {
@@ -1117,12 +1182,7 @@ function certificateIndexForItem(assetId: string, kind: 'box' | 'dude', dudeIds?
 function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
-  const signers: Keypair[] = [treeAuthority()];
-  const ca = collectionAuthority();
-  if (!signers.some((s) => s.publicKey.equals(ca.publicKey))) {
-    signers.push(ca);
-  }
-  tx.sign(signers);
+  tx.sign([treeAuthority()]);
   return tx;
 }
 
@@ -1368,6 +1428,8 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     );
   }
   const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const cfgMerkleTree = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32 + 32, 8 + 32 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new functions.https.HttpsError(
@@ -1377,18 +1439,34 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     );
   }
 
+  // Ensure env matches on-chain config (helps catch mismatched deployments).
+  assertConfiguredPublicKey(merkleTree, 'MERKLE_TREE');
+  if (!merkleTree.equals(cfgMerkleTree)) {
+    throw new functions.https.HttpsError('failed-precondition', 'MERKLE_TREE env var does not match on-chain config', {
+      env: merkleTree.toBase58(),
+      onchain: cfgMerkleTree.toBase58(),
+    });
+  }
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+  if (!collectionMint.equals(cfgCoreCollection)) {
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
+      env: collectionMint.toBase58(),
+      onchain: cfgCoreCollection.toBase58(),
+    });
+  }
+
   // Assign dudes deterministically per box, reserving globally unique IDs in Firestore.
   const dudeIds = await assignDudes(boxAssetId);
 
   // Normalize proof + truncate canopy nodes to keep the tx under the size limit.
   const proofTreeStr = String((proof as any)?.merkleTree || (proof as any)?.merkle_tree || (proof as any)?.treeId || '');
-  if (proofTreeStr && proofTreeStr !== merkleTree.toBase58()) {
+  if (proofTreeStr && proofTreeStr !== cfgMerkleTree.toBase58()) {
     throw new functions.https.HttpsError('failed-precondition', 'Box is from a different Merkle tree than the configured drop', {
       boxTree: proofTreeStr,
-      configuredTree: merkleTree.toBase58(),
+      configuredTree: cfgMerkleTree.toBase58(),
     });
   }
-  const { canopyDepth, maxDepth } = await getTreeParams(merkleTree);
+  const { canopyDepth, maxDepth } = await getTreeParams(cfgMerkleTree);
   const fullProof = Array.isArray((proof as any)?.proof) ? ((proof as any).proof as any[]).filter((p) => typeof p === 'string') : [];
   const truncatedProof = truncateProofByCanopy(fullProof as string[], canopyDepth);
 
@@ -1406,7 +1484,7 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
       leafIndex,
       maxDepth: maxDepthUsed,
       maxLeaves,
-      tree: merkleTree.toBase58(),
+      tree: cfgMerkleTree.toBase58(),
     });
   }
 
@@ -1416,17 +1494,14 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
       { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
       { pubkey: signer.publicKey, isSigner: true, isWritable: false },
       { pubkey: ownerPk, isSigner: true, isWritable: true },
-      { pubkey: merkleTree, isSigner: false, isWritable: true },
-      { pubkey: treeAuthorityPda(merkleTree), isSigner: false, isWritable: true },
-      { pubkey: collectionMint, isSigner: false, isWritable: false },
-      { pubkey: collectionMetadata, isSigner: false, isWritable: true },
-      { pubkey: collectionMasterEdition, isSigner: false, isWritable: false },
-      { pubkey: collectionAuthorityRecordPda(boxMinterConfigPda), isSigner: false, isWritable: false },
-      { pubkey: bubblegumCollectionSigner, isSigner: false, isWritable: false },
+      { pubkey: cfgMerkleTree, isSigner: false, isWritable: true },
+      { pubkey: treeAuthorityPda(cfgMerkleTree), isSigner: false, isWritable: true },
+      { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
       { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ...truncatedProof.map((p) => ({ pubkey: new PublicKey(p), isSigner: false, isWritable: false })),
     ],

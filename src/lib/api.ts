@@ -139,6 +139,7 @@ const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
 const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
 const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
+const heliusMerkleTree = (import.meta.env.VITE_MERKLE_TREE || '').trim();
 
 type DasAsset = Record<string, any>;
 
@@ -301,10 +302,14 @@ function isMonsAsset(asset: DasAsset): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
-  // Strict filter: only show assets from the configured collection.
-  // This prevents leaking lookalike items from unrelated collections when the drop has 0 mints.
-  if (!heliusCollection) return false;
-  return assetMatchesCollection(asset, heliusCollection);
+  // Prefer collection grouping when configured.
+  if (heliusCollection && assetMatchesCollection(asset, heliusCollection)) return true;
+
+  // Fall back to the drop's Merkle tree (handles indexing delays or when collection grouping is unavailable).
+  const tree: string = (asset as any)?.compression?.tree || (asset as any)?.compression?.treeId || '';
+  if (heliusMerkleTree && tree && tree === heliusMerkleTree) return true;
+
+  return false;
 }
 
 function transformInventoryItem(asset: DasAsset): InventoryItem | null {
@@ -488,11 +493,11 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
     },
   };
 
-  if (!heliusCollection) return [];
-
-  const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
-  const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
-  if (groupedItems.length) return groupedItems.filter(isMonsAsset);
+  if (heliusCollection) {
+    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
+    const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
+    if (groupedItems.length) return groupedItems.filter(isMonsAsset);
+  }
 
   const ungrouped = await heliusRpc<any>('searchAssets', baseParams);
   const items = Array.isArray(ungrouped?.items) ? ungrouped.items : [];

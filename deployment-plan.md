@@ -12,7 +12,7 @@ Step-by-step guide to ship mons.shop end-to-end (Solana + Firebase Cloud Functio
   cd functions && npm install
   ```
 
-## 1) Solana setup (box minter program, collection, cNFT tree, vault)
+## 1) Solana setup (box minter program, cNFT tree, vault)
 All commands run from repo root unless noted.
 
 1. Pick a cluster and fund the payer keypair:
@@ -21,7 +21,7 @@ All commands run from repo root unless noted.
    solana config set --url https://api.devnet.solana.com
    solana airdrop 2
    ```
-2. Deploy the **box minter program** (Anchor) + create collection + create cNFT tree + configure delegation:
+2. Deploy the **box minter program** (Anchor) + create Bubblegum V2 cNFT tree + configure delegation:
    - One-command deploy (auto-generates a fresh program id each run):
      ```bash
      npm run box-minter:deploy-all -- \
@@ -29,8 +29,8 @@ All commands run from repo root unless noted.
        --keypair ~/.config/solana/id.json \
        --rpc https://api.devnet.solana.com
      ```
-   - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
- Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `MERKLE_TREE`, `COLLECTION_*`, `TREE_AUTHORITY_SECRET`).
+- Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
+Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `MERKLE_TREE`, `TREE_AUTHORITY_SECRET`, `COSIGNER_SECRET`).
 
 3. Generate the shipping vault:
    ```bash
@@ -38,7 +38,7 @@ All commands run from repo root unless noted.
    ```
    Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
 4. Decide supplies & metadata:
-   - Box minting parameters + collection metadata are hard-coded in `scripts/deploy-all-box-minter.ts` (edit there before deploying).
+   - Box minting parameters are hard-coded in `scripts/deploy-all-box-minter.ts` (edit there before deploying).
    - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
 5. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
 
@@ -58,10 +58,7 @@ Keys in the template:
 - `MERKLE_TREE`
 - `TREE_AUTHORITY_SECRET`
 - `COSIGNER_SECRET` (optional, defaults to tree authority if left blank)
-- `COLLECTION_MINT`
-- `COLLECTION_METADATA`
-- `COLLECTION_MASTER_EDITION`
-- `COLLECTION_UPDATE_AUTHORITY`
+- `COLLECTION_MINT` (MPL-Core collection address used by Bubblegum V2 mint-to-collection)
 - `DELIVERY_VAULT`
 - `METADATA_BASE`
 

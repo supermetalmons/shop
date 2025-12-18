@@ -15,28 +15,38 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
+import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID } from '@metaplex-foundation/mpl-bubblegum';
 import {
-  MINT_SIZE,
-  TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountInstruction,
-  createInitializeMintInstruction,
-  createMintToInstruction,
-  getAssociatedTokenAddress,
-  getMinimumBalanceForRentExemptMint,
-} from '@solana/spl-token';
-import {
-  PROGRAM_ID as TOKEN_METADATA_PROGRAM_ID,
-  createApproveCollectionAuthorityInstruction,
-  createCreateMasterEditionV3Instruction,
-  createCreateMetadataAccountV3Instruction,
-} from '@metaplex-foundation/mpl-token-metadata';
-import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID, createCreateTreeInstruction } from '@metaplex-foundation/mpl-bubblegum';
-import {
-  createAllocTreeIx,
-  SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-  SPL_NOOP_PROGRAM_ID,
+  getConcurrentMerkleTreeAccountSize,
 } from '@solana/spl-account-compression';
 import type { ValidDepthSizePair } from '@solana/spl-account-compression';
+
+// MPL Core program id (Bubblegum V2 dependency).
+const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+// Bubblegum V2 expects the Metaplex noop + compression programs (not the legacy SPL ones).
+const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+
+async function createAllocTreeV2Ix(
+  connection: Connection,
+  merkleTree: PublicKey,
+  payer: PublicKey,
+  depthSizePair: ValidDepthSizePair,
+  canopyDepth: number,
+): Promise<TransactionInstruction> {
+  const requiredSpace = getConcurrentMerkleTreeAccountSize(
+    depthSizePair.maxDepth,
+    depthSizePair.maxBufferSize,
+    canopyDepth ?? 0,
+  );
+  return SystemProgram.createAccount({
+    fromPubkey: payer,
+    lamports: await connection.getMinimumBalanceForRentExemption(requiredSpace),
+    newAccountPubkey: merkleTree,
+    programId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    space: requiredSpace,
+  });
+}
 
 /**
  * Minimal argv flag parser.
@@ -91,6 +101,148 @@ function borshString(value: string): Buffer {
   return Buffer.concat([u32LE(bytes.length), bytes]);
 }
 
+function u8(value: number): Buffer {
+  return Buffer.from([value & 0xff]);
+}
+
+function borshOption(value: Buffer | null | undefined): Buffer {
+  if (!value) return Buffer.from([0]);
+  return Buffer.concat([Buffer.from([1]), value]);
+}
+
+function encodeUmiArray(items: Buffer[]): Buffer {
+  return Buffer.concat([u32LE(items.length), ...items]);
+}
+
+/**
+ * MPL-Core: BasePluginAuthority data enum.
+ * Variants (umi-serializers scalar enums):
+ * 0=None, 1=Owner, 2=UpdateAuthority, 3=Address { address: Pubkey }
+ */
+function encodeBasePluginAuthorityAddress(address: PublicKey): Buffer {
+  return Buffer.concat([u8(3), address.toBuffer()]);
+}
+
+function encodeBasePluginAuthorityUpdateAuthority(): Buffer {
+  return u8(2);
+}
+
+/**
+ * MPL-Core: PluginType scalar enum, BubblegumV2 = 15 (from mpl-core 1.7.0).
+ */
+const MPL_CORE_PLUGIN_TYPE_BUBBLEGUM_V2 = 15;
+
+/**
+ * MPL-Core: Plugin data enum, BubblegumV2 variant index = 15 and has an empty payload.
+ *
+ * This matches `getPluginSerializer()` in mpl-core 1.7.0:
+ * Royalties=0 ... Autograph=14, BubblegumV2=15, FreezeExecute=16, PermanentFreezeExecute=17.
+ */
+function encodePluginBubblegumV2(): Buffer {
+  return u8(15);
+}
+
+function encodePluginUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
+  // MPL-Core Plugin data enum (mpl-core 1.7.0): UpdateDelegate = 4.
+  // Variant payload: UpdateDelegate { additionalDelegates: Vec<Pubkey> }.
+  return Buffer.concat([u8(4), u32LE(additionalDelegates.length), ...additionalDelegates.map((k) => k.toBuffer())]);
+}
+
+/**
+ * MPL-Core: PluginAuthorityPair { plugin: Plugin, authority: Option<BasePluginAuthority> }.
+ */
+function encodePluginAuthorityPair(args: { plugin: Buffer; authority: Buffer | null }): Buffer {
+  return Buffer.concat([args.plugin, borshOption(args.authority)]);
+}
+
+/**
+ * MPL-Core instruction: create_collection_v2 (discriminator = 21, mpl-core 1.7.0).
+ *
+ * Data layout (umi-serializers, which are Borsh-compatible here):
+ * - u8 discriminator (21)
+ * - string name
+ * - string uri
+ * - Option<Vec<PluginAuthorityPair>> plugins
+ * - Option<Vec<BaseExternalPluginAdapterInitInfo>> externalPluginAdapters
+ *
+ * We pass Some([BubblegumV2 plugin]) and Some([]) external adapters (matches mpl-core defaulting logic).
+ */
+const IX_MPL_CORE_CREATE_COLLECTION_V2 = 21;
+function buildCreateMplCoreCollectionV2Ix(args: {
+  collection: PublicKey;
+  updateAuthority: PublicKey;
+  payer: PublicKey;
+  systemProgram: PublicKey;
+  name: string;
+  uri: string;
+  updateDelegate: PublicKey;
+}): TransactionInstruction {
+  const plugins = [
+    // Required for Bubblegum V2 mint-to-collection.
+    encodePluginAuthorityPair({
+      plugin: encodePluginBubblegumV2(),
+      authority: null,
+    }),
+    // Delegate collection authority to the program PDA using the UpdateDelegate plugin.
+    // Bubblegum V2 accepts either the collection update authority or a delegated authority.
+    encodePluginAuthorityPair({
+      plugin: encodePluginUpdateDelegate([args.updateDelegate]),
+      authority: null,
+    }),
+  ];
+
+  const pluginsOpt = borshOption(encodeUmiArray(plugins));
+  // Default in mpl-core generated instruction is `[]` (i.e. Some([])), not None.
+  const externalAdaptersOpt = borshOption(encodeUmiArray([]));
+
+  const data = Buffer.concat([
+    u8(IX_MPL_CORE_CREATE_COLLECTION_V2),
+    borshString(args.name),
+    borshString(args.uri),
+    pluginsOpt,
+    externalAdaptersOpt,
+  ]);
+
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.collection, isSigner: true, isWritable: true },
+      { pubkey: args.updateAuthority, isSigner: false, isWritable: false },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.systemProgram, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+/**
+ * MPL-Core instruction: approve_collection_plugin_authority_v1 (discriminator = 9, mpl-core 1.7.0).
+ * Data: u8 discriminator, u8 pluginType, BasePluginAuthority newAuthority
+ */
+const IX_MPL_CORE_APPROVE_COLLECTION_PLUGIN_AUTHORITY_V1 = 9;
+function buildApproveCollectionPluginAuthorityV1Ix(args: {
+  collection: PublicKey;
+  payer: PublicKey;
+  authority: PublicKey;
+  systemProgram: PublicKey;
+  logWrapper: PublicKey;
+  pluginType: number;
+  newAuthority: Buffer;
+}): TransactionInstruction {
+  const data = Buffer.concat([u8(IX_MPL_CORE_APPROVE_COLLECTION_PLUGIN_AUTHORITY_V1), u8(args.pluginType), args.newAuthority]);
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.collection, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: args.systemProgram, isSigner: false, isWritable: false },
+      { pubkey: args.logWrapper, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
 function readBorshString(buf: Buffer, offset: number): { value: string; offset: number } {
   const len = buf.readUInt32LE(offset);
   const start = offset + 4;
@@ -107,11 +259,7 @@ function decodeBoxMinterConfig(data: Buffer) {
   o += 32;
   const merkleTree = new PublicKey(data.subarray(o, o + 32));
   o += 32;
-  const collectionMint = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const collectionMetadata = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const collectionMasterEdition = new PublicKey(data.subarray(o, o + 32));
+  const coreCollection = new PublicKey(data.subarray(o, o + 32));
   o += 32;
   const priceLamports = data.readBigUInt64LE(o);
   o += 8;
@@ -133,9 +281,7 @@ function decodeBoxMinterConfig(data: Buffer) {
     admin,
     treasury,
     merkleTree,
-    collectionMint,
-    collectionMetadata,
-    collectionMasterEdition,
+    coreCollection,
     priceLamports,
     maxSupply,
     maxPerTx,
@@ -155,23 +301,6 @@ function bubblegumTreeConfigPda(tree: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([tree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
-function bubblegumCollectionSignerPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from('collection_cpi')], BUBBLEGUM_PROGRAM_ID)[0];
-}
-
-function collectionAuthorityRecordPda(collectionMint: PublicKey, authority: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [
-      Buffer.from('metadata'),
-      TOKEN_METADATA_PROGRAM_ID.toBuffer(),
-      collectionMint.toBuffer(),
-      Buffer.from('collection_authority'),
-      authority.toBuffer(),
-    ],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-}
-
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
 const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
 
@@ -180,9 +309,7 @@ function buildInitializeIx(args: {
   admin: PublicKey;
   treasury: PublicKey;
   merkleTree: PublicKey;
-  collectionMint: PublicKey;
-  collectionMetadata: PublicKey;
-  collectionMasterEdition: PublicKey;
+  coreCollection: PublicKey;
   priceLamports: bigint;
   maxSupply: number;
   maxPerTx: number;
@@ -208,9 +335,7 @@ function buildInitializeIx(args: {
       { pubkey: args.admin, isSigner: true, isWritable: true },
       { pubkey: args.treasury, isSigner: false, isWritable: false },
       { pubkey: args.merkleTree, isSigner: false, isWritable: false },
-      { pubkey: args.collectionMint, isSigner: false, isWritable: false },
-      { pubkey: args.collectionMetadata, isSigner: false, isWritable: false },
-      { pubkey: args.collectionMasterEdition, isSigner: false, isWritable: false },
+      { pubkey: args.coreCollection, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,
@@ -219,6 +344,50 @@ function buildInitializeIx(args: {
 
 // Bubblegum discriminator (from mpl-bubblegum 2.1.1): [253,118,66,37,190,49,154,102]
 const IX_SET_TREE_DELEGATE = Buffer.from([253, 118, 66, 37, 190, 49, 154, 102]);
+
+// Bubblegum discriminator for CreateTreeV2 (`create_tree_config_v2`, mpl-bubblegum 2.1.1):
+// [55,99,95,215,142,203,227,205]
+const IX_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
+
+function borshOptionBool(value: boolean | null | undefined): Buffer {
+  if (value === null || value === undefined) return Buffer.from([0]);
+  return Buffer.from([1, value ? 1 : 0]);
+}
+
+function buildCreateTreeConfigV2Ix(args: {
+  treeConfig: PublicKey;
+  merkleTree: PublicKey;
+  payer: PublicKey;
+  logWrapper: PublicKey;
+  compressionProgram: PublicKey;
+  systemProgram: PublicKey;
+  maxDepth: number;
+  maxBufferSize: number;
+  public?: boolean | null;
+}): TransactionInstruction {
+  const data = Buffer.concat([
+    IX_CREATE_TREE_CONFIG_V2,
+    u32LE(args.maxDepth),
+    u32LE(args.maxBufferSize),
+    borshOptionBool(args.public ?? null),
+  ]);
+
+  // Note: `tree_creator` is optional in Bubblegum and defaults to `payer`.
+  // When omitted, Bubblegum uses its own program id as a placeholder account.
+  return new TransactionInstruction({
+    programId: BUBBLEGUM_PROGRAM_ID,
+    keys: [
+      { pubkey: args.treeConfig, isSigner: false, isWritable: true },
+      { pubkey: args.merkleTree, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // tree_creator placeholder
+      { pubkey: args.logWrapper, isSigner: false, isWritable: false },
+      { pubkey: args.compressionProgram, isSigner: false, isWritable: false },
+      { pubkey: args.systemProgram, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
 
 function buildSetTreeDelegateIx(args: {
   treeConfig: PublicKey;
@@ -340,6 +509,24 @@ function cargoLockHasPackage(onchainDir: string, name: string, version: string):
   return re.test(content);
 }
 
+async function assertMplCoreCollection(connection: Connection, coreCollection: PublicKey) {
+  const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
+  if (!info) {
+    throw new Error(
+      `Missing core collection account: ${coreCollection.toBase58()}\n` +
+        `Make sure you passed a valid MPL-Core collection address for this cluster via --core-collection.`,
+    );
+  }
+  if (!info.owner.equals(MPL_CORE_PROGRAM_ID)) {
+    throw new Error(
+      `coreCollection ${coreCollection.toBase58()} is not owned by the MPL-Core program.\n` +
+        `Expected owner: ${MPL_CORE_PROGRAM_ID.toBase58()}\n` +
+        `Actual owner  : ${info.owner.toBase58()}\n` +
+        `Pass an MPL-Core collection address (not a Token Metadata mint) via --core-collection.`,
+    );
+  }
+}
+
 async function main() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -355,14 +542,17 @@ async function main() {
   // Keep this script deterministic: edit constants below to change metadata/supply/price.
   const cluster = (getArg('--cluster', 'devnet') || 'devnet').toLowerCase();
   const rpc = getArg('--rpc');
+  const coreCollectionArg = getArg('--core-collection');
   const keypairPath = path.resolve(resolveHome(requireArg('--keypair', getArg('--keypair'))));
   const solanaUrl = rpc || cluster;
   const solanaBinDir = readSolanaActiveReleaseBinDir();
   const toolEnv = solanaBinDir ? { PATH: `${solanaBinDir}:${process.env.PATH || ''}` } : undefined;
+  const rpcUrlForApps = rpc || clusterApiUrl(cluster as any);
 
-  console.log('--- deploy ALL (program + collection + tree + delegation) ---');
+  console.log('--- deploy ALL (program + tree + delegation) ---');
   console.log('cluster:', cluster);
   if (rpc) console.log('rpc    :', rpc);
+  if (coreCollectionArg) console.log('core collection:', coreCollectionArg);
   if (keypairPath) console.log('keypair:', keypairPath);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
@@ -456,11 +646,6 @@ async function main() {
     // (Your on-chain program can also accept a full *.json uri for a single shared metadata file.)
     uriBase: `${DROP_METADATA_BASE}/json/boxes/`,
 
-    // Collection NFT metadata (1/1 master edition)
-    collectionName: 'little swag figures',
-    collectionSymbol: 'LSF',
-    collectionUri: `${DROP_METADATA_BASE}/collection.json`,
-
     // Merkle tree params (compressed mints)
     treeDepth: 14,
     treeBufferSize: 64,
@@ -479,7 +664,7 @@ async function main() {
   const existingCfg = await connection.getAccountInfo(configPda, { commitment: 'confirmed' });
   if (existingCfg) {
     const cfg = decodeBoxMinterConfig(existingCfg.data);
-    console.log('\nConfig PDA already exists (skipping collection/tree/init):', configPda.toBase58());
+    console.log('\nConfig PDA already exists (skipping tree/init):', configPda.toBase58());
     console.log(
       `Minted: ${cfg.minted}/${cfg.maxSupply} · price(lamports): ${cfg.priceLamports.toString()} · max/tx: ${cfg.maxPerTx}`,
     );
@@ -488,27 +673,43 @@ async function main() {
       console.warn(`    On-chain admin pubkey : ${cfg.admin.toBase58()}`);
       console.warn('    (That is fine for reading config, but secrets below won’t be printed.)');
     }
+    await assertMplCoreCollection(connection, cfg.coreCollection);
+
     console.log('');
     console.log('--- env for frontend ---');
     console.log(`VITE_SOLANA_CLUSTER=${cluster}`);
+    console.log(`VITE_RPC_URL=${rpcUrlForApps}`);
     console.log(`VITE_BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-    console.log(`VITE_COLLECTION_MINT=${cfg.collectionMint.toBase58()}`);
     console.log(`VITE_MERKLE_TREE=${cfg.merkleTree.toBase58()}`);
+    console.log(`VITE_COLLECTION_MINT=${cfg.coreCollection.toBase58()}`);
+    console.log('# Also required (not generated here):');
+    console.log('# VITE_HELIUS_API_KEY=...');
+    console.log('# VITE_FIREBASE_...=...');
+    console.log('# VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=...');
     console.log('');
     console.log('--- env for functions ---');
+    console.log(`SOLANA_CLUSTER=${cluster}`);
     console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
     console.log(`MERKLE_TREE=${cfg.merkleTree.toBase58()}`);
-    console.log(`COLLECTION_MINT=${cfg.collectionMint.toBase58()}`);
-    console.log(`COLLECTION_METADATA=${cfg.collectionMetadata.toBase58()}`);
-    console.log(`COLLECTION_MASTER_EDITION=${cfg.collectionMasterEdition.toBase58()}`);
-    console.log(`COLLECTION_UPDATE_AUTHORITY=${cfg.admin.toBase58()}`);
+    console.log(`COLLECTION_MINT=${cfg.coreCollection.toBase58()}`);
+    console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
+    console.log('# Also required (not generated here):');
+    console.log('# HELIUS_API_KEY=...');
+    console.log('# DELIVERY_VAULT=...');
     if (payer.publicKey.equals(cfg.admin)) {
       console.log('# Sensitive: keep this secret offline/backed up securely.');
+      console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
       console.log(`TREE_AUTHORITY_SECRET=${bs58.encode(payer.secretKey)}`);
     } else {
-      console.log('# TREE_AUTHORITY_SECRET not printed because --keypair != on-chain admin.');
+      console.log('# COSIGNER_SECRET/TREE_AUTHORITY_SECRET not printed because --keypair != on-chain admin.');
     }
     console.log('');
+    console.log('--- notes ---');
+    console.log(
+      `Core collection must be an MPL-Core collection with the BubblegumV2 plugin enabled,\n` +
+        `and it must authorize the config PDA as a collection authority:\n` +
+        `  ${configPda.toBase58()}\n`,
+    );
     return;
   }
 
@@ -516,94 +717,74 @@ async function main() {
   const priceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.priceSol) * LAMPORTS_PER_SOL));
   const maxSupply = Number(BOX_MINTER_CONFIG.maxSupply);
   const maxPerTx = Number(BOX_MINTER_CONFIG.maxPerTx);
+  // 2) Create or reuse an MPL-Core collection with the BubblegumV2 plugin enabled.
+  // If --core-collection is omitted, we create a fresh collection and delegate BubblegumV2 plugin authority
+  // to the program config PDA so the on-chain program can mint into it.
+  const coreCollection = coreCollectionArg ? new PublicKey(coreCollectionArg) : undefined;
 
-  console.log('\n[2/4] Creating collection NFT…');
-  const mint = Keypair.generate();
-  const metadataPda = PublicKey.findProgramAddressSync(
-    [Buffer.from('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.publicKey.toBuffer()],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-  const masterEditionPda = PublicKey.findProgramAddressSync(
-    [Buffer.from('metadata'), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.publicKey.toBuffer(), Buffer.from('edition')],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-  const mintRent = await getMinimumBalanceForRentExemptMint(connection);
-  const ata = await getAssociatedTokenAddress(mint.publicKey, payer.publicKey);
+  // EDIT THESE CONSTANTS to control the MPL-Core collection metadata.
+  const CORE_COLLECTION_CONFIG = {
+    name: 'mons',
+    uri: `${DROP_METADATA_BASE}/collection.json`,
+  };
 
-  const createCollectionTx = new Transaction().add(
-    SystemProgram.createAccount({
-      fromPubkey: payer.publicKey,
-      newAccountPubkey: mint.publicKey,
-      lamports: mintRent,
-      space: MINT_SIZE,
-      programId: TOKEN_PROGRAM_ID,
-    }),
-    createInitializeMintInstruction(mint.publicKey, 0, payer.publicKey, payer.publicKey),
-    createAssociatedTokenAccountInstruction(payer.publicKey, ata, payer.publicKey, mint.publicKey),
-    createMintToInstruction(mint.publicKey, ata, payer.publicKey, 1),
-    createCreateMetadataAccountV3Instruction(
-      {
-        metadata: metadataPda,
-        mint: mint.publicKey,
-        mintAuthority: payer.publicKey,
-        payer: payer.publicKey,
-        updateAuthority: payer.publicKey,
-      },
-      {
-        createMetadataAccountArgsV3: {
-          data: {
-            name: BOX_MINTER_CONFIG.collectionName,
-            symbol: BOX_MINTER_CONFIG.collectionSymbol,
-            uri: BOX_MINTER_CONFIG.collectionUri,
-            sellerFeeBasisPoints: 0,
-            creators: [{ address: payer.publicKey, verified: true, share: 100 }],
-            collection: null,
-            uses: null,
-          },
-          isMutable: true,
-          collectionDetails: { __kind: 'V1', size: maxSupply },
-        },
-      },
-    ),
-    createCreateMasterEditionV3Instruction(
-      {
-        edition: masterEditionPda,
-        mint: mint.publicKey,
-        updateAuthority: payer.publicKey,
-        mintAuthority: payer.publicKey,
-        payer: payer.publicKey,
-        metadata: metadataPda,
-      },
-      { createMasterEditionArgs: { maxSupply: 0 } },
-    ),
-  );
-  createCollectionTx.feePayer = payer.publicKey;
-  createCollectionTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-  createCollectionTx.sign(payer, mint);
-  const collectionSig = await sendAndConfirmTransaction(connection, createCollectionTx, [payer, mint], { commitment: 'confirmed' });
-  console.log('✅ Collection created:', collectionSig);
-  console.log('  Collection mint:', mint.publicKey.toBase58());
+  let resolvedCoreCollection: PublicKey;
+  if (coreCollection) {
+    resolvedCoreCollection = coreCollection;
+    await assertMplCoreCollection(connection, resolvedCoreCollection);
+    console.log('\n[2/4] Using existing MPL-Core collection…');
+    console.log('  core collection:', resolvedCoreCollection.toBase58());
+  } else {
+    console.log('\n[2/4] Creating MPL-Core collection (Bubblegum V2)…');
+    const collection = Keypair.generate();
+    const createCollectionIx = buildCreateMplCoreCollectionV2Ix({
+      collection: collection.publicKey,
+      updateAuthority: payer.publicKey,
+      payer: payer.publicKey,
+      systemProgram: SystemProgram.programId,
+      name: CORE_COLLECTION_CONFIG.name,
+      uri: CORE_COLLECTION_CONFIG.uri,
+      updateDelegate: configPda,
+    });
+    // Create the collection with BubblegumV2 enabled and the UpdateDelegate plugin configured
+    // to include the program config PDA as a delegate authority.
+    const createCollectionTx = new Transaction().add(createCollectionIx);
+    createCollectionTx.feePayer = payer.publicKey;
+    createCollectionTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+    createCollectionTx.partialSign(collection);
+    const sig = await sendAndConfirmTransaction(connection, createCollectionTx, [payer, collection], { commitment: 'confirmed' });
+    console.log('✅ Collection created:', sig);
+    console.log('  Collection:', collection.publicKey.toBase58());
+    console.log('  Collection delegate (program config PDA):', configPda.toBase58());
+    resolvedCoreCollection = collection.publicKey;
+    await assertMplCoreCollection(connection, resolvedCoreCollection);
+  }
 
-  console.log('\n[3/4] Creating Merkle tree…');
+  console.log('\n[3/4] Creating Merkle tree (Bubblegum V2)…');
   const tree = Keypair.generate();
   const depthSize: ValidDepthSizePair = {
     maxDepth: Number(BOX_MINTER_CONFIG.treeDepth),
     maxBufferSize: Number(BOX_MINTER_CONFIG.treeBufferSize),
   } as ValidDepthSizePair;
-  const allocIx = await createAllocTreeIx(connection, tree.publicKey, payer.publicKey, depthSize, Number(BOX_MINTER_CONFIG.treeCanopy));
-  const treeConfigPda = bubblegumTreeConfigPda(tree.publicKey);
-  const createTreeIx = createCreateTreeInstruction(
-    {
-      treeAuthority: treeConfigPda,
-      merkleTree: tree.publicKey,
-      payer: payer.publicKey,
-      treeCreator: payer.publicKey,
-      logWrapper: SPL_NOOP_PROGRAM_ID,
-      compressionProgram: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    },
-    { maxDepth: depthSize.maxDepth, maxBufferSize: depthSize.maxBufferSize, public: null },
+  const allocIx = await createAllocTreeV2Ix(
+    connection,
+    tree.publicKey,
+    payer.publicKey,
+    depthSize,
+    Number(BOX_MINTER_CONFIG.treeCanopy),
   );
+  const treeConfigPda = bubblegumTreeConfigPda(tree.publicKey);
+  const createTreeIx = buildCreateTreeConfigV2Ix({
+    treeConfig: treeConfigPda,
+    merkleTree: tree.publicKey,
+    payer: payer.publicKey,
+    logWrapper: MPL_NOOP_PROGRAM_ID,
+    compressionProgram: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+    maxDepth: depthSize.maxDepth,
+    maxBufferSize: depthSize.maxBufferSize,
+    public: null,
+  });
   const createTreeTx = new Transaction().add(allocIx, createTreeIx);
   createTreeTx.feePayer = payer.publicKey;
   createTreeTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
@@ -614,44 +795,19 @@ async function main() {
   console.log('  TreeConfig PDA:', treeConfigPda.toBase58());
 
   console.log('\n[4/4] Initializing box minter + delegation…');
-  const bubblegumSigner = bubblegumCollectionSignerPda();
-  const bubblegumSignerRecord = collectionAuthorityRecordPda(mint.publicKey, bubblegumSigner);
-  const programAuthorityRecord = collectionAuthorityRecordPda(mint.publicKey, configPda);
 
   const initIx = buildInitializeIx({
     programId: programPk,
     admin: payer.publicKey,
     treasury,
     merkleTree: tree.publicKey,
-    collectionMint: mint.publicKey,
-    collectionMetadata: metadataPda,
-    collectionMasterEdition: masterEditionPda,
+    coreCollection: resolvedCoreCollection,
     priceLamports,
     maxSupply,
     maxPerTx,
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
     symbol: BOX_MINTER_CONFIG.symbol,
     uriBase: BOX_MINTER_CONFIG.uriBase,
-  });
-
-  const approveBubblegumSignerIx = createApproveCollectionAuthorityInstruction({
-    collectionAuthorityRecord: bubblegumSignerRecord,
-    newCollectionAuthority: bubblegumSigner,
-    updateAuthority: payer.publicKey,
-    payer: payer.publicKey,
-    metadata: metadataPda,
-    mint: mint.publicKey,
-    systemProgram: SystemProgram.programId,
-  });
-
-  const approveProgramAuthorityIx = createApproveCollectionAuthorityInstruction({
-    collectionAuthorityRecord: programAuthorityRecord,
-    newCollectionAuthority: configPda,
-    updateAuthority: payer.publicKey,
-    payer: payer.publicKey,
-    metadata: metadataPda,
-    mint: mint.publicKey,
-    systemProgram: SystemProgram.programId,
   });
 
   const setDelegateIx = buildSetTreeDelegateIx({
@@ -661,7 +817,7 @@ async function main() {
     merkleTree: tree.publicKey,
   });
 
-  const setupTx = new Transaction().add(initIx, approveBubblegumSignerIx, approveProgramAuthorityIx, setDelegateIx);
+  const setupTx = new Transaction().add(initIx, setDelegateIx);
   setupTx.feePayer = payer.publicKey;
   setupTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
   const setupSig = await sendAndConfirmTransaction(connection, setupTx, [payer], { commitment: 'confirmed' });
@@ -673,20 +829,34 @@ async function main() {
 
   console.log('--- env for frontend ---');
   console.log(`VITE_SOLANA_CLUSTER=${cluster}`);
+  console.log(`VITE_RPC_URL=${rpcUrlForApps}`);
   console.log(`VITE_BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-  console.log(`VITE_COLLECTION_MINT=${mint.publicKey.toBase58()}`);
   console.log(`VITE_MERKLE_TREE=${tree.publicKey.toBase58()}`);
+  console.log(`VITE_COLLECTION_MINT=${resolvedCoreCollection.toBase58()}`);
+  console.log('# Also required (not generated here):');
+  console.log('# VITE_HELIUS_API_KEY=...');
+  console.log('# VITE_FIREBASE_...=...');
+  console.log('# VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=...');
   console.log('');
   console.log('--- env for functions ---');
+  console.log(`SOLANA_CLUSTER=${cluster}`);
   console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
   console.log(`MERKLE_TREE=${tree.publicKey.toBase58()}`);
-  console.log(`COLLECTION_MINT=${mint.publicKey.toBase58()}`);
-  console.log(`COLLECTION_METADATA=${metadataPda.toBase58()}`);
-  console.log(`COLLECTION_MASTER_EDITION=${masterEditionPda.toBase58()}`);
-  console.log(`COLLECTION_UPDATE_AUTHORITY=${payer.publicKey.toBase58()}`);
+  console.log(`COLLECTION_MINT=${resolvedCoreCollection.toBase58()}`);
+  console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
+  console.log('# Also required (not generated here):');
+  console.log('# HELIUS_API_KEY=...');
+  console.log('# DELIVERY_VAULT=...');
   console.log('# Sensitive: keep this secret offline/backed up securely.');
+  console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
   console.log(`TREE_AUTHORITY_SECRET=${bs58.encode(payer.secretKey)}`);
   console.log('');
+  console.log('--- notes ---');
+  console.log(
+    `Core collection must be an MPL-Core collection with the BubblegumV2 plugin enabled,\n` +
+      `and it must authorize the config PDA as a collection authority:\n` +
+      `  ${configPda.toBase58()}\n`,
+  );
 }
 
 main().catch((err) => {

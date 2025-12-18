@@ -25,10 +25,11 @@ VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
 VITE_RPC_URL=https://your-rpc
 VITE_HELIUS_API_KEY=<helius-api-key>
 VITE_BOX_MINTER_PROGRAM_ID=<deployed box minter program id>
+VITE_MERKLE_TREE=<drop merkle tree pubkey (for inventory filtering)>
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 ```
-- Required for strict inventory filtering: `VITE_COLLECTION_MINT`
+- Optional: `VITE_COLLECTION_MINT` (MPL-Core collection address for Helius `grouping: ['collection', ...]` queries; UI can fall back to Merkle tree filtering)
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY`:
@@ -50,7 +51,8 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `SOLANA_CLUSTER` (`devnet`/`testnet`/`mainnet-beta`)
 - `TREE_AUTHORITY_SECRET` (bs58 secret key that owns the cNFT tree)
 - `COSIGNER_SECRET` (optional, defaults to tree authority)
-- `MERKLE_TREE`, `COLLECTION_MINT`, `COLLECTION_METADATA`, `COLLECTION_MASTER_EDITION`, `COLLECTION_UPDATE_AUTHORITY`
+- `MERKLE_TREE`
+- `COLLECTION_MINT` (MPL-Core collection address used by Bubblegum V2 mint-to-collection)
 - `DELIVERY_VAULT` (SOL recipient for shipping)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 
@@ -62,11 +64,12 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `prepareIrlClaimTx`: validates IRL claim code + blind box certificate ownership, mints dudes certificates.
 
 ### Tree + address helpers
-- Deploy box minter (program + collection + tree + delegation):
+- Deploy box minter (program + tree + delegation):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
-  - One-command deploy (auto-generates a fresh program id each run): `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com`
-  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips collection/tree/init if the config PDA already exists).
-  - Prints both frontend + functions env values (including `TREE_AUTHORITY_SECRET`, which is sensitive).
+  - One-command deploy (auto-generates a fresh program id each run):
+    - `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com --core-collection <MPL_CORE_COLLECTION_PUBKEY>`
+  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips tree/init if the config PDA already exists).
+  - Prints both frontend + functions env values (including `TREE_AUTHORITY_SECRET`/`COSIGNER_SECRET`, which are sensitive).
 - Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).
 
 ## Notes
