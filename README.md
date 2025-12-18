@@ -10,6 +10,15 @@ Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per
 - Run dev server: `npm run dev`
 - Build for production: `npm run build`
 
+### Deploy to Amplify (sync `.env` → Amplify branch env vars)
+- Prereqs: AWS CLI configured locally with permissions to `amplify:GetBranch`, `amplify:UpdateBranch`, and `amplify:StartJob`.
+- Set `AMPLIFY_APP_ID` (and optionally `AMPLIFY_REGION`, `AWS_PROFILE`) in your shell or in `.env`.
+- Push your branch (Amplify builds from the connected git repo).
+- Deploy: `npm run deploy -- <branch>`
+  - Dry run (prints keys only): `npm run deploy -- <branch> --dry-run`
+  - Wait for the Amplify job to finish: `npm run deploy -- <branch> --wait`
+- Note: this **replaces** the Amplify branch env vars with **all non-reserved keys** from `.env`. For Vite, anything referenced in client code can end up in the public bundle—don’t put secrets in `.env`.
+
 ### Required Vite env
 ```
 VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta

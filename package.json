@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "box-minter:deploy-all": "node --experimental-strip-types scripts/deploy-all-box-minter.ts",
     "keygen": "node scripts/keygen.js"
   },
