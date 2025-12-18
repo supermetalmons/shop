@@ -6,7 +6,6 @@ import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { DeliveryPanel } from './components/DeliveryPanel';
-import { ContactEmail } from './components/ContactEmail';
 import { ClaimForm } from './components/ClaimForm';
 import { EmailSubscribe } from './components/EmailSubscribe';
 import { useMintProgress } from './hooks/useMintProgress';
@@ -72,7 +71,6 @@ function App() {
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
   const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
-  const [contactEmail, setContactEmail] = useState(profile?.email || '');
   const owner = publicKey?.toBase58();
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
 
@@ -182,7 +180,7 @@ function App() {
   }) => {
     const session = token ? { token, profile } : await signIn();
     const idToken = session?.token || token;
-    const encryptionKey = import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '';
+    const encryptionKey = (import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '').trim();
     if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
     const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
     if (!idToken) throw new Error('Missing auth token');
@@ -196,15 +194,6 @@ function App() {
       });
     }
     setStatus('Address saved and encrypted');
-  };
-
-  const handleSaveEmail = async (value: string) => {
-    const normalized = value.trim();
-    setContactEmail(normalized);
-    if (updateProfile && profile) {
-      updateProfile({ ...profile, email: normalized });
-    }
-    setStatus('Contact email updated for deliveries');
   };
 
   const handleRequestDelivery = async (addressId: string | null) => {
@@ -291,10 +280,6 @@ function App() {
   }, [addressId, savedAddresses]);
 
   useEffect(() => {
-    setContactEmail(profile?.email || '');
-  }, [profile?.email]);
-
-  useEffect(() => {
     const addr = savedAddresses.find((a) => a.id === addressId);
     const deliverableIds = Array.from(selected).filter((id) => {
       const item = inventory.find((inv) => inv.id === id);
@@ -376,7 +361,6 @@ function App() {
       ) : null}
 
       <div className="grid">
-        <ContactEmail email={contactEmail} onChange={setContactEmail} onSave={handleSaveEmail} />
         <DeliveryPanel
           selectedCount={selected.size}
           addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
@@ -386,7 +370,7 @@ function App() {
           loading={deliveryLoading}
           costLamports={deliveryCost}
         />
-        <DeliveryForm onSave={handleSaveAddress} contactEmail={contactEmail} />
+        <DeliveryForm onSave={handleSaveAddress} defaultEmail={profile?.email || ''} />
       </div>
 
       <ClaimForm onClaim={handleClaim} />

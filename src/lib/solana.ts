@@ -140,9 +140,28 @@ export function encryptAddressPayload(
   plaintext: string,
   recipientPublicKey: string,
 ): { cipherText: string; hint: string } {
-  const remoteKey = Buffer.from(recipientPublicKey, 'base64');
+  const rawKey = (recipientPublicKey || '').trim();
+  if (!rawKey) {
+    throw new Error(
+      'Missing address encryption public key (set VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY to a base64 Curve25519 public key)',
+    );
+  }
+
+  let remoteKey: Uint8Array;
+  try {
+    remoteKey = Buffer.from(rawKey, 'base64');
+  } catch {
+    remoteKey = new Uint8Array();
+  }
+
   if (remoteKey.length !== nacl.box.publicKeyLength) {
-    throw new Error('Invalid address encryption public key');
+    const looksBase58 = /^[1-9A-HJ-NP-Za-km-z]+$/.test(rawKey);
+    const hint = looksBase58
+      ? ' It looks like you pasted a base58 Solana address (e.g. DELIVERY_VAULT). This must be a TweetNaCl box (Curve25519) public key encoded in base64.'
+      : '';
+    throw new Error(
+      `Invalid address encryption public key: expected base64 Curve25519 public key (${nacl.box.publicKeyLength} bytes), got ${remoteKey.length} bytes after base64 decode.${hint}`,
+    );
   }
   const ephemeral = nacl.box.keyPair();
   const nonce = nacl.randomBytes(nacl.box.nonceLength);

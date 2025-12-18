@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { signInWithCustomToken, signOut as firebaseSignOut } from 'firebase/auth';
+import { signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { solanaAuth } from '../lib/api';
 import { Profile } from '../types';
@@ -29,9 +29,9 @@ export function useSolanaAuth() {
       const message = buildSignInMessage(publicKey.toBase58());
       const encoded = new TextEncoder().encode(message);
       const signature = await signMessage(encoded);
-      const { customToken, profile } = await solanaAuth(publicKey.toBase58(), message, signature);
-      const credential = await signInWithCustomToken(auth, customToken);
-      const token = await credential.user.getIdToken();
+      const { profile } = await solanaAuth(publicKey.toBase58(), message, signature);
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Missing Firebase auth token');
       const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
       setState({ profile: normalizedProfile, token, loading: false });
       return { profile: normalizedProfile, token };

@@ -1,5 +1,4 @@
 import { initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import * as functions from 'firebase-functions';
 import {
@@ -78,7 +77,6 @@ loadLocalEnv();
 
 const app = initializeApp();
 const db = getFirestore(app);
-const auth = getAuth(app);
 const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 type CallableReq<T = any> = functions.https.CallableRequest<T>;
@@ -93,6 +91,40 @@ function requireAuth(request: CallableReq<any>): string {
     throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
   }
   return uid;
+}
+
+const WALLET_SESSION_COLLECTION = 'authSessions';
+const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function normalizeWallet(wallet: string): string {
+  try {
+    return new PublicKey(wallet).toBase58();
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid wallet address');
+  }
+}
+
+async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
+  const uid = requireAuth(request);
+  const snap = await db.doc(`${WALLET_SESSION_COLLECTION}/${uid}`).get();
+  const data = snap.exists ? (snap.data() as any) : null;
+  const wallet = typeof data?.wallet === 'string' ? data.wallet : null;
+
+  // Backwards compatibility: if the caller is already authenticated as the wallet UID.
+  if (!wallet) {
+    try {
+      return { uid, wallet: normalizeWallet(uid) };
+    } catch {
+      throw new functions.https.HttpsError('unauthenticated', 'Sign in with your wallet first.');
+    }
+  }
+
+  const expiresAt = data?.expiresAt;
+  if (expiresAt && typeof expiresAt.toMillis === 'function' && expiresAt.toMillis() < Date.now()) {
+    throw new functions.https.HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
+  }
+
+  return { uid, wallet: normalizeWallet(wallet) };
 }
 
 const DUDES_PER_BOX = 3;
@@ -291,7 +323,8 @@ function onCallLogged<TReq, TRes>(
     } catch (err) {
       const ms = Date.now() - startedAt;
       try {
-        functions.logger.error(`${name}:error`, { ...baseMeta, ms, error: summarizeError(err) });
+        const errorForLog = err instanceof Error ? err : new Error(String(err));
+        functions.logger.error(`${name}:error`, errorForLog, { ...baseMeta, ms, error: summarizeError(err) });
       } catch (logErr) {
         console.error(`${name}:error logger failed`, {
           logError: summarizeError(logErr),
@@ -1172,37 +1205,41 @@ async function detectClaimOnChain(code: string, owner: string, limit = 20): Prom
   return null;
 }
 
-export const solanaAuth = onCallAuthed('solanaAuth', async (request, _uid) => {
+export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
-  const { wallet, message, signature } = parseRequest(schema, request.data);
+  const { wallet: rawWallet, message, signature } = parseRequest(schema, request.data);
+  const wallet = normalizeWallet(rawWallet);
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
   if (!verified) throw new functions.https.HttpsError('unauthenticated', 'Invalid signature');
 
-  const userRecord = await auth.getUser(wallet).catch(() => null);
-  if (!userRecord) {
-    await auth.createUser({ uid: wallet, email: `${wallet}@mons.shop` }).catch(() => undefined);
-  }
-  const customToken = await auth.createCustomToken(wallet);
+  await db.doc(`${WALLET_SESSION_COLLECTION}/${uid}`).set(
+    {
+      wallet,
+      updatedAt: FieldValue.serverTimestamp(),
+      expiresAt: Timestamp.fromMillis(Date.now() + WALLET_SESSION_TTL_MS),
+    },
+    { merge: true },
+  );
+
   const profileRef = db.doc(`profiles/${wallet}`);
   const snap = await profileRef.get();
   const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
   const addresses = addressesSnap.docs.map((doc) => doc.data());
-  const profileData = snap.exists ? (snap.data() as any) : { wallet };
-  if (!snap.exists) await profileRef.set(profileData);
+  const profileData = snap.exists ? (snap.data() as any) : {};
+  if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
-    customToken,
     profile: {
       ...profileData,
       wallet,
-      email: profileData.email || userRecord?.email,
+      email: profileData.email,
       addresses,
     },
   };
 });
 
 export const saveAddress = onCallLogged('saveAddress', async (request) => {
-  const uid = requireAuth(request);
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({
     encrypted: z.string(),
     country: z.string(),
@@ -1214,7 +1251,7 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   const body = parseRequest(schema, request.data);
   const id = db.collection('tmp').doc().id;
   const countryCode = normalizeCountryCode(body.countryCode || body.country);
-  const addressRef = db.doc(`profiles/${uid}/addresses/${id}`);
+  const addressRef = db.doc(`profiles/${wallet}/addresses/${id}`);
   await addressRef.set(
     {
       ...body,
@@ -1224,8 +1261,8 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
     },
     { merge: true },
   );
-  await db.doc(`profiles/${uid}`).set(
-    { wallet: uid, ...(body.email ? { email: body.email } : {}) },
+  await db.doc(`profiles/${wallet}`).set(
+    { wallet, ...(body.email ? { email: body.email } : {}) },
     { merge: true },
   );
   return {
@@ -1394,13 +1431,14 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
 });
 
 export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {
-  const uid = requireAuth(request);
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
   const { owner, itemIds, addressId } = parseRequest(schema, request.data);
-  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  const ownerPk = new PublicKey(owner);
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  const ownerPk = new PublicKey(ownerWallet);
   const conn = connection();
-  const addressSnap = await db.doc(`profiles/${uid}/addresses/${addressId}`).get();
+  const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
   if (!addressSnap.exists) {
     throw new functions.https.HttpsError('not-found', 'Address not found');
   }
@@ -1430,7 +1468,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
       throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
     }
     const assetOwner = assetData.asset?.ownership?.owner;
-    if (assetOwner !== owner) {
+    if (assetOwner !== ownerWallet) {
       throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
     }
     if (kind === 'certificate') {
@@ -1441,7 +1479,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     if (kind === 'box') {
       const assigned = await assignDudes(id);
       dudeIds = assigned;
-      claimCode = await ensureClaimCode(id, assigned, owner);
+      claimCode = await ensureClaimCode(id, assigned, ownerWallet);
     }
     if (kind === 'dude') {
       const dudeId = getDudeIdFromAsset(assetData.asset);
@@ -1476,7 +1514,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   const tx = buildTx(instructions, ownerPk, blockhash);
   await db.doc(`deliveryOrders/${orderId}`).set({
     status: 'prepared',
-    owner,
+    owner: ownerWallet,
     addressId,
     addressSnapshot: {
       ...addressData,
@@ -1492,10 +1530,11 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
 });
 
 export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (request) => {
-  const uid = requireAuth(request);
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
   const { owner, signature, orderId } = parseRequest(schema, request.data);
-  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
 
   const orderRef = db.doc(`deliveryOrders/${orderId}`);
   const orderSnap = await orderRef.get();
@@ -1503,7 +1542,7 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
     throw new functions.https.HttpsError('not-found', 'Delivery order not found');
   }
   const order = orderSnap.data() as any;
-  if (order.owner && order.owner !== owner) {
+  if (order.owner && order.owner !== ownerWallet) {
     throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
   }
   if (order.signature && order.signature !== signature && order.status === 'completed') {
@@ -1519,7 +1558,7 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
     throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction not found or failed');
   }
   const payer = getPayerFromTx(tx);
-  if (!payer || payer.toBase58() !== owner) {
+  if (!payer || payer.toBase58() !== ownerWallet) {
     throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
   }
   const memo = extractMemos(tx).find((m) => m === `delivery:${orderId}`);
@@ -1561,7 +1600,7 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
       {
         status: 'completed',
         signature,
-        payer: owner,
+        payer: ownerWallet,
         memoDetected: Boolean(memo),
         shippingPaid,
         mintedCertificates: certificateSummary,
@@ -1582,11 +1621,12 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
 });
 
 export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (request) => {
-  const uid = requireAuth(request);
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), code: z.string() });
   const { owner, code } = parseRequest(schema, request.data);
-  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  const ownerPk = new PublicKey(owner);
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  const ownerPk = new PublicKey(ownerWallet);
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
@@ -1596,24 +1636,24 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   if (claim.redeemedAt || claim.redeemedSignature) {
     throw new functions.https.HttpsError('failed-precondition', 'Claim code already redeemed');
   }
-  const alreadyRedeemedSig = await detectClaimOnChain(code, owner).catch(() => null);
+  const alreadyRedeemedSig = await detectClaimOnChain(code, ownerWallet).catch(() => null);
   if (alreadyRedeemedSig) {
     await claimRef.set(
       {
         redeemedAt: FieldValue.serverTimestamp(),
-        redeemedBy: owner,
+        redeemedBy: ownerWallet,
         redeemedSignature: alreadyRedeemedSig,
       },
       { merge: true },
     );
     throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed on-chain');
   }
-  const certificate = claim.boxId ? await findCertificateForBox(owner, claim.boxId) : null;
+  const certificate = claim.boxId ? await findCertificateForBox(ownerWallet, claim.boxId) : null;
   if (!certificate) {
     throw new functions.https.HttpsError('permission-denied', 'Blind box certificate not found in wallet');
   }
   const certificateOwner = certificate?.ownership?.owner;
-  if (certificateOwner !== owner) {
+  if (certificateOwner !== ownerWallet) {
     throw new functions.https.HttpsError('permission-denied', 'Certificate not found in wallet');
   }
   const kind = getAssetKind(certificate);
@@ -1641,7 +1681,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   const pendingExpiry = pending?.expiresAt?.toMillis ? pending.expiresAt.toMillis() : 0;
   if (pending && pendingExpiry > nowMs) {
     const message =
-      pending.owner === owner
+      pending.owner === ownerWallet
         ? 'Claim already has a pending transaction, please submit it or wait a few minutes.'
         : 'Claim is locked by another wallet right now.';
     throw new functions.https.HttpsError('failed-precondition', message);
@@ -1665,7 +1705,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     }
     txRef.update(claimRef, {
       pendingAttempt: {
-        owner,
+        owner: ownerWallet,
         attemptId,
         certificateId,
         expiresAt,
@@ -1699,10 +1739,11 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
 });
 
 export const finalizeClaimTx = onCallLogged('finalizeClaimTx', async (request) => {
-  const uid = requireAuth(request);
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), code: z.string(), signature: z.string() });
   const { owner, code, signature } = parseRequest(schema, request.data);
-  if (uid !== owner) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
@@ -1713,7 +1754,7 @@ export const finalizeClaimTx = onCallLogged('finalizeClaimTx', async (request) =
     throw new functions.https.HttpsError('failed-precondition', 'Claim already redeemed');
   }
 
-  const processed = await processClaimSignature(code, signature, owner);
+  const processed = await processClaimSignature(code, signature, ownerWallet);
   if (!processed) {
     throw new functions.https.HttpsError('failed-precondition', 'Claim transaction not found or invalid');
   }
@@ -1727,7 +1768,7 @@ export const finalizeClaimTx = onCallLogged('finalizeClaimTx', async (request) =
     if (data.redeemedAt || data.redeemedSignature) return;
     txRef.update(claimRef, {
       redeemedAt: FieldValue.serverTimestamp(),
-      redeemedBy: owner,
+      redeemedBy: ownerWallet,
       redeemedSignature: signature,
       redeemedCertificateId: data.pendingAttempt?.certificateId,
       pendingAttempt: FieldValue.delete(),

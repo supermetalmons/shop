@@ -1,12 +1,14 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 
 interface DeliveryFormProps {
   onSave: (payload: { formatted: string; country: string; countryCode: string; label: string; email: string }) => Promise<void>;
-  contactEmail: string;
+  defaultEmail?: string;
 }
 
-export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
+export function DeliveryForm({ onSave, defaultEmail }: DeliveryFormProps) {
+  const [email, setEmail] = useState(defaultEmail || '');
+  const [emailTouched, setEmailTouched] = useState(false);
   const [fullName, setFullName] = useState('');
   const [line1, setLine1] = useState('');
   const [line2, setLine2] = useState('');
@@ -20,11 +22,15 @@ export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
   const countryOption = useMemo(() => findCountryByCode(countryCode) || findCountryByCode('INTL'), [countryCode]);
   const countryName = countryOption?.name || countryCode;
 
+  useEffect(() => {
+    if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);
+  }, [defaultEmail, emailTouched, email]);
+
   const handleSubmit = async (evt: FormEvent) => {
     evt.preventDefault();
-    const email = contactEmail.trim();
-    if (!email) {
-      setError('Add a contact email first.');
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setError('Email is required for delivery updates.');
       return;
     }
     setSaving(true);
@@ -39,7 +45,7 @@ export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
       ]
         .filter(Boolean)
         .join('\n');
-      await onSave({ formatted, country: countryName, countryCode, label, email });
+      await onSave({ formatted, country: countryName, countryCode, label, email: normalizedEmail });
       setSaving(false);
     } catch (err) {
       setSaving(false);
@@ -50,8 +56,21 @@ export function DeliveryForm({ onSave, contactEmail }: DeliveryFormProps) {
   return (
     <form className="card" onSubmit={handleSubmit}>
       <div className="card__title">Save a delivery address</div>
-      <p className="muted small">Addresses use your contact email for shipping updates.</p>
+      <p className="muted small">We use your email for delivery updates.</p>
       <div className="grid">
+        <label>
+          <span className="muted">Email</span>
+          <input
+            required
+            type="email"
+            value={email}
+            onChange={(e) => {
+              setEmailTouched(true);
+              setEmail(e.target.value);
+            }}
+            placeholder="you@example.com"
+          />
+        </label>
         <label>
           <span className="muted">Full name</span>
           <input required value={fullName} onChange={(e) => setFullName(e.target.value)} />

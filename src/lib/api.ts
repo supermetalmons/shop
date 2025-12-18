@@ -371,11 +371,12 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
-): Promise<{ customToken: string; profile: Profile }> {
-  return callFunction<{ wallet: string; message: string; signature: number[] }, { customToken: string; profile: Profile }>(
-    'solanaAuth',
-    { wallet, message, signature: Array.from(signature) },
-  );
+): Promise<{ profile: Profile }> {
+  return callFunction<{ wallet: string; message: string; signature: number[] }, { profile: Profile }>('solanaAuth', {
+    wallet,
+    message,
+    signature: Array.from(signature),
+  });
 }
 
 export async function finalizeDeliveryTx(
