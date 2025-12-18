@@ -16,6 +16,7 @@ const utf8 = (value: string) => TE.encode(value);
 // Anchor discriminators (sha256("global:<name>")[0..8]).
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
+const IX_DELIVER = Uint8Array.from([0xfa, 0x83, 0xde, 0x39, 0xd3, 0xe5, 0xd1, 0x93]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 // Canonical program IDs (pulled from Metaplex/SPL sources).
@@ -40,6 +41,22 @@ export interface BoxMinterConfigAccount {
   symbol: string;
   uriBase: string;
   bump: number;
+}
+
+export type DeliverItemKind = 'box' | 'dude';
+
+export interface DeliverItemInput {
+  kind: DeliverItemKind;
+  // Numeric id used for receipt metadata (box id or dude id).
+  refId: number;
+  // Bubblegum burn args:
+  root: Uint8Array; // 32 bytes
+  dataHash: Uint8Array; // 32 bytes
+  creatorHash: Uint8Array; // 32 bytes
+  nonce: bigint; // u64
+  index: number; // u32
+  // Truncated proof node pubkeys (each 32 bytes).
+  proof: PublicKey[];
 }
 
 function requireEnvPubkey(name: string): PublicKey {
@@ -184,6 +201,125 @@ function treeAuthorityPda(merkleTree: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([merkleTree.toBytes()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
+function u32LE(value: number) {
+  const buf = Buffer.alloc(4);
+  buf.writeUInt32LE(value >>> 0, 0);
+  return buf;
+}
+
+function u64LE(value: bigint) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(value, 0);
+  return buf;
+}
+
+function encodeDeliverData(args: {
+  deliveryId: number;
+  deliveryFeeLamports: number;
+  items: DeliverItemInput[];
+}): Buffer {
+  const deliveryId = Number(args.deliveryId);
+  const fee = Number(args.deliveryFeeLamports);
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0 || deliveryId > 0xffff_ffff) {
+    throw new Error('Invalid deliveryId');
+  }
+  if (!Number.isFinite(fee) || fee < 0 || fee > Number.MAX_SAFE_INTEGER) {
+    throw new Error('Invalid deliveryFeeLamports');
+  }
+  const items = args.items || [];
+  if (!Array.isArray(items) || !items.length) throw new Error('No delivery items');
+
+  const parts: Buffer[] = [];
+  parts.push(Buffer.from(IX_DELIVER));
+  parts.push(u32LE(deliveryId));
+  parts.push(u64LE(BigInt(fee)));
+  parts.push(u32LE(items.length));
+
+  for (const item of items) {
+    const kindByte = item.kind === 'box' ? 0 : item.kind === 'dude' ? 1 : 255;
+    if (kindByte === 255) throw new Error(`Invalid item kind: ${String((item as any).kind)}`);
+    const refId = Number(item.refId);
+    if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) throw new Error('Invalid item refId');
+
+    const root = Buffer.from(item.root || []);
+    const dataHash = Buffer.from(item.dataHash || []);
+    const creatorHash = Buffer.from(item.creatorHash || []);
+    if (root.length !== 32 || dataHash.length !== 32 || creatorHash.length !== 32) {
+      throw new Error('Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
+    }
+
+    const nonce = item.nonce;
+    if (typeof nonce !== 'bigint' || nonce < 0n) throw new Error('Invalid burn nonce');
+    const index = Number(item.index);
+    if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) throw new Error('Invalid burn leaf index');
+
+    const proof = item.proof || [];
+    if (!Array.isArray(proof)) throw new Error('Invalid proof');
+    if (proof.length > 255) throw new Error('Proof too long');
+
+    parts.push(Buffer.from([kindByte]));
+    parts.push(u32LE(refId));
+    parts.push(root);
+    parts.push(dataHash);
+    parts.push(creatorHash);
+    parts.push(u64LE(nonce));
+    parts.push(u32LE(index));
+    parts.push(Buffer.from([proof.length & 0xff]));
+  }
+
+  return Buffer.concat(parts);
+}
+
+export function buildDeliverIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
+): TransactionInstruction {
+  const programId = boxMinterProgramId();
+  const [configPda] = boxMinterConfigPda(programId);
+
+  const treeAuthority = treeAuthorityPda(cfg.merkleTree);
+  const bubblegumSigner = bubblegumSignerPda();
+  const collectionAuthorityRecord = collectionAuthorityRecordPda(cfg.collectionMint, configPda);
+
+  const keys = [
+    { pubkey: configPda, isSigner: false, isWritable: false },
+    // Server cosigner (must match config.admin). Backend fills this signature.
+    { pubkey: cfg.admin, isSigner: true, isWritable: false },
+    { pubkey: payer, isSigner: true, isWritable: true },
+    { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+    { pubkey: cfg.merkleTree, isSigner: false, isWritable: true },
+    { pubkey: treeAuthority, isSigner: false, isWritable: true },
+    { pubkey: cfg.collectionMint, isSigner: false, isWritable: false },
+    { pubkey: cfg.collectionMetadata, isSigner: false, isWritable: true },
+    { pubkey: cfg.collectionMasterEdition, isSigner: false, isWritable: false },
+    { pubkey: collectionAuthorityRecord, isSigner: false, isWritable: false },
+    { pubkey: bubblegumSigner, isSigner: false, isWritable: false },
+    { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  // Remaining accounts: concatenated proof nodes for each burn.
+  for (const item of args.items || []) {
+    for (const p of item.proof || []) {
+      keys.push({ pubkey: p, isSigner: false, isWritable: false });
+    }
+  }
+
+  return new TransactionInstruction({
+    programId,
+    keys,
+    data: encodeDeliverData({
+      deliveryId: args.deliveryId,
+      deliveryFeeLamports: args.deliveryFeeLamports,
+      items: args.items,
+    }),
+  });
+}
+
 export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, quantity: number): TransactionInstruction {
   const programId = boxMinterProgramId();
   const [configPda] = boxMinterConfigPda(programId);
@@ -241,6 +377,56 @@ export async function buildMintBoxesTx(
     ],
   }).compileToV0Message();
   return new VersionedTransaction(msg);
+}
+
+export async function buildDeliverTx(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
+): Promise<VersionedTransaction> {
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  return buildDeliverTxWithBlockhash(cfg, payer, args, blockhash);
+}
+
+export function buildDeliverTxWithBlockhash(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
+  recentBlockhash: string,
+): VersionedTransaction {
+  const deliverIx = buildDeliverIx(cfg, payer, args);
+  const msg = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash,
+    instructions: [
+      // Bubblegum CPI allocates; request max heap frame to avoid OOM.
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      deliverIx,
+    ],
+  }).compileToV0Message();
+  return new VersionedTransaction(msg);
+}
+
+export function truncateProofByCanopy(proof: string[], canopyDepth: number): string[] {
+  const drop = Math.max(0, Math.floor(canopyDepth || 0));
+  if (!drop) return proof;
+  if (proof.length <= drop) return [];
+  return proof.slice(0, proof.length - drop);
+}
+
+export function normalizeLeafIndex(args: { nodeIndex: number; maxDepth: number }): number {
+  const nodeIndex = Number(args.nodeIndex);
+  if (!Number.isFinite(nodeIndex) || nodeIndex < 0) return 0;
+
+  // Helius `node_index` is the index in the *full binary tree* where leaf nodes start at 2^depth.
+  // Bubblegum/compression expects the leaf index 0..(2^depth - 1).
+  const depth = Number(args.maxDepth || 0);
+  if (!depth) return nodeIndex >>> 0;
+  const leafOffset = Math.pow(2, depth);
+  const leafIndex = nodeIndex >= leafOffset ? nodeIndex - leafOffset : nodeIndex;
+  return leafIndex >>> 0;
 }
 
 

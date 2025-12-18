@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use borsh::BorshSerialize;
 use core::fmt::Write;
 
-declare_id!("CXCXHYVRh5QMCxBYZv58ubAcwnycPwyAy9SNHbtGCv8p");
+declare_id!("Czxt4hfAsrp9Jou25nTEbkgkx8iryMNayDsYdihGnEpe");
 
 // Bubblegum instruction discriminator for `mint_to_collection_v1` (mpl-bubblegum 2.1.1).
 const IX_MINT_TO_COLLECTION_V1: [u8; 8] = [153, 18, 178, 47, 197, 158, 86, 15];
@@ -13,6 +13,11 @@ const IX_BURN: [u8; 8] = [116, 110, 29, 56, 107, 219, 42, 93];
 // Hard safety cap: Bubblegum minting triggers multiple inner instructions per NFT, and Solana enforces
 // a max instruction trace length per transaction. Empirically on devnet this caps out at 15 mints/tx.
 const MAX_SAFE_MINTS_PER_TX: u8 = 15;
+// Delivery: each item burns + mints a receipt. Keep this conservative (trace-length + compute).
+const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 8;
+// Random delivery fee bounds (0.001..=0.003 SOL).
+const MIN_DELIVERY_LAMPORTS: u64 = 1_000_000;
+const MAX_DELIVERY_LAMPORTS: u64 = 3_000_000;
 
 // Figure IDs are globally unique, 1..=999 for a 333 box supply (3 figures per box).
 const DUDES_PER_BOX: usize = 3;
@@ -459,6 +464,246 @@ pub mod box_minter {
 
         Ok(())
     }
+
+    pub fn deliver<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, Deliver<'info>>,
+        args: DeliverArgs,
+    ) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+
+        // Require a cloud-held signer (same admin as initialize/open_box) so users can't choose arbitrary fees.
+        require_keys_eq!(
+            ctx.accounts.cosigner.key(),
+            cfg.admin,
+            BoxMinterError::InvalidCosigner
+        );
+
+        require!(
+            args.delivery_fee_lamports >= MIN_DELIVERY_LAMPORTS && args.delivery_fee_lamports <= MAX_DELIVERY_LAMPORTS,
+            BoxMinterError::InvalidDeliveryFee
+        );
+
+        require!(!args.items.is_empty(), BoxMinterError::InvalidQuantity);
+        require!(
+            (args.items.len() as u8) <= MAX_SAFE_DELIVERY_ITEMS_PER_TX,
+            BoxMinterError::InvalidQuantity
+        );
+
+        require_keys_eq!(
+            ctx.accounts.bubblegum_program.key(),
+            mpl_bubblegum::ID,
+            BoxMinterError::InvalidBubblegumProgram
+        );
+
+        // Defensive: verify PDAs that are easy to spoof on the client (once per tx).
+        verify_tree_authority(ctx.accounts.merkle_tree.key(), ctx.accounts.tree_authority.key())?;
+        verify_bubblegum_signer(ctx.accounts.bubblegum_signer.key())?;
+        verify_collection_authority_record(
+            ctx.accounts.token_metadata_program.key(),
+            cfg.collection_mint,
+            ctx.accounts.config.key(),
+            ctx.accounts.collection_authority_record_pda.key(),
+        )?;
+
+        // Take delivery payment (enforced on-chain).
+        if args.delivery_fee_lamports > 0 {
+            let ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.treasury.key(),
+                args.delivery_fee_lamports,
+            );
+            anchor_lang::solana_program::program::invoke(
+                &ix,
+                &[
+                    ctx.accounts.payer.to_account_info(),
+                    ctx.accounts.treasury.to_account_info(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+            )?;
+        }
+
+        // Derive receipts URI bases from the on-chain boxes uri base to keep configuration on-chain.
+        let receipts_boxes_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Box)?;
+        let receipts_figures_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Figure)?;
+
+        // Shared CPI accounts.
+        let bubblegum_program = ctx.accounts.bubblegum_program.to_account_info();
+        let tree_config = ctx.accounts.tree_authority.to_account_info();
+        let leaf_owner = ctx.accounts.payer.to_account_info();
+        let leaf_delegate = ctx.accounts.payer.to_account_info();
+        let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
+        let tree_creator_or_delegate = ctx.accounts.config.to_account_info();
+        let collection_authority = ctx.accounts.config.to_account_info();
+        let collection_authority_record_pda =
+            ctx.accounts.collection_authority_record_pda.to_account_info();
+        let collection_mint = ctx.accounts.collection_mint.to_account_info();
+        let collection_metadata = ctx.accounts.collection_metadata.to_account_info();
+        let collection_edition = ctx.accounts.collection_master_edition.to_account_info();
+        let bubblegum_signer = ctx.accounts.bubblegum_signer.to_account_info();
+        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
+        let compression_program = ctx.accounts.compression_program.to_account_info();
+        let token_metadata_program = ctx.accounts.token_metadata_program.to_account_info();
+        let system_program = ctx.accounts.system_program.to_account_info();
+
+        // Mint instruction metas are constant across all receipts.
+        let mut mint_ix = Instruction {
+            program_id: mpl_bubblegum::ID,
+            accounts: vec![
+                AccountMeta::new(*tree_config.key, false),
+                AccountMeta::new_readonly(*leaf_owner.key, false),
+                AccountMeta::new_readonly(*leaf_delegate.key, false),
+                AccountMeta::new(*merkle_tree.key, false),
+                AccountMeta::new_readonly(*payer.key, true),
+                AccountMeta::new_readonly(*tree_creator_or_delegate.key, true),
+                AccountMeta::new_readonly(*collection_authority.key, true),
+                AccountMeta::new_readonly(*collection_authority_record_pda.key, false),
+                AccountMeta::new_readonly(*collection_mint.key, false),
+                AccountMeta::new(*collection_metadata.key, false),
+                AccountMeta::new_readonly(*collection_edition.key, false),
+                AccountMeta::new_readonly(*bubblegum_signer.key, false),
+                AccountMeta::new_readonly(*log_wrapper.key, false),
+                AccountMeta::new_readonly(*compression_program.key, false),
+                AccountMeta::new_readonly(*token_metadata_program.key, false),
+                AccountMeta::new_readonly(*system_program.key, false),
+            ],
+            data: Vec::with_capacity(256),
+        };
+
+        let mut mint_infos = Vec::with_capacity(17);
+        mint_infos.push(bubblegum_program.clone());
+        mint_infos.push(tree_config.clone());
+        mint_infos.push(leaf_owner.clone());
+        mint_infos.push(leaf_delegate.clone());
+        mint_infos.push(merkle_tree.clone());
+        mint_infos.push(payer.clone());
+        mint_infos.push(tree_creator_or_delegate.clone());
+        mint_infos.push(collection_authority.clone());
+        mint_infos.push(collection_authority_record_pda.clone());
+        mint_infos.push(collection_mint.clone());
+        mint_infos.push(collection_metadata.clone());
+        mint_infos.push(collection_edition.clone());
+        mint_infos.push(bubblegum_signer.clone());
+        mint_infos.push(log_wrapper.clone());
+        mint_infos.push(compression_program.clone());
+        mint_infos.push(token_metadata_program.clone());
+        mint_infos.push(system_program.clone());
+
+        let creator = mpl_bubblegum::types::Creator {
+            address: ctx.accounts.config.key(),
+            verified: true,
+            share: 100,
+        };
+        let mut creators = Vec::with_capacity(1);
+        creators.push(creator);
+
+        let mut metadata = mpl_bubblegum::types::MetadataArgs {
+            name: String::with_capacity(64),
+            symbol: cfg.symbol.clone(),
+            uri: String::with_capacity(BoxMinterConfig::MAX_URI_BASE + 32),
+            seller_fee_basis_points: 0,
+            creators,
+            primary_sale_happened: false,
+            is_mutable: false,
+            edition_nonce: None,
+            token_standard: Some(mpl_bubblegum::types::TokenStandard::NonFungible),
+            collection: Some(mpl_bubblegum::types::Collection {
+                key: cfg.collection_mint,
+                verified: true,
+            }),
+            uses: None,
+            token_program_version: mpl_bubblegum::types::TokenProgramVersion::Original,
+        };
+
+        let signer_seeds: &[&[&[u8]]] = &[&[BoxMinterConfig::SEED, &[cfg.bump]]];
+
+        // Reusable burn instruction buffers to reduce allocations.
+        let mut burn_ix = Instruction {
+            program_id: mpl_bubblegum::ID,
+            accounts: Vec::with_capacity(7 + 32), // 32 is an upper bound for typical truncated proofs
+            data: Vec::with_capacity(8 + 32 * 3 + 8 + 4),
+        };
+        let mut burn_infos = Vec::with_capacity(1 + 7 + 32);
+
+        // Remaining accounts are concatenated proof nodes for each burn, in the same order as `items`.
+        let mut rem_offset: usize = 0;
+        for item in args.items {
+            let proof_len = item.proof_len as usize;
+            require!(rem_offset + proof_len <= ctx.remaining_accounts.len(), BoxMinterError::InvalidProof);
+            let proof_accounts = &ctx.remaining_accounts[rem_offset..rem_offset + proof_len];
+            rem_offset += proof_len;
+
+            // 1) Burn the selected leaf.
+            burn_ix.data.clear();
+            burn_ix.data.extend_from_slice(&IX_BURN);
+            burn_ix.data.extend_from_slice(&item.root);
+            burn_ix.data.extend_from_slice(&item.data_hash);
+            burn_ix.data.extend_from_slice(&item.creator_hash);
+            burn_ix.data.extend_from_slice(&item.nonce.to_le_bytes());
+            burn_ix.data.extend_from_slice(&item.index.to_le_bytes());
+
+            burn_ix.accounts.clear();
+            burn_ix.accounts.push(AccountMeta::new_readonly(*ctx.accounts.tree_authority.key, false));
+            burn_ix.accounts.push(AccountMeta::new_readonly(*ctx.accounts.payer.key, true)); // leafOwner
+            burn_ix.accounts.push(AccountMeta::new_readonly(*ctx.accounts.payer.key, true)); // leafDelegate
+            burn_ix.accounts.push(AccountMeta::new(*ctx.accounts.merkle_tree.key, false));
+            burn_ix.accounts.push(AccountMeta::new_readonly(*ctx.accounts.log_wrapper.key, false));
+            burn_ix
+                .accounts
+                .push(AccountMeta::new_readonly(*ctx.accounts.compression_program.key, false));
+            burn_ix
+                .accounts
+                .push(AccountMeta::new_readonly(*ctx.accounts.system_program.key, false));
+            for acc in proof_accounts.iter() {
+                burn_ix.accounts.push(AccountMeta::new_readonly(acc.key(), false));
+            }
+
+            burn_infos.clear();
+            burn_infos.push(ctx.accounts.bubblegum_program.to_account_info());
+            burn_infos.push(ctx.accounts.tree_authority.to_account_info());
+            burn_infos.push(ctx.accounts.payer.to_account_info());
+            burn_infos.push(ctx.accounts.payer.to_account_info());
+            burn_infos.push(ctx.accounts.merkle_tree.to_account_info());
+            burn_infos.push(ctx.accounts.log_wrapper.to_account_info());
+            burn_infos.push(ctx.accounts.compression_program.to_account_info());
+            burn_infos.push(ctx.accounts.system_program.to_account_info());
+            for acc in proof_accounts.iter() {
+                burn_infos.push(acc.clone());
+            }
+            invoke(&burn_ix, &burn_infos).map_err(anchor_lang::error::Error::from)?;
+
+            // 2) Mint a receipt cNFT (same tree + collection).
+            let (uri_base, name_prefix) = match item.kind {
+                0 => (&receipts_boxes_uri_base, "mons receipt · box "),
+                1 => (&receipts_figures_uri_base, "mons receipt · figure #"),
+                _ => return Err(error!(BoxMinterError::InvalidDeliveryItemKind)),
+            };
+
+            metadata.name.clear();
+            metadata.name.push_str(name_prefix);
+            write!(&mut metadata.name, "{}", item.ref_id)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+            metadata.uri.clear();
+            metadata.uri.push_str(uri_base);
+            write!(&mut metadata.uri, "{}", item.ref_id)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            metadata.uri.push_str(".json");
+
+            mint_ix.data.clear();
+            mint_ix.data.extend_from_slice(&IX_MINT_TO_COLLECTION_V1);
+            metadata
+                .serialize(&mut mint_ix.data)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+            invoke_signed(&mint_ix, &mint_infos, signer_seeds)
+                .map_err(anchor_lang::error::Error::from)?;
+        }
+
+        require!(rem_offset == ctx.remaining_accounts.len(), BoxMinterError::InvalidProof);
+        msg!("delivery_id:{}", args.delivery_id);
+        Ok(())
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
@@ -479,6 +724,33 @@ pub struct InitializeArgs {
     pub name_prefix: String,
     pub symbol: String,
     pub uri_base: String,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct DeliverItemArgs {
+    /// 0 = box, 1 = figure
+    pub kind: u8,
+    /// box id or dude id (for receipt metadata)
+    pub ref_id: u32,
+    /// Bubblegum burn proof root (32 bytes)
+    pub root: [u8; 32],
+    /// Leaf data hash (32 bytes)
+    pub data_hash: [u8; 32],
+    /// Leaf creator hash (32 bytes)
+    pub creator_hash: [u8; 32],
+    /// Leaf nonce (u64)
+    pub nonce: u64,
+    /// Leaf index (0..2^maxDepth-1)
+    pub index: u32,
+    /// How many proof nodes are provided for this burn in `remaining_accounts`.
+    pub proof_len: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct DeliverArgs {
+    pub delivery_id: u32,
+    pub delivery_fee_lamports: u64,
+    pub items: Vec<DeliverItemArgs>,
 }
 
 #[account]
@@ -664,6 +936,62 @@ pub struct OpenBox<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct Deliver<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    /// Cloud-held signer (must match config.admin).
+    pub cosigner: Signer<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// CHECK: Must match config.treasury
+    #[account(mut, address = config.treasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Must match config.merkle_tree
+    #[account(mut, address = config.merkle_tree)]
+    pub merkle_tree: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum TreeConfig PDA derived from merkle_tree.
+    #[account(mut)]
+    pub tree_authority: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex collection mint (verified collection)
+    #[account(address = config.collection_mint)]
+    pub collection_mint: UncheckedAccount<'info>,
+
+    /// CHECK: Metadata PDA for collection mint
+    #[account(mut, address = config.collection_metadata)]
+    pub collection_metadata: UncheckedAccount<'info>,
+
+    /// CHECK: Master edition PDA for collection mint
+    #[account(address = config.collection_master_edition)]
+    pub collection_master_edition: UncheckedAccount<'info>,
+
+    /// CHECK: Token Metadata collection authority record PDA for (collection_mint, config PDA)
+    pub collection_authority_record_pda: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum's CPI signer PDA for collection verification
+    pub bubblegum_signer: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Bubblegum program
+    pub bubblegum_program: UncheckedAccount<'info>,
+
+    /// CHECK: SPL Account Compression program
+    pub compression_program: UncheckedAccount<'info>,
+
+    /// CHECK: SPL Noop program
+    pub log_wrapper: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Token Metadata program
+    pub token_metadata_program: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 fn verify_tree_authority(merkle_tree: Pubkey, tree_authority: Pubkey) -> Result<()> {
     let (expected, _bump) =
         Pubkey::find_program_address(&[merkle_tree.as_ref()], &mpl_bubblegum::ID);
@@ -730,6 +1058,45 @@ fn derive_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
     Ok(out)
 }
 
+#[derive(Clone, Copy)]
+enum ReceiptKind {
+    Box,
+    Figure,
+}
+
+fn derive_receipts_uri_base(boxes_uri_base: &str, kind: ReceiptKind) -> Result<String> {
+    if boxes_uri_base.ends_with(".json") {
+        // Shared single-URI metadata isn't compatible with per-item IDs.
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    let target = match kind {
+        ReceiptKind::Box => "/json/receipts/boxes/",
+        ReceiptKind::Figure => "/json/receipts/figures/",
+    };
+
+    let mut out = boxes_uri_base.to_string();
+    if out.contains("/json/boxes/") {
+        out = out.replace("/json/boxes/", target);
+    } else if out.contains("/boxes/") {
+        out = out.replace("/boxes/", target);
+    } else if out.contains("boxes") {
+        // Best-effort fallback for slightly different prefixes.
+        let replacement = match kind {
+            ReceiptKind::Box => "receipts/boxes",
+            ReceiptKind::Figure => "receipts/figures",
+        };
+        out = out.replace("boxes", replacement);
+    } else {
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    if !out.ends_with('/') {
+        out.push('/');
+    }
+    Ok(out)
+}
+
 #[error_code]
 pub enum BoxMinterError {
     #[msg("Invalid quantity")]
@@ -768,6 +1135,14 @@ pub enum BoxMinterError {
     InvalidCosigner,
     #[msg("Invalid figure URI base")]
     InvalidFigureUriBase,
+    #[msg("Invalid receipt URI base")]
+    InvalidReceiptUriBase,
+    #[msg("Invalid delivery fee")]
+    InvalidDeliveryFee,
+    #[msg("Invalid delivery item kind")]
+    InvalidDeliveryItemKind,
+    #[msg("Invalid delivery proof")]
+    InvalidProof,
 }
 
 

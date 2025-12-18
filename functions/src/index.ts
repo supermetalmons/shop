@@ -189,6 +189,11 @@ const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || Pu
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
 // Anchor discriminator = sha256("global:open_box")[0..8]
 const IX_OPEN_BOX = Buffer.from('e1dc0a68ad97d6c7', 'hex');
+// Anchor discriminator = sha256("global:deliver")[0..8]
+const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
+
+const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
+const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
 
 function assertConfiguredProgramId(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
@@ -954,6 +959,28 @@ function u64LE(value: bigint) {
   return buf;
 }
 
+function decodeU64LEAsNumber(buf: Buffer, offset: number, label: string): number {
+  const n = buf.readBigUInt64LE(offset);
+  if (n > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new functions.https.HttpsError('failed-precondition', `${label} is too large`);
+  }
+  return Number(n);
+}
+
+function decodeDeliverIxData(data: Buffer): { deliveryId: number; feeLamports: number; itemsLen: number } {
+  if (data.length < 8 + 4 + 8 + 4) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliver instruction data (too short)');
+  }
+  const disc = data.subarray(0, 8);
+  if (!disc.equals(IX_DELIVER)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Transaction is not a box_minter deliver instruction');
+  }
+  const deliveryId = data.readUInt32LE(8);
+  const feeLamports = decodeU64LEAsNumber(data, 12, 'delivery_fee_lamports');
+  const itemsLen = data.readUInt32LE(20);
+  return { deliveryId, feeLamports, itemsLen };
+}
+
 function normalizeU64(value: unknown, label: string): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return BigInt(Math.floor(value));
@@ -1547,6 +1574,164 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId };
 });
 
+export const createDeliveryOrder = onCallLogged('createDeliveryOrder', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
+  const { owner, itemIds, addressId } = parseRequest(schema, request.data);
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+
+  // Keep server-side limits conservative; client will also enforce tx size limits.
+  if (itemIds.length > 8) {
+    throw new functions.https.HttpsError('invalid-argument', 'Too many items in one delivery request (max 8)');
+  }
+
+  // Provide tree params to the client so it can truncate proofs without importing spl-account-compression in the browser.
+  const { canopyDepth, maxDepth } = await getTreeParams(merkleTree);
+
+  const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
+  if (!addressSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Address not found');
+  }
+  const addressData = addressSnap.data();
+  const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
+
+  const orderId = db.collection('deliveryOrders').doc().id;
+  const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
+  // Small on-chain-friendly id (u32-ish). Stored + later embedded in the on-chain instruction data.
+  const deliveryId = randomInt(1, 2 ** 31);
+
+  await db.doc(`deliveryOrders/${orderId}`).set({
+    status: 'prepared',
+    owner: ownerWallet,
+    addressId,
+    addressSnapshot: {
+      ...addressData,
+      id: addressId,
+      countryCode: addressCountry || addressData?.countryCode,
+    },
+    itemIds,
+    deliveryId,
+    deliveryLamports,
+    treeParams: { canopyDepth, maxDepth },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { orderId, deliveryId, deliveryLamports, canopyDepth, maxDepth };
+});
+
+export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const schema = z.object({ owner: z.string(), orderId: z.string(), encodedTx: z.string() });
+  const { owner, orderId, encodedTx } = parseRequest(schema, request.data);
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+
+  const orderRef = db.doc(`deliveryOrders/${orderId}`);
+  const orderSnap = await orderRef.get();
+  if (!orderSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Delivery order not found');
+  }
+  const order = orderSnap.data() as any;
+  if (order.owner && order.owner !== ownerWallet) {
+    throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
+  }
+
+  let tx: VersionedTransaction;
+  try {
+    tx = VersionedTransaction.deserialize(Buffer.from(encodedTx, 'base64'));
+  } catch (err) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid transaction payload (decode failed)', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Validate payer == owner wallet.
+  const payerKey = tx.message.staticAccountKeys?.[0];
+  if (!payerKey || payerKey.toBase58() !== ownerWallet) {
+    throw new functions.https.HttpsError('failed-precondition', 'Transaction payer does not match owner');
+  }
+
+  assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+
+  // Find the box_minter instruction and decode its args.
+  const keys = tx.message.staticAccountKeys;
+  const ix = (tx.message.compiledInstructions || []).find((ci: any) => {
+    const program = keys?.[ci.programIdIndex];
+    return program && program.equals(boxMinterProgramId);
+  });
+  if (!ix) {
+    throw new functions.https.HttpsError('failed-precondition', 'Missing box_minter instruction in transaction');
+  }
+
+  const ixData = Buffer.from(ix.data || []);
+  const decoded = decodeDeliverIxData(ixData);
+  const expectedFee = Number(order.deliveryLamports || order.shippingLamports || 0);
+  const expectedId = Number(order.deliveryId || 0);
+
+  if (!expectedFee || !expectedId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Order is missing delivery fee/id (recreate order)');
+  }
+  if (decoded.deliveryId !== expectedId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery id mismatch', {
+      expectedId,
+      got: decoded.deliveryId,
+    });
+  }
+  if (decoded.feeLamports !== expectedFee) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery fee mismatch', {
+      expectedFee,
+      got: decoded.feeLamports,
+    });
+  }
+  if (decoded.feeLamports < MIN_DELIVERY_LAMPORTS || decoded.feeLamports > MAX_DELIVERY_LAMPORTS) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery fee is out of bounds', {
+      feeLamports: decoded.feeLamports,
+      min: MIN_DELIVERY_LAMPORTS,
+      max: MAX_DELIVERY_LAMPORTS,
+    });
+  }
+  const expectedItems = Array.isArray(order.itemIds) ? order.itemIds.length : 0;
+  if (expectedItems && decoded.itemsLen !== expectedItems) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery item count mismatch', {
+      expectedItems,
+      got: decoded.itemsLen,
+    });
+  }
+
+  // Require that the server cosigner is a required signer on this tx (so on-chain can enforce approval).
+  const signer = cosigner();
+  const header: any = (tx.message as any).header;
+  const numRequired = Number(header?.numRequiredSignatures || 0);
+  const required = keys.slice(0, Math.max(0, numRequired)).map((k) => k.toBase58());
+  if (!required.includes(signer.publicKey.toBase58())) {
+    throw new functions.https.HttpsError('failed-precondition', 'Transaction is missing required server cosigner', {
+      requiredSigners: required,
+      expectedCosigner: signer.publicKey.toBase58(),
+    });
+  }
+
+  // Sign only as cosigner; wallet will add payer sig client-side.
+  tx.sign([signer]);
+
+  const raw = tx.serialize();
+  const MAX_RAW_TX_BYTES = 1232;
+  if (raw.length > MAX_RAW_TX_BYTES) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try fewer items.`,
+      {
+        rawBytes: raw.length,
+        maxRawBytes: MAX_RAW_TX_BYTES,
+        base64Chars: Buffer.from(raw).toString('base64').length,
+        items: decoded.itemsLen,
+      },
+    );
+  }
+
+  return { encodedTx: Buffer.from(raw).toString('base64') };
+});
+
 export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), signature: z.string(), orderId: z.string() });
@@ -1579,26 +1764,56 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
   if (!payer || payer.toBase58() !== ownerWallet) {
     throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
   }
-  const memo = extractMemos(tx).find((m) => m === `delivery:${orderId}`);
-  if (!memo) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery memo not found on transaction');
+
+  // Verify the tx contains our box_minter::deliver instruction and that it matches the order's fee/id.
+  const keys = resolveInstructionAccounts(tx);
+  const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(boxMinterProgramId)) return false;
+    const dataField = (ix as any).data;
+    const dataBuffer =
+      typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
+    return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
+  });
+  if (!deliverIx) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
   }
-  const shippingPaid = lamportsDeltaForAccount(tx, shippingVault);
-  if (order.shippingLamports && shippingPaid < order.shippingLamports) {
-    throw new functions.https.HttpsError('failed-precondition', 'Shipping payment missing or too low');
+
+  const deliverDataField = (deliverIx as any).data;
+  const deliverData =
+    typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
+  const decoded = decodeDeliverIxData(deliverData);
+
+  const expectedId = Number(order.deliveryId || 0);
+  const expectedFee = Number(order.deliveryLamports || order.shippingLamports || 0);
+  if (expectedId && decoded.deliveryId !== expectedId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery id mismatch', {
+      expectedId,
+      got: decoded.deliveryId,
+    });
   }
+  if (expectedFee && decoded.feeLamports !== expectedFee) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery fee mismatch', {
+      expectedFee,
+      got: decoded.feeLamports,
+    });
+  }
+
+  // Treasury is the 4th account in our deliver instruction account list:
+  // [config, cosigner, payer, treasury, ...]
+  const treasuryKeyIndex = Array.isArray((deliverIx as any).accountKeyIndexes) ? (deliverIx as any).accountKeyIndexes[3] : null;
+  const treasuryKey = typeof treasuryKeyIndex === 'number' ? keys[treasuryKeyIndex] : null;
+  const shippingPaid = treasuryKey ? lamportsDeltaForAccount(tx, treasuryKey) : 0;
+  if (expectedFee && shippingPaid < expectedFee) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery payment missing or too low');
+  }
+
   const mintedIds = extractCompressedAssetIds(tx);
-  const certificateSummary = (order.items || []).map(
-    (item: any, idx: number) => ({
-      assetId: item.assetId,
-      kind: item.kind,
-      boxId: item.boxId,
-      dudeIds: item.dudeIds,
-      certificateIndex: item.certificateIndex,
-      claimCode: item.claimCode,
-      mintedAssetId: mintedIds[idx] || null,
-    }),
-  );
+  const itemIds: string[] = Array.isArray(order.itemIds) ? order.itemIds : [];
+  const certificateSummary = itemIds.map((assetId: string, idx: number) => ({
+    assetId,
+    mintedAssetId: mintedIds[idx] || null,
+  }));
 
   let finalSignature = signature;
   let finalShippingPaid = shippingPaid;
@@ -1619,7 +1834,7 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
         status: 'completed',
         signature,
         payer: ownerWallet,
-        memoDetected: Boolean(memo),
+        deliveryId: expectedId || decoded.deliveryId,
         shippingPaid,
         mintedCertificates: certificateSummary,
         burnedAssets: existing.itemIds || order.itemIds,
