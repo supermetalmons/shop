@@ -24,6 +24,32 @@ import { buildMintBoxesTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 
+function hiddenInventoryKey(wallet?: string) {
+  return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
+}
+
+function loadHiddenAssets(wallet?: string): Set<string> {
+  if (typeof window === 'undefined' || !wallet) return new Set();
+  try {
+    const raw = window.localStorage?.getItem(hiddenInventoryKey(wallet));
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v) => typeof v === 'string' && v));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistHiddenAssets(wallet: string, ids: Set<string>) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage?.setItem(hiddenInventoryKey(wallet), JSON.stringify(Array.from(ids)));
+  } catch {
+    // ignore storage failures
+  }
+}
+
 function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -47,6 +73,31 @@ function App() {
   const [status, setStatus] = useState<string>('');
   const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [contactEmail, setContactEmail] = useState(profile?.email || '');
+  const owner = publicKey?.toBase58();
+  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
+
+  useEffect(() => {
+    setHiddenAssets(loadHiddenAssets(owner));
+  }, [owner]);
+
+  const markAssetsHidden = useMemo(() => {
+    if (!owner) return (_ids: string[]) => undefined;
+    return (ids: string[]) => {
+      setHiddenAssets((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => {
+          if (typeof id === 'string' && id) next.add(id);
+        });
+        persistHiddenAssets(owner, next);
+        return next;
+      });
+    };
+  }, [owner]);
+
+  const visibleInventory = useMemo(() => {
+    if (!hiddenAssets.size) return inventory;
+    return inventory.filter((item) => !hiddenAssets.has(item.id));
+  }, [inventory, hiddenAssets]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
@@ -105,6 +156,8 @@ function App() {
       setLastOpen({ boxId: item.id, dudeIds: revealedDudes, signature: sig });
       const revealCopy = revealedDudes.length ? ` · dudes ${revealedDudes.join(', ')}` : '';
       setStatus(`Opened box · ${sig}${revealCopy}`);
+      // Helius indexing can lag after burns; hide immediately once the tx is confirmed.
+      markAssetsHidden([item.id]);
       await refetchInventory();
     } catch (err) {
       console.error(err);
@@ -192,6 +245,8 @@ function App() {
         const msg = err instanceof Error ? err.message : 'Failed to record delivery';
         setStatus(`Delivery requested · ${sig} (finalize warning: ${msg})`);
       }
+      // Delivery burns the selected assets; hide them immediately once confirmed.
+      markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();
     } catch (err) {
@@ -299,7 +354,7 @@ function App() {
       <section className="card">
         <div className="card__title">Inventory</div>
         <p className="muted small">Boxes, dudes, and certificates fetched directly from Helius.</p>
-        <InventoryGrid items={inventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
+        <InventoryGrid items={visibleInventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
         {openLoading ? <div className="muted">Opening {shortAddress(openLoading)}…</div> : null}
       </section>
 

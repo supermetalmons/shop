@@ -230,7 +230,26 @@ function assetMatchesCollection(asset: DasAsset, collectionMint: string): boolea
   return false;
 }
 
+function isBurntAsset(asset: DasAsset): boolean {
+  const anyAsset = asset as any;
+  const burnt =
+    anyAsset?.burnt ??
+    anyAsset?.burned ??
+    anyAsset?.compression?.burnt ??
+    anyAsset?.compression?.burned ??
+    anyAsset?.ownership?.burnt ??
+    anyAsset?.ownership?.burned;
+
+  if (burnt === true) return true;
+  // Some APIs return a non-boolean marker (slot/object). Treat any defined, non-false value as burnt.
+  if (burnt != null && burnt !== false) return true;
+  return false;
+}
+
 function isMonsAsset(asset: DasAsset): boolean {
+  // Never show burned assets in inventory.
+  if (isBurntAsset(asset)) return false;
+
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
@@ -241,6 +260,7 @@ function isMonsAsset(asset: DasAsset): boolean {
 }
 
 function transformInventoryItem(asset: DasAsset): InventoryItem | null {
+  if (isBurntAsset(asset)) return null;
   const kind = getAssetKind(asset);
   if (!kind) return null;
   const boxId = getBoxIdFromAsset(asset);
