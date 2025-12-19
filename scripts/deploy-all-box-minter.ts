@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 import bs58 from 'bs58';
 import {
   clusterApiUrl,
+  AddressLookupTableProgram,
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -18,6 +19,8 @@ import {
 
 // MPL Core program id.
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+// SPL Noop program (Metaplex "log wrapper").
+const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 // NOTE: This deployment script targets uncompressed MPL Core assets (no Bubblegum / no Merkle tree).
 
 /**
@@ -319,6 +322,58 @@ function readProgramId(onchainDir: string): string {
   return match[1];
 }
 
+function uniquePubkeys(keys: PublicKey[]) {
+  const seen = new Set<string>();
+  const out: PublicKey[] = [];
+  for (const k of keys) {
+    const s = k.toBase58();
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push(k);
+  }
+  return out;
+}
+
+async function ensureDeliveryLookupTable(args: {
+  connection: Connection;
+  payer: Keypair;
+  configPda: PublicKey;
+  treasury: PublicKey;
+  coreCollection: PublicKey;
+}): Promise<PublicKey> {
+  const { connection, payer, configPda, treasury, coreCollection } = args;
+  const required = uniquePubkeys([
+    configPda,
+    treasury,
+    coreCollection,
+    MPL_CORE_PROGRAM_ID,
+    SystemProgram.programId,
+    SPL_NOOP_PROGRAM_ID,
+  ]);
+
+  // Create a fresh LUT + extend with required addresses (no caching; clean deployments).
+  const recentSlot = await connection.getSlot('confirmed');
+  const [createIx, lutAddress] = AddressLookupTableProgram.createLookupTable({
+    payer: payer.publicKey,
+    authority: payer.publicKey,
+    recentSlot,
+  });
+  const extendIx = AddressLookupTableProgram.extendLookupTable({
+    payer: payer.publicKey,
+    authority: payer.publicKey,
+    lookupTable: lutAddress,
+    addresses: required,
+  });
+
+  const tx = new Transaction().add(createIx, extendIx);
+  tx.feePayer = payer.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
+  console.log('✅ Delivery ALT created:', sig);
+  console.log('  ALT:', lutAddress.toBase58());
+  return lutAddress;
+}
+
 function generateFreshProgramKeypair(programKeypairPath: string): { programId: string; backupPath?: string } {
   mkdirSync(path.dirname(programKeypairPath), { recursive: true });
 
@@ -493,7 +548,9 @@ async function main() {
   const DROP_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
   const BOX_MINTER_CONFIG = {
     // Payment + mint caps
-    treasury: undefined, // defaults to payer
+    // Single-master-key mode: treasury defaults to deployer/admin keypair (no extra vault key management).
+    // If you truly want a different vault, fork this script and set a different pubkey here.
+    treasury: undefined,
     priceSol: 0.001,
     maxSupply: 333,
     maxPerTx: 15,
@@ -519,10 +576,26 @@ async function main() {
     console.log(
       `Minted: ${cfg.minted}/${cfg.maxSupply} · price(lamports): ${cfg.priceLamports.toString()} · max/tx: ${cfg.maxPerTx}`,
     );
+    // Single-master-key mode: require deployer/admin/treasury to be the same key.
     if (!payer.publicKey.equals(cfg.admin)) {
-      console.warn(`⚠️  Deployer keypair pubkey: ${payer.publicKey.toBase58()}`);
-      console.warn(`    On-chain admin pubkey : ${cfg.admin.toBase58()}`);
-      console.warn('    (That is fine for reading config, but secrets below won’t be printed.)');
+      throw new Error(
+        `This repo is configured for a single master key.\n` +
+          `Config admin pubkey does not match --keypair.\n` +
+          `- keypair : ${payer.publicKey.toBase58()}\n` +
+          `- admin   : ${cfg.admin.toBase58()}\n` +
+          `\n` +
+          `Fix: re-run with the admin keypair, or redeploy fresh without reusing this config PDA.`,
+      );
+    }
+    if (!payer.publicKey.equals(cfg.treasury)) {
+      throw new Error(
+        `This repo is configured for a single master key.\n` +
+          `Config treasury pubkey does not match --keypair.\n` +
+          `- keypair : ${payer.publicKey.toBase58()}\n` +
+          `- treasury: ${cfg.treasury.toBase58()}\n` +
+          `\n` +
+          `Fix: set treasury to the same key (admin can call set_treasury) or redeploy fresh.`,
+      );
     }
     await assertMplCoreCollection(connection, cfg.coreCollection);
 
@@ -544,13 +617,27 @@ async function main() {
     console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
     console.log('# Also required (not generated here):');
     console.log('# HELIUS_API_KEY=...');
-    console.log('# DELIVERY_VAULT=...');
     if (payer.publicKey.equals(cfg.admin)) {
       console.log('# Sensitive: keep this secret offline/backed up securely.');
       console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
     } else {
       console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
     }
+
+    try {
+      const lut = await ensureDeliveryLookupTable({
+        connection,
+        payer,
+        configPda,
+        treasury: cfg.treasury,
+        coreCollection: cfg.coreCollection,
+      });
+      console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
+    } catch (err) {
+      console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
+      console.log('# DELIVERY_LOOKUP_TABLE=...');
+    }
+
     console.log('');
     console.log('--- notes ---');
     console.log(
@@ -559,6 +646,7 @@ async function main() {
     return;
   }
 
+  // Single-master-key mode: make treasury == deployer/admin keypair by default.
   const treasury = new PublicKey(BOX_MINTER_CONFIG.treasury || payer.publicKey.toBase58());
   const priceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.priceSol) * LAMPORTS_PER_SOL));
   const maxSupply = Number(BOX_MINTER_CONFIG.maxSupply);
@@ -657,9 +745,21 @@ async function main() {
   console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
   console.log('# Also required (not generated here):');
   console.log('# HELIUS_API_KEY=...');
-  console.log('# DELIVERY_VAULT=...');
   console.log('# Sensitive: keep this secret offline/backed up securely.');
   console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
+  try {
+    const lut = await ensureDeliveryLookupTable({
+      connection,
+      payer,
+      configPda,
+      treasury,
+      coreCollection: resolvedCoreCollection,
+    });
+    console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
+  } catch (err) {
+    console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
+    console.log('# DELIVERY_LOOKUP_TABLE=...');
+  }
   console.log('');
   console.log('--- notes ---');
   console.log(

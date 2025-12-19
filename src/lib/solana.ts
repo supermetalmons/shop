@@ -157,7 +157,7 @@ export function encryptAddressPayload(
   if (remoteKey.length !== nacl.box.publicKeyLength) {
     const looksBase58 = /^[1-9A-HJ-NP-Za-km-z]+$/.test(rawKey);
     const hint = looksBase58
-      ? ' It looks like you pasted a base58 Solana address (e.g. DELIVERY_VAULT). This must be a TweetNaCl box (Curve25519) public key encoded in base64.'
+      ? ' It looks like you pasted a base58 Solana address. This must be a TweetNaCl box (Curve25519) public key encoded in base64.'
       : '';
     throw new Error(
       `Invalid address encryption public key: expected base64 Curve25519 public key (${nacl.box.publicKeyLength} bytes), got ${remoteKey.length} bytes after base64 decode.${hint}`,

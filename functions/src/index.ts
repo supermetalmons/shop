@@ -10,6 +10,7 @@ import {
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
+  AddressLookupTableAccount,
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
@@ -158,6 +159,14 @@ const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 
 const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
 const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
+
+// Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
+// Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
+const deliveryLookupTable = new PublicKey(process.env.DELIVERY_LOOKUP_TABLE || PublicKey.default.toBase58());
+const deliveryLookupTableStr = deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58();
+const DELIVERY_LUT_CACHE_TTL_MS = 10 * 60 * 1000;
+let cachedDeliveryLut: AddressLookupTableAccount | null = null;
+let cachedDeliveryLutAtMs = 0;
 
 function assertConfiguredProgramId(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
@@ -782,11 +791,35 @@ async function assignDudes(boxId: string): Promise<number[]> {
   });
 }
 
-function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string, signers: Keypair[] = []) {
-  const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
+function buildTx(
+  instructions: TransactionInstruction[],
+  payer: PublicKey,
+  recentBlockhash: string,
+  signers: Keypair[] = [],
+  addressLookupTables: AddressLookupTableAccount[] = [],
+) {
+  const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message(addressLookupTables);
   const tx = new VersionedTransaction(message);
   if (signers.length) tx.sign(signers);
   return tx;
+}
+
+async function getDeliveryLookupTable(conn: Connection): Promise<AddressLookupTableAccount[] | []> {
+  if (!deliveryLookupTableStr) return [];
+  const now = Date.now();
+  if (cachedDeliveryLut && now - cachedDeliveryLutAtMs < DELIVERY_LUT_CACHE_TTL_MS) return [cachedDeliveryLut];
+
+  const res = await withTimeout(conn.getAddressLookupTable(deliveryLookupTable), RPC_TIMEOUT_MS, 'getAddressLookupTable:delivery');
+  const lut = res?.value || null;
+  if (!lut) {
+    throw new functions.https.HttpsError('failed-precondition', 'DELIVERY_LOOKUP_TABLE not found on-chain', {
+      deliveryLookupTable: deliveryLookupTableStr,
+      cluster,
+    });
+  }
+  cachedDeliveryLut = lut;
+  cachedDeliveryLutAtMs = now;
+  return [lut];
 }
 
 function normalizeCountryCode(country?: string) {
@@ -1224,6 +1257,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   const programId = boxMinterProgramId;
   const ownerPk = new PublicKey(ownerWallet);
   const conn = connection();
+  const addressLookupTables = await getDeliveryLookupTable(conn);
 
   // Allocate a unique, compact delivery id and its on-chain PDA.
   let deliveryId = 0;
@@ -1275,7 +1309,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   ];
 
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
-  const tx = buildTx(instructions, ownerPk, blockhash, [signer]);
+  const tx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
 
   const raw = tx.serialize();
   const MAX_RAW_TX_BYTES = 1232;
@@ -1303,6 +1337,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
         ownerPk,
         blockhash,
         [signer],
+        addressLookupTables,
       );
       if (candidateTx.serialize().length <= MAX_RAW_TX_BYTES) {
         maxFit = n;
@@ -1329,6 +1364,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     itemIds: uniqueItemIds,
     deliveryId,
     deliveryPda: deliveryPda.toBase58(),
+    ...(deliveryLookupTableStr ? { lookupTable: deliveryLookupTableStr } : {}),
     deliveryLamports,
     createdAt: FieldValue.serverTimestamp(),
   });

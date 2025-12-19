@@ -30,13 +30,10 @@ All commands run from repo root unless noted.
        --rpc https://api.devnet.solana.com
      ```
 - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
-Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `COLLECTION_MINT`, `COSIGNER_SECRET`).
+Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `COLLECTION_MINT`, `COSIGNER_SECRET`, `DELIVERY_LOOKUP_TABLE`).
 
-3. Generate the shipping vault:
-   ```bash
-   npm run keygen
-   ```
-   Output: `DELIVERY_VAULT` (public key) and the private key (store securely).
+3. Single-master-key mode:
+   - The deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair to manage).
 4. Decide supplies & metadata:
    - Box minting parameters are hard-coded in `scripts/deploy-all-box-minter.ts` (edit there before deploying).
    - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
@@ -57,7 +54,7 @@ Keys in the template:
 - `SOLANA_CLUSTER` (devnet|testnet|mainnet-beta)
 - `COSIGNER_SECRET`
 - `COLLECTION_MINT` (MPL-Core collection address for this drop)
-- `DELIVERY_VAULT`
+- `DELIVERY_LOOKUP_TABLE` (optional; printed by deploy script to allow more items per delivery tx)
 - `METADATA_BASE`
 
 Push the filled deployment file to Cloud Functions env vars (2nd-gen). Requires `firebase-tools` with `functions:env:*` support (update with `npm i -g firebase-tools@latest` if the command is missing):
@@ -109,7 +106,7 @@ xargs -L1 firebase functions:env:set < .env.deploy
 ## 6) Production cutover checklist
 - Switch `SOLANA_CLUSTER`, `SOLANA_RPC_URL`, metadata base, and any secondary links to mainnet values.
 - Re-run collection/tree/vault steps on mainnet; update function env vars accordingly.
-- Fund the tree authority and shipping vault with sufficient SOL.
+- Fund the admin/treasury wallet with sufficient SOL.
 - Monitor Helius usage/limits; set alerts.
-- Rotate keys: keep `COSIGNER_SECRET` and `DELIVERY_VAULT` secrets offline/backed up.
+- Rotate keys: keep `COSIGNER_SECRET` secret and backed up securely.
 

@@ -50,7 +50,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `SOLANA_CLUSTER` (`devnet`/`testnet`/`mainnet-beta`)
 - `COSIGNER_SECRET` (bs58 secret key for the server cosigner; must match the on-chain box minter admin)
 - `COLLECTION_MINT` (MPL-Core collection address for this drop)
-- `DELIVERY_VAULT` (SOL recipient for shipping)
+- `DELIVERY_LOOKUP_TABLE` (optional; Address Lookup Table pubkey used to shrink delivery tx size, allowing more items per delivery tx)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 
 ### What the functions do
@@ -67,7 +67,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
     - `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com --core-collection <MPL_CORE_COLLECTION_PUBKEY>`
   - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips init if the config PDA already exists).
   - Prints both frontend + functions env values (including `COSIGNER_SECRET`, which is sensitive).
-- Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).
+- Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).
 
 ## Notes
 - If you see an Apple Silicon error like `You installed esbuild for another platform than the one you're currently using` (e.g. `@esbuild/darwin-x64` vs `@esbuild/darwin-arm64`), your `node_modules` were installed under the wrong architecture (often via Rosetta). Fix with a clean reinstall under the same arch you run Node with:
