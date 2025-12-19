@@ -4,14 +4,12 @@ import * as functions from 'firebase-functions';
 import {
   ComputeBudgetProgram,
   Connection,
-  LAMPORTS_PER_SOL,
   PublicKey,
   Keypair,
   SystemProgram,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
-  clusterApiUrl,
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
@@ -146,7 +144,6 @@ const rpcUrl = heliusRpcUrl();
 // Required: MPL-Core collection address (uncompressed collection).
 const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
-const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 
@@ -397,14 +394,6 @@ async function ensureOnchainCoreConfig(force = false) {
   }
 
   onchainConfigOk = true;
-}
-
-function isTxSizeError(err: unknown) {
-  const anyErr = err as any;
-  const message = typeof anyErr?.message === 'string' ? anyErr.message : '';
-  if (anyErr instanceof RangeError && message.includes('encoding overruns Uint8Array')) return true;
-  const lower = message.toLowerCase();
-  return lower.includes('transaction too large') || lower.includes('encoding overruns') || lower.includes('too large');
 }
 
 function parseSignature(sig: number[] | string) {
@@ -702,17 +691,6 @@ function u32LE(value: number) {
   return buf;
 }
 
-function u64LE(value: bigint) {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(value, 0);
-  return buf;
-}
-
-function borshString(value: string): Buffer {
-  const bytes = Buffer.from(String(value || ''), 'utf8');
-  return Buffer.concat([u32LE(bytes.length), bytes]);
-}
-
 function decodeMplCoreCollectionUpdateAuthority(data: Buffer): PublicKey {
   // mpl-core BaseCollectionV1 starts with `Key` enum (u8). CollectionV1 = 5.
   const key = data[0];
@@ -760,20 +738,6 @@ function decodeDeliverIxItems(data: Buffer): Array<{ kind: number; refId: number
     items.push({ kind, refId });
   }
   return items;
-}
-
-function normalizeU64(value: unknown, label: string): bigint {
-  if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return BigInt(Math.floor(value));
-  if (typeof value === 'string' && value) {
-    try {
-      const n = BigInt(value);
-      if (n >= 0n) return n;
-    } catch {
-      // handled below
-    }
-  }
-  throw new functions.https.HttpsError('invalid-argument', `${label} must be a non-negative u64`);
 }
 
 function encodeOpenBoxArgs(dudeIds: number[]): Buffer {
@@ -867,21 +831,6 @@ function normalizeCountryCode(country?: string) {
   return '';
 }
 
-function shippingZone(country?: string): 'us' | 'intl' {
-  const code = normalizeCountryCode(country);
-  if (code === 'US' || code === 'PR' || code === 'GU' || code === 'VI' || code === 'AS') return 'us';
-  const normalized = (country || '').trim().toLowerCase();
-  if (normalized.includes('united states')) return 'us';
-  return 'intl';
-}
-
-function shippingLamports(country: string, items: number) {
-  const zone = shippingZone(country);
-  const base = zone === 'us' ? 0.15 : 0.32;
-  const multiplier = Math.max(1, items * 0.35);
-  return Math.round(base * multiplier * LAMPORTS_PER_SOL);
-}
-
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -914,17 +863,6 @@ function extractMemos(tx: any): string[] {
 function findClaimMemo(tx: any, code: string) {
   const memos = extractMemos(tx);
   return memos.find((m) => m === `claim:${code}` || m.startsWith(`claim:${code}:`));
-}
-
-function extractCompressedAssetIds(tx: any) {
-  const logs: string[] = tx?.meta?.logMessages || [];
-  const regex = /asset(?:\s+|-)id[:\s]*([1-9A-HJ-NP-Za-km-z]{32,44})/i;
-  const found = new Set<string>();
-  logs.forEach((line) => {
-    const match = typeof line === 'string' ? line.match(regex) : null;
-    if (match?.[1]) found.add(match[1]);
-  });
-  return Array.from(found);
 }
 
 function lamportsDeltaForAccount(tx: any, account: PublicKey): number {
@@ -1205,7 +1143,6 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
 
   const instructions: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    memoInstruction(`mons: open box transfers this box ${boxAssetPk.toBase58()} to vault ${cfgTreasury.toBase58()}`),
     openBoxIx,
     transferBoxIx,
   ];
