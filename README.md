@@ -40,9 +40,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
-- Set env vars (see `deployment-plan.md`), then deploy: `firebase deploy --only firestore:rules,functions`
-- Emulate locally with `firebase emulators:start --only functions,firestore`.
-- Firestore rules live in `firestore.rules` (profiles+addresses are user-restricted, everything else locked down).
+- `firebase deploy --only firestore:rules,functions`
 
 ### Function env (set as runtime config or shell env)
 - `BOX_MINTER_PROGRAM_ID` (same program id as `VITE_BOX_MINTER_PROGRAM_ID`)
@@ -53,13 +51,6 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `DELIVERY_LOOKUP_TABLE` (optional; Address Lookup Table pubkey used to shrink delivery tx size, allowing more items per delivery tx)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 
-### What the functions do
-- `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
-- `saveAddress`: stores an encrypted address blob + country/label under the wallet.
-- `prepareOpenBoxTx`: burns a box Core asset and mints 3 figure Core assets; assigns dudes deterministically per box.
-- `prepareDeliveryTx`: validates requested items + address, allocates a compact on-chain delivery id + fee, builds a single-instruction `deliver` tx (fee + transfers + delivery record PDA), and cosigns it server-side.
-- `prepareIrlClaimTx`: validates IRL claim code + box receipt ownership, then prepares a `mint_receipts` tx (figure receipts) and cosigns it.
-
 ### On-chain + address helpers
 - Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
@@ -68,13 +59,3 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
   - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips init if the config PDA already exists).
   - Prints both frontend + functions env values (including `COSIGNER_SECRET`, which is sensitive).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).
-
-## Notes
-- If you see an Apple Silicon error like `You installed esbuild for another platform than the one you're currently using` (e.g. `@esbuild/darwin-x64` vs `@esbuild/darwin-arm64`), your `node_modules` were installed under the wrong architecture (often via Rosetta). Fix with a clean reinstall under the same arch you run Node with:
-  - `node -p process.arch` (should match `uname -m`)
-  - `rm -rf node_modules package-lock.json && npm install`
-  - If you also run Cloud Functions locally, repeat inside `functions/`: `cd functions && rm -rf node_modules package-lock.json && npm install`
-- If `anchor build` fails with `lock file version 4 requires -Znext-lockfile-bump`, delete `onchain/Cargo.lock` and re-run. The bundled Cargo in Solana/Anchor toolchains can’t parse v4 lockfiles.
-- Supply is capped on-chain by the box minter config PDA (default deploy script: 333 boxes → 999 dudes).
-- Delivery addresses are encrypted client-side with TweetNaCl; only country + label are stored in clear.
-- Secondary links & email form swap in automatically once the drop is minted out.
