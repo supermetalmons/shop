@@ -68,7 +68,6 @@ loadLocalEnv();
 
 const app = initializeApp();
 const db = getFirestore(app);
-const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 type CallableReq<T = any> = functions.https.CallableRequest<T>;
 
@@ -129,6 +128,12 @@ const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
 
 // MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+// Sysvar containing the full transaction instruction list (used by on-chain `open_box` to verify a burn is present).
+const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
+// Solana SPL Noop program (commonly used as Metaplex "log wrapper").
+const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+// SPL Memo program (wallets commonly surface this in the approval UI).
+const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
@@ -703,6 +708,21 @@ function u64LE(value: bigint) {
   return buf;
 }
 
+function borshString(value: string): Buffer {
+  const bytes = Buffer.from(String(value || ''), 'utf8');
+  return Buffer.concat([u32LE(bytes.length), bytes]);
+}
+
+function decodeMplCoreCollectionUpdateAuthority(data: Buffer): PublicKey {
+  // mpl-core BaseCollectionV1 starts with `Key` enum (u8). CollectionV1 = 5.
+  const key = data[0];
+  if (key !== 5) {
+    throw new functions.https.HttpsError('failed-precondition', `Not an MPL-Core collection account (unexpected Key enum ${key})`);
+  }
+  // BaseCollectionV1::update_authority is the next 32 bytes.
+  return new PublicKey(data.subarray(1, 1 + 32));
+}
+
 function decodeU64LEAsNumber(buf: Buffer, offset: number, label: string): number {
   const n = buf.readBigUInt64LE(offset);
   if (n > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -1083,6 +1103,7 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     );
   }
   const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
@@ -1114,6 +1135,41 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     throw new functions.https.HttpsError('invalid-argument', 'Invalid boxAssetId');
   }
 
+  const conn = connection();
+
+  // Collection update authority must remain the box minter config PDA so the on-chain program can mint.
+  const collectionInfo = await withTimeout(
+    conn.getAccountInfo(cfgCoreCollection, { commitment: 'confirmed' }),
+    RPC_TIMEOUT_MS,
+    'getAccountInfo:coreCollection',
+  );
+  if (!collectionInfo?.data) {
+    throw new functions.https.HttpsError('failed-precondition', 'Missing MPL-Core collection account', {
+      collection: cfgCoreCollection.toBase58(),
+    });
+  }
+  if (!collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Configured collection is not owned by the MPL-Core program', {
+      collection: cfgCoreCollection.toBase58(),
+      expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
+      actualOwner: collectionInfo.owner.toBase58(),
+    });
+  }
+  const updateAuthority = decodeMplCoreCollectionUpdateAuthority(collectionInfo.data);
+  if (!updateAuthority.equals(boxMinterConfigPda)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Collection update authority must be the box minter config PDA to open boxes. Transfer update authority and retry.',
+      {
+        collection: cfgCoreCollection.toBase58(),
+        updateAuthority: updateAuthority.toBase58(),
+        requiredAuthority: boxMinterConfigPda.toBase58(),
+      },
+    );
+  }
+
+  // 1) Mint dudes via on-chain program (program signs as config PDA, which is the collection update authority).
+  // 2) Transfer the box via MPL-Core `TransferV1` as the *next* instruction so wallets can show it as a top-level action.
   const openBoxIx = new TransactionInstruction({
     programId,
     keys: [
@@ -1124,13 +1180,35 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
       { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
       ...dudeAssetPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
     data: encodeOpenBoxArgs(dudeIds),
   });
 
-  const conn = connection();
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), openBoxIx];
+  // Transfer the box to the vault (we reuse config.treasury) (MPL-Core `TransferV1`).
+  const transferBoxIx = new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      // asset, collection, payer, authority, new_owner, system_program, log_wrapper
+      { pubkey: boxAssetPk, isSigner: false, isWritable: true },
+      { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
+      { pubkey: ownerPk, isSigner: true, isWritable: true },
+      { pubkey: ownerPk, isSigner: true, isWritable: false },
+      { pubkey: cfgTreasury, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    // TransferV1 discriminator=14, compression_proof=None (0)
+    data: Buffer.from([14, 0]),
+  });
+
+  const instructions: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    memoInstruction(`mons: open box transfers this box ${boxAssetPk.toBase58()} to vault ${cfgTreasury.toBase58()}`),
+    openBoxIx,
+    transferBoxIx,
+  ];
 
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
   const msg = new TransactionMessage({ payerKey: ownerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
@@ -1368,7 +1446,7 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
     ? (accountKeyIndexesRaw as number[])
     : Array.from(accountKeyIndexesRaw || []);
   const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
-  const FIXED_DELIVER_ACCOUNTS = 7;
+  const FIXED_DELIVER_ACCOUNTS = 8;
   const expectedAccountLen = FIXED_DELIVER_ACCOUNTS + decoded.itemsLen * 2;
   if (ixAccounts.length !== expectedAccountLen) {
     throw new functions.https.HttpsError('failed-precondition', 'Invalid deliver instruction accounts', {
@@ -1396,6 +1474,9 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
   }
   if (!ixAccounts[6]?.equals(SystemProgram.programId)) {
     throw new functions.https.HttpsError('failed-precondition', 'Invalid system program in deliver instruction');
+  }
+  if (!ixAccounts[7]?.equals(SYSVAR_INSTRUCTIONS_ID)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid instructions sysvar in deliver instruction');
   }
 
   const expectedItemIds = Array.isArray(order.itemIds) ? (order.itemIds as string[]) : [];

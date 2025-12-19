@@ -24,6 +24,8 @@ const IX_DELIVER = Uint8Array.from([0xfa, 0x83, 0xde, 0x39, 0xd3, 0xe5, 0xd1, 0x
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+export const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
+export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -333,6 +335,7 @@ export function buildDeliverIx(
     { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
     { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
   ];
 
   // Remaining accounts: for each item => (asset_to_burn, receipt_asset_pda_to_create).
@@ -370,10 +373,30 @@ export function buildDeliverTxWithBlockhash(
   recentBlockhash: string,
 ): VersionedTransaction {
   const deliverIx = buildDeliverIx(cfg, payer, args);
+  const transferIxs = (args.items || []).map(
+    (item) =>
+      new TransactionInstruction({
+        programId: MPL_CORE_PROGRAM_ID,
+        keys: [
+          // TransferV1 accounts (kinobi order):
+          // 0 asset, 1 collection, 2 payer, 3 authority, 4 newOwner, 5 systemProgram, 6 logWrapper
+          { pubkey: item.asset, isSigner: false, isWritable: true },
+          { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
+          { pubkey: payer, isSigner: true, isWritable: true },
+          { pubkey: payer, isSigner: true, isWritable: false },
+          { pubkey: cfg.treasury, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+        ],
+        // TransferV1 discriminator=14, compression_proof=None (0)
+        data: Buffer.from([14, 0]),
+      }),
+  );
   const msg = new TransactionMessage({
     payerKey: payer,
     recentBlockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), deliverIx],
+    // Order matters: on-chain `deliver` enforces that the subsequent instructions are transfers to the vault.
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), deliverIx, ...transferIxs],
   }).compileToV0Message();
   return new VersionedTransaction(msg);
 }

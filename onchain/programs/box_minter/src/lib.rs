@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("7qRds7SWuvnf78tRTCfD3JupXi8dcndrwdUTzw5t3LYi");
+declare_id!("G8PBrBPVy4YWy1ukfxeFF7p4ctYQF66PB4RMizAfmv7r");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -366,38 +367,26 @@ pub mod box_minter {
             None,
         )?;
 
-        // 1) Burn the box asset (MPL Core `BurnV1`).
+        // IMPORTANT: Wallets generally won't display inner-CPI burns in their approval UI.
+        // To make the "box goes away" explicit to users, require the *next* instruction in the
+        // transaction to be an MPL-Core `TransferV1` that transfers `box_asset` to the configured
+        // vault (we reuse `config.treasury` as the vault).
+        //
+        // If the transfer fails, the whole transaction fails (so figures are not minted).
+        require_next_ix_is_mpl_core_transfer_of_asset_to(
+            &ctx.accounts.instructions.to_account_info(),
+            0,
+            ctx.accounts.box_asset.key(),
+            ctx.accounts.core_collection.key(),
+            ctx.accounts.payer.key(),
+            cfg.treasury,
+        )?;
+
+        // Mint 3 figure Core assets into the same collection.
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let core_collection = ctx.accounts.core_collection.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
-        let box_asset_ai = ctx.accounts.box_asset.to_account_info();
-
-        let burn_ix = anchor_lang::solana_program::instruction::Instruction {
-            program_id: MPL_CORE_PROGRAM_ID,
-            accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(box_asset_ai.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                // log_wrapper: None (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
-            ],
-            // discriminator=12, compression_proof=None
-            data: vec![12u8, 0u8],
-        };
-        let burn_infos = [
-            mpl_core_program.clone(),
-            box_asset_ai.clone(),
-            core_collection.clone(),
-            payer.clone(),
-            payer.clone(), // authority
-            system_program.clone(),
-        ];
-        invoke(&burn_ix, &burn_infos).map_err(anchor_lang::error::Error::from)?;
-
-        // 2) Mint 3 figure Core assets into the same collection.
         let figures_uri_base = derive_figures_uri_base(&cfg.uri_base)?;
         let cfg_ai = ctx.accounts.config.to_account_info();
         let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
@@ -429,6 +418,12 @@ pub mod box_minter {
 
             let asset_ai = &ctx.remaining_accounts[i];
             require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
+            // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
+            require_keys_eq!(
+                *asset_ai.owner,
+                anchor_lang::solana_program::system_program::ID,
+                BoxMinterError::InvalidAssetPda
+            );
 
             name_buf.clear();
             name_buf.push_str("mons figure #");
@@ -467,7 +462,8 @@ pub mod box_minter {
                 payer.clone(),
                 system_program.clone(),
             ];
-            invoke_signed(&create_ix, &create_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
+            invoke_signed(&create_ix, &create_infos, signer_seeds)
+                .map_err(anchor_lang::error::Error::from)?;
         }
 
         Ok(())
@@ -479,7 +475,7 @@ pub mod box_minter {
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
 
-        // Require a cloud-held signer (same admin as initialize/open_box) so users can't choose arbitrary fees.
+        // Require a cloud-held signer (same admin as initialize) so users can't choose arbitrary fees.
         require_keys_eq!(
             ctx.accounts.cosigner.key(),
             cfg.admin,
@@ -526,7 +522,7 @@ pub mod box_minter {
         let receipts_boxes_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Box)?;
         let receipts_figures_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Figure)?;
 
-        // Remaining accounts: for each item => (asset_to_burn, receipt_asset_pda_to_create).
+        // Remaining accounts: for each item => (asset_to_transfer, receipt_asset_pda_to_create).
         require!(
             ctx.remaining_accounts.len() == args.items.len().saturating_mul(2),
             BoxMinterError::InvalidRemainingAccounts
@@ -538,21 +534,6 @@ pub mod box_minter {
         let cfg_ai = ctx.accounts.config.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
         let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
-
-        // Reuse CPI buffers to avoid heap OOM under load.
-        let mut burn_ix = anchor_lang::solana_program::instruction::Instruction {
-            program_id: MPL_CORE_PROGRAM_ID,
-            accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false), // log_wrapper None
-            ],
-            // discriminator=12, compression_proof=None
-            data: vec![12u8, 0u8],
-        };
 
         let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
@@ -576,7 +557,7 @@ pub mod box_minter {
             let burn_ai = &ctx.remaining_accounts[i * 2];
             let receipt_ai = &ctx.remaining_accounts[i * 2 + 1];
 
-            // Burn input must be a Mons asset owned by payer, and its metadata must match the claimed kind/ref_id.
+            // Delivered item must be a Mons asset owned by payer, and its metadata must match the claimed kind/ref_id.
             let expected_uri_base = match item.kind {
                 0 => cfg.uri_base.as_str(),
                 1 => figures_uri_base.as_str(),
@@ -590,19 +571,21 @@ pub mod box_minter {
                 Some(item.ref_id),
             )?;
 
-            // 1) Burn the asset (MPL Core `BurnV1`).
-            burn_ix.accounts[0].pubkey = burn_ai.key();
-            let burn_infos = [
-                mpl_core_program.clone(),
-                burn_ai.clone(),
-                core_collection.clone(),
-                payer.clone(),
-                payer.clone(), // authority
-                system_program.clone(),
-            ];
-            invoke(&burn_ix, &burn_infos).map_err(anchor_lang::error::Error::from)?;
+            // Require a *top-level* MPL-Core transfer right after this instruction so wallets
+            // clearly show that the user is giving up the item.
+            //
+            // The client constructs the tx as:
+            //   [compute_budget?, deliver, transfer(item0->vault), transfer(item1->vault), ...]
+            require_next_ix_is_mpl_core_transfer_of_asset_to(
+                &ctx.accounts.instructions.to_account_info(),
+                i,
+                burn_ai.key(),
+                ctx.accounts.core_collection.key(),
+                ctx.accounts.payer.key(),
+                ctx.accounts.treasury.key(),
+            )?;
 
-            // 2) Mint a receipt Core asset (same collection).
+            // Mint a receipt Core asset (same collection).
             let (kind_byte, uri_base, name_prefix) = match item.kind {
                 0 => (0u8, &receipts_boxes_uri_base, "mons receipt · box "),
                 1 => (1u8, &receipts_figures_uri_base, "mons receipt · figure #"),
@@ -916,7 +899,7 @@ pub struct OpenBox<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    /// CHECK: Existing box Core asset account to burn.
+    /// CHECK: Existing box Core asset account to transfer to the vault.
     #[account(mut)]
     pub box_asset: UncheckedAccount<'info>,
 
@@ -928,6 +911,10 @@ pub struct OpenBox<'info> {
     pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Instructions sysvar (for requiring an explicit MPL-Core transfer after `open_box`).
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -953,6 +940,10 @@ pub struct Deliver<'info> {
     pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Instructions sysvar (for requiring explicit MPL-Core transfers after `deliver`).
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1095,6 +1086,88 @@ fn parse_ref_id_from_uri_bytes(uri: &[u8], uri_base: &str) -> Option<u32> {
         return None;
     }
     Some(out)
+}
+
+fn require_next_ix_is_mpl_core_transfer_of_asset_to(
+    instructions_ai: &AccountInfo,
+    offset: usize,
+    asset: Pubkey,
+    core_collection: Pubkey,
+    owner: Pubkey,
+    new_owner: Pubkey,
+) -> Result<()> {
+    let current_index = sysvar_instructions::load_current_index_checked(instructions_ai)? as usize;
+    let ix_index = current_index
+        .checked_add(1)
+        .and_then(|v| v.checked_add(offset))
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    let next_ix = sysvar_instructions::load_instruction_at_checked(ix_index, instructions_ai)
+        .map_err(|_| error!(BoxMinterError::MissingTransferInstruction))?;
+
+    require_keys_eq!(
+        next_ix.program_id,
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidTransferInstruction
+    );
+    require!(
+        next_ix.data.len() >= 2,
+        BoxMinterError::InvalidTransferInstruction
+    );
+    // TransferV1 discriminator = 14; compression_proof = None (0)
+    require!(
+        next_ix.data[0] == 14u8 && next_ix.data[1] == 0u8,
+        BoxMinterError::InvalidTransferInstruction
+    );
+
+    // Enforce a stable account layout so the client/backend can construct deterministic transactions:
+    //   0: asset
+    //   1: collection
+    //   2: payer (signer)
+    //   3: owner/authority (signer)  (same as payer here)
+    //   4: new_owner (vault)
+    //
+    // Additional accounts (system_program, log_wrapper, etc.) may follow.
+    let a0 = next_ix
+        .accounts
+        .get(0)
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    require_keys_eq!(a0.pubkey, asset, BoxMinterError::InvalidTransferInstruction);
+
+    let a1 = next_ix
+        .accounts
+        .get(1)
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    require_keys_eq!(
+        a1.pubkey,
+        core_collection,
+        BoxMinterError::InvalidTransferInstruction
+    );
+
+    let a2 = next_ix
+        .accounts
+        .get(2)
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    require_keys_eq!(a2.pubkey, owner, BoxMinterError::InvalidTransferInstruction);
+    require!(a2.is_signer, BoxMinterError::InvalidTransferInstruction);
+
+    let a3 = next_ix
+        .accounts
+        .get(3)
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    require_keys_eq!(a3.pubkey, owner, BoxMinterError::InvalidTransferInstruction);
+    require!(a3.is_signer, BoxMinterError::InvalidTransferInstruction);
+
+    let a4 = next_ix
+        .accounts
+        .get(4)
+        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
+    require_keys_eq!(
+        a4.pubkey,
+        new_owner,
+        BoxMinterError::InvalidTransferInstruction
+    );
+
+    Ok(())
 }
 
 fn verify_core_asset_owned_by_uri(
@@ -1243,6 +1316,10 @@ pub enum BoxMinterError {
     InvalidAssetMetadata,
     #[msg("Invalid receipt kind")]
     InvalidReceiptKind,
+    #[msg("Missing required transfer instruction")]
+    MissingTransferInstruction,
+    #[msg("Invalid transfer instruction")]
+    InvalidTransferInstruction,
 }
 
 
