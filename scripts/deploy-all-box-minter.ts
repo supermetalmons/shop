@@ -16,11 +16,18 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
+import { getConcurrentMerkleTreeAccountSize } from '@solana/spl-account-compression';
 
 // MPL Core program id.
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 // SPL Noop program (Metaplex "log wrapper").
 const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+// Metaplex Noop program (Bubblegum v2 log wrapper).
+const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+// Metaplex Account Compression program (used by Bubblegum v2 trees).
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+// Metaplex Bubblegum program.
+const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 // NOTE: This deployment script targets uncompressed MPL Core assets (no Bubblegum / no Merkle tree).
 
 /**
@@ -89,6 +96,39 @@ function encodeUmiArray(items: Buffer[]): Buffer {
   return Buffer.concat([u32LE(items.length), ...items]);
 }
 
+// MPL-Core plugin encoding helpers (Umi dataEnum + option layouts).
+// We need BubblegumV2 + UpdateDelegate so Bubblegum can mint cNFT receipts into this collection
+// even though the collection update authority is a PDA (box_minter config PDA).
+function mplCoreBasePluginAuthorityAddress(address: PublicKey): Buffer {
+  // BasePluginAuthority::Address enum index = 3 (None=0, Owner=1, UpdateAuthority=2, Address=3)
+  return Buffer.concat([u8(3), address.toBuffer()]);
+}
+
+function mplCorePluginBubblegumV2(): Buffer {
+  // Plugin::BubblegumV2 enum index = 15 (see mpl-core PluginType order).
+  return u8(15);
+}
+
+function mplCorePluginUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
+  // Plugin::UpdateDelegate enum index = 4 (Royalties=0, FreezeDelegate=1, BurnDelegate=2, TransferDelegate=3, UpdateDelegate=4)
+  // UpdateDelegate data: { additionalDelegates: Vec<Pubkey> }
+  return Buffer.concat([u8(4), encodeUmiArray(additionalDelegates.map((k) => k.toBuffer()))]);
+}
+
+function mplCorePluginAuthorityPairBubblegumV2(): Buffer {
+  // PluginAuthorityPair = { plugin: Plugin, authority: Option<BasePluginAuthority> }
+  // BubblegumV2 authority is fixed to the Bubblegum program (mpl-core enforces this at creation time).
+  // We omit the authority field (None) so mpl-core uses the default manager authority.
+  return Buffer.concat([mplCorePluginBubblegumV2(), borshOption(null)]);
+}
+
+function mplCorePluginAuthorityPairUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
+  // Let Bubblegum mint by letting our deploy/admin key be an UpdateDelegate.
+  // We keep the plugin authority as None => UpdateAuthority (the collection update authority, i.e. the config PDA).
+  // Bubblegum’s own checks will pass as long as `collection_authority` is in `additionalDelegates`.
+  return Buffer.concat([mplCorePluginUpdateDelegate(additionalDelegates), borshOption(null)]);
+}
+
 /**
  * MPL-Core instruction: create_collection_v2 (discriminator = 21, mpl-core 1.7.0).
  *
@@ -99,7 +139,8 @@ function encodeUmiArray(items: Buffer[]): Buffer {
  * - Option<Vec<PluginAuthorityPair>> plugins
  * - Option<Vec<BaseExternalPluginAdapterInitInfo>> externalPluginAdapters
  *
- * We pass Some([]) plugins and Some([]) external adapters (matches mpl-core defaulting logic).
+ * NOTE: BubblegumV2 plugin can ONLY be added at creation time (it is permanent and rejects addCollectionPlugin).
+ * We include it here so Bubblegum v2 can mint receipt cNFTs into this MPL-Core collection.
  */
 const IX_MPL_CORE_CREATE_COLLECTION_V2 = 21;
 function buildCreateMplCoreCollectionV2Ix(args: {
@@ -110,8 +151,12 @@ function buildCreateMplCoreCollectionV2Ix(args: {
   name: string;
   uri: string;
 }): TransactionInstruction {
-  const pluginsOpt = borshOption(encodeUmiArray([]));
-  // Default in mpl-core generated instruction is `[]` (i.e. Some([])), not None.
+  const pluginsOpt = borshOption(
+    encodeUmiArray([
+      mplCorePluginAuthorityPairBubblegumV2(),
+      mplCorePluginAuthorityPairUpdateDelegate([args.payer]),
+    ]),
+  );
   const externalAdaptersOpt = borshOption(encodeUmiArray([]));
 
   const data = Buffer.concat([
@@ -129,34 +174,6 @@ function buildCreateMplCoreCollectionV2Ix(args: {
       { pubkey: args.updateAuthority, isSigner: false, isWritable: false },
       { pubkey: args.payer, isSigner: true, isWritable: true },
       { pubkey: args.systemProgram, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-}
-
-/**
- * MPL-Core instruction: approve_collection_plugin_authority_v1 (discriminator = 9, mpl-core 1.7.0).
- * Data: u8 discriminator, u8 pluginType, BasePluginAuthority newAuthority
- */
-const IX_MPL_CORE_APPROVE_COLLECTION_PLUGIN_AUTHORITY_V1 = 9;
-function buildApproveCollectionPluginAuthorityV1Ix(args: {
-  collection: PublicKey;
-  payer: PublicKey;
-  authority: PublicKey;
-  systemProgram: PublicKey;
-  logWrapper: PublicKey;
-  pluginType: number;
-  newAuthority: Buffer;
-}): TransactionInstruction {
-  const data = Buffer.concat([u8(IX_MPL_CORE_APPROVE_COLLECTION_PLUGIN_AUTHORITY_V1), u8(args.pluginType), args.newAuthority]);
-  return new TransactionInstruction({
-    programId: MPL_CORE_PROGRAM_ID,
-    keys: [
-      { pubkey: args.collection, isSigner: false, isWritable: true },
-      { pubkey: args.payer, isSigner: true, isWritable: true },
-      { pubkey: args.authority, isSigner: true, isWritable: false },
-      { pubkey: args.systemProgram, isSigner: false, isWritable: false },
-      { pubkey: args.logWrapper, isSigner: false, isWritable: false },
     ],
     data,
   });
@@ -352,7 +369,10 @@ async function ensureDeliveryLookupTable(args: {
   ]);
 
   // Create a fresh LUT + extend with required addresses (no caching; clean deployments).
-  const recentSlot = await connection.getSlot('confirmed');
+  // IMPORTANT: Address Lookup Tables require a *recent rooted slot* (present in the SlotHashes sysvar).
+  // Using `confirmed` can return a slot that's not yet rooted, which fails with:
+  //   "<slot> is not a recent slot" (InvalidInstructionData)
+  const recentSlot = await connection.getSlot('finalized');
   const [createIx, lutAddress] = AddressLookupTableProgram.createLookupTable({
     payer: payer.publicKey,
     authority: payer.publicKey,
@@ -367,11 +387,83 @@ async function ensureDeliveryLookupTable(args: {
 
   const tx = new Transaction().add(createIx, extendIx);
   tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('finalized')).blockhash;
   const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
   console.log('✅ Delivery ALT created:', sig);
   console.log('  ALT:', lutAddress.toBase58());
   return lutAddress;
+}
+
+const RECEIPTS_TREE_MAX_DEPTH = 14;
+const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
+const RECEIPTS_TREE_CANOPY_DEPTH = 0;
+const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
+
+function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
+}
+
+function buildCreateBubblegumTreeConfigV2Ix(args: {
+  merkleTree: PublicKey;
+  payer: PublicKey;
+  treeCreator: PublicKey;
+  maxDepth: number;
+  maxBufferSize: number;
+  // If undefined/null, encodes Option::None (private tree).
+  isPublic?: boolean | null;
+}): TransactionInstruction {
+  const treeConfig = bubblegumTreeConfigPda(args.merkleTree);
+  const publicOpt = args.isPublic == null ? Buffer.from([0]) : Buffer.from([1, args.isPublic ? 1 : 0]);
+  const data = Buffer.concat([
+    IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2,
+    u32LE(args.maxDepth),
+    u32LE(args.maxBufferSize),
+    publicOpt,
+  ]);
+
+  return new TransactionInstruction({
+    programId: BUBBLEGUM_PROGRAM_ID,
+    keys: [
+      { pubkey: treeConfig, isSigner: false, isWritable: true },
+      { pubkey: args.merkleTree, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.treeCreator, isSigner: true, isWritable: false },
+      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+async function createReceiptsMerkleTree(connection: Connection, payer: Keypair): Promise<PublicKey> {
+  const merkleTree = Keypair.generate();
+  const space = getConcurrentMerkleTreeAccountSize(RECEIPTS_TREE_MAX_DEPTH, RECEIPTS_TREE_MAX_BUFFER_SIZE, RECEIPTS_TREE_CANOPY_DEPTH);
+  const lamports = await connection.getMinimumBalanceForRentExemption(space, 'confirmed');
+
+  const createTreeAccountIx = SystemProgram.createAccount({
+    fromPubkey: payer.publicKey,
+    newAccountPubkey: merkleTree.publicKey,
+    lamports,
+    space,
+    programId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+  });
+  const createTreeConfigIx = buildCreateBubblegumTreeConfigV2Ix({
+    merkleTree: merkleTree.publicKey,
+    payer: payer.publicKey,
+    treeCreator: payer.publicKey,
+    maxDepth: RECEIPTS_TREE_MAX_DEPTH,
+    maxBufferSize: RECEIPTS_TREE_MAX_BUFFER_SIZE,
+    isPublic: null,
+  });
+
+  const tx = new Transaction().add(createTreeAccountIx).add(createTreeConfigIx);
+  tx.feePayer = payer.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const sig = await sendAndConfirmTransaction(connection, tx, [payer, merkleTree], { commitment: 'confirmed' });
+  console.log('✅ Receipt cNFT Merkle tree created:', sig);
+  console.log('  RECEIPTS_MERKLE_TREE:', merkleTree.publicKey.toBase58());
+  return merkleTree.publicKey;
 }
 
 function generateFreshProgramKeypair(programKeypairPath: string): { programId: string; backupPath?: string } {
@@ -638,6 +730,14 @@ async function main() {
       console.log('# DELIVERY_LOOKUP_TABLE=...');
     }
 
+    try {
+      const receiptsTree = await createReceiptsMerkleTree(connection, payer);
+      console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+    } catch (err) {
+      console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+      console.log('# RECEIPTS_MERKLE_TREE=...');
+    }
+
     console.log('');
     console.log('--- notes ---');
     console.log(
@@ -759,6 +859,13 @@ async function main() {
   } catch (err) {
     console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
     console.log('# DELIVERY_LOOKUP_TABLE=...');
+  }
+  try {
+    const receiptsTree = await createReceiptsMerkleTree(connection, payer);
+    console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+  } catch (err) {
+    console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+    console.log('# RECEIPTS_MERKLE_TREE=...');
   }
   console.log('');
   console.log('--- notes ---');

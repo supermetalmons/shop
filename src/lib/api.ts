@@ -369,6 +369,19 @@ export async function requestDeliveryTx(
   return callFunction<{ owner: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', { owner, ...selection });
 }
 
+export async function issueReceipts(
+  owner: string,
+  deliveryId: number,
+  signature: string,
+  token?: string,
+): Promise<{ processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }> {
+  // token retained for backwards compatibility; wallet session auth is used under the hood.
+  return callFunction<
+    { owner: string; deliveryId: number; signature: string },
+    { processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }
+  >('issueReceipts', { owner, deliveryId, signature });
+}
+
 export async function requestClaimTx(
   owner: string,
   code: string,

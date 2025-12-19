@@ -131,6 +131,14 @@ const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4
 const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
 // Solana SPL Noop program (commonly used as Metaplex "log wrapper").
 const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+// Metaplex Noop program (used by Bubblegum v2).
+const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+// MPL Account Compression program (used by Bubblegum v2).
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+// Bubblegum program (compressed NFTs).
+const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
+// Bubblegum -> MPL-Core CPI signer (used when minting cNFTs to an MPL-Core collection).
+const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk');
 // SPL Memo program (wallets commonly surface this in the approval UI).
 const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
 
@@ -148,14 +156,23 @@ const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collec
 const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
 const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
 
+// Bubblegum receipts tree (required to mint receipt cNFTs).
+const receiptsMerkleTree = new PublicKey(process.env.RECEIPTS_MERKLE_TREE || PublicKey.default.toBase58());
+const receiptsMerkleTreeStr = receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58();
+
 const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
 // Anchor discriminator = sha256("global:open_box")[0..8]
 const IX_OPEN_BOX = Buffer.from('e1dc0a68ad97d6c7', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
+// Anchor discriminator = sha256("global:close_delivery")[0..8]
+const IX_CLOSE_DELIVERY = Buffer.from('ae641ab98ea5f208', 'hex');
 // Anchor discriminator = sha256("global:mint_receipts")[0..8]
 const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
+
+// Bubblegum v2 mint discriminator (kinobi generated).
+const IX_MINT_V2 = Buffer.from([120, 121, 23, 146, 173, 110, 199, 205]);
 
 const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
 const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
@@ -710,6 +727,23 @@ function u64LE(value: number) {
   return buf;
 }
 
+function borshString(value: string) {
+  const bytes = Buffer.from(String(value ?? ''), 'utf8');
+  return Buffer.concat([u32LE(bytes.length), bytes]);
+}
+
+function borshBool(value: boolean) {
+  return Buffer.from([value ? 1 : 0]);
+}
+
+function borshOption(inner?: Buffer | null) {
+  return inner ? Buffer.concat([Buffer.from([1]), inner]) : Buffer.from([0]);
+}
+
+function borshVec(items: Buffer[]) {
+  return Buffer.concat([u32LE(items.length), ...items]);
+}
+
 function decodeMplCoreCollectionUpdateAuthority(data: Buffer): PublicKey {
   // mpl-core BaseCollectionV1 starts with `Key` enum (u8). CollectionV1 = 5.
   const key = data[0];
@@ -734,6 +768,139 @@ function encodeDeliverArgs(args: { deliveryId: number; feeLamports: number; deli
     throw new functions.https.HttpsError('invalid-argument', 'Invalid delivery bump');
   }
   return Buffer.concat([IX_DELIVER, u32LE(deliveryId), u64LE(feeLamports), Buffer.from([bump & 0xff])]);
+}
+
+function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: number; deliveryBump: number } {
+  if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
+  if (data.length < 8 + 4 + 8 + 1) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliver instruction data (too short)');
+  }
+  const disc = data.subarray(0, 8);
+  if (!disc.equals(IX_DELIVER)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Transaction is not a box_minter deliver instruction');
+  }
+  const deliveryId = data.readUInt32LE(8);
+  const feeLamportsBig = data.readBigUInt64LE(12);
+  if (feeLamportsBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new functions.https.HttpsError('failed-precondition', 'delivery_fee_lamports is too large');
+  }
+  const feeLamports = Number(feeLamportsBig);
+  const deliveryBump = data.readUInt8(20);
+  return { deliveryId, feeLamports, deliveryBump };
+}
+
+function encodeCloseDeliveryArgs(args: { deliveryId: number; deliveryBump: number }): Buffer {
+  const deliveryId = Number(args.deliveryId);
+  const bump = Number(args.deliveryBump);
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0 || deliveryId > 0xffff_ffff) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliveryId');
+  }
+  if (!Number.isFinite(bump) || bump < 0 || bump > 255) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid delivery bump');
+  }
+  return Buffer.concat([IX_CLOSE_DELIVERY, u32LE(deliveryId), Buffer.from([bump & 0xff])]);
+}
+
+function deriveDeliveryPda(programId: PublicKey, deliveryId: number): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from('delivery'), u32LE(deliveryId)], programId);
+}
+
+function deriveTreeConfigPda(merkleTree: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
+}
+
+function mplCoreBurnV1Ix(args: { asset: PublicKey; coreCollection: PublicKey; authority: PublicKey; payer: PublicKey }) {
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.asset, isSigner: false, isWritable: true }, // asset
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true }, // collection
+      { pubkey: args.payer, isSigner: true, isWritable: true }, // payer
+      { pubkey: args.authority, isSigner: true, isWritable: false }, // authority
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
+    ],
+    // BurnV1 discriminator=12, compression_proof=None (0)
+    data: Buffer.from([12, 0]),
+  });
+}
+
+function bubblegumMintV2Ix(args: {
+  payer: PublicKey;
+  treeCreatorOrDelegate: PublicKey;
+  collectionAuthority: PublicKey;
+  leafOwner: PublicKey;
+  leafDelegate: PublicKey;
+  merkleTree: PublicKey;
+  coreCollection: PublicKey;
+  name: string;
+  symbol?: string;
+  uri: string;
+  sellerFeeBasisPoints?: number;
+  creators?: Array<{ address: PublicKey; verified: boolean; share: number }>;
+}) {
+  const treeConfig = deriveTreeConfigPda(args.merkleTree);
+  const creators = args.creators || [];
+  const sellerFeeBasisPoints = Number(args.sellerFeeBasisPoints ?? 0);
+  if (!Number.isFinite(sellerFeeBasisPoints) || sellerFeeBasisPoints < 0 || sellerFeeBasisPoints > 10_000) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid sellerFeeBasisPoints');
+  }
+
+  const metadata = Buffer.concat([
+    borshString(args.name),
+    borshString(args.symbol || ''),
+    borshString(args.uri),
+    (() => {
+      const buf = Buffer.alloc(2);
+      buf.writeUInt16LE(sellerFeeBasisPoints & 0xffff, 0);
+      return buf;
+    })(),
+    borshBool(false), // primarySaleHappened
+    borshBool(true), // isMutable
+    // tokenStandard: Option<TokenStandard> (Some(NonFungible=0))
+    Buffer.from([1, 0]),
+    // creators: Vec<Creator>
+    borshVec(
+      creators.map((c) =>
+        Buffer.concat([
+          c.address.toBuffer(),
+          borshBool(Boolean(c.verified)),
+          Buffer.from([Number(c.share) & 0xff]),
+        ]),
+      ),
+    ),
+    // collection: Option<Pubkey> (Some(coreCollection))
+    borshOption(args.coreCollection.toBuffer()),
+  ]);
+
+  const data = Buffer.concat([
+    IX_MINT_V2,
+    metadata,
+    // assetData: None
+    Buffer.from([0]),
+    // assetDataSchema: None
+    Buffer.from([0]),
+  ]);
+
+  return new TransactionInstruction({
+    programId: BUBBLEGUM_PROGRAM_ID,
+    keys: [
+      { pubkey: treeConfig, isSigner: false, isWritable: true }, // treeConfig
+      { pubkey: args.payer, isSigner: true, isWritable: true }, // payer
+      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false }, // treeCreatorOrDelegate
+      { pubkey: args.collectionAuthority, isSigner: true, isWritable: false }, // collectionAuthority
+      { pubkey: args.leafOwner, isSigner: false, isWritable: false }, // leafOwner
+      { pubkey: args.leafDelegate, isSigner: false, isWritable: false }, // leafDelegate
+      { pubkey: args.merkleTree, isSigner: false, isWritable: true }, // merkleTree
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true }, // coreCollection
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mplCoreCpiSigner
+      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // logWrapper
+      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compressionProgram
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mplCoreProgram
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // systemProgram
+    ],
+    data,
+  });
 }
 
 function encodeOpenBoxArgs(dudeIds: number[]): Buffer {
@@ -1198,6 +1365,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
 
   // Validate assets are deliverable Mons items owned by the wallet.
   const assetPks: PublicKey[] = [];
+  const orderItems: Array<{ assetId: string; kind: 'box' | 'dude'; refId: number; receiptName: string; receiptUri: string }> = [];
   for (const assetId of uniqueItemIds) {
     let pk: PublicKey;
     try {
@@ -1219,6 +1387,35 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     const assetOwner = asset?.ownership?.owner;
     if (assetOwner !== ownerWallet) {
       throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
+    }
+
+    // Prepare receipt metadata now so issuing receipts can be deterministic and fast later.
+    if (kind === 'box') {
+      const boxIdStr = getBoxIdFromAsset(asset);
+      const refId = Number(boxIdStr);
+      if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
+        throw new functions.https.HttpsError('failed-precondition', 'Box id missing from metadata');
+      }
+      orderItems.push({
+        assetId,
+        kind: 'box',
+        refId,
+        receiptName: `mons receipt · box ${refId}`,
+        receiptUri: `${metadataBase}/json/receipts/boxes/${refId}.json`,
+      });
+    } else {
+      const dudeId = getDudeIdFromAsset(asset);
+      const refId = Number(dudeId);
+      if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
+        throw new functions.https.HttpsError('failed-precondition', 'Dude id missing from metadata');
+      }
+      orderItems.push({
+        assetId,
+        kind: 'dude',
+        refId,
+        receiptName: `mons receipt · figure #${refId}`,
+        receiptUri: `${metadataBase}/json/receipts/figures/${refId}.json`,
+      });
     }
   }
 
@@ -1362,6 +1559,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
       countryCode: addressCountry || addressData?.countryCode,
     },
     itemIds: uniqueItemIds,
+    items: orderItems,
     deliveryId,
     deliveryPda: deliveryPda.toBase58(),
     ...(deliveryLookupTableStr ? { lookupTable: deliveryLookupTableStr } : {}),
@@ -1370,6 +1568,382 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   });
 
   return { encodedTx: Buffer.from(raw).toString('base64'), deliveryLamports, deliveryId };
+});
+
+export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const schema = z.object({ owner: z.string(), deliveryId: z.number().int().positive(), signature: z.string() });
+  const { owner, deliveryId, signature } = parseRequest(schema, request.data);
+  const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+
+  await ensureOnchainCoreConfig();
+  if (!receiptsMerkleTreeStr) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Receipt cNFT tree is not configured (missing RECEIPTS_MERKLE_TREE env var)',
+    );
+  }
+
+  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
+  const orderSnap = await orderRef.get();
+  if (!orderSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Delivery order not found');
+  }
+  const order = orderSnap.data() as any;
+  if (order.owner && order.owner !== ownerWallet) {
+    throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
+  }
+
+  // Fast-path idempotency.
+  if (order.status === 'ready_to_ship' || order.status === 'processed') {
+    const conn = connection();
+    const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
+    let closeDeliveryTx: string | null = order.closeDeliveryTx || null;
+    if (!closeDeliveryTx) {
+      // Best-effort late cleanup: if the delivery PDA still exists, close it now.
+      const deliveryInfo = await withTimeout(
+        conn.getAccountInfo(expectedDeliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+        RPC_TIMEOUT_MS,
+        'getAccountInfo:deliveryPda:lateClose',
+      );
+      if (deliveryInfo) {
+        const cfgInfo = await withTimeout(
+          conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+          RPC_TIMEOUT_MS,
+          'getAccountInfo:boxMinterConfig:lateClose',
+        );
+        if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+          throw new functions.https.HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
+        }
+        const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+        const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
+        const signer = cosigner();
+        if (!signer.publicKey.equals(cfgAdmin) || !signer.publicKey.equals(cfgTreasury)) {
+          throw new functions.https.HttpsError('failed-precondition', 'Server key does not match on-chain admin/treasury (late close)');
+        }
+
+        const closeIx = new TransactionInstruction({
+          programId: boxMinterProgramId,
+          keys: [
+            { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+            { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+            { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+            { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          ],
+          data: encodeCloseDeliveryArgs({ deliveryId, deliveryBump: expectedDeliveryBump }),
+        });
+        const { blockhash } = await withTimeout(
+          conn.getLatestBlockhash('confirmed'),
+          RPC_TIMEOUT_MS,
+          'getLatestBlockhash:lateClose',
+        );
+        const closeTx = buildTx(
+          [ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx],
+          signer.publicKey,
+          blockhash,
+          [signer],
+        );
+        const closeSig = await withTimeout(
+          conn.sendTransaction(closeTx, { maxRetries: 2 }),
+          RPC_TIMEOUT_MS,
+          'sendTransaction:lateClose',
+        );
+        await withTimeout(conn.confirmTransaction(closeSig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:lateClose');
+        closeDeliveryTx = closeSig;
+        await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+      }
+    }
+
+    return {
+      processed: true,
+      deliveryId,
+      receiptsMinted: Number(order.receiptsMinted || 0),
+      receiptTxs: Array.isArray(order.receiptTxs) ? order.receiptTxs : [],
+      closeDeliveryTx,
+    };
+  }
+
+  const conn = connection();
+  const tx = await withTimeout(
+    conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    'getTransaction:delivery',
+  );
+  if (!tx || tx.meta?.err) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction not found or failed');
+  }
+
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== ownerWallet) {
+    throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
+  }
+
+  // Find the deliver instruction and decode delivery id + bump.
+  const keys = resolveInstructionAccounts(tx);
+  const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(boxMinterProgramId)) return false;
+    const dataField = (ix as any).data;
+    const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
+    return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
+  });
+  if (!deliverIx) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
+  }
+  const deliverDataField = (deliverIx as any).data;
+  const deliverData =
+    typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
+  const decoded = decodeDeliverArgs(deliverData);
+  if (decoded.deliveryId !== deliveryId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery id mismatch', {
+      expectedId: deliveryId,
+      got: decoded.deliveryId,
+    });
+  }
+
+  const accountKeyIndexesRaw: any = (deliverIx as any).accountKeyIndexes;
+  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
+    ? (accountKeyIndexesRaw as number[])
+    : Array.from(accountKeyIndexesRaw || []);
+  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
+  const FIXED_DELIVER_ACCOUNTS = 9;
+  if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
+  }
+
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
+  const deliveryPdaFromIx = ixAccounts[8];
+  if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery PDA mismatch', {
+      expected: expectedDeliveryPda.toBase58(),
+      got: deliveryPdaFromIx?.toBase58(),
+    });
+  }
+
+  // Determine expected delivered assets (prefer order.itemIds; fall back to tx accounts).
+  const itemIds: string[] = Array.isArray(order.itemIds) ? order.itemIds : [];
+  const deliveredAssetsFromIx = ixAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
+  if (itemIds.length && deliveredAssetsFromIx.length && itemIds.length !== deliveredAssetsFromIx.length) {
+    throw new functions.https.HttpsError('failed-precondition', 'Delivery item count mismatch', {
+      expected: itemIds.length,
+      got: deliveredAssetsFromIx.length,
+    });
+  }
+  if (itemIds.length) {
+    for (let i = 0; i < itemIds.length; i += 1) {
+      if (deliveredAssetsFromIx[i] && deliveredAssetsFromIx[i] !== itemIds[i]) {
+        throw new functions.https.HttpsError('failed-precondition', 'Delivered asset list mismatch', {
+          index: i,
+          expected: itemIds[i],
+          got: deliveredAssetsFromIx[i],
+        });
+      }
+    }
+  }
+
+  // Ensure the cosigner key matches the on-chain admin and treasury matches our single-master-key setup.
+  const cfgInfo = await withTimeout(
+    conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    RPC_TIMEOUT_MS,
+    'getAccountInfo:boxMinterConfig',
+  );
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
+    );
+  }
+  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
+  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const signer = cosigner();
+  if (!signer.publicKey.equals(cfgAdmin)) {
+    throw new functions.https.HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
+      expectedAdmin: cfgAdmin.toBase58(),
+      cosigner: signer.publicKey.toBase58(),
+    });
+  }
+  if (!signer.publicKey.equals(cfgTreasury)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Treasury does not match server key (single-master-key mode)', {
+      treasury: cfgTreasury.toBase58(),
+      server: signer.publicKey.toBase58(),
+    });
+  }
+
+  // Best-effort processing lock (avoid concurrent minting).
+  await orderRef.set(
+    { status: 'processing', deliverySignature: signature, processingAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+
+  const expectedOrderItems: any[] = Array.isArray(order.items) ? order.items : [];
+  const byAssetId = new Map<string, any>();
+  expectedOrderItems.forEach((it) => {
+    if (it && typeof it.assetId === 'string') byAssetId.set(it.assetId, it);
+  });
+
+  const targetAssetIds = itemIds.length ? itemIds : deliveredAssetsFromIx;
+  const targetAssetPks = targetAssetIds.map((id) => new PublicKey(id));
+  const infos = await withTimeout(
+    conn.getMultipleAccountsInfo(targetAssetPks, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+    RPC_TIMEOUT_MS,
+    'getMultipleAccountsInfo:deliveryAssets',
+  );
+
+  const ownerPk = new PublicKey(ownerWallet);
+  const pending: Array<{ assetId: string; assetPk: PublicKey; receiptName: string; receiptUri: string }> = [];
+  for (let i = 0; i < targetAssetIds.length; i += 1) {
+    const info = infos[i];
+    if (!info) continue; // already burned / reclaimed
+    const assetId = targetAssetIds[i];
+    const pk = targetAssetPks[i];
+    const stored = byAssetId.get(assetId);
+    if (stored?.receiptName && stored?.receiptUri) {
+      pending.push({ assetId, assetPk: pk, receiptName: String(stored.receiptName), receiptUri: String(stored.receiptUri) });
+      continue;
+    }
+    // Backwards compat for older orders: fetch and derive.
+    const asset = await fetchAssetRetry(assetId);
+    const kind = getAssetKind(asset);
+    if (kind === 'box') {
+      const refId = Number(getBoxIdFromAsset(asset));
+      if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
+        throw new functions.https.HttpsError('failed-precondition', 'Box id missing from metadata');
+      }
+      pending.push({
+    assetId,
+        assetPk: pk,
+        receiptName: `mons receipt · box ${refId}`,
+        receiptUri: `${metadataBase}/json/receipts/boxes/${refId}.json`,
+      });
+    } else if (kind === 'dude') {
+      const refId = Number(getDudeIdFromAsset(asset));
+      if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
+        throw new functions.https.HttpsError('failed-precondition', 'Dude id missing from metadata');
+      }
+      pending.push({
+        assetId,
+        assetPk: pk,
+        receiptName: `mons receipt · figure #${refId}`,
+        receiptUri: `${metadataBase}/json/receipts/figures/${refId}.json`,
+      });
+    } else {
+      throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type for receipt minting');
+    }
+  }
+
+  const alreadyProcessed = targetAssetIds.length - pending.length;
+  const receiptTxs: string[] = [];
+  let totalProcessed = 0;
+
+  // Process in as-large-as-possible batches, bounded by tx size.
+  while (pending.length) {
+    const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:issueReceipts');
+
+    let n = Math.min(pending.length, 24);
+    let candidate: VersionedTransaction | null = null;
+    while (n >= 1) {
+      const batch = pending.slice(0, n);
+      const burnIxs = batch.map((it) =>
+        mplCoreBurnV1Ix({ asset: it.assetPk, coreCollection: cfgCoreCollection, authority: signer.publicKey, payer: signer.publicKey }),
+      );
+      const mintIxs = batch.map((it) =>
+        bubblegumMintV2Ix({
+          payer: signer.publicKey,
+          treeCreatorOrDelegate: signer.publicKey,
+          collectionAuthority: signer.publicKey,
+          leafOwner: ownerPk,
+          leafDelegate: ownerPk,
+          merkleTree: receiptsMerkleTree,
+          coreCollection: cfgCoreCollection,
+          name: it.receiptName,
+          uri: it.receiptUri,
+          sellerFeeBasisPoints: 0,
+          creators: [],
+        }),
+      );
+      const instructions: TransactionInstruction[] = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ...burnIxs,
+        ...mintIxs,
+      ];
+      try {
+        // IMPORTANT: web3.js serializes messages into a fixed 1232-byte buffer. If the candidate is too large,
+        // `buildTx` (sign) can throw `RangeError: encoding overruns Uint8Array` before we can call `.serialize()`.
+        const txCandidate = buildTx(instructions, signer.publicKey, blockhash, [signer]);
+        const raw = txCandidate.serialize();
+        if (raw.length <= 1232) {
+          candidate = txCandidate;
+          break;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const tooLarge =
+          err instanceof RangeError && /encoding overruns Uint8Array/i.test(msg);
+        if (!tooLarge) throw err;
+        // Fall through to reduce `n`.
+      }
+      n -= 1;
+    }
+
+    if (!candidate || n < 1) {
+      throw new functions.https.HttpsError('failed-precondition', 'Unable to fit receipt issuance transaction (try fewer items)');
+    }
+
+    const sig = await withTimeout(conn.sendTransaction(candidate, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:issueReceipts');
+    await withTimeout(conn.confirmTransaction(sig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:issueReceipts');
+    receiptTxs.push(sig);
+    totalProcessed += n;
+    pending.splice(0, n);
+  }
+
+  const receiptsMinted = alreadyProcessed + totalProcessed;
+
+  // Mark Firestore ready-to-ship BEFORE closing on-chain delivery record.
+  await orderRef.set(
+    {
+      status: 'ready_to_ship',
+      deliverySignature: signature,
+      receiptsMinted,
+      receiptTxs,
+      processedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+  // Close delivery PDA (reclaim rent) after burning + minting + Firestore marking.
+  let closeDeliveryTx: string | null = null;
+  const deliveryInfo = await withTimeout(
+    conn.getAccountInfo(expectedDeliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+    RPC_TIMEOUT_MS,
+    'getAccountInfo:deliveryPda',
+  );
+  if (deliveryInfo) {
+    const closeIx = new TransactionInstruction({
+      programId: boxMinterProgramId,
+      keys: [
+        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+        { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+        { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: encodeCloseDeliveryArgs({ deliveryId, deliveryBump: expectedDeliveryBump }),
+    });
+    const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:closeDelivery');
+    const closeTx = buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx], signer.publicKey, blockhash, [signer]);
+    const closeSig = await withTimeout(conn.sendTransaction(closeTx, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:closeDelivery');
+    await withTimeout(conn.confirmTransaction(closeSig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:closeDelivery');
+    closeDeliveryTx = closeSig;
+  }
+
+  if (closeDeliveryTx) {
+    await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+  }
+
+  return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
 });
 
 export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (request) => {

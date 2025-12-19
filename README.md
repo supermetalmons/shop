@@ -49,6 +49,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `COSIGNER_SECRET` (bs58 secret key for the server cosigner; must match the on-chain box minter admin)
 - `COLLECTION_MINT` (MPL-Core collection address for this drop)
 - `DELIVERY_LOOKUP_TABLE` (optional; Address Lookup Table pubkey used to shrink delivery tx size, allowing more items per delivery tx)
+- `RECEIPTS_MERKLE_TREE` (Bubblegum v2 Concurrent Merkle Tree pubkey used to mint receipt cNFTs into the same MPL-Core collection)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 
 ### On-chain + address helpers

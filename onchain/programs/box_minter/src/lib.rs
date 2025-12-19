@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("Gm7GkTBTYwXZSMwwkLucsEEt561QUiVQaCK3Ss98RFB2");
+declare_id!("4qKPCNn3e1jncDuDrtSmD3HDyZJzpQagUyjVStPBaYmJ");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -623,6 +623,53 @@ pub mod box_minter {
         Ok(())
     }
 
+    pub fn close_delivery(ctx: Context<CloseDelivery>, args: CloseDeliveryArgs) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+
+        // Require a cloud-held signer (same admin as initialize).
+        require_keys_eq!(
+            ctx.accounts.cosigner.key(),
+            cfg.admin,
+            BoxMinterError::InvalidCosigner
+        );
+
+        // Validate delivery PDA.
+        let delivery_id_bytes = args.delivery_id.to_le_bytes();
+        let expected_delivery = Pubkey::create_program_address(
+            &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]],
+                ctx.program_id,
+        )
+        .map_err(|_| error!(BoxMinterError::InvalidDeliveryPda))?;
+        require_keys_eq!(
+            ctx.accounts.delivery.key(),
+            expected_delivery,
+            BoxMinterError::InvalidDeliveryPda
+        );
+        require_keys_eq!(
+            *ctx.accounts.delivery.owner,
+            *ctx.program_id,
+            BoxMinterError::InvalidDeliveryPda
+        );
+
+        // Drain lamports to the treasury and close the account (reclaim rent).
+        let delivery_ai = ctx.accounts.delivery.to_account_info();
+        let treasury_ai = ctx.accounts.treasury.to_account_info();
+        let lamports = delivery_ai.lamports();
+        if lamports > 0 {
+            **treasury_ai.lamports.borrow_mut() = treasury_ai
+                .lamports()
+                .checked_add(lamports)
+                .ok_or(BoxMinterError::MathOverflow)?;
+            **delivery_ai.lamports.borrow_mut() = 0;
+        }
+
+        // Mark as system-owned + shrink data so it can be reclaimed.
+        delivery_ai.assign(&anchor_lang::solana_program::system_program::ID);
+        delivery_ai.realloc(0, false)?;
+
+        Ok(())
+    }
+
     pub fn mint_receipts<'a, 'b, 'c, 'info>(
         ctx: Context<'a, 'b, 'c, 'info, MintReceipts<'info>>,
         args: MintReceiptsArgs,
@@ -761,6 +808,12 @@ pub struct DeliverArgs {
     pub delivery_id: u32,
     pub delivery_fee_lamports: u64,
     /// PDA bump for `delivery` record (passed from client to avoid find_program_address compute).
+    pub delivery_bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct CloseDeliveryArgs {
+    pub delivery_id: u32,
     pub delivery_bump: u8,
 }
 
@@ -934,6 +987,25 @@ pub struct Deliver<'info> {
     /// CHECK: Delivery record PDA (created by this instruction).
     #[account(mut)]
     pub delivery: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseDelivery<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    /// Cloud-held signer (must match config.admin).
+    pub cosigner: Signer<'info>,
+
+    /// CHECK: Must match config.treasury
+    #[account(mut, address = config.treasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Delivery record PDA to close.
+    #[account(mut)]
+    pub delivery: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

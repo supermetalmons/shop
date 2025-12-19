@@ -18,6 +18,7 @@ import {
   requestOpenBoxTx,
   finalizeClaimTx,
   saveEncryptedAddress,
+  issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
@@ -239,6 +240,18 @@ function App() {
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();
+      if (resp.deliveryId) {
+        try {
+          setStatus(`Delivery submitted${idSuffix} · ${sig} · issuing receipts…`);
+          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, idToken);
+          const minted = Number(issued?.receiptsMinted || 0);
+          setStatus(`Delivery submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
+          await refetchInventory();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to issue receipts';
+          setStatus(`Delivery submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
+        }
+      }
     } catch (err) {
       console.error(err);
       setStatus(err instanceof Error ? err.message : 'Failed to request delivery');
