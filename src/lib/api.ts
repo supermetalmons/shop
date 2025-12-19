@@ -3,14 +3,7 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 import { Connection, PublicKey } from '@solana/web3.js';
-import bs58 from 'bs58';
-import {
-  DeliverItemInput,
-  buildDeliverTxWithBlockhash,
-  fetchBoxMinterConfig,
-  normalizeLeafIndex,
-  truncateProofByCanopy,
-} from './boxMinter';
+import { DeliverItemInput, buildDeliverTxWithBlockhash, fetchBoxMinterConfig } from './boxMinter';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -139,7 +132,6 @@ const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
 const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
 const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
-const heliusMerkleTree = (import.meta.env.VITE_MERKLE_TREE || '').trim();
 
 type DasAsset = Record<string, any>;
 
@@ -175,20 +167,6 @@ async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
     throw new Error(message);
   }
   return (json as any).result as T;
-}
-
-function normalizeU64(value: unknown, label: string): bigint {
-  if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return BigInt(Math.floor(value));
-  if (typeof value === 'string' && value) {
-    try {
-      const n = BigInt(value);
-      if (n >= 0n) return n;
-    } catch {
-      // handled below
-    }
-  }
-  throw new Error(`${label} must be a non-negative u64`);
 }
 
 function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
@@ -305,10 +283,6 @@ function isMonsAsset(asset: DasAsset): boolean {
   // Prefer collection grouping when configured.
   if (heliusCollection && assetMatchesCollection(asset, heliusCollection)) return true;
 
-  // Fall back to the drop's Merkle tree (handles indexing delays or when collection grouping is unavailable).
-  const tree: string = (asset as any)?.compression?.tree || (asset as any)?.compression?.treeId || '';
-  if (heliusMerkleTree && tree && tree === heliusMerkleTree) return true;
-
   return false;
 }
 
@@ -331,7 +305,6 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     dudeId,
     image,
     attributes: asset.content?.metadata?.attributes || [],
-    status: asset.compression?.compressed ? 'minted' : undefined,
   };
 }
 
@@ -366,26 +339,6 @@ async function fetchHeliusAsset(assetId: string): Promise<DasAsset> {
   );
 }
 
-async function fetchHeliusAssetProof(assetId: string): Promise<any> {
-  const cluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
-  const apiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
-  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-  return heliusRpcWithFallback<any>(
-    'getAssetProof',
-    { id: assetId },
-    async () => {
-      if (!apiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
-      const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${apiKey}${clusterParam}`;
-      const res = await fetch(url);
-      const json = await res.json().catch(() => ({}));
-      if (!json || typeof json !== 'object' || !(json as any)?.root || !(json as any)?.proof) {
-        throw new Error('Asset proof not available yet');
-      }
-      return json;
-    },
-  );
-}
-
 function numericIdFromString(value: string | undefined): number {
   const raw = (value || '').trim();
   if (!raw) return NaN;
@@ -395,15 +348,14 @@ function numericIdFromString(value: string | undefined): number {
   return match?.[0] ? Number(match[0]) : NaN;
 }
 
-async function fetchAssetWithProofRetry(assetId: string): Promise<{ asset: DasAsset; proof: any }> {
+async function fetchAssetRetry(assetId: string): Promise<DasAsset> {
   const startedAt = Date.now();
   const maxWaitMs = 12_000;
   const maxAttempts = 6;
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts && Date.now() - startedAt < maxWaitMs; attempt++) {
     try {
-      const [asset, proof] = await Promise.all([fetchHeliusAsset(assetId), fetchHeliusAssetProof(assetId)]);
-      return { asset, proof };
+      return await fetchHeliusAsset(assetId);
     } catch (err) {
       lastErr = err;
       // Only retry on transient/indexing failures.
@@ -417,25 +369,23 @@ async function fetchAssetWithProofRetry(assetId: string): Promise<{ asset: DasAs
       }
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Asset proof not available yet'));
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Asset not available yet'));
 }
 
 async function buildDeliverItem(
-  connection: Connection,
   cfg: Awaited<ReturnType<typeof fetchBoxMinterConfig>>,
-  canopyDepth: number,
-  maxDepth: number,
   assetId: string,
   ownerWallet: string,
 ): Promise<DeliverItemInput> {
-  const { asset, proof } = await fetchAssetWithProofRetry(assetId);
+  const asset = await fetchAssetRetry(assetId);
   const kind = getAssetKind(asset);
   if (!kind) throw new Error('Unsupported asset type');
   if (kind === 'certificate') throw new Error('Certificates are already delivery outputs');
-  if (!isMonsAsset(asset)) throw new Error('Item is not part of the Mons collection');
+  const expectedCollection = cfg.coreCollection.toBase58();
+  if (!assetMatchesCollection(asset, expectedCollection)) throw new Error('Item is not part of the Mons collection');
 
   const assetOwner = asset?.ownership?.owner;
-  // Owner check is still enforced by Bubblegum burn; this is just a friendly preflight.
+  // Owner check is also enforced by the on-chain burn; this is just a friendly preflight.
   if (typeof assetOwner === 'string' && assetOwner && assetOwner !== ownerWallet) {
     throw new Error('Item not owned by wallet');
   }
@@ -447,38 +397,10 @@ async function buildDeliverItem(
     throw new Error(kind === 'box' ? 'Box id missing from metadata' : 'Dude id missing from metadata');
   }
 
-  const proofNodes = Array.isArray((proof as any)?.proof) ? ((proof as any).proof as any[]).filter((p) => typeof p === 'string') : [];
-  const truncated = truncateProofByCanopy(proofNodes as string[], canopyDepth);
-  const proofKeys = truncated.map((p) => new PublicKey(p));
-
-  const rootBytes = bs58.decode(String((proof as any).root || ''));
-  const dataHashBytes = bs58.decode(String(asset?.compression?.data_hash || ''));
-  const creatorHashBytes = bs58.decode(String(asset?.compression?.creator_hash || ''));
-  if (rootBytes.length !== 32 || dataHashBytes.length !== 32 || creatorHashBytes.length !== 32) {
-    throw new Error('Invalid burn hashes from Helius');
-  }
-
-  const nonce = normalizeU64((proof as any)?.leaf?.nonce ?? asset?.compression?.leaf_id ?? 0, 'nonce');
-  const maxDepthUsed = maxDepth || proofNodes.length || 0;
-  const nodeIndex = Number((proof as any)?.node_index ?? asset?.compression?.leaf_id ?? 0);
-  const leafIndex = normalizeLeafIndex({ nodeIndex, maxDepth: maxDepthUsed });
-
-  // Ensure the proof tree matches the on-chain configured tree.
-  const proofTreeStr = String((proof as any)?.merkleTree || (proof as any)?.merkle_tree || (proof as any)?.treeId || '');
-  const treeStr = String(asset?.compression?.tree || asset?.compression?.treeId || proofTreeStr || '');
-  if (treeStr && treeStr !== cfg.merkleTree.toBase58()) {
-    throw new Error('Item is from a different Merkle tree than the configured drop');
-  }
-
   return {
-    kind,
+    kind: kind === 'box' ? 'box' : 'dude',
     refId,
-    root: rootBytes,
-    dataHash: dataHashBytes,
-    creatorHash: creatorHashBytes,
-    nonce,
-    index: leafIndex >>> 0,
-    proof: proofKeys,
+    asset: new PublicKey(assetId),
   };
 }
 
@@ -554,19 +476,19 @@ export async function requestDeliveryTx(
   // 1) Create an order on the backend (it decides the random delivery fee + deliveryId).
   const created = await callFunction<
     { owner: string } & DeliverySelection,
-    { orderId: string; deliveryId: number; deliveryLamports: number; canopyDepth: number; maxDepth: number }
+    { orderId: string; deliveryId: number; deliveryLamports: number }
   >(
     'createDeliveryOrder',
     { owner, ...selection },
   );
 
-  const { orderId, deliveryId, deliveryLamports, canopyDepth, maxDepth } = created;
+  const { orderId, deliveryId, deliveryLamports } = created;
   if (!orderId) throw new Error('Missing orderId from backend');
 
-  // 2) Build the on-chain deliver tx client-side (fetching proofs via Helius).
+  // 2) Build the on-chain deliver tx client-side (fetching assets via Helius; no Merkle proofs).
   const cfg = await fetchBoxMinterConfig(conn);
   const ownerWallet = ownerPk.toBase58();
-  const items = await Promise.all(selection.itemIds.map((id) => buildDeliverItem(conn, cfg, canopyDepth, maxDepth, id, ownerWallet)));
+  const items = await Promise.all(selection.itemIds.map((id) => buildDeliverItem(cfg, id, ownerWallet)));
 
   const { blockhash } = await conn.getLatestBlockhash('confirmed');
   const unsignedTx = buildDeliverTxWithBlockhash(
@@ -580,7 +502,7 @@ export async function requestDeliveryTx(
   const MAX_RAW_TX_BYTES = 1232;
   const raw = unsignedTx.serialize();
   if (raw.length > MAX_RAW_TX_BYTES) {
-    // Best-effort: estimate how many items would fit given the already-fetched proofs.
+    // Best-effort: estimate how many items would fit.
     let maxFit = 0;
     for (let n = items.length - 1; n >= 1; n -= 1) {
       const candidate = buildDeliverTxWithBlockhash(
@@ -594,10 +516,9 @@ export async function requestDeliveryTx(
         break;
       }
     }
-    const proofLen = items?.[0]?.proof?.length ?? 0;
     throw new Error(
       `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). ` +
-        `Try fewer items (this tree proofLen≈${proofLen}, canopy=${canopyDepth}). ` +
+        `Try fewer items. ` +
         (maxFit ? `Estimated max that fits: ${maxFit}.` : 'Try 1 item.'),
     );
   }

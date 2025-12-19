@@ -26,9 +26,6 @@
   },
   "homepage": "https://github.com/supermetalmons/shop#readme",
   "dependencies": {
-    "@metaplex-foundation/mpl-bubblegum": "^0.11.0",
-    "@metaplex-foundation/mpl-token-metadata": "^2.3.3",
-    "@solana/spl-account-compression": "0.2.1",
     "@solana/spl-token": "^0.4.8",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",

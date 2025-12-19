@@ -1,7 +1,7 @@
 [package]
 name = "box_minter"
 version = "0.1.0"
-description = "mons.shop box minter – on-chain mint + supply cap for compressed NFTs"
+description = "mons.shop box minter – on-chain mint + supply cap for MPL Core (uncompressed) assets"
 edition = "2021"
 
 [lib]
@@ -21,9 +21,6 @@ solana = []
 
 [dependencies]
 anchor-lang = "0.32.1"
-
-# Bubblegum CPI + metadata types (Metaplex)
-mpl-bubblegum = "2.1.1"
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

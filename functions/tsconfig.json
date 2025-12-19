@@ -8,9 +8,6 @@
     "rootDir": "src",
     "esModuleInterop": true,
     "baseUrl": ".",
-    "paths": {
-      "@solana/spl-account-compression": ["./node_modules/@solana/spl-account-compression/dist/types/src/index.d.ts"]
-    },
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "sourceMap": true,

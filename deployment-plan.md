@@ -12,7 +12,7 @@ Step-by-step guide to ship mons.shop end-to-end (Solana + Firebase Cloud Functio
   cd functions && npm install
   ```
 
-## 1) Solana setup (box minter program, cNFT tree, vault)
+## 1) Solana setup (box minter program, MPL Core collection, vault)
 All commands run from repo root unless noted.
 
 1. Pick a cluster and fund the payer keypair:
@@ -21,7 +21,7 @@ All commands run from repo root unless noted.
    solana config set --url https://api.devnet.solana.com
    solana airdrop 2
    ```
-2. Deploy the **box minter program** (Anchor) + create Bubblegum V2 cNFT tree + configure delegation:
+2. Deploy the **box minter program** (Anchor) + create an MPL Core collection (uncompressed) + initialize config PDA:
    - One-command deploy (auto-generates a fresh program id each run):
      ```bash
      npm run box-minter:deploy-all -- \
@@ -30,7 +30,7 @@ All commands run from repo root unless noted.
        --rpc https://api.devnet.solana.com
      ```
 - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id`
-Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `MERKLE_TREE`, `TREE_AUTHORITY_SECRET`, `COSIGNER_SECRET`).
+Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `COLLECTION_MINT`, `COSIGNER_SECRET`).
 
 3. Generate the shipping vault:
    ```bash
@@ -40,7 +40,7 @@ Outputs: frontend env (`VITE_*`) + functions env (`BOX_MINTER_PROGRAM_ID`, `MERK
 4. Decide supplies & metadata:
    - Box minting parameters are hard-coded in `scripts/deploy-all-box-minter.ts` (edit there before deploying).
    - `METADATA_BASE` should host the drop under one root (used by Cloud Functions for open/delivery/claim), e.g. `https://assets.mons.link/shop/drops/1`.
-5. Optional cosigner: set `COSIGNER_SECRET` (bs58) if you want a separate key from the tree authority.
+5. Optional: you may use a dedicated server cosigner keypair for `COSIGNER_SECRET` (bs58). It must match the on-chain config admin.
 
 Record all outputs for the function environment in step 2.
 
@@ -55,10 +55,8 @@ Keys in the template:
 - `BOX_MINTER_PROGRAM_ID`
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (devnet|testnet|mainnet-beta)
-- `MERKLE_TREE`
-- `TREE_AUTHORITY_SECRET`
-- `COSIGNER_SECRET` (optional, defaults to tree authority if left blank)
-- `COLLECTION_MINT` (MPL-Core collection address used by Bubblegum V2 mint-to-collection)
+- `COSIGNER_SECRET`
+- `COLLECTION_MINT` (MPL-Core collection address for this drop)
 - `DELIVERY_VAULT`
 - `METADATA_BASE`
 
@@ -103,9 +101,9 @@ xargs -L1 firebase functions:env:set < .env.deploy
 ## 5) End-to-end smoke test (after deploy)
 1. Connect a funded wallet on the chosen cluster.
 2. Sign in (wallet message) → verify profile created in Firestore.
-3. Mint a small quantity (≤30) directly from the client → confirm the tx on-chain → refresh UI; mint progress is read from the box minter config PDA.
+3. Mint a small quantity (≤15) directly from the client → confirm the tx on-chain → refresh UI; mint progress is read from the box minter config PDA.
 4. Open one box via `/prepareOpenBoxTx` → sign → inventory shows 3 dudes.
-5. Save an encrypted address → request delivery for 1–2 items → sign `/prepareDeliveryTx` tx (burn + certificates) → finalize `/finalizeDeliveryTx` and confirm Firestore `deliveryOrders`.
+5. Save an encrypted address → request delivery for 1–2 items → client builds `deliver` tx → `/cosignDeliveryTx` → sign+submit → finalize `/finalizeDeliveryTx` and confirm Firestore `deliveryOrders`.
 6. Create a claim code via delivery, then test `/prepareIrlClaimTx` + `/finalizeClaimTx` with the same wallet and certificate present.
 
 ## 6) Production cutover checklist
@@ -113,5 +111,5 @@ xargs -L1 firebase functions:env:set < .env.deploy
 - Re-run collection/tree/vault steps on mainnet; update function env vars accordingly.
 - Fund the tree authority and shipping vault with sufficient SOL.
 - Monitor Helius usage/limits; set alerts.
-- Rotate keys: keep `TREE_AUTHORITY_SECRET`, `COSIGNER_SECRET`, and `DELIVERY_VAULT` secrets offline/backed up.
+- Rotate keys: keep `COSIGNER_SECRET` and `DELIVERY_VAULT` secrets offline/backed up.
 

@@ -13,8 +13,6 @@ import {
   VersionedTransaction,
   clusterApiUrl,
 } from '@solana/web3.js';
-import { PROGRAM_ID as BUBBLEGUM_PROGRAM_ID } from '@metaplex-foundation/mpl-bubblegum';
-import { ConcurrentMerkleTreeAccount } from '@solana/spl-account-compression';
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
@@ -129,23 +127,8 @@ const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
 const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
 
-function treeAuthorityPda(tree: PublicKey) {
-  // Bubblegum expects the tree authority (TreeConfig) PDA, not the wallet that created/delegates the tree.
-  // PDA seed is the Merkle tree pubkey.
-  return PublicKey.findProgramAddressSync([tree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
-}
-
-// Bubblegum V2 depends on MPL-Core (even when not using Core collections).
+// MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
-const MPL_CORE_CPI_SIGNER = PublicKey.findProgramAddressSync([Buffer.from('mpl_core_cpi_signer')], BUBBLEGUM_PROGRAM_ID)[0];
-// Bubblegum V2 expects the Metaplex noop + compression programs (not the legacy SPL ones).
-// Names kept for backwards compatibility with existing code paths.
-const SPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
-const SPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
-
-// Bubblegum V2 discriminators (mpl-bubblegum 2.1.1).
-const IX_MINT_V2 = Buffer.from([120, 121, 23, 146, 173, 110, 199, 205]);
-const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
@@ -155,8 +138,7 @@ function heliusRpcUrl() {
 
 const rpcUrl = heliusRpcUrl();
 
-const merkleTree = new PublicKey(process.env.MERKLE_TREE || PublicKey.default.toBase58());
-// Required: MPL-Core collection address used for Bubblegum V2 mint-to-collection (and for fast Helius `grouping: ['collection', ...]` queries).
+// Required: MPL-Core collection address (uncompressed collection).
 const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 const shippingVault = new PublicKey(process.env.DELIVERY_VAULT || PublicKey.default.toBase58());
@@ -169,6 +151,8 @@ const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config
 const IX_OPEN_BOX = Buffer.from('e1dc0a68ad97d6c7', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
+// Anchor discriminator = sha256("global:mint_receipts")[0..8]
+const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 
 const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
 const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
@@ -192,27 +176,17 @@ function decodeSecretKey(secret: string | undefined, label: string) {
   return decoded;
 }
 
-let cachedTreeAuthority: Keypair | null = null;
-function treeAuthority() {
-  if (!cachedTreeAuthority) {
-    cachedTreeAuthority = Keypair.fromSecretKey(decodeSecretKey(process.env.TREE_AUTHORITY_SECRET, 'TREE_AUTHORITY_SECRET'));
-  }
-  return cachedTreeAuthority;
-}
-
 let cachedCosigner: Keypair | null = null;
 function cosigner() {
   if (!cachedCosigner) {
-    const raw = (process.env.COSIGNER_SECRET || process.env.TREE_AUTHORITY_SECRET || '').trim();
-    const label = process.env.COSIGNER_SECRET ? 'COSIGNER_SECRET' : 'TREE_AUTHORITY_SECRET';
-    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(raw, label));
+    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(process.env.COSIGNER_SECRET, 'COSIGNER_SECRET'));
   }
   return cachedCosigner;
 }
 
 function ensureAuthorityKeys() {
-  // Prepared transactions require a server-side signature for the tree creator/delegate.
-  treeAuthority();
+  // Prepared transactions require a server-side cosigner signature.
+  cosigner();
 }
 
 function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
@@ -366,15 +340,16 @@ const ONCHAIN_CONFIG_CHECK_TTL_MS = 5 * 60 * 1000;
 let lastOnchainConfigCheckMs = 0;
 let onchainConfigOk = false;
 
-async function ensureOnchainMintConfig(force = false) {
+async function ensureOnchainCoreConfig(force = false) {
   const now = Date.now();
   if (!force && onchainConfigOk && now - lastOnchainConfigCheckMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return;
   lastOnchainConfigCheckMs = now;
 
   ensureAuthorityKeys();
-  assertConfiguredPublicKey(merkleTree, 'MERKLE_TREE');
-  const treeConfig = treeAuthorityPda(merkleTree);
-  const pubkeys = [merkleTree, treeConfig];
+  assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+
+  const pubkeys = [collectionMint, boxMinterConfigPda];
   const infos = await withTimeout(
     connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
     RPC_TIMEOUT_MS,
@@ -385,7 +360,7 @@ async function ensureOnchainMintConfig(force = false) {
   for (let i = 0; i < pubkeys.length; i += 1) {
     if (infos[i]) continue;
     const key = pubkeys[i];
-    const label = key.equals(merkleTree) ? 'MERKLE_TREE' : 'BUBBLEGUM_TREE_CONFIG_PDA';
+    const label = key.equals(collectionMint) ? 'COLLECTION_MINT' : 'BOX_MINTER_CONFIG_PDA';
     missing[label] = key.toBase58();
   }
 
@@ -396,7 +371,22 @@ async function ensureOnchainMintConfig(force = false) {
       'On-chain mint config is missing or mismatched. Re-run `npm run box-minter:deploy-all`, update functions env, and redeploy.',
       {
         missing,
-        treeConfig: treeConfig.toBase58(),
+        collection: collectionMint.toBase58(),
+        configPda: boxMinterConfigPda.toBase58(),
+      },
+    );
+  }
+
+  const collectionInfo = infos[0];
+  if (collectionInfo && !collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
+    onchainConfigOk = false;
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'COLLECTION_MINT is not an MPL Core collection account for this cluster.',
+      {
+        collection: collectionMint.toBase58(),
+        expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
+        actualOwner: collectionInfo.owner.toBase58(),
       },
     );
   }
@@ -415,215 +405,6 @@ function isTxSizeError(err: unknown) {
 function parseSignature(sig: number[] | string) {
   if (typeof sig === 'string') return bs58.decode(sig);
   return Uint8Array.from(sig);
-}
-
-type MetadataExtra = {
-  boxId?: string;
-  dudeIds?: number[];
-  receiptTarget?: 'box' | 'figure';
-};
-
-type BubblegumCreatorV2 = {
-  address: PublicKey;
-  verified: boolean;
-  share: number;
-};
-
-type BubblegumMetadataArgsV2 = {
-  name: string;
-  symbol: string;
-  uri: string;
-  sellerFeeBasisPoints: number;
-  primarySaleHappened: boolean;
-  isMutable: boolean;
-  tokenStandard: 'NonFungible';
-  creators: BubblegumCreatorV2[];
-  collection: PublicKey;
-};
-
-function normalizeBoxId(boxId?: string) {
-  if (!boxId) return undefined;
-  const numeric = Number(boxId);
-  if (Number.isFinite(numeric) && numeric > 0) return String(numeric);
-  const match = `${boxId}`.match(/\d+/);
-  return match?.[0];
-}
-
-function buildMetadata(kind: 'box' | 'dude' | 'certificate', index: number, extra?: MetadataExtra): BubblegumMetadataArgsV2 {
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
-  const dudes = (extra?.dudeIds || []).filter((id) => Number.isFinite(id)) as number[];
-  const primaryDudeId = dudes[0] ?? index;
-  const boxRef = normalizeBoxId(extra?.boxId);
-  const certificateTarget =
-    kind === 'certificate'
-      ? extra?.receiptTarget || (dudes.length ? 'figure' : boxRef ? 'box' : undefined)
-      : undefined;
-  const name = (() => {
-    if (kind === 'box') return `mons blind box #${index}`;
-    if (kind === 'dude') return `mons figure #${primaryDudeId}`;
-    if (certificateTarget === 'figure') return `mons receipt · figure #${primaryDudeId}`;
-    if (certificateTarget === 'box') return `mons receipt · box ${boxRef || extra?.boxId?.slice(0, 6) || index}`;
-    return `mons authenticity #${index}`;
-  })();
-
-  const uriSuffix =
-    kind === 'box'
-      ? `json/boxes/${index}.json`
-      : kind === 'dude'
-        ? `json/figures/${primaryDudeId}.json`
-        : certificateTarget === 'box'
-          ? `json/receipts/boxes/${boxRef || index}.json`
-          : certificateTarget === 'figure'
-            ? `json/receipts/figures/${primaryDudeId}.json`
-            : `json/receipts/${index}.json`;
-
-  return {
-    name,
-    symbol: 'MONS',
-    uri: `${metadataBase}/${uriSuffix}`,
-    sellerFeeBasisPoints: 0,
-    creators: [{ address: treeAuthority().publicKey, verified: false, share: 100 }],
-    primarySaleHappened: false,
-    isMutable: true,
-    tokenStandard: 'NonFungible',
-    collection: collectionMint,
-  };
-}
-
-function borshString(value: string): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  return Buffer.concat([u32LE(bytes.length), bytes]);
-}
-
-function borshBool(value: boolean): Buffer {
-  return Buffer.from([value ? 1 : 0]);
-}
-
-function borshOptionBytes(value: Uint8Array | null | undefined): Buffer {
-  if (!value) return Buffer.from([0]);
-  const buf = Buffer.from(value);
-  return Buffer.concat([Buffer.from([1]), u32LE(buf.length), buf]);
-}
-
-function borshOptionU8(value: number | null | undefined): Buffer {
-  if (value === null || value === undefined) return Buffer.from([0]);
-  return Buffer.from([1, value & 0xff]);
-}
-
-function borshOptionPubkey(value: PublicKey | null | undefined): Buffer {
-  if (!value) return Buffer.from([0]);
-  return Buffer.concat([Buffer.from([1]), value.toBuffer()]);
-}
-
-function encodeCreatorsV2(creators: BubblegumCreatorV2[]): Buffer {
-  const parts: Buffer[] = [u32LE(creators.length)];
-  for (const c of creators) {
-    parts.push(c.address.toBuffer(), borshBool(Boolean(c.verified)), Buffer.from([c.share & 0xff]));
-  }
-  return Buffer.concat(parts);
-}
-
-function encodeMetadataArgsV2(metadata: BubblegumMetadataArgsV2): Buffer {
-  // TokenStandard enum (mpl-bubblegum): NonFungible = 0.
-  const tokenStandard = metadata.tokenStandard === 'NonFungible' ? 0 : 0;
-  const tokenStandardOpt = Buffer.from([1, tokenStandard]); // Some(TokenStandard)
-
-  return Buffer.concat([
-    borshString(metadata.name),
-    borshString(metadata.symbol),
-    borshString(metadata.uri),
-    u16LE(metadata.sellerFeeBasisPoints),
-    borshBool(Boolean(metadata.primarySaleHappened)),
-    borshBool(Boolean(metadata.isMutable)),
-    tokenStandardOpt,
-    encodeCreatorsV2(metadata.creators || []),
-    borshOptionPubkey(metadata.collection),
-  ]);
-}
-
-function encodeMintV2Args(metadata: BubblegumMetadataArgsV2): Buffer {
-  // MintV2InstructionArgs = { metadata, asset_data: Option<Vec<u8>>, asset_data_schema: Option<AssetDataSchema> }
-  // We omit asset_data + schema to keep the leaf schema defaults (smaller + consistent with burnV2).
-  return Buffer.concat([encodeMetadataArgsV2(metadata), borshOptionBytes(null), Buffer.from([0])]);
-}
-
-function encodeBurnV2Args(args: {
-  root: Uint8Array;
-  dataHash: Uint8Array;
-  creatorHash: Uint8Array;
-  nonce: bigint;
-  index: number;
-}): Buffer {
-  if (args.root.length !== 32 || args.dataHash.length !== 32 || args.creatorHash.length !== 32) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
-  }
-  // BurnV2InstructionArgs = { root, data_hash, creator_hash, asset_data_hash: Option<[32]>, flags: Option<u8>, nonce, index }
-  // We omit asset_data_hash + flags (defaults).
-  return Buffer.concat([
-    Buffer.from(args.root),
-    Buffer.from(args.dataHash),
-    Buffer.from(args.creatorHash),
-    Buffer.from([0]), // asset_data_hash: None
-    Buffer.from([0]), // flags: None
-    u64LE(args.nonce),
-    u32LE(args.index),
-  ]);
-}
-
-function createMintV2Ix(args: { payer: PublicKey; treeCreatorOrDelegate: PublicKey; metadata: BubblegumMetadataArgsV2 }) {
-  const treeConfig = treeAuthorityPda(merkleTree);
-  return new TransactionInstruction({
-    programId: BUBBLEGUM_PROGRAM_ID,
-    keys: [
-      { pubkey: treeConfig, isSigner: false, isWritable: true },
-      { pubkey: args.payer, isSigner: true, isWritable: true },
-      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false },
-      // Bubblegum V2: collection authority must sign when minting into an MPL-Core collection.
-      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false }, // collection_authority (delegate)
-      { pubkey: args.payer, isSigner: false, isWritable: false }, // leaf_owner
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // leaf_delegate (None)
-      { pubkey: merkleTree, isSigner: false, isWritable: true },
-      { pubkey: collectionMint, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.concat([IX_MINT_V2, encodeMintV2Args(args.metadata)]),
-  });
-}
-
-async function buildMintInstructions(
-  owner: PublicKey,
-  quantity: number,
-  kind: 'box' | 'dude' | 'certificate',
-  startIndex = 1,
-  extra?: MetadataExtra,
-) {
-  // Fail fast with a helpful error if env/on-chain prereqs don't match the current deployment.
-  await ensureOnchainMintConfig();
-  const instructions: TransactionInstruction[] = [];
-  const treeAuthorityKey = treeAuthority();
-
-  for (let i = 0; i < quantity; i += 1) {
-    const perMintDudeIds =
-      extra?.dudeIds && (quantity > 1 || kind === 'dude') ? [extra.dudeIds[i]] : extra?.dudeIds;
-    const metadata = buildMetadata(kind, startIndex + i, {
-      boxId: extra?.boxId,
-      dudeIds: perMintDudeIds?.filter((id) => Number.isFinite(id)) as number[] | undefined,
-      receiptTarget: extra?.receiptTarget,
-    });
-    instructions.push(
-      createMintV2Ix({
-          payer: owner,
-        treeCreatorOrDelegate: treeAuthorityKey.publicKey,
-        metadata,
-      }),
-    );
-  }
-
-  return instructions;
 }
 
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
@@ -717,7 +498,7 @@ async function fetchAssetsOwned(owner: string) {
   // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
   // (assets returned by the API use objects like { group_key, group_value }).
   //
-  // NOTE: Newly minted compressed NFTs can briefly miss collection-group indexing on devnet.
+  // NOTE: Newly minted assets can briefly miss collection-group indexing on devnet.
   // We first try the collection-group query (fast/small), then fall back to an ungrouped query
   // and filter locally by merkle tree + metadata patterns.
   const baseParams = {
@@ -749,43 +530,6 @@ async function findCertificateForBox(owner: string, boxId: string) {
   if (!boxId) return null;
   const assets = await fetchAssetsOwned(owner);
   return assets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxId) || null;
-}
-
-async function fetchAssetProof(assetId: string) {
-  // Use DAS RPC to keep behavior consistent with `searchAssets` (inventory).
-  // REST endpoints can lag or behave differently across clusters.
-  let proof: any;
-  try {
-    proof = await heliusRpc<any>('getAssetProof', { id: assetId }, 'Helius proof error');
-  } catch (err) {
-    const anyErr = err as any;
-    const upstreamCode = anyErr?.details?.upstreamCode;
-    const msg = String(anyErr?.message || '');
-    const looksLikeRpcMethodMismatch =
-      upstreamCode === -32601 || upstreamCode === -32602 || /method not found|invalid params/i.test(msg);
-    if (!looksLikeRpcMethodMismatch) throw err;
-    // Fallback to legacy REST endpoint if RPC method signature isn't supported.
-    const helius = process.env.HELIUS_API_KEY;
-    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-    const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
-    proof = await heliusJson(url, 'Helius proof error');
-  }
-  const tree =
-    (proof as any)?.merkleTree ||
-    (proof as any)?.merkle_tree ||
-    (proof as any)?.tree_id ||
-    (proof as any)?.treeId ||
-    (proof as any)?.tree;
-  if (!proof || typeof proof !== 'object' || !(proof as any)?.root || !(proof as any)?.proof || !tree) {
-    throw new functions.https.HttpsError(
-      'not-found',
-      'Asset proof not available yet. If you just minted/transferred/opened this item, wait a few seconds and retry.',
-      { assetId },
-    );
-  }
-  // Normalize tree field so downstream code can rely on it.
-  if (!(proof as any).merkleTree && tree) (proof as any).merkleTree = tree;
-  return proof;
 }
 
 async function fetchAsset(assetId: string) {
@@ -901,20 +645,17 @@ function isMonsAsset(asset: any): boolean {
     const groupingMatch = (asset?.grouping || []).some(
       (g: any) => g?.group_key === 'collection' && g?.group_value === collectionMintStr,
     );
-  if (groupingMatch) return true;
+    if (groupingMatch) return true;
   }
 
   // Fallbacks: allow inventory to work during collection-indexing delays.
-  const tree = asset?.compression?.tree || asset?.compression?.treeId;
-  if (typeof tree === 'string' && tree === merkleTree.toBase58()) return true;
-
   const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
   if (typeof uri === 'string' && uri && uri.startsWith(metadataBase)) return true;
 
   return false;
 }
 
-async function fetchAssetWithProof(assetId: string) {
+async function fetchAssetRetry(assetId: string) {
   // DAS can be briefly inconsistent right after mint/transfer. Retry a few times so a newly minted
   // box that already shows in inventory can still be opened immediately.
   const startedAt = Date.now();
@@ -923,8 +664,7 @@ async function fetchAssetWithProof(assetId: string) {
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts && Date.now() - startedAt < maxWaitMs; attempt++) {
     try {
-      const [asset, proof] = await Promise.all([fetchAsset(assetId), fetchAssetProof(assetId)]);
-      return { asset, proof };
+      return await fetchAsset(assetId);
     } catch (err) {
       lastErr = err;
       const anyErr = err as any;
@@ -943,53 +683,6 @@ async function fetchAssetWithProof(assetId: string) {
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-}
-
-const TREE_PARAMS_CACHE_TTL_MS = 10 * 60 * 1000;
-const treeParamsCache = new Map<string, { canopyDepth: number; maxDepth: number; updatedAt: number }>();
-
-async function getTreeParams(tree: PublicKey): Promise<{ canopyDepth: number; maxDepth: number }> {
-  const key = tree.toBase58();
-  const cached = treeParamsCache.get(key);
-  const now = Date.now();
-  if (cached && now - cached.updatedAt < TREE_PARAMS_CACHE_TTL_MS) {
-    return { canopyDepth: cached.canopyDepth, maxDepth: cached.maxDepth };
-  }
-
-  const info = await withTimeout(connection().getAccountInfo(tree, { commitment: 'confirmed' }), RPC_TIMEOUT_MS, 'getAccountInfo:tree');
-  if (!info?.data) {
-    const params = { canopyDepth: 0, maxDepth: 0 };
-    treeParamsCache.set(key, { ...params, updatedAt: now });
-    return params;
-  }
-
-  const acct = ConcurrentMerkleTreeAccount.fromBuffer(info.data);
-  const canopyRaw = Number(acct.getCanopyDepth() || 0);
-  const canopyDepth = Number.isFinite(canopyRaw) && canopyRaw > 0 ? Math.round(canopyRaw) : 0;
-  const depthRaw = Number(acct.getMaxDepth() || 0);
-  const maxDepth = Number.isFinite(depthRaw) && depthRaw > 0 ? Math.round(depthRaw) : 0;
-  treeParamsCache.set(key, { canopyDepth, maxDepth, updatedAt: now });
-  return { canopyDepth, maxDepth };
-}
-
-function truncateProofByCanopy(proof: string[], canopyDepth: number): string[] {
-  const drop = Math.max(0, Math.floor(canopyDepth || 0));
-  if (!drop) return proof;
-  if (proof.length <= drop) return [];
-  return proof.slice(0, proof.length - drop);
-}
-
-function normalizeLeafIndex(args: { nodeIndex: number; maxDepth: number }): number {
-  const nodeIndex = Number(args.nodeIndex);
-  if (!Number.isFinite(nodeIndex) || nodeIndex < 0) return 0;
-
-  // Helius `node_index` is the index in the *full binary tree* where leaf nodes start at 2^depth.
-  // Bubblegum/compression expects the leaf index 0..(2^depth - 1).
-  const depth = Number(args.maxDepth || 0);
-  if (!depth) return nodeIndex >>> 0;
-  const leafOffset = Math.pow(2, depth);
-  const leafIndex = nodeIndex >= leafOffset ? nodeIndex - leafOffset : nodeIndex;
-  return leafIndex >>> 0;
 }
 
 function u16LE(value: number) {
@@ -1032,6 +725,23 @@ function decodeDeliverIxData(data: Buffer): { deliveryId: number; feeLamports: n
   return { deliveryId, feeLamports, itemsLen };
 }
 
+function decodeDeliverIxItems(data: Buffer): Array<{ kind: number; refId: number }> {
+  const decoded = decodeDeliverIxData(data);
+  const items: Array<{ kind: number; refId: number }> = [];
+  let o = 8 + 4 + 8 + 4; // discriminator + delivery_id + fee + vec_len
+  for (let i = 0; i < decoded.itemsLen; i += 1) {
+    if (o + 1 + 4 > data.length) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid deliver instruction data (truncated items)');
+    }
+    const kind = data[o];
+    o += 1;
+    const refId = data.readUInt32LE(o);
+    o += 4;
+    items.push({ kind, refId });
+  }
+  return items;
+}
+
 function normalizeU64(value: unknown, label: string): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return BigInt(Math.floor(value));
@@ -1046,18 +756,11 @@ function normalizeU64(value: unknown, label: string): bigint {
   throw new functions.https.HttpsError('invalid-argument', `${label} must be a non-negative u64`);
 }
 
-function encodeOpenBoxArgs(args: {
-  dudeIds: number[];
-  root: Uint8Array;
-  dataHash: Uint8Array;
-  creatorHash: Uint8Array;
-  nonce: bigint;
-  index: number;
-}): Buffer {
-  if (!Array.isArray(args.dudeIds) || args.dudeIds.length !== DUDES_PER_BOX) {
+function encodeOpenBoxArgs(dudeIds: number[]): Buffer {
+  if (!Array.isArray(dudeIds) || dudeIds.length !== DUDES_PER_BOX) {
     throw new functions.https.HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
   }
-  const ids = args.dudeIds.map((n) => Number(n));
+  const ids = dudeIds.map((n) => Number(n));
   ids.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
       throw new functions.https.HttpsError('invalid-argument', `Invalid dude id: ${id}`);
@@ -1066,67 +769,25 @@ function encodeOpenBoxArgs(args: {
   if (new Set(ids).size !== ids.length) {
     throw new functions.https.HttpsError('invalid-argument', 'Duplicate dude ids');
   }
-  if (args.root.length !== 32 || args.dataHash.length !== 32 || args.creatorHash.length !== 32) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
-  }
-
-  return Buffer.concat([
-    IX_OPEN_BOX,
-    ...ids.map(u16LE),
-    Buffer.from(args.root),
-    Buffer.from(args.dataHash),
-    Buffer.from(args.creatorHash),
-    u64LE(args.nonce),
-    u32LE(args.index),
-  ]);
+  return Buffer.concat([IX_OPEN_BOX, ...ids.map(u16LE)]);
 }
 
-async function createBurnIx(assetId: string, owner: PublicKey, cached?: { asset?: any; proof?: any }) {
-  const asset = cached?.asset ?? (await fetchAsset(assetId));
-  const proof = cached?.proof ?? (await fetchAssetProof(assetId));
-  const leafNonce = proof.leaf?.nonce ?? asset.compression?.leaf_id ?? 0;
-  const merkle = new PublicKey(asset.compression?.tree || proof.merkleTree);
-  const { canopyDepth, maxDepth } = await getTreeParams(merkle);
-  const proofNodes = Array.isArray(proof.proof) ? (proof.proof as any[]).filter((p) => typeof p === 'string') : [];
-  const truncated = truncateProofByCanopy(proofNodes as string[], canopyDepth);
-  const proofPath = truncated.map((p: string) => ({ pubkey: new PublicKey(p), isSigner: false, isWritable: false }));
-  const maxDepthUsed = maxDepth || proofNodes.length || 0;
-  const leafIndex = normalizeLeafIndex({ nodeIndex: Number(proof.node_index ?? asset.compression?.leaf_id ?? 0), maxDepth: maxDepthUsed });
-
-  const rootBytes = bs58.decode(String(proof.root || ''));
-  const dataHashBytes = bs58.decode(String(asset?.compression?.data_hash || ''));
-  const creatorHashBytes = bs58.decode(String(asset?.compression?.creator_hash || ''));
-  const nonce = normalizeU64(leafNonce, 'nonce');
-  const leafOwner = new PublicKey(asset?.ownership?.owner);
-
-  return new TransactionInstruction({
-    programId: BUBBLEGUM_PROGRAM_ID,
-    keys: [
-      { pubkey: treeAuthorityPda(merkle), isSigner: false, isWritable: true }, // tree_config
-      { pubkey: owner, isSigner: true, isWritable: true }, // payer
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // authority (None)
-      { pubkey: leafOwner, isSigner: false, isWritable: false }, // leaf_owner
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // leaf_delegate (None)
-      { pubkey: merkle, isSigner: false, isWritable: true },
-      { pubkey: collectionMint, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...proofPath,
-    ],
-    data: Buffer.concat([
-      IX_BURN_V2,
-      encodeBurnV2Args({
-        root: rootBytes,
-        dataHash: dataHashBytes,
-        creatorHash: creatorHashBytes,
-        nonce,
-      index: leafIndex,
-      }),
-    ]),
+function encodeMintReceiptsArgs(args: { kind: number; refIds: number[] }): Buffer {
+  const kind = Number(args.kind);
+  if (!Number.isFinite(kind) || ![0, 1].includes(kind)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid receipt kind');
+  }
+  const refIds = Array.isArray(args.refIds) ? args.refIds.map((n) => Number(n)) : [];
+  if (!refIds.length) {
+    throw new functions.https.HttpsError('invalid-argument', 'refIds must be non-empty');
+  }
+  refIds.forEach((id) => {
+    if (!Number.isFinite(id) || id <= 0 || id > 0xffff_ffff) {
+      throw new functions.https.HttpsError('invalid-argument', `Invalid refId: ${id}`);
+    }
   });
+
+  return Buffer.concat([IX_MINT_RECEIPTS, Buffer.from([kind & 0xff]), u32LE(refIds.length), ...refIds.map(u32LE)]);
 }
 
 async function assignDudes(boxId: string): Promise<number[]> {
@@ -1150,7 +811,7 @@ async function assignDudes(boxId: string): Promise<number[]> {
   });
 }
 
-async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) {
+async function ensureClaimCode(boxId: string, boxAssetId: string, dudeIds: number[], owner: string) {
   const existing = await db.collection('claimCodes').where('boxId', '==', boxId).limit(1).get();
   if (!existing.empty) return existing.docs[0].id;
   let code = '';
@@ -1162,6 +823,7 @@ async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) 
 
   await ref.set({
     boxId,
+    boxAssetId,
     dudeIds,
     owner,
     createdAt: FieldValue.serverTimestamp(),
@@ -1169,20 +831,10 @@ async function ensureClaimCode(boxId: string, dudeIds: number[], owner: string) 
   return code;
 }
 
-function certificateIndexForItem(assetId: string, kind: 'box' | 'dude', dudeIds?: number[]) {
-  if (kind === 'dude' && dudeIds?.[0]) return dudeIds[0];
-  const input = `${kind}:${assetId}:${(dudeIds || []).join(',')}`;
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-  return (hash % 1_000_000) + 1;
-}
-
-function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string) {
+function buildTx(instructions: TransactionInstruction[], payer: PublicKey, recentBlockhash: string, signers: Keypair[] = []) {
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(message);
-  tx.sign([treeAuthority()]);
+  if (signers.length) tx.sign(signers);
   return tx;
 }
 
@@ -1384,11 +1036,14 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
 export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request) => {
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
-  const ownerPk = new PublicKey(owner);
+  const ownerWallet = normalizeWallet(owner);
+  const ownerPk = new PublicKey(ownerWallet);
+
+  await ensureOnchainCoreConfig();
+
   let asset: any;
-  let proof: any;
   try {
-    ({ asset, proof } = await fetchAssetWithProof(boxAssetId));
+    asset = await fetchAssetRetry(boxAssetId);
   } catch (err) {
     const anyErr = err as any;
     if (anyErr && typeof anyErr === 'object' && anyErr.code === 'not-found') {
@@ -1400,6 +1055,7 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     }
     throw err;
   }
+
   const kind = getAssetKind(asset);
   if (kind !== 'box') {
     throw new functions.https.HttpsError('failed-precondition', 'Only blind boxes can be opened');
@@ -1408,19 +1064,18 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
   }
   const assetOwner = asset?.ownership?.owner;
-  if (assetOwner !== owner) {
+  if (assetOwner !== ownerWallet) {
     throw new functions.https.HttpsError('failed-precondition', 'Box not owned by wallet');
   }
 
-  assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
-
-  // Ensure the provided COSIGNER_SECRET matches the on-chain box minter admin (config PDA).
+  // Ensure the provided COSIGNER_SECRET matches the on-chain box minter admin (config PDA),
+  // and ensure COLLECTION_MINT matches the on-chain configured core collection.
   const cfgInfo = await withTimeout(
     connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getAccountInfo:boxMinterConfig',
   );
-  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32) {
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
     throw new functions.https.HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
@@ -1428,8 +1083,7 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     );
   }
   const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgMerkleTree = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
-  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32 + 32, 8 + 32 + 32 + 32 + 32));
+  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new functions.https.HttpsError(
@@ -1437,15 +1091,6 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
       `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
-  }
-
-  // Ensure env matches on-chain config (helps catch mismatched deployments).
-  assertConfiguredPublicKey(merkleTree, 'MERKLE_TREE');
-  if (!merkleTree.equals(cfgMerkleTree)) {
-    throw new functions.https.HttpsError('failed-precondition', 'MERKLE_TREE env var does not match on-chain config', {
-      env: merkleTree.toBase58(),
-      onchain: cfgMerkleTree.toBase58(),
-    });
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
@@ -1457,196 +1102,56 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
 
   // Assign dudes deterministically per box, reserving globally unique IDs in Firestore.
   const dudeIds = await assignDudes(boxAssetId);
+  const programId = boxMinterProgramId;
+  const dudeAssetPdas = dudeIds.map((id) =>
+    PublicKey.findProgramAddressSync([Buffer.from('dude'), u16LE(id)], programId)[0],
+  );
 
-  // Normalize proof + truncate canopy nodes to keep the tx under the size limit.
-  const proofTreeStr = String((proof as any)?.merkleTree || (proof as any)?.merkle_tree || (proof as any)?.treeId || '');
-  if (proofTreeStr && proofTreeStr !== cfgMerkleTree.toBase58()) {
-    throw new functions.https.HttpsError('failed-precondition', 'Box is from a different Merkle tree than the configured drop', {
-      boxTree: proofTreeStr,
-      configuredTree: cfgMerkleTree.toBase58(),
-    });
-  }
-  const { canopyDepth, maxDepth } = await getTreeParams(cfgMerkleTree);
-  const fullProof = Array.isArray((proof as any)?.proof) ? ((proof as any).proof as any[]).filter((p) => typeof p === 'string') : [];
-  const truncatedProof = truncateProofByCanopy(fullProof as string[], canopyDepth);
-
-  const rootBytes = bs58.decode(String((proof as any).root || ''));
-  const dataHashBytes = bs58.decode(String(asset?.compression?.data_hash || ''));
-  const creatorHashBytes = bs58.decode(String(asset?.compression?.creator_hash || ''));
-  const nonce = normalizeU64((proof as any)?.leaf?.nonce ?? asset?.compression?.leaf_id ?? 0, 'nonce');
-  const maxDepthUsed = maxDepth || fullProof.length || 0;
-  const nodeIndex = Number((proof as any)?.node_index ?? asset?.compression?.leaf_id ?? 0);
-  const leafIndex = normalizeLeafIndex({ nodeIndex, maxDepth: maxDepthUsed });
-  const maxLeaves = maxDepthUsed ? Math.pow(2, maxDepthUsed) : 0;
-  if (maxLeaves && leafIndex >= maxLeaves) {
-    throw new functions.https.HttpsError('failed-precondition', 'Leaf index is out of bounds for the configured Merkle tree', {
-      nodeIndex,
-      leafIndex,
-      maxDepth: maxDepthUsed,
-      maxLeaves,
-      tree: cfgMerkleTree.toBase58(),
-    });
+  let boxAssetPk: PublicKey;
+  try {
+    boxAssetPk = new PublicKey(boxAssetId);
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid boxAssetId');
   }
 
   const openBoxIx = new TransactionInstruction({
-    programId: boxMinterProgramId,
+    programId,
     keys: [
       { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
       { pubkey: signer.publicKey, isSigner: true, isWritable: false },
       { pubkey: ownerPk, isSigner: true, isWritable: true },
-      { pubkey: cfgMerkleTree, isSigner: false, isWritable: true },
-      { pubkey: treeAuthorityPda(cfgMerkleTree), isSigner: false, isWritable: true },
+      { pubkey: boxAssetPk, isSigner: false, isWritable: true },
       { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...truncatedProof.map((p) => ({ pubkey: new PublicKey(p), isSigner: false, isWritable: false })),
+      ...dudeAssetPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
-    data: encodeOpenBoxArgs({
-      dudeIds,
-      root: rootBytes,
-      dataHash: dataHashBytes,
-      creatorHash: creatorHashBytes,
-      nonce,
-      index: leafIndex >>> 0,
-    }),
+    data: encodeOpenBoxArgs(dudeIds),
   });
 
   const conn = connection();
-  const instructions: TransactionInstruction[] = [
-    // Bubblegum CPI allocates; request the max heap frame to avoid OOM.
-    ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    openBoxIx,
-  ];
+  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), openBoxIx];
 
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
   const msg = new TransactionMessage({ payerKey: ownerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
   const tx = new VersionedTransaction(msg);
   tx.sign([signer]);
+
   const raw = tx.serialize();
-  // Solana hard cap: 1232 bytes for the serialized transaction.
-  // (Wallets often show a base64 cap too: 1644 chars.)
   const MAX_RAW_TX_BYTES = 1232;
   if (raw.length > MAX_RAW_TX_BYTES) {
     throw new functions.https.HttpsError(
       'failed-precondition',
-      `Open box transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). This usually means the Merkle tree canopy is too small; redeploy the tree with a larger canopy (e.g. 8).`,
+      `Open box transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try again or contact support.`,
       {
         rawBytes: raw.length,
         maxRawBytes: MAX_RAW_TX_BYTES,
         base64Chars: Buffer.from(raw).toString('base64').length,
-        canopyDepth,
-        proofNodes: fullProof.length,
-        truncatedProofNodes: truncatedProof.length,
-        tree: merkleTree.toBase58(),
       },
     );
   }
 
   return { encodedTx: Buffer.from(raw).toString('base64'), assignedDudeIds: dudeIds };
-});
-
-export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {
-  const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
-  const { owner, itemIds, addressId } = parseRequest(schema, request.data);
-  const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
-  const ownerPk = new PublicKey(ownerWallet);
-  const conn = connection();
-  const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
-  if (!addressSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Address not found');
-  }
-  const addressData = addressSnap.data();
-  const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
-  const orderId = db.collection('deliveryOrders').doc().id;
-  const instructions: TransactionInstruction[] = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_200_000 }),
-    memoInstruction(`delivery:${orderId}`),
-  ];
-  const orderItems: {
-    assetId: string;
-    kind: 'box' | 'dude';
-    boxId?: string;
-    dudeIds?: number[];
-    certificateIndex: number;
-    claimCode?: string;
-  }[] = [];
-  for (let i = 0; i < itemIds.length; i += 1) {
-    const id = itemIds[i];
-    const assetData = await fetchAssetWithProof(id);
-    const kind = getAssetKind(assetData.asset);
-    if (!kind) {
-      throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type');
-    }
-    if (!isMonsAsset(assetData.asset)) {
-      throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
-    }
-    const assetOwner = assetData.asset?.ownership?.owner;
-    if (assetOwner !== ownerWallet) {
-      throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
-    }
-    if (kind === 'certificate') {
-      throw new functions.https.HttpsError('failed-precondition', 'Certificates are already delivery outputs');
-    }
-    let dudeIds: number[] | undefined;
-    let claimCode: string | undefined;
-    if (kind === 'box') {
-      const assigned = await assignDudes(id);
-      dudeIds = assigned;
-      claimCode = await ensureClaimCode(id, assigned, ownerWallet);
-    }
-    if (kind === 'dude') {
-      const dudeId = getDudeIdFromAsset(assetData.asset);
-      dudeIds = dudeId ? [dudeId] : undefined;
-    }
-    const boxRef = getBoxIdFromAsset(assetData.asset) || (kind === 'box' ? id : undefined);
-    const certIndex = certificateIndexForItem(boxRef || id, kind, dudeIds);
-    orderItems.push({
-      assetId: id,
-      kind,
-      boxId: boxRef,
-      dudeIds,
-      certificateIndex: certIndex,
-      claimCode,
-    });
-    instructions.push(await createBurnIx(id, ownerPk, assetData));
-    instructions.push(
-      ...(await buildMintInstructions(ownerPk, 1, 'certificate', certIndex, {
-        boxId: boxRef,
-        dudeIds,
-        receiptTarget: kind === 'box' ? 'box' : 'figure',
-      })),
-    );
-  }
-  const deliveryPrice = shippingLamports(addressCountry || 'unknown', itemIds.length);
-  instructions.unshift(SystemProgram.transfer({ fromPubkey: ownerPk, toPubkey: shippingVault, lamports: deliveryPrice }));
-  const { blockhash } = await withTimeout(
-    conn.getLatestBlockhash('confirmed'),
-    RPC_TIMEOUT_MS,
-    'getLatestBlockhash',
-  );
-  const tx = buildTx(instructions, ownerPk, blockhash);
-  await db.doc(`deliveryOrders/${orderId}`).set({
-    status: 'prepared',
-    owner: ownerWallet,
-    addressId,
-    addressSnapshot: {
-      ...addressData,
-      id: addressId,
-      countryCode: addressCountry || addressData?.countryCode,
-    },
-    itemIds,
-    items: orderItems,
-    shippingLamports: deliveryPrice,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-  return { encodedTx: Buffer.from(tx.serialize()).toString('base64'), deliveryLamports: deliveryPrice, orderId };
 });
 
 export const createDeliveryOrder = onCallLogged('createDeliveryOrder', async (request) => {
@@ -1661,8 +1166,7 @@ export const createDeliveryOrder = onCallLogged('createDeliveryOrder', async (re
     throw new functions.https.HttpsError('invalid-argument', 'Too many items in one delivery request (max 8)');
   }
 
-  // Provide tree params to the client so it can truncate proofs without importing spl-account-compression in the browser.
-  const { canopyDepth, maxDepth } = await getTreeParams(merkleTree);
+  await ensureOnchainCoreConfig();
 
   const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
   if (!addressSnap.exists) {
@@ -1670,6 +1174,44 @@ export const createDeliveryOrder = onCallLogged('createDeliveryOrder', async (re
   }
   const addressData = addressSnap.data();
   const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
+
+  // Pre-validate items and prepare any claim codes for delivered boxes.
+  // This keeps cosigning strict and lets the client build transactions deterministically.
+  const orderItems: any[] = [];
+  for (const assetId of itemIds) {
+    const asset = await fetchAssetRetry(assetId);
+    const kind = getAssetKind(asset);
+    if (!kind) throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type');
+    if (kind === 'certificate') {
+      throw new functions.https.HttpsError('failed-precondition', 'Certificates are already delivery outputs');
+    }
+    if (!isMonsAsset(asset)) {
+      throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+    }
+    const assetOwner = asset?.ownership?.owner;
+    if (assetOwner !== ownerWallet) {
+      throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
+    }
+
+    if (kind === 'box') {
+      const boxIdStr = getBoxIdFromAsset(asset);
+      const refId = Number(boxIdStr);
+      if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
+        throw new functions.https.HttpsError('failed-precondition', 'Box id missing from metadata');
+      }
+
+      const dudeIds = await assignDudes(assetId);
+      const claimCode = await ensureClaimCode(String(refId), assetId, dudeIds, ownerWallet);
+      orderItems.push({ assetId, kind: 'box', refId, boxId: String(refId), dudeIds, claimCode });
+    } else {
+      const dudeId = getDudeIdFromAsset(asset);
+      const refId = Number(dudeId);
+      if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
+        throw new functions.https.HttpsError('failed-precondition', 'Dude id missing from metadata');
+      }
+      orderItems.push({ assetId, kind: 'dude', refId });
+    }
+  }
 
   const orderId = db.collection('deliveryOrders').doc().id;
   const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
@@ -1686,13 +1228,13 @@ export const createDeliveryOrder = onCallLogged('createDeliveryOrder', async (re
       countryCode: addressCountry || addressData?.countryCode,
     },
     itemIds,
+    items: orderItems,
     deliveryId,
     deliveryLamports,
-    treeParams: { canopyDepth, maxDepth },
     createdAt: FieldValue.serverTimestamp(),
   });
 
-  return { orderId, deliveryId, deliveryLamports, canopyDepth, maxDepth };
+  return { orderId, deliveryId, deliveryLamports };
 });
 
 export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request) => {
@@ -1701,6 +1243,8 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
   const { owner, orderId, encodedTx } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+
+  await ensureOnchainCoreConfig();
 
   const orderRef = db.doc(`deliveryOrders/${orderId}`);
   const orderSnap = await orderRef.get();
@@ -1729,6 +1273,38 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
 
   assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
 
+  // Load on-chain config (admin/treasury/core collection) so we can strictly validate the instruction accounts.
+  const cfgInfo = await withTimeout(
+    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    RPC_TIMEOUT_MS,
+    'getAccountInfo:boxMinterConfig',
+  );
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
+      { configPda: boxMinterConfigPda.toBase58() },
+    );
+  }
+  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
+  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const signer = cosigner();
+  if (!signer.publicKey.equals(cfgAdmin)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
+      { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
+    );
+  }
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+  if (!collectionMint.equals(cfgCoreCollection)) {
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
+      env: collectionMint.toBase58(),
+      onchain: cfgCoreCollection.toBase58(),
+    });
+  }
+
   // Find the box_minter instruction and decode its args.
   const keys = tx.message.staticAccountKeys;
   const ix = (tx.message.compiledInstructions || []).find((ci: any) => {
@@ -1741,6 +1317,7 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
 
   const ixData = Buffer.from(ix.data || []);
   const decoded = decodeDeliverIxData(ixData);
+  const decodedItems = decodeDeliverIxItems(ixData);
   const expectedFee = Number(order.deliveryLamports || order.shippingLamports || 0);
   const expectedId = Number(order.deliveryId || 0);
 
@@ -1775,7 +1352,6 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
   }
 
   // Require that the server cosigner is a required signer on this tx (so on-chain can enforce approval).
-  const signer = cosigner();
   const header: any = (tx.message as any).header;
   const numRequired = Number(header?.numRequiredSignatures || 0);
   const required = keys.slice(0, Math.max(0, numRequired)).map((k) => k.toBase58());
@@ -1784,6 +1360,92 @@ export const cosignDeliveryTx = onCallLogged('cosignDeliveryTx', async (request)
       requiredSigners: required,
       expectedCosigner: signer.publicKey.toBase58(),
     });
+  }
+
+  // Validate deliver instruction account list matches the expected order items and on-chain config.
+  const accountKeyIndexesRaw: any = (ix as any).accountKeyIndexes;
+  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
+    ? (accountKeyIndexesRaw as number[])
+    : Array.from(accountKeyIndexesRaw || []);
+  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
+  const FIXED_DELIVER_ACCOUNTS = 7;
+  const expectedAccountLen = FIXED_DELIVER_ACCOUNTS + decoded.itemsLen * 2;
+  if (ixAccounts.length !== expectedAccountLen) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid deliver instruction accounts', {
+      expectedAccountLen,
+      got: ixAccounts.length,
+    });
+  }
+  if (!ixAccounts[0]?.equals(boxMinterConfigPda)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid config PDA in deliver instruction');
+  }
+  if (!ixAccounts[1]?.equals(signer.publicKey)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid cosigner in deliver instruction');
+  }
+  if (!ixAccounts[2]?.equals(payerKey)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid payer in deliver instruction');
+  }
+  if (!ixAccounts[3]?.equals(cfgTreasury)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid treasury in deliver instruction');
+  }
+  if (!ixAccounts[4]?.equals(cfgCoreCollection)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid core collection in deliver instruction');
+  }
+  if (!ixAccounts[5]?.equals(MPL_CORE_PROGRAM_ID)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid MPL Core program id in deliver instruction');
+  }
+  if (!ixAccounts[6]?.equals(SystemProgram.programId)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid system program in deliver instruction');
+  }
+
+  const expectedItemIds = Array.isArray(order.itemIds) ? (order.itemIds as string[]) : [];
+  const expectedOrderItems = Array.isArray(order.items) ? (order.items as any[]) : [];
+  for (let i = 0; i < decoded.itemsLen; i += 1) {
+    const burnAccount = ixAccounts[FIXED_DELIVER_ACCOUNTS + i * 2];
+    const receiptAccount = ixAccounts[FIXED_DELIVER_ACCOUNTS + i * 2 + 1];
+
+    const expectedAssetId = expectedItemIds[i];
+    if (expectedAssetId) {
+      const expectedBurn = new PublicKey(expectedAssetId);
+      if (!burnAccount?.equals(expectedBurn)) {
+        throw new functions.https.HttpsError('failed-precondition', 'Delivery burn asset mismatch', {
+          index: i,
+          expected: expectedBurn.toBase58(),
+          got: burnAccount?.toBase58(),
+        });
+      }
+    }
+
+    const kindByte = Number(decodedItems[i]?.kind);
+    const refId = Number(decodedItems[i]?.refId);
+    if (![0, 1].includes(kindByte) || !Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
+      throw new functions.https.HttpsError('failed-precondition', 'Invalid deliver item args', { index: i, kindByte, refId });
+    }
+
+    const expectedReceipt = PublicKey.findProgramAddressSync(
+      [Buffer.from('receipt'), Buffer.from([kindByte]), u32LE(refId)],
+      boxMinterProgramId,
+    )[0];
+    if (!receiptAccount?.equals(expectedReceipt)) {
+      throw new functions.https.HttpsError('failed-precondition', 'Delivery receipt PDA mismatch', {
+        index: i,
+        expected: expectedReceipt.toBase58(),
+        got: receiptAccount?.toBase58(),
+      });
+    }
+
+    const orderItem = expectedOrderItems[i];
+    if (orderItem) {
+      const expectedKindByte = orderItem.kind === 'box' ? 0 : orderItem.kind === 'dude' ? 1 : null;
+      const expectedRefId = Number(orderItem.refId);
+      if (expectedKindByte == null || expectedKindByte !== kindByte || !Number.isFinite(expectedRefId) || expectedRefId !== refId) {
+        throw new functions.https.HttpsError('failed-precondition', 'Delivery item metadata mismatch', {
+          index: i,
+          expected: { kind: orderItem.kind, refId: orderItem.refId },
+          got: { kindByte, refId },
+        });
+      }
+    }
   }
 
   // Sign only as cosigner; wallet will add payer sig client-side.
@@ -1883,11 +1545,21 @@ export const finalizeDeliveryTx = onCallLogged('finalizeDeliveryTx', async (requ
     throw new functions.https.HttpsError('failed-precondition', 'Delivery payment missing or too low');
   }
 
-  const mintedIds = extractCompressedAssetIds(tx);
+  const accountKeyIndexesRaw: any = (deliverIx as any).accountKeyIndexes;
+  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
+    ? (accountKeyIndexesRaw as number[])
+    : Array.from(accountKeyIndexesRaw || []);
+  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
+  const FIXED_DELIVER_ACCOUNTS = 7;
+  const mintedReceiptIds = Array.from({ length: decoded.itemsLen }, (_, i) => {
+    const receiptKey = ixAccounts[FIXED_DELIVER_ACCOUNTS + i * 2 + 1];
+    return receiptKey ? receiptKey.toBase58() : null;
+  });
+
   const itemIds: string[] = Array.isArray(order.itemIds) ? order.itemIds : [];
   const certificateSummary = itemIds.map((assetId: string, idx: number) => ({
     assetId,
-    mintedAssetId: mintedIds[idx] || null,
+    mintedAssetId: mintedReceiptIds[idx] || null,
   }));
 
   let finalSignature = signature;
@@ -1935,6 +1607,9 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
+
+  await ensureOnchainCoreConfig();
+
   const claimRef = db.doc(`claimCodes/${code}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
@@ -2022,23 +1697,77 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     });
   });
 
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 })];
-  instructions.push(memoInstruction(`claim:${code}:${attemptId}`));
-  instructions.push(
-    ...(await buildMintInstructions(ownerPk, dudeIds.length, 'certificate', 1, {
-      boxId: claim.boxId || certificateBoxId,
-      dudeIds,
-      receiptTarget: 'figure',
-    })),
-  );
-  const { blockhash } = await withTimeout(
-    connection().getLatestBlockhash('confirmed'),
+  // Load on-chain config (admin/core collection) so we can build a correct `mint_receipts` tx.
+  const cfgInfo = await withTimeout(
+    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
-    'getLatestBlockhash',
+    'getAccountInfo:boxMinterConfig',
   );
-  const tx = buildTx(instructions, ownerPk, blockhash);
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
+      { configPda: boxMinterConfigPda.toBase58() },
+    );
+  }
+  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const signer = cosigner();
+  if (!signer.publicKey.equals(cfgAdmin)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
+      { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
+    );
+  }
+  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+  if (!collectionMint.equals(cfgCoreCollection)) {
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
+      env: collectionMint.toBase58(),
+      onchain: cfgCoreCollection.toBase58(),
+    });
+  }
+
+  const programId = boxMinterProgramId;
+  const receiptPdas = dudeIds.map((id) =>
+    PublicKey.findProgramAddressSync([Buffer.from('receipt'), Buffer.from([1]), u32LE(Number(id))], programId)[0],
+  );
+
+  const mintReceiptsIx = new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+      { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+      { pubkey: ownerPk, isSigner: true, isWritable: true },
+      { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...receiptPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    ],
+    data: encodeMintReceiptsArgs({ kind: 1, refIds: dudeIds }),
+  });
+
+  const instructions: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 900_000 }),
+    memoInstruction(`claim:${code}:${attemptId}`),
+    mintReceiptsIx,
+  ];
+
+  const { blockhash } = await withTimeout(connection().getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
+  const tx = buildTx(instructions, ownerPk, blockhash, [signer]);
+
+  const raw = tx.serialize();
+  const MAX_RAW_TX_BYTES = 1232;
+  if (raw.length > MAX_RAW_TX_BYTES) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `Claim transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}).`,
+      { rawBytes: raw.length, maxRawBytes: MAX_RAW_TX_BYTES },
+    );
+  }
+
   return {
-    encodedTx: Buffer.from(tx.serialize()).toString('base64'),
+    encodedTx: Buffer.from(raw).toString('base64'),
     certificates: dudeIds,
     attemptId,
     lockExpiresAt: expiresAt.toMillis(),

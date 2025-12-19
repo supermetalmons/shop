@@ -10,6 +10,10 @@ import {
 import type { MintStats } from '../types';
 
 const CONFIG_SEED = 'config';
+const BOX_ASSET_SEED = 'box';
+const DUDE_ASSET_SEED = 'dude';
+const RECEIPT_ASSET_SEED = 'receipt';
+
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
 
@@ -19,19 +23,12 @@ const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55,
 const IX_DELIVER = Uint8Array.from([0xfa, 0x83, 0xde, 0x39, 0xd3, 0xe5, 0xd1, 0x93]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
-// Canonical program IDs (pulled from Metaplex/SPL sources).
-export const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
-// Bubblegum V2 uses the Metaplex noop + compression programs (not the legacy SPL ones).
-export const SPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
-export const SPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
-// Bubblegum V2 depends on MPL-Core (even if we don't use Core collections).
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
   admin: PublicKey;
   treasury: PublicKey;
-  merkleTree: PublicKey;
   coreCollection: PublicKey;
   priceLamports: bigint;
   maxSupply: number;
@@ -49,14 +46,8 @@ export interface DeliverItemInput {
   kind: DeliverItemKind;
   // Numeric id used for receipt metadata (box id or dude id).
   refId: number;
-  // Bubblegum burn args:
-  root: Uint8Array; // 32 bytes
-  dataHash: Uint8Array; // 32 bytes
-  creatorHash: Uint8Array; // 32 bytes
-  nonce: bigint; // u64
-  index: number; // u32
-  // Truncated proof node pubkeys (each 32 bytes).
-  proof: PublicKey[];
+  // Existing Core asset account to burn.
+  asset: PublicKey;
 }
 
 function requireEnvPubkey(name: string): PublicKey {
@@ -72,6 +63,31 @@ export function boxMinterProgramId(): PublicKey {
 
 export function boxMinterConfigPda(programId = boxMinterProgramId()): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
+}
+
+export function boxAssetPda(index: number, programId = boxMinterProgramId()): [PublicKey, number] {
+  const idx = Number(index);
+  if (!Number.isFinite(idx) || idx <= 0 || idx > 0xffff_ffff) throw new Error('Invalid box index');
+  const buf = Buffer.alloc(4);
+  buf.writeUInt32LE(idx >>> 0, 0);
+  return PublicKey.findProgramAddressSync([Buffer.from(BOX_ASSET_SEED), buf], programId);
+}
+
+export function dudeAssetPda(dudeId: number, programId = boxMinterProgramId()): [PublicKey, number] {
+  const id = Number(dudeId);
+  if (!Number.isFinite(id) || id <= 0 || id > 0xffff) throw new Error('Invalid dude id');
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16LE(id & 0xffff, 0);
+  return PublicKey.findProgramAddressSync([Buffer.from(DUDE_ASSET_SEED), buf], programId);
+}
+
+export function receiptAssetPda(kind: DeliverItemKind, refId: number, programId = boxMinterProgramId()): [PublicKey, number] {
+  const kindByte = kind === 'box' ? 0 : 1;
+  const ref = Number(refId);
+  if (!Number.isFinite(ref) || ref <= 0 || ref > 0xffff_ffff) throw new Error('Invalid receipt refId');
+  const refBuf = Buffer.alloc(4);
+  refBuf.writeUInt32LE(ref >>> 0, 0);
+  return PublicKey.findProgramAddressSync([Buffer.from(RECEIPT_ASSET_SEED), Buffer.from([kindByte]), refBuf], programId);
 }
 
 function readU32(buf: Uint8Array, offset: number): number {
@@ -104,12 +120,11 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     }
   }
 
+  // Layout matches `onchain/programs/box_minter/src/lib.rs` BoxMinterConfig.
   let o = 8;
   const admin = readPubkey(data, o);
   o += 32;
   const treasury = readPubkey(data, o);
-  o += 32;
-  const merkleTree = readPubkey(data, o);
   o += 32;
   const coreCollection = readPubkey(data, o);
   o += 32;
@@ -135,7 +150,6 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     pubkey,
     admin,
     treasury,
-    merkleTree,
     coreCollection,
     priceLamports,
     maxSupply,
@@ -160,26 +174,9 @@ export async function fetchMintStatsFromProgram(connection: Connection): Promise
   const minted = Number(cfg.minted || 0);
   const total = Number(cfg.maxSupply || 0);
   const remaining = Math.max(0, total - minted);
-  // Hard cap (see on-chain MAX_SAFE_MINTS_PER_TX): Bubblegum hits Solana's max instruction trace length above 10.
-  const maxPerTx = Math.min(cfg.maxPerTx || 0, 10);
+  // Keep in sync with on-chain MAX_SAFE_MINTS_PER_TX.
+  const maxPerTx = Math.min(cfg.maxPerTx || 0, 15);
   return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
-}
-
-function encodeMintBoxesData(quantity: number): Buffer {
-  if (!Number.isFinite(quantity)) throw new Error('Invalid quantity');
-  if (quantity < 1 || quantity > 30) throw new Error('Quantity must be between 1 and 30');
-  const data = Buffer.alloc(IX_MINT_BOXES.length + 1);
-  data.set(IX_MINT_BOXES, 0);
-  data[8] = quantity & 0xff;
-  return data;
-}
-
-function treeAuthorityPda(merkleTree: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([merkleTree.toBytes()], BUBBLEGUM_PROGRAM_ID)[0];
-}
-
-function mplCoreCpiSignerPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([utf8('mpl_core_cpi_signer')], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
 function u32LE(value: number) {
@@ -194,10 +191,41 @@ function u64LE(value: bigint) {
   return buf;
 }
 
+function randomU64(): bigint {
+  // Uniqueness is the goal (not cryptographic security); still prefer WebCrypto when available.
+  const g: any = globalThis as any;
+  const cryptoObj: Crypto | undefined = g?.crypto;
+  const arr = new Uint32Array(2);
+  if (cryptoObj?.getRandomValues) {
+    cryptoObj.getRandomValues(arr);
+  } else {
+    // Fallback (should be rare in modern browsers).
+    arr[0] = (Math.random() * 2 ** 32) >>> 0;
+    arr[1] = (Math.random() * 2 ** 32) >>> 0;
+  }
+  return (BigInt(arr[0]) | (BigInt(arr[1]) << 32n)) & 0xffff_ffff_ffff_ffffn;
+}
+
+function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[]): Buffer {
+  if (!Number.isFinite(quantity)) throw new Error('Invalid quantity');
+  if (quantity < 1 || quantity > 15) throw new Error('Quantity must be between 1 and 15');
+  if (!Array.isArray(boxBumps) || boxBumps.length !== quantity) {
+    throw new Error('Invalid box bumps');
+  }
+  // Anchor args: (quantity: u8, mint_id: u64, box_bumps: Vec<u8>)
+  // Borsh layout: u8 + u64 + u32(len) + [u8; len]
+  const bumps = Buffer.from(boxBumps.map((b) => b & 0xff));
+  const len = u32LE(bumps.length);
+  const header = Buffer.alloc(IX_MINT_BOXES.length + 1);
+  header.set(IX_MINT_BOXES, 0);
+  header[8] = quantity & 0xff;
+  return Buffer.concat([header, u64LE(mintId), len, bumps]);
+}
+
 function encodeDeliverData(args: {
   deliveryId: number;
   deliveryFeeLamports: number;
-  items: DeliverItemInput[];
+  items: Array<{ kind: DeliverItemKind; refId: number }>;
 }): Buffer {
   const deliveryId = Number(args.deliveryId);
   const fee = Number(args.deliveryFeeLamports);
@@ -221,88 +249,31 @@ function encodeDeliverData(args: {
     if (kindByte === 255) throw new Error(`Invalid item kind: ${String((item as any).kind)}`);
     const refId = Number(item.refId);
     if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) throw new Error('Invalid item refId');
-
-    const root = Buffer.from(item.root || []);
-    const dataHash = Buffer.from(item.dataHash || []);
-    const creatorHash = Buffer.from(item.creatorHash || []);
-    if (root.length !== 32 || dataHash.length !== 32 || creatorHash.length !== 32) {
-      throw new Error('Invalid burn hashes (expected 32-byte root/dataHash/creatorHash)');
-    }
-
-    const nonce = item.nonce;
-    if (typeof nonce !== 'bigint' || nonce < 0n) throw new Error('Invalid burn nonce');
-    const index = Number(item.index);
-    if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) throw new Error('Invalid burn leaf index');
-
-    const proof = item.proof || [];
-    if (!Array.isArray(proof)) throw new Error('Invalid proof');
-    if (proof.length > 255) throw new Error('Proof too long');
-
     parts.push(Buffer.from([kindByte]));
     parts.push(u32LE(refId));
-    parts.push(root);
-    parts.push(dataHash);
-    parts.push(creatorHash);
-    parts.push(u64LE(nonce));
-    parts.push(u32LE(index));
-    parts.push(Buffer.from([proof.length & 0xff]));
   }
 
   return Buffer.concat(parts);
-}
-
-export function buildDeliverIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
-): TransactionInstruction {
-  const programId = boxMinterProgramId();
-  const [configPda] = boxMinterConfigPda(programId);
-
-  const treeAuthority = treeAuthorityPda(cfg.merkleTree);
-  const mplCoreCpiSigner = mplCoreCpiSignerPda();
-
-  const keys = [
-    { pubkey: configPda, isSigner: false, isWritable: false },
-    // Server cosigner (must match config.admin). Backend fills this signature.
-    { pubkey: cfg.admin, isSigner: true, isWritable: false },
-    { pubkey: payer, isSigner: true, isWritable: true },
-    { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-    { pubkey: cfg.merkleTree, isSigner: false, isWritable: true },
-    { pubkey: treeAuthority, isSigner: false, isWritable: true },
-    { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-    { pubkey: mplCoreCpiSigner, isSigner: false, isWritable: false },
-    { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-  ];
-
-  // Remaining accounts: concatenated proof nodes for each burn.
-  for (const item of args.items || []) {
-    for (const p of item.proof || []) {
-      keys.push({ pubkey: p, isSigner: false, isWritable: false });
-    }
-  }
-
-  return new TransactionInstruction({
-    programId,
-    keys,
-    data: encodeDeliverData({
-      deliveryId: args.deliveryId,
-      deliveryFeeLamports: args.deliveryFeeLamports,
-      items: args.items,
-    }),
-  });
 }
 
 export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, quantity: number): TransactionInstruction {
   const programId = boxMinterProgramId();
   const [configPda] = boxMinterConfigPda(programId);
 
-  const treeAuthority = treeAuthorityPda(cfg.merkleTree);
-  const mplCoreCpiSigner = mplCoreCpiSignerPda();
+  // IMPORTANT: derive box asset PDAs from (payer + random mintId), not from cfg.minted.
+  // This avoids stale-PDA failures when many users mint concurrently.
+  const mintId = randomU64();
+  const mintIdBytes = u64LE(mintId);
+  const boxAccounts: PublicKey[] = [];
+  const boxBumps: number[] = [];
+  for (let i = 0; i < quantity; i += 1) {
+    const [pda, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from(BOX_ASSET_SEED), payer.toBuffer(), mintIdBytes, Buffer.from([i & 0xff])],
+      programId,
+    );
+    boxAccounts.push(pda);
+    boxBumps.push(bump);
+  }
 
   return new TransactionInstruction({
     programId,
@@ -310,17 +281,12 @@ export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, 
       { pubkey: configPda, isSigner: false, isWritable: true },
       { pubkey: payer, isSigner: true, isWritable: true },
       { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-      { pubkey: cfg.merkleTree, isSigner: false, isWritable: true },
-      { pubkey: treeAuthority, isSigner: false, isWritable: true },
       { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: mplCoreCpiSigner, isSigner: false, isWritable: false },
-      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
-    data: encodeMintBoxesData(quantity),
+    data: encodeMintBoxesData(quantity, mintId, boxBumps),
   });
 }
 
@@ -330,7 +296,8 @@ export async function buildMintBoxesTx(
   payer: PublicKey,
   quantity: number,
 ): Promise<VersionedTransaction> {
-  const MAX_MINTS_PER_TX = 10;
+  // Keep conservative; each Core mint creates a new account.
+  const MAX_MINTS_PER_TX = 15;
   if (quantity > MAX_MINTS_PER_TX) {
     throw new Error(`Max ${MAX_MINTS_PER_TX} boxes per transaction.`);
   }
@@ -341,15 +308,49 @@ export async function buildMintBoxesTx(
     payerKey: payer,
     recentBlockhash: blockhash,
     instructions: [
-      // Bubblegum CPI allocates; larger batches need a bigger heap frame to avoid OOM.
-      // 256 KiB is the max supported heap frame size.
-      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       // Optional: add setComputeUnitPrice here if you want priority fees.
       mintIx,
     ],
   }).compileToV0Message();
   return new VersionedTransaction(msg);
+}
+
+export function buildDeliverIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
+): TransactionInstruction {
+  const programId = boxMinterProgramId();
+  const [configPda] = boxMinterConfigPda(programId);
+
+  const keys = [
+    { pubkey: configPda, isSigner: false, isWritable: false },
+    // Server cosigner (must match config.admin). Backend fills this signature.
+    { pubkey: cfg.admin, isSigner: true, isWritable: false },
+    { pubkey: payer, isSigner: true, isWritable: true },
+    { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+    { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+    { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  // Remaining accounts: for each item => (asset_to_burn, receipt_asset_pda_to_create).
+  for (const item of args.items || []) {
+    const [receiptPda] = receiptAssetPda(item.kind, item.refId, programId);
+    keys.push({ pubkey: item.asset, isSigner: false, isWritable: true });
+    keys.push({ pubkey: receiptPda, isSigner: false, isWritable: true });
+  }
+
+  return new TransactionInstruction({
+    programId,
+    keys,
+    data: encodeDeliverData({
+      deliveryId: args.deliveryId,
+      deliveryFeeLamports: args.deliveryFeeLamports,
+      items: (args.items || []).map((i) => ({ kind: i.kind, refId: i.refId })),
+    }),
+  });
 }
 
 export async function buildDeliverTx(
@@ -372,34 +373,9 @@ export function buildDeliverTxWithBlockhash(
   const msg = new TransactionMessage({
     payerKey: payer,
     recentBlockhash,
-    instructions: [
-      // Bubblegum CPI allocates; request max heap frame to avoid OOM.
-      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      deliverIx,
-    ],
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), deliverIx],
   }).compileToV0Message();
   return new VersionedTransaction(msg);
-}
-
-export function truncateProofByCanopy(proof: string[], canopyDepth: number): string[] {
-  const drop = Math.max(0, Math.floor(canopyDepth || 0));
-  if (!drop) return proof;
-  if (proof.length <= drop) return [];
-  return proof.slice(0, proof.length - drop);
-}
-
-export function normalizeLeafIndex(args: { nodeIndex: number; maxDepth: number }): number {
-  const nodeIndex = Number(args.nodeIndex);
-  if (!Number.isFinite(nodeIndex) || nodeIndex < 0) return 0;
-
-  // Helius `node_index` is the index in the *full binary tree* where leaf nodes start at 2^depth.
-  // Bubblegum/compression expects the leaf index 0..(2^depth - 1).
-  const depth = Number(args.maxDepth || 0);
-  if (!depth) return nodeIndex >>> 0;
-  const leafOffset = Math.pow(2, depth);
-  const leafIndex = nodeIndex >= leafOffset ? nodeIndex - leafOffset : nodeIndex;
-  return leafIndex >>> 0;
 }
 
 

@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is now fully on-chain** via a custom Solana program: mint **1–15** compressed boxes per tx, with mint progress read directly from the program state (no Firebase needed for mint/progress). Cloud Functions are still used for non-mint features (open box, delivery, IRL claim) that require off-chain coordination. Inventory is fetched client-side via Helius.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Inventory is fetched client-side via Helius DAS.
 
 Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per box**, **max 15 per tx**.
 
@@ -25,11 +25,10 @@ VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
 VITE_RPC_URL=https://your-rpc
 VITE_HELIUS_API_KEY=<helius-api-key>
 VITE_BOX_MINTER_PROGRAM_ID=<deployed box minter program id>
-VITE_MERKLE_TREE=<drop merkle tree pubkey (for inventory filtering)>
 VITE_FIREBASE_*=...
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
 ```
-- Optional: `VITE_COLLECTION_MINT` (MPL-Core collection address for Helius `grouping: ['collection', ...]` queries; UI can fall back to Merkle tree filtering)
+- Required: `VITE_COLLECTION_MINT` (MPL-Core collection address for Helius `grouping: ['collection', ...]` queries)
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY`:
@@ -49,27 +48,27 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `BOX_MINTER_PROGRAM_ID` (same program id as `VITE_BOX_MINTER_PROGRAM_ID`)
 - `HELIUS_API_KEY`
 - `SOLANA_CLUSTER` (`devnet`/`testnet`/`mainnet-beta`)
-- `TREE_AUTHORITY_SECRET` (bs58 secret key that owns the cNFT tree)
-- `COSIGNER_SECRET` (optional, defaults to tree authority)
-- `MERKLE_TREE`
-- `COLLECTION_MINT` (MPL-Core collection address used by Bubblegum V2 mint-to-collection)
+- `COSIGNER_SECRET` (bs58 secret key for the server cosigner; must match the on-chain box minter admin)
+- `COLLECTION_MINT` (MPL-Core collection address for this drop)
 - `DELIVERY_VAULT` (SOL recipient for shipping)
 - `METADATA_BASE` (drop base URI, e.g. `https://assets.mons.link/shop/drops/1` with `collection.json`, `json/boxes`, `json/figures`, `json/receipts`)
 
 ### What the functions do
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
 - `saveAddress`: stores an encrypted address blob + country/label under the wallet.
-- `prepareOpenBoxTx`: burns a box (with proof) and mints 3 dudes; assigns dudes deterministically per box.
-- `prepareDeliveryTx`: burns selected boxes/dudes, charges SOL shipping, and mints per-item certificates.
-- `prepareIrlClaimTx`: validates IRL claim code + blind box certificate ownership, mints dudes certificates.
+- `prepareOpenBoxTx`: burns a box Core asset and mints 3 figure Core assets; assigns dudes deterministically per box.
+- `createDeliveryOrder`: validates the requested items, creates order state, and returns a random on-chain delivery fee/id.
+- `cosignDeliveryTx`: validates a client-built `deliver` transaction and cosigns it server-side (enforces fee/id + receipt PDAs).
+- `finalizeDeliveryTx`: verifies the submitted tx on-chain and marks the order completed.
+- `prepareIrlClaimTx`: validates IRL claim code + box receipt ownership, then prepares a `mint_receipts` tx (figure receipts) and cosigns it.
 
-### Tree + address helpers
-- Deploy box minter (program + tree + delegation):
+### On-chain + address helpers
+- Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
   - One-command deploy (auto-generates a fresh program id each run):
     - `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com --core-collection <MPL_CORE_COLLECTION_PUBKEY>`
-  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips tree/init if the config PDA already exists).
-  - Prints both frontend + functions env values (including `TREE_AUTHORITY_SECRET`/`COSIGNER_SECRET`, which are sensitive).
+  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips init if the config PDA already exists).
+  - Prints both frontend + functions env values (including `COSIGNER_SECRET`, which is sensitive).
 - Generate a delivery vault keypair: `npm run keygen` (prints public key and base58 + JSON secrets).
 
 ## Notes
