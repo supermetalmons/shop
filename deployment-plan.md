@@ -103,7 +103,7 @@ xargs -L1 firebase functions:env:set < .env.deploy
 2. Sign in (wallet message) → verify profile created in Firestore.
 3. Mint a small quantity (≤15) directly from the client → confirm the tx on-chain → refresh UI; mint progress is read from the box minter config PDA.
 4. Open one box via `/prepareOpenBoxTx` → sign → inventory shows 3 dudes.
-5. Save an encrypted address → request delivery for 1–2 items → client builds `deliver` tx → `/cosignDeliveryTx` → sign+submit → finalize `/finalizeDeliveryTx` and confirm Firestore `deliveryOrders`.
+5. Save an encrypted address → request delivery for 1–2 items → `/prepareDeliveryTx` returns a cosigned `deliver` tx → sign+submit → confirm Firestore `deliveryOrders` + on-chain delivery PDA exists.
 6. Create a claim code via delivery, then test `/prepareIrlClaimTx` + `/finalizeClaimTx` with the same wallet and certificate present.
 
 ## 6) Production cutover checklist

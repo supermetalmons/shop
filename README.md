@@ -57,9 +57,7 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 - `solanaAuth`: SIWS message verification → Firebase custom token + profile + saved addresses.
 - `saveAddress`: stores an encrypted address blob + country/label under the wallet.
 - `prepareOpenBoxTx`: burns a box Core asset and mints 3 figure Core assets; assigns dudes deterministically per box.
-- `createDeliveryOrder`: validates the requested items, creates order state, and returns a random on-chain delivery fee/id.
-- `cosignDeliveryTx`: validates a client-built `deliver` transaction and cosigns it server-side (enforces fee/id + receipt PDAs).
-- `finalizeDeliveryTx`: verifies the submitted tx on-chain and marks the order completed.
+- `prepareDeliveryTx`: validates requested items + address, allocates a compact on-chain delivery id + fee, builds a single-instruction `deliver` tx (fee + transfers + delivery record PDA), and cosigns it server-side.
 - `prepareIrlClaimTx`: validates IRL claim code + box receipt ownership, then prepares a `mint_receipts` tx (figure receipts) and cosigns it.
 
 ### On-chain + address helpers

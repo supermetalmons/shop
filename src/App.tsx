@@ -18,7 +18,6 @@ import {
   requestOpenBoxTx,
   finalizeClaimTx,
   saveEncryptedAddress,
-  finalizeDeliveryTx,
 } from './lib/api';
 import { buildMintBoxesTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
@@ -234,18 +233,9 @@ function App() {
       const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId }, idToken || '');
       setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
-      try {
-        if (resp.orderId) {
-          await finalizeDeliveryTx(publicKey.toBase58(), sig, resp.orderId, idToken);
-          setStatus(`Delivery recorded · ${sig}`);
-        } else {
-          setStatus(`Delivery requested · ${sig}`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to record delivery';
-        setStatus(`Delivery requested · ${sig} (finalize warning: ${msg})`);
-      }
-      // Delivery burns the selected assets; hide them immediately once confirmed.
+      const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
+      setStatus(`Delivery submitted${idSuffix} · ${sig}`);
+      // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();

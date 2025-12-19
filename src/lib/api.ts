@@ -2,8 +2,6 @@ import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth'
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, PreparedTxResponse, Profile, ProfileAddress } from '../types';
-import { Connection, PublicKey } from '@solana/web3.js';
-import { DeliverItemInput, buildDeliverTxWithBlockhash, fetchBoxMinterConfig } from './boxMinter';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -308,102 +306,6 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
   };
 }
 
-async function heliusRpcWithFallback<T>(method: string, params: any, fallback: () => Promise<T>): Promise<T> {
-  try {
-    return await heliusRpc<T>(method, params);
-  } catch (err) {
-    const msg = String((err as any)?.message || '');
-    if (/method not found|invalid params/i.test(msg)) {
-      return await fallback();
-    }
-    throw err;
-  }
-}
-
-async function fetchHeliusAsset(assetId: string): Promise<DasAsset> {
-  const cluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
-  const apiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
-  const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-  return heliusRpcWithFallback<DasAsset>(
-    'getAsset',
-    { id: assetId },
-    async () => {
-      if (!apiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
-      const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${apiKey}${clusterParam}`;
-      const res = await fetch(url);
-      const json = await res.json().catch(() => ({}));
-      const asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
-      if (!asset) throw new Error('Asset not found');
-      return asset as DasAsset;
-    },
-  );
-}
-
-function numericIdFromString(value: string | undefined): number {
-  const raw = (value || '').trim();
-  if (!raw) return NaN;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return Math.floor(n);
-  const match = raw.match(/\d+/);
-  return match?.[0] ? Number(match[0]) : NaN;
-}
-
-async function fetchAssetRetry(assetId: string): Promise<DasAsset> {
-  const startedAt = Date.now();
-  const maxWaitMs = 12_000;
-  const maxAttempts = 6;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < maxAttempts && Date.now() - startedAt < maxWaitMs; attempt++) {
-    try {
-      return await fetchHeliusAsset(assetId);
-    } catch (err) {
-      lastErr = err;
-      // Only retry on transient/indexing failures.
-      const msg = String((err as any)?.message || '');
-      const retriable =
-        /not available yet|not found|rate|timeout|timed out|unavailable|failed/i.test(msg) ||
-        /404|429|5\d\d/.test(msg);
-      if (!retriable) throw err;
-      if (attempt < maxAttempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt));
-      }
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Asset not available yet'));
-}
-
-async function buildDeliverItem(
-  cfg: Awaited<ReturnType<typeof fetchBoxMinterConfig>>,
-  assetId: string,
-  ownerWallet: string,
-): Promise<DeliverItemInput> {
-  const asset = await fetchAssetRetry(assetId);
-  const kind = getAssetKind(asset);
-  if (!kind) throw new Error('Unsupported asset type');
-  if (kind === 'certificate') throw new Error('Certificates are already delivery outputs');
-  const expectedCollection = cfg.coreCollection.toBase58();
-  if (!assetMatchesCollection(asset, expectedCollection)) throw new Error('Item is not part of the Mons collection');
-
-  const assetOwner = asset?.ownership?.owner;
-  // Owner check is also enforced by the on-chain burn; this is just a friendly preflight.
-  if (typeof assetOwner === 'string' && assetOwner && assetOwner !== ownerWallet) {
-    throw new Error('Item not owned by wallet');
-  }
-
-  const boxIdStr = kind === 'box' ? getBoxIdFromAsset(asset) : undefined;
-  const dudeId = kind === 'dude' ? getDudeIdFromAsset(asset) : undefined;
-  const refId = kind === 'box' ? numericIdFromString(boxIdStr) : kind === 'dude' ? Number(dudeId) : NaN;
-  if (!Number.isFinite(refId) || refId <= 0) {
-    throw new Error(kind === 'box' ? 'Box id missing from metadata' : 'Dude id missing from metadata');
-  }
-
-  return {
-    kind: kind === 'box' ? 'box' : 'dude',
-    refId,
-    asset: new PublicKey(assetId),
-  };
-}
-
 async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
   const baseParams = {
     ownerAddress: owner,
@@ -464,75 +366,7 @@ export async function requestDeliveryTx(
   token: string,
 ): Promise<PreparedTxResponse> {
   // token retained for backwards compatibility; wallet session auth is used under the hood.
-  const conn = new Connection(heliusRpcUrl(), { commitment: 'confirmed' });
-  const ownerPk = new PublicKey(owner);
-
-  // On-chain program has a conservative cap; size limits often bite earlier anyway.
-  const MAX_ITEMS_PER_DELIVERY_TX = 8;
-  if ((selection?.itemIds || []).length > MAX_ITEMS_PER_DELIVERY_TX) {
-    throw new Error(`Too many items for one delivery transaction (max ${MAX_ITEMS_PER_DELIVERY_TX}). Split into multiple deliveries.`);
-  }
-
-  // 1) Create an order on the backend (it decides the random delivery fee + deliveryId).
-  const created = await callFunction<
-    { owner: string } & DeliverySelection,
-    { orderId: string; deliveryId: number; deliveryLamports: number }
-  >(
-    'createDeliveryOrder',
-    { owner, ...selection },
-  );
-
-  const { orderId, deliveryId, deliveryLamports } = created;
-  if (!orderId) throw new Error('Missing orderId from backend');
-
-  // 2) Build the on-chain deliver tx client-side (fetching assets via Helius; no Merkle proofs).
-  const cfg = await fetchBoxMinterConfig(conn);
-  const ownerWallet = ownerPk.toBase58();
-  const items = await Promise.all(selection.itemIds.map((id) => buildDeliverItem(cfg, id, ownerWallet)));
-
-  const { blockhash } = await conn.getLatestBlockhash('confirmed');
-  const unsignedTx = buildDeliverTxWithBlockhash(
-    cfg,
-    ownerPk,
-    { deliveryId, deliveryFeeLamports: deliveryLamports, items },
-    blockhash,
-  );
-
-  // Solana hard cap: 1232 bytes for the serialized transaction.
-  const MAX_RAW_TX_BYTES = 1232;
-  const raw = unsignedTx.serialize();
-  if (raw.length > MAX_RAW_TX_BYTES) {
-    // Best-effort: estimate how many items would fit.
-    let maxFit = 0;
-    for (let n = items.length - 1; n >= 1; n -= 1) {
-      const candidate = buildDeliverTxWithBlockhash(
-        cfg,
-        ownerPk,
-        { deliveryId, deliveryFeeLamports: deliveryLamports, items: items.slice(0, n) },
-        blockhash,
-      );
-      if (candidate.serialize().length <= MAX_RAW_TX_BYTES) {
-        maxFit = n;
-        break;
-      }
-    }
-    throw new Error(
-      `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). ` +
-        `Try fewer items. ` +
-        (maxFit ? `Estimated max that fits: ${maxFit}.` : 'Try 1 item.'),
-    );
-  }
-
-  const unsignedEncoded = Buffer.from(unsignedTx.serialize()).toString('base64');
-
-  // 3) Ask the backend to cosign (this strictly enforces delivery fee/id approval).
-  const cosigned = await callFunction<{ owner: string; orderId: string; encodedTx: string }, { encodedTx: string }>('cosignDeliveryTx', {
-    owner,
-    orderId,
-    encodedTx: unsignedEncoded,
-  });
-
-  return { encodedTx: cosigned.encodedTx, deliveryLamports, orderId };
+  return callFunction<{ owner: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', { owner, ...selection });
 }
 
 export async function requestClaimTx(
@@ -569,16 +403,4 @@ export async function solanaAuth(
 
 export async function getProfile(): Promise<{ profile: Profile }> {
   return callFunction<{}, { profile: Profile }>('getProfile', {});
-}
-
-export async function finalizeDeliveryTx(
-  owner: string,
-  signature: string,
-  orderId: string,
-  token: string,
-): Promise<{ recorded: boolean; signature: string; orderId: string }> {
-  return callFunction<{ owner: string; signature: string; orderId: string }, { recorded: boolean; signature: string; orderId: string }>(
-    'finalizeDeliveryTx',
-    { owner, signature, orderId },
-  );
 }

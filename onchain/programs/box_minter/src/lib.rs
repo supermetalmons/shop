@@ -4,13 +4,14 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("G8PBrBPVy4YWy1ukfxeFF7p4ctYQF66PB4RMizAfmv7r");
+declare_id!("BB2cbrTQUPgd7CgwaDc5o9bboPNndjEpLKfupRjNfAs");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
 // NOTE: Uncompressed Core mints are expensive; keep this reasonably low.
 const MAX_SAFE_MINTS_PER_TX: u8 = 15;
-const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 8;
+// Delivery is mostly limited by tx size; keep this high enough to not be the limiting factor.
+const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
 const MAX_SAFE_RECEIPTS_PER_TX: u8 = 12;
 
 // Random delivery fee bounds (0.001..=0.003 SOL).
@@ -25,11 +26,18 @@ const MAX_DUDE_ID: u16 = 999;
 const SEED_BOX_ASSET: &[u8] = b"box";
 const SEED_DUDE_ASSET: &[u8] = b"dude";
 const SEED_RECEIPT_ASSET: &[u8] = b"receipt";
+const SEED_DELIVERY: &[u8] = b"delivery";
 
 // Metaplex Core program id.
 const MPL_CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     175, 84, 171, 16, 189, 151, 165, 66, 160, 158, 247, 179, 152, 137, 221, 12, 211, 148,
     164, 204, 233, 223, 166, 205, 201, 126, 190, 45, 35, 91, 167, 72,
+]);
+
+// SPL Noop program id (MPL-Core log wrapper).
+const SPL_NOOP_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    11, 188, 15, 192, 187, 71, 202, 47, 116, 196, 17, 46, 148, 171, 19, 207, 163, 198, 52,
+    229, 220, 23, 234, 203, 3, 205, 26, 35, 205, 126, 120, 124,
 ]);
 
 #[program]
@@ -488,9 +496,12 @@ pub mod box_minter {
             BoxMinterError::InvalidDeliveryFee
         );
 
-        require!(!args.items.is_empty(), BoxMinterError::InvalidQuantity);
         require!(
-            (args.items.len() as u8) <= MAX_SAFE_DELIVERY_ITEMS_PER_TX,
+            !ctx.remaining_accounts.is_empty(),
+            BoxMinterError::InvalidQuantity
+        );
+        require!(
+            (ctx.remaining_accounts.len() as u8) <= MAX_SAFE_DELIVERY_ITEMS_PER_TX,
             BoxMinterError::InvalidQuantity
         );
 
@@ -499,6 +510,56 @@ pub mod box_minter {
             MPL_CORE_PROGRAM_ID,
             BoxMinterError::InvalidMplCoreProgram
         );
+        require_keys_eq!(
+            ctx.accounts.log_wrapper.key(),
+            SPL_NOOP_PROGRAM_ID,
+            BoxMinterError::InvalidLogWrapper
+        );
+
+        // Delivery record PDA: `delivery` + delivery_id.
+        let delivery_id_bytes = args.delivery_id.to_le_bytes();
+        let expected_delivery = Pubkey::create_program_address(
+            &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]],
+            ctx.program_id,
+        )
+        .map_err(|_| error!(BoxMinterError::InvalidDeliveryPda))?;
+        require_keys_eq!(
+            ctx.accounts.delivery.key(),
+            expected_delivery,
+            BoxMinterError::InvalidDeliveryPda
+        );
+        require!(
+            ctx.accounts.delivery.to_account_info().data_is_empty(),
+            BoxMinterError::DeliveryAlreadyExists
+        );
+
+        // Create the tiny on-chain delivery record (presence == paid order).
+        let delivery_space: usize = DeliveryRecord::SPACE;
+        let rent_lamports = Rent::get()?.minimum_balance(delivery_space);
+        let create_delivery_ix = anchor_lang::solana_program::system_instruction::create_account(
+            &ctx.accounts.payer.key(),
+            &ctx.accounts.delivery.key(),
+            rent_lamports,
+            delivery_space as u64,
+            ctx.program_id,
+        );
+        let delivery_seeds: &[&[u8]] = &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]];
+        invoke_signed(
+            &create_delivery_ix,
+            &[
+                ctx.accounts.payer.to_account_info(),
+                ctx.accounts.delivery.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+            &[delivery_seeds],
+        )?;
+
+        let record = DeliveryRecord {
+            payer: ctx.accounts.payer.key(),
+            delivery_fee_lamports: args.delivery_fee_lamports,
+            item_count: ctx.remaining_accounts.len() as u16,
+        };
+        record.try_serialize(&mut &mut ctx.accounts.delivery.to_account_info().data.borrow_mut()[..])?;
 
         // Take delivery payment (enforced on-chain).
         if args.delivery_fee_lamports > 0 {
@@ -517,127 +578,45 @@ pub mod box_minter {
             )?;
         }
 
-        // Derive URI bases from the on-chain boxes uri base to keep configuration on-chain.
-        let figures_uri_base = derive_figures_uri_base(&cfg.uri_base)?;
-        let receipts_boxes_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Box)?;
-        let receipts_figures_uri_base = derive_receipts_uri_base(&cfg.uri_base, ReceiptKind::Figure)?;
-
-        // Remaining accounts: for each item => (asset_to_transfer, receipt_asset_pda_to_create).
-        require!(
-            ctx.remaining_accounts.len() == args.items.len().saturating_mul(2),
-            BoxMinterError::InvalidRemainingAccounts
-        );
-
+        // Transfer all delivered assets to the vault (config.treasury) via MPL-Core `TransferV1`.
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let core_collection = ctx.accounts.core_collection.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
-        let cfg_ai = ctx.accounts.config.to_account_info();
+        let treasury = ctx.accounts.treasury.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
 
-        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+        let mut transfer_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false), // collection
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true), // payer
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), false), // owner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false), // update_authority None
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false), // system
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false), // log_wrapper None
+                // asset, collection, payer, authority, new_owner, system_program, log_wrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(treasury.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
-            data: Vec::with_capacity(256),
+            // TransferV1 discriminator=14, compression_proof=None (0)
+            data: vec![14u8, 0u8],
         };
 
-        let mut name_buf = String::with_capacity(64);
-        let mut uri_buf = String::with_capacity(128);
-
-        for (i, item) in args.items.iter().enumerate() {
-            let burn_ai = &ctx.remaining_accounts[i * 2];
-            let receipt_ai = &ctx.remaining_accounts[i * 2 + 1];
-
-            // Delivered item must be a Mons asset owned by payer, and its metadata must match the claimed kind/ref_id.
-            let expected_uri_base = match item.kind {
-                0 => cfg.uri_base.as_str(),
-                1 => figures_uri_base.as_str(),
-                _ => return Err(error!(BoxMinterError::InvalidDeliveryItemKind)),
-            };
-            verify_core_asset_owned_by_uri(
-                burn_ai,
-                ctx.accounts.payer.key(),
-                cfg.core_collection,
-                expected_uri_base,
-                Some(item.ref_id),
+        for asset_ai in ctx.remaining_accounts.iter() {
+            transfer_ix.accounts[0].pubkey = asset_ai.key();
+            invoke(
+                &transfer_ix,
+                &[
+                    asset_ai.clone(),
+                    core_collection.clone(),
+                    payer.clone(),
+                    payer.clone(),
+                    treasury.clone(),
+                    system_program.clone(),
+                    log_wrapper.clone(),
+                    mpl_core_program.clone(),
+                ],
             )?;
-
-            // Require a *top-level* MPL-Core transfer right after this instruction so wallets
-            // clearly show that the user is giving up the item.
-            //
-            // The client constructs the tx as:
-            //   [compute_budget?, deliver, transfer(item0->vault), transfer(item1->vault), ...]
-            require_next_ix_is_mpl_core_transfer_of_asset_to(
-                &ctx.accounts.instructions.to_account_info(),
-                i,
-                burn_ai.key(),
-                ctx.accounts.core_collection.key(),
-                ctx.accounts.payer.key(),
-                ctx.accounts.treasury.key(),
-            )?;
-
-            // Mint a receipt Core asset (same collection).
-            let (kind_byte, uri_base, name_prefix) = match item.kind {
-                0 => (0u8, &receipts_boxes_uri_base, "mons receipt · box "),
-                1 => (1u8, &receipts_figures_uri_base, "mons receipt · figure #"),
-                _ => return Err(error!(BoxMinterError::InvalidDeliveryItemKind)),
-            };
-
-            // Receipt PDA derived from (kind, ref_id) so it is globally unique.
-            let ref_bytes = item.ref_id.to_le_bytes();
-            let kind_seed = [kind_byte];
-            let (expected, receipt_bump) = Pubkey::find_program_address(
-                &[SEED_RECEIPT_ASSET, &kind_seed, &ref_bytes],
-                ctx.program_id,
-            );
-            require_keys_eq!(receipt_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-
-            name_buf.clear();
-            name_buf.push_str(name_prefix);
-            write!(&mut name_buf, "{}", item.ref_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-
-            uri_buf.clear();
-            uri_buf.push_str(uri_base);
-            write!(&mut uri_buf, "{}", item.ref_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-            uri_buf.push_str(".json");
-
-            let receipt_seeds: &[&[u8]] = &[SEED_RECEIPT_ASSET, &kind_seed, &ref_bytes, &[receipt_bump]];
-            let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, receipt_seeds];
-
-            create_ix.accounts[0].pubkey = receipt_ai.key();
-            create_ix.data.clear();
-            // CreateV1 discriminator=0, DataState::AccountState=0
-            create_ix.data.push(0u8);
-            create_ix.data.push(0u8);
-            create_ix
-                .data
-                .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(name_buf.as_bytes());
-            create_ix
-                .data
-                .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(uri_buf.as_bytes());
-            create_ix.data.push(0u8); // plugins: None
-
-            let create_infos = [
-                mpl_core_program.clone(),
-                receipt_ai.clone(),
-                core_collection.clone(),
-                cfg_ai.clone(),
-                payer.clone(),
-                payer.clone(),
-                system_program.clone(),
-            ];
-            invoke_signed(&create_ix, &create_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
         }
 
         msg!("delivery_id:{}", args.delivery_id);
@@ -777,19 +756,12 @@ pub struct OpenBoxArgs {
     pub dude_ids: [u16; DUDES_PER_BOX],
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
-pub struct DeliverItemArgs {
-    /// 0 = box, 1 = figure
-    pub kind: u8,
-    /// box id or dude id (for receipt metadata)
-    pub ref_id: u32,
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct DeliverArgs {
     pub delivery_id: u32,
     pub delivery_fee_lamports: u64,
-    pub items: Vec<DeliverItemArgs>,
+    /// PDA bump for `delivery` record (passed from client to avoid find_program_address compute).
+    pub delivery_bump: u8,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -813,6 +785,20 @@ pub struct BoxMinterConfig {
     pub symbol: String,
     pub uri_base: String,
     pub bump: u8,
+}
+
+#[account]
+pub struct DeliveryRecord {
+    pub payer: Pubkey,
+    pub delivery_fee_lamports: u64,
+    pub item_count: u16,
+}
+
+impl DeliveryRecord {
+    pub const SPACE: usize = 8 // anchor account discriminator
+        + 32 // payer
+        + 8 // delivery_fee_lamports
+        + 2; // item_count
 }
 
 impl BoxMinterConfig {
@@ -933,7 +919,7 @@ pub struct Deliver<'info> {
     pub treasury: UncheckedAccount<'info>,
 
     /// CHECK: MPL-Core collection. Must match config.core_collection.
-    #[account(mut, address = config.core_collection)]
+    #[account(address = config.core_collection)]
     pub core_collection: UncheckedAccount<'info>,
 
     /// CHECK: Metaplex Core program
@@ -941,9 +927,13 @@ pub struct Deliver<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// CHECK: Instructions sysvar (for requiring explicit MPL-Core transfers after `deliver`).
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub instructions: UncheckedAccount<'info>,
+    /// CHECK: SPL Noop program (MPL-Core log wrapper).
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+
+    /// CHECK: Delivery record PDA (created by this instruction).
+    #[account(mut)]
+    pub delivery: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1320,6 +1310,12 @@ pub enum BoxMinterError {
     MissingTransferInstruction,
     #[msg("Invalid transfer instruction")]
     InvalidTransferInstruction,
+    #[msg("Invalid delivery PDA")]
+    InvalidDeliveryPda,
+    #[msg("Delivery record already exists")]
+    DeliveryAlreadyExists,
+    #[msg("Invalid log wrapper program id")]
+    InvalidLogWrapper,
 }
 
 

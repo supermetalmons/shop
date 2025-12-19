@@ -12,7 +12,6 @@ import type { MintStats } from '../types';
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
 const DUDE_ASSET_SEED = 'dude';
-const RECEIPT_ASSET_SEED = 'receipt';
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -20,12 +19,9 @@ const utf8 = (value: string) => TE.encode(value);
 // Anchor discriminators (sha256("global:<name>")[0..8]).
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
-const IX_DELIVER = Uint8Array.from([0xfa, 0x83, 0xde, 0x39, 0xd3, 0xe5, 0xd1, 0x93]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
-export const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
-export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -40,16 +36,6 @@ export interface BoxMinterConfigAccount {
   symbol: string;
   uriBase: string;
   bump: number;
-}
-
-export type DeliverItemKind = 'box' | 'dude';
-
-export interface DeliverItemInput {
-  kind: DeliverItemKind;
-  // Numeric id used for receipt metadata (box id or dude id).
-  refId: number;
-  // Existing Core asset account to burn.
-  asset: PublicKey;
 }
 
 function requireEnvPubkey(name: string): PublicKey {
@@ -81,15 +67,6 @@ export function dudeAssetPda(dudeId: number, programId = boxMinterProgramId()): 
   const buf = Buffer.alloc(2);
   buf.writeUInt16LE(id & 0xffff, 0);
   return PublicKey.findProgramAddressSync([Buffer.from(DUDE_ASSET_SEED), buf], programId);
-}
-
-export function receiptAssetPda(kind: DeliverItemKind, refId: number, programId = boxMinterProgramId()): [PublicKey, number] {
-  const kindByte = kind === 'box' ? 0 : 1;
-  const ref = Number(refId);
-  if (!Number.isFinite(ref) || ref <= 0 || ref > 0xffff_ffff) throw new Error('Invalid receipt refId');
-  const refBuf = Buffer.alloc(4);
-  refBuf.writeUInt32LE(ref >>> 0, 0);
-  return PublicKey.findProgramAddressSync([Buffer.from(RECEIPT_ASSET_SEED), Buffer.from([kindByte]), refBuf], programId);
 }
 
 function readU32(buf: Uint8Array, offset: number): number {
@@ -224,40 +201,6 @@ function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[
   return Buffer.concat([header, u64LE(mintId), len, bumps]);
 }
 
-function encodeDeliverData(args: {
-  deliveryId: number;
-  deliveryFeeLamports: number;
-  items: Array<{ kind: DeliverItemKind; refId: number }>;
-}): Buffer {
-  const deliveryId = Number(args.deliveryId);
-  const fee = Number(args.deliveryFeeLamports);
-  if (!Number.isFinite(deliveryId) || deliveryId <= 0 || deliveryId > 0xffff_ffff) {
-    throw new Error('Invalid deliveryId');
-  }
-  if (!Number.isFinite(fee) || fee < 0 || fee > Number.MAX_SAFE_INTEGER) {
-    throw new Error('Invalid deliveryFeeLamports');
-  }
-  const items = args.items || [];
-  if (!Array.isArray(items) || !items.length) throw new Error('No delivery items');
-
-  const parts: Buffer[] = [];
-  parts.push(Buffer.from(IX_DELIVER));
-  parts.push(u32LE(deliveryId));
-  parts.push(u64LE(BigInt(fee)));
-  parts.push(u32LE(items.length));
-
-  for (const item of items) {
-    const kindByte = item.kind === 'box' ? 0 : item.kind === 'dude' ? 1 : 255;
-    if (kindByte === 255) throw new Error(`Invalid item kind: ${String((item as any).kind)}`);
-    const refId = Number(item.refId);
-    if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) throw new Error('Invalid item refId');
-    parts.push(Buffer.from([kindByte]));
-    parts.push(u32LE(refId));
-  }
-
-  return Buffer.concat(parts);
-}
-
 export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, quantity: number): TransactionInstruction {
   const programId = boxMinterProgramId();
   const [configPda] = boxMinterConfigPda(programId);
@@ -317,88 +260,3 @@ export async function buildMintBoxesTx(
   }).compileToV0Message();
   return new VersionedTransaction(msg);
 }
-
-export function buildDeliverIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
-): TransactionInstruction {
-  const programId = boxMinterProgramId();
-  const [configPda] = boxMinterConfigPda(programId);
-
-  const keys = [
-    { pubkey: configPda, isSigner: false, isWritable: false },
-    // Server cosigner (must match config.admin). Backend fills this signature.
-    { pubkey: cfg.admin, isSigner: true, isWritable: false },
-    { pubkey: payer, isSigner: true, isWritable: true },
-    { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-    { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-    { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
-  ];
-
-  // Remaining accounts: for each item => (asset_to_burn, receipt_asset_pda_to_create).
-  for (const item of args.items || []) {
-    const [receiptPda] = receiptAssetPda(item.kind, item.refId, programId);
-    keys.push({ pubkey: item.asset, isSigner: false, isWritable: true });
-    keys.push({ pubkey: receiptPda, isSigner: false, isWritable: true });
-  }
-
-  return new TransactionInstruction({
-    programId,
-    keys,
-    data: encodeDeliverData({
-      deliveryId: args.deliveryId,
-      deliveryFeeLamports: args.deliveryFeeLamports,
-      items: (args.items || []).map((i) => ({ kind: i.kind, refId: i.refId })),
-    }),
-  });
-}
-
-export async function buildDeliverTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
-): Promise<VersionedTransaction> {
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  return buildDeliverTxWithBlockhash(cfg, payer, args, blockhash);
-}
-
-export function buildDeliverTxWithBlockhash(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  args: { deliveryId: number; deliveryFeeLamports: number; items: DeliverItemInput[] },
-  recentBlockhash: string,
-): VersionedTransaction {
-  const deliverIx = buildDeliverIx(cfg, payer, args);
-  const transferIxs = (args.items || []).map(
-    (item) =>
-      new TransactionInstruction({
-        programId: MPL_CORE_PROGRAM_ID,
-        keys: [
-          // TransferV1 accounts (kinobi order):
-          // 0 asset, 1 collection, 2 payer, 3 authority, 4 newOwner, 5 systemProgram, 6 logWrapper
-          { pubkey: item.asset, isSigner: false, isWritable: true },
-          { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
-          { pubkey: payer, isSigner: true, isWritable: true },
-          { pubkey: payer, isSigner: true, isWritable: false },
-          { pubkey: cfg.treasury, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-        ],
-        // TransferV1 discriminator=14, compression_proof=None (0)
-        data: Buffer.from([14, 0]),
-      }),
-  );
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash,
-    // Order matters: on-chain `deliver` enforces that the subsequent instructions are transfers to the vault.
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), deliverIx, ...transferIxs],
-  }).compileToV0Message();
-  return new VersionedTransaction(msg);
-}
-
-

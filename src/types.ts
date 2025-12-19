@@ -41,6 +41,7 @@ export interface PreparedTxResponse {
   encodedTx: string;
   feeLamports?: number;
   deliveryLamports?: number;
+  deliveryId?: number;
   assignedDudeIds?: number[];
   certificates?: number[];
   message?: string;
