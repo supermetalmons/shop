@@ -12,6 +12,13 @@ export interface InventoryItem {
   status?: 'minted' | 'opened' | 'delivered' | 'pending';
 }
 
+export interface PendingOpenBox {
+  pendingPda: string;
+  boxAssetId: string;
+  dudeAssetIds: string[];
+  createdSlot?: number;
+}
+
 export interface MintStats {
   minted: number;
   total: number;
@@ -42,7 +49,6 @@ export interface PreparedTxResponse {
   feeLamports?: number;
   deliveryLamports?: number;
   deliveryId?: number;
-  assignedDudeIds?: number[];
   certificates?: number[];
   message?: string;
   allowedQuantity?: number;

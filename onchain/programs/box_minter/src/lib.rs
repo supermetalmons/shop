@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("4qKPCNn3e1jncDuDrtSmD3HDyZJzpQagUyjVStPBaYmJ");
+declare_id!("6RUphA6UUMAuB2rzGqj5oSd2B4Jhggs84cxmhKQqwACz");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -24,9 +24,11 @@ const MAX_DUDE_ID: u16 = 999;
 
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
-const SEED_DUDE_ASSET: &[u8] = b"dude";
 const SEED_RECEIPT_ASSET: &[u8] = b"receipt";
 const SEED_DELIVERY: &[u8] = b"delivery";
+// Pending (two-step) box open flow.
+const SEED_PENDING_OPEN: &[u8] = b"open";
+const SEED_PENDING_DUDE_ASSET: &[u8] = b"pdude";
 
 // Metaplex Core program id.
 const MPL_CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -330,16 +332,175 @@ pub mod box_minter {
         Ok(())
     }
 
-    pub fn open_box<'a, 'b, 'c, 'info>(
-        ctx: Context<'a, 'b, 'c, 'info, OpenBox<'info>>,
-        args: OpenBoxArgs,
+    /// Starts a two-step box open flow.
+    ///
+    /// This instruction must be immediately followed by an MPL-Core `TransferV1` that transfers
+    /// `box_asset` from the user to `config.treasury` (vault). If the transfer fails, the whole
+    /// transaction fails (so no pending state is created and no placeholder assets are minted).
+    ///
+    /// Side effects (all in this one transaction):
+    /// - creates a `PendingOpenBox` PDA keyed by the box asset pubkey
+    /// - mints 3 placeholder Core assets (empty metadata, no collection) owned by `config.treasury`
+    pub fn start_open_box<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, StartOpenBox<'info>>,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
 
-        // Require a cloud-held signer so users cannot pick arbitrary figure IDs.
+        require_keys_eq!(
+            ctx.accounts.mpl_core_program.key(),
+            MPL_CORE_PROGRAM_ID,
+            BoxMinterError::InvalidMplCoreProgram
+        );
+
+        // Defensive: ensure the provided asset is a Mons *box* owned by payer.
+        verify_core_asset_owned_by_uri(
+            &ctx.accounts.box_asset.to_account_info(),
+            ctx.accounts.payer.key(),
+            cfg.core_collection,
+            &cfg.uri_base,
+            None,
+        )?;
+
+        // IMPORTANT: wallets often won't show inner CPIs clearly; require an explicit top-level transfer.
+        require_next_ix_is_mpl_core_transfer_of_asset_to(
+            &ctx.accounts.instructions.to_account_info(),
+            0,
+            ctx.accounts.box_asset.key(),
+            ctx.accounts.core_collection.key(),
+            ctx.accounts.payer.key(),
+            cfg.treasury,
+        )?;
+
+        // Remaining accounts: exactly 3 new placeholder dude asset PDAs.
+        require!(
+            ctx.remaining_accounts.len() == DUDES_PER_BOX,
+            BoxMinterError::InvalidRemainingAccounts
+        );
+
+        // Create 3 placeholder Core assets:
+        // - owner: config.treasury (vault/admin)
+        // - update authority: config PDA (so only the program can later "reveal" by updating metadata + setting collection)
+        // - collection: None (placeholder) so the assets do NOT appear in the collection until reveal.
+        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
+        let treasury = ctx.accounts.treasury.to_account_info();
+        let system_program = ctx.accounts.system_program.to_account_info();
+        let cfg_ai = ctx.accounts.config.to_account_info();
+        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+
+        let pending_key = ctx.accounts.pending.key();
+        let mut dudes: [Pubkey; DUDES_PER_BOX] = [Pubkey::default(); DUDES_PER_BOX];
+
+        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                // 0 asset (placeholder)
+                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true),
+                // 1 collection: None => placeholder = program id (must be readonly when absent)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                // 2 authority (signer): config PDA
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true),
+                // 3 payer (signer)
+                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
+                // 4 owner: vault/admin (not signer)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(treasury.key(), false),
+                // 5 update authority: config PDA (not signer account meta)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), false),
+                // 6 system program
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                // 7 log wrapper: None => placeholder = program id
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+            ],
+            data: Vec::with_capacity(32),
+        };
+
+        for i in 0..DUDES_PER_BOX {
+            let i_u8: u8 = i
+                .try_into()
+                .map_err(|_| error!(BoxMinterError::InvalidRemainingAccounts))?;
+            let i_seed = [i_u8];
+            let (expected, asset_bump) = Pubkey::find_program_address(
+                &[SEED_PENDING_DUDE_ASSET, pending_key.as_ref(), &i_seed],
+                ctx.program_id,
+            );
+
+            let asset_ai = &ctx.remaining_accounts[i];
+            require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
+            // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
+            require_keys_eq!(
+                *asset_ai.owner,
+                anchor_lang::solana_program::system_program::ID,
+                BoxMinterError::InvalidAssetPda
+            );
+
+            dudes[i] = expected;
+
+            let asset_seeds: &[&[u8]] = &[
+                SEED_PENDING_DUDE_ASSET,
+                pending_key.as_ref(),
+                &i_seed,
+                &[asset_bump],
+            ];
+            let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+
+            create_ix.accounts[0].pubkey = asset_ai.key();
+            create_ix.data.clear();
+            // CreateV1 discriminator=0, DataState::AccountState=0
+            create_ix.data.push(0u8);
+            create_ix.data.push(0u8);
+            // name: empty string
+            create_ix.data.extend_from_slice(&(0u32).to_le_bytes());
+            // uri: empty string
+            create_ix.data.extend_from_slice(&(0u32).to_le_bytes());
+            // plugins: None
+            create_ix.data.push(0u8);
+
+            let create_infos = [
+                mpl_core_program.clone(),
+                asset_ai.clone(),
+                cfg_ai.clone(),
+                payer.clone(),
+                treasury.clone(),
+                cfg_ai.clone(),
+                system_program.clone(),
+            ];
+            invoke_signed(&create_ix, &create_infos, signer_seeds)
+                .map_err(anchor_lang::error::Error::from)?;
+        }
+
+        // Persist the pending flow record so the admin can later finalize it.
+        let record = &mut ctx.accounts.pending;
+        record.owner = ctx.accounts.payer.key();
+        record.box_asset = ctx.accounts.box_asset.key();
+        record.dudes = dudes;
+        record.created_slot = Clock::get()?.slot;
+        record.bump = ctx.bumps.pending;
+
+        Ok(())
+    }
+
+    /// Finalizes a pending box open, admin-only.
+    ///
+    /// Performs in one transaction:
+    /// 1) burns the vault-owned box (reclaims rent)
+    /// 2) updates placeholder dudes with real IDs + moves them into the core collection
+    /// 3) transfers dudes to the user
+    /// 4) closes the pending record PDA
+    pub fn finalize_open_box<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, FinalizeOpenBox<'info>>,
+        args: FinalizeOpenBoxArgs,
+    ) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+
+        // Admin-only. In this repo we run single-master-key mode (admin == treasury).
         require_keys_eq!(
             ctx.accounts.cosigner.key(),
             cfg.admin,
+            BoxMinterError::InvalidCosigner
+        );
+        require_keys_eq!(
+            ctx.accounts.cosigner.key(),
+            cfg.treasury,
             BoxMinterError::InvalidCosigner
         );
 
@@ -347,6 +508,11 @@ pub mod box_minter {
             ctx.accounts.mpl_core_program.key(),
             MPL_CORE_PROGRAM_ID,
             BoxMinterError::InvalidMplCoreProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.log_wrapper.key(),
+            SPL_NOOP_PROGRAM_ID,
+            BoxMinterError::InvalidLogWrapper
         );
 
         // Validate dude IDs.
@@ -360,118 +526,188 @@ pub mod box_minter {
             BoxMinterError::DuplicateDudeId
         );
 
-        // Remaining accounts: exactly 3 new figure asset PDAs, in the same order as dude_ids.
+        // Pending record must belong to the provided user, and must correspond to this box.
+        require_keys_eq!(
+            ctx.accounts.pending.box_asset,
+            ctx.accounts.box_asset.key(),
+            BoxMinterError::InvalidPendingRecord
+        );
+        require_keys_eq!(
+            ctx.accounts.user.key(),
+            ctx.accounts.pending.owner,
+            BoxMinterError::InvalidPendingRecord
+        );
+
+        // Remaining accounts: exactly 3 placeholder dude assets, in the order stored on-chain.
         require!(
             ctx.remaining_accounts.len() == DUDES_PER_BOX,
             BoxMinterError::InvalidRemainingAccounts
         );
+        for i in 0..DUDES_PER_BOX {
+            require_keys_eq!(
+                ctx.remaining_accounts[i].key(),
+                ctx.accounts.pending.dudes[i],
+                BoxMinterError::InvalidRemainingAccounts
+            );
+        }
 
-        // Defensive: ensure the provided asset is a Mons *box* owned by payer.
+        // Defensive: ensure the box is a Mons *box* now owned by the vault/admin.
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
-            ctx.accounts.payer.key(),
+            cfg.treasury,
             cfg.core_collection,
             &cfg.uri_base,
             None,
         )?;
 
-        // IMPORTANT: Wallets generally won't display inner-CPI burns in their approval UI.
-        // To make the "box goes away" explicit to users, require the *next* instruction in the
-        // transaction to be an MPL-Core `TransferV1` that transfers `box_asset` to the configured
-        // vault (we reuse `config.treasury` as the vault).
-        //
-        // If the transfer fails, the whole transaction fails (so figures are not minted).
-        require_next_ix_is_mpl_core_transfer_of_asset_to(
-            &ctx.accounts.instructions.to_account_info(),
-            0,
-            ctx.accounts.box_asset.key(),
-            ctx.accounts.core_collection.key(),
-            ctx.accounts.payer.key(),
-            cfg.treasury,
-        )?;
-
-        // Mint 3 figure Core assets into the same collection.
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let core_collection = ctx.accounts.core_collection.to_account_info();
-        let payer = ctx.accounts.payer.to_account_info();
+        let cosigner = ctx.accounts.cosigner.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
-        let figures_uri_base = derive_figures_uri_base(&cfg.uri_base)?;
+        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
         let cfg_ai = ctx.accounts.config.to_account_info();
         let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
 
-        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+        // 1) Burn the box (reclaim rent to the admin payer).
+        let burn_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false), // collection
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true), // payer
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), false), // owner
-                // update_authority: None (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false), // system
-                // log_wrapper: None (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                // asset, collection, payer, authority, system_program, log_wrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new(ctx.accounts.box_asset.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
-            data: Vec::with_capacity(256),
+            // BurnV1 discriminator=12, compression_proof=None (0)
+            data: vec![12u8, 0u8],
         };
+        invoke(
+            &burn_ix,
+            &[
+                ctx.accounts.box_asset.to_account_info(),
+                core_collection.clone(),
+                cosigner.clone(),
+                cosigner.clone(),
+                system_program.clone(),
+                log_wrapper.clone(),
+                mpl_core_program.clone(),
+            ],
+        )?;
+
+        // 2) Update + "add to collection" by setting update authority to Collection(core_collection).
+        //
+        // IMPORTANT: MPL-Core only supports moving an asset into a collection via `UpdateV2`
+        // (UpdateV1 cannot add/remove/change collection).
+        let figures_uri_base = derive_figures_uri_base(&cfg.uri_base)?;
         let mut name_buf = String::with_capacity(32);
         let mut uri_buf = String::with_capacity(figures_uri_base.len() + 16);
 
-        for (i, dude_id) in args.dude_ids.iter().enumerate() {
-            let id_u16 = *dude_id;
-            let id_bytes = id_u16.to_le_bytes();
-            let (expected, asset_bump) =
-                Pubkey::find_program_address(&[SEED_DUDE_ASSET, &id_bytes], ctx.program_id);
+        let mut update_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                // UpdateV2 accounts:
+                //   asset, collection (optional), payer, authority, new_collection (optional), system_program, log_wrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                // collection: None (placeholder)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
+                // new_collection: core collection (writable; mpl-core increments size)
+                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+            ],
+            data: Vec::with_capacity(128),
+        };
 
-            let asset_ai = &ctx.remaining_accounts[i];
-            require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-            // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
-            require_keys_eq!(
-                *asset_ai.owner,
-                anchor_lang::solana_program::system_program::ID,
-                BoxMinterError::InvalidAssetPda
-            );
+        // 3) Transfer dudes to the user.
+        let user_ai = ctx.accounts.user.to_account_info();
+        let mut transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                // asset, collection, payer, authority, new_owner, system_program, log_wrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+            ],
+            // TransferV1 discriminator=14, compression_proof=None (0)
+            data: vec![14u8, 0u8],
+        };
 
+        for i in 0..DUDES_PER_BOX {
+            let dude_id = args.dude_ids[i];
             name_buf.clear();
             name_buf.push_str("mons figure #");
-            write!(&mut name_buf, "{}", id_u16).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
             uri_buf.push_str(&figures_uri_base);
-            write!(&mut uri_buf, "{}", id_u16).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            write!(&mut uri_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
 
-            let asset_seeds: &[&[u8]] = &[SEED_DUDE_ASSET, &id_bytes, &[asset_bump]];
-            let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+            let asset_ai = &ctx.remaining_accounts[i];
 
-            create_ix.accounts[0].pubkey = asset_ai.key();
-            create_ix.data.clear();
-            // CreateV1 discriminator=0, DataState::AccountState=0
-            create_ix.data.push(0u8);
-            create_ix.data.push(0u8);
-            create_ix
+            // UpdateV2:
+            // - newName: Some(name)
+            // - newUri: Some(uri)
+            // - newUpdateAuthority: Some(Collection(core_collection))
+            update_ix.accounts[0].pubkey = asset_ai.key();
+            update_ix.data.clear();
+            // discriminator
+            update_ix.data.push(30u8);
+            // newName: Some(string)
+            update_ix.data.push(1u8);
+            update_ix
                 .data
                 .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(name_buf.as_bytes());
-            create_ix
+            update_ix.data.extend_from_slice(name_buf.as_bytes());
+            // newUri: Some(string)
+            update_ix.data.push(1u8);
+            update_ix
                 .data
                 .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(uri_buf.as_bytes());
-            // plugins: None
-            create_ix.data.push(0u8);
+            update_ix.data.extend_from_slice(uri_buf.as_bytes());
+            // newUpdateAuthority: Some(BaseUpdateAuthority::Collection(core_collection))
+            update_ix.data.push(1u8); // Option::Some
+            update_ix.data.push(2u8); // BaseUpdateAuthority::Collection enum index
+            update_ix.data.extend_from_slice(core_collection.key().as_ref());
 
-            let create_infos = [
-                mpl_core_program.clone(),
-                asset_ai.clone(),
-                core_collection.clone(),
-                cfg_ai.clone(),
-                payer.clone(),
-                payer.clone(),
-                system_program.clone(),
-            ];
-            invoke_signed(&create_ix, &create_infos, signer_seeds)
-                .map_err(anchor_lang::error::Error::from)?;
+            invoke_signed(
+                &update_ix,
+                &[
+                    asset_ai.clone(),
+                    core_collection.clone(),
+                    cosigner.clone(),
+                    cfg_ai.clone(),
+                    system_program.clone(),
+                    log_wrapper.clone(),
+                    mpl_core_program.clone(),
+                ],
+                &[cfg_signer_seeds],
+            )
+            .map_err(anchor_lang::error::Error::from)?;
+
+            // TransferV1 to the user.
+            transfer_ix.accounts[0].pubkey = asset_ai.key();
+            invoke(
+                &transfer_ix,
+                &[
+                    asset_ai.clone(),
+                    core_collection.clone(),
+                    cosigner.clone(),
+                    cosigner.clone(),
+                    user_ai.clone(),
+                    system_program.clone(),
+                    log_wrapper.clone(),
+                    mpl_core_program.clone(),
+                ],
+            )?;
         }
 
         Ok(())
@@ -799,7 +1035,7 @@ pub struct InitializeArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
-pub struct OpenBoxArgs {
+pub struct FinalizeOpenBoxArgs {
     pub dude_ids: [u16; DUDES_PER_BOX],
 }
 
@@ -874,6 +1110,29 @@ impl BoxMinterConfig {
         + 1; // bump
 }
 
+#[account]
+pub struct PendingOpenBox {
+    /// User who started the open.
+    pub owner: Pubkey,
+    /// The box asset being opened (now owned by the vault).
+    pub box_asset: Pubkey,
+    /// Placeholder dude asset accounts to be updated + transferred on finalize.
+    pub dudes: [Pubkey; DUDES_PER_BOX],
+    /// Slot when the pending record was created (for UX ordering).
+    pub created_slot: u64,
+    /// PDA bump for this record.
+    pub bump: u8,
+}
+
+impl PendingOpenBox {
+    pub const SPACE: usize = 8 // anchor discriminator
+        + 32 // owner
+        + 32 // box_asset
+        + 32 * DUDES_PER_BOX // dudes
+        + 8 // created_slot
+        + 1; // bump
+}
+
 #[derive(Accounts)]
 #[instruction(args: InitializeArgs)]
 pub struct Initialize<'info> {
@@ -928,17 +1187,54 @@ pub struct MintBoxes<'info> {
 }
 
 #[derive(Accounts)]
-pub struct OpenBox<'info> {
+pub struct StartOpenBox<'info> {
     #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
-
-    /// Cloud-held signer (must match config.admin).
-    pub cosigner: Signer<'info>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
 
     /// CHECK: Existing box Core asset account to transfer to the vault.
+    #[account(mut)]
+    pub box_asset: UncheckedAccount<'info>,
+
+    /// CHECK: Must match config.treasury (owner for placeholder dudes).
+    #[account(address = config.treasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: MPL-Core collection. Must match config.core_collection.
+    #[account(address = config.core_collection)]
+    pub core_collection: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Core program
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+
+    /// CHECK: Instructions sysvar (for requiring an explicit MPL-Core transfer after `start_open_box`).
+    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = PendingOpenBox::SPACE,
+        seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
+        bump,
+    )]
+    pub pending: Account<'info, PendingOpenBox>,
+}
+
+#[derive(Accounts)]
+pub struct FinalizeOpenBox<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    /// Cloud-held signer (must match config.admin and config.treasury in this repo).
+    #[account(mut)]
+    pub cosigner: Signer<'info>,
+
+    /// CHECK: Vault-owned box Core asset to burn.
     #[account(mut)]
     pub box_asset: UncheckedAccount<'info>,
 
@@ -951,9 +1247,21 @@ pub struct OpenBox<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// CHECK: Instructions sysvar (for requiring an explicit MPL-Core transfer after `open_box`).
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub instructions: UncheckedAccount<'info>,
+    /// CHECK: SPL Noop program (MPL-Core log wrapper).
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+
+    /// Pending open record PDA, closed after finalize to reclaim rent.
+    #[account(
+        mut,
+        seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
+        bump = pending.bump,
+        close = cosigner
+    )]
+    pub pending: Account<'info, PendingOpenBox>,
+
+    /// CHECK: User who will receive the dudes (must equal `pending.owner`).
+    pub user: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1382,6 +1690,8 @@ pub enum BoxMinterError {
     MissingTransferInstruction,
     #[msg("Invalid transfer instruction")]
     InvalidTransferInstruction,
+    #[msg("Invalid pending open record")]
+    InvalidPendingRecord,
     #[msg("Invalid delivery PDA")]
     InvalidDeliveryPda,
     #[msg("Delivery record already exists")]

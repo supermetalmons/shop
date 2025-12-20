@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import type { VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -11,16 +11,17 @@ import { ClaimForm } from './components/ClaimForm';
 import { EmailSubscribe } from './components/EmailSubscribe';
 import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
+import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
   requestClaimTx,
   requestDeliveryTx,
-  requestOpenBoxTx,
+  revealDudes,
   finalizeClaimTx,
   saveEncryptedAddress,
   issueReceipts,
 } from './lib/api';
-import { buildMintBoxesTx, fetchBoxMinterConfig } from './lib/boxMinter';
+import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 
@@ -64,14 +65,16 @@ function App() {
     updateProfile,
   } = useSolanaAuth();
   const { data: inventory = [], refetch: refetchInventory } = useInventory(token);
+  const { data: pendingOpenBoxes = [], refetch: refetchPendingOpenBoxes } = usePendingOpenBoxes();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
-  const [openLoading, setOpenLoading] = useState<string | null>(null);
+  const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
+  const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
-  const [lastOpen, setLastOpen] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
+  const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [addAddressOpen, setAddAddressOpen] = useState(false);
   const owner = publicKey?.toBase58();
@@ -145,26 +148,49 @@ function App() {
     }
   };
 
-  const handleOpenBox = async (item: InventoryItem) => {
+  const handleStartOpenBox = async (item: InventoryItem) => {
     if (!publicKey) throw new Error('Connect wallet to open a box');
-    setOpenLoading(item.id);
+    setStartOpenLoading(item.id);
     setStatus('');
-    setLastOpen(null);
+    setLastReveal(null);
     try {
-      const resp = await requestOpenBoxTx(publicKey.toBase58(), item.id, token || undefined);
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
-      const revealedDudes = (resp.assignedDudeIds || []).map((id) => Number(id));
-      setLastOpen({ boxId: item.id, dudeIds: revealedDudes, signature: sig });
-      const revealCopy = revealedDudes.length ? ` · dudes ${revealedDudes.join(', ')}` : '';
-      setStatus(`Opened box · ${sig}${revealCopy}`);
-      // Helius indexing can lag after burns; hide immediately once the tx is confirmed.
+      const cfg = await fetchBoxMinterConfig(connection);
+      const tx = await buildStartOpenBoxTx(connection, cfg, publicKey, new PublicKey(item.id));
+      const sig = await signAndSendViaConnection(tx);
+      await connection.confirmTransaction(sig, 'confirmed');
+      setStatus(`Box sent to vault · ${sig}`);
+      // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
       markAssetsHidden([item.id]);
-      await refetchInventory();
+      await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
       setStatus(err instanceof Error ? err.message : 'Failed to open box');
     } finally {
-      setOpenLoading(null);
+      setStartOpenLoading(null);
+    }
+  };
+
+  const handleRevealDudes = async (boxAssetId: string) => {
+    if (!publicKey) throw new Error('Connect wallet first');
+    // Ensure the wallet session exists (reveal is an authenticated callable).
+    if (!token) {
+      await signIn();
+    }
+    setRevealLoading(boxAssetId);
+    setStatus('');
+    setLastReveal(null);
+    try {
+      const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
+      const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
+      setLastReveal({ boxId: boxAssetId, dudeIds: revealed, signature: resp.signature });
+      const revealCopy = revealed.length ? ` · dudes ${revealed.join(', ')}` : '';
+      setStatus(`Revealed dudes · ${resp.signature}${revealCopy}`);
+      await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
+    } catch (err) {
+      console.error(err);
+      setStatus(err instanceof Error ? err.message : 'Failed to reveal dudes');
+    } finally {
+      setRevealLoading(null);
     }
   };
 
@@ -325,7 +351,7 @@ function App() {
           <p className="muted small">Mint boxes on-chain, reveal dudes, then burn for delivery and certificates.</p>
           <ul className="muted small">
             <li>Mint 1-15 blind boxes per tx until the 333 supply is gone (MPL Core, uncompressed).</li>
-            <li>Open a box to burn it and mint 3 dudes, co-signed by our cloud function.</li>
+            <li>Start opening a box to send it to the vault (no reveal yet). Then reveal to burn it and receive 3 dudes.</li>
             <li>Select boxes + dudes for delivery; pay shipping in SOL, burn items, receive certificates.</li>
             <li>Use the IRL code inside a shipped box to mint dudes certificates for that specific box.</li>
           </ul>
@@ -350,26 +376,57 @@ function App() {
       ) : null}
 
       <section className="card">
-        <div className="card__title">Inventory</div>
-        <p className="muted small">Boxes, dudes, and certificates fetched directly from Helius.</p>
-        <InventoryGrid items={visibleInventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleOpenBox} />
-        {openLoading ? <div className="muted">Opening {shortAddress(openLoading)}…</div> : null}
+        <div className="card__title">Pending reveals</div>
+        <p className="muted small">Boxes you’ve sent to the vault. Reveal to burn the box and receive 3 dudes.</p>
+        {pendingOpenBoxes.length ? (
+          <div className="grid">
+            {pendingOpenBoxes.map((p) => (
+              <div key={p.pendingPda} className="card subtle">
+                <div className="card__head">
+                  <div>
+                    <div className="pill">Pending</div>
+                    <div className="muted small">Box {shortAddress(p.boxAssetId)}</div>
+                  </div>
+                  <div className="card__actions">
+                    <button
+                      className="ghost"
+                      onClick={() => handleRevealDudes(p.boxAssetId)}
+                      disabled={Boolean(revealLoading) || Boolean(startOpenLoading)}
+                    >
+                      {revealLoading === p.boxAssetId ? 'Revealing…' : 'Reveal dudes'}
+                    </button>
+                  </div>
+                </div>
+                <div className="muted small">Pending id {shortAddress(p.pendingPda)}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="muted small">No pending reveals.</div>
+        )}
       </section>
 
-      {lastOpen ? (
+      <section className="card">
+        <div className="card__title">Inventory</div>
+        <p className="muted small">Boxes, dudes, and certificates fetched directly from Helius.</p>
+        <InventoryGrid items={visibleInventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleStartOpenBox} />
+        {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
+      </section>
+
+      {lastReveal ? (
         <section className="card subtle">
           <div className="card__title">Revealed dudes</div>
           <p className="muted small">
-            Box {shortAddress(lastOpen.boxId)} revealed:
+            Box {shortAddress(lastReveal.boxId)} revealed:
           </p>
           <div className="row">
-            {lastOpen.dudeIds.map((id) => (
+            {lastReveal.dudeIds.map((id) => (
               <span key={id} className="pill">
                 Dude #{id}
               </span>
             ))}
           </div>
-          <p className="muted small">Tx {shortAddress(lastOpen.signature)}</p>
+          <p className="muted small">Tx {shortAddress(lastReveal.signature)}</p>
         </section>
       ) : null}
 

@@ -56,7 +56,7 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
               <div className="inventory__actions">
                 {isBox && onOpenBox ? (
                   <button className="ghost" onClick={() => onOpenBox(item)}>
-                    Open box
+                    Start opening
                   </button>
                 ) : null}
                 <span className="muted small">{item.id.slice(0, 4)}…{item.id.slice(-4)}</span>

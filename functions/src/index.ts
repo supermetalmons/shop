@@ -127,8 +127,6 @@ const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
 
 // MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
-// Sysvar containing the full transaction instruction list (used by on-chain `open_box` to verify a burn is present).
-const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
 // Solana SPL Noop program (commonly used as Metaplex "log wrapper").
 const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 // Metaplex Noop program (used by Bubblegum v2).
@@ -162,8 +160,10 @@ const receiptsMerkleTreeStr = receiptsMerkleTree.equals(PublicKey.default) ? '' 
 
 const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
-// Anchor discriminator = sha256("global:open_box")[0..8]
-const IX_OPEN_BOX = Buffer.from('e1dc0a68ad97d6c7', 'hex');
+// Anchor discriminator = sha256("global:finalize_open_box")[0..8]
+const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
+// Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
+const ACCOUNT_PENDING_OPEN_BOX = Buffer.from('4507451af00c43a1', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 // Anchor discriminator = sha256("global:close_delivery")[0..8]
@@ -903,7 +903,7 @@ function bubblegumMintV2Ix(args: {
   });
 }
 
-function encodeOpenBoxArgs(dudeIds: number[]): Buffer {
+function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
   if (!Array.isArray(dudeIds) || dudeIds.length !== DUDES_PER_BOX) {
     throw new functions.https.HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
   }
@@ -916,7 +916,39 @@ function encodeOpenBoxArgs(dudeIds: number[]): Buffer {
   if (new Set(ids).size !== ids.length) {
     throw new functions.https.HttpsError('invalid-argument', 'Duplicate dude ids');
   }
-  return Buffer.concat([IX_OPEN_BOX, ...ids.map(u16LE)]);
+  return Buffer.concat([IX_FINALIZE_OPEN_BOX, ...ids.map(u16LE)]);
+}
+
+function decodePendingOpenBox(data: Buffer): {
+  owner: PublicKey;
+  boxAsset: PublicKey;
+  dudeAssets: PublicKey[];
+  createdSlot: bigint;
+  bump: number;
+} {
+  if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
+  const minLen = 8 + 32 + 32 + 32 * DUDES_PER_BOX + 8 + 1;
+  if (data.length < minLen) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (too short)');
+  }
+  const disc = data.subarray(0, 8);
+  if (!disc.equals(ACCOUNT_PENDING_OPEN_BOX)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid PendingOpenBox account discriminator');
+  }
+  let o = 8;
+  const owner = new PublicKey(data.subarray(o, o + 32));
+  o += 32;
+  const boxAsset = new PublicKey(data.subarray(o, o + 32));
+  o += 32;
+  const dudeAssets: PublicKey[] = [];
+  for (let i = 0; i < DUDES_PER_BOX; i += 1) {
+    dudeAssets.push(new PublicKey(data.subarray(o, o + 32)));
+    o += 32;
+  }
+  const createdSlot = data.readBigUInt64LE(o);
+  o += 8;
+  const bump = data.readUInt8(o);
+  return { owner, boxAsset, dudeAssets, createdSlot, bump };
 }
 
 function encodeMintReceiptsArgs(args: { kind: number; refIds: number[] }): Buffer {
@@ -1158,47 +1190,30 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
-export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request) => {
+export const revealDudes = onCallLogged('revealDudes', async (request) => {
+  const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
+  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
 
   await ensureOnchainCoreConfig();
 
-  let asset: any;
+  let boxAssetPk: PublicKey;
   try {
-    asset = await fetchAssetRetry(boxAssetId);
-  } catch (err) {
-    const anyErr = err as any;
-    if (anyErr && typeof anyErr === 'object' && anyErr.code === 'not-found') {
-      throw new functions.https.HttpsError(
-        'not-found',
-        'Box not found. If you already opened this box, it has been burned. If you just minted/transferred it, wait a few seconds and try again.',
-        { boxAssetId, cluster },
-      );
-    }
-    throw err;
+    boxAssetPk = new PublicKey(boxAssetId);
+  } catch {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid boxAssetId');
   }
 
-  const kind = getAssetKind(asset);
-  if (kind !== 'box') {
-    throw new functions.https.HttpsError('failed-precondition', 'Only blind boxes can be opened');
-  }
-  if (!isMonsAsset(asset)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
-  }
-  const assetOwner = asset?.ownership?.owner;
-  if (assetOwner !== ownerWallet) {
-    throw new functions.https.HttpsError('failed-precondition', 'Box not owned by wallet');
-  }
+  const conn = connection();
 
-  // Ensure the provided COSIGNER_SECRET matches the on-chain box minter admin (config PDA),
-  // and ensure COLLECTION_MINT matches the on-chain configured core collection.
+  // Load on-chain config and enforce single-master-key assumptions for reveal.
   const cfgInfo = await withTimeout(
-    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig',
+    'getAccountInfo:boxMinterConfig:reveal',
   );
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
     throw new functions.https.HttpsError(
@@ -1218,6 +1233,13 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
   }
+  if (!signer.publicKey.equals(cfgTreasury)) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter treasury ${cfgTreasury.toBase58()}`,
+      { expectedTreasury: cfgTreasury.toBase58(), cosigner: signer.publicKey.toBase58() },
+    );
+  }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
     throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
@@ -1226,114 +1248,63 @@ export const prepareOpenBoxTx = onCallLogged('prepareOpenBoxTx', async (request)
     });
   }
 
-  // Assign dudes deterministically per box, reserving globally unique IDs in Firestore.
-  const dudeIds = await assignDudes(boxAssetId);
+  // Read pending open record from chain.
   const programId = boxMinterProgramId;
-  const dudeAssetPdas = dudeIds.map((id) =>
-    PublicKey.findProgramAddressSync([Buffer.from('dude'), u16LE(id)], programId)[0],
-  );
-
-  let boxAssetPk: PublicKey;
-  try {
-    boxAssetPk = new PublicKey(boxAssetId);
-  } catch {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid boxAssetId');
-  }
-
-  const conn = connection();
-
-  // Collection update authority must remain the box minter config PDA so the on-chain program can mint.
-  const collectionInfo = await withTimeout(
-    conn.getAccountInfo(cfgCoreCollection, { commitment: 'confirmed' }),
+  const pendingPda = PublicKey.findProgramAddressSync([Buffer.from('open'), boxAssetPk.toBuffer()], programId)[0];
+  const pendingInfo = await withTimeout(
+    conn.getAccountInfo(pendingPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
-    'getAccountInfo:coreCollection',
+    'getAccountInfo:pendingOpenBox',
   );
-  if (!collectionInfo?.data) {
-    throw new functions.https.HttpsError('failed-precondition', 'Missing MPL-Core collection account', {
-      collection: cfgCoreCollection.toBase58(),
-    });
-  }
-  if (!collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Configured collection is not owned by the MPL-Core program', {
-      collection: cfgCoreCollection.toBase58(),
-      expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
-      actualOwner: collectionInfo.owner.toBase58(),
-    });
-  }
-  const updateAuthority = decodeMplCoreCollectionUpdateAuthority(collectionInfo.data);
-  if (!updateAuthority.equals(boxMinterConfigPda)) {
+  if (!pendingInfo?.data) {
     throw new functions.https.HttpsError(
-      'failed-precondition',
-      'Collection update authority must be the box minter config PDA to open boxes. Transfer update authority and retry.',
-      {
-        collection: cfgCoreCollection.toBase58(),
-        updateAuthority: updateAuthority.toBase58(),
-        requiredAuthority: boxMinterConfigPda.toBase58(),
-      },
+      'not-found',
+      'Pending open not found. Start opening the box first (send it to the vault), then reveal.',
+      { pending: pendingPda.toBase58(), boxAssetId },
     );
   }
+  const pending = decodePendingOpenBox(pendingInfo.data);
+  if (!pending.owner.equals(ownerPk) || !pending.boxAsset.equals(boxAssetPk)) {
+    throw new functions.https.HttpsError('permission-denied', 'Pending open belongs to a different wallet', {
+      owner: ownerWallet,
+      pendingOwner: pending.owner.toBase58(),
+      boxAssetId,
+      pending: pendingPda.toBase58(),
+    });
+  }
 
-  // 1) Mint dudes via on-chain program (program signs as config PDA, which is the collection update authority).
-  // 2) Transfer the box via MPL-Core `TransferV1` as the *next* instruction so wallets can show it as a top-level action.
-  const openBoxIx = new TransactionInstruction({
+  // Assign dudes NOW (after the box has already been transferred away); keep this admin-only.
+  const dudeIds = await assignDudes(boxAssetId);
+
+  const finalizeIx = new TransactionInstruction({
     programId,
     keys: [
       { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-      { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-      { pubkey: ownerPk, isSigner: true, isWritable: true },
+      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
       { pubkey: boxAssetPk, isSigner: false, isWritable: true },
       { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
-      ...dudeAssetPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: encodeOpenBoxArgs(dudeIds),
-  });
-
-  // Transfer the box to the vault (we reuse config.treasury) (MPL-Core `TransferV1`).
-  const transferBoxIx = new TransactionInstruction({
-    programId: MPL_CORE_PROGRAM_ID,
-    keys: [
-      // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-      { pubkey: boxAssetPk, isSigner: false, isWritable: true },
-      { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
-      { pubkey: ownerPk, isSigner: true, isWritable: true },
-      { pubkey: ownerPk, isSigner: true, isWritable: false },
-      { pubkey: cfgTreasury, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: pendingPda, isSigner: false, isWritable: true },
+      { pubkey: ownerPk, isSigner: false, isWritable: false },
+      ...pending.dudeAssets.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
-    // TransferV1 discriminator=14, compression_proof=None (0)
-    data: Buffer.from([14, 0]),
+    data: encodeFinalizeOpenBoxArgs(dudeIds),
   });
 
   const instructions: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    openBoxIx,
-    transferBoxIx,
+    finalizeIx,
   ];
 
-  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
-  const msg = new TransactionMessage({ payerKey: ownerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
-  const tx = new VersionedTransaction(msg);
-  tx.sign([signer]);
+  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:revealDudes');
+  const tx = buildTx(instructions, signer.publicKey, blockhash, [signer]);
 
-  const raw = tx.serialize();
-  const MAX_RAW_TX_BYTES = 1232;
-  if (raw.length > MAX_RAW_TX_BYTES) {
-    throw new functions.https.HttpsError(
-      'failed-precondition',
-      `Open box transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try again or contact support.`,
-      {
-        rawBytes: raw.length,
-        maxRawBytes: MAX_RAW_TX_BYTES,
-        base64Chars: Buffer.from(raw).toString('base64').length,
-      },
-    );
-  }
+  const sig = await withTimeout(conn.sendTransaction(tx, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:revealDudes');
+  await withTimeout(conn.confirmTransaction(sig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:revealDudes');
 
-  return { encodedTx: Buffer.from(raw).toString('base64'), assignedDudeIds: dudeIds };
+  return { signature: sig, dudeIds };
 });
 
 export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {

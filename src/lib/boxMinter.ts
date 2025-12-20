@@ -11,7 +11,8 @@ import type { MintStats } from '../types';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
-const DUDE_ASSET_SEED = 'dude';
+const PENDING_OPEN_SEED = 'open';
+const PENDING_DUDE_ASSET_SEED = 'pdude';
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -19,9 +20,12 @@ const utf8 = (value: string) => TE.encode(value);
 // Anchor discriminators (sha256("global:<name>")[0..8]).
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
+const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0x28, 0x8f]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+export const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -61,12 +65,14 @@ export function boxAssetPda(index: number, programId = boxMinterProgramId()): [P
   return PublicKey.findProgramAddressSync([Buffer.from(BOX_ASSET_SEED), buf], programId);
 }
 
-export function dudeAssetPda(dudeId: number, programId = boxMinterProgramId()): [PublicKey, number] {
-  const id = Number(dudeId);
-  if (!Number.isFinite(id) || id <= 0 || id > 0xffff) throw new Error('Invalid dude id');
-  const buf = Buffer.alloc(2);
-  buf.writeUInt16LE(id & 0xffff, 0);
-  return PublicKey.findProgramAddressSync([Buffer.from(DUDE_ASSET_SEED), buf], programId);
+export function pendingOpenPda(boxAsset: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from(PENDING_OPEN_SEED), boxAsset.toBuffer()], programId);
+}
+
+export function pendingDudeAssetPda(pending: PublicKey, index: number, programId = boxMinterProgramId()): [PublicKey, number] {
+  const i = Number(index);
+  if (!Number.isFinite(i) || i < 0 || i >= 3) throw new Error('Invalid pending dude index');
+  return PublicKey.findProgramAddressSync([Buffer.from(PENDING_DUDE_ASSET_SEED), pending.toBuffer(), Buffer.from([i & 0xff])], programId);
 }
 
 function readU32(buf: Uint8Array, offset: number): number {
@@ -256,6 +262,69 @@ export async function buildMintBoxesTx(
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       // Optional: add setComputeUnitPrice here if you want priority fees.
       mintIx,
+    ],
+  }).compileToV0Message();
+  return new VersionedTransaction(msg);
+}
+
+export function buildStartOpenBoxIx(cfg: BoxMinterConfigAccount, payer: PublicKey, boxAsset: PublicKey): TransactionInstruction {
+  const programId = boxMinterProgramId();
+  const [configPda] = boxMinterConfigPda(programId);
+  const [pendingPda] = pendingOpenPda(boxAsset, programId);
+  const dudePdas = [0, 1, 2].map((i) => pendingDudeAssetPda(pendingPda, i, programId)[0]);
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: false },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: boxAsset, isSigner: false, isWritable: true },
+      { pubkey: cfg.treasury, isSigner: false, isWritable: false },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
+      { pubkey: pendingPda, isSigner: false, isWritable: true },
+      ...dudePdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    ],
+    data: Buffer.from(IX_START_OPEN_BOX),
+  });
+}
+
+export function buildTransferBoxToVaultIx(cfg: BoxMinterConfigAccount, payer: PublicKey, boxAsset: PublicKey): TransactionInstruction {
+  // MPL-Core TransferV1 discriminator=14, compression_proof=None (0)
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: boxAsset, isSigner: false, isWritable: true },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: payer, isSigner: true, isWritable: false },
+      { pubkey: cfg.treasury, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([14, 0]),
+  });
+}
+
+export async function buildStartOpenBoxTx(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  boxAsset: PublicKey,
+): Promise<VersionedTransaction> {
+  const startIx = buildStartOpenBoxIx(cfg, payer, boxAsset);
+  const transferIx = buildTransferBoxToVaultIx(cfg, payer, boxAsset);
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const msg = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      startIx,
+      // MUST be immediately after startIx (on-chain verifies it).
+      transferIx,
     ],
   }).compileToV0Message();
   return new VersionedTransaction(msg);

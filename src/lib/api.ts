@@ -1,7 +1,9 @@
 import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { PublicKey } from '@solana/web3.js';
 import { auth, firebaseApp } from './firebase';
-import { DeliverySelection, InventoryItem, PreparedTxResponse, Profile, ProfileAddress } from '../types';
+import { DeliverySelection, InventoryItem, PendingOpenBox, PreparedTxResponse, Profile, ProfileAddress } from '../types';
+import { boxMinterProgramId } from './boxMinter';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -132,6 +134,19 @@ const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusClu
 const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
 
 type DasAsset = Record<string, any>;
+
+// Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
+const ACCOUNT_PENDING_OPEN_BOX = Uint8Array.from([0x45, 0x07, 0x45, 0x1a, 0xf0, 0x0c, 0x43, 0xa1]);
+// base58(ACCOUNT_PENDING_OPEN_BOX)
+const ACCOUNT_PENDING_OPEN_BOX_B58 = 'CYfPji7s3EQ';
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 function heliusRpcUrl() {
   if (!heliusApiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
@@ -334,12 +349,59 @@ export async function fetchInventory(owner: string, token?: string): Promise<Inv
   return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
 }
 
-export async function requestOpenBoxTx(
+export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenBox[]> {
+  const programId = boxMinterProgramId().toBase58();
+  const result = await heliusRpc<any>('getProgramAccounts', [
+    programId,
+    {
+      encoding: 'base64',
+      filters: [
+        { memcmp: { offset: 0, bytes: ACCOUNT_PENDING_OPEN_BOX_B58 } },
+        { memcmp: { offset: 8, bytes: owner } },
+      ],
+    },
+  ]);
+
+  const out: PendingOpenBox[] = [];
+  const accounts = Array.isArray(result) ? result : [];
+  for (const entry of accounts) {
+    const pendingPda = typeof entry?.pubkey === 'string' ? entry.pubkey : null;
+    const dataField = entry?.account?.data;
+    const dataB64 =
+      Array.isArray(dataField) && typeof dataField[0] === 'string'
+        ? dataField[0]
+        : typeof dataField === 'string'
+          ? dataField
+          : null;
+    if (!pendingPda || !dataB64) continue;
+    const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
+    if (buf.length < 8 + 32 + 32 + 32 * 3 + 8 + 1) continue;
+    if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) continue;
+    const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
+    if (ownerFromChain !== owner) continue;
+    const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
+    const dudeAssetIds: string[] = [];
+    let o = 8 + 32 + 32;
+    for (let i = 0; i < 3; i += 1) {
+      dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
+      o += 32;
+    }
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const createdSlotBig = view.getBigUint64(o, true);
+    const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
+    out.push({ pendingPda, boxAssetId, dudeAssetIds, ...(createdSlot != null ? { createdSlot } : {}) });
+  }
+  out.sort((a, b) => (Number(b.createdSlot || 0) - Number(a.createdSlot || 0)));
+  return out;
+}
+
+export async function revealDudes(
   owner: string,
   boxAssetId: string,
   token?: string,
-): Promise<PreparedTxResponse> {
-  return callFunction<{ owner: string; boxAssetId: string }, PreparedTxResponse>('prepareOpenBoxTx', {
+): Promise<{ signature: string; dudeIds: number[] }> {
+  // token retained for backwards compatibility; wallet session auth is used under the hood.
+  return callFunction<{ owner: string; boxAssetId: string }, { signature: string; dudeIds: number[] }>('revealDudes', {
     owner,
     boxAssetId,
   });
