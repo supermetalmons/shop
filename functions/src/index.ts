@@ -646,10 +646,26 @@ async function fetchAssetsOwned(owner: string) {
   return Array.isArray(result?.items) ? result.items : [];
 }
 
-async function findCertificateForBox(owner: string, boxId: string) {
-  if (!boxId) return null;
-  const assets = await fetchAssetsOwned(owner);
-  return assets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxId) || null;
+function looksBurntOrClosedInHelius(asset: any): boolean {
+  if (!asset || typeof asset !== 'object') return true;
+  const anyAsset = asset as any;
+  const burntFlag =
+    anyAsset?.burnt ??
+    anyAsset?.burned ??
+    anyAsset?.is_burnt ??
+    anyAsset?.isBurnt ??
+    anyAsset?.compression?.burnt ??
+    anyAsset?.compression?.burned ??
+    anyAsset?.compression?.is_burnt ??
+    anyAsset?.compression?.isBurnt ??
+    anyAsset?.ownership?.burnt ??
+    anyAsset?.ownership?.burned;
+  if (typeof burntFlag === 'boolean') return burntFlag;
+  const ownershipState = String(
+    anyAsset?.ownership?.ownership_state || anyAsset?.ownership?.ownershipState || anyAsset?.ownership?.state || '',
+  ).toLowerCase();
+  if (ownershipState && /burn/.test(ownershipState)) return true;
+  return false;
 }
 
 async function fetchAsset(assetId: string) {
@@ -2266,10 +2282,32 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     throw new functions.https.HttpsError('failed-precondition', 'Duplicate dude ids in claim');
   }
 
+  // Load wallet assets once and use it for both:
+  // - detecting an already-claimed code (dude receipts already present)
+  // - finding the matching box certificate in the wallet
+  const ownedAssets = await fetchAssetsOwned(ownerWallet);
+
+  // If any of the expected dude receipts are already in the wallet, the claim is already done.
+  // (The claim tx is atomic; once any of these exist, the box certificate must already be burned.)
+  const dudeSet = new Set(dudeIds.map((n) => Number(n)));
+  const mintedDudeReceipts = new Set<number>();
+  for (const a of ownedAssets) {
+    if (getAssetKind(a) !== 'certificate') continue;
+    const id = getDudeIdFromAsset(a);
+    if (id != null && dudeSet.has(Number(id))) mintedDudeReceipts.add(Number(id));
+  }
+  if (mintedDudeReceipts.size > 0) {
+    throw new functions.https.HttpsError('failed-precondition', 'This IRL claim code has already been used');
+  }
+
   // Locate the matching box certificate (receipt) in the requesting wallet.
-  const certificate = await findCertificateForBox(ownerWallet, boxIdStr);
+  const certificate =
+    ownedAssets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxIdStr) || null;
   if (!certificate) {
     throw new functions.https.HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
+  }
+  if (looksBurntOrClosedInHelius(certificate)) {
+    throw new functions.https.HttpsError('failed-precondition', 'This IRL claim code has already been used');
   }
   if (certificate?.ownership?.owner !== ownerWallet) {
     throw new functions.https.HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
