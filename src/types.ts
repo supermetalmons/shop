@@ -52,9 +52,6 @@ export interface PreparedTxResponse {
   certificates?: number[];
   message?: string;
   allowedQuantity?: number;
-  recorded?: number;
-  attemptId?: string;
-  lockExpiresAt?: number;
   orderId?: string;
   certificateId?: string;
 }

@@ -343,8 +343,7 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
   return items.filter(isMonsAsset);
 }
 
-export async function fetchInventory(owner: string, token?: string): Promise<InventoryItem[]> {
-  // token retained for backwards compatibility; it is no longer used (client fetches directly from Helius).
+export async function fetchInventory(owner: string): Promise<InventoryItem[]> {
   const assets = await fetchAssetsOwned(owner);
   return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
 }
@@ -398,9 +397,7 @@ export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenB
 export async function revealDudes(
   owner: string,
   boxAssetId: string,
-  token?: string,
 ): Promise<{ signature: string; dudeIds: number[] }> {
-  // token retained for backwards compatibility; wallet session auth is used under the hood.
   return callFunction<{ owner: string; boxAssetId: string }, { signature: string; dudeIds: number[] }>('revealDudes', {
     owner,
     boxAssetId,
@@ -411,7 +408,6 @@ export async function saveEncryptedAddress(
   encrypted: string,
   country: string,
   label: string,
-  token: string,
   hint: string,
   email?: string,
   countryCode?: string,
@@ -425,9 +421,7 @@ export async function saveEncryptedAddress(
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,
-  token: string,
 ): Promise<PreparedTxResponse> {
-  // token retained for backwards compatibility; wallet session auth is used under the hood.
   return callFunction<{ owner: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', { owner, ...selection });
 }
 
@@ -435,9 +429,7 @@ export async function issueReceipts(
   owner: string,
   deliveryId: number,
   signature: string,
-  token?: string,
 ): Promise<{ processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }> {
-  // token retained for backwards compatibility; wallet session auth is used under the hood.
   return callFunction<
     { owner: string; deliveryId: number; signature: string },
     { processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }
@@ -447,21 +439,8 @@ export async function issueReceipts(
 export async function requestClaimTx(
   owner: string,
   code: string,
-  token: string,
 ): Promise<PreparedTxResponse> {
   return callFunction<{ owner: string; code: string }, PreparedTxResponse>('prepareIrlClaimTx', { owner, code });
-}
-
-export async function finalizeClaimTx(
-  owner: string,
-  code: string,
-  signature: string,
-  token: string,
-): Promise<{ recorded: boolean; signature: string }> {
-  return callFunction<{ owner: string; code: string; signature: string }, { recorded: boolean; signature: string }>(
-    'finalizeClaimTx',
-    { owner, code, signature },
-  );
 }
 
 export async function solanaAuth(

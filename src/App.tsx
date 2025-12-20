@@ -17,7 +17,6 @@ import {
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
-  finalizeClaimTx,
   saveEncryptedAddress,
   issueReceipts,
 } from './lib/api';
@@ -64,7 +63,7 @@ function App() {
     signIn,
     updateProfile,
   } = useSolanaAuth();
-  const { data: inventory = [], refetch: refetchInventory } = useInventory(token);
+  const { data: inventory = [], refetch: refetchInventory } = useInventory();
   const { data: pendingOpenBoxes = [], refetch: refetchPendingOpenBoxes } = usePendingOpenBoxes();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -207,15 +206,14 @@ function App() {
     email: string;
     countryCode: string;
   }) => {
-    const session = token ? { token, profile } : await signIn();
-    const idToken = session?.token || token;
     const encryptionKey = (import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '').trim();
     if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
     const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
-    if (!idToken) throw new Error('Missing auth token');
-    const saved = await saveEncryptedAddress(cipherText, country, label, idToken, hint, email, countryCode);
-    if (updateProfile && (session?.profile || profile)) {
-      const base = session?.profile || profile!;
+    // Ensure wallet session exists for authenticated callable.
+    const session = token ? { profile } : await signIn();
+    const saved = await saveEncryptedAddress(cipherText, country, label, hint, email, countryCode);
+    const base = (session?.profile || profile) as typeof profile;
+    if (updateProfile && base) {
       updateProfile({
         ...base,
         email: email || base.email,
@@ -235,14 +233,15 @@ function App() {
 
   const handleRequestDelivery = async (addressId: string | null) => {
     if (!publicKey) throw new Error('Connect wallet first');
-    const session = token ? { token, profile } : await signIn();
-    const idToken = session?.token || token;
     if (!addressId) throw new Error('Select a delivery address');
     const itemIds = Array.from(selected);
     if (!itemIds.length) throw new Error('Select items to deliver');
     const addr = savedAddresses.find((a) => a.id === addressId);
     if (!addr) throw new Error('Select a delivery address');
-    if (!idToken) throw new Error('Missing auth token');
+    // Ensure wallet session exists for authenticated callable.
+    if (!token) {
+      await signIn();
+    }
     const deliverableIds = itemIds.filter((id) => {
       const item = inventory.find((entry) => entry.id === id);
       return item && item.kind !== 'certificate';
@@ -257,7 +256,7 @@ function App() {
     setStatus('');
     try {
       setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
-      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId }, idToken || '');
+      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
       setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
@@ -269,7 +268,7 @@ function App() {
       if (resp.deliveryId) {
         try {
           setStatus(`Delivery submitted${idSuffix} · ${sig} · issuing receipts…`);
-          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, idToken);
+          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig);
           const minted = Number(issued?.receiptsMinted || 0);
           setStatus(`Delivery submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           await refetchInventory();
@@ -288,19 +287,14 @@ function App() {
 
   const handleClaim = async ({ code }: { code: string }) => {
     if (!publicKey) throw new Error('Connect wallet to claim');
-    const session = token ? { token, profile } : await signIn();
-    const idToken = session?.token || token;
-    if (!idToken) throw new Error('Missing auth token');
-    setStatus('');
-    const resp = await requestClaimTx(publicKey.toBase58(), code, idToken);
-    const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
-    try {
-      await finalizeClaimTx(publicKey.toBase58(), code, sig, idToken);
-      setStatus(`Claimed certificates · ${sig}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to record claim';
-      setStatus(`Claimed certificates · ${sig} (finalize warning: ${msg})`);
+    // Ensure wallet session exists for authenticated callable.
+    if (!token) {
+      await signIn();
     }
+    setStatus('');
+    const resp = await requestClaimTx(publicKey.toBase58(), code);
+    const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+    setStatus(`Claimed certificates · ${sig}`);
     await refetchInventory();
   };
 

@@ -74,7 +74,7 @@ export function normalizeCountryCode(country?: string) {
   return '';
 }
 
-export function shippingZone(country?: string): 'us' | 'intl' {
+function shippingZone(country?: string): 'us' | 'intl' {
   const code = normalizeCountryCode(country);
   if (code === 'US' || code === 'PR' || code === 'GU' || code === 'VI' || code === 'AS') return 'us';
   const normalized = (country || '').trim().toLowerCase();

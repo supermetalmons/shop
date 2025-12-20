@@ -8,6 +8,7 @@ import {
   clusterApiUrl,
   AddressLookupTableProgram,
   Connection,
+  ComputeBudgetProgram,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -28,7 +29,7 @@ const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGG
 const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
 // Metaplex Bubblegum program.
 const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
-// NOTE: This deployment script targets uncompressed MPL Core assets (no Bubblegum / no Merkle tree).
+// NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
 /**
  * Minimal argv flag parser.
@@ -357,15 +358,28 @@ async function ensureDeliveryLookupTable(args: {
   configPda: PublicKey;
   treasury: PublicKey;
   coreCollection: PublicKey;
+  receiptsMerkleTree?: PublicKey;
 }): Promise<PublicKey> {
-  const { connection, payer, configPda, treasury, coreCollection } = args;
+  const { connection, payer, configPda, treasury, coreCollection, receiptsMerkleTree } = args;
   const required = uniquePubkeys([
     configPda,
     treasury,
     coreCollection,
     MPL_CORE_PROGRAM_ID,
     SystemProgram.programId,
+    ComputeBudgetProgram.programId,
     SPL_NOOP_PROGRAM_ID,
+    // Also include Bubblegum v2 + compression + sysvar programs used by IRL claim txs,
+    // so `DELIVERY_LOOKUP_TABLE` can be reused to shrink them below tx-size limits.
+    MPL_NOOP_PROGRAM_ID,
+    MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    BUBBLEGUM_PROGRAM_ID,
+    // Bubblegum -> MPL-Core CPI signer.
+    new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk'),
+    // Instructions sysvar (required by on-chain `claim_irl`).
+    new PublicKey('Sysvar1nstructions1111111111111111111111111'),
+    // Also include the receipt tree + its Bubblegum PDA so claim txs can stay tiny.
+    ...(receiptsMerkleTree ? [receiptsMerkleTree, bubblegumTreeConfigPda(receiptsMerkleTree)] : []),
   ]);
 
   // Create a fresh LUT + extend with required addresses (no caching; clean deployments).
@@ -396,7 +410,9 @@ async function ensureDeliveryLookupTable(args: {
 
 const RECEIPTS_TREE_MAX_DEPTH = 14;
 const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
-const RECEIPTS_TREE_CANOPY_DEPTH = 0;
+// IMPORTANT: canopy depth > 0 reduces the number of proof accounts required for cNFT transfers/burns.
+// This is key for keeping the IRL-claim transaction under Solana's packet size limit.
+const RECEIPTS_TREE_CANOPY_DEPTH = 10;
 const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
 
 function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
@@ -463,6 +479,7 @@ async function createReceiptsMerkleTree(connection: Connection, payer: Keypair):
   const sig = await sendAndConfirmTransaction(connection, tx, [payer, merkleTree], { commitment: 'confirmed' });
   console.log('✅ Receipt cNFT Merkle tree created:', sig);
   console.log('  RECEIPTS_MERKLE_TREE:', merkleTree.publicKey.toBase58());
+  console.log('  RECEIPTS_TREE_CANOPY_DEPTH:', RECEIPTS_TREE_CANOPY_DEPTH);
   return merkleTree.publicKey;
 }
 
@@ -716,6 +733,17 @@ async function main() {
       console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
     }
 
+    let receiptsTree: PublicKey | null = null;
+    try {
+      receiptsTree = await createReceiptsMerkleTree(connection, payer);
+      console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+      console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
+    } catch (err) {
+      console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+      console.log('# RECEIPTS_MERKLE_TREE=...');
+      console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
+    }
+
     try {
       const lut = await ensureDeliveryLookupTable({
         connection,
@@ -723,19 +751,12 @@ async function main() {
         configPda,
         treasury: cfg.treasury,
         coreCollection: cfg.coreCollection,
+        receiptsMerkleTree: receiptsTree || undefined,
       });
       console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
     } catch (err) {
       console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
       console.log('# DELIVERY_LOOKUP_TABLE=...');
-    }
-
-    try {
-      const receiptsTree = await createReceiptsMerkleTree(connection, payer);
-      console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
-    } catch (err) {
-      console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
-      console.log('# RECEIPTS_MERKLE_TREE=...');
     }
 
     console.log('');
@@ -847,6 +868,18 @@ async function main() {
   console.log('# HELIUS_API_KEY=...');
   console.log('# Sensitive: keep this secret offline/backed up securely.');
   console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
+
+  let receiptsTree: PublicKey | null = null;
+  try {
+    receiptsTree = await createReceiptsMerkleTree(connection, payer);
+    console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+    console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
+  } catch (err) {
+    console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+    console.log('# RECEIPTS_MERKLE_TREE=...');
+    console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
+  }
+
   try {
     const lut = await ensureDeliveryLookupTable({
       connection,
@@ -854,18 +887,12 @@ async function main() {
       configPda,
       treasury,
       coreCollection: resolvedCoreCollection,
+      receiptsMerkleTree: receiptsTree || undefined,
     });
     console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
   } catch (err) {
     console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
     console.log('# DELIVERY_LOOKUP_TABLE=...');
-  }
-  try {
-    const receiptsTree = await createReceiptsMerkleTree(connection, payer);
-    console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
-  } catch (err) {
-    console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
-    console.log('# RECEIPTS_MERKLE_TREE=...');
   }
   console.log('');
   console.log('--- notes ---');

@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("6RUphA6UUMAuB2rzGqj5oSd2B4Jhggs84cxmhKQqwACz");
+declare_id!("DdmH5vZzCvNq8VG9ydncotB2tTYCBm5SoA53iCfHNos7");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -12,7 +12,6 @@ declare_id!("6RUphA6UUMAuB2rzGqj5oSd2B4Jhggs84cxmhKQqwACz");
 const MAX_SAFE_MINTS_PER_TX: u8 = 15;
 // Delivery is mostly limited by tx size; keep this high enough to not be the limiting factor.
 const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
-const MAX_SAFE_RECEIPTS_PER_TX: u8 = 12;
 
 // Random delivery fee bounds (0.001..=0.003 SOL).
 const MIN_DELIVERY_LAMPORTS: u64 = 1_000_000;
@@ -24,7 +23,6 @@ const MAX_DUDE_ID: u16 = 999;
 
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
-const SEED_RECEIPT_ASSET: &[u8] = b"receipt";
 const SEED_DELIVERY: &[u8] = b"delivery";
 // Pending (two-step) box open flow.
 const SEED_PENDING_OPEN: &[u8] = b"open";
@@ -905,123 +903,6 @@ pub mod box_minter {
 
         Ok(())
     }
-
-    pub fn mint_receipts<'a, 'b, 'c, 'info>(
-        ctx: Context<'a, 'b, 'c, 'info, MintReceipts<'info>>,
-        args: MintReceiptsArgs,
-    ) -> Result<()> {
-        let cfg = &ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.cosigner.key(),
-            cfg.admin,
-            BoxMinterError::InvalidCosigner
-        );
-
-        require_keys_eq!(
-            ctx.accounts.mpl_core_program.key(),
-            MPL_CORE_PROGRAM_ID,
-            BoxMinterError::InvalidMplCoreProgram
-        );
-
-        require!(!args.ref_ids.is_empty(), BoxMinterError::InvalidQuantity);
-        require!(
-            (args.ref_ids.len() as u8) <= MAX_SAFE_RECEIPTS_PER_TX,
-            BoxMinterError::InvalidQuantity
-        );
-
-        let kind_byte = args.kind;
-        require!(kind_byte == 0 || kind_byte == 1, BoxMinterError::InvalidReceiptKind);
-
-        require!(
-            ctx.remaining_accounts.len() == args.ref_ids.len(),
-            BoxMinterError::InvalidRemainingAccounts
-        );
-
-        let receipts_uri_base = derive_receipts_uri_base(
-            &cfg.uri_base,
-            if kind_byte == 0 { ReceiptKind::Box } else { ReceiptKind::Figure },
-        )?;
-        let name_prefix = if kind_byte == 0 {
-            "mons receipt · box "
-        } else {
-            "mons receipt · figure #"
-        };
-
-        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
-        let core_collection = ctx.accounts.core_collection.to_account_info();
-        let payer = ctx.accounts.payer.to_account_info();
-        let cfg_ai = ctx.accounts.config.to_account_info();
-        let system_program = ctx.accounts.system_program.to_account_info();
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
-
-        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
-            program_id: MPL_CORE_PROGRAM_ID,
-            accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false), // collection
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true), // payer
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), false), // owner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false), // update_authority None
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false), // system
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false), // log_wrapper None
-            ],
-            data: Vec::with_capacity(256),
-        };
-        let mut name_buf = String::with_capacity(64);
-        let mut uri_buf = String::with_capacity(receipts_uri_base.len() + 32);
-
-        let kind_seed = [kind_byte];
-        for (i, ref_id) in args.ref_ids.iter().enumerate() {
-            let receipt_ai = &ctx.remaining_accounts[i];
-            let ref_bytes = ref_id.to_le_bytes();
-            let (expected, bump) = Pubkey::find_program_address(
-                &[SEED_RECEIPT_ASSET, &kind_seed, &ref_bytes],
-                ctx.program_id,
-            );
-            require_keys_eq!(receipt_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-
-            name_buf.clear();
-            name_buf.push_str(name_prefix);
-            write!(&mut name_buf, "{}", ref_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-
-            uri_buf.clear();
-            uri_buf.push_str(&receipts_uri_base);
-            write!(&mut uri_buf, "{}", ref_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-            uri_buf.push_str(".json");
-
-            let receipt_seeds: &[&[u8]] = &[SEED_RECEIPT_ASSET, &kind_seed, &ref_bytes, &[bump]];
-            let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, receipt_seeds];
-
-            create_ix.accounts[0].pubkey = receipt_ai.key();
-            create_ix.data.clear();
-            // CreateV1 discriminator=0, DataState::AccountState=0
-            create_ix.data.push(0u8);
-            create_ix.data.push(0u8);
-            create_ix
-                .data
-                .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(name_buf.as_bytes());
-            create_ix
-                .data
-                .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(uri_buf.as_bytes());
-            create_ix.data.push(0u8); // plugins: None
-
-            let create_infos = [
-                mpl_core_program.clone(),
-                receipt_ai.clone(),
-                core_collection.clone(),
-                cfg_ai.clone(),
-                payer.clone(),
-                payer.clone(),
-                system_program.clone(),
-            ];
-            invoke_signed(&create_ix, &create_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1051,14 +932,6 @@ pub struct DeliverArgs {
 pub struct CloseDeliveryArgs {
     pub delivery_id: u32,
     pub delivery_bump: u8,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct MintReceiptsArgs {
-    /// 0 = box, 1 = figure
-    pub kind: u8,
-    /// box ids or dude ids (for receipt metadata)
-    pub ref_ids: Vec<u32>,
 }
 
 #[account]
@@ -1312,27 +1185,6 @@ pub struct CloseDelivery<'info> {
     /// CHECK: Delivery record PDA to close.
     #[account(mut)]
     pub delivery: UncheckedAccount<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct MintReceipts<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
-    pub config: Account<'info, BoxMinterConfig>,
-
-    /// Cloud-held signer (must match config.admin).
-    pub cosigner: Signer<'info>,
-
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    /// CHECK: MPL-Core collection. Must match config.core_collection.
-    #[account(mut, address = config.core_collection)]
-    pub core_collection: UncheckedAccount<'info>,
-
-    /// CHECK: Metaplex Core program
-    pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1594,44 +1446,6 @@ fn derive_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
     Ok(out)
 }
 
-#[derive(Clone, Copy)]
-enum ReceiptKind {
-    Box,
-    Figure,
-}
-
-fn derive_receipts_uri_base(boxes_uri_base: &str, kind: ReceiptKind) -> Result<String> {
-    if boxes_uri_base.ends_with(".json") {
-        // Shared single-URI metadata isn't compatible with per-item IDs.
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    let target = match kind {
-        ReceiptKind::Box => "/json/receipts/boxes/",
-        ReceiptKind::Figure => "/json/receipts/figures/",
-    };
-
-    let mut out = boxes_uri_base.to_string();
-    if out.contains("/json/boxes/") {
-        out = out.replace("/json/boxes/", target);
-    } else if out.contains("/boxes/") {
-        out = out.replace("/boxes/", target);
-    } else if out.contains("boxes") {
-        let replacement = match kind {
-            ReceiptKind::Box => "receipts/boxes",
-            ReceiptKind::Figure => "receipts/figures",
-        };
-        out = out.replace("boxes", replacement);
-    } else {
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    if !out.ends_with('/') {
-        out.push('/');
-    }
-    Ok(out)
-}
-
 #[error_code]
 pub enum BoxMinterError {
     #[msg("Invalid quantity")]
@@ -1664,8 +1478,6 @@ pub enum BoxMinterError {
     InvalidCosigner,
     #[msg("Invalid figure URI base")]
     InvalidFigureUriBase,
-    #[msg("Invalid receipt URI base")]
-    InvalidReceiptUriBase,
     #[msg("Invalid delivery fee")]
     InvalidDeliveryFee,
     #[msg("Invalid delivery item kind")]
@@ -1684,8 +1496,6 @@ pub enum BoxMinterError {
     InvalidAssetCollection,
     #[msg("Asset metadata does not match expected kind/id")]
     InvalidAssetMetadata,
-    #[msg("Invalid receipt kind")]
-    InvalidReceiptKind,
     #[msg("Missing required transfer instruction")]
     MissingTransferInstruction,
     #[msg("Invalid transfer instruction")]
