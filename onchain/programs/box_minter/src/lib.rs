@@ -665,7 +665,7 @@ pub mod box_minter {
 
         // Mark as system-owned + shrink data so it can be reclaimed.
         delivery_ai.assign(&anchor_lang::solana_program::system_program::ID);
-        delivery_ai.realloc(0, false)?;
+        delivery_ai.resize(0)?;
 
         Ok(())
     }
