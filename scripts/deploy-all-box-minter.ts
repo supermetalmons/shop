@@ -355,13 +355,15 @@ function uniquePubkeys(keys: PublicKey[]) {
 async function ensureDeliveryLookupTable(args: {
   connection: Connection;
   payer: Keypair;
+  programId: PublicKey;
   configPda: PublicKey;
   treasury: PublicKey;
   coreCollection: PublicKey;
   receiptsMerkleTree?: PublicKey;
 }): Promise<PublicKey> {
-  const { connection, payer, configPda, treasury, coreCollection, receiptsMerkleTree } = args;
+  const { connection, payer, programId, configPda, treasury, coreCollection, receiptsMerkleTree } = args;
   const required = uniquePubkeys([
+    programId,
     configPda,
     treasury,
     coreCollection,
@@ -376,8 +378,6 @@ async function ensureDeliveryLookupTable(args: {
     BUBBLEGUM_PROGRAM_ID,
     // Bubblegum -> MPL-Core CPI signer.
     new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk'),
-    // Instructions sysvar (required by on-chain `claim_irl`).
-    new PublicKey('Sysvar1nstructions1111111111111111111111111'),
     // Also include the receipt tree + its Bubblegum PDA so claim txs can stay tiny.
     ...(receiptsMerkleTree ? [receiptsMerkleTree, bubblegumTreeConfigPda(receiptsMerkleTree)] : []),
   ]);
@@ -410,9 +410,11 @@ async function ensureDeliveryLookupTable(args: {
 
 const RECEIPTS_TREE_MAX_DEPTH = 14;
 const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
-// IMPORTANT: canopy depth > 0 reduces the number of proof accounts required for cNFT transfers/burns.
-// This is key for keeping the IRL-claim transaction under Solana's packet size limit.
-const RECEIPTS_TREE_CANOPY_DEPTH = 10;
+// Canopy depth controls how many proof nodes are stored on-chain in the tree account.
+// NOTE: For Phantom UX, we prefer canopy depth = 0 so wallets can see the *full proof* in the tx
+// (this can make previews more reliable). Our IRL-claim tx now fits in one packet without canopy
+// by minting the 3 dude receipts via a single `box_minter` instruction (server-cosigned).
+const RECEIPTS_TREE_CANOPY_DEPTH = 0;
 const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
 
 function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
@@ -479,7 +481,6 @@ async function createReceiptsMerkleTree(connection: Connection, payer: Keypair):
   const sig = await sendAndConfirmTransaction(connection, tx, [payer, merkleTree], { commitment: 'confirmed' });
   console.log('✅ Receipt cNFT Merkle tree created:', sig);
   console.log('  RECEIPTS_MERKLE_TREE:', merkleTree.publicKey.toBase58());
-  console.log('  RECEIPTS_TREE_CANOPY_DEPTH:', RECEIPTS_TREE_CANOPY_DEPTH);
   return merkleTree.publicKey;
 }
 
@@ -737,17 +738,16 @@ async function main() {
     try {
       receiptsTree = await createReceiptsMerkleTree(connection, payer);
       console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
-      console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
     } catch (err) {
       console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
       console.log('# RECEIPTS_MERKLE_TREE=...');
-      console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
     }
 
     try {
       const lut = await ensureDeliveryLookupTable({
         connection,
         payer,
+        programId: programPk,
         configPda,
         treasury: cfg.treasury,
         coreCollection: cfg.coreCollection,
@@ -873,17 +873,16 @@ async function main() {
   try {
     receiptsTree = await createReceiptsMerkleTree(connection, payer);
     console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
-    console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
   } catch (err) {
     console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
     console.log('# RECEIPTS_MERKLE_TREE=...');
-    console.log(`RECEIPTS_TREE_CANOPY_DEPTH=${RECEIPTS_TREE_CANOPY_DEPTH}`);
   }
 
   try {
     const lut = await ensureDeliveryLookupTable({
       connection,
       payer,
+      programId: programPk,
       configPda,
       treasury,
       coreCollection: resolvedCoreCollection,

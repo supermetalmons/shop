@@ -119,6 +119,10 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
 const DUDES_PER_BOX = 3;
 const MAX_DUDE_ID = 999;
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
+const TX_SEND_TIMEOUT_MS = Number(process.env.TX_SEND_TIMEOUT_MS || 25_000);
+const TX_CONFIRM_TIMEOUT_MS = Number(process.env.TX_CONFIRM_TIMEOUT_MS || 45_000);
+const TX_CONFIRM_POLL_MS = Number(process.env.TX_CONFIRM_POLL_MS || 900);
+const TX_MAX_SEND_ATTEMPTS = Number(process.env.TX_MAX_SEND_ATTEMPTS || 4);
 
 // Hardcode devnet for now to avoid cluster mismatches while iterating.
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
@@ -155,26 +159,6 @@ const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replac
 const receiptsMerkleTree = new PublicKey(process.env.RECEIPTS_MERKLE_TREE || PublicKey.default.toBase58());
 const receiptsMerkleTreeStr = receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58();
 
-function parseNonNegativeInt(value: unknown, fallback = 0): number {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return fallback;
-  return Math.floor(n);
-}
-
-// If your receipts tree has a canopy depth > 0, you MUST omit the top `canopyDepth` proof nodes.
-// Helius returns the full proof; Bubblegum expects only (maxDepth - canopyDepth) nodes.
-const receiptsTreeCanopyDepth = parseNonNegativeInt(process.env.RECEIPTS_TREE_CANOPY_DEPTH, 0);
-
-function trimProofForCanopy(proof: PublicKey[], canopyDepth: number): PublicKey[] {
-  const d = parseNonNegativeInt(canopyDepth, 0);
-  if (!d) return Array.isArray(proof) ? proof : [];
-  if (!Array.isArray(proof)) return [];
-  // If the upstream proof provider already omits canopy nodes, keep it as-is.
-  if (proof.length <= d) return proof;
-  // Bubblegum expects the proof without the canopy nodes (those closest to the root).
-  return proof.slice(0, proof.length - d);
-}
-
 const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
@@ -185,11 +169,11 @@ const ACCOUNT_PENDING_OPEN_BOX = Buffer.from('4507451af00c43a1', 'hex');
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 // Anchor discriminator = sha256("global:close_delivery")[0..8]
 const IX_CLOSE_DELIVERY = Buffer.from('ae641ab98ea5f208', 'hex');
+// Anchor discriminator = sha256("global:mint_receipts")[0..8]
+const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 
-// Bubblegum v2 mint discriminator (kinobi generated).
-const IX_MINT_V2 = Buffer.from([120, 121, 23, 146, 173, 110, 199, 205]);
-// Bubblegum v2 transfer discriminator (kinobi generated).
-const IX_TRANSFER_V2 = Buffer.from([119, 40, 6, 235, 234, 221, 248, 49]);
+// Bubblegum v2 burn discriminator (kinobi generated).
+const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
 const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
 const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
@@ -358,6 +342,112 @@ function connection() {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function txErrMessage(err: unknown) {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function txErrLogs(err: unknown): string[] {
+  const logs = (err as any)?.logs;
+  return Array.isArray(logs) ? logs.map((l) => String(l)) : [];
+}
+
+function looksLikeComputeLimitError(message: string, logs: string[]) {
+  const haystack = `${message}\n${logs.join('\n')}`.toLowerCase();
+  return (
+    haystack.includes('computational budget exceeded') ||
+    haystack.includes('exceeded maximum compute') ||
+    haystack.includes('program failed to complete') ||
+    haystack.includes('compute units') && haystack.includes('consumed') && haystack.includes('failed')
+  );
+}
+
+function looksLikeAccountInUseError(message: string, logs: string[]) {
+  const haystack = `${message}\n${logs.join('\n')}`.toLowerCase();
+  return haystack.includes('account in use') || haystack.includes('already in use');
+}
+
+function looksLikeBlockhashError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes('blockhash not found') ||
+    m.includes('blockhash expired') ||
+    m.includes('transaction expired') ||
+    m.includes('block height exceeded') ||
+    m.includes('transactionexpiredblockheightexceedederror')
+  );
+}
+
+function looksLikeRateLimitOrRpcError(message: string) {
+  const m = message.toLowerCase();
+  return (
+    m.includes('429') ||
+    m.includes('rate limit') ||
+    m.includes('too many requests') ||
+    m.includes('timed out') ||
+    m.includes('timeout') ||
+    m.includes('fetch failed') ||
+    m.includes('socket hang up') ||
+    m.includes('econnreset') ||
+    m.includes('etimedout') ||
+    m.includes('service unavailable') ||
+    m.includes('gateway timeout') ||
+    m.includes('rpc') && m.includes('error')
+  );
+}
+
+async function waitForSignature(
+  conn: Connection,
+  signature: string,
+  opts: { timeoutMs: number; pollMs: number },
+): Promise<{ ok: true } | { ok: false; err: any; logs?: string[]; tx?: any }> {
+  const startedAt = Date.now();
+  let attempt = 0;
+  while (Date.now() - startedAt < opts.timeoutMs) {
+    try {
+      const res = await withTimeout(
+        conn.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+        RPC_TIMEOUT_MS,
+        'getSignatureStatuses',
+      );
+      const st = res?.value?.[0] || null;
+      if (st?.err) {
+        // Best-effort fetch logs for debugging/classification.
+        let tx: any = null;
+        try {
+          tx = await withTimeout(
+            conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+            RPC_TIMEOUT_MS,
+            'getTransaction:failedTx',
+          );
+        } catch {
+          // ignore
+        }
+        const logs = Array.isArray(tx?.meta?.logMessages) ? tx.meta.logMessages : [];
+        return { ok: false, err: st.err, logs, tx };
+      }
+      const status = st?.confirmationStatus;
+      if (status === 'confirmed' || status === 'finalized') return { ok: true };
+    } catch {
+      // ignore transient polling failures
+    }
+
+    const backoff = Math.min(opts.pollMs * 2 ** Math.min(attempt, 4), 4_000);
+    attempt += 1;
+    await sleep(backoff);
+  }
+
+  // Timeout: try one last fetch to see if it landed.
+  try {
+    const tx = await withTimeout(conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }), RPC_TIMEOUT_MS, 'getTransaction:timeoutTx');
+    if (tx?.meta && !tx.meta.err) return { ok: true };
+    const logs = Array.isArray(tx?.meta?.logMessages) ? tx.meta.logMessages : [];
+    return { ok: false, err: tx?.meta?.err || 'timeout', logs, tx };
+  } catch {
+    return { ok: false, err: 'timeout' };
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -759,21 +849,8 @@ function u64LE(value: number) {
   return buf;
 }
 
-function borshString(value: string) {
-  const bytes = Buffer.from(String(value ?? ''), 'utf8');
-  return Buffer.concat([u32LE(bytes.length), bytes]);
-}
-
-function borshBool(value: boolean) {
-  return Buffer.from([value ? 1 : 0]);
-}
-
 function borshOption(inner?: Buffer | null) {
   return inner ? Buffer.concat([Buffer.from([1]), inner]) : Buffer.from([0]);
-}
-
-function borshVec(items: Buffer[]) {
-  return Buffer.concat([u32LE(items.length), ...items]);
 }
 
 function encodeDeliverArgs(args: { deliveryId: number; feeLamports: number; deliveryBump: number }): Buffer {
@@ -847,84 +924,6 @@ function mplCoreBurnV1Ix(args: { asset: PublicKey; coreCollection: PublicKey; au
   });
 }
 
-function bubblegumMintV2Ix(args: {
-  payer: PublicKey;
-  treeCreatorOrDelegate: PublicKey;
-  collectionAuthority: PublicKey;
-  leafOwner: PublicKey;
-  leafDelegate: PublicKey;
-  merkleTree: PublicKey;
-  coreCollection: PublicKey;
-  name: string;
-  symbol?: string;
-  uri: string;
-  sellerFeeBasisPoints?: number;
-  creators?: Array<{ address: PublicKey; verified: boolean; share: number }>;
-}) {
-  const treeConfig = deriveTreeConfigPda(args.merkleTree);
-  const creators = args.creators || [];
-  const sellerFeeBasisPoints = Number(args.sellerFeeBasisPoints ?? 0);
-  if (!Number.isFinite(sellerFeeBasisPoints) || sellerFeeBasisPoints < 0 || sellerFeeBasisPoints > 10_000) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid sellerFeeBasisPoints');
-  }
-
-  const metadata = Buffer.concat([
-    borshString(args.name),
-    borshString(args.symbol || ''),
-    borshString(args.uri),
-    (() => {
-      const buf = Buffer.alloc(2);
-      buf.writeUInt16LE(sellerFeeBasisPoints & 0xffff, 0);
-      return buf;
-    })(),
-    borshBool(false), // primarySaleHappened
-    borshBool(true), // isMutable
-    // tokenStandard: Option<TokenStandard> (Some(NonFungible=0))
-    Buffer.from([1, 0]),
-    // creators: Vec<Creator>
-    borshVec(
-      creators.map((c) =>
-        Buffer.concat([
-          c.address.toBuffer(),
-          borshBool(Boolean(c.verified)),
-          Buffer.from([Number(c.share) & 0xff]),
-        ]),
-      ),
-    ),
-    // collection: Option<Pubkey> (Some(coreCollection))
-    borshOption(args.coreCollection.toBuffer()),
-  ]);
-
-  const data = Buffer.concat([
-    IX_MINT_V2,
-    metadata,
-    // assetData: None
-    Buffer.from([0]),
-    // assetDataSchema: None
-    Buffer.from([0]),
-  ]);
-
-  return new TransactionInstruction({
-    programId: BUBBLEGUM_PROGRAM_ID,
-    keys: [
-      { pubkey: treeConfig, isSigner: false, isWritable: true }, // treeConfig
-      { pubkey: args.payer, isSigner: true, isWritable: true }, // payer
-      { pubkey: args.treeCreatorOrDelegate, isSigner: true, isWritable: false }, // treeCreatorOrDelegate
-      { pubkey: args.collectionAuthority, isSigner: true, isWritable: false }, // collectionAuthority
-      { pubkey: args.leafOwner, isSigner: false, isWritable: false }, // leafOwner
-      { pubkey: args.leafDelegate, isSigner: false, isWritable: false }, // leafDelegate
-      { pubkey: args.merkleTree, isSigner: false, isWritable: true }, // merkleTree
-      { pubkey: args.coreCollection, isSigner: false, isWritable: true }, // coreCollection
-      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mplCoreCpiSigner
-      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // logWrapper
-      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compressionProgram
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mplCoreProgram
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // systemProgram
-    ],
-    data,
-  });
-}
-
 function bs58Bytes32(value: string, label: string): Buffer {
   const text = String(value || '').trim();
   if (!text) {
@@ -948,12 +947,11 @@ function bs58Bytes32(value: string, label: string): Buffer {
   return Buffer.from(out);
 }
 
-function bubblegumTransferV2Ix(args: {
+function bubblegumBurnV2Ix(args: {
   payer: PublicKey;
   authority: PublicKey;
   leafOwner: PublicKey;
   leafDelegate: PublicKey;
-  newLeafOwner: PublicKey;
   merkleTree: PublicKey;
   coreCollection: PublicKey;
   root: Buffer; // 32 bytes
@@ -969,17 +967,17 @@ function bubblegumTransferV2Ix(args: {
   const nonce = Number(args.nonce);
   const index = Number(args.index);
   if (!Number.isFinite(nonce) || nonce < 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid transfer nonce');
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn nonce');
   }
   if (!Number.isFinite(index) || index < 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid transfer index');
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn index');
   }
 
   const root = Buffer.isBuffer(args.root) ? args.root : Buffer.from(args.root || []);
   const dataHash = Buffer.isBuffer(args.dataHash) ? args.dataHash : Buffer.from(args.dataHash || []);
   const creatorHash = Buffer.isBuffer(args.creatorHash) ? args.creatorHash : Buffer.from(args.creatorHash || []);
   if (root.length !== 32 || dataHash.length !== 32 || creatorHash.length !== 32) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid transfer hash lengths');
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn hash lengths');
   }
   const assetDataHash = args.assetDataHash ? Buffer.from(args.assetDataHash) : null;
   if (assetDataHash && assetDataHash.length !== 32) {
@@ -987,12 +985,12 @@ function bubblegumTransferV2Ix(args: {
   }
   const flagsNum = args.flags == null ? null : Number(args.flags);
   if (flagsNum != null && (!Number.isFinite(flagsNum) || flagsNum < 0 || flagsNum > 0xff)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid transfer flags');
+    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn flags');
   }
   const proof = Array.isArray(args.proof) ? args.proof : [];
 
   const data = Buffer.concat([
-    IX_TRANSFER_V2,
+    IX_BURN_V2,
     root,
     dataHash,
     creatorHash,
@@ -1010,11 +1008,12 @@ function bubblegumTransferV2Ix(args: {
       { pubkey: args.authority, isSigner: true, isWritable: false }, // authority
       { pubkey: args.leafOwner, isSigner: false, isWritable: false }, // leafOwner
       { pubkey: args.leafDelegate, isSigner: false, isWritable: false }, // leafDelegate
-      { pubkey: args.newLeafOwner, isSigner: false, isWritable: false }, // newLeafOwner
       { pubkey: args.merkleTree, isSigner: false, isWritable: true }, // merkleTree
-      { pubkey: args.coreCollection, isSigner: false, isWritable: false }, // coreCollection
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true }, // coreCollection
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mplCoreCpiSigner
       { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // logWrapper
       { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compressionProgram
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mplCoreProgram
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // systemProgram
       ...proof.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
     ],
@@ -1036,6 +1035,30 @@ function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
     throw new functions.https.HttpsError('invalid-argument', 'Duplicate dude ids');
   }
   return Buffer.concat([IX_FINALIZE_OPEN_BOX, ...ids.map(u16LE)]);
+}
+
+function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }): Buffer {
+  const boxIds = Array.isArray(args.boxIds) ? args.boxIds.map((n) => Number(n)) : [];
+  const dudeIds = Array.isArray(args.dudeIds) ? args.dudeIds.map((n) => Number(n)) : [];
+
+  boxIds.forEach((id) => {
+    if (!Number.isFinite(id) || id < 1 || id > 0xffff_ffff) {
+      throw new functions.https.HttpsError('invalid-argument', `Invalid box id: ${id}`);
+    }
+  });
+  dudeIds.forEach((id) => {
+    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+      throw new functions.https.HttpsError('invalid-argument', `Invalid dude id: ${id}`);
+    }
+  });
+
+  return Buffer.concat([
+    IX_MINT_RECEIPTS,
+    u32LE(boxIds.length),
+    ...boxIds.map((id) => u32LE(Math.floor(id))),
+    u32LE(dudeIds.length),
+    ...dudeIds.map((id) => u16LE(Math.floor(id))),
+  ]);
 }
 
 function decodePendingOpenBox(data: Buffer): {
@@ -1497,7 +1520,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
 
   // Validate assets are deliverable Mons items owned by the wallet.
   const assetPks: PublicKey[] = [];
-  const orderItems: Array<{ assetId: string; kind: 'box' | 'dude'; refId: number; receiptName: string; receiptUri: string }> = [];
+  const orderItems: Array<{ assetId: string; kind: 'box' | 'dude'; refId: number }> = [];
   for (const assetId of uniqueItemIds) {
     let pk: PublicKey;
     try {
@@ -1521,7 +1544,6 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
       throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
     }
 
-    // Prepare receipt metadata now so issuing receipts can be deterministic and fast later.
     if (kind === 'box') {
       const boxIdStr = getBoxIdFromAsset(asset);
       const refId = Number(boxIdStr);
@@ -1532,8 +1554,6 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
         assetId,
         kind: 'box',
         refId,
-        receiptName: `mons receipt · box ${refId}`,
-        receiptUri: `${metadataBase}/json/receipts/boxes/${refId}.json`,
       });
     } else {
       const dudeId = getDudeIdFromAsset(asset);
@@ -1545,8 +1565,6 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
         assetId,
         kind: 'dude',
         refId,
-        receiptName: `mons receipt · figure #${refId}`,
-        receiptUri: `${metadataBase}/json/receipts/figures/${refId}.json`,
       });
     }
   }
@@ -1925,118 +1943,222 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   );
 
   const ownerPk = new PublicKey(ownerWallet);
-  const pending: Array<{ assetId: string; assetPk: PublicKey; receiptName: string; receiptUri: string }> = [];
+  const pending: Array<{ assetId: string; assetPk: PublicKey; kind: 'box' | 'dude'; refId: number }> = [];
   for (let i = 0; i < targetAssetIds.length; i += 1) {
     const info = infos[i];
     if (!info) continue; // already burned / reclaimed
     const assetId = targetAssetIds[i];
     const pk = targetAssetPks[i];
     const stored = byAssetId.get(assetId);
-    if (stored?.receiptName && stored?.receiptUri) {
-      pending.push({ assetId, assetPk: pk, receiptName: String(stored.receiptName), receiptUri: String(stored.receiptUri) });
-      continue;
-    }
-    // Backwards compat for older orders: fetch and derive.
-    const asset = await fetchAssetRetry(assetId);
-    const kind = getAssetKind(asset);
-    if (kind === 'box') {
-      const refId = Number(getBoxIdFromAsset(asset));
-      if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
-        throw new functions.https.HttpsError('failed-precondition', 'Box id missing from metadata');
-      }
-      pending.push({
+    const kind = stored?.kind;
+    const refId = Number(stored?.refId);
+    if (kind !== 'box' && kind !== 'dude') {
+      throw new functions.https.HttpsError('failed-precondition', 'Delivery order is missing item kind for receipt minting', {
     assetId,
-        assetPk: pk,
-        receiptName: `mons receipt · box ${refId}`,
-        receiptUri: `${metadataBase}/json/receipts/boxes/${refId}.json`,
+        kind,
       });
-    } else if (kind === 'dude') {
-      const refId = Number(getDudeIdFromAsset(asset));
-      if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
-        throw new functions.https.HttpsError('failed-precondition', 'Dude id missing from metadata');
       }
-      pending.push({
+    if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
+      throw new functions.https.HttpsError('failed-precondition', 'Delivery order is missing item refId for receipt minting', {
         assetId,
-        assetPk: pk,
-        receiptName: `mons receipt · figure #${refId}`,
-        receiptUri: `${metadataBase}/json/receipts/figures/${refId}.json`,
+        kind,
+        refId,
       });
-    } else {
-      throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type for receipt minting');
     }
+    if (kind === 'dude' && refId > MAX_DUDE_ID) {
+      throw new functions.https.HttpsError('failed-precondition', 'Invalid dude id for receipt minting', { assetId, refId });
+    }
+    pending.push({ assetId, assetPk: pk, kind, refId });
   }
 
   const alreadyProcessed = targetAssetIds.length - pending.length;
   const receiptTxs: string[] = [];
   let totalProcessed = 0;
 
-  // Process in as-large-as-possible batches, bounded by tx size.
+  // Process in as-large-as-possible batches, bounded by tx size + compute + transient RPC failures.
+  // Strategy:
+  // - start with a large batch size (<= 24)
+  // - if tx is too large OR hits compute/simulation limits, shrink `n`
+  // - if send/confirm has transient failures, retry the SAME batch (same `n`) with backoff
+  // - if we can't confirm but the burned assets are gone, treat it as success (idempotent)
   while (pending.length) {
-    const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:issueReceipts');
-
     let n = Math.min(pending.length, 24);
-    let candidate: VersionedTransaction | null = null;
+    let lastErr: unknown = null;
+
     while (n >= 1) {
       const batch = pending.slice(0, n);
       const burnIxs = batch.map((it) =>
         mplCoreBurnV1Ix({ asset: it.assetPk, coreCollection: cfgCoreCollection, authority: signer.publicKey, payer: signer.publicKey }),
       );
-      const mintIxs = batch.map((it) =>
-        bubblegumMintV2Ix({
-          payer: signer.publicKey,
-          treeCreatorOrDelegate: signer.publicKey,
-          collectionAuthority: signer.publicKey,
-          leafOwner: ownerPk,
-          leafDelegate: ownerPk,
-          merkleTree: receiptsMerkleTree,
-          coreCollection: cfgCoreCollection,
-          name: it.receiptName,
-          uri: it.receiptUri,
-          sellerFeeBasisPoints: 0,
-          creators: [],
-        }),
-      );
+      const boxIds = batch.filter((it) => it.kind === 'box').map((it) => Math.floor(it.refId));
+      const dudeIds = batch.filter((it) => it.kind === 'dude').map((it) => Math.floor(it.refId));
+      const treeConfig = deriveTreeConfigPda(receiptsMerkleTree);
+      const mintReceiptsIx = new TransactionInstruction({
+        programId: boxMinterProgramId,
+        keys: [
+          { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false }, // config
+          { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
+          { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
+          { pubkey: receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
+          { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
+          { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
+          { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
+          { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
+          { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compression_program
+          { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mpl_core_program
+          { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+        ],
+        data: encodeMintReceiptsArgs({ boxIds, dudeIds }),
+      });
       const instructions: TransactionInstruction[] = [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
         ...burnIxs,
-        ...mintIxs,
+        mintReceiptsIx,
       ];
-      try {
-        // IMPORTANT: web3.js serializes messages into a fixed 1232-byte buffer. If the candidate is too large,
-        // `buildTx` (sign) can throw `RangeError: encoding overruns Uint8Array` before we can call `.serialize()`.
-        const txCandidate = buildTx(instructions, signer.publicKey, blockhash, [signer]);
-        const raw = txCandidate.serialize();
-        if (raw.length <= 1232) {
-          candidate = txCandidate;
-          break;
+
+      let succeeded = false;
+
+      for (let attempt = 0; attempt < Math.max(1, TX_MAX_SEND_ATTEMPTS); attempt += 1) {
+        // Fresh blockhash each send attempt.
+        const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:issueReceipts');
+
+        let txCandidate: VersionedTransaction;
+        let rawLen = 0;
+        try {
+          txCandidate = buildTx(instructions, signer.publicKey, blockhash, [signer]);
+          rawLen = txCandidate.serialize().length;
+          if (rawLen > 1232) {
+            lastErr = new RangeError(`Receipt issuance transaction too large (${rawLen} bytes)`);
+            break; // shrink `n`
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+          const msg = txErrMessage(err);
         const anyErr = err as any;
-        // web3.js can throw different RangeError variants when the v0 message exceeds the fixed 1232-byte buffer.
-        // Examples seen in the wild:
-        // - "RangeError: encoding overruns Uint8Array"
-        // - "RangeError [ERR_OUT_OF_RANGE]: The value of \"offset\" is out of range... Received 1232"
         const tooLarge =
           err instanceof RangeError &&
           (/encoding overruns Uint8Array/i.test(msg) ||
             /offset.*out of range/i.test(msg) ||
             String(anyErr?.code || '') === 'ERR_OUT_OF_RANGE');
         if (!tooLarge) throw err;
-        // Fall through to reduce `n`.
-      }
-      n -= 1;
-    }
+          lastErr = err;
+          break; // shrink `n`
+        }
 
-    if (!candidate || n < 1) {
-      throw new functions.https.HttpsError('failed-precondition', 'Unable to fit receipt issuance transaction (try fewer items)');
-    }
+        const sig = bs58.encode(txCandidate.signatures[0]);
 
-    const sig = await withTimeout(conn.sendTransaction(candidate, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:issueReceipts');
-    await withTimeout(conn.confirmTransaction(sig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:issueReceipts');
+        let sendErr: unknown = null;
+        try {
+          await withTimeout(conn.sendTransaction(txCandidate, { maxRetries: 2 }), TX_SEND_TIMEOUT_MS, 'sendTransaction:issueReceipts');
+        } catch (err) {
+          sendErr = err;
+        }
+
+        if (sendErr) {
+          const msg = txErrMessage(sendErr);
+          const logs = txErrLogs(sendErr);
+          lastErr = sendErr;
+
+          // If preflight simulation failed (logs present), retrying with the same batch size often won't help.
+          if (logs.length) {
+            if (looksLikeAccountInUseError(msg, logs) || looksLikeRateLimitOrRpcError(msg) || looksLikeBlockhashError(msg)) {
+              // transient: backoff + retry same `n`
+              await sleep(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000));
+              continue;
+            }
+            // likely compute or deterministic failure: shrink
+            break;
+          }
+
+          // Unclear if it was submitted; wait briefly for it to land anyway.
+          const maybe = await waitForSignature(conn, sig, { timeoutMs: 12_000, pollMs: TX_CONFIRM_POLL_MS });
+          if (maybe.ok) {
     receiptTxs.push(sig);
     totalProcessed += n;
     pending.splice(0, n);
+            succeeded = true;
+            break;
+          }
+          // If we can't confirm, but the burned assets are gone, treat as success.
+          const postInfos = await withTimeout(
+            conn.getMultipleAccountsInfo(
+              batch.map((b) => b.assetPk),
+              { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+            ),
+            RPC_TIMEOUT_MS,
+            'getMultipleAccountsInfo:postSend',
+          );
+          if (postInfos.every((ai) => !ai)) {
+            receiptTxs.push(sig);
+            totalProcessed += n;
+            pending.splice(0, n);
+            succeeded = true;
+            break;
+          }
+
+          // retry same batch (transient)
+          await sleep(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000));
+          continue;
+        }
+
+        // Sent: confirm (polling is more reliable than a single confirmTransaction call).
+        const confirmed = await waitForSignature(conn, sig, { timeoutMs: TX_CONFIRM_TIMEOUT_MS, pollMs: TX_CONFIRM_POLL_MS });
+        if (confirmed.ok) {
+          receiptTxs.push(sig);
+          totalProcessed += n;
+          pending.splice(0, n);
+          succeeded = true;
+          break;
+        }
+
+        // If we can't confirm, but the burned assets are gone, treat as success.
+        const postInfos = await withTimeout(
+          conn.getMultipleAccountsInfo(
+            batch.map((b) => b.assetPk),
+            { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+          ),
+          RPC_TIMEOUT_MS,
+          'getMultipleAccountsInfo:postConfirm',
+        );
+        if (postInfos.every((ai) => !ai)) {
+          receiptTxs.push(sig);
+          totalProcessed += n;
+          pending.splice(0, n);
+          succeeded = true;
+          break;
+        }
+
+        // Failed or still unknown.
+        if (confirmed.ok === false) {
+          lastErr = confirmed.err;
+          const msg = txErrMessage(confirmed.err);
+          const logs = Array.isArray(confirmed.logs) ? confirmed.logs : [];
+          if (looksLikeComputeLimitError(msg, logs)) {
+            // shrink batch size
+            break;
+          }
+        }
+
+        // retry same `n` (congestion / rpc flakiness)
+        await sleep(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000));
+      }
+
+      if (succeeded) {
+        break; // go to next `pending` chunk
+      }
+
+      // Shrink batch size and try again.
+      n -= 1;
+    }
+
+    if (n < 1) {
+      const msg = txErrMessage(lastErr);
+      const logs = txErrLogs(lastErr);
+      throw new functions.https.HttpsError('failed-precondition', 'Unable to issue receipts (try fewer items or retry later)', {
+        lastError: msg,
+        lastLogs: logs.slice(0, 80),
+      });
+    }
   }
 
   const receiptsMinted = alreadyProcessed + totalProcessed;
@@ -2213,138 +2335,142 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
 
   const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })];
 
-  // Determine whether the certificate is compressed (Bubblegum v2, MPL-Core collection) or uncompressed (MPL-Core account).
+  // All receipts/certificates in this repo are Bubblegum v2 compressed cNFTs.
+  // (We intentionally do NOT support uncompressed receipt assets anymore.)
   const compression = (certificate as any)?.compression || {};
-  const looksCompressed =
-    Boolean(compression?.compressed) ||
-    Boolean(compression?.tree) ||
-    Boolean(compression?.data_hash) ||
-    Boolean(compression?.creator_hash) ||
-    typeof compression?.leaf_id !== 'undefined';
-
-  if (looksCompressed) {
-    const proof = await fetchAssetProof(certificateId);
-    const proofPath: string[] = Array.isArray(proof?.proof) ? proof.proof : [];
-    const treeId = String(proof?.tree_id ?? proof?.treeId ?? '');
-    const rootStr = String(proof?.root || '');
-    if (!treeId || !rootStr) {
-      throw new functions.https.HttpsError('failed-precondition', 'Unable to fetch certificate proof for transfer');
-    }
-    const merkleTree = new PublicKey(treeId);
-    if (!merkleTree.equals(receiptsMerkleTree)) {
-      throw new functions.https.HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
-        certificateTree: merkleTree.toBase58(),
-        receiptsTree: receiptsMerkleTree.toBase58(),
-      });
-    }
-    const root = bs58Bytes32(rootStr, 'assetProof.root');
-    const dataHash = bs58Bytes32(String(compression?.data_hash || compression?.dataHash || ''), 'asset.compression.data_hash');
-    const creatorHash = bs58Bytes32(
-      String(compression?.creator_hash || compression?.creatorHash || ''),
-      'asset.compression.creator_hash',
-    );
-    const assetDataHashStr = compression?.asset_data_hash || compression?.assetDataHash || '';
-    const assetDataHash = assetDataHashStr ? bs58Bytes32(String(assetDataHashStr), 'asset.compression.asset_data_hash') : null;
-    const flagsNum = compression?.flags == null ? null : Number(compression.flags);
-    const nonce = Number(compression?.leaf_id ?? compression?.leafId);
-    if (!Number.isFinite(nonce) || nonce < 0) {
-      throw new functions.https.HttpsError('failed-precondition', 'Unable to parse certificate leaf id');
-    }
-    // Bubblegum burn uses both `nonce` (u64) and `index` (u32). For our receipts, leaf_id is the leaf index.
-    const index = Math.floor(nonce);
-    if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
-      throw new functions.https.HttpsError('failed-precondition', 'Certificate leaf index out of range');
-    }
-    const proofAccountsFull = proofPath.map((p) => new PublicKey(p));
-    const proofAccounts = trimProofForCanopy(proofAccountsFull, receiptsTreeCanopyDepth);
-    const leafOwner = new PublicKey(String(certificate?.ownership?.owner || ownerWallet));
-    const leafDelegate = new PublicKey(String(certificate?.ownership?.delegate || certificate?.ownership?.owner || ownerWallet));
-
-    instructions.push(
-      bubblegumTransferV2Ix({
-        payer: ownerPk,
-        authority: ownerPk,
-        leafOwner,
-        leafDelegate,
-        newLeafOwner: cfgAdmin,
-        merkleTree,
-        coreCollection: cfgCoreCollection,
-        root,
-        dataHash,
-        creatorHash,
-        assetDataHash,
-        flags: flagsNum,
-        nonce,
-        index,
-        proof: proofAccounts,
-      }),
-    );
-
-    // Mint 3 compressed receipts for the assigned dudes.
-    dudeIds.forEach((id) => {
-      instructions.push(
-        bubblegumMintV2Ix({
-          payer: signer.publicKey,
-          treeCreatorOrDelegate: signer.publicKey,
-          collectionAuthority: signer.publicKey,
-          leafOwner: ownerPk,
-          leafDelegate: ownerPk,
-          merkleTree: receiptsMerkleTree,
-          coreCollection: cfgCoreCollection,
-          name: `mons receipt · figure #${id}`,
-          uri: `${metadataBase}/json/receipts/figures/${id}.json`,
-          sellerFeeBasisPoints: 0,
-          creators: [],
-        }),
-      );
-    });
-  } else {
-    throw new functions.https.HttpsError('failed-precondition', 'Box certificate must be a compressed receipt (cNFT)');
+  const proof = await fetchAssetProof(certificateId);
+  const proofPath: string[] = Array.isArray(proof?.proof) ? proof.proof : [];
+  const treeId = String(proof?.tree_id ?? proof?.treeId ?? '');
+  const rootStr = String(proof?.root || '');
+  if (!treeId || !rootStr) {
+    throw new functions.https.HttpsError('failed-precondition', 'Unable to fetch certificate proof for burn');
   }
+  const merkleTree = new PublicKey(treeId);
+  if (!merkleTree.equals(receiptsMerkleTree)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
+      certificateTree: merkleTree.toBase58(),
+      receiptsTree: receiptsMerkleTree.toBase58(),
+    });
+  }
+  const root = bs58Bytes32(rootStr, 'assetProof.root');
+  const dataHash = bs58Bytes32(String(compression?.data_hash || compression?.dataHash || ''), 'asset.compression.data_hash');
+  const creatorHash = bs58Bytes32(String(compression?.creator_hash || compression?.creatorHash || ''), 'asset.compression.creator_hash');
+  const assetDataHashStr = compression?.asset_data_hash || compression?.assetDataHash || '';
+  const assetDataHash = assetDataHashStr ? bs58Bytes32(String(assetDataHashStr), 'asset.compression.asset_data_hash') : null;
+  const flagsNum = compression?.flags == null ? null : Number(compression.flags);
+  const nonce = Number(compression?.leaf_id ?? compression?.leafId);
+  if (!Number.isFinite(nonce) || nonce < 0) {
+    throw new functions.https.HttpsError('failed-precondition', 'Unable to parse certificate leaf id');
+  }
+  const index = Math.floor(nonce);
+  if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
+    throw new functions.https.HttpsError('failed-precondition', 'Certificate leaf index out of range');
+  }
+  const proofAccountsFull = proofPath.map((p) => new PublicKey(p));
+  const proofAccounts = proofAccountsFull;
+  const leafOwner = new PublicKey(String(certificate?.ownership?.owner || ownerWallet));
+  const leafDelegate = new PublicKey(String(certificate?.ownership?.delegate || certificate?.ownership?.owner || ownerWallet));
 
-  // Claim txs must use an Address Lookup Table to reliably fit under Solana's packet limit.
-  // (Bubblegum proofs add many 32-byte pubkeys that can't be table-looked-up.)
-  const addressLookupTables = await getDeliveryLookupTable(conn);
-  if (!addressLookupTables.length) {
-    throw new functions.https.HttpsError(
-      'failed-precondition',
-      'DELIVERY_LOOKUP_TABLE is not configured. Re-run deploy-all, copy DELIVERY_LOOKUP_TABLE into functions env, redeploy, then retry.',
-      { receiptsTreeCanopyDepth },
-    );
+  // 1) Burn the box certificate cNFT (user-signed).
+  instructions.push(
+    bubblegumBurnV2Ix({
+      payer: ownerPk,
+      authority: ownerPk,
+      leafOwner,
+      leafDelegate,
+      merkleTree,
+      coreCollection: cfgCoreCollection,
+      root,
+      dataHash,
+      creatorHash,
+      assetDataHash,
+      flags: flagsNum,
+      nonce,
+      index,
+      proof: proofAccounts,
+    }),
+  );
+
+  // 2) Mint the 3 dude receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
+  const treeConfig = deriveTreeConfigPda(receiptsMerkleTree);
+  instructions.push(
+    new TransactionInstruction({
+      programId: boxMinterProgramId,
+      keys: [
+        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false }, // config
+        { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
+        { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
+        { pubkey: receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
+        { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
+        { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
+        { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
+        { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
+        { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compression_program
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mpl_core_program
+        { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+      ],
+      data: encodeMintReceiptsArgs({ boxIds: [], dudeIds }),
+    }),
+  );
+
+  // Prefer building without LUT first (wallet UX / preview tends to behave better),
+  // but fall back to the delivery ALT if needed to fit under Solana's packet limit.
+  let addressLookupTables: AddressLookupTableAccount[] = [];
+  try {
+    addressLookupTables = await getDeliveryLookupTable(conn);
+  } catch {
+    addressLookupTables = [];
   }
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:claimIrl');
+  const MAX_RAW_TX_BYTES = 1232;
+
+  const buildClaimTx = (luts: AddressLookupTableAccount[]) => buildTx(instructions, ownerPk, blockhash, [signer], luts);
+
   let tx: VersionedTransaction;
   try {
-    tx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
+    // Try without LUT first.
+    tx = buildClaimTx([]);
   } catch (err) {
     // web3.js can throw RangeError when the v0 message exceeds the fixed 1232-byte buffer.
     const msg = err instanceof Error ? err.message : String(err);
     if (err instanceof RangeError && /encoding overruns Uint8Array/i.test(msg)) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'Claim transaction is too large to encode. Your DELIVERY_LOOKUP_TABLE is missing required addresses (Bubblegum + compression + core + receipts tree). Re-run deploy-all and update env, then retry.',
-        {
-          deliveryLookupTable: deliveryLookupTableStr,
-          receiptsMerkleTree: receiptsMerkleTreeStr,
-          receiptsTreeCanopyDepth,
-        },
-      );
+      if (!addressLookupTables.length) {
+        throw new functions.https.HttpsError(
+          'failed-precondition',
+          'Claim transaction is too large to encode. Re-run deploy-all and set DELIVERY_LOOKUP_TABLE in functions env, then retry.',
+          { receiptsMerkleTree: receiptsMerkleTreeStr },
+        );
+      }
+      tx = buildClaimTx(addressLookupTables);
+    } else {
+      throw err;
     }
-    throw err;
   }
-  const raw = tx.serialize();
-  const MAX_RAW_TX_BYTES = 1232;
+
+  let raw = tx.serialize();
+  if (raw.length > MAX_RAW_TX_BYTES && addressLookupTables.length) {
+    // If the no-LUT build encoded but exceeded the packet limit, retry with LUT.
+    tx = buildClaimTx(addressLookupTables);
+    raw = tx.serialize();
+  }
   if (raw.length > MAX_RAW_TX_BYTES) {
-    throw new functions.https.HttpsError('failed-precondition', `Claim transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}).`, {
-      rawBytes: raw.length,
-      maxRawBytes: MAX_RAW_TX_BYTES,
-    });
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      `Claim transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}).`,
+      {
+        rawBytes: raw.length,
+        maxRawBytes: MAX_RAW_TX_BYTES,
+        deliveryLookupTable: deliveryLookupTableStr,
+        receiptsMerkleTree: receiptsMerkleTreeStr,
+      },
+    );
   }
 
   return {
     encodedTx: Buffer.from(raw).toString('base64'),
     certificates: dudeIds,
     certificateId,
-    message: 'Sign and send to transfer your box receipt to the admin wallet and mint your dude receipts.',
+    message: 'Sign and send to burn your box receipt and mint your dude receipts.',
   };
 });

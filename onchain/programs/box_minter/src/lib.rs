@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("DdmH5vZzCvNq8VG9ydncotB2tTYCBm5SoA53iCfHNos7");
+declare_id!("49euba421M3MfEMbYZeduZU4UoXQ3oCWCQoJnvwVErnP");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -39,6 +39,33 @@ const SPL_NOOP_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     11, 188, 15, 192, 187, 71, 202, 47, 116, 196, 17, 46, 148, 171, 19, 207, 163, 198, 52,
     229, 220, 23, 234, 203, 3, 205, 26, 35, 205, 126, 120, 124,
 ]);
+
+// Metaplex Noop program id (Bubblegum v2 log wrapper).
+const MPL_NOOP_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    11, 121, 89, 138, 15, 175, 40, 176, 251, 210, 37, 99, 35, 51, 65, 75, 208, 58, 171, 36,
+    15, 112, 50, 209, 222, 71, 87, 160, 172, 93, 198, 6,
+]);
+
+// Metaplex Account Compression program id (used by Bubblegum v2).
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    11, 110, 1, 83, 35, 73, 37, 196, 7, 241, 129, 86, 118, 252, 211, 44, 245, 164, 143, 110,
+    139, 22, 153, 55, 86, 36, 187, 205, 94, 20, 114, 203,
+]);
+
+// Metaplex Bubblegum v2 program id.
+const BUBBLEGUM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    152, 139, 128, 235, 121, 53, 40, 105, 178, 36, 116, 95, 89, 221, 191, 138, 38, 88, 202,
+    19, 220, 104, 129, 33, 38, 53, 28, 174, 7, 193, 165, 165,
+]);
+
+// Bubblegum -> MPL-Core CPI signer (fixed address).
+const MPL_CORE_CPI_SIGNER: Pubkey = Pubkey::new_from_array([
+    172, 62, 167, 81, 182, 229, 187, 148, 54, 215, 103, 188, 191, 118, 136, 109, 246, 185,
+    148, 74, 208, 130, 94, 187, 44, 164, 169, 205, 130, 57, 140, 171,
+]);
+
+// Bubblegum v2 mint discriminator: [120, 121, 23, 146, 173, 110, 199, 205]
+const IX_BUBBLEGUM_MINT_V2: [u8; 8] = [120, 121, 23, 146, 173, 110, 199, 205];
 
 #[program]
 pub mod box_minter {
@@ -903,6 +930,229 @@ pub mod box_minter {
 
         Ok(())
     }
+
+    /// Mint compressed (Bubblegum v2) receipt cNFTs into the receipts tree, admin/cosigner-only.
+    ///
+    /// This is used by:
+    /// - delivery receipt issuance (boxes + figures)
+    /// - IRL claim flow (figures)
+    ///
+    /// Receipt metadata is derived on-chain from the configured `config.uri_base` so the backend
+    /// does not duplicate receipt URI/name logic.
+    pub fn mint_receipts(ctx: Context<MintReceipts>, args: MintReceiptsArgs) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+
+        // Admin-only (server cosigner).
+        require_keys_eq!(
+            ctx.accounts.cosigner.key(),
+            cfg.admin,
+            BoxMinterError::InvalidCosigner
+        );
+        // Single-master-key mode in this repo.
+        require_keys_eq!(
+            ctx.accounts.cosigner.key(),
+            cfg.treasury,
+            BoxMinterError::InvalidCosigner
+        );
+
+        require_keys_eq!(
+            ctx.accounts.bubblegum_program.key(),
+            BUBBLEGUM_PROGRAM_ID,
+            BoxMinterError::InvalidBubblegumProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.log_wrapper.key(),
+            MPL_NOOP_PROGRAM_ID,
+            BoxMinterError::InvalidMplNoopProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.compression_program.key(),
+            MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+            BoxMinterError::InvalidCompressionProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.mpl_core_program.key(),
+            MPL_CORE_PROGRAM_ID,
+            BoxMinterError::InvalidMplCoreProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.mpl_core_cpi_signer.key(),
+            MPL_CORE_CPI_SIGNER,
+            BoxMinterError::InvalidMplCoreCpiSigner
+        );
+
+        let box_ids = args.box_ids;
+        let dude_ids = args.dude_ids;
+
+        // Defensive caps (Bubblegum mints are compute-heavy).
+        let total = box_ids.len().checked_add(dude_ids.len()).ok_or(BoxMinterError::MathOverflow)?;
+        require!(total > 0, BoxMinterError::InvalidQuantity);
+        // Conservative cap; if the backend wants more, it should batch.
+        require!(total <= 24, BoxMinterError::InvalidQuantity);
+
+        // Validate box IDs (must correspond to configured box supply).
+        for id in box_ids.iter() {
+            require!(*id >= 1 && *id <= cfg.max_supply, BoxMinterError::InvalidAssetMetadata);
+        }
+        // Validate dude IDs.
+        for id in dude_ids.iter() {
+            require!(*id >= 1 && *id <= MAX_DUDE_ID, BoxMinterError::InvalidDudeId);
+        }
+        // Ensure there are no duplicates (cheap O(n^2) since n is tiny).
+        for i in 0..box_ids.len() {
+            for j in (i + 1)..box_ids.len() {
+                require!(box_ids[i] != box_ids[j], BoxMinterError::InvalidAssetMetadata);
+            }
+        }
+        for i in 0..dude_ids.len() {
+            for j in (i + 1)..dude_ids.len() {
+                require!(dude_ids[i] != dude_ids[j], BoxMinterError::DuplicateDudeId);
+            }
+        }
+
+        // Validate receipts tree + treeConfig PDA.
+        require_keys_eq!(
+            *ctx.accounts.merkle_tree.to_account_info().owner,
+            MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+            BoxMinterError::InvalidReceiptsMerkleTree
+        );
+        let (expected_tree_config, _) = Pubkey::find_program_address(
+            &[ctx.accounts.merkle_tree.key().as_ref()],
+            &BUBBLEGUM_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.tree_config.key(),
+            expected_tree_config,
+            BoxMinterError::InvalidReceiptsTreeConfig
+        );
+
+        let receipts_boxes_uri_base = derive_receipts_boxes_uri_base(&cfg.uri_base)?;
+        let receipts_figures_uri_base = derive_receipts_figures_uri_base(&cfg.uri_base)?;
+
+        // Build constant accounts once; only metadata bytes change per mint.
+        let cosigner = ctx.accounts.cosigner.to_account_info();
+        let user_ai = ctx.accounts.user.to_account_info();
+        let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
+        let tree_config = ctx.accounts.tree_config.to_account_info();
+        let core_collection = ctx.accounts.core_collection.to_account_info();
+        let mpl_core_cpi_signer = ctx.accounts.mpl_core_cpi_signer.to_account_info();
+        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
+        let compression_program = ctx.accounts.compression_program.to_account_info();
+        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
+        let system_program = ctx.accounts.system_program.to_account_info();
+        let bubblegum_program = ctx.accounts.bubblegum_program.to_account_info();
+
+        let mut mint_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: BUBBLEGUM_PROGRAM_ID,
+            accounts: vec![
+                // mintV2 accounts order (kinobi):
+                // 0 treeConfig (writable)
+                anchor_lang::solana_program::instruction::AccountMeta::new(tree_config.key(), false),
+                // 1 payer (writable signer)
+                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
+                // 2 treeCreatorOrDelegate (signer)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                // 3 collectionAuthority (signer)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                // 4 leafOwner
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
+                // 5 leafDelegate
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
+                // 6 merkleTree (writable)
+                anchor_lang::solana_program::instruction::AccountMeta::new(merkle_tree.key(), false),
+                // 7 coreCollection (writable)
+                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
+                // 8 mplCoreCpiSigner
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(mpl_core_cpi_signer.key(), false),
+                // 9 logWrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                // 10 compressionProgram
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(compression_program.key(), false),
+                // 11 mplCoreProgram
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(mpl_core_program.key(), false),
+                // 12 systemProgram
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+            ],
+            data: Vec::with_capacity(256),
+        };
+
+        let mut name_buf = String::with_capacity(48);
+        let mut uri_buf = String::with_capacity(receipts_boxes_uri_base.len().max(receipts_figures_uri_base.len()) + 16);
+
+        // Helper closure to build + invoke a Bubblegum mintV2 for the current name/uri buffers.
+        let mut mint_one = |name: &str, uri: &str| -> Result<()> {
+            mint_ix.data.clear();
+            mint_ix.data.extend_from_slice(&IX_BUBBLEGUM_MINT_V2);
+            // MetadataArgsV2 (borsh):
+            // name, symbol, uri, sellerFeeBasisPoints(u16), primarySaleHappened(bool), isMutable(bool),
+            // tokenStandard: Option<TokenStandard> (Some(NonFungible=0)),
+            // creators: Vec<Creator> (empty),
+            // collection: Option<Pubkey> (Some(coreCollection))
+            borsh_push_string(&mut mint_ix.data, name)?;
+            borsh_push_string(&mut mint_ix.data, "")?;
+            borsh_push_string(&mut mint_ix.data, uri)?;
+            mint_ix.data.extend_from_slice(&(0u16).to_le_bytes()); // sellerFeeBasisPoints
+            mint_ix.data.push(0u8); // primarySaleHappened=false
+            mint_ix.data.push(1u8); // isMutable=true
+            mint_ix.data.push(1u8); // tokenStandard: Some
+            mint_ix.data.push(0u8); // NonFungible enum index
+            mint_ix.data.extend_from_slice(&(0u32).to_le_bytes()); // creators vec len=0
+            mint_ix.data.push(1u8); // collection: Some
+            mint_ix.data.extend_from_slice(core_collection.key().as_ref());
+            // assetData: None
+            mint_ix.data.push(0u8);
+            // assetDataSchema: None
+            mint_ix.data.push(0u8);
+
+            // CPI: include the program account at the end (like SystemProgram CPIs).
+            invoke(
+                &mint_ix,
+                &[
+                    tree_config.clone(),
+                    cosigner.clone(),
+                    cosigner.clone(),
+                    cosigner.clone(),
+                    user_ai.clone(),
+                    user_ai.clone(),
+                    merkle_tree.clone(),
+                    core_collection.clone(),
+                    mpl_core_cpi_signer.clone(),
+                    log_wrapper.clone(),
+                    compression_program.clone(),
+                    mpl_core_program.clone(),
+                    system_program.clone(),
+                    bubblegum_program.clone(),
+                ],
+            )?;
+            Ok(())
+        };
+
+        for box_id in box_ids.iter() {
+            name_buf.clear();
+            name_buf.push_str("mons receipt · box ");
+            write!(&mut name_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+            uri_buf.clear();
+            uri_buf.push_str(&receipts_boxes_uri_base);
+            write!(&mut uri_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            uri_buf.push_str(".json");
+            mint_one(&name_buf, &uri_buf)?;
+        }
+
+        for dude_id in dude_ids.iter() {
+            name_buf.clear();
+            name_buf.push_str("mons receipt · figure #");
+            write!(&mut name_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+            uri_buf.clear();
+            uri_buf.push_str(&receipts_figures_uri_base);
+            write!(&mut uri_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            uri_buf.push_str(".json");
+            mint_one(&name_buf, &uri_buf)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -932,6 +1182,12 @@ pub struct DeliverArgs {
 pub struct CloseDeliveryArgs {
     pub delivery_id: u32,
     pub delivery_bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct MintReceiptsArgs {
+    pub box_ids: Vec<u32>,
+    pub dude_ids: Vec<u16>,
 }
 
 #[account]
@@ -1185,6 +1441,52 @@ pub struct CloseDelivery<'info> {
     /// CHECK: Delivery record PDA to close.
     #[account(mut)]
     pub delivery: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MintReceipts<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    /// Cloud-held signer (must match config.admin and config.treasury in this repo).
+    #[account(mut)]
+    pub cosigner: Signer<'info>,
+
+    /// CHECK: User who will receive the dude receipt cNFTs.
+    pub user: UncheckedAccount<'info>,
+
+    /// CHECK: Receipt cNFT Merkle tree (owned by MPL account compression program).
+    #[account(mut)]
+    pub merkle_tree: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum tree config PDA for `merkle_tree`.
+    #[account(mut)]
+    pub tree_config: UncheckedAccount<'info>,
+
+    /// CHECK: MPL-Core collection. Must match config.core_collection.
+    #[account(mut, address = config.core_collection)]
+    pub core_collection: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Bubblegum program
+    pub bubblegum_program: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Noop program (Bubblegum v2 log wrapper).
+    #[account(address = MPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Account Compression program.
+    #[account(address = MPL_ACCOUNT_COMPRESSION_PROGRAM_ID)]
+    pub compression_program: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Core program
+    #[account(address = MPL_CORE_PROGRAM_ID)]
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum -> MPL-Core CPI signer.
+    #[account(address = MPL_CORE_CPI_SIGNER)]
+    pub mpl_core_cpi_signer: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -1446,6 +1748,63 @@ fn derive_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
     Ok(out)
 }
 
+fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    require!(
+        bytes.len() <= u32::MAX as usize,
+        BoxMinterError::SerializationFailed
+    );
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn derive_receipts_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
+    if boxes_uri_base.ends_with(".json") {
+        // Shared single-URI metadata isn't compatible with per-figure receipt IDs.
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    let mut out = boxes_uri_base.to_string();
+    if out.contains("/json/boxes/") {
+        out = out.replace("/json/boxes/", "/json/receipts/figures/");
+    } else if out.contains("/boxes/") {
+        out = out.replace("/boxes/", "/receipts/figures/");
+    } else if out.contains("boxes") {
+        out = out.replace("boxes", "receipts/figures");
+    } else {
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    if !out.ends_with('/') {
+        out.push('/');
+    }
+    Ok(out)
+}
+
+fn derive_receipts_boxes_uri_base(boxes_uri_base: &str) -> Result<String> {
+    if boxes_uri_base.ends_with(".json") {
+        // Shared single-URI metadata isn't compatible with per-box receipt IDs.
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    let mut out = boxes_uri_base.to_string();
+    if out.contains("/json/boxes/") {
+        out = out.replace("/json/boxes/", "/json/receipts/boxes/");
+    } else if out.contains("/boxes/") {
+        out = out.replace("/boxes/", "/receipts/boxes/");
+    } else if out.contains("boxes") {
+        out = out.replace("boxes", "receipts/boxes");
+    } else {
+        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
+    }
+
+    if !out.ends_with('/') {
+        out.push('/');
+    }
+    Ok(out)
+}
+
 #[error_code]
 pub enum BoxMinterError {
     #[msg("Invalid quantity")]
@@ -1508,6 +1867,20 @@ pub enum BoxMinterError {
     DeliveryAlreadyExists,
     #[msg("Invalid log wrapper program id")]
     InvalidLogWrapper,
+    #[msg("Invalid Bubblegum program id")]
+    InvalidBubblegumProgram,
+    #[msg("Invalid MPL Noop program id")]
+    InvalidMplNoopProgram,
+    #[msg("Invalid compression program id")]
+    InvalidCompressionProgram,
+    #[msg("Invalid Bubblegum -> MPL-Core CPI signer address")]
+    InvalidMplCoreCpiSigner,
+    #[msg("Invalid receipts merkle tree account")]
+    InvalidReceiptsMerkleTree,
+    #[msg("Invalid receipts tree config PDA")]
+    InvalidReceiptsTreeConfig,
+    #[msg("Invalid receipt URI base")]
+    InvalidReceiptUriBase,
 }
 
 
