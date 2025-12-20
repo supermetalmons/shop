@@ -1982,7 +1982,8 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   // - if send/confirm has transient failures, retry the SAME batch (same `n`) with backoff
   // - if we can't confirm but the burned assets are gone, treat it as success (idempotent)
   while (pending.length) {
-    let n = Math.min(pending.length, 24);
+    // Start small (more reliable under congestion / compute variability).
+    let n = Math.min(pending.length, 3);
     let lastErr: unknown = null;
 
     while (n >= 1) {
