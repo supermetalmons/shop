@@ -46,7 +46,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
               min={1}
               max={Math.min(maxPerTx, remaining)}
               value={quantity}
-              onChange={(evt) => setQuantity(parseInt(evt.target.value, 15))}
+              onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
             />
           </label>
           <div className="mint__qty">
