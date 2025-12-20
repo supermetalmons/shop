@@ -119,10 +119,12 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
 const DUDES_PER_BOX = 3;
 const MAX_DUDE_ID = 999;
 const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
-const TX_SEND_TIMEOUT_MS = Number(process.env.TX_SEND_TIMEOUT_MS || 25_000);
-const TX_CONFIRM_TIMEOUT_MS = Number(process.env.TX_CONFIRM_TIMEOUT_MS || 45_000);
-const TX_CONFIRM_POLL_MS = Number(process.env.TX_CONFIRM_POLL_MS || 900);
-const TX_MAX_SEND_ATTEMPTS = Number(process.env.TX_MAX_SEND_ATTEMPTS || 4);
+// Issue-receipts tx retry/confirm tuning.
+// Hardcoded (no env) to keep deployments deterministic and avoid config sprawl.
+const TX_SEND_TIMEOUT_MS = 12_000;
+const TX_CONFIRM_TIMEOUT_MS = 25_000;
+const TX_CONFIRM_POLL_MS = 800;
+const TX_MAX_SEND_ATTEMPTS = 3;
 
 // Hardcode devnet for now to avoid cluster mismatches while iterating.
 const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
@@ -404,11 +406,12 @@ async function waitForSignature(
   opts: { timeoutMs: number; pollMs: number },
 ): Promise<{ ok: true } | { ok: false; err: any; logs?: string[]; tx?: any }> {
   const startedAt = Date.now();
-  let attempt = 0;
   while (Date.now() - startedAt < opts.timeoutMs) {
     try {
+      // Only hit full history lookups after we've waited a bit; it's slower and usually unnecessary.
+      const searchHistory = Date.now() - startedAt > 6_000;
       const res = await withTimeout(
-        conn.getSignatureStatuses([signature], { searchTransactionHistory: true }),
+        conn.getSignatureStatuses([signature], { searchTransactionHistory: searchHistory }),
         RPC_TIMEOUT_MS,
         'getSignatureStatuses',
       );
@@ -434,9 +437,7 @@ async function waitForSignature(
       // ignore transient polling failures
     }
 
-    const backoff = Math.min(opts.pollMs * 2 ** Math.min(attempt, 4), 4_000);
-    attempt += 1;
-    await sleep(backoff);
+    await sleep(opts.pollMs);
   }
 
   // Timeout: try one last fetch to see if it landed.

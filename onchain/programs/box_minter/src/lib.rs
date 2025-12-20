@@ -668,7 +668,7 @@ pub mod box_minter {
         for i in 0..DUDES_PER_BOX {
             let dude_id = args.dude_ids[i];
             name_buf.clear();
-            name_buf.push_str("mons figure #");
+            name_buf.push_str("little swag figure ");
             write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
@@ -1129,7 +1129,7 @@ pub mod box_minter {
 
         for box_id in box_ids.iter() {
             name_buf.clear();
-            name_buf.push_str("mons receipt · box ");
+            name_buf.push_str("receipt · box ");
             write!(&mut name_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
@@ -1141,7 +1141,7 @@ pub mod box_minter {
 
         for dude_id in dude_ids.iter() {
             name_buf.clear();
-            name_buf.push_str("mons receipt · figure #");
+            name_buf.push_str("receipt · figure ");
             write!(&mut name_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();

@@ -666,7 +666,7 @@ async function main() {
     maxPerTx: 15,
 
     // Box metadata (stored on-chain)
-    namePrefix: 'swag box',
+    namePrefix: 'little swag box',
     symbol: 'box',
     // Base URI for per-box JSON: `${uriBase}${index}.json`
     // (Your on-chain program can also accept a full *.json uri for a single shared metadata file.)
@@ -779,7 +779,7 @@ async function main() {
 
   // EDIT THESE CONSTANTS to control the MPL-Core collection metadata.
   const CORE_COLLECTION_CONFIG = {
-    name: 'mons',
+    name: 'little swag figures',
     uri: `${DROP_METADATA_BASE}/collection.json`,
   };
 
