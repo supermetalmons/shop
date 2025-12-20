@@ -1851,8 +1851,16 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        const anyErr = err as any;
+        // web3.js can throw different RangeError variants when the v0 message exceeds the fixed 1232-byte buffer.
+        // Examples seen in the wild:
+        // - "RangeError: encoding overruns Uint8Array"
+        // - "RangeError [ERR_OUT_OF_RANGE]: The value of \"offset\" is out of range... Received 1232"
         const tooLarge =
-          err instanceof RangeError && /encoding overruns Uint8Array/i.test(msg);
+          err instanceof RangeError &&
+          (/encoding overruns Uint8Array/i.test(msg) ||
+            /offset.*out of range/i.test(msg) ||
+            String(anyErr?.code || '') === 'ERR_OUT_OF_RANGE');
         if (!tooLarge) throw err;
         // Fall through to reduce `n`.
       }
