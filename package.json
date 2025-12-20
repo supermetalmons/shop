@@ -1,14 +1,16 @@
 {
   "name": "shop",
+  "private": true,
   "version": "1.0.0",
   "description": "mons.shop – blind boxes drop with on-chain & Firebase helpers",
-  "main": "dist/index.html",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && tsc --noEmit",
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
+    "deploy:firebase": "firebase deploy --only firestore:rules,functions",
+    "deploy:functions": "firebase deploy --only functions",
     "df": "cd functions && firebase deploy --only functions",
     "box-minter:deploy-all": "node --experimental-strip-types scripts/deploy-all-box-minter.ts",
     "keygen": "node scripts/keygen.js"

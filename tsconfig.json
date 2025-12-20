@@ -14,7 +14,8 @@
     "jsx": "react-jsx",
     "strict": true,
     "types": ["vite/client"],
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    "tsBuildInfoFile": "./.cache/tsconfig.tsbuildinfo"
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

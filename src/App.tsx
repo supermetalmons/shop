@@ -298,7 +298,6 @@ function App() {
     await refetchInventory();
   };
 
-  // TODO: fix links
   const secondaryLinks = [
     { label: 'Tensor', href: 'https://www.tensor.trade/trade/mons' },
     { label: 'Magic Eden', href: 'https://magiceden.io/' },

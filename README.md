@@ -6,9 +6,12 @@ Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per
 
 ## Frontend
 - Install deps: `npm install`
-- Copy `.env.example` to `.env` and fill values (RPC, Firebase config, functions base URL, encryption pubkey, secondary links).
+- Copy `.env.example` to `.env` and fill values (RPC, Firebase config, functions region, encryption pubkey).
 - Run dev server: `npm run dev`
-- Build for production: `npm run build`
+- Build for production: `npm run build` (outputs `dist/`)
+
+## Deployment
+The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amplify, Netlify, Vercel, S3/CloudFront, etc) and configure the same env vars as build-time environment variables.
 
 ### Deploy to Amplify (sync `.env` → Amplify branch env vars)
 - Prereqs: AWS CLI configured locally with permissions to `amplify:GetBranch`, `amplify:UpdateBranch`, and `amplify:StartJob`.
@@ -22,11 +25,14 @@ Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per
 ### Required Vite env
 ```
 VITE_SOLANA_CLUSTER=devnet|testnet|mainnet-beta
-VITE_RPC_URL=https://your-rpc
+VITE_RPC_URL=https://your-rpc               # optional override
 VITE_HELIUS_API_KEY=<helius-api-key>
+VITE_HELIUS_RPC_URL=<optional-rpc-base-url> # optional override (api-key is appended)
 VITE_BOX_MINTER_PROGRAM_ID=<deployed box minter program id>
 VITE_FIREBASE_*=...
+VITE_FIREBASE_FUNCTIONS_REGION=us-central1  # optional
 VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryption>
+VITE_DEBUG_FUNCTIONS=false                  # optional
 ```
 - Required: `VITE_COLLECTION_MINT` (MPL-Core collection address for Helius `grouping: ['collection', ...]` queries)
 
@@ -40,7 +46,9 @@ VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=<base64 curve25519 pubkey for delivery encryp
 
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
-- `firebase deploy --only firestore:rules,functions`
+- Deploy (from repo root):
+  - `npm run deploy:firebase` (rules + functions)
+  - `npm run deploy:functions` (functions only)
 
 ### Function env (set as runtime config or shell env)
 - `BOX_MINTER_PROGRAM_ID` (same program id as `VITE_BOX_MINTER_PROGRAM_ID`)
