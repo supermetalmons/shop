@@ -12,7 +12,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? 333;
   const remaining = stats?.remaining ?? Math.max(0, total - minted);
-  const maxPerTx = stats?.maxPerTx ?? 10;
+  const maxPerTx = stats?.maxPerTx ?? 15;
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +46,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
               min={1}
               max={Math.min(maxPerTx, remaining)}
               value={quantity}
-              onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
+              onChange={(evt) => setQuantity(parseInt(evt.target.value, 15))}
             />
           </label>
           <div className="mint__qty">
