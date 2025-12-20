@@ -666,7 +666,7 @@ async function main() {
     maxPerTx: 15,
 
     // Box metadata (stored on-chain)
-    namePrefix: 'little swag box',
+    namePrefix: 'box',
     symbol: 'box',
     // Base URI for per-box JSON: `${uriBase}${index}.json`
     // (Your on-chain program can also accept a full *.json uri for a single shared metadata file.)

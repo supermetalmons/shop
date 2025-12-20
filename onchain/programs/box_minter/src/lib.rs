@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("49euba421M3MfEMbYZeduZU4UoXQ3oCWCQoJnvwVErnP");
+declare_id!("5LooGm86zHiNA4TJgK6Nk7AcTwTKS58s5fRMUwje53cp");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
@@ -668,7 +668,7 @@ pub mod box_minter {
         for i in 0..DUDES_PER_BOX {
             let dude_id = args.dude_ids[i];
             name_buf.clear();
-            name_buf.push_str("little swag figure ");
+            name_buf.push_str("figure ");
             write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
