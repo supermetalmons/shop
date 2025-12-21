@@ -4,6 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, PendingOpenBox, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 import { boxMinterProgramId } from './boxMinter';
+import { getHeliusApiKey } from './helius';
 
 const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -127,7 +128,7 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   }
 }
 
-const heliusApiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
+const heliusApiKey = getHeliusApiKey();
 const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
 const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
@@ -149,7 +150,6 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 function heliusRpcUrl() {
-  if (!heliusApiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
   if (heliusRpcBase) return `${heliusRpcBase}${heliusRpcBase.includes('?') ? '&' : '?'}api-key=${heliusApiKey}`;
   return `https://${heliusSubdomain}.helius-rpc.com/?api-key=${heliusApiKey}`;
 }

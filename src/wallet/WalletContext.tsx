@@ -14,6 +14,7 @@ import {
 } from '@solana/wallet-adapter-wallets';
 import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
+import { getHeliusApiKey } from '../lib/helius';
 
 function resolveNetwork(): WalletAdapterNetwork {
   const raw = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
@@ -23,7 +24,7 @@ function resolveNetwork(): WalletAdapterNetwork {
 }
 
 function heliusRpcUrl(): string | null {
-  const apiKey = (import.meta.env.VITE_HELIUS_API_KEY || '').trim();
+  const apiKey = getHeliusApiKey();
   if (!apiKey) return null;
   const cluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
   const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;
