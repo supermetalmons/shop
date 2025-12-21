@@ -273,7 +273,8 @@ export function buildStartOpenBoxIx(cfg: BoxMinterConfigAccount, payer: PublicKe
       { pubkey: configPda, isSigner: false, isWritable: false },
       { pubkey: payer, isSigner: true, isWritable: true },
       { pubkey: boxAsset, isSigner: false, isWritable: true },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: false },
+      // Vault/custody address for opened boxes (admin/deployer). Payments go to `cfg.treasury`.
+      { pubkey: cfg.admin, isSigner: false, isWritable: false },
       { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -294,7 +295,8 @@ export function buildTransferBoxToVaultIx(cfg: BoxMinterConfigAccount, payer: Pu
       { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
       { pubkey: payer, isSigner: true, isWritable: true },
       { pubkey: payer, isSigner: true, isWritable: false },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: false },
+      // Vault/custody address (admin/deployer). Payments go to `cfg.treasury`.
+      { pubkey: cfg.admin, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
     ],

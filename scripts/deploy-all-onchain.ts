@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 import bs58 from 'bs58';
 import {
   clusterApiUrl,
@@ -462,6 +463,8 @@ function boxMinterConfigPda(programId: PublicKey): PublicKey {
 
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
 const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
+// Anchor instruction discriminator: sha256("global:set_treasury")[0..8]
+const IX_SET_TREASURY = createHash('sha256').update('global:set_treasury').digest().subarray(0, 8);
 
 function buildInitializeIx(args: {
   programId: PublicKey;
@@ -494,6 +497,19 @@ function buildInitializeIx(args: {
       { pubkey: args.treasury, isSigner: false, isWritable: false },
       { pubkey: args.coreCollection, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+function buildSetTreasuryIx(args: { programId: PublicKey; admin: PublicKey; treasury: PublicKey }): TransactionInstruction {
+  const configPda = boxMinterConfigPda(args.programId);
+  const data = Buffer.concat([IX_SET_TREASURY, args.treasury.toBuffer()]);
+  return new TransactionInstruction({
+    programId: args.programId,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: args.admin, isSigner: true, isWritable: false },
     ],
     data,
   });
@@ -900,10 +916,11 @@ async function main() {
   const DROP_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
   const BOX_MINTER_CONFIG = {
     // Payment + mint caps
-    // Single-master-key mode: treasury defaults to deployer/admin keypair (no extra vault key management).
-    // If you truly want a different vault, fork this script and set a different pubkey here.
-    treasury: undefined,
-    priceSol: 0.001,
+    // Payments: SOL from box mints + delivery fees go here.
+    // Custody/vault: boxes and delivered assets still transfer to the deployer/admin key (config.admin).
+    // Set to `undefined` to default payments to the deployer/admin key.
+    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    priceSol: 0.01,
     maxSupply: 333,
     maxPerTx: 15,
 
@@ -927,28 +944,35 @@ async function main() {
     console.log(
       `Minted: ${cfg.minted}/${cfg.maxSupply} · price(lamports): ${cfg.priceLamports.toString()} · max/tx: ${cfg.maxPerTx}`,
     );
-    // Single-master-key mode: require deployer/admin/treasury to be the same key.
+    // Require the deployer key to match the configured admin (custody vault + server cosigner).
     if (!payer.publicKey.equals(cfg.admin)) {
       throw new Error(
-        `This repo is configured for a single master key.\n` +
-          `Config admin pubkey does not match the deployer key you entered.\n` +
+        `Config admin pubkey does not match the deployer key you entered.\n` +
           `- deployer: ${payer.publicKey.toBase58()}\n` +
           `- admin   : ${cfg.admin.toBase58()}\n` +
           `\n` +
           `Fix: re-run with the admin keypair, or redeploy fresh without reusing this config PDA.`,
       );
     }
-    if (!payer.publicKey.equals(cfg.treasury)) {
-      throw new Error(
-        `This repo is configured for a single master key.\n` +
-          `Config treasury pubkey does not match the deployer key you entered.\n` +
-          `- deployer: ${payer.publicKey.toBase58()}\n` +
-          `- treasury: ${cfg.treasury.toBase58()}\n` +
-          `\n` +
-          `Fix: set treasury to the same key (admin can call set_treasury) or redeploy fresh.`,
-      );
-    }
     await assertMplCoreCollection(connection, cfg.coreCollection);
+
+    // Optional: update payment treasury if configured in BOX_MINTER_CONFIG.
+    let paymentTreasury = cfg.treasury;
+    if (BOX_MINTER_CONFIG.treasury) {
+      const desired = new PublicKey(BOX_MINTER_CONFIG.treasury);
+      if (!desired.equals(cfg.treasury)) {
+        console.log('\nUpdating payment treasury…');
+        console.log('  from:', cfg.treasury.toBase58());
+        console.log('  to  :', desired.toBase58());
+        const setIx = buildSetTreasuryIx({ programId: programPk, admin: payer.publicKey, treasury: desired });
+        const tx = new Transaction().add(setIx);
+        tx.feePayer = payer.publicKey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+        const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
+        console.log('✅ Payment treasury updated:', sig);
+        paymentTreasury = desired;
+      }
+    }
 
     console.log('');
     let receiptsTree: PublicKey | null = null;
@@ -966,7 +990,7 @@ async function main() {
         payer,
         programId: programPk,
         configPda,
-        treasury: cfg.treasury,
+        treasury: paymentTreasury,
         coreCollection: cfg.coreCollection,
         receiptsMerkleTree: receiptsTree || undefined,
       });
@@ -1008,7 +1032,7 @@ async function main() {
     return;
   }
 
-  // Single-master-key mode: make treasury == deployer/admin keypair by default.
+  // Payment treasury (defaults to deployer/admin key if unset).
   const treasury = new PublicKey(BOX_MINTER_CONFIG.treasury || payer.publicKey.toBase58());
   const priceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.priceSol) * LAMPORTS_PER_SOL));
   const maxSupply = Number(BOX_MINTER_CONFIG.maxSupply);
@@ -1086,7 +1110,7 @@ async function main() {
   const setupSig = await sendAndConfirmTransaction(connection, setupTx, [payer], { commitment: 'confirmed' });
   console.log('✅ Box minter configured:', setupSig);
   console.log('  Config PDA:', configPda.toBase58());
-  console.log('  Treasury:', treasury.toBase58());
+  console.log('  Payment treasury:', treasury.toBase58());
   console.log('  Price (lamports):', priceLamports.toString());
   console.log('');
 

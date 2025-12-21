@@ -360,12 +360,12 @@ pub mod box_minter {
     /// Starts a two-step box open flow.
     ///
     /// This instruction must be immediately followed by an MPL-Core `TransferV1` that transfers
-    /// `box_asset` from the user to `config.treasury` (vault). If the transfer fails, the whole
+    /// `box_asset` from the user to `config.admin` (vault). If the transfer fails, the whole
     /// transaction fails (so no pending state is created and no placeholder assets are minted).
     ///
     /// Side effects (all in this one transaction):
     /// - creates a `PendingOpenBox` PDA keyed by the box asset pubkey
-    /// - mints 3 placeholder Core assets (empty metadata, no collection) owned by `config.treasury`
+    /// - mints 3 placeholder Core assets (empty metadata, no collection) owned by `config.admin`
     pub fn start_open_box<'a, 'b, 'c, 'info>(
         ctx: Context<'a, 'b, 'c, 'info, StartOpenBox<'info>>,
     ) -> Result<()> {
@@ -393,7 +393,7 @@ pub mod box_minter {
             ctx.accounts.box_asset.key(),
             ctx.accounts.core_collection.key(),
             ctx.accounts.payer.key(),
-            cfg.treasury,
+            cfg.admin,
         )?;
 
         // Remaining accounts: exactly 3 new placeholder dude asset PDAs.
@@ -403,12 +403,12 @@ pub mod box_minter {
         );
 
         // Create 3 placeholder Core assets:
-        // - owner: config.treasury (vault/admin)
+        // - owner: config.admin (vault/admin)
         // - update authority: config PDA (so only the program can later "reveal" by updating metadata + setting collection)
         // - collection: None (placeholder) so the assets do NOT appear in the collection until reveal.
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
-        let treasury = ctx.accounts.treasury.to_account_info();
+        let vault = ctx.accounts.vault.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
         let cfg_ai = ctx.accounts.config.to_account_info();
         let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
@@ -428,7 +428,7 @@ pub mod box_minter {
                 // 3 payer (signer)
                 anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
                 // 4 owner: vault/admin (not signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(treasury.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
                 // 5 update authority: config PDA (not signer account meta)
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), false),
                 // 6 system program
@@ -485,7 +485,7 @@ pub mod box_minter {
                 asset_ai.clone(),
                 cfg_ai.clone(),
                 payer.clone(),
-                treasury.clone(),
+                vault.clone(),
                 cfg_ai.clone(),
                 system_program.clone(),
             ];
@@ -517,15 +517,10 @@ pub mod box_minter {
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
 
-        // Admin-only. In this repo we run single-master-key mode (admin == treasury).
+        // Admin-only. The admin key is the custody vault for delivered/opened assets.
         require_keys_eq!(
             ctx.accounts.cosigner.key(),
             cfg.admin,
-            BoxMinterError::InvalidCosigner
-        );
-        require_keys_eq!(
-            ctx.accounts.cosigner.key(),
-            cfg.treasury,
             BoxMinterError::InvalidCosigner
         );
 
@@ -579,7 +574,7 @@ pub mod box_minter {
         // Defensive: ensure the box is a Mons *box* now owned by the vault/admin.
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
-            cfg.treasury,
+            cfg.admin,
             cfg.core_collection,
             &cfg.uri_base,
             None,
@@ -839,11 +834,13 @@ pub mod box_minter {
             )?;
         }
 
-        // Transfer all delivered assets to the vault (config.treasury) via MPL-Core `TransferV1`.
+        // Transfer all delivered assets to the vault (config.admin) via MPL-Core `TransferV1`.
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let core_collection = ctx.accounts.core_collection.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
         let treasury = ctx.accounts.treasury.to_account_info();
+        // Vault is the admin/cosigner key (custody); payment receiver is `config.treasury`.
+        let vault = ctx.accounts.cosigner.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
         let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
 
@@ -855,7 +852,7 @@ pub mod box_minter {
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
                 anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(treasury.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
@@ -872,7 +869,7 @@ pub mod box_minter {
                     core_collection.clone(),
                     payer.clone(),
                     payer.clone(),
-                    treasury.clone(),
+                    vault.clone(),
                     system_program.clone(),
                     log_wrapper.clone(),
                     mpl_core_program.clone(),
@@ -912,12 +909,12 @@ pub mod box_minter {
             BoxMinterError::InvalidDeliveryPda
         );
 
-        // Drain lamports to the treasury and close the account (reclaim rent).
+        // Drain lamports to the admin/cosigner and close the account (reclaim rent).
         let delivery_ai = ctx.accounts.delivery.to_account_info();
-        let treasury_ai = ctx.accounts.treasury.to_account_info();
+        let cosigner_ai = ctx.accounts.cosigner.to_account_info();
         let lamports = delivery_ai.lamports();
         if lamports > 0 {
-            **treasury_ai.lamports.borrow_mut() = treasury_ai
+            **cosigner_ai.lamports.borrow_mut() = cosigner_ai
                 .lamports()
                 .checked_add(lamports)
                 .ok_or(BoxMinterError::MathOverflow)?;
@@ -946,12 +943,6 @@ pub mod box_minter {
         require_keys_eq!(
             ctx.accounts.cosigner.key(),
             cfg.admin,
-            BoxMinterError::InvalidCosigner
-        );
-        // Single-master-key mode in this repo.
-        require_keys_eq!(
-            ctx.accounts.cosigner.key(),
-            cfg.treasury,
             BoxMinterError::InvalidCosigner
         );
 
@@ -1327,9 +1318,9 @@ pub struct StartOpenBox<'info> {
     #[account(mut)]
     pub box_asset: UncheckedAccount<'info>,
 
-    /// CHECK: Must match config.treasury (owner for placeholder dudes).
-    #[account(address = config.treasury)]
-    pub treasury: UncheckedAccount<'info>,
+    /// CHECK: Must match config.admin (vault that receives box transfers and temporarily owns placeholder dudes).
+    #[account(address = config.admin)]
+    pub vault: UncheckedAccount<'info>,
 
     /// CHECK: MPL-Core collection. Must match config.core_collection.
     #[account(address = config.core_collection)]
@@ -1359,7 +1350,7 @@ pub struct FinalizeOpenBox<'info> {
     #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
-    /// Cloud-held signer (must match config.admin and config.treasury in this repo).
+    /// Cloud-held signer (must match config.admin).
     #[account(mut)]
     pub cosigner: Signer<'info>,
 
@@ -1432,11 +1423,8 @@ pub struct CloseDelivery<'info> {
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
+    #[account(mut)]
     pub cosigner: Signer<'info>,
-
-    /// CHECK: Must match config.treasury
-    #[account(mut, address = config.treasury)]
-    pub treasury: UncheckedAccount<'info>,
 
     /// CHECK: Delivery record PDA to close.
     #[account(mut)]
@@ -1450,7 +1438,7 @@ pub struct MintReceipts<'info> {
     #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
-    /// Cloud-held signer (must match config.admin and config.treasury in this repo).
+    /// Cloud-held signer (must match config.admin).
     #[account(mut)]
     pub cosigner: Signer<'info>,
 

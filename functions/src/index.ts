@@ -1436,7 +1436,7 @@ export const revealDudes = onCallLogged(
 
   const conn = connection();
 
-  // Load on-chain config and enforce single-master-key assumptions for reveal.
+  // Load on-chain config and enforce server cosigner matches on-chain admin.
   const cfgInfo = await withTimeout(
     conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
@@ -1450,7 +1450,6 @@ export const revealDudes = onCallLogged(
     );
   }
   const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
@@ -1458,13 +1457,6 @@ export const revealDudes = onCallLogged(
       'failed-precondition',
       `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
-    );
-  }
-  if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new HttpsError(
-      'failed-precondition',
-      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter treasury ${cfgTreasury.toBase58()}`,
-      { expectedTreasury: cfgTreasury.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
@@ -1820,16 +1812,15 @@ export const issueReceipts = onCallLogged(
         const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
         const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
         const signer = cosigner();
-        if (!signer.publicKey.equals(cfgAdmin) || !signer.publicKey.equals(cfgTreasury)) {
-          throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin/treasury (late close)');
+        if (!signer.publicKey.equals(cfgAdmin)) {
+          throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin (late close)');
         }
 
         const closeIx = new TransactionInstruction({
           programId: boxMinterProgramId,
           keys: [
             { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-            { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-            { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+            { pubkey: signer.publicKey, isSigner: true, isWritable: true },
             { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           ],
@@ -1944,7 +1935,7 @@ export const issueReceipts = onCallLogged(
     }
   }
 
-  // Ensure the cosigner key matches the on-chain admin and treasury matches our single-master-key setup.
+  // Ensure the cosigner key matches the on-chain admin (custody vault).
   const cfgInfo = await withTimeout(
     conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
@@ -1964,12 +1955,6 @@ export const issueReceipts = onCallLogged(
     throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: cfgAdmin.toBase58(),
       cosigner: signer.publicKey.toBase58(),
-    });
-  }
-  if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new HttpsError('failed-precondition', 'Treasury does not match server key (single-master-key mode)', {
-      treasury: cfgTreasury.toBase58(),
-      server: signer.publicKey.toBase58(),
     });
   }
 
@@ -2253,8 +2238,7 @@ export const issueReceipts = onCallLogged(
       programId: boxMinterProgramId,
       keys: [
         { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-        { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+        { pubkey: signer.publicKey, isSigner: true, isWritable: true },
         { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
@@ -2380,18 +2364,11 @@ export const prepareIrlClaimTx = onCallLogged(
     );
   }
   const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: cfgAdmin.toBase58(),
-      cosigner: signer.publicKey.toBase58(),
-    });
-  }
-  if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain treasury', {
-      expectedTreasury: cfgTreasury.toBase58(),
       cosigner: signer.publicKey.toBase58(),
     });
   }
