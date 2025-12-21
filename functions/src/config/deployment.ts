@@ -49,8 +49,8 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   uriBase: 'https://assets.mons.link/shop/drops/1/json/boxes/',
 
   // On-chain ids
-  boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
-  collectionMint: 'CxZubJmi2aubC76EF7yP88xsooosjcmrqomZv6FSS7Uj',
-  receiptsMerkleTree: 'YGkNwcQTf1TB1PbVByFDoGMFTBeQ5pDNu7UpDfhzEFX',
-  deliveryLookupTable: 'uwBz7Q3J6wW4NyERzrBFXUPvTwA8H3eZsrYgeouSb8P',
+  boxMinterProgramId: 'FYJ8PRHzMg3UTu47TppZxgVSS7Qh7PjzwZriYm4VVoP6',
+  collectionMint: 'DJqHWvUB1vEbwCV4oYzzuVEZvaFZoyVaPdwfb6qQQzeW',
+  receiptsMerkleTree: 'AQ1iHnnVH6FuDMsmDSBRq8PFUpAo1w5HvjVVdXk26g8w',
+  deliveryLookupTable: '3X3HPJWwucZ8fjK9oSkyQjLxMRkZ97Tw4LrrvSPBrVpW',
 };

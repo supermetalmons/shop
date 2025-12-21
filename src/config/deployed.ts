@@ -35,6 +35,6 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   namePrefix: 'box',
   symbol: 'box',
   uriBase: 'https://assets.mons.link/shop/drops/1/json/boxes/',
-  boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
-  collectionMint: 'CxZubJmi2aubC76EF7yP88xsooosjcmrqomZv6FSS7Uj',
+  boxMinterProgramId: 'FYJ8PRHzMg3UTu47TppZxgVSS7Qh7PjzwZriYm4VVoP6',
+  collectionMint: 'DJqHWvUB1vEbwCV4oYzzuVEZvaFZoyVaPdwfb6qQQzeW',
 };
