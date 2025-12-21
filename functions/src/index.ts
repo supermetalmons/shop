@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DEPLOYMENT } from './config/deployment.js';
+import { FUNCTIONS_DEPLOYMENT, FUNCTIONS_PATHS } from './config/deployment.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -178,7 +178,7 @@ function requireConfiguredPubkey(label: string, value: string | undefined): Publ
 const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', FUNCTIONS_DEPLOYMENT.collectionMint);
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
 // Drop metadata base (collection.json + json/* + images/*)
-const metadataBase = (FUNCTIONS_DEPLOYMENT.metadataBase || '').replace(/\/$/, '');
+const metadataBase = FUNCTIONS_PATHS.base;
 
 // Bubblegum receipts tree (required to mint receipt cNFTs).
 const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', FUNCTIONS_DEPLOYMENT.receiptsMerkleTree);

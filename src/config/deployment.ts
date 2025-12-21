@@ -8,10 +8,13 @@
  * - Do NOT put secrets here.
  * - Only `VITE_HELIUS_API_KEY` and `VITE_FIREBASE_API_KEY` should be provided via env.
  */
-import { FRONTEND_DEPLOYED } from './deployed';
+import { FRONTEND_DEPLOYED, FRONTEND_PATHS } from './deployed';
 
 export const FRONTEND_DEPLOYMENT = {
   ...FRONTEND_DEPLOYED,
+
+  // Canonical derived drop paths (avoid duplicating URL strings).
+  paths: FRONTEND_PATHS,
 
   // Delivery address encryption (public key only; keep secret key offline).
   addressEncryptionPublicKey: 't6amHtGqTyN1odz/o7m7EuXFmfS2wqegHF1r/3TAhDg=',

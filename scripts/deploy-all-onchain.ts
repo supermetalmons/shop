@@ -201,6 +201,11 @@ function tsStringLiteral(value: string): string {
   return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
+function normalizeDropBase(base: string): string {
+  // Drop base should be stable and never end with `/`.
+  return (base || '').trim().replace(/\/+$/, '');
+}
+
 function readExistingTsObjectStringField(filePath: string, field: string): string | undefined {
   if (!existsSync(filePath)) return undefined;
   try {
@@ -231,7 +236,6 @@ function writeFrontendDeployedConfig(args: {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  uriBase: string;
   boxMinterProgramId: string;
   collectionMint: string;
 }) {
@@ -257,7 +261,6 @@ export type FrontendDeployedConfig = {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  uriBase: string;
 
   boxMinterProgramId: string;
   collectionMint: string;
@@ -272,10 +275,43 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
   symbol: ${tsStringLiteral(args.symbol)},
-  uriBase: ${tsStringLiteral(args.uriBase)},
   boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
   collectionMint: ${tsStringLiteral(args.collectionMint)},
 };
+
+export type DropPaths = {
+  /** Normalized drop base (no trailing slash). */
+  base: string;
+  collectionJson: string;
+  boxesJsonBase: string;
+  figuresJsonBase: string;
+  receiptsBoxesJsonBase: string;
+  receiptsFiguresJsonBase: string;
+};
+
+export function normalizeDropBase(base: string): string {
+  // Allow callers to pass either \`https://.../drops/1\` or \`https://.../drops/1/\`.
+  return String(base || '').replace(/\\/+$/, '');
+}
+
+export function dropPathsFromBase(dropBase: string): DropPaths {
+  const base = normalizeDropBase(dropBase);
+  return {
+    base,
+    collectionJson: \`\${base}/collection.json\`,
+    boxesJsonBase: \`\${base}/json/boxes/\`,
+    figuresJsonBase: \`\${base}/json/figures/\`,
+    receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
+    receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
+  };
+}
+
+/**
+ * Canonical derived paths for the current drop.
+ *
+ * Keep all path building in one place to avoid duplicating URL strings.
+ */
+export const FRONTEND_PATHS = dropPathsFromBase(FRONTEND_DEPLOYED.metadataBase);
 `;
   writeTextFileIfChanged(filePath, content);
   return filePath;
@@ -291,7 +327,6 @@ function writeFunctionsDeploymentConfig(args: {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  uriBase: string;
   boxMinterProgramId: string;
   collectionMint: string;
   receiptsMerkleTree: string;
@@ -324,7 +359,6 @@ export type FunctionsDeploymentConfig = {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  uriBase: string;
 
   // On-chain ids
   boxMinterProgramId: string;
@@ -346,7 +380,6 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
   symbol: ${tsStringLiteral(args.symbol)},
-  uriBase: ${tsStringLiteral(args.uriBase)},
 
   // On-chain ids
   boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
@@ -354,6 +387,40 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   receiptsMerkleTree: ${tsStringLiteral(args.receiptsMerkleTree)},
   deliveryLookupTable: ${tsStringLiteral(args.deliveryLookupTable)},
 };
+
+export type DropPaths = {
+  /** Normalized drop base (no trailing slash). */
+  base: string;
+  collectionJson: string;
+  boxesJsonBase: string;
+  figuresJsonBase: string;
+  receiptsBoxesJsonBase: string;
+  receiptsFiguresJsonBase: string;
+};
+
+export function normalizeDropBase(base: string): string {
+  // Allow callers to pass either \`https://.../drops/1\` or \`https://.../drops/1/\`.
+  return String(base || '').replace(/\\/+$/, '');
+}
+
+export function dropPathsFromBase(dropBase: string): DropPaths {
+  const base = normalizeDropBase(dropBase);
+  return {
+    base,
+    collectionJson: \`\${base}/collection.json\`,
+    boxesJsonBase: \`\${base}/json/boxes/\`,
+    figuresJsonBase: \`\${base}/json/figures/\`,
+    receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
+    receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
+  };
+}
+
+/**
+ * Canonical derived paths for the current drop.
+ *
+ * Keep all path building in one place to avoid duplicating URL strings.
+ */
+export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);
 `;
   writeTextFileIfChanged(filePath, content);
   return filePath;
@@ -538,7 +605,12 @@ function buildInitializeIx(args: {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  uriBase: string;
+  /**
+   * Drop base URL (canonical), e.g. `https://assets.mons.link/shop/drops/1`.
+   *
+   * The on-chain program derives per-asset JSON URIs from this base.
+   */
+  metadataBase: string;
 }): TransactionInstruction {
   const configPda = boxMinterConfigPda(args.programId);
   const data = Buffer.concat([
@@ -548,7 +620,7 @@ function buildInitializeIx(args: {
     Buffer.from([args.maxPerTx & 0xff]),
     borshString(args.namePrefix),
     borshString(args.symbol),
-    borshString(args.uriBase),
+    borshString(args.metadataBase),
   ]);
 
   return new TransactionInstruction({
@@ -1034,9 +1106,12 @@ async function main() {
     // Box metadata (stored on-chain)
     namePrefix: 'box',
     symbol: 'box',
-    // Base URI for per-box JSON: `${uriBase}${index}.json`
-    // (Your on-chain program can also accept a full *.json uri for a single shared metadata file.)
-    uriBase: `${DROP_METADATA_BASE}/json/boxes/`,
+    // Canonical drop base. The on-chain program derives:
+    // - boxes   : `${metadataBase}/json/boxes/{id}.json`
+    // - figures : `${metadataBase}/json/figures/{id}.json`
+    // - receipts: `${metadataBase}/json/receipts/{kind}/{id}.json`
+    // (The program also supports legacy configs where the stored value is already `${base}/json/boxes/`.)
+    metadataBase: DROP_METADATA_BASE,
   };
   // ---------------------------------------------------------------------------
 
@@ -1112,31 +1187,31 @@ async function main() {
     const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
     const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
 
+    const resolvedDropBase = normalizeDropBase(cfg.uriBase) || normalizeDropBase(DROP_METADATA_BASE);
+
     const frontendCfgPath = writeFrontendDeployedConfig({
       root,
       solanaCluster: cluster,
-      metadataBase: DROP_METADATA_BASE,
+      metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
       maxSupply: cfg.maxSupply,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
       symbol: cfg.symbol,
-      uriBase: cfg.uriBase,
       boxMinterProgramId: programPk.toBase58(),
       collectionMint: cfg.coreCollection.toBase58(),
     });
     const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
       root,
       solanaCluster: cluster,
-      metadataBase: DROP_METADATA_BASE,
+      metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
       maxSupply: cfg.maxSupply,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
       symbol: cfg.symbol,
-      uriBase: cfg.uriBase,
       boxMinterProgramId: programPk.toBase58(),
       collectionMint: cfg.coreCollection.toBase58(),
       receiptsMerkleTree: receiptsTreeStr,
@@ -1222,7 +1297,7 @@ async function main() {
     maxPerTx,
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
     symbol: BOX_MINTER_CONFIG.symbol,
-    uriBase: BOX_MINTER_CONFIG.uriBase,
+    metadataBase: normalizeDropBase(BOX_MINTER_CONFIG.metadataBase),
   });
 
   const setupTx = new Transaction().add(initIx);
@@ -1275,7 +1350,6 @@ async function main() {
     maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
     symbol: BOX_MINTER_CONFIG.symbol,
-    uriBase: BOX_MINTER_CONFIG.uriBase,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
   });
@@ -1289,7 +1363,6 @@ async function main() {
     maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
     symbol: BOX_MINTER_CONFIG.symbol,
-    uriBase: BOX_MINTER_CONFIG.uriBase,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,

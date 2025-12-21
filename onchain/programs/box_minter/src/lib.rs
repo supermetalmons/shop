@@ -91,6 +91,14 @@ pub mod box_minter {
             args.uri_base.len() <= BoxMinterConfig::MAX_URI_BASE,
             BoxMinterError::UriTooLong
         );
+        // Canonical config: `uri_base` is the DROP BASE (not `/json/boxes/` and not a `.json` file).
+        // Example: `https://assets.mons.link/shop/drops/1`
+        let drop_base = args.uri_base.trim_end_matches('/');
+        require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
+        require!(!drop_base.ends_with(".json"), BoxMinterError::InvalidMetadataBase);
+        require!(!drop_base.contains("/json/boxes"), BoxMinterError::InvalidMetadataBase);
+        require!(!drop_base.contains("/json/figures"), BoxMinterError::InvalidMetadataBase);
+        require!(!drop_base.contains("/json/receipts"), BoxMinterError::InvalidMetadataBase);
 
         let core_collection_ai = ctx.accounts.core_collection.to_account_info();
         require!(
@@ -113,7 +121,8 @@ pub mod box_minter {
         cfg.minted = 0;
         cfg.name_prefix = args.name_prefix;
         cfg.symbol = args.symbol;
-        cfg.uri_base = args.uri_base;
+        // Store normalized drop base (no trailing slash).
+        cfg.uri_base = drop_base.to_string();
         cfg.bump = ctx.bumps.config;
         Ok(())
     }
@@ -198,8 +207,14 @@ pub mod box_minter {
 
         // IMPORTANT (memory): kinobi CPI builders allocate fresh Vec/Box per mint and the SBF heap is tiny.
         // Reuse buffers across the loop so minting 10+ assets doesn't OOM.
+        // Canonical config: cfg.uri_base is the DROP BASE.
+        let drop_base = cfg.uri_base.as_str();
+        let boxes_uri_base = derive_boxes_uri_base(drop_base);
+        // Pre-allocate enough for: `${boxes_uri_base}{id}.json`
+        let max_uri_len: usize = boxes_uri_base.len() + 16;
+
         let mut name_buf = String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12);
-        let mut uri_buf = String::with_capacity(BoxMinterConfig::MAX_URI_BASE + 16);
+        let mut uri_buf = String::with_capacity(max_uri_len);
 
         let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
@@ -208,7 +223,7 @@ pub mod box_minter {
                 1 // discriminator
                 + 1 // data_state
                 + 4 + (BoxMinterConfig::MAX_NAME_PREFIX + 12) // name
-                + 4 + (BoxMinterConfig::MAX_URI_BASE + 16) // uri
+                + 4 + max_uri_len // uri (dynamic based on derived prefix)
                 + 1, // plugins option
             ),
         };
@@ -305,14 +320,10 @@ pub mod box_minter {
             write!(&mut name_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
-            uri_buf.push_str(&cfg.uri_base);
-            if !cfg.uri_base.is_empty() && !cfg.uri_base.ends_with(".json") {
-                if !cfg.uri_base.ends_with('/') {
-                    uri_buf.push('/');
-                }
-                write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-                uri_buf.push_str(".json");
-            }
+            // Per-box JSON URI: `${boxes_uri_base}{id}.json`
+            uri_buf.push_str(&boxes_uri_base);
+            write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            uri_buf.push_str(".json");
             let asset_seeds: &[&[u8]] = &[
                 SEED_BOX_ASSET,
                 payer_key.as_ref(),
@@ -378,11 +389,12 @@ pub mod box_minter {
         );
 
         // Defensive: ensure the provided asset is a Mons *box* owned by payer.
+        let boxes_uri_base = derive_boxes_uri_base(cfg.uri_base.as_str());
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
             ctx.accounts.payer.key(),
             cfg.core_collection,
-            &cfg.uri_base,
+            &boxes_uri_base,
             None,
         )?;
 
@@ -572,11 +584,12 @@ pub mod box_minter {
         }
 
         // Defensive: ensure the box is a Mons *box* now owned by the vault/admin.
+        let boxes_uri_base = derive_boxes_uri_base(cfg.uri_base.as_str());
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
             cfg.admin,
             cfg.core_collection,
-            &cfg.uri_base,
+            &boxes_uri_base,
             None,
         )?;
 
@@ -620,7 +633,7 @@ pub mod box_minter {
         //
         // IMPORTANT: MPL-Core only supports moving an asset into a collection via `UpdateV2`
         // (UpdateV1 cannot add/remove/change collection).
-        let figures_uri_base = derive_figures_uri_base(&cfg.uri_base)?;
+        let figures_uri_base = derive_figures_uri_base(cfg.uri_base.as_str());
         let mut name_buf = String::with_capacity(32);
         let mut uri_buf = String::with_capacity(figures_uri_base.len() + 16);
 
@@ -838,7 +851,6 @@ pub mod box_minter {
         let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
         let core_collection = ctx.accounts.core_collection.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
-        let treasury = ctx.accounts.treasury.to_account_info();
         // Vault is the admin/cosigner key (custody); payment receiver is `config.treasury`.
         let vault = ctx.accounts.cosigner.to_account_info();
         let system_program = ctx.accounts.system_program.to_account_info();
@@ -1017,8 +1029,8 @@ pub mod box_minter {
             BoxMinterError::InvalidReceiptsTreeConfig
         );
 
-        let receipts_boxes_uri_base = derive_receipts_boxes_uri_base(&cfg.uri_base)?;
-        let receipts_figures_uri_base = derive_receipts_figures_uri_base(&cfg.uri_base)?;
+        let receipts_boxes_uri_base = derive_receipts_boxes_uri_base(cfg.uri_base.as_str());
+        let receipts_figures_uri_base = derive_receipts_figures_uri_base(cfg.uri_base.as_str());
 
         // Build constant accounts once; only metadata bytes change per mint.
         let cosigner = ctx.accounts.cosigner.to_account_info();
@@ -1564,21 +1576,11 @@ fn parse_mpl_core_base_asset_v1(data: &[u8]) -> Result<ParsedMplCoreBaseAssetV1<
 }
 
 fn parse_ref_id_from_uri_bytes(uri: &[u8], uri_base: &str) -> Option<u32> {
-    if uri_base.ends_with(".json") {
-        // Single shared metadata URI (no numeric id to extract).
-        return None;
-    }
     let base = uri_base.as_bytes();
     if !uri.starts_with(base) {
         return None;
     }
-    let mut rest = &uri[base.len()..];
-    if !uri_base.ends_with('/') {
-        if rest.first().copied() != Some(b'/') {
-            return None;
-        }
-        rest = &rest[1..];
-    }
+    let rest = &uri[base.len()..];
     if rest.len() < 5 || !rest.ends_with(b".json") {
         return None;
     }
@@ -1699,12 +1701,6 @@ fn verify_core_asset_owned_by_uri(
     );
 
     // Ensure the asset corresponds to the expected kind by validating its URI prefix and (optionally) id.
-    if expected_uri_base.ends_with(".json") {
-        require!(base.uri == expected_uri_base.as_bytes(), BoxMinterError::InvalidAssetMetadata);
-        require!(expected_ref_id.is_none(), BoxMinterError::InvalidAssetMetadata);
-        return Ok(());
-    }
-
     let parsed =
         parse_ref_id_from_uri_bytes(base.uri, expected_uri_base).ok_or(error!(BoxMinterError::InvalidAssetMetadata))?;
     if let Some(expected) = expected_ref_id {
@@ -1713,27 +1709,12 @@ fn verify_core_asset_owned_by_uri(
     Ok(())
 }
 
-fn derive_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
-    if boxes_uri_base.ends_with(".json") {
-        // Shared single-URI metadata isn't compatible with per-figure IDs.
-        return Err(error!(BoxMinterError::InvalidFigureUriBase));
-    }
+fn derive_boxes_uri_base(drop_base: &str) -> String {
+    format!("{}/json/boxes/", drop_base)
+}
 
-    let mut out = boxes_uri_base.to_string();
-    if out.contains("/json/boxes/") {
-        out = out.replace("/json/boxes/", "/json/figures/");
-    } else if out.contains("/boxes/") {
-        out = out.replace("/boxes/", "/figures/");
-    } else if out.contains("boxes") {
-        out = out.replace("boxes", "figures");
-    } else {
-        return Err(error!(BoxMinterError::InvalidFigureUriBase));
-    }
-
-    if !out.ends_with('/') {
-        out.push('/');
-    }
-    Ok(out)
+fn derive_figures_uri_base(drop_base: &str) -> String {
+    format!("{}/json/figures/", drop_base)
 }
 
 fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
@@ -1747,50 +1728,12 @@ fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn derive_receipts_figures_uri_base(boxes_uri_base: &str) -> Result<String> {
-    if boxes_uri_base.ends_with(".json") {
-        // Shared single-URI metadata isn't compatible with per-figure receipt IDs.
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    let mut out = boxes_uri_base.to_string();
-    if out.contains("/json/boxes/") {
-        out = out.replace("/json/boxes/", "/json/receipts/figures/");
-    } else if out.contains("/boxes/") {
-        out = out.replace("/boxes/", "/receipts/figures/");
-    } else if out.contains("boxes") {
-        out = out.replace("boxes", "receipts/figures");
-    } else {
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    if !out.ends_with('/') {
-        out.push('/');
-    }
-    Ok(out)
+fn derive_receipts_figures_uri_base(drop_base: &str) -> String {
+    format!("{}/json/receipts/figures/", drop_base)
 }
 
-fn derive_receipts_boxes_uri_base(boxes_uri_base: &str) -> Result<String> {
-    if boxes_uri_base.ends_with(".json") {
-        // Shared single-URI metadata isn't compatible with per-box receipt IDs.
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    let mut out = boxes_uri_base.to_string();
-    if out.contains("/json/boxes/") {
-        out = out.replace("/json/boxes/", "/json/receipts/boxes/");
-    } else if out.contains("/boxes/") {
-        out = out.replace("/boxes/", "/receipts/boxes/");
-    } else if out.contains("boxes") {
-        out = out.replace("boxes", "receipts/boxes");
-    } else {
-        return Err(error!(BoxMinterError::InvalidReceiptUriBase));
-    }
-
-    if !out.ends_with('/') {
-        out.push('/');
-    }
-    Ok(out)
+fn derive_receipts_boxes_uri_base(drop_base: &str) -> String {
+    format!("{}/json/receipts/boxes/", drop_base)
 }
 
 #[error_code]
@@ -1869,6 +1812,8 @@ pub enum BoxMinterError {
     InvalidReceiptsTreeConfig,
     #[msg("Invalid receipt URI base")]
     InvalidReceiptUriBase,
+    #[msg("Invalid metadata base")]
+    InvalidMetadataBase,
 }
 
 
