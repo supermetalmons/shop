@@ -68,6 +68,13 @@ const MPL_CORE_CPI_SIGNER: Pubkey = Pubkey::new_from_array([
 // Bubblegum v2 mint discriminator: [120, 121, 23, 146, 173, 110, 199, 205]
 const IX_BUBBLEGUM_MINT_V2: [u8; 8] = [120, 121, 23, 146, 173, 110, 199, 205];
 
+// URI path suffixes appended to the configured DROP BASE (`config.uri_base`).
+// Kept as `&'static str` so we can avoid allocating derived base Strings on the SBF heap.
+const URI_SUFFIX_BOXES: &str = "/json/boxes/";
+const URI_SUFFIX_FIGURES: &str = "/json/figures/";
+const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
+const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
+
 #[program]
 pub mod box_minter {
     use super::*;
@@ -215,9 +222,8 @@ pub mod box_minter {
         // Reuse buffers across the loop so minting 10+ assets doesn't OOM.
         // Canonical config: cfg.uri_base is the DROP BASE.
         let drop_base = cfg.uri_base.as_str();
-        let boxes_uri_base = derive_boxes_uri_base(drop_base);
-        // Pre-allocate enough for: `${boxes_uri_base}{id}.json`
-        let max_uri_len: usize = boxes_uri_base.len() + 16;
+        // Pre-allocate enough for: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
+        let max_uri_len: usize = drop_base.len() + URI_SUFFIX_BOXES.len() + 16;
 
         let mut name_buf = String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12);
         let mut uri_buf = String::with_capacity(max_uri_len);
@@ -350,8 +356,9 @@ pub mod box_minter {
             write!(&mut name_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
-            // Per-box JSON URI: `${boxes_uri_base}{id}.json`
-            uri_buf.push_str(&boxes_uri_base);
+            // Per-box JSON URI: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
+            uri_buf.push_str(drop_base);
+            uri_buf.push_str(URI_SUFFIX_BOXES);
             write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
             let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
@@ -424,12 +431,13 @@ pub mod box_minter {
         );
 
         // Defensive: ensure the provided asset is a Mons *box* owned by payer.
-        let boxes_uri_base = derive_boxes_uri_base(cfg.uri_base.as_str());
+        let drop_base = cfg.uri_base.as_str();
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
             ctx.accounts.payer.key(),
             cfg.core_collection,
-            &boxes_uri_base,
+            drop_base,
+            URI_SUFFIX_BOXES,
             None,
         )?;
 
@@ -660,12 +668,13 @@ pub mod box_minter {
         }
 
         // Defensive: ensure the box is a Mons *box* now owned by the vault/admin.
-        let boxes_uri_base = derive_boxes_uri_base(cfg.uri_base.as_str());
+        let drop_base = cfg.uri_base.as_str();
         verify_core_asset_owned_by_uri(
             &ctx.accounts.box_asset.to_account_info(),
             cfg.admin,
             cfg.core_collection,
-            &boxes_uri_base,
+            drop_base,
+            URI_SUFFIX_BOXES,
             None,
         )?;
 
@@ -709,9 +718,8 @@ pub mod box_minter {
         //
         // IMPORTANT: MPL-Core only supports moving an asset into a collection via `UpdateV2`
         // (UpdateV1 cannot add/remove/change collection).
-        let figures_uri_base = derive_figures_uri_base(cfg.uri_base.as_str());
         let mut name_buf = String::with_capacity(32);
-        let mut uri_buf = String::with_capacity(figures_uri_base.len() + 16);
+        let mut uri_buf = String::with_capacity(drop_base.len() + URI_SUFFIX_FIGURES.len() + 16);
 
         let mut update_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
@@ -756,7 +764,8 @@ pub mod box_minter {
             write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
-            uri_buf.push_str(&figures_uri_base);
+            uri_buf.push_str(drop_base);
+            uri_buf.push_str(URI_SUFFIX_FIGURES);
             write!(&mut uri_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
 
@@ -1150,8 +1159,7 @@ pub mod box_minter {
             BoxMinterError::InvalidReceiptsTreeConfig
         );
 
-        let receipts_boxes_uri_base = derive_receipts_boxes_uri_base(cfg.uri_base.as_str());
-        let receipts_figures_uri_base = derive_receipts_figures_uri_base(cfg.uri_base.as_str());
+        let drop_base = cfg.uri_base.as_str();
 
         // Build constant accounts once; only metadata bytes change per mint.
         let cosigner = ctx.accounts.cosigner.to_account_info();
@@ -1201,7 +1209,13 @@ pub mod box_minter {
         };
 
         let mut name_buf = String::with_capacity(48);
-        let mut uri_buf = String::with_capacity(receipts_boxes_uri_base.len().max(receipts_figures_uri_base.len()) + 16);
+        let mut uri_buf = String::with_capacity(
+            drop_base.len()
+                + URI_SUFFIX_RECEIPTS_BOXES
+                    .len()
+                    .max(URI_SUFFIX_RECEIPTS_FIGURES.len())
+                + 16,
+        );
 
         // Helper closure to build + invoke a Bubblegum mintV2 for the current name/uri buffers.
         let mut mint_one = |name: &str, uri: &str| -> Result<()> {
@@ -1257,7 +1271,8 @@ pub mod box_minter {
             write!(&mut name_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
-            uri_buf.push_str(&receipts_boxes_uri_base);
+            uri_buf.push_str(drop_base);
+            uri_buf.push_str(URI_SUFFIX_RECEIPTS_BOXES);
             write!(&mut uri_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
             mint_one(&name_buf, &uri_buf)?;
@@ -1269,7 +1284,8 @@ pub mod box_minter {
             write!(&mut name_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
 
             uri_buf.clear();
-            uri_buf.push_str(&receipts_figures_uri_base);
+            uri_buf.push_str(drop_base);
+            uri_buf.push_str(URI_SUFFIX_RECEIPTS_FIGURES);
             write!(&mut uri_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
             mint_one(&name_buf, &uri_buf)?;
@@ -1703,12 +1719,17 @@ fn parse_mpl_core_base_asset_v1(data: &[u8]) -> Result<ParsedMplCoreBaseAssetV1<
     })
 }
 
-fn parse_ref_id_from_uri_bytes(uri: &[u8], uri_base: &str) -> Option<u32> {
-    let base = uri_base.as_bytes();
-    if !uri.starts_with(base) {
+fn parse_ref_id_from_uri_bytes(uri: &[u8], drop_base: &str, uri_suffix: &str) -> Option<u32> {
+    let drop = drop_base.as_bytes();
+    if !uri.starts_with(drop) {
         return None;
     }
-    let rest = &uri[base.len()..];
+    let rest = &uri[drop.len()..];
+    let suffix = uri_suffix.as_bytes();
+    if !rest.starts_with(suffix) {
+        return None;
+    }
+    let rest = &rest[suffix.len()..];
     if rest.len() < 5 || !rest.ends_with(b".json") {
         return None;
     }
@@ -1734,7 +1755,8 @@ fn verify_core_asset_owned_by_uri(
     asset_ai: &AccountInfo,
     owner: Pubkey,
     core_collection: Pubkey,
-    expected_uri_base: &str,
+    expected_drop_base: &str,
+    expected_uri_suffix: &str,
     expected_ref_id: Option<u32>,
 ) -> Result<()> {
     require_keys_eq!(*asset_ai.owner, MPL_CORE_PROGRAM_ID, BoxMinterError::InvalidAsset);
@@ -1747,27 +1769,12 @@ fn verify_core_asset_owned_by_uri(
     );
 
     // Ensure the asset corresponds to the expected kind by validating its URI prefix and (optionally) id.
-    let parsed =
-        parse_ref_id_from_uri_bytes(base.uri, expected_uri_base).ok_or(error!(BoxMinterError::InvalidAssetMetadata))?;
+    let parsed = parse_ref_id_from_uri_bytes(base.uri, expected_drop_base, expected_uri_suffix)
+        .ok_or(error!(BoxMinterError::InvalidAssetMetadata))?;
     if let Some(expected) = expected_ref_id {
         require!(parsed == expected, BoxMinterError::InvalidAssetMetadata);
     }
     Ok(())
-}
-
-fn derive_uri_base(drop_base: &str, suffix: &str) -> String {
-    let mut out = String::with_capacity(drop_base.len() + suffix.len());
-    out.push_str(drop_base);
-    out.push_str(suffix);
-    out
-}
-
-fn derive_boxes_uri_base(drop_base: &str) -> String {
-    derive_uri_base(drop_base, "/json/boxes/")
-}
-
-fn derive_figures_uri_base(drop_base: &str) -> String {
-    derive_uri_base(drop_base, "/json/figures/")
 }
 
 fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
@@ -1779,14 +1786,6 @@ fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(bytes);
     Ok(())
-}
-
-fn derive_receipts_figures_uri_base(drop_base: &str) -> String {
-    derive_uri_base(drop_base, "/json/receipts/figures/")
-}
-
-fn derive_receipts_boxes_uri_base(drop_base: &str) -> String {
-    derive_uri_base(drop_base, "/json/receipts/boxes/")
 }
 
 #[error_code]
