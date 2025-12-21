@@ -4,9 +4,9 @@
  * This file is intended to be updated by `scripts/deploy-all-box-minter.ts` after
  * an on-chain deployment, so functions can run with minimal env usage.
  *
- * Secrets (keep in env/runtime config):
- * - HELIUS_API_KEY
- * - COSIGNER_SECRET
+ * Secrets:
+ * - HELIUS_API_KEY (env/runtime config)
+ * - COSIGNER_SECRET (Firebase Functions secret / Google Secret Manager)
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';

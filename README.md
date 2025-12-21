@@ -40,9 +40,11 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - `npm run deploy:firebase` (rules + functions)
   - `npm run deploy:functions` (functions only)
 
-### Function env (set as runtime config or shell env)
-- `HELIUS_API_KEY`
-- `COSIGNER_SECRET` (bs58 secret key for the server cosigner; must match the on-chain box minter admin)
+### Function env + secrets
+- `HELIUS_API_KEY` (env/runtime config)
+- `COSIGNER_SECRET` (Firebase Functions secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
+  - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
+  - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
 
 Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
 
@@ -55,5 +57,5 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
   - Updates tracked config files:
     - `src/config/deployed.ts` (frontend)
     - `functions/src/config/deployment.ts` (cloud functions)
-  - Prints remaining required env secrets (including `COSIGNER_SECRET`, which is sensitive).
+  - Prints remaining required config keys (does **not** print `COSIGNER_SECRET`).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).

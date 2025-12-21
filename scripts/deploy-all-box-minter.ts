@@ -147,9 +147,9 @@ function writeFunctionsDeploymentConfig(args: {
  * This file is intended to be updated by \`scripts/deploy-all-box-minter.ts\` after
  * an on-chain deployment, so functions can run with minimal env usage.
  *
- * Secrets (keep in env/runtime config):
- * - HELIUS_API_KEY
- * - COSIGNER_SECRET
+ * Secrets:
+ * - HELIUS_API_KEY (env/runtime config)
+ * - COSIGNER_SECRET (Firebase Functions secret / Google Secret Manager)
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
@@ -890,15 +890,6 @@ async function main() {
     console.log(`- ${path.relative(root, frontendCfgPath)}`);
     console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
     console.log('');
-    console.log('--- remaining env ---');
-    console.log('frontend : VITE_HELIUS_API_KEY, VITE_FIREBASE_API_KEY');
-    console.log('functions: HELIUS_API_KEY, COSIGNER_SECRET');
-    if (payer.publicKey.equals(cfg.admin)) {
-      console.log('# Sensitive: keep this secret offline/backed up securely.');
-      console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
-    } else {
-      console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
-    }
     return;
   }
 
@@ -1039,16 +1030,6 @@ async function main() {
   console.log(`- ${path.relative(root, frontendCfgPath)}`);
   console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
   console.log('');
-  console.log('--- remaining env ---');
-  console.log('frontend : VITE_HELIUS_API_KEY, VITE_FIREBASE_API_KEY');
-  console.log('functions: HELIUS_API_KEY, COSIGNER_SECRET');
-  console.log('# Sensitive: keep this secret offline/backed up securely.');
-  console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
-  console.log('');
-  console.log('--- notes ---');
-  console.log(
-    `Core collection update authority must be the box minter config PDA:\n` + `  ${configPda.toBase58()}\n`,
-  );
 }
 
 main().catch((err) => {

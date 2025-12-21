@@ -1,6 +1,8 @@
 import { initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
-import * as functions from 'firebase-functions';
+import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
+import * as logger from 'firebase-functions/logger';
 import {
   ComputeBudgetProgram,
   Connection,
@@ -21,6 +23,10 @@ import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
 import { FUNCTIONS_DEPLOYMENT } from './config/deployment.js';
+
+// Firebase/Google Secret Manager secrets (Cloud Functions v2).
+// Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
+const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -70,7 +76,7 @@ loadLocalEnv();
 const app = initializeApp();
 const db = getFirestore(app);
 
-type CallableReq<T = any> = functions.https.CallableRequest<T>;
+type CallableReq<T = any> = CallableRequest<T>;
 
 function uidFromRequest(request: CallableReq<any>): string | null {
   return request.auth?.uid || null;
@@ -79,7 +85,7 @@ function uidFromRequest(request: CallableReq<any>): string | null {
 function requireAuth(request: CallableReq<any>): string {
   const uid = uidFromRequest(request);
   if (!request.auth || !uid) {
-    throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
   }
   return uid;
 }
@@ -91,7 +97,7 @@ function normalizeWallet(wallet: string): string {
   try {
     return new PublicKey(wallet).toBase58();
   } catch {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid wallet address');
+    throw new HttpsError('invalid-argument', 'Invalid wallet address');
   }
 }
 
@@ -106,13 +112,13 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
     try {
       return { uid, wallet: normalizeWallet(uid) };
     } catch {
-      throw new functions.https.HttpsError('unauthenticated', 'Sign in with your wallet first.');
+      throw new HttpsError('unauthenticated', 'Sign in with your wallet first.');
     }
   }
 
   const expiresAt = data?.expiresAt;
   if (expiresAt && typeof expiresAt.toMillis === 'function' && expiresAt.toMillis() < Date.now()) {
-    throw new functions.https.HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
+    throw new HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
   }
 
   return { uid, wallet: normalizeWallet(wallet) };
@@ -206,7 +212,7 @@ let cachedDeliveryLutAtMs = 0;
 
 function assertConfiguredProgramId(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
-    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
+    throw new HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
   }
 }
 
@@ -226,7 +232,7 @@ function decodeSecretKey(secret: string | undefined, label: string) {
 let cachedCosigner: Keypair | null = null;
 function cosigner() {
   if (!cachedCosigner) {
-    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(process.env.COSIGNER_SECRET, 'COSIGNER_SECRET'));
+    cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(COSIGNER_SECRET.value(), 'COSIGNER_SECRET'));
   }
   return cachedCosigner;
 }
@@ -242,7 +248,7 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
     const details = parsed.error.issues
       .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
       .join('; ');
-    throw new functions.https.HttpsError('invalid-argument', details || 'Invalid request payload');
+    throw new HttpsError('invalid-argument', details || 'Invalid request payload');
   }
   return parsed.data;
 }
@@ -301,14 +307,15 @@ function summarizeError(err: unknown) {
 function onCallLogged<TReq, TRes>(
   name: string,
   handler: (request: CallableReq<TReq>) => Promise<TRes>,
+  options: CallableOptions = {},
 ) {
-  return functions.https.onCall(async (request: CallableReq<TReq>) => {
+  return onCall(options, async (request: CallableReq<TReq>) => {
     const startedAt = Date.now();
     const debug = (request as any)?.data?.__debug as any;
     const debugCallId = typeof debug?.callId === 'string' ? debug.callId : null;
     const baseMeta = { ...callableMeta(request), debugCallId };
     try {
-      functions.logger.info(`${name}:call`, { ...baseMeta, data: summarizePayload((request as any).data) });
+      logger.info(`${name}:call`, { ...baseMeta, data: summarizePayload((request as any).data) });
     } catch (logErr) {
       // Never fail the function because structured logging couldn't serialize something.
       console.error(`${name}:call logger failed`, { logError: summarizeError(logErr), meta: baseMeta });
@@ -317,7 +324,7 @@ function onCallLogged<TReq, TRes>(
       const result = await handler(request);
       const ms = Date.now() - startedAt;
       try {
-        functions.logger.info(`${name}:ok`, { ...baseMeta, ms });
+        logger.info(`${name}:ok`, { ...baseMeta, ms });
       } catch (logErr) {
         console.error(`${name}:ok logger failed`, { logError: summarizeError(logErr), meta: baseMeta, ms });
       }
@@ -326,7 +333,7 @@ function onCallLogged<TReq, TRes>(
       const ms = Date.now() - startedAt;
       try {
         const errorForLog = err instanceof Error ? err : new Error(String(err));
-        functions.logger.error(`${name}:error`, errorForLog, { ...baseMeta, ms, error: summarizeError(err) });
+        logger.error(`${name}:error`, errorForLog, { ...baseMeta, ms, error: summarizeError(err) });
       } catch (logErr) {
         console.error(`${name}:error logger failed`, {
           logError: summarizeError(logErr),
@@ -343,11 +350,12 @@ function onCallLogged<TReq, TRes>(
 function onCallAuthed<TReq, TRes>(
   name: string,
   handler: (request: CallableReq<TReq>, uid: string) => Promise<TRes>,
+  options: CallableOptions = {},
 ) {
   return onCallLogged<TReq, TRes>(name, async (request: CallableReq<TReq>) => {
     const uid = requireAuth(request);
     return handler(request, uid);
-  });
+  }, options);
 }
 
 function heliusRpcEndpoint() {
@@ -469,14 +477,14 @@ async function waitForSignature(
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   const timeout = sleep(ms).then(() => {
-    throw new functions.https.HttpsError('deadline-exceeded', `${label} timed out after ${ms}ms`);
+    throw new HttpsError('deadline-exceeded', `${label} timed out after ${ms}ms`);
   });
   return Promise.race([promise, timeout]);
 }
 
 function assertConfiguredPublicKey(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
-    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
+    throw new HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
   }
 }
 
@@ -510,7 +518,7 @@ async function ensureOnchainCoreConfig(force = false) {
 
   if (Object.keys(missing).length) {
     onchainConfigOk = false;
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'On-chain mint config is missing or mismatched. Re-run `npm run box-minter:deploy-all`, update functions env, and redeploy.',
       {
@@ -524,7 +532,7 @@ async function ensureOnchainCoreConfig(force = false) {
   const collectionInfo = infos[0];
   if (collectionInfo && !collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
     onchainConfigOk = false;
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'COLLECTION_MINT is not an MPL Core collection account for this cluster.',
       {
@@ -558,23 +566,23 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
       }
 
       if (status === 404) {
-        throw new functions.https.HttpsError('not-found', `${label}: not found (Helius 404)`, { status });
+        throw new HttpsError('not-found', `${label}: not found (Helius 404)`, { status });
       }
       if (status === 400) {
-        throw new functions.https.HttpsError('invalid-argument', `${label}: bad request (Helius 400)`, { status });
+        throw new HttpsError('invalid-argument', `${label}: bad request (Helius 400)`, { status });
       }
       if (status === 401 || status === 403) {
-        throw new functions.https.HttpsError('failed-precondition', `${label}: unauthorized (check Helius API key)`, {
+        throw new HttpsError('failed-precondition', `${label}: unauthorized (check Helius API key)`, {
           status,
         });
       }
       if (status === 429) {
-        throw new functions.https.HttpsError('resource-exhausted', `${label}: rate limited`, { status });
+        throw new HttpsError('resource-exhausted', `${label}: rate limited`, { status });
       }
       if (status >= 500) {
-        throw new functions.https.HttpsError('unavailable', `${label}: upstream unavailable`, { status });
+        throw new HttpsError('unavailable', `${label}: upstream unavailable`, { status });
       }
-      throw new functions.https.HttpsError('unknown', `${label}: HTTP ${status}`, { status });
+      throw new HttpsError('unknown', `${label}: HTTP ${status}`, { status });
     } catch (err) {
       const anyErr = err as any;
       const isHttpsError = anyErr && typeof anyErr === 'object' && typeof anyErr.code === 'string' && anyErr.code !== 'UNKNOWN';
@@ -588,7 +596,7 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
       }
 
       if (attempt === retries) {
-        throw new functions.https.HttpsError('unavailable', `${label}: request failed`, {
+        throw new HttpsError('unavailable', `${label}: request failed`, {
           message: err instanceof Error ? err.message : String(err),
         });
       }
@@ -596,7 +604,7 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
     }
   }
   // Unreachable, but keeps TS happy.
-  throw new functions.https.HttpsError('unavailable', `${label}: request failed`);
+  throw new HttpsError('unavailable', `${label}: request failed`);
 }
 
 async function heliusRpc<T>(method: string, params: any, label: string): Promise<T> {
@@ -614,14 +622,14 @@ async function heliusRpc<T>(method: string, params: any, label: string): Promise
   if (!res.ok || json?.error) {
     const message = json?.error?.message || res.statusText || 'Unknown Helius RPC error';
     const upstreamCode = json?.error?.code;
-    functions.logger.warn('Helius RPC error', {
+    logger.warn('Helius RPC error', {
       method,
       label,
       status: res.status,
       upstreamCode,
       message,
     });
-    throw new functions.https.HttpsError('unavailable', `${label}: ${message}`, {
+    throw new HttpsError('unavailable', `${label}: ${message}`, {
       method,
       status: res.status,
       upstreamCode,
@@ -652,7 +660,7 @@ async function fetchAssetsOwned(owner: string) {
     const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping }, 'Helius assets error');
     const items = Array.isArray(grouped?.items) ? grouped.items : [];
     if (items.length) return items;
-    functions.logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
+    logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
       owner,
       collection: collectionMintStr,
     });
@@ -704,7 +712,7 @@ async function fetchAsset(assetId: string) {
     asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
   }
   if (!asset) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'not-found',
       'Asset not found. If you just minted/transferred/opened this item, wait a few seconds and retry.',
       { assetId },
@@ -731,7 +739,7 @@ async function fetchAssetProof(assetId: string) {
     proof = await heliusJson(url, 'Helius asset proof error');
   }
   if (!proof) {
-    throw new functions.https.HttpsError('not-found', 'Asset proof not found', { assetId });
+    throw new HttpsError('not-found', 'Asset proof not found', { assetId });
   }
   return proof;
 }
@@ -875,7 +883,7 @@ function u32LE(value: number) {
 function u64LE(value: number) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) {
-    throw new functions.https.HttpsError('invalid-argument', `Invalid u64 value: ${value}`);
+    throw new HttpsError('invalid-argument', `Invalid u64 value: ${value}`);
   }
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(BigInt(Math.floor(n)), 0);
@@ -891,13 +899,13 @@ function encodeDeliverArgs(args: { deliveryId: number; feeLamports: number; deli
   const feeLamports = Number(args.feeLamports);
   const bump = Number(args.deliveryBump);
   if (!Number.isFinite(deliveryId) || deliveryId <= 0 || deliveryId > 0xffff_ffff) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliveryId');
+    throw new HttpsError('invalid-argument', 'Invalid deliveryId');
   }
   if (!Number.isFinite(feeLamports) || feeLamports < MIN_DELIVERY_LAMPORTS || feeLamports > MAX_DELIVERY_LAMPORTS) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid delivery_fee_lamports');
+    throw new HttpsError('invalid-argument', 'Invalid delivery_fee_lamports');
   }
   if (!Number.isFinite(bump) || bump < 0 || bump > 255) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid delivery bump');
+    throw new HttpsError('invalid-argument', 'Invalid delivery bump');
   }
   return Buffer.concat([IX_DELIVER, u32LE(deliveryId), u64LE(feeLamports), Buffer.from([bump & 0xff])]);
 }
@@ -905,16 +913,16 @@ function encodeDeliverArgs(args: { deliveryId: number; feeLamports: number; deli
 function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: number; deliveryBump: number } {
   if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
   if (data.length < 8 + 4 + 8 + 1) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliver instruction data (too short)');
+    throw new HttpsError('invalid-argument', 'Invalid deliver instruction data (too short)');
   }
   const disc = data.subarray(0, 8);
   if (!disc.equals(IX_DELIVER)) {
-    throw new functions.https.HttpsError('invalid-argument', 'Transaction is not a box_minter deliver instruction');
+    throw new HttpsError('invalid-argument', 'Transaction is not a box_minter deliver instruction');
   }
   const deliveryId = data.readUInt32LE(8);
   const feeLamportsBig = data.readBigUInt64LE(12);
   if (feeLamportsBig > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new functions.https.HttpsError('failed-precondition', 'delivery_fee_lamports is too large');
+    throw new HttpsError('failed-precondition', 'delivery_fee_lamports is too large');
   }
   const feeLamports = Number(feeLamportsBig);
   const deliveryBump = data.readUInt8(20);
@@ -925,10 +933,10 @@ function encodeCloseDeliveryArgs(args: { deliveryId: number; deliveryBump: numbe
   const deliveryId = Number(args.deliveryId);
   const bump = Number(args.deliveryBump);
   if (!Number.isFinite(deliveryId) || deliveryId <= 0 || deliveryId > 0xffff_ffff) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid deliveryId');
+    throw new HttpsError('invalid-argument', 'Invalid deliveryId');
   }
   if (!Number.isFinite(bump) || bump < 0 || bump > 255) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid delivery bump');
+    throw new HttpsError('invalid-argument', 'Invalid delivery bump');
   }
   return Buffer.concat([IX_CLOSE_DELIVERY, u32LE(deliveryId), Buffer.from([bump & 0xff])]);
 }
@@ -960,19 +968,19 @@ function mplCoreBurnV1Ix(args: { asset: PublicKey; coreCollection: PublicKey; au
 function bs58Bytes32(value: string, label: string): Buffer {
   const text = String(value || '').trim();
   if (!text) {
-    throw new functions.https.HttpsError('failed-precondition', `Missing ${label}`);
+    throw new HttpsError('failed-precondition', `Missing ${label}`);
   }
   let out: Uint8Array;
   try {
     out = bs58.decode(text);
   } catch (err) {
-    throw new functions.https.HttpsError('failed-precondition', `Invalid ${label} (base58 decode failed)`, {
+    throw new HttpsError('failed-precondition', `Invalid ${label} (base58 decode failed)`, {
       label,
       message: err instanceof Error ? err.message : String(err),
     });
   }
   if (out.length !== 32) {
-    throw new functions.https.HttpsError('failed-precondition', `Invalid ${label} length (expected 32 bytes)`, {
+    throw new HttpsError('failed-precondition', `Invalid ${label} length (expected 32 bytes)`, {
       label,
       bytes: out.length,
     });
@@ -1000,25 +1008,25 @@ function bubblegumBurnV2Ix(args: {
   const nonce = Number(args.nonce);
   const index = Number(args.index);
   if (!Number.isFinite(nonce) || nonce < 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn nonce');
+    throw new HttpsError('failed-precondition', 'Invalid burn nonce');
   }
   if (!Number.isFinite(index) || index < 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn index');
+    throw new HttpsError('failed-precondition', 'Invalid burn index');
   }
 
   const root = Buffer.isBuffer(args.root) ? args.root : Buffer.from(args.root || []);
   const dataHash = Buffer.isBuffer(args.dataHash) ? args.dataHash : Buffer.from(args.dataHash || []);
   const creatorHash = Buffer.isBuffer(args.creatorHash) ? args.creatorHash : Buffer.from(args.creatorHash || []);
   if (root.length !== 32 || dataHash.length !== 32 || creatorHash.length !== 32) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn hash lengths');
+    throw new HttpsError('failed-precondition', 'Invalid burn hash lengths');
   }
   const assetDataHash = args.assetDataHash ? Buffer.from(args.assetDataHash) : null;
   if (assetDataHash && assetDataHash.length !== 32) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid assetDataHash length');
+    throw new HttpsError('failed-precondition', 'Invalid assetDataHash length');
   }
   const flagsNum = args.flags == null ? null : Number(args.flags);
   if (flagsNum != null && (!Number.isFinite(flagsNum) || flagsNum < 0 || flagsNum > 0xff)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid burn flags');
+    throw new HttpsError('failed-precondition', 'Invalid burn flags');
   }
   const proof = Array.isArray(args.proof) ? args.proof : [];
 
@@ -1056,16 +1064,16 @@ function bubblegumBurnV2Ix(args: {
 
 function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
   if (!Array.isArray(dudeIds) || dudeIds.length !== DUDES_PER_BOX) {
-    throw new functions.https.HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
+    throw new HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
   }
   const ids = dudeIds.map((n) => Number(n));
   ids.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
-      throw new functions.https.HttpsError('invalid-argument', `Invalid dude id: ${id}`);
+      throw new HttpsError('invalid-argument', `Invalid dude id: ${id}`);
     }
   });
   if (new Set(ids).size !== ids.length) {
-    throw new functions.https.HttpsError('invalid-argument', 'Duplicate dude ids');
+    throw new HttpsError('invalid-argument', 'Duplicate dude ids');
   }
   return Buffer.concat([IX_FINALIZE_OPEN_BOX, ...ids.map(u16LE)]);
 }
@@ -1076,12 +1084,12 @@ function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }): 
 
   boxIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > 0xffff_ffff) {
-      throw new functions.https.HttpsError('invalid-argument', `Invalid box id: ${id}`);
+      throw new HttpsError('invalid-argument', `Invalid box id: ${id}`);
     }
   });
   dudeIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
-      throw new functions.https.HttpsError('invalid-argument', `Invalid dude id: ${id}`);
+      throw new HttpsError('invalid-argument', `Invalid dude id: ${id}`);
     }
   });
 
@@ -1104,11 +1112,11 @@ function decodePendingOpenBox(data: Buffer): {
   if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
   const minLen = 8 + 32 + 32 + 32 * DUDES_PER_BOX + 8 + 1;
   if (data.length < minLen) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (too short)');
+    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (too short)');
   }
   const disc = data.subarray(0, 8);
   if (!disc.equals(ACCOUNT_PENDING_OPEN_BOX)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid PendingOpenBox account discriminator');
+    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account discriminator');
   }
   let o = 8;
   const owner = new PublicKey(data.subarray(o, o + 32));
@@ -1175,23 +1183,23 @@ async function ensureIrlClaimCodeForBox(params: {
   const boxId = Number(params.boxId);
   const dudeIds = Array.isArray(params.dudeIds) ? params.dudeIds.map((n) => Number(n)) : [];
 
-  if (!boxAssetId) throw new functions.https.HttpsError('failed-precondition', 'Missing boxAssetId for IRL claim code');
+  if (!boxAssetId) throw new HttpsError('failed-precondition', 'Missing boxAssetId for IRL claim code');
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid deliveryId for IRL claim code');
+    throw new HttpsError('failed-precondition', 'Invalid deliveryId for IRL claim code');
   }
   if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid box id for IRL claim code');
+    throw new HttpsError('failed-precondition', 'Invalid box id for IRL claim code');
   }
   if (dudeIds.length !== DUDES_PER_BOX) {
-    throw new functions.https.HttpsError('failed-precondition', `Invalid dudeIds (expected ${DUDES_PER_BOX})`);
+    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${DUDES_PER_BOX})`);
   }
   dudeIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
-      throw new functions.https.HttpsError('failed-precondition', `Invalid dude id: ${id}`);
+      throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
     }
   });
   if (new Set(dudeIds).size !== dudeIds.length) {
-    throw new functions.https.HttpsError('failed-precondition', 'Duplicate dude ids for IRL claim code');
+    throw new HttpsError('failed-precondition', 'Duplicate dude ids for IRL claim code');
   }
 
   const assignmentRef = db.doc(`boxAssignments/${boxAssetId}`);
@@ -1258,7 +1266,7 @@ async function ensureIrlClaimCodeForBox(params: {
       return code;
     }
 
-    throw new functions.https.HttpsError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
+    throw new HttpsError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
   });
 }
 
@@ -1283,7 +1291,7 @@ async function getDeliveryLookupTable(conn: Connection): Promise<AddressLookupTa
   const res = await withTimeout(conn.getAddressLookupTable(deliveryLookupTable), RPC_TIMEOUT_MS, 'getAddressLookupTable:delivery');
   const lut = res?.value || null;
   if (!lut) {
-    throw new functions.https.HttpsError('failed-precondition', 'DELIVERY_LOOKUP_TABLE not found on-chain', {
+    throw new HttpsError('failed-precondition', 'DELIVERY_LOOKUP_TABLE not found on-chain', {
       deliveryLookupTable: deliveryLookupTableStr,
       cluster,
     });
@@ -1324,7 +1332,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   const wallet = normalizeWallet(rawWallet);
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
-  if (!verified) throw new functions.https.HttpsError('unauthenticated', 'Invalid signature');
+  if (!verified) throw new HttpsError('unauthenticated', 'Invalid signature');
 
   await db.doc(`${WALLET_SESSION_COLLECTION}/${uid}`).set(
     {
@@ -1407,12 +1415,14 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
-export const revealDudes = onCallLogged('revealDudes', async (request) => {
+export const revealDudes = onCallLogged(
+  'revealDudes',
+  async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
   const { owner, boxAssetId } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
 
   await ensureOnchainCoreConfig();
@@ -1421,7 +1431,7 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   try {
     boxAssetPk = new PublicKey(boxAssetId);
   } catch {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid boxAssetId');
+    throw new HttpsError('invalid-argument', 'Invalid boxAssetId');
   }
 
   const conn = connection();
@@ -1433,7 +1443,7 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
     'getAccountInfo:boxMinterConfig:reveal',
   );
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
       { configPda: boxMinterConfigPda.toBase58() },
@@ -1444,14 +1454,14 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
   }
   if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter treasury ${cfgTreasury.toBase58()}`,
       { expectedTreasury: cfgTreasury.toBase58(), cosigner: signer.publicKey.toBase58() },
@@ -1459,7 +1469,7 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+    throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
       configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
@@ -1474,7 +1484,7 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
     'getAccountInfo:pendingOpenBox',
   );
   if (!pendingInfo?.data) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'not-found',
       'Pending open not found. Start opening the box first (send it to the vault), then reveal.',
       { pending: pendingPda.toBase58(), boxAssetId },
@@ -1482,7 +1492,7 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   }
   const pending = decodePendingOpenBox(pendingInfo.data);
   if (!pending.owner.equals(ownerPk) || !pending.boxAsset.equals(boxAssetPk)) {
-    throw new functions.https.HttpsError('permission-denied', 'Pending open belongs to a different wallet', {
+    throw new HttpsError('permission-denied', 'Pending open belongs to a different wallet', {
       owner: ownerWallet,
       pendingOwner: pending.owner.toBase58(),
       boxAssetId,
@@ -1522,31 +1532,35 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   await withTimeout(conn.confirmTransaction(sig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:revealDudes');
 
   return { signature: sig, dudeIds };
-});
+  },
+  { secrets: [COSIGNER_SECRET] },
+);
 
-export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (request) => {
+export const prepareDeliveryTx = onCallLogged(
+  'prepareDeliveryTx',
+  async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
   const { owner, itemIds, addressId } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
   await ensureOnchainCoreConfig();
 
   const uniqueItemIds = Array.from(new Set(itemIds));
   if (uniqueItemIds.length !== itemIds.length) {
-    throw new functions.https.HttpsError('invalid-argument', 'Duplicate itemIds are not allowed');
+    throw new HttpsError('invalid-argument', 'Duplicate itemIds are not allowed');
   }
 
   // Keep this comfortably above realistic tx-size limits while preventing accidental huge requests.
   const MAX_ITEMS_REQUESTED = 32;
   if (uniqueItemIds.length > MAX_ITEMS_REQUESTED) {
-    throw new functions.https.HttpsError('invalid-argument', `Too many items in one delivery request (max ${MAX_ITEMS_REQUESTED})`);
+    throw new HttpsError('invalid-argument', `Too many items in one delivery request (max ${MAX_ITEMS_REQUESTED})`);
   }
 
   const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
   if (!addressSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Address not found');
+    throw new HttpsError('not-found', 'Address not found');
   }
   const addressData = addressSnap.data();
   const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
@@ -1559,29 +1573,29 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     try {
       pk = new PublicKey(assetId);
     } catch {
-      throw new functions.https.HttpsError('invalid-argument', 'Invalid asset id');
+      throw new HttpsError('invalid-argument', 'Invalid asset id');
     }
     assetPks.push(pk);
 
     const asset = await fetchAssetRetry(assetId);
     const kind = getAssetKind(asset);
-    if (!kind) throw new functions.https.HttpsError('failed-precondition', 'Unsupported asset type');
+    if (!kind) throw new HttpsError('failed-precondition', 'Unsupported asset type');
     if (kind === 'certificate') {
-      throw new functions.https.HttpsError('failed-precondition', 'Certificates cannot be delivered');
+      throw new HttpsError('failed-precondition', 'Certificates cannot be delivered');
     }
     if (!isMonsAsset(asset)) {
-      throw new functions.https.HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+      throw new HttpsError('failed-precondition', 'Item is not part of the Mons collection');
     }
     const assetOwner = asset?.ownership?.owner;
     if (assetOwner !== ownerWallet) {
-      throw new functions.https.HttpsError('failed-precondition', 'Item not owned by wallet');
+      throw new HttpsError('failed-precondition', 'Item not owned by wallet');
     }
 
     if (kind === 'box') {
       const boxIdStr = getBoxIdFromAsset(asset);
       const refId = Number(boxIdStr);
       if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
-        throw new functions.https.HttpsError('failed-precondition', 'Box id missing from metadata');
+        throw new HttpsError('failed-precondition', 'Box id missing from metadata');
       }
       orderItems.push({
         assetId,
@@ -1592,7 +1606,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
       const dudeId = getDudeIdFromAsset(asset);
       const refId = Number(dudeId);
       if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
-        throw new functions.https.HttpsError('failed-precondition', 'Dude id missing from metadata');
+        throw new HttpsError('failed-precondition', 'Dude id missing from metadata');
       }
       orderItems.push({
         assetId,
@@ -1609,7 +1623,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     'getAccountInfo:boxMinterConfig',
   );
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
       { configPda: boxMinterConfigPda.toBase58() },
@@ -1620,7 +1634,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
@@ -1628,7 +1642,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+    throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
       configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
@@ -1661,7 +1675,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
     break;
   }
   if (!deliveryId || !deliveryPda) {
-    throw new functions.https.HttpsError('unavailable', 'Failed to allocate delivery id (try again)');
+    throw new HttpsError('unavailable', 'Failed to allocate delivery id (try again)');
   }
 
   const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
@@ -1724,7 +1738,7 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
         break;
       }
     }
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try fewer items.` +
         (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 item.'),
@@ -1751,18 +1765,22 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   });
 
   return { encodedTx: Buffer.from(raw).toString('base64'), deliveryLamports, deliveryId };
-});
+  },
+  { secrets: [COSIGNER_SECRET] },
+);
 
-export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
+export const issueReceipts = onCallLogged(
+  'issueReceipts',
+  async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), deliveryId: z.number().int().positive(), signature: z.string() });
   const { owner, deliveryId, signature } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
   await ensureOnchainCoreConfig();
   if (!receiptsMerkleTreeStr) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
     );
@@ -1771,11 +1789,11 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
   const orderSnap = await orderRef.get();
   if (!orderSnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Delivery order not found');
+    throw new HttpsError('not-found', 'Delivery order not found');
   }
   const order = orderSnap.data() as any;
   if (order.owner && order.owner !== ownerWallet) {
-    throw new functions.https.HttpsError('permission-denied', 'Order belongs to a different wallet');
+    throw new HttpsError('permission-denied', 'Order belongs to a different wallet');
   }
 
   // Fast-path idempotency.
@@ -1797,13 +1815,13 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
           'getAccountInfo:boxMinterConfig:lateClose',
         );
         if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-          throw new functions.https.HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
+          throw new HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
         }
         const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
         const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
         const signer = cosigner();
         if (!signer.publicKey.equals(cfgAdmin) || !signer.publicKey.equals(cfgTreasury)) {
-          throw new functions.https.HttpsError('failed-precondition', 'Server key does not match on-chain admin/treasury (late close)');
+          throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin/treasury (late close)');
         }
 
         const closeIx = new TransactionInstruction({
@@ -1855,12 +1873,12 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
     'getTransaction:delivery',
   );
   if (!tx || tx.meta?.err) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction not found or failed');
+    throw new HttpsError('failed-precondition', 'Delivery transaction not found or failed');
   }
 
   const payer = getPayerFromTx(tx);
   if (!payer || payer.toBase58() !== ownerWallet) {
-    throw new functions.https.HttpsError('failed-precondition', 'Signature payer does not match owner');
+    throw new HttpsError('failed-precondition', 'Signature payer does not match owner');
   }
 
   // Find the deliver instruction and decode delivery id + bump.
@@ -1873,14 +1891,14 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
     return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
   });
   if (!deliverIx) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
+    throw new HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
   }
   const deliverDataField = (deliverIx as any).data;
   const deliverData =
     typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
   const decoded = decodeDeliverArgs(deliverData);
   if (decoded.deliveryId !== deliveryId) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery id mismatch', {
+    throw new HttpsError('failed-precondition', 'Delivery id mismatch', {
       expectedId: deliveryId,
       got: decoded.deliveryId,
     });
@@ -1893,13 +1911,13 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
   const FIXED_DELIVER_ACCOUNTS = 9;
   if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) {
-    throw new functions.https.HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
+    throw new HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
   }
 
   const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
   const deliveryPdaFromIx = ixAccounts[8];
   if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery PDA mismatch', {
+    throw new HttpsError('failed-precondition', 'Delivery PDA mismatch', {
       expected: expectedDeliveryPda.toBase58(),
       got: deliveryPdaFromIx?.toBase58(),
     });
@@ -1909,7 +1927,7 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   const itemIds: string[] = Array.isArray(order.itemIds) ? order.itemIds : [];
   const deliveredAssetsFromIx = ixAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
   if (itemIds.length && deliveredAssetsFromIx.length && itemIds.length !== deliveredAssetsFromIx.length) {
-    throw new functions.https.HttpsError('failed-precondition', 'Delivery item count mismatch', {
+    throw new HttpsError('failed-precondition', 'Delivery item count mismatch', {
       expected: itemIds.length,
       got: deliveredAssetsFromIx.length,
     });
@@ -1917,7 +1935,7 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   if (itemIds.length) {
     for (let i = 0; i < itemIds.length; i += 1) {
       if (deliveredAssetsFromIx[i] && deliveredAssetsFromIx[i] !== itemIds[i]) {
-        throw new functions.https.HttpsError('failed-precondition', 'Delivered asset list mismatch', {
+        throw new HttpsError('failed-precondition', 'Delivered asset list mismatch', {
           index: i,
           expected: itemIds[i],
           got: deliveredAssetsFromIx[i],
@@ -1933,7 +1951,7 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
     'getAccountInfo:boxMinterConfig',
   );
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
     );
@@ -1943,13 +1961,13 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
+    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: cfgAdmin.toBase58(),
       cosigner: signer.publicKey.toBase58(),
     });
   }
   if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Treasury does not match server key (single-master-key mode)', {
+    throw new HttpsError('failed-precondition', 'Treasury does not match server key (single-master-key mode)', {
       treasury: cfgTreasury.toBase58(),
       server: signer.publicKey.toBase58(),
     });
@@ -1986,20 +2004,20 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
     const kind = stored?.kind;
     const refId = Number(stored?.refId);
     if (kind !== 'box' && kind !== 'dude') {
-      throw new functions.https.HttpsError('failed-precondition', 'Delivery order is missing item kind for receipt minting', {
+      throw new HttpsError('failed-precondition', 'Delivery order is missing item kind for receipt minting', {
     assetId,
         kind,
       });
       }
     if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
-      throw new functions.https.HttpsError('failed-precondition', 'Delivery order is missing item refId for receipt minting', {
+      throw new HttpsError('failed-precondition', 'Delivery order is missing item refId for receipt minting', {
         assetId,
         kind,
         refId,
       });
     }
     if (kind === 'dude' && refId > MAX_DUDE_ID) {
-      throw new functions.https.HttpsError('failed-precondition', 'Invalid dude id for receipt minting', { assetId, refId });
+      throw new HttpsError('failed-precondition', 'Invalid dude id for receipt minting', { assetId, refId });
     }
     pending.push({ assetId, assetPk: pk, kind, refId });
   }
@@ -2188,7 +2206,7 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
     if (n < 1) {
       const msg = txErrMessage(lastErr);
       const logs = txErrLogs(lastErr);
-      throw new functions.https.HttpsError('failed-precondition', 'Unable to issue receipts (try fewer items or retry later)', {
+      throw new HttpsError('failed-precondition', 'Unable to issue receipts (try fewer items or retry later)', {
         lastError: msg,
         lastLogs: logs.slice(0, 80),
       });
@@ -2254,48 +2272,52 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   }
 
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
-});
+  },
+  { secrets: [COSIGNER_SECRET] },
+);
 
-export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (request) => {
+export const prepareIrlClaimTx = onCallLogged(
+  'prepareIrlClaimTx',
+  async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({ owner: z.string(), code: z.string() });
   const { owner, code } = parseRequest(schema, request.data);
   const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new functions.https.HttpsError('permission-denied', 'Owners only');
+  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
 
   await ensureOnchainCoreConfig();
 
   const normalizedCode = normalizeIrlClaimCode(code);
   if (!normalizedCode || normalizedCode.length !== IRL_CLAIM_CODE_DIGITS) {
-    throw new functions.https.HttpsError('invalid-argument', `Invalid claim code (must be ${IRL_CLAIM_CODE_DIGITS} digits)`);
+    throw new HttpsError('invalid-argument', `Invalid claim code (must be ${IRL_CLAIM_CODE_DIGITS} digits)`);
   }
 
   const claimRef = db.doc(`claimCodes/${normalizedCode}`);
   const claimDoc = await claimRef.get();
   if (!claimDoc.exists) {
-    throw new functions.https.HttpsError('not-found', 'Invalid claim code');
+    throw new HttpsError('not-found', 'Invalid claim code');
   }
 
   const claim = claimDoc.data() as any;
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
   if (!Number.isFinite(boxIdNum) || boxIdNum <= 0 || boxIdNum > 0xffff_ffff || !boxIdStr) {
-    throw new functions.https.HttpsError('failed-precondition', 'Claim code is missing a valid box id');
+    throw new HttpsError('failed-precondition', 'Claim code is missing a valid box id');
   }
 
   const dudeIdsRaw = claim?.dudeIds ?? claim?.dude_ids ?? claim?.dudes ?? [];
   const dudeIds: number[] = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n: any) => Number(n)) : [];
   if (dudeIds.length !== DUDES_PER_BOX) {
-    throw new functions.https.HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${DUDES_PER_BOX})`);
+    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${DUDES_PER_BOX})`);
   }
   dudeIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
-      throw new functions.https.HttpsError('failed-precondition', `Invalid dude id: ${id}`);
+      throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
     }
   });
   if (new Set(dudeIds).size !== dudeIds.length) {
-    throw new functions.https.HttpsError('failed-precondition', 'Duplicate dude ids in claim');
+    throw new HttpsError('failed-precondition', 'Duplicate dude ids in claim');
   }
 
   // Load wallet assets once and use it for both:
@@ -2313,34 +2335,34 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     if (id != null && dudeSet.has(Number(id))) mintedDudeReceipts.add(Number(id));
   }
   if (mintedDudeReceipts.size > 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'This IRL claim code has already been used');
+    throw new HttpsError('failed-precondition', 'This IRL claim code has already been used');
   }
 
   // Locate the matching box certificate (receipt) in the requesting wallet.
   const certificate =
     ownedAssets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxIdStr) || null;
   if (!certificate) {
-    throw new functions.https.HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
+    throw new HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
   }
   if (looksBurntOrClosedInHelius(certificate)) {
-    throw new functions.https.HttpsError('failed-precondition', 'This IRL claim code has already been used');
+    throw new HttpsError('failed-precondition', 'This IRL claim code has already been used');
   }
   if (certificate?.ownership?.owner !== ownerWallet) {
-    throw new functions.https.HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
+    throw new HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
   }
   const kind = getAssetKind(certificate);
   if (kind !== 'certificate') {
-    throw new functions.https.HttpsError('failed-precondition', 'Provided asset is not a certificate');
+    throw new HttpsError('failed-precondition', 'Provided asset is not a certificate');
   }
   const certificateBoxId = getBoxIdFromAsset(certificate);
   if (!certificateBoxId) {
-    throw new functions.https.HttpsError('failed-precondition', 'Certificate missing box reference');
+    throw new HttpsError('failed-precondition', 'Certificate missing box reference');
   }
   if (String(certificateBoxId) !== boxIdStr) {
-    throw new functions.https.HttpsError('failed-precondition', 'Certificate does not match claim box');
+    throw new HttpsError('failed-precondition', 'Certificate does not match claim box');
   }
   if (!isMonsAsset(certificate)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Certificate is outside the Mons collection');
+    throw new HttpsError('failed-precondition', 'Certificate is outside the Mons collection');
   }
   const certificateId = String(certificate.id || '');
 
@@ -2351,7 +2373,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     'getAccountInfo:boxMinterConfig:claimIrl',
   );
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
       { configPda: boxMinterConfigPda.toBase58() },
@@ -2362,20 +2384,20 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
+    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: cfgAdmin.toBase58(),
       cosigner: signer.publicKey.toBase58(),
     });
   }
   if (!signer.publicKey.equals(cfgTreasury)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain treasury', {
+    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain treasury', {
       expectedTreasury: cfgTreasury.toBase58(),
       cosigner: signer.publicKey.toBase58(),
     });
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+    throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
       configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
@@ -2383,7 +2405,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
 
   const conn = connection();
   if (!receiptsMerkleTreeStr) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
     );
@@ -2399,11 +2421,11 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   const treeId = String(proof?.tree_id ?? proof?.treeId ?? '');
   const rootStr = String(proof?.root || '');
   if (!treeId || !rootStr) {
-    throw new functions.https.HttpsError('failed-precondition', 'Unable to fetch certificate proof for burn');
+    throw new HttpsError('failed-precondition', 'Unable to fetch certificate proof for burn');
   }
   const merkleTree = new PublicKey(treeId);
   if (!merkleTree.equals(receiptsMerkleTree)) {
-    throw new functions.https.HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
+    throw new HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
       certificateTree: merkleTree.toBase58(),
       receiptsTree: receiptsMerkleTree.toBase58(),
     });
@@ -2416,11 +2438,11 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   const flagsNum = compression?.flags == null ? null : Number(compression.flags);
   const nonce = Number(compression?.leaf_id ?? compression?.leafId);
   if (!Number.isFinite(nonce) || nonce < 0) {
-    throw new functions.https.HttpsError('failed-precondition', 'Unable to parse certificate leaf id');
+    throw new HttpsError('failed-precondition', 'Unable to parse certificate leaf id');
   }
   const index = Math.floor(nonce);
   if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
-    throw new functions.https.HttpsError('failed-precondition', 'Certificate leaf index out of range');
+    throw new HttpsError('failed-precondition', 'Certificate leaf index out of range');
   }
   const proofAccountsFull = proofPath.map((p) => new PublicKey(p));
   const proofAccounts = proofAccountsFull;
@@ -2492,7 +2514,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     const msg = err instanceof Error ? err.message : String(err);
     if (err instanceof RangeError && /encoding overruns Uint8Array/i.test(msg)) {
       if (!addressLookupTables.length) {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
           'failed-precondition',
           'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
           { receiptsMerkleTree: receiptsMerkleTreeStr },
@@ -2511,7 +2533,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     raw = tx.serialize();
   }
   if (raw.length > MAX_RAW_TX_BYTES) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       'failed-precondition',
       `Claim transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}).`,
       {
@@ -2529,4 +2551,6 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
     certificateId,
     message: 'Sign and send to burn your box receipt and mint your dude receipts.',
   };
-});
+  },
+  { secrets: [COSIGNER_SECRET] },
+);
