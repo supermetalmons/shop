@@ -1023,50 +1023,11 @@ pub mod box_minter {
         Ok(())
     }
 
-    pub fn close_delivery(ctx: Context<CloseDelivery>, args: CloseDeliveryArgs) -> Result<()> {
-        let cfg = &ctx.accounts.config;
-
-        // Require a cloud-held signer (same admin as initialize).
-        require_keys_eq!(
-            ctx.accounts.cosigner.key(),
-            cfg.admin,
-            BoxMinterError::InvalidCosigner
-        );
-
-        // Validate delivery PDA.
-        let delivery_id_bytes = args.delivery_id.to_le_bytes();
-        let expected_delivery = Pubkey::create_program_address(
-            &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]],
-                ctx.program_id,
-        )
-        .map_err(|_| error!(BoxMinterError::InvalidDeliveryPda))?;
-        require_keys_eq!(
-            ctx.accounts.delivery.key(),
-            expected_delivery,
-            BoxMinterError::InvalidDeliveryPda
-        );
-        require_keys_eq!(
-            *ctx.accounts.delivery.owner,
-            *ctx.program_id,
-            BoxMinterError::InvalidDeliveryPda
-        );
-
-        // Drain lamports to the admin/cosigner and close the account (reclaim rent).
-        let delivery_ai = ctx.accounts.delivery.to_account_info();
-        let cosigner_ai = ctx.accounts.cosigner.to_account_info();
-        let lamports = delivery_ai.lamports();
-        if lamports > 0 {
-            **cosigner_ai.lamports.borrow_mut() = cosigner_ai
-                .lamports()
-                .checked_add(lamports)
-                .ok_or(BoxMinterError::MathOverflow)?;
-            **delivery_ai.lamports.borrow_mut() = 0;
-        }
-
-        // Mark as system-owned + shrink data so it can be reclaimed.
-        delivery_ai.assign(&anchor_lang::solana_program::system_program::ID);
-        delivery_ai.resize(0)?;
-
+    pub fn close_delivery(_ctx: Context<CloseDelivery>, _args: CloseDeliveryArgs) -> Result<()> {
+        // The `CloseDelivery` account constraints enforce:
+        // - `cosigner` == `config.admin`
+        // - `delivery` is the expected PDA
+        // - `delivery` is closed to `cosigner` (rent reclaimed) via Anchor's canonical close path
         Ok(())
     }
 
@@ -1574,17 +1535,23 @@ pub struct Deliver<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(args: CloseDeliveryArgs)]
 pub struct CloseDelivery<'info> {
     #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
-    #[account(mut)]
+    #[account(mut, address = config.admin)]
     pub cosigner: Signer<'info>,
 
-    /// CHECK: Delivery record PDA to close.
-    #[account(mut)]
-    pub delivery: UncheckedAccount<'info>,
+    /// Delivery record PDA to close (rent reclaimed to `cosigner`).
+    #[account(
+        mut,
+        seeds = [SEED_DELIVERY, &args.delivery_id.to_le_bytes()],
+        bump = args.delivery_bump,
+        close = cosigner
+    )]
+    pub delivery: Account<'info, DeliveryRecord>,
 
     pub system_program: Program<'info, System>,
 }
