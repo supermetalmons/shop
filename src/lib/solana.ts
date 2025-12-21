@@ -74,22 +74,6 @@ export function normalizeCountryCode(country?: string) {
   return '';
 }
 
-function shippingZone(country?: string): 'us' | 'intl' {
-  const code = normalizeCountryCode(country);
-  if (code === 'US' || code === 'PR' || code === 'GU' || code === 'VI' || code === 'AS') return 'us';
-  const normalized = (country || '').trim().toLowerCase();
-  if (normalized.includes('united states')) return 'us';
-  return 'intl';
-}
-
-export function estimateDeliveryLamports(country: string, items: number): number {
-  if (!items) return 0;
-  const zone = shippingZone(country);
-  const base = zone === 'us' ? 0.15 : 0.32;
-  const multiplier = Math.max(1, items * 0.35);
-  return Math.round(base * multiplier * LAMPORTS_PER_SOL);
-}
-
 export async function sendPreparedTransaction(
   encodedTx: string,
   connection: Connection,

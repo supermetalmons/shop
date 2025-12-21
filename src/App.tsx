@@ -21,7 +21,7 @@ import {
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
-import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
+import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
@@ -251,14 +251,13 @@ function App() {
     if (deliverableIds.length !== itemIds.length) {
       setSelected(new Set(deliverableIds));
     }
-    const deliveryCountry = addr.countryCode || addr.country;
 
     setDeliveryLoading(true);
     setStatus('');
+    setDeliveryCost(undefined);
     try {
-      setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
       const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
-      setDeliveryCost(resp.deliveryLamports ?? estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
+      setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
       const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
       setStatus(`Delivery submitted${idSuffix} · ${sig}`);
@@ -313,18 +312,10 @@ function App() {
   }, [addressId, savedAddresses]);
 
   useEffect(() => {
-    const addr = savedAddresses.find((a) => a.id === addressId);
-    const deliverableIds = Array.from(selected).filter((id) => {
-      const item = inventory.find((inv) => inv.id === id);
-      return item && item.kind !== 'certificate';
-    });
-    if (!addr || !deliverableIds.length) {
-      setDeliveryCost(undefined);
-      return;
-    }
-    const deliveryCountry = addr.countryCode || addr.country;
-    setDeliveryCost(estimateDeliveryLamports(deliveryCountry, deliverableIds.length));
-  }, [addressId, savedAddresses, selected, inventory]);
+    // Delivery cost is returned by the server when preparing the delivery transaction.
+    // Clear any previously-returned value whenever the inputs change to avoid showing stale fees.
+    setDeliveryCost(undefined);
+  }, [addressId, selected]);
 
   return (
     <div className="page">

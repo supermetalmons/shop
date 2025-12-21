@@ -13,10 +13,6 @@ const MAX_SAFE_MINTS_PER_TX: u8 = 15;
 // Delivery is mostly limited by tx size; keep this high enough to not be the limiting factor.
 const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
 
-// Random delivery fee bounds (0.001..=0.003 SOL).
-const MIN_DELIVERY_LAMPORTS: u64 = 1_000_000;
-const MAX_DELIVERY_LAMPORTS: u64 = 3_000_000;
-
 // Figure IDs are globally unique, 1..=999 for a 333 box supply (3 figures per box).
 const DUDES_PER_BOX: usize = 3;
 const MAX_DUDE_ID: u16 = 999;
@@ -753,16 +749,11 @@ pub mod box_minter {
         let cfg = &ctx.accounts.config;
 
         // Require a cloud-held signer (same admin as initialize) so users can't choose arbitrary fees.
+        // The delivery fee itself is determined off-chain and embedded in the cosigned transaction.
         require_keys_eq!(
             ctx.accounts.cosigner.key(),
             cfg.admin,
             BoxMinterError::InvalidCosigner
-        );
-
-        require!(
-            args.delivery_fee_lamports >= MIN_DELIVERY_LAMPORTS
-                && args.delivery_fee_lamports <= MAX_DELIVERY_LAMPORTS,
-            BoxMinterError::InvalidDeliveryFee
         );
 
         require!(

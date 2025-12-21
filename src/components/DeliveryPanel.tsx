@@ -60,8 +60,14 @@ export function DeliveryPanel({
       </div>
       <div className="pill-row">
         <span className="pill">{selectedCount} selected</span>
-        {typeof costLamports === 'number' ? (
-          <span className="pill">Est. ship: {lamportsToSol(costLamports)} ◎</span>
+        {selectedCount && addressId ? (
+          typeof costLamports === 'number' ? (
+            <span className="pill">Ship: {lamportsToSol(costLamports)} ◎</span>
+          ) : loading ? (
+            <span className="pill">Ship: calculating…</span>
+          ) : (
+            <span className="pill">Ship: calculated on request</span>
+          )
         ) : null}
         {signedIn ? <span className="pill">{addresses.length} saved</span> : null}
       </div>
