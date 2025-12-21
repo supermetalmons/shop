@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
-use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
 declare_id!("FYJ8PRHzMg3UTu47TppZxgVSS7Qh7PjzwZriYm4VVoP6");
@@ -366,9 +365,9 @@ pub mod box_minter {
 
     /// Starts a two-step box open flow.
     ///
-    /// This instruction must be immediately followed by an MPL-Core `TransferV1` that transfers
-    /// `box_asset` from the user to `config.admin` (vault). If the transfer fails, the whole
-    /// transaction fails (so no pending state is created and no placeholder assets are minted).
+    /// This instruction performs an MPL-Core `TransferV1` CPI that transfers `box_asset` from the
+    /// user to `config.admin` (vault). This avoids brittle reliance on instruction ordering (some
+    /// wallets inject extra instructions like Compute Budget).
     ///
     /// Side effects (all in this one transaction):
     /// - creates a `PendingOpenBox` PDA keyed by the box asset pubkey
@@ -383,6 +382,11 @@ pub mod box_minter {
             MPL_CORE_PROGRAM_ID,
             BoxMinterError::InvalidMplCoreProgram
         );
+        require_keys_eq!(
+            ctx.accounts.log_wrapper.key(),
+            SPL_NOOP_PROGRAM_ID,
+            BoxMinterError::InvalidLogWrapper
+        );
 
         // Defensive: ensure the provided asset is a Mons *box* owned by payer.
         let boxes_uri_base = derive_boxes_uri_base(cfg.uri_base.as_str());
@@ -394,33 +398,57 @@ pub mod box_minter {
             None,
         )?;
 
-        // IMPORTANT: wallets often won't show inner CPIs clearly; require an explicit top-level transfer.
-        require_next_ix_is_mpl_core_transfer_of_asset_to(
-            &ctx.accounts.instructions.to_account_info(),
-            0,
-            ctx.accounts.box_asset.key(),
-            ctx.accounts.core_collection.key(),
-            ctx.accounts.payer.key(),
-            cfg.admin,
-        )?;
-
         // Remaining accounts: exactly 3 new placeholder dude asset PDAs.
         require!(
             ctx.remaining_accounts.len() == DUDES_PER_BOX,
             BoxMinterError::InvalidRemainingAccounts
         );
 
+        // Transfer the box to the vault/admin via MPL-Core `TransferV1` inside this instruction.
+        // This makes the instruction robust against wallets that insert extra instructions into the tx.
+        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
+        let box_asset = ctx.accounts.box_asset.to_account_info();
+        let core_collection = ctx.accounts.core_collection.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
+        let vault = ctx.accounts.vault.to_account_info();
+        let system_program = ctx.accounts.system_program.to_account_info();
+        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
+        let cfg_ai = ctx.accounts.config.to_account_info();
+        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+
+        let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                // asset, collection, payer, authority, new_owner, system_program, log_wrapper
+                anchor_lang::solana_program::instruction::AccountMeta::new(box_asset.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+            ],
+            // TransferV1 discriminator=14, compression_proof=None (0)
+            data: vec![14u8, 0u8],
+        };
+        invoke(
+            &transfer_ix,
+            &[
+                box_asset.clone(),
+                core_collection.clone(),
+                payer.clone(),
+                payer.clone(),
+                vault.clone(),
+                system_program.clone(),
+                log_wrapper.clone(),
+                mpl_core_program.clone(),
+            ],
+        )?;
+
         // Create 3 placeholder Core assets:
         // - owner: config.admin (vault/admin)
         // - update authority: config PDA (so only the program can later "reveal" by updating metadata + setting collection)
         // - collection: None (placeholder) so the assets do NOT appear in the collection until reveal.
-        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
-        let payer = ctx.accounts.payer.to_account_info();
-        let vault = ctx.accounts.vault.to_account_info();
-        let system_program = ctx.accounts.system_program.to_account_info();
-        let cfg_ai = ctx.accounts.config.to_account_info();
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
-
         let pending_key = ctx.accounts.pending.key();
         let mut dudes: [Pubkey; DUDES_PER_BOX] = [Pubkey::default(); DUDES_PER_BOX];
 
@@ -1332,9 +1360,9 @@ pub struct StartOpenBox<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// CHECK: Instructions sysvar (for requiring an explicit MPL-Core transfer after `start_open_box`).
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub instructions: UncheckedAccount<'info>,
+    /// CHECK: SPL Noop program (MPL-Core log wrapper).
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -1589,88 +1617,6 @@ fn parse_ref_id_from_uri_bytes(uri: &[u8], uri_base: &str) -> Option<u32> {
         return None;
     }
     Some(out)
-}
-
-fn require_next_ix_is_mpl_core_transfer_of_asset_to(
-    instructions_ai: &AccountInfo,
-    offset: usize,
-    asset: Pubkey,
-    core_collection: Pubkey,
-    owner: Pubkey,
-    new_owner: Pubkey,
-) -> Result<()> {
-    let current_index = sysvar_instructions::load_current_index_checked(instructions_ai)? as usize;
-    let ix_index = current_index
-        .checked_add(1)
-        .and_then(|v| v.checked_add(offset))
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    let next_ix = sysvar_instructions::load_instruction_at_checked(ix_index, instructions_ai)
-        .map_err(|_| error!(BoxMinterError::MissingTransferInstruction))?;
-
-    require_keys_eq!(
-        next_ix.program_id,
-        MPL_CORE_PROGRAM_ID,
-        BoxMinterError::InvalidTransferInstruction
-    );
-    require!(
-        next_ix.data.len() >= 2,
-        BoxMinterError::InvalidTransferInstruction
-    );
-    // TransferV1 discriminator = 14; compression_proof = None (0)
-    require!(
-        next_ix.data[0] == 14u8 && next_ix.data[1] == 0u8,
-        BoxMinterError::InvalidTransferInstruction
-    );
-
-    // Enforce a stable account layout so the client/backend can construct deterministic transactions:
-    //   0: asset
-    //   1: collection
-    //   2: payer (signer)
-    //   3: owner/authority (signer)  (same as payer here)
-    //   4: new_owner (vault)
-    //
-    // Additional accounts (system_program, log_wrapper, etc.) may follow.
-    let a0 = next_ix
-        .accounts
-        .get(0)
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    require_keys_eq!(a0.pubkey, asset, BoxMinterError::InvalidTransferInstruction);
-
-    let a1 = next_ix
-        .accounts
-        .get(1)
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    require_keys_eq!(
-        a1.pubkey,
-        core_collection,
-        BoxMinterError::InvalidTransferInstruction
-    );
-
-    let a2 = next_ix
-        .accounts
-        .get(2)
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    require_keys_eq!(a2.pubkey, owner, BoxMinterError::InvalidTransferInstruction);
-    require!(a2.is_signer, BoxMinterError::InvalidTransferInstruction);
-
-    let a3 = next_ix
-        .accounts
-        .get(3)
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    require_keys_eq!(a3.pubkey, owner, BoxMinterError::InvalidTransferInstruction);
-    require!(a3.is_signer, BoxMinterError::InvalidTransferInstruction);
-
-    let a4 = next_ix
-        .accounts
-        .get(4)
-        .ok_or(error!(BoxMinterError::InvalidTransferInstruction))?;
-    require_keys_eq!(
-        a4.pubkey,
-        new_owner,
-        BoxMinterError::InvalidTransferInstruction
-    );
-
-    Ok(())
 }
 
 fn verify_core_asset_owned_by_uri(

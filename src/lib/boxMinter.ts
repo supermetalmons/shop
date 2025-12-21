@@ -49,7 +49,6 @@ const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb,
 
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
-export const SYSVAR_INSTRUCTIONS_ID = new PublicKey('Sysvar1nstructions1111111111111111111111111');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -306,29 +305,12 @@ export function buildStartOpenBoxIx(cfg: BoxMinterConfigAccount, payer: PublicKe
       { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
       { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SYSVAR_INSTRUCTIONS_ID, isSigner: false, isWritable: false },
+      // MPL-Core log wrapper (SPL noop).
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: pendingPda, isSigner: false, isWritable: true },
       ...dudePdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
     data: Buffer.from(IX_START_OPEN_BOX),
-  });
-}
-
-export function buildTransferBoxToVaultIx(cfg: BoxMinterConfigAccount, payer: PublicKey, boxAsset: PublicKey): TransactionInstruction {
-  // MPL-Core TransferV1 discriminator=14, compression_proof=None (0)
-  return new TransactionInstruction({
-    programId: MPL_CORE_PROGRAM_ID,
-    keys: [
-      { pubkey: boxAsset, isSigner: false, isWritable: true },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: payer, isSigner: true, isWritable: false },
-      // Vault/custody address (admin/deployer). Payments go to `cfg.treasury`.
-      { pubkey: cfg.admin, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from([14, 0]),
   });
 }
 
@@ -339,7 +321,6 @@ export async function buildStartOpenBoxTx(
   boxAsset: PublicKey,
 ): Promise<VersionedTransaction> {
   const startIx = buildStartOpenBoxIx(cfg, payer, boxAsset);
-  const transferIx = buildTransferBoxToVaultIx(cfg, payer, boxAsset);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const msg = new TransactionMessage({
     payerKey: payer,
@@ -347,8 +328,6 @@ export async function buildStartOpenBoxTx(
     instructions: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       startIx,
-      // MUST be immediately after startIx (on-chain verifies it).
-      transferIx,
     ],
   }).compileToV0Message();
   return new VersionedTransaction(msg);
