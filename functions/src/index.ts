@@ -19,7 +19,8 @@ import { randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
-import { FUNCTIONS_DEPLOYMENT } from './config/deployment';
+// IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
+import { FUNCTIONS_DEPLOYMENT } from './config/deployment.js';
 
 function loadLocalEnv() {
   const envPaths = [
