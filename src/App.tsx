@@ -23,6 +23,7 @@ import {
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, estimateDeliveryLamports, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
+import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -206,8 +207,8 @@ function App() {
     email: string;
     countryCode: string;
   }) => {
-    const encryptionKey = (import.meta.env.VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY || '').trim();
-    if (!encryptionKey) throw new Error('Missing VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY');
+    const encryptionKey = (FRONTEND_DEPLOYMENT.addressEncryptionPublicKey || '').trim();
+    if (!encryptionKey) throw new Error('Missing address encryption public key (src/config/deployment.ts)');
     const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
     // Ensure wallet session exists for authenticated callable.
     const session = token ? { profile } : await signIn();
@@ -336,7 +337,7 @@ function App() {
 
       <div className="hero">
         <div className="hero__media">
-          <img src="https://assets.mons.link/shop/drops/1/box/default.webp" alt="mons blind box" />
+          <img src={`${FRONTEND_DEPLOYMENT.metadataBase}/box/default.webp`} alt="mons blind box" />
         </div>
         <div className="card hero__copy">
           <div className="eyebrow">Mint drop</div>

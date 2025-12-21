@@ -1,16 +1,17 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+import { FRONTEND_RUNTIME } from '../config/runtime';
 
-const DEFAULT_FIREBASE_API_KEY = 'AIzaSyA3NTv_zfVYMB2VNORxbKg3rJUsiMXIhko';
-const firebaseApiKey = (import.meta.env.VITE_FIREBASE_API_KEY || '').trim() || DEFAULT_FIREBASE_API_KEY;
+const firebaseApiKey = FRONTEND_RUNTIME.firebaseApiKey;
 
 const firebaseConfig = {
   apiKey: firebaseApiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  authDomain: FRONTEND_DEPLOYMENT.firebase.authDomain,
+  projectId: FRONTEND_DEPLOYMENT.firebase.projectId,
+  storageBucket: FRONTEND_DEPLOYMENT.firebase.storageBucket,
+  messagingSenderId: FRONTEND_DEPLOYMENT.firebase.messagingSenderId,
+  appId: FRONTEND_DEPLOYMENT.firebase.appId,
 };
 
 export const firebaseApp =

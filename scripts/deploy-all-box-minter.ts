@@ -67,6 +67,131 @@ function loadKeypair(keypairPath: string): Keypair {
   }
 }
 
+function tsStringLiteral(value: string): string {
+  return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function readExistingTsObjectStringField(filePath: string, field: string): string | undefined {
+  if (!existsSync(filePath)) return undefined;
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    const re = new RegExp(`${field}\\s*:\\s*'([^']*)'`, 'm');
+    const match = content.match(re);
+    return match?.[1] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeTextFileIfChanged(filePath: string, content: string) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  const next = content.endsWith('\n') ? content : `${content}\n`;
+  const prev = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+  if (prev === next) return;
+  writeFileSync(filePath, next, 'utf8');
+}
+
+function writeFrontendDeployedConfig(args: {
+  root: string;
+  solanaCluster: string;
+  rpcUrl: string;
+  boxMinterProgramId: string;
+  collectionMint: string;
+  metadataBase: string;
+}) {
+  const filePath = path.join(args.root, 'src', 'config', 'deployed.ts');
+  const content = `/**
+ * Frontend values produced by on-chain deployment (COMMITTED).
+ *
+ * This file is intended to be overwritten by \`scripts/deploy-all-box-minter.ts\`.
+ * Put anything that is NOT produced by deployment (Firebase non-secret config,
+ * encryption public key, etc) in \`src/config/deployment.ts\`.
+ */
+export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+
+export type FrontendDeployedConfig = {
+  solanaCluster: SolanaCluster;
+  rpcUrl: string;
+  boxMinterProgramId: string;
+  collectionMint: string;
+  metadataBase: string;
+};
+
+export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
+  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
+  rpcUrl: ${tsStringLiteral(args.rpcUrl)},
+  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
+  collectionMint: ${tsStringLiteral(args.collectionMint)},
+  metadataBase: ${tsStringLiteral(args.metadataBase)},
+};
+`;
+  writeTextFileIfChanged(filePath, content);
+  return filePath;
+}
+
+function writeFunctionsDeploymentConfig(args: {
+  root: string;
+  solanaCluster: string;
+  metadataBase: string;
+  totalSupply: number;
+  deliveryVault: string;
+  boxMinterProgramId: string;
+  collectionMint: string;
+  receiptsMerkleTree: string;
+  deliveryLookupTable: string;
+}) {
+  const filePath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
+  const content = `/**
+ * Cloud Functions deployment constants (COMMITTED).
+ *
+ * This file is intended to be updated by \`scripts/deploy-all-box-minter.ts\` after
+ * an on-chain deployment, so functions can run with minimal env usage.
+ *
+ * Secrets (keep in env/runtime config):
+ * - HELIUS_API_KEY
+ * - COSIGNER_SECRET
+ */
+
+export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+
+export type FunctionsDeploymentConfig = {
+  solanaCluster: SolanaCluster;
+
+  // Drop metadata base (collection.json + json/* + images/*)
+  metadataBase: string;
+
+  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
+  totalSupply: number;
+  deliveryVault: string;
+
+  // On-chain ids
+  boxMinterProgramId: string;
+  collectionMint: string;
+  receiptsMerkleTree: string;
+  deliveryLookupTable: string;
+};
+
+export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
+  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
+
+  // Drop metadata base (collection.json + json/* + images/*)
+  metadataBase: ${tsStringLiteral(args.metadataBase)},
+
+  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
+  totalSupply: ${Number(args.totalSupply)},
+  deliveryVault: ${tsStringLiteral(args.deliveryVault)},
+
+  // On-chain ids
+  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
+  collectionMint: ${tsStringLiteral(args.collectionMint)},
+  receiptsMerkleTree: ${tsStringLiteral(args.receiptsMerkleTree)},
+  deliveryLookupTable: ${tsStringLiteral(args.deliveryLookupTable)},
+};
+`;
+  writeTextFileIfChanged(filePath, content);
+  return filePath;
+}
+
 function u64LE(value: bigint): Buffer {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(value);
@@ -710,41 +835,17 @@ async function main() {
     await assertMplCoreCollection(connection, cfg.coreCollection);
 
     console.log('');
-    console.log('--- env for frontend ---');
-    console.log(`VITE_SOLANA_CLUSTER=${cluster}`);
-    console.log(`VITE_RPC_URL=${rpcUrlForApps}`);
-    console.log(`VITE_BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-    console.log(`VITE_COLLECTION_MINT=${cfg.coreCollection.toBase58()}`);
-    console.log('# Also required (not generated here):');
-    console.log('# VITE_HELIUS_API_KEY=...');
-    console.log('# VITE_FIREBASE_...=...');
-    console.log('# VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=...');
-    console.log('');
-    console.log('--- env for functions ---');
-    console.log(`SOLANA_CLUSTER=${cluster}`);
-    console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-    console.log(`COLLECTION_MINT=${cfg.coreCollection.toBase58()}`);
-    console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
-    console.log('# Also required (not generated here):');
-    console.log('# HELIUS_API_KEY=...');
-    if (payer.publicKey.equals(cfg.admin)) {
-      console.log('# Sensitive: keep this secret offline/backed up securely.');
-      console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
-    } else {
-      console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
-    }
-
     let receiptsTree: PublicKey | null = null;
     try {
       receiptsTree = await createReceiptsMerkleTree(connection, payer);
       console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
     } catch (err) {
       console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
-      console.log('# RECEIPTS_MERKLE_TREE=...');
     }
 
+    let deliveryLut: PublicKey | null = null;
     try {
-      const lut = await ensureDeliveryLookupTable({
+      deliveryLut = await ensureDeliveryLookupTable({
         connection,
         payer,
         programId: programPk,
@@ -753,12 +854,51 @@ async function main() {
         coreCollection: cfg.coreCollection,
         receiptsMerkleTree: receiptsTree || undefined,
       });
-      console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
+      console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
     } catch (err) {
       console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
-      console.log('# DELIVERY_LOOKUP_TABLE=...');
     }
 
+    const functionsCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
+    const previousReceipts = readExistingTsObjectStringField(functionsCfgPath, 'receiptsMerkleTree');
+    const previousLut = readExistingTsObjectStringField(functionsCfgPath, 'deliveryLookupTable');
+    const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
+    const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
+
+    const frontendCfgPath = writeFrontendDeployedConfig({
+      root,
+      solanaCluster: cluster,
+      rpcUrl: rpcUrlForApps,
+      boxMinterProgramId: programPk.toBase58(),
+      collectionMint: cfg.coreCollection.toBase58(),
+      metadataBase: DROP_METADATA_BASE,
+    });
+    const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
+      root,
+      solanaCluster: cluster,
+      metadataBase: DROP_METADATA_BASE,
+      totalSupply: cfg.maxSupply,
+      deliveryVault: cfg.treasury.toBase58(),
+      boxMinterProgramId: programPk.toBase58(),
+      collectionMint: cfg.coreCollection.toBase58(),
+      receiptsMerkleTree: receiptsTreeStr,
+      deliveryLookupTable: deliveryLutStr,
+    });
+
+    console.log('');
+    console.log('--- updated tracked config ---');
+    console.log(`- ${path.relative(root, frontendCfgPath)}`);
+    console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
+    console.log('');
+    console.log('--- remaining env ---');
+    console.log('frontend : VITE_HELIUS_API_KEY, VITE_FIREBASE_API_KEY');
+    console.log('functions: HELIUS_API_KEY, COSIGNER_SECRET');
+    if (payer.publicKey.equals(cfg.admin)) {
+      console.log('# Sensitive: keep this secret offline/backed up securely.');
+      console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
+    } else {
+      console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
+    }
     console.log('');
     console.log('--- notes ---');
     console.log(
@@ -849,37 +989,17 @@ async function main() {
   console.log('  Price (lamports):', priceLamports.toString());
   console.log('');
 
-  console.log('--- env for frontend ---');
-  console.log(`VITE_SOLANA_CLUSTER=${cluster}`);
-  console.log(`VITE_RPC_URL=${rpcUrlForApps}`);
-  console.log(`VITE_BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-  console.log(`VITE_COLLECTION_MINT=${resolvedCoreCollection.toBase58()}`);
-  console.log('# Also required (not generated here):');
-  console.log('# VITE_HELIUS_API_KEY=...');
-  console.log('# VITE_FIREBASE_...=...');
-  console.log('# VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY=...');
-  console.log('');
-  console.log('--- env for functions ---');
-  console.log(`SOLANA_CLUSTER=${cluster}`);
-  console.log(`BOX_MINTER_PROGRAM_ID=${programPk.toBase58()}`);
-  console.log(`COLLECTION_MINT=${resolvedCoreCollection.toBase58()}`);
-  console.log(`METADATA_BASE=${DROP_METADATA_BASE}`);
-  console.log('# Also required (not generated here):');
-  console.log('# HELIUS_API_KEY=...');
-  console.log('# Sensitive: keep this secret offline/backed up securely.');
-  console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
-
   let receiptsTree: PublicKey | null = null;
   try {
     receiptsTree = await createReceiptsMerkleTree(connection, payer);
     console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
   } catch (err) {
     console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
-    console.log('# RECEIPTS_MERKLE_TREE=...');
   }
 
+  let deliveryLut: PublicKey | null = null;
   try {
-    const lut = await ensureDeliveryLookupTable({
+    deliveryLut = await ensureDeliveryLookupTable({
       connection,
       payer,
       programId: programPk,
@@ -888,11 +1008,47 @@ async function main() {
       coreCollection: resolvedCoreCollection,
       receiptsMerkleTree: receiptsTree || undefined,
     });
-    console.log(`DELIVERY_LOOKUP_TABLE=${lut.toBase58()}`);
+    console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
   } catch (err) {
     console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
-    console.log('# DELIVERY_LOOKUP_TABLE=...');
   }
+
+  const functionsCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
+  const previousReceipts = readExistingTsObjectStringField(functionsCfgPath, 'receiptsMerkleTree');
+  const previousLut = readExistingTsObjectStringField(functionsCfgPath, 'deliveryLookupTable');
+  const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
+  const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
+
+  const frontendCfgPath = writeFrontendDeployedConfig({
+    root,
+    solanaCluster: cluster,
+    rpcUrl: rpcUrlForApps,
+    boxMinterProgramId: programPk.toBase58(),
+    collectionMint: resolvedCoreCollection.toBase58(),
+    metadataBase: DROP_METADATA_BASE,
+  });
+  const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
+    root,
+    solanaCluster: cluster,
+    metadataBase: DROP_METADATA_BASE,
+    totalSupply: maxSupply,
+    deliveryVault: treasury.toBase58(),
+    boxMinterProgramId: programPk.toBase58(),
+    collectionMint: resolvedCoreCollection.toBase58(),
+    receiptsMerkleTree: receiptsTreeStr,
+    deliveryLookupTable: deliveryLutStr,
+  });
+
+  console.log('');
+  console.log('--- updated tracked config ---');
+  console.log(`- ${path.relative(root, frontendCfgPath)}`);
+  console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
+  console.log('');
+  console.log('--- remaining env ---');
+  console.log('frontend : VITE_HELIUS_API_KEY, VITE_FIREBASE_API_KEY');
+  console.log('functions: HELIUS_API_KEY, COSIGNER_SECRET');
+  console.log('# Sensitive: keep this secret offline/backed up securely.');
+  console.log(`COSIGNER_SECRET=${bs58.encode(payer.secretKey)}`);
   console.log('');
   console.log('--- notes ---');
   console.log(

@@ -8,6 +8,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { MintStats } from '../types';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
@@ -42,15 +43,8 @@ export interface BoxMinterConfigAccount {
   bump: number;
 }
 
-function requireEnvPubkey(name: string): PublicKey {
-  const raw = (import.meta.env as any)?.[name] as string | undefined;
-  const value = (raw || '').trim();
-  if (!value) throw new Error(`Missing ${name}`);
-  return new PublicKey(value);
-}
-
 export function boxMinterProgramId(): PublicKey {
-  return requireEnvPubkey('VITE_BOX_MINTER_PROGRAM_ID');
+  return new PublicKey(FRONTEND_DEPLOYMENT.boxMinterProgramId);
 }
 
 export function boxMinterConfigPda(programId = boxMinterProgramId()): [PublicKey, number] {

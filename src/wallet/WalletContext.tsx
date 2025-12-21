@@ -15,10 +15,11 @@ import {
 import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { getHeliusApiKey } from '../lib/helius';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 function resolveNetwork(): WalletAdapterNetwork {
-  const raw = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
-  if (raw === 'mainnet-beta' || raw === 'mainnet') return WalletAdapterNetwork.Mainnet;
+  const raw = FRONTEND_DEPLOYMENT.solanaCluster;
+  if (raw === 'mainnet-beta') return WalletAdapterNetwork.Mainnet;
   if (raw === 'testnet') return WalletAdapterNetwork.Testnet;
   return WalletAdapterNetwork.Devnet;
 }
@@ -26,16 +27,13 @@ function resolveNetwork(): WalletAdapterNetwork {
 function heliusRpcUrl(): string | null {
   const apiKey = getHeliusApiKey();
   if (!apiKey) return null;
-  const cluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
+  const cluster = FRONTEND_DEPLOYMENT.solanaCluster;
   const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;
-  const base = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
-  if (base) return `${base}${base.includes('?') ? '&' : '?'}api-key=${apiKey}`;
   return `https://${subdomain}.helius-rpc.com/?api-key=${apiKey}`;
 }
 
 const network = resolveNetwork();
-const envRpc = (import.meta.env.VITE_RPC_URL || '').trim();
-const rpcEndpoint = envRpc || heliusRpcUrl() || clusterApiUrl(network);
+const rpcEndpoint = FRONTEND_DEPLOYMENT.rpcUrl || heliusRpcUrl() || clusterApiUrl(network);
 
 interface Props {
   children: ReactNode;

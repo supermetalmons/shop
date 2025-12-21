@@ -143,7 +143,7 @@ export function encryptAddressPayload(
   const rawKey = (recipientPublicKey || '').trim();
   if (!rawKey) {
     throw new Error(
-      'Missing address encryption public key (set VITE_ADDRESS_ENCRYPTION_PUBLIC_KEY to a base64 Curve25519 public key)',
+      'Missing address encryption public key (set src/config/deployment.ts `addressEncryptionPublicKey` to a base64 Curve25519 public key)',
     );
   }
 

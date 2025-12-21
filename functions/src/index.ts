@@ -19,6 +19,7 @@ import { randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
+import { FUNCTIONS_DEPLOYMENT } from './config/deployment';
 
 function loadLocalEnv() {
   const envPaths = [
@@ -118,7 +119,8 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
 
 const DUDES_PER_BOX = 3;
 const MAX_DUDE_ID = 999;
-const RPC_TIMEOUT_MS = Number(process.env.RPC_TIMEOUT_MS || 8_000);
+// Hardcoded (no env / no deployment config) to avoid config sprawl.
+const RPC_TIMEOUT_MS = 8_000;
 // Issue-receipts tx retry/confirm tuning.
 // Hardcoded (no env) to keep deployments deterministic and avoid config sprawl.
 const TX_SEND_TIMEOUT_MS = 12_000;
@@ -126,9 +128,13 @@ const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
 const TX_MAX_SEND_ATTEMPTS = 3;
 
-// Hardcode devnet for now to avoid cluster mismatches while iterating.
-const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = 'devnet';
-const HELIUS_DEVNET_RPC = 'https://devnet.helius-rpc.com';
+const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = FUNCTIONS_DEPLOYMENT.solanaCluster;
+const HELIUS_RPC_BASE =
+  cluster === 'mainnet-beta'
+    ? 'https://mainnet.helius-rpc.com'
+    : cluster === 'testnet'
+      ? 'https://testnet.helius-rpc.com'
+      : 'https://devnet.helius-rpc.com';
 
 // MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
@@ -146,22 +152,31 @@ const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQ
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
-  return `${HELIUS_DEVNET_RPC}/?api-key=${apiKey}`;
+  return `${HELIUS_RPC_BASE}/?api-key=${apiKey}`;
 }
 
 const rpcUrl = heliusRpcUrl();
 
+function requireConfiguredPubkey(label: string, value: string | undefined): PublicKey {
+  const v = (value || '').trim();
+  if (!v) return PublicKey.default;
+  try {
+    return new PublicKey(v);
+  } catch (err) {
+    throw new Error(`${label} is invalid in functions/src/config/deployment.ts: ${String(err)}`);
+  }
+}
+
 // Required: MPL-Core collection address (uncompressed collection).
-const collectionMint = new PublicKey(process.env.COLLECTION_MINT || PublicKey.default.toBase58());
+const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', FUNCTIONS_DEPLOYMENT.collectionMint);
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
-const DEFAULT_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
-const metadataBase = (process.env.METADATA_BASE || DEFAULT_METADATA_BASE).replace(/\/$/, '');
+const metadataBase = (FUNCTIONS_DEPLOYMENT.metadataBase || '').replace(/\/$/, '');
 
 // Bubblegum receipts tree (required to mint receipt cNFTs).
-const receiptsMerkleTree = new PublicKey(process.env.RECEIPTS_MERKLE_TREE || PublicKey.default.toBase58());
+const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', FUNCTIONS_DEPLOYMENT.receiptsMerkleTree);
 const receiptsMerkleTreeStr = receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58();
 
-const boxMinterProgramId = new PublicKey(process.env.BOX_MINTER_PROGRAM_ID || PublicKey.default.toBase58());
+const boxMinterProgramId = requireConfiguredPubkey('BOX_MINTER_PROGRAM_ID', FUNCTIONS_DEPLOYMENT.boxMinterProgramId);
 const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
 const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
@@ -182,7 +197,7 @@ const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
-const deliveryLookupTable = new PublicKey(process.env.DELIVERY_LOOKUP_TABLE || PublicKey.default.toBase58());
+const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', FUNCTIONS_DEPLOYMENT.deliveryLookupTable);
 const deliveryLookupTableStr = deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58();
 const DELIVERY_LUT_CACHE_TTL_MS = 10 * 60 * 1000;
 let cachedDeliveryLut: AddressLookupTableAccount | null = null;
@@ -190,7 +205,7 @@ let cachedDeliveryLutAtMs = 0;
 
 function assertConfiguredProgramId(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
-    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (missing env var)`);
+    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
   }
 }
 
@@ -460,7 +475,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
 
 function assertConfiguredPublicKey(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
-    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (missing env var)`);
+    throw new functions.https.HttpsError('failed-precondition', `${label} is not configured (see functions/src/config/deployment.ts)`);
   }
 }
 
@@ -1443,8 +1458,8 @@ export const revealDudes = onCallLogged('revealDudes', async (request) => {
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
-      env: collectionMint.toBase58(),
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+      configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
   }
@@ -1612,8 +1627,8 @@ export const prepareDeliveryTx = onCallLogged('prepareDeliveryTx', async (reques
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
-      env: collectionMint.toBase58(),
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+      configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
   }
@@ -1748,7 +1763,7 @@ export const issueReceipts = onCallLogged('issueReceipts', async (request) => {
   if (!receiptsMerkleTreeStr) {
     throw new functions.https.HttpsError(
       'failed-precondition',
-      'Receipt cNFT tree is not configured (missing RECEIPTS_MERKLE_TREE env var)',
+      'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
     );
   }
 
@@ -2359,8 +2374,8 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   }
   assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
   if (!collectionMint.equals(cfgCoreCollection)) {
-    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT env var does not match on-chain config', {
-      env: collectionMint.toBase58(),
+    throw new functions.https.HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+      configured: collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
     });
   }
@@ -2369,7 +2384,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
   if (!receiptsMerkleTreeStr) {
     throw new functions.https.HttpsError(
       'failed-precondition',
-      'Receipt cNFT tree is not configured (missing RECEIPTS_MERKLE_TREE env var)',
+      'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
     );
   }
 
@@ -2478,7 +2493,7 @@ export const prepareIrlClaimTx = onCallLogged('prepareIrlClaimTx', async (reques
       if (!addressLookupTables.length) {
         throw new functions.https.HttpsError(
           'failed-precondition',
-          'Claim transaction is too large to encode. Re-run deploy-all and set DELIVERY_LOOKUP_TABLE in functions env, then retry.',
+          'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
           { receiptsMerkleTree: receiptsMerkleTreeStr },
         );
       }

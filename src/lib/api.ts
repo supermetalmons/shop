@@ -5,8 +5,9 @@ import { auth, firebaseApp } from './firebase';
 import { DeliverySelection, InventoryItem, PendingOpenBox, PreparedTxResponse, Profile, ProfileAddress } from '../types';
 import { boxMinterProgramId } from './boxMinter';
 import { getHeliusApiKey } from './helius';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
-const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'us-central1';
+const region = FRONTEND_DEPLOYMENT.firebaseFunctionsRegion;
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
 let authReadyPromise: Promise<string> | null = null;
@@ -51,7 +52,6 @@ async function ensureAuthenticated(): Promise<string> {
 
 const DEBUG_FUNCTIONS =
   import.meta.env.DEV ||
-  import.meta.env.VITE_DEBUG_FUNCTIONS === 'true' ||
   (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugFunctions') === '1');
 
 function summarizeValue(value: unknown) {
@@ -129,10 +129,9 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 }
 
 const heliusApiKey = getHeliusApiKey();
-const heliusRpcBase = (import.meta.env.VITE_HELIUS_RPC_URL || '').trim();
-const heliusCluster = (import.meta.env.VITE_SOLANA_CLUSTER || 'devnet').toLowerCase();
+const heliusCluster = FRONTEND_DEPLOYMENT.solanaCluster;
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
-const heliusCollection = (import.meta.env.VITE_COLLECTION_MINT || '').trim();
+const heliusCollection = FRONTEND_DEPLOYMENT.collectionMint;
 
 type DasAsset = Record<string, any>;
 
@@ -150,7 +149,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 function heliusRpcUrl() {
-  if (heliusRpcBase) return `${heliusRpcBase}${heliusRpcBase.includes('?') ? '&' : '?'}api-key=${heliusApiKey}`;
+  if (!heliusApiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
   return `https://${heliusSubdomain}.helius-rpc.com/?api-key=${heliusApiKey}`;
 }
 
