@@ -449,12 +449,6 @@ button.ghost:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
-.subscribe {
-  background: var(--bg-secondary);
-  padding: 20px;
-  border-radius: var(--radius);
-}
-
 .modal-overlay {
   position: fixed;
   inset: 0;

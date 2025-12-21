@@ -1,31 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
-    }
+    // NOTE: The frontend authenticates with Firebase Anonymous Auth and uses callable Cloud Functions
+    // (Admin SDK) for all profile/address reads and writes.
+    // We intentionally deny all direct Firestore client access.
 
-    // NOTE: The current frontend uses anonymous Firebase Auth + Cloud Functions.
-    // We keep Firestore client access extremely strict: only "self" profile reads are allowed.
-    function isProfileOwner(wallet) {
-      return signedIn() && request.auth.uid == wallet;
-    }
-
-    // Client-readable user data (scoped to the user's own document only).
+    // User data (backend-only via Cloud Functions / Admin SDK).
     match /profiles/{wallet} {
-      // Never allow enumerating profiles; only allow fetching the caller's own doc by id.
-      allow get: if isProfileOwner(wallet);
-      allow list: if false;
-
-      // All profile mutations go through Cloud Functions (Admin SDK bypasses rules).
-      allow create, update, delete: if false;
+      allow read, write: if false;
 
       match /addresses/{addressId} {
-        // Users can only read their own saved addresses.
-        allow read: if isProfileOwner(wallet);
-
-        // Address writes go through Cloud Functions.
-        allow write: if false;
+        allow read, write: if false;
       }
     }
 

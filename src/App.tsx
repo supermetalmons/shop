@@ -8,7 +8,6 @@ import { DeliveryForm } from './components/DeliveryForm';
 import { DeliveryPanel } from './components/DeliveryPanel';
 import { Modal } from './components/Modal';
 import { ClaimForm } from './components/ClaimForm';
-import { EmailSubscribe } from './components/EmailSubscribe';
 import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
@@ -392,7 +391,7 @@ function App() {
       {mintedOut ? (
         <section className="card">
           <div className="card__title">Minted out</div>
-          <p className="muted">All boxes are gone. Grab them on secondary or drop your email for the next wave.</p>
+          <p className="muted">All boxes are gone. Grab them on secondary.</p>
           <div className="row">
             {secondaryLinks.map((link) => (
               <a key={link.href} className="pill" href={link.href} target="_blank" rel="noreferrer">
@@ -400,7 +399,6 @@ function App() {
               </a>
             ))}
           </div>
-          <EmailSubscribe />
         </section>
       ) : null}
 
