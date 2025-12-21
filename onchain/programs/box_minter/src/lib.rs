@@ -5,6 +5,12 @@ use core::fmt::Write;
 
 declare_id!("FYJ8PRHzMg3UTu47TppZxgVSS7Qh7PjzwZriYm4VVoP6");
 
+/// The only signer allowed to run `initialize()`.
+///
+/// This prevents a permissionless first-initializer from permanently taking over the canonical
+/// `config` PDA (`seeds = [b"config"]`).
+const EXPECTED_INITIALIZER: Pubkey = pubkey!("kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx");
+
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.
 // NOTE: Uncompressed Core mints are expensive; keep this reasonably low.
@@ -67,6 +73,11 @@ pub mod box_minter {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.admin.key(),
+            EXPECTED_INITIALIZER,
+            BoxMinterError::UnauthorizedInitializer
+        );
         require!(args.max_supply > 0, BoxMinterError::InvalidMaxSupply);
         require!(args.max_per_tx > 0, BoxMinterError::InvalidMaxPerTx);
         require!(
@@ -1294,7 +1305,10 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, BoxMinterConfig>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = admin.key() == EXPECTED_INITIALIZER @ BoxMinterError::UnauthorizedInitializer
+    )]
     pub admin: Signer<'info>,
 
     /// CHECK: Any SOL receiver is fine; stored in config.
@@ -1756,6 +1770,8 @@ pub enum BoxMinterError {
     InvalidReceiptUriBase,
     #[msg("Invalid metadata base")]
     InvalidMetadataBase,
+    #[msg("Unauthorized initializer")]
+    UnauthorizedInitializer,
 }
 
 
