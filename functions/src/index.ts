@@ -1244,22 +1244,78 @@ function decodePendingOpenBox(data: Buffer): {
   return { owner, boxAsset, dudeAssets, createdSlot, bump };
 }
 
-async function assignDudes(boxId: string): Promise<number[]> {
-  const ref = db.doc(`boxAssignments/${boxId}`);
+async function assignDudes(boxAssetId: string): Promise<number[]> {
+  const ref = db.doc(`boxAssignments/${boxAssetId}`);
   const poolRef = db.doc('meta/dudePool');
   return db.runTransaction(async (tx) => {
     const existing = await tx.get(ref);
-    if (existing.exists) return (existing.data() as any).dudeIds as number[];
-    const poolSnap = await tx.get(poolRef);
-    const pool = (poolSnap.data() as any)?.available || Array.from({ length: MAX_DUDE_ID }, (_, i) => i + 1);
-    if (pool.length < DUDES_PER_BOX) throw new Error('No dudes remaining to assign');
-    const chosen: number[] = [];
-    for (let i = 0; i < DUDES_PER_BOX; i += 1) {
-      const pick = randomInt(0, pool.length);
-      chosen.push(pool[pick]);
-      pool.splice(pick, 1);
+    if (existing.exists) {
+      const dudeIdsRaw = (existing.data() as any)?.dudeIds;
+      const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
+      if (dudeIds.length !== DUDES_PER_BOX) {
+        throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${DUDES_PER_BOX})`, {
+          boxAssetId,
+          dudeIds,
+        });
+      }
+      dudeIds.forEach((id) => {
+        if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+          throw new HttpsError('failed-precondition', 'Invalid stored dude id', { boxAssetId, dudeId: id });
+        }
+      });
+      if (new Set(dudeIds).size !== dudeIds.length) {
+        throw new HttpsError('failed-precondition', 'Duplicate stored dudeIds for box', { boxAssetId, dudeIds });
+      }
+
+      return dudeIds;
     }
-    tx.set(poolRef, { available: pool }, { merge: true });
+
+    const poolSnap = await tx.get(poolRef);
+    const rawPool = (poolSnap.data() as any)?.available;
+    let pool: number[] = Array.isArray(rawPool) ? rawPool.map((n) => Math.floor(Number(n))) : Array.from({ length: MAX_DUDE_ID }, (_, i) => i + 1);
+    // Sanitize + de-dupe (in case the pool doc was manually edited/corrupted).
+    pool = pool.filter((id) => Number.isFinite(id) && id >= 1 && id <= MAX_DUDE_ID);
+    pool = Array.from(new Set(pool));
+
+    if (pool.length < DUDES_PER_BOX) throw new Error('No dudes remaining to assign');
+
+    const chosen: number[] = [];
+    const chosenSet = new Set<number>();
+
+    // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
+    // across *all* boxes by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
+    while (chosen.length < DUDES_PER_BOX) {
+      if (!pool.length) throw new Error('No dudes remaining to assign');
+
+      const pick = randomInt(0, pool.length);
+      const candidate = pool[pick];
+      pool.splice(pick, 1);
+      if (!Number.isFinite(candidate) || candidate < 1 || candidate > MAX_DUDE_ID) continue;
+      if (chosenSet.has(candidate)) continue;
+
+      const dudeRef = db.doc(`dudeAssignments/${candidate}`);
+      const dudeSnap = await tx.get(dudeRef);
+      if (dudeSnap.exists) {
+        // Pool is stale/corrupt (it includes an already-assigned dude). Keep it removed from `pool` so the
+        // pool doc gets self-healed on commit.
+        continue;
+      }
+
+      chosen.push(candidate);
+      chosenSet.add(candidate);
+    }
+
+    // Reserve dudes (uniqueness across boxes, even if the pool doc is corrupted).
+    for (const dudeId of chosen) {
+      const dudeRef = db.doc(`dudeAssignments/${dudeId}`);
+      tx.create(dudeRef, {
+        dudeId,
+        boxAssetId,
+        assignedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    tx.set(poolRef, { available: pool, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
     tx.set(ref, { dudeIds: chosen, createdAt: FieldValue.serverTimestamp() });
     return chosen;
   });

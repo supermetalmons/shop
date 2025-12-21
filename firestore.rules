@@ -38,6 +38,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /dudeAssignments/{dudeId} {
+      allow read, write: if false;
+    }
+
     match /meta/dudePool {
       allow read, write: if false;
     }

@@ -53,7 +53,7 @@ const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim() || 'm
 
 // Firestore collections that belong to a specific drop and should be wiped on each full on-chain deployment.
 // IMPORTANT: Do NOT add user-owned collections here (profiles/authSessions/wallets).
-const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'meta', 'claimCodes', 'deliveryOrders', 'mintTxs'];
+const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'dudeAssignments', 'meta', 'claimCodes', 'deliveryOrders', 'mintTxs'];
 // ---------------------------------------------------------------------------
 
 async function promptMaskedInput(prompt: string): Promise<string> {
