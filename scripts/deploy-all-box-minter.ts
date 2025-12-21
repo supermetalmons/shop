@@ -899,11 +899,6 @@ async function main() {
     } else {
       console.log('# COSIGNER_SECRET not printed because --keypair != on-chain admin.');
     }
-    console.log('');
-    console.log('--- notes ---');
-    console.log(
-      `Core collection update authority must be the box minter config PDA:\n` + `  ${configPda.toBase58()}\n`,
-    );
     return;
   }
 

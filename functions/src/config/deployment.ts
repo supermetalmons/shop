@@ -39,8 +39,8 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   deliveryVault: 'Aj42b5TrjeZyAVeZVxpjV8nxQ7CSExjmYV42NwuFcjqa',
 
   // On-chain ids
-  boxMinterProgramId: '8ppYPX2FkPoFcXwWfDJKyPy16STm4q912QwdSgAs9Tr9',
-  collectionMint: 'EBsDK56cGoer796S5tQYz9x83d1w96Rn8L8HCSyKa5cP',
-  receiptsMerkleTree: 'H2szEocmEFNVL5V9MQyhNUyLT8RsP1mb42tApY8Vv7kf',
-  deliveryLookupTable: 'Cze4KN9EgWBugu19uc5mmgaCS9w7qZ3DqAk7aSgPn5JE',
+  boxMinterProgramId: 'D6HxewzSWiFc4yVupdRQT1G4mFw4K7rJKhiV3SEoUju9',
+  collectionMint: 'CxMNd67qGWFmyadYJz6a11CBASbsFteXiz7t4NxNVJLC',
+  receiptsMerkleTree: 'CzTvErCx1jz6csebZG9Yi7yhaJ2zTQpXmDfMQVCHqNxk',
+  deliveryLookupTable: 'EfaFdGw2kYwV5yzjMuBhvNuM8Smt3TyLZum497GZRXqf',
 };
