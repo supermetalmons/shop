@@ -888,8 +888,6 @@ pub mod box_minter {
                 ],
             )?;
         }
-
-        msg!("delivery_id:{}", args.delivery_id);
         Ok(())
     }
 
@@ -1709,12 +1707,19 @@ fn verify_core_asset_owned_by_uri(
     Ok(())
 }
 
+fn derive_uri_base(drop_base: &str, suffix: &str) -> String {
+    let mut out = String::with_capacity(drop_base.len() + suffix.len());
+    out.push_str(drop_base);
+    out.push_str(suffix);
+    out
+}
+
 fn derive_boxes_uri_base(drop_base: &str) -> String {
-    format!("{}/json/boxes/", drop_base)
+    derive_uri_base(drop_base, "/json/boxes/")
 }
 
 fn derive_figures_uri_base(drop_base: &str) -> String {
-    format!("{}/json/figures/", drop_base)
+    derive_uri_base(drop_base, "/json/figures/")
 }
 
 fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
@@ -1729,11 +1734,11 @@ fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
 }
 
 fn derive_receipts_figures_uri_base(drop_base: &str) -> String {
-    format!("{}/json/receipts/figures/", drop_base)
+    derive_uri_base(drop_base, "/json/receipts/figures/")
 }
 
 fn derive_receipts_boxes_uri_base(drop_base: &str) -> String {
-    format!("{}/json/receipts/boxes/", drop_base)
+    derive_uri_base(drop_base, "/json/receipts/boxes/")
 }
 
 #[error_code]

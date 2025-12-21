@@ -1077,7 +1077,8 @@ async function main() {
     }
   }
 
-  run('anchor', ['build', '--arch', 'sbf'], { cwd: onchainDir, env: toolEnv });
+  // Build with Anchor "lean" features to reduce binary size (no on-chain IDL + no auto instruction-name logs).
+  run('anchor', ['build', '--arch', 'sbf', '--', '--features', 'no-idl,no-log-ix-name'], { cwd: onchainDir, env: toolEnv });
   if (!existsSync(programBinary)) {
     throw new Error(`Missing program binary after build: ${programBinary}`);
   }
