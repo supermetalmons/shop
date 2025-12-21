@@ -1,7 +1,7 @@
 /**
  * Cloud Functions deployment constants (COMMITTED).
  *
- * This file is intended to be updated by `scripts/deploy-all-box-minter.ts` after
+ * This file is intended to be updated by `scripts/deploy-all-onchain.ts` (`npm run deploy-all-onchain`) after
  * an on-chain deployment, so functions can run with minimal env usage.
  *
  * Secrets:
@@ -36,11 +36,11 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
 
   // Optional convenience fields (not required by runtime logic, but useful to keep synced)
   totalSupply: 333,
-  deliveryVault: 'Aj42b5TrjeZyAVeZVxpjV8nxQ7CSExjmYV42NwuFcjqa',
+  deliveryVault: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
 
   // On-chain ids
-  boxMinterProgramId: 'D6HxewzSWiFc4yVupdRQT1G4mFw4K7rJKhiV3SEoUju9',
-  collectionMint: 'CxMNd67qGWFmyadYJz6a11CBASbsFteXiz7t4NxNVJLC',
-  receiptsMerkleTree: 'CzTvErCx1jz6csebZG9Yi7yhaJ2zTQpXmDfMQVCHqNxk',
-  deliveryLookupTable: 'EfaFdGw2kYwV5yzjMuBhvNuM8Smt3TyLZum497GZRXqf',
+  boxMinterProgramId: 'HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k',
+  collectionMint: 'AAFckuKi8keaaFTPfnyApL1D1mPtywq4HQDM3NpwaHuD',
+  receiptsMerkleTree: '81phSLXTWGmXHcjRzmyYuvNSYdFWgFGoTmB3dytfGnVz',
+  deliveryLookupTable: '2GX46VBg82BCLyQozkCqnKVcYyoWwb5LvcBX2n28yaz8',
 };

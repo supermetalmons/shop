@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
@@ -31,40 +31,147 @@ const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRL
 const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 // NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
-/**
- * Minimal argv flag parser.
- * Supports: `--flag value` (no `--flag=value` parsing).
- */
-function getArg(flag: string, fallback?: string) {
-  const idx = process.argv.indexOf(flag);
-  if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1];
-  return fallback;
-}
+type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
-function requireArg(flag: string, value?: string): string {
-  const v = (value || '').trim();
-  if (!v) {
-    console.error(`Missing required arg: ${flag}`);
-    process.exit(1);
+// ---------------------------------------------------------------------------
+// EDIT THESE CONSTANTS to change deploy behavior.
+// This script intentionally accepts NO CLI args.
+const SOLANA_CLUSTER: SolanaCluster = 'devnet';
+// Optional: set a custom RPC URL; otherwise the default cluster RPC is used.
+const SOLANA_RPC_URL: string | undefined = undefined;
+// Optional: set to an existing MPL-Core collection address (must have update authority = config PDA).
+// If unset, the script auto-creates a new collection on first deploy.
+const CORE_COLLECTION_PUBKEY: string | undefined = undefined;
+// If true, reuse the existing program id/keypair (upgrade in-place). If false, auto-generate a fresh program id.
+const REUSE_PROGRAM_ID = false;
+// ---------------------------------------------------------------------------
+
+async function promptMaskedInput(prompt: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new Error('Cannot prompt for private key: stdin is not a TTY. Run this script in an interactive terminal.');
   }
-  return v;
+
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+
+  stdout.write(prompt);
+  stdin.setEncoding('utf8');
+
+  const wasRaw = (stdin as any).isRaw;
+  stdin.setRawMode(true);
+  stdin.resume();
+
+  let input = '';
+
+  return await new Promise((resolve, reject) => {
+    function cleanup() {
+      stdin.removeListener('data', onData);
+      try {
+        stdin.setRawMode(Boolean(wasRaw));
+      } catch {
+        // ignore
+      }
+      stdin.pause();
+    }
+
+    function onData(chunk: string) {
+      for (const ch of chunk) {
+        // Ctrl+C
+        if (ch === '\u0003') {
+          stdout.write('\n');
+          cleanup();
+          reject(new Error('Cancelled'));
+          return;
+        }
+
+        // Enter
+        if (ch === '\r' || ch === '\n') {
+          stdout.write('\n');
+          cleanup();
+          resolve(input);
+          return;
+        }
+
+        // Backspace (DEL / BS)
+        if (ch === '\u007f' || ch === '\b') {
+          if (input.length > 0) {
+            input = input.slice(0, -1);
+            stdout.write('\b \b');
+          }
+          continue;
+        }
+
+        // Ignore other control chars
+        if (ch < ' ' && ch !== '\t') continue;
+
+        input += ch;
+        stdout.write('*');
+      }
+    }
+
+    stdin.on('data', onData);
+  });
 }
 
-function resolveHome(p: string): string {
-  if (!p) return p;
-  if (p === '~') return homedir();
-  if (p.startsWith('~/')) return path.join(homedir(), p.slice(2));
-  return p;
+function keypairFromBytes(bytes: Uint8Array): Keypair {
+  if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
+  if (bytes.length === 32) return Keypair.fromSeed(bytes);
+  throw new Error(`Invalid private key length: ${bytes.length} bytes (expected 32 or 64).`);
 }
 
-function loadKeypair(keypairPath: string): Keypair {
-  const raw = readFileSync(keypairPath, 'utf8').trim();
+function parsePrivateKeyInput(input: string): Keypair {
+  const raw = (input || '').trim();
+  if (!raw) throw new Error('Empty private key input.');
+
+  // Accept Solana CLI-style JSON keypair arrays (e.g. ~/.config/solana/id.json contents).
+  if (raw.startsWith('[')) {
+    let arr: unknown;
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      throw new Error('Invalid JSON private key. Expected a JSON array of numbers or a base58-encoded secret key.');
+    }
+    if (!Array.isArray(arr) || arr.some((n) => typeof n !== 'number')) {
+      throw new Error('Invalid JSON private key. Expected a JSON array of numbers.');
+    }
+    return keypairFromBytes(Uint8Array.from(arr as number[]));
+  }
+
+  // Otherwise, treat as base58.
   try {
-    const arr = JSON.parse(raw);
-    return Keypair.fromSecretKey(Uint8Array.from(arr));
+    return keypairFromBytes(bs58.decode(raw));
   } catch {
-    return Keypair.fromSecretKey(bs58.decode(raw));
+    throw new Error('Invalid base58 private key.');
   }
+}
+
+function writeTempKeypairFile(kp: Keypair): string {
+  const filePath = path.join(tmpdir(), `mons-shop-deployer-${process.pid}-${Date.now()}.json`);
+  // solana-cli expects a JSON array of 64 u8 values.
+  writeFileSync(filePath, JSON.stringify(Array.from(kp.secretKey)), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return filePath;
+}
+
+function registerTempKeypairCleanup(filePath: string) {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      unlinkSync(filePath);
+    } catch {
+      // ignore
+    }
+  };
+  process.on('exit', cleanup);
+  process.on('SIGINT', () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.on('SIGTERM', () => {
+    cleanup();
+    process.exit(143);
+  });
 }
 
 function tsStringLiteral(value: string): string {
@@ -103,7 +210,7 @@ function writeFrontendDeployedConfig(args: {
   const content = `/**
  * Frontend values produced by on-chain deployment (COMMITTED).
  *
- * This file is intended to be overwritten by \`scripts/deploy-all-box-minter.ts\`.
+ * This file is intended to be overwritten by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`).
  * Put anything that is NOT produced by deployment (Firebase non-secret config,
  * encryption public key, etc) in \`src/config/deployment.ts\`.
  */
@@ -144,7 +251,7 @@ function writeFunctionsDeploymentConfig(args: {
   const content = `/**
  * Cloud Functions deployment constants (COMMITTED).
  *
- * This file is intended to be updated by \`scripts/deploy-all-box-minter.ts\` after
+ * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
  * an on-chain deployment, so functions can run with minimal env usage.
  *
  * Secrets:
@@ -645,7 +752,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
   if (!info) {
     throw new Error(
       `Missing core collection account: ${coreCollection.toBase58()}\n` +
-        `Make sure you passed a valid MPL-Core collection address for this cluster via --core-collection.`,
+        `Make sure SOLANA_CLUSTER / SOLANA_RPC_URL are correct (scripts/deploy-all-onchain.ts).`,
     );
   }
   if (!info.owner.equals(MPL_CORE_PROGRAM_ID)) {
@@ -653,7 +760,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
       `coreCollection ${coreCollection.toBase58()} is not owned by the MPL-Core program.\n` +
         `Expected owner: ${MPL_CORE_PROGRAM_ID.toBase58()}\n` +
         `Actual owner  : ${info.owner.toBase58()}\n` +
-        `Pass an MPL-Core collection address (not a Token Metadata mint) via --core-collection.`,
+        `If you set CORE_COLLECTION_PUBKEY, it must be an MPL-Core collection address (not a Token Metadata mint).`,
     );
   }
 }
@@ -677,42 +784,56 @@ async function getMplCoreCollectionUpdateAuthority(connection: Connection, coreC
 }
 
 async function main() {
+  const extraArgs = process.argv.slice(2);
+  if (extraArgs.length) {
+    throw new Error(
+      `This script accepts no CLI args.\n` +
+        `Run:\n` +
+        `  npm run deploy-all-onchain\n` +
+        `\n` +
+        `To change cluster/RPC/core collection or reuse settings, edit constants at the top of scripts/deploy-all-onchain.ts.\n`,
+    );
+  }
+
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const root = path.resolve(__dirname, '..');
   const onchainDir = path.join(root, 'onchain');
-  const programKeypairArg = getArg('--program-keypair');
-  const programKeypair = programKeypairArg
-    ? path.resolve(resolveHome(programKeypairArg))
-    : path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
+  const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
 
-  // We intentionally do NOT read env vars for deployment config.
-  // Keep this script deterministic: edit constants below to change metadata/supply/price.
-  const cluster = (getArg('--cluster', 'devnet') || 'devnet').toLowerCase();
-  const rpc = getArg('--rpc');
-  const coreCollectionArg = getArg('--core-collection');
-  const keypairPath = path.resolve(resolveHome(requireArg('--keypair', getArg('--keypair'))));
-  const solanaUrl = rpc || cluster;
+  const cluster: SolanaCluster = SOLANA_CLUSTER;
+  const rpcUrlForApps = SOLANA_RPC_URL || clusterApiUrl(cluster);
+  const solanaUrl = SOLANA_RPC_URL || cluster;
   const solanaBinDir = readSolanaActiveReleaseBinDir();
-  const toolEnv = solanaBinDir ? { PATH: `${solanaBinDir}:${process.env.PATH || ''}` } : undefined;
-  const rpcUrlForApps = rpc || clusterApiUrl(cluster as any);
 
   console.log('--- deploy ALL (program + MPL Core collection + config) ---');
   console.log('cluster:', cluster);
-  if (rpc) console.log('rpc    :', rpc);
-  if (coreCollectionArg) console.log('core collection:', coreCollectionArg);
-  if (keypairPath) console.log('keypair:', keypairPath);
+  console.log('rpc url :', rpcUrlForApps);
+  if (CORE_COLLECTION_PUBKEY) console.log('core collection:', CORE_COLLECTION_PUBKEY);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
 
-  const reuseProgramId = process.argv.includes('--reuse-program-id') || process.argv.includes('--reuse-program-keypair');
+  console.log('Enter the deployer wallet private key (input is hidden).');
+  console.log('Accepted formats: base58 secret key, or JSON array (like ~/.config/solana/id.json contents).');
+  const payer = parsePrivateKeyInput(await promptMaskedInput('deployer private key: '));
+  console.log('deployer pubkey:', payer.publicKey.toBase58());
+
+  const tempKeypairPath = writeTempKeypairFile(payer);
+  registerTempKeypairCleanup(tempKeypairPath);
+  const toolEnv = {
+    ...(solanaBinDir ? { PATH: `${solanaBinDir}:${process.env.PATH || ''}` } : {}),
+    // Keep anchor + solana cli aligned with the deployer wallet.
+    ANCHOR_WALLET: tempKeypairPath,
+  };
+
+  const reuseProgramId = REUSE_PROGRAM_ID;
   let expectedProgramId: string | undefined;
   if (reuseProgramId) {
     if (!existsSync(programKeypair)) {
       throw new Error(
         `Missing program keypair: ${programKeypair}\n` +
-          `Either create it first, or omit --reuse-program-id to auto-generate a fresh program id.\n` +
+          `Either create it first, or set REUSE_PROGRAM_ID=false to auto-generate a fresh program id.\n` +
           `Generate it with:\n` +
           `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n`,
       );
@@ -770,8 +891,7 @@ async function main() {
   }
 
   // Deploy program via Solana CLI (Agave). This avoids `anchor deploy` rebuilding with the wrong arch/tooling.
-  const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypair, '--url', solanaUrl];
-  if (keypairPath) deployArgs.push('--keypair', keypairPath);
+  const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypair, '--url', solanaUrl, '--keypair', tempKeypairPath];
   run('solana', deployArgs, { cwd: onchainDir, env: toolEnv });
 
   const programId = readProgramId(onchainDir);
@@ -799,8 +919,7 @@ async function main() {
   };
   // ---------------------------------------------------------------------------
 
-  const connection = new Connection(rpc || clusterApiUrl(cluster as any), { commitment: 'confirmed' });
-  const payer = loadKeypair(keypairPath);
+  const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
   const programPk = new PublicKey(programId);
   const configPda = boxMinterConfigPda(programPk);
 
@@ -815,8 +934,8 @@ async function main() {
     if (!payer.publicKey.equals(cfg.admin)) {
       throw new Error(
         `This repo is configured for a single master key.\n` +
-          `Config admin pubkey does not match --keypair.\n` +
-          `- keypair : ${payer.publicKey.toBase58()}\n` +
+          `Config admin pubkey does not match the deployer key you entered.\n` +
+          `- deployer: ${payer.publicKey.toBase58()}\n` +
           `- admin   : ${cfg.admin.toBase58()}\n` +
           `\n` +
           `Fix: re-run with the admin keypair, or redeploy fresh without reusing this config PDA.`,
@@ -825,8 +944,8 @@ async function main() {
     if (!payer.publicKey.equals(cfg.treasury)) {
       throw new Error(
         `This repo is configured for a single master key.\n` +
-          `Config treasury pubkey does not match --keypair.\n` +
-          `- keypair : ${payer.publicKey.toBase58()}\n` +
+          `Config treasury pubkey does not match the deployer key you entered.\n` +
+          `- deployer: ${payer.publicKey.toBase58()}\n` +
           `- treasury: ${cfg.treasury.toBase58()}\n` +
           `\n` +
           `Fix: set treasury to the same key (admin can call set_treasury) or redeploy fresh.`,
@@ -901,7 +1020,7 @@ async function main() {
   // 2) Create or reuse an MPL-Core collection (uncompressed).
   // IMPORTANT: for the on-chain program to mint into the collection, the collection update authority
   // must be the program config PDA.
-  const coreCollection = coreCollectionArg ? new PublicKey(coreCollectionArg) : undefined;
+  const coreCollection = CORE_COLLECTION_PUBKEY ? new PublicKey(CORE_COLLECTION_PUBKEY) : undefined;
 
   // EDIT THESE CONSTANTS to control the MPL-Core collection metadata.
   const CORE_COLLECTION_CONFIG = {
@@ -916,12 +1035,12 @@ async function main() {
     const updateAuthority = await getMplCoreCollectionUpdateAuthority(connection, resolvedCoreCollection);
     if (!updateAuthority.equals(configPda)) {
       throw new Error(
-        `Provided --core-collection is not configured for this deployment.\n` +
+        `CORE_COLLECTION_PUBKEY is not configured for this deployment.\n` +
           `Collection: ${resolvedCoreCollection.toBase58()}\n` +
           `Expected update authority (program config PDA): ${configPda.toBase58()}\n` +
           `Actual update authority: ${updateAuthority.toBase58()}\n` +
           `\n` +
-          `Fix: omit --core-collection to auto-create one, or transfer collection update authority to the config PDA.`,
+          `Fix: unset CORE_COLLECTION_PUBKEY to auto-create one, or transfer collection update authority to the config PDA.`,
       );
     }
     console.log('\n[2/3] Using existing MPL-Core collection…');

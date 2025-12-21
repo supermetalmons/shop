@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::sysvar::instructions as sysvar_instructions;
 use core::fmt::Write;
 
-declare_id!("D6HxewzSWiFc4yVupdRQT1G4mFw4K7rJKhiV3SEoUju9");
+declare_id!("HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
 // Keep conservative caps to avoid compute/tx-size failures.

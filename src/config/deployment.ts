@@ -2,7 +2,7 @@
  * Frontend deployment constants (COMMITTED).
  *
  * Values produced by on-chain deployment live in `src/config/deployed.ts` and are
- * updated by `scripts/deploy-all-box-minter.ts`.
+ * updated by `scripts/deploy-all-onchain.ts` (`npm run deploy-all-onchain`).
  *
  * Secrets:
  * - Do NOT put secrets here.

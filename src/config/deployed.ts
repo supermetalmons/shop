@@ -1,7 +1,7 @@
 /**
  * Frontend values produced by on-chain deployment (COMMITTED).
  *
- * This file is intended to be overwritten by `scripts/deploy-all-box-minter.ts`.
+ * This file is intended to be overwritten by `scripts/deploy-all-onchain.ts` (`npm run deploy-all-onchain`).
  * Put anything that is NOT produced by deployment (Firebase non-secret config,
  * encryption public key, etc) in `src/config/deployment.ts`.
  */
@@ -18,7 +18,7 @@ export type FrontendDeployedConfig = {
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: 'devnet',
   rpcUrl: 'https://api.devnet.solana.com',
-  boxMinterProgramId: 'D6HxewzSWiFc4yVupdRQT1G4mFw4K7rJKhiV3SEoUju9',
-  collectionMint: 'CxMNd67qGWFmyadYJz6a11CBASbsFteXiz7t4NxNVJLC',
+  boxMinterProgramId: 'HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k',
+  collectionMint: 'AAFckuKi8keaaFTPfnyApL1D1mPtywq4HQDM3NpwaHuD',
   metadataBase: 'https://assets.mons.link/shop/drops/1',
 };

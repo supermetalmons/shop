@@ -520,7 +520,7 @@ async function ensureOnchainCoreConfig(force = false) {
     onchainConfigOk = false;
     throw new HttpsError(
       'failed-precondition',
-      'On-chain mint config is missing or mismatched. Re-run `npm run box-minter:deploy-all`, update functions env, and redeploy.',
+      'On-chain mint config is missing or mismatched. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
       {
         missing,
         collection: collectionMint.toBase58(),
@@ -1445,7 +1445,7 @@ export const revealDudes = onCallLogged(
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
     throw new HttpsError(
       'failed-precondition',
-      'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
+      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
       { configPda: boxMinterConfigPda.toBase58() },
     );
   }
@@ -1625,7 +1625,7 @@ export const prepareDeliveryTx = onCallLogged(
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
     throw new HttpsError(
       'failed-precondition',
-      'Box minter config PDA not found. Re-run `npm run box-minter:deploy-all`, update env, and redeploy.',
+      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
       { configPda: boxMinterConfigPda.toBase58() },
     );
   }

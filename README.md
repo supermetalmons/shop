@@ -11,7 +11,7 @@ Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per
   - `VITE_FIREBASE_API_KEY`
 - Configure everything else in **committed config**:
   - `src/config/deployment.ts` (Firebase non-secret config, delivery encryption public key)
-  - `src/config/deployed.ts` (auto-updated by `npm run box-minter:deploy-all`)
+  - `src/config/deployed.ts` (auto-updated by `npm run deploy-all-onchain`)
 - Run dev server: `npm run dev`
 - Build for production: `npm run build` (outputs `dist/`)
 
@@ -52,8 +52,9 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
 - Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
   - One-command deploy (auto-generates a fresh program id each run):
-    - `npm run box-minter:deploy-all -- --cluster devnet --keypair ~/.config/solana/id.json --rpc https://api.devnet.solana.com --core-collection <MPL_CORE_COLLECTION_PUBKEY>`
-  - Reuse the existing program id/keypair (upgrade in-place): add `--reuse-program-id` (skips init if the config PDA already exists).
+    - `npm run deploy-all-onchain` (prompts for deployer private key; no CLI args)
+    - To change cluster/RPC/reuse behavior or pin an existing MPL-Core collection, edit the constants at the top of `scripts/deploy-all-onchain.ts`.
+  - Reuse the existing program id/keypair (upgrade in-place): set `REUSE_PROGRAM_ID = true` in `scripts/deploy-all-onchain.ts` (skips init if the config PDA already exists).
   - Updates tracked config files:
     - `src/config/deployed.ts` (frontend)
     - `functions/src/config/deployment.ts` (cloud functions)
