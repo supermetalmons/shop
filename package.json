@@ -12,7 +12,7 @@
     "deploy:firebase": "firebase deploy --only firestore:rules,functions",
     "deploy:functions": "firebase deploy --only functions",
     "df": "cd functions && firebase deploy --only functions",
-    "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
+    "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts"
   },
   "repository": {
     "type": "git",

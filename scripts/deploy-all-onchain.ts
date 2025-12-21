@@ -241,7 +241,6 @@ function writeFunctionsDeploymentConfig(args: {
   solanaCluster: string;
   metadataBase: string;
   totalSupply: number;
-  deliveryVault: string;
   boxMinterProgramId: string;
   collectionMint: string;
   receiptsMerkleTree: string;
@@ -269,7 +268,6 @@ export type FunctionsDeploymentConfig = {
 
   // Optional convenience fields (not required by runtime logic, but useful to keep synced)
   totalSupply: number;
-  deliveryVault: string;
 
   // On-chain ids
   boxMinterProgramId: string;
@@ -286,7 +284,6 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
 
   // Optional convenience fields (not required by runtime logic, but useful to keep synced)
   totalSupply: ${Number(args.totalSupply)},
-  deliveryVault: ${tsStringLiteral(args.deliveryVault)},
 
   // On-chain ids
   boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
@@ -997,7 +994,6 @@ async function main() {
       solanaCluster: cluster,
       metadataBase: DROP_METADATA_BASE,
       totalSupply: cfg.maxSupply,
-      deliveryVault: cfg.treasury.toBase58(),
       boxMinterProgramId: programPk.toBase58(),
       collectionMint: cfg.coreCollection.toBase58(),
       receiptsMerkleTree: receiptsTreeStr,
@@ -1137,7 +1133,6 @@ async function main() {
     solanaCluster: cluster,
     metadataBase: DROP_METADATA_BASE,
     totalSupply: maxSupply,
-    deliveryVault: treasury.toBase58(),
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,

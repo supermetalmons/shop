@@ -19,7 +19,6 @@ export type FunctionsDeploymentConfig = {
 
   // Optional convenience fields (not required by runtime logic, but useful to keep synced)
   totalSupply: number;
-  deliveryVault: string;
 
   // On-chain ids
   boxMinterProgramId: string;
@@ -36,7 +35,6 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
 
   // Optional convenience fields (not required by runtime logic, but useful to keep synced)
   totalSupply: 333,
-  deliveryVault: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
 
   // On-chain ids
   boxMinterProgramId: 'HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k',
