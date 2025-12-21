@@ -744,7 +744,23 @@ async function ensureDeliveryLookupTable(args: {
   return lutAddress;
 }
 
-const RECEIPTS_TREE_MAX_DEPTH = 14;
+// ---------------------------------------------------------------------------
+// Receipt cNFT Merkle tree sizing (Bubblegum v2).
+//
+// This tree ONLY stores *compressed receipt NFTs* minted via `box_minter::mint_receipts`.
+// The uncompressed MPL-Core assets (boxes + revealed figures) are NOT stored in this tree.
+//
+// Max receipts in this drop:
+// - 333 box receipts (1 per box id)
+// - 999 figure receipts (1 per figure id)
+// => 1332 total receipts.
+//
+// A concurrent Merkle tree can store up to 2^maxDepth leaves:
+// - depth 10 => 1024 (too small)
+// - depth 11 => 2048 (fits, with headroom)
+// - depth 12 => 4096 (more headroom, higher rent)
+// ---------------------------------------------------------------------------
+const RECEIPTS_TREE_MAX_DEPTH = 11;
 const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
 // Canopy depth controls how many proof nodes are stored on-chain in the tree account.
 // NOTE: For Phantom UX, we prefer canopy depth = 0 so wallets can see the *full proof* in the tx
