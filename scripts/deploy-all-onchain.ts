@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import bs58 from 'bs58';
+import { createInterface } from 'node:readline/promises';
 import {
   clusterApiUrl,
   AddressLookupTableProgram,
@@ -45,6 +46,14 @@ const SOLANA_RPC_URL: string | undefined = undefined;
 const CORE_COLLECTION_PUBKEY: string | undefined = undefined;
 // If true, reuse the existing program id/keypair (upgrade in-place). If false, auto-generate a fresh program id.
 const REUSE_PROGRAM_ID = false;
+
+// Firebase project id used for Firestore cleanup.
+// Defaults to the repo's configured Firebase project (see `src/config/deployment.ts`).
+const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim() || 'mons-shop';
+
+// Firestore collections that belong to a specific drop and should be wiped on each full on-chain deployment.
+// IMPORTANT: Do NOT add user-owned collections here (profiles/authSessions/wallets).
+const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'meta', 'claimCodes', 'deliveryOrders', 'mintTxs'];
 // ---------------------------------------------------------------------------
 
 async function promptMaskedInput(prompt: string): Promise<string> {
@@ -112,6 +121,19 @@ async function promptMaskedInput(prompt: string): Promise<string> {
 
     stdin.on('data', onData);
   });
+}
+
+async function promptYConfirmation(prompt: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    throw new Error('Cannot prompt for confirmation: stdin is not a TTY. Run this script in an interactive terminal.');
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(prompt)).trim().toLowerCase();
+    return answer === 'y';
+  } finally {
+    rl.close();
+  }
 }
 
 function keypairFromBytes(bytes: Uint8Array): Keypair {
@@ -615,6 +637,35 @@ function run(cmd: string, args: string[], opts: { cwd?: string; env?: Record<str
   }
 }
 
+async function maybeWipeFirestoreDropData(args: { root: string; projectId: string }) {
+  const projectId = (args.projectId || '').trim();
+  if (!projectId) return;
+
+  const collections = FIRESTORE_DROP_COLLECTIONS_TO_DELETE.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
+  if (!collections.length) return;
+
+  console.log('\n⚠️  FIRESTORE WIPE (drop data)');
+  console.log(`Project: ${projectId}`);
+  console.log('This will permanently delete ALL documents (recursively) in the following collections:');
+  collections.forEach((c) => console.log(`- ${c}`));
+  console.log('This will NOT touch: profiles/**, authSessions/**, wallets/** (and their subcollections).');
+  console.log('');
+
+  const confirmed = await promptYConfirmation("Type 'y' to confirm Firestore wipe: ");
+  if (!confirmed) {
+    console.log('Skipping Firestore wipe.');
+    return;
+  }
+
+  for (const collection of collections) {
+    console.log(`\nDeleting Firestore collection: ${collection}`);
+    // `--force` skips Firebase CLI prompts; we already prompted above.
+    run('firebase', ['firestore:delete', collection, '--recursive', '--force', '--project', projectId], { cwd: args.root });
+  }
+
+  console.log('\n✅ Firestore drop data wipe complete.');
+}
+
 function readProgramId(onchainDir: string): string {
   const libPath = path.join(onchainDir, 'programs', 'box_minter', 'src', 'lib.rs');
   const content = readFileSync(libPath, 'utf8');
@@ -1081,6 +1132,8 @@ async function main() {
     console.log(`- ${path.relative(root, frontendCfgPath)}`);
     console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
     console.log('');
+
+    await maybeWipeFirestoreDropData({ root, projectId: FIREBASE_PROJECT_ID });
     return;
   }
 
@@ -1232,6 +1285,8 @@ async function main() {
   console.log(`- ${path.relative(root, frontendCfgPath)}`);
   console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
   console.log('');
+
+  await maybeWipeFirestoreDropData({ root, projectId: FIREBASE_PROJECT_ID });
 }
 
 main().catch((err) => {
