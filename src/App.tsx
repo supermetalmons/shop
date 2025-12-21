@@ -21,7 +21,7 @@ import {
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
-import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from './lib/solana';
+import { encryptAddressPayload, isBlockhashExpiredError, sendPreparedTransaction, shortAddress } from './lib/solana';
 import { InventoryItem } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
@@ -138,9 +138,20 @@ function App() {
     setStatus('');
     try {
       const cfg = await fetchBoxMinterConfig(connection);
-      const tx = await buildMintBoxesTx(connection, cfg, publicKey, quantity);
-      const sig = await signAndSendViaConnection(tx);
-      await connection.confirmTransaction(sig, 'confirmed');
+      const sendOnce = async () => {
+        const tx = await buildMintBoxesTx(connection, cfg, publicKey, quantity);
+        const sig = await signAndSendViaConnection(tx);
+        await connection.confirmTransaction(sig, 'confirmed');
+        return sig;
+      };
+      let sig: string;
+      try {
+        sig = await sendOnce();
+      } catch (err) {
+        if (!isBlockhashExpiredError(err)) throw err;
+        setStatus('Transaction expired before you approved it. Please approve again…');
+        sig = await sendOnce();
+      }
       setStatus(`Minted ${quantity} boxes · ${sig}`);
       await Promise.all([refetchStats(), refetchInventory()]);
     } finally {
@@ -155,9 +166,20 @@ function App() {
     setLastReveal(null);
     try {
       const cfg = await fetchBoxMinterConfig(connection);
-      const tx = await buildStartOpenBoxTx(connection, cfg, publicKey, new PublicKey(item.id));
-      const sig = await signAndSendViaConnection(tx);
-      await connection.confirmTransaction(sig, 'confirmed');
+      const sendOnce = async () => {
+        const tx = await buildStartOpenBoxTx(connection, cfg, publicKey, new PublicKey(item.id));
+        const sig = await signAndSendViaConnection(tx);
+        await connection.confirmTransaction(sig, 'confirmed');
+        return sig;
+      };
+      let sig: string;
+      try {
+        sig = await sendOnce();
+      } catch (err) {
+        if (!isBlockhashExpiredError(err)) throw err;
+        setStatus('Transaction expired before you approved it. Please approve again…');
+        sig = await sendOnce();
+      }
       setStatus(`Box sent to vault · ${sig}`);
       // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
       markAssetsHidden([item.id]);
@@ -256,9 +278,19 @@ function App() {
     setStatus('');
     setDeliveryCost(undefined);
     try {
-      const resp = await requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
+      const requestTx = () => requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
+      let resp = await requestTx();
       setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
-      const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+      let sig: string;
+      try {
+        sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+      } catch (err) {
+        if (!isBlockhashExpiredError(err)) throw err;
+        setStatus('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        resp = await requestTx();
+        setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
+        sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+      }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
       setStatus(`Delivery submitted${idSuffix} · ${sig}`);
       // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
@@ -292,8 +324,17 @@ function App() {
       await signIn();
     }
     setStatus('');
-    const resp = await requestClaimTx(publicKey.toBase58(), code);
-    const sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+    const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
+    let resp = await requestTx();
+    let sig: string;
+    try {
+      sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+    } catch (err) {
+      if (!isBlockhashExpiredError(err)) throw err;
+      setStatus('Prepared transaction expired before you approved it. Preparing a fresh one…');
+      resp = await requestTx();
+      sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+    }
     setStatus(`Claimed certificates · ${sig}`);
     await refetchInventory();
   };

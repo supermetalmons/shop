@@ -19,6 +19,28 @@ const MAX_MINTS_PER_TX = FRONTEND_DEPLOYMENT.maxPerTx;
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryRpc<T>(
+  fn: () => Promise<T>,
+  opts: { retries: number; baseDelayMs: number; maxDelayMs: number },
+): Promise<T> {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= Math.max(0, opts.retries); attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= opts.retries) throw err;
+      const delay = Math.min(opts.baseDelayMs * 2 ** attempt, opts.maxDelayMs);
+      await sleep(delay);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'RPC failed'));
+}
+
 // Anchor discriminators (sha256("global:<name>")[0..8]).
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
@@ -144,7 +166,11 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
 
 export async function fetchBoxMinterConfig(connection: Connection): Promise<BoxMinterConfigAccount> {
   const [pda] = boxMinterConfigPda();
-  const info = await connection.getAccountInfo(pda, 'confirmed');
+  const info = await retryRpc(() => connection.getAccountInfo(pda, 'confirmed'), {
+    retries: 3,
+    baseDelayMs: 300,
+    maxDelayMs: 2_000,
+  });
   if (!info?.data) throw new Error('Box minter is not initialized on this cluster');
   return decodeBoxMinterConfigAccount(pda, info.data);
 }

@@ -12,6 +12,16 @@ function unwrapTxErrorMessage(err: unknown): string {
   return 'Unexpected error';
 }
 
+export function isBlockhashExpiredError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as any;
+  if (anyErr?.cause) return isBlockhashExpiredError(anyErr.cause);
+  const msg = unwrapTxErrorMessage(err);
+  return /blockhash not found|blockhash expired|transaction expired|expired blockhash|signature has expired|block height exceeded|TransactionExpiredBlockheightExceededError/i.test(
+    msg,
+  );
+}
+
 async function extractSendTransactionLogs(err: unknown): Promise<string[] | undefined> {
   if (!err) return undefined;
   const anyErr = err as any;
@@ -111,10 +121,9 @@ export async function sendPreparedTransaction(
     } else {
       console.error('[mons/solana] transaction failed', { error: err, ...(signerInfo ? { signerInfo } : {}) });
     }
-    const hint =
-      /blockhash not found|transaction expired|expired blockhash|signature has expired/i.test(msg)
-        ? ' (try again; also ensure your wallet network matches the app cluster)'
-        : '';
+    const hint = isBlockhashExpiredError(err)
+      ? ' (try again; also ensure your wallet network matches the app cluster)'
+      : '';
     const logHint = logs?.length ? ' (see console for full program logs)' : '';
     throw new Error(`${msg || 'Transaction failed'}${hint}${logHint}`);
   }

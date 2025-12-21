@@ -541,6 +541,50 @@ async function waitForSignature(
   }
 }
 
+async function sendAndConfirmSignedTx(
+  conn: Connection,
+  tx: VersionedTransaction,
+  label: string,
+  opts: { sendTimeoutMs?: number; confirmTimeoutMs?: number } = {},
+): Promise<string> {
+  const sig = bs58.encode(tx.signatures[0]);
+  const sendTimeoutMs = opts.sendTimeoutMs ?? TX_SEND_TIMEOUT_MS;
+  const confirmTimeoutMs = opts.confirmTimeoutMs ?? TX_CONFIRM_TIMEOUT_MS;
+
+  let sendErr: unknown = null;
+  try {
+    await withTimeout(conn.sendTransaction(tx, { maxRetries: 2 }), sendTimeoutMs, `sendTransaction:${label}`);
+  } catch (err) {
+    sendErr = err;
+  }
+
+  if (sendErr) {
+    const logs = txErrLogs(sendErr);
+    // If preflight simulation produced logs, we can treat it as a deterministic failure (not "maybe submitted").
+    if (logs.length) throw sendErr;
+
+    // Unclear if it was submitted; wait briefly for it to land anyway.
+    const maybe = await waitForSignature(conn, sig, { timeoutMs: 12_000, pollMs: TX_CONFIRM_POLL_MS });
+    if (maybe.ok) return sig;
+    throw sendErr;
+  }
+
+  const confirmed = await waitForSignature(conn, sig, { timeoutMs: confirmTimeoutMs, pollMs: TX_CONFIRM_POLL_MS });
+  if (confirmed.ok) return sig;
+
+  // TS narrowing can be finicky on boolean discriminants in some configs; use a structural guard.
+  if (!('err' in confirmed)) return sig;
+
+  const msg = txErrMessage(confirmed.err);
+  const logs = Array.isArray(confirmed.logs) ? confirmed.logs : [];
+  const code = /timeout/i.test(msg) ? 'deadline-exceeded' : 'failed-precondition';
+  throw new HttpsError(code, `${label} transaction not confirmed (try again)`, {
+    signature: sig,
+    lastError: msg,
+    lastLogs: logs.slice(0, 80),
+  });
+}
+
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   const timeout = sleep(ms).then(() => {
     throw new HttpsError('deadline-exceeded', `${label} timed out after ${ms}ms`);
@@ -1594,8 +1638,7 @@ export const revealDudes = onCallLogged(
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:revealDudes');
   const tx = buildTx(instructions, signer.publicKey, blockhash, [signer]);
 
-  const sig = await withTimeout(conn.sendTransaction(tx, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:revealDudes');
-  await withTimeout(conn.confirmTransaction(sig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:revealDudes');
+  const sig = await sendAndConfirmSignedTx(conn, tx, 'revealDudes');
 
   return { signature: sig, dudeIds };
   },
@@ -1721,9 +1764,9 @@ export const prepareDeliveryTx = onCallLogged(
 
   // Allocate a unique, compact delivery id and its on-chain PDA.
   // IMPORTANT: we atomically reserve the Firestore doc via `create()` to avoid TOCTOU collisions under concurrency.
-  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
   const MAX_RAW_TX_BYTES = 1232;
   const MAX_DELIVERY_ID_ATTEMPTS = 16;
+  const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 
   for (let attempt = 0; attempt < MAX_DELIVERY_ID_ATTEMPTS; attempt += 1) {
     const candidate = randomInt(1, 2 ** 31);
@@ -1760,8 +1803,9 @@ export const prepareDeliveryTx = onCallLogged(
       deliverIx,
     ];
 
-    const solanaTx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
-    const raw = solanaTx.serialize();
+    // NOTE: use a dummy blockhash for the size check; it keeps the prepared transaction's real blockhash as fresh as possible.
+    const sizeTx = buildTx(instructions, ownerPk, DUMMY_BLOCKHASH, [signer], addressLookupTables);
+    const raw = sizeTx.serialize();
 
     if (raw.length > MAX_RAW_TX_BYTES) {
       let maxFit = 0;
@@ -1785,7 +1829,7 @@ export const prepareDeliveryTx = onCallLogged(
         const candidateTx = buildTx(
           [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), candidateIx],
           ownerPk,
-          blockhash,
+          DUMMY_BLOCKHASH,
           [signer],
           addressLookupTables,
         );
@@ -1828,7 +1872,25 @@ export const prepareDeliveryTx = onCallLogged(
       throw err;
     }
 
-    return { encodedTx: Buffer.from(raw).toString('base64'), deliveryLamports, deliveryId: candidate };
+    try {
+      const { blockhash } = await withTimeout(
+        conn.getLatestBlockhash('confirmed'),
+        RPC_TIMEOUT_MS,
+        'getLatestBlockhash:prepareDeliveryTx',
+      );
+      const solanaTx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
+      const rawTx = solanaTx.serialize();
+      return { encodedTx: Buffer.from(rawTx).toString('base64'), deliveryLamports, deliveryId: candidate };
+    } catch (err) {
+      // If we fail after reserving the order doc (e.g. RPC timeout fetching blockhash),
+      // clean up to avoid leaving orphan "prepared" orders around.
+      try {
+        await orderRef.delete();
+      } catch (cleanupErr) {
+        console.error('[mons/functions] prepareDeliveryTx cleanup failed', summarizeError(cleanupErr), { deliveryId: candidate });
+      }
+      throw err;
+    }
   }
 
   throw new HttpsError('unavailable', 'Failed to allocate delivery id (try again)');
@@ -1876,50 +1938,51 @@ export const issueReceipts = onCallLogged(
         'getAccountInfo:deliveryPda:lateClose',
       );
       if (deliveryInfo) {
-        const cfgInfo = await withTimeout(
-          conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
-          RPC_TIMEOUT_MS,
-          'getAccountInfo:boxMinterConfig:lateClose',
-        );
-        if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-          throw new HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
-        }
-        const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-        const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
-        const signer = cosigner();
-        if (!signer.publicKey.equals(cfgAdmin)) {
-          throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin (late close)');
-        }
+        try {
+          const cfgInfo = await withTimeout(
+            conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+            RPC_TIMEOUT_MS,
+            'getAccountInfo:boxMinterConfig:lateClose',
+          );
+          if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+            throw new HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
+          }
+          const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+          const signer = cosigner();
+          if (!signer.publicKey.equals(cfgAdmin)) {
+            throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin (late close)');
+          }
 
-        const closeIx = new TransactionInstruction({
-          programId: boxMinterProgramId,
-          keys: [
-            { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-            { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-            { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
-            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          ],
-          data: encodeCloseDeliveryArgs({ deliveryId, deliveryBump: expectedDeliveryBump }),
-        });
-        const { blockhash } = await withTimeout(
-          conn.getLatestBlockhash('confirmed'),
-          RPC_TIMEOUT_MS,
-          'getLatestBlockhash:lateClose',
-        );
-        const closeTx = buildTx(
-          [ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx],
-          signer.publicKey,
-          blockhash,
-          [signer],
-        );
-        const closeSig = await withTimeout(
-          conn.sendTransaction(closeTx, { maxRetries: 2 }),
-          RPC_TIMEOUT_MS,
-          'sendTransaction:lateClose',
-        );
-        await withTimeout(conn.confirmTransaction(closeSig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:lateClose');
-        closeDeliveryTx = closeSig;
-        await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+          const closeIx = new TransactionInstruction({
+            programId: boxMinterProgramId,
+            keys: [
+              { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+              { pubkey: signer.publicKey, isSigner: true, isWritable: true },
+              { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
+              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            ],
+            data: encodeCloseDeliveryArgs({ deliveryId, deliveryBump: expectedDeliveryBump }),
+          });
+          const { blockhash } = await withTimeout(
+            conn.getLatestBlockhash('confirmed'),
+            RPC_TIMEOUT_MS,
+            'getLatestBlockhash:lateClose',
+          );
+          const closeTx = buildTx(
+            [ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx],
+            signer.publicKey,
+            blockhash,
+            [signer],
+          );
+          const closeSig = await sendAndConfirmSignedTx(conn, closeTx, 'lateCloseDelivery', {
+            sendTimeoutMs: TX_SEND_TIMEOUT_MS,
+            confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+          });
+          closeDeliveryTx = closeSig;
+          await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+        } catch (err) {
+          console.error('[mons/functions] late closeDelivery failed (non-fatal)', summarizeError(err), { deliveryId });
+        }
       }
     }
 
@@ -2321,9 +2384,14 @@ export const issueReceipts = onCallLogged(
     });
     const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:closeDelivery');
     const closeTx = buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx], signer.publicKey, blockhash, [signer]);
-    const closeSig = await withTimeout(conn.sendTransaction(closeTx, { maxRetries: 2 }), RPC_TIMEOUT_MS, 'sendTransaction:closeDelivery');
-    await withTimeout(conn.confirmTransaction(closeSig, 'confirmed'), RPC_TIMEOUT_MS, 'confirmTransaction:closeDelivery');
-    closeDeliveryTx = closeSig;
+    try {
+      closeDeliveryTx = await sendAndConfirmSignedTx(conn, closeTx, 'closeDelivery', {
+        sendTimeoutMs: TX_SEND_TIMEOUT_MS,
+        confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+      });
+    } catch (err) {
+      console.error('[mons/functions] closeDelivery failed (non-fatal)', summarizeError(err), { deliveryId });
+    }
   }
 
   if (closeDeliveryTx) {
