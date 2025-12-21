@@ -20,7 +20,7 @@ anchor-debug = []
 solana = []
 
 [dependencies]
-anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+anchor-lang = { version = "0.32.1" }
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

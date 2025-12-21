@@ -423,11 +423,104 @@ pub mod box_minter {
             BoxMinterError::InvalidLogWrapper
         );
 
-        // `init_if_needed` makes the pending PDA resilient to "pre-funded" system-owned stubs.
-        // Still, starting an open twice for the same box must fail.
+        // Pending open record PDA:
+        // - Do not rely on Anchor `init_if_needed` here; its reclaim behavior for pre-funded PDA stubs
+        //   (system-owned, data_len=0) has historically been version-sensitive.
+        // - Starting an open twice for the same box must fail.
+        let pending_ai = ctx.accounts.pending.to_account_info();
+        if !pending_ai.data_is_empty() {
+            return err!(BoxMinterError::PendingAlreadyExists);
+        }
+
+        // Create (or reclaim) the pending record PDA.
+        //
+        // Note: a PDA can be "pre-funded", creating a system-owned stub account that makes
+        // `system_instruction::create_account` fail ("account already in use"). Since this is a PDA,
+        // we can sign for it and reclaim it via `allocate` + `assign`.
+        let pending_space: usize = PendingOpenBox::SPACE;
+        let rent_lamports = Rent::get()?.minimum_balance(pending_space);
+        let pending_bump: u8 = ctx.bumps.pending;
+        let box_asset_key = ctx.accounts.box_asset.key();
+        let pending_seeds: &[&[u8]] = &[
+            SEED_PENDING_OPEN,
+            box_asset_key.as_ref(),
+            &[pending_bump],
+        ];
+        if pending_ai.lamports() == 0 {
+            let create_pending_ix = anchor_lang::solana_program::system_instruction::create_account(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.pending.key(),
+                rent_lamports,
+                pending_space as u64,
+                ctx.program_id,
+            );
+            invoke_signed(
+                &create_pending_ix,
+                &[
+                    ctx.accounts.payer.to_account_info(),
+                    pending_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[pending_seeds],
+            )?;
+        } else {
+            // Reclaim pre-funded PDA stub (system-owned, unallocated).
+            require_keys_eq!(
+                *pending_ai.owner,
+                anchor_lang::solana_program::system_program::ID,
+                BoxMinterError::InvalidPendingRecord
+            );
+            require!(pending_ai.data_len() == 0, BoxMinterError::PendingAlreadyExists);
+
+            // Ensure rent exemption for the allocated size.
+            if pending_ai.lamports() < rent_lamports {
+                let diff = rent_lamports - pending_ai.lamports();
+                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.payer.key(),
+                    &ctx.accounts.pending.key(),
+                    diff,
+                );
+                invoke(
+                    &topup_ix,
+                    &[
+                        ctx.accounts.payer.to_account_info(),
+                        pending_ai.clone(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                )?;
+            }
+
+            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
+                &ctx.accounts.pending.key(),
+                pending_space as u64,
+            );
+            invoke_signed(
+                &allocate_ix,
+                &[pending_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[pending_seeds],
+            )?;
+
+            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
+                &ctx.accounts.pending.key(),
+                ctx.program_id,
+            );
+            invoke_signed(
+                &assign_ix,
+                &[pending_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[pending_seeds],
+            )?;
+        }
+
+        // Post-conditions: at this point the pending PDA must be a properly sized, program-owned
+        // account ready for serialization.
+        require_keys_eq!(
+            *pending_ai.owner,
+            *ctx.program_id,
+            BoxMinterError::InvalidPendingRecord
+        );
         require!(
-            ctx.accounts.pending.owner == Pubkey::default() && ctx.accounts.pending.created_slot == 0,
-            BoxMinterError::PendingAlreadyExists
+            pending_ai.data_len() == pending_space,
+            BoxMinterError::InvalidPendingRecord
         );
 
         // Defensive: ensure the provided asset is a Mons *box* owned by payer.
@@ -590,12 +683,14 @@ pub mod box_minter {
         }
 
         // Persist the pending flow record so the admin can later finalize it.
-        let record = &mut ctx.accounts.pending;
-        record.owner = ctx.accounts.payer.key();
-        record.box_asset = ctx.accounts.box_asset.key();
-        record.dudes = dudes;
-        record.created_slot = Clock::get()?.slot;
-        record.bump = ctx.bumps.pending;
+        let record = PendingOpenBox {
+            owner: ctx.accounts.payer.key(),
+            box_asset: ctx.accounts.box_asset.key(),
+            dudes,
+            created_slot: Clock::get()?.slot,
+            bump: pending_bump,
+        };
+        record.try_serialize(&mut &mut pending_ai.data.borrow_mut()[..])?;
 
         Ok(())
     }
@@ -1450,16 +1545,14 @@ pub struct StartOpenBox<'info> {
 
     /// Pending open record PDA.
     ///
-    /// Uses `init_if_needed` to tolerate "pre-funded PDA stubs" (PDA squatting). The handler
-    /// enforces that an already-initialized pending record cannot be overwritten.
+    /// Created/reclaimed by the handler to tolerate "pre-funded PDA stubs" (PDA squatting).
+    /// The handler enforces that an already-initialized pending record cannot be overwritten.
     #[account(
-        init_if_needed,
-        payer = payer,
-        space = PendingOpenBox::SPACE,
+        mut,
         seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
         bump,
     )]
-    pub pending: Account<'info, PendingOpenBox>,
+    pub pending: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
