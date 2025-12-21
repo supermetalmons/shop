@@ -73,14 +73,6 @@ export function boxMinterConfigPda(programId = boxMinterProgramId()): [PublicKey
   return PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
 }
 
-export function boxAssetPda(index: number, programId = boxMinterProgramId()): [PublicKey, number] {
-  const idx = Number(index);
-  if (!Number.isFinite(idx) || idx <= 0 || idx > 0xffff_ffff) throw new Error('Invalid box index');
-  const buf = Buffer.alloc(4);
-  buf.writeUInt32LE(idx >>> 0, 0);
-  return PublicKey.findProgramAddressSync([Buffer.from(BOX_ASSET_SEED), buf], programId);
-}
-
 export function pendingOpenPda(boxAsset: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_OPEN_SEED), boxAsset.toBuffer()], programId);
 }
