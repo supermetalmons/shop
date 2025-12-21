@@ -1,31 +1,58 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // NOTE: The current frontend uses anonymous Firebase Auth + Cloud Functions.
+    // We keep Firestore client access extremely strict: only "self" profile reads are allowed.
+    function isProfileOwner(wallet) {
+      return signedIn() && request.auth.uid == wallet;
+    }
+
+    // Client-readable user data (scoped to the user's own document only).
     match /profiles/{wallet} {
-      allow read, write: if request.auth != null && request.auth.uid == wallet;
+      // Never allow enumerating profiles; only allow fetching the caller's own doc by id.
+      allow get: if isProfileOwner(wallet);
+      allow list: if false;
+
+      // All profile mutations go through Cloud Functions (Admin SDK bypasses rules).
+      allow create, update, delete: if false;
+
       match /addresses/{addressId} {
-        allow read, write: if request.auth != null && request.auth.uid == wallet;
+        // Users can only read their own saved addresses.
+        allow read: if isProfileOwner(wallet);
+
+        // Address writes go through Cloud Functions.
+        allow write: if false;
       }
     }
 
-    match /boxAssignments/{boxId} {
-      allow read, write: if false; // only via cloud functions
+    // Backend-only collections (used by Cloud Functions via Admin SDK).
+    match /authSessions/{uid} {
+      allow read, write: if false;
     }
 
-    match /meta/{docId} {
-      allow read, write: if false; // stats + dude pools locked for backend only
+    match /boxAssignments/{boxAssetId} {
+      allow read, write: if false;
     }
 
-    match /mintTxs/{signature} {
-      allow read, write: if false; // mint tracking is backend-only
+    match /meta/dudePool {
+      allow read, write: if false;
     }
 
     match /claimCodes/{code} {
-      allow read, write: if false; // claim codes are redeemed server-side only
+      allow read, write: if false;
     }
 
-    match /deliveryOrders/{orderId} {
-      allow read, write: if false; // delivery orders are tracked server-side only
+    match /deliveryOrders/{deliveryId} {
+      allow read, write: if false;
+    }
+
+    // Default deny: nothing else is accessible from the client.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
