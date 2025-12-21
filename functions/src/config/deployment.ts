@@ -37,8 +37,8 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   totalSupply: 333,
 
   // On-chain ids
-  boxMinterProgramId: 'HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k',
-  collectionMint: 'AAFckuKi8keaaFTPfnyApL1D1mPtywq4HQDM3NpwaHuD',
-  receiptsMerkleTree: '81phSLXTWGmXHcjRzmyYuvNSYdFWgFGoTmB3dytfGnVz',
-  deliveryLookupTable: '2GX46VBg82BCLyQozkCqnKVcYyoWwb5LvcBX2n28yaz8',
+  boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
+  collectionMint: 'CxZubJmi2aubC76EF7yP88xsooosjcmrqomZv6FSS7Uj',
+  receiptsMerkleTree: 'YGkNwcQTf1TB1PbVByFDoGMFTBeQ5pDNu7UpDfhzEFX',
+  deliveryLookupTable: 'uwBz7Q3J6wW4NyERzrBFXUPvTwA8H3eZsrYgeouSb8P',
 };

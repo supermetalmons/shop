@@ -18,7 +18,7 @@ export type FrontendDeployedConfig = {
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: 'devnet',
   rpcUrl: 'https://api.devnet.solana.com',
-  boxMinterProgramId: 'HxHRyEJok9VD7WfCrZKY58wh2cFvepTyzV2B92Kmrh5k',
-  collectionMint: 'AAFckuKi8keaaFTPfnyApL1D1mPtywq4HQDM3NpwaHuD',
+  boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
+  collectionMint: 'CxZubJmi2aubC76EF7yP88xsooosjcmrqomZv6FSS7Uj',
   metadataBase: 'https://assets.mons.link/shop/drops/1',
 };
