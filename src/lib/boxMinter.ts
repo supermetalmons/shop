@@ -14,6 +14,7 @@ const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
 const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
+const MAX_MINTS_PER_TX = FRONTEND_DEPLOYMENT.maxPerTx;
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -153,8 +154,8 @@ export async function fetchMintStatsFromProgram(connection: Connection): Promise
   const minted = Number(cfg.minted || 0);
   const total = Number(cfg.maxSupply || 0);
   const remaining = Math.max(0, total - minted);
-  // Keep in sync with on-chain MAX_SAFE_MINTS_PER_TX.
-  const maxPerTx = Math.min(cfg.maxPerTx || 0, 15);
+  // Keep in sync with on-chain config; clamp to our deployment-config defaults for safety.
+  const maxPerTx = Math.min(cfg.maxPerTx || 0, MAX_MINTS_PER_TX);
   return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
 }
 
@@ -187,7 +188,9 @@ function randomU64(): bigint {
 
 function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[]): Buffer {
   if (!Number.isFinite(quantity)) throw new Error('Invalid quantity');
-  if (quantity < 1 || quantity > 15) throw new Error('Quantity must be between 1 and 15');
+  if (quantity < 1 || quantity > MAX_MINTS_PER_TX) {
+    throw new Error(`Quantity must be between 1 and ${MAX_MINTS_PER_TX}`);
+  }
   if (!Array.isArray(boxBumps) || boxBumps.length !== quantity) {
     throw new Error('Invalid box bumps');
   }
@@ -242,7 +245,6 @@ export async function buildMintBoxesTx(
   quantity: number,
 ): Promise<VersionedTransaction> {
   // Keep conservative; each Core mint creates a new account.
-  const MAX_MINTS_PER_TX = 15;
   if (quantity > MAX_MINTS_PER_TX) {
     throw new Error(`Max ${MAX_MINTS_PER_TX} boxes per transaction.`);
   }

@@ -33,7 +33,7 @@ function heliusRpcUrl(): string | null {
 }
 
 const network = resolveNetwork();
-const rpcEndpoint = FRONTEND_DEPLOYMENT.rpcUrl || heliusRpcUrl() || clusterApiUrl(network);
+const rpcEndpoint = heliusRpcUrl() || clusterApiUrl(network);
 
 interface Props {
   children: ReactNode;

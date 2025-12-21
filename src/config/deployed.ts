@@ -9,16 +9,32 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FrontendDeployedConfig = {
   solanaCluster: SolanaCluster;
-  rpcUrl: string;
+  // Drop metadata base (collection.json + json/* + images/*)
+  metadataBase: string;
+
+  // Drop config (kept in sync with on-chain config; useful for UI defaults)
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
+
   boxMinterProgramId: string;
   collectionMint: string;
-  metadataBase: string;
 };
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: 'devnet',
-  rpcUrl: 'https://api.devnet.solana.com',
+  metadataBase: 'https://assets.mons.link/shop/drops/1',
+  treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+  priceSol: 0.01,
+  maxSupply: 333,
+  maxPerTx: 15,
+  namePrefix: 'box',
+  symbol: 'box',
+  uriBase: 'https://assets.mons.link/shop/drops/1/json/boxes/',
   boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
   collectionMint: 'CxZubJmi2aubC76EF7yP88xsooosjcmrqomZv6FSS7Uj',
-  metadataBase: 'https://assets.mons.link/shop/drops/1',
 };

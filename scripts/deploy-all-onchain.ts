@@ -202,10 +202,16 @@ function writeTextFileIfChanged(filePath: string, content: string) {
 function writeFrontendDeployedConfig(args: {
   root: string;
   solanaCluster: string;
-  rpcUrl: string;
+  metadataBase: string;
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
   boxMinterProgramId: string;
   collectionMint: string;
-  metadataBase: string;
 }) {
   const filePath = path.join(args.root, 'src', 'config', 'deployed.ts');
   const content = `/**
@@ -219,18 +225,34 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FrontendDeployedConfig = {
   solanaCluster: SolanaCluster;
-  rpcUrl: string;
+  // Drop metadata base (collection.json + json/* + images/*)
+  metadataBase: string;
+
+  // Drop config (kept in sync with on-chain config; useful for UI defaults)
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
+
   boxMinterProgramId: string;
   collectionMint: string;
-  metadataBase: string;
 };
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: ${tsStringLiteral(args.solanaCluster)},
-  rpcUrl: ${tsStringLiteral(args.rpcUrl)},
+  metadataBase: ${tsStringLiteral(args.metadataBase)},
+  treasury: ${tsStringLiteral(args.treasury)},
+  priceSol: ${Number(args.priceSol)},
+  maxSupply: ${Number(args.maxSupply)},
+  maxPerTx: ${Number(args.maxPerTx)},
+  namePrefix: ${tsStringLiteral(args.namePrefix)},
+  symbol: ${tsStringLiteral(args.symbol)},
+  uriBase: ${tsStringLiteral(args.uriBase)},
   boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
   collectionMint: ${tsStringLiteral(args.collectionMint)},
-  metadataBase: ${tsStringLiteral(args.metadataBase)},
 };
 `;
   writeTextFileIfChanged(filePath, content);
@@ -241,7 +263,13 @@ function writeFunctionsDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   metadataBase: string;
-  totalSupply: number;
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
   boxMinterProgramId: string;
   collectionMint: string;
   receiptsMerkleTree: string;
@@ -267,8 +295,14 @@ export type FunctionsDeploymentConfig = {
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
 
-  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
-  totalSupply: number;
+  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
 
   // On-chain ids
   boxMinterProgramId: string;
@@ -283,8 +317,14 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: ${tsStringLiteral(args.metadataBase)},
 
-  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
-  totalSupply: ${Number(args.totalSupply)},
+  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+  treasury: ${tsStringLiteral(args.treasury)},
+  priceSol: ${Number(args.priceSol)},
+  maxSupply: ${Number(args.maxSupply)},
+  maxPerTx: ${Number(args.maxPerTx)},
+  namePrefix: ${tsStringLiteral(args.namePrefix)},
+  symbol: ${tsStringLiteral(args.symbol)},
+  uriBase: ${tsStringLiteral(args.uriBase)},
 
   // On-chain ids
   boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
@@ -1008,16 +1048,28 @@ async function main() {
     const frontendCfgPath = writeFrontendDeployedConfig({
       root,
       solanaCluster: cluster,
-      rpcUrl: rpcUrlForApps,
+      metadataBase: DROP_METADATA_BASE,
+      treasury: paymentTreasury.toBase58(),
+      priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
+      maxSupply: cfg.maxSupply,
+      maxPerTx: cfg.maxPerTx,
+      namePrefix: cfg.namePrefix,
+      symbol: cfg.symbol,
+      uriBase: cfg.uriBase,
       boxMinterProgramId: programPk.toBase58(),
       collectionMint: cfg.coreCollection.toBase58(),
-      metadataBase: DROP_METADATA_BASE,
     });
     const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
       root,
       solanaCluster: cluster,
       metadataBase: DROP_METADATA_BASE,
-      totalSupply: cfg.maxSupply,
+      treasury: paymentTreasury.toBase58(),
+      priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
+      maxSupply: cfg.maxSupply,
+      maxPerTx: cfg.maxPerTx,
+      namePrefix: cfg.namePrefix,
+      symbol: cfg.symbol,
+      uriBase: cfg.uriBase,
       boxMinterProgramId: programPk.toBase58(),
       collectionMint: cfg.coreCollection.toBase58(),
       receiptsMerkleTree: receiptsTreeStr,
@@ -1147,16 +1199,28 @@ async function main() {
   const frontendCfgPath = writeFrontendDeployedConfig({
     root,
     solanaCluster: cluster,
-    rpcUrl: rpcUrlForApps,
+    metadataBase: DROP_METADATA_BASE,
+    treasury: treasury.toBase58(),
+    priceSol: Number(BOX_MINTER_CONFIG.priceSol),
+    maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
+    maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
+    namePrefix: BOX_MINTER_CONFIG.namePrefix,
+    symbol: BOX_MINTER_CONFIG.symbol,
+    uriBase: BOX_MINTER_CONFIG.uriBase,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
-    metadataBase: DROP_METADATA_BASE,
   });
   const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
     root,
     solanaCluster: cluster,
     metadataBase: DROP_METADATA_BASE,
-    totalSupply: maxSupply,
+    treasury: treasury.toBase58(),
+    priceSol: Number(BOX_MINTER_CONFIG.priceSol),
+    maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
+    maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
+    namePrefix: BOX_MINTER_CONFIG.namePrefix,
+    symbol: BOX_MINTER_CONFIG.symbol,
+    uriBase: BOX_MINTER_CONFIG.uriBase,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,

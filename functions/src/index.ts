@@ -177,6 +177,7 @@ function requireConfiguredPubkey(label: string, value: string | undefined): Publ
 // Required: MPL-Core collection address (uncompressed collection).
 const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', FUNCTIONS_DEPLOYMENT.collectionMint);
 const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
+// Drop metadata base (collection.json + json/* + images/*)
 const metadataBase = (FUNCTIONS_DEPLOYMENT.metadataBase || '').replace(/\/$/, '');
 
 // Bubblegum receipts tree (required to mint receipt cNFTs).

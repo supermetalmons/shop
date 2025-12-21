@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { MintStats } from '../types';
 import { ProgressBar } from './ProgressBar';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 interface MintPanelProps {
   stats?: MintStats;
@@ -10,9 +11,9 @@ interface MintPanelProps {
 
 export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
-  const total = stats?.total ?? 333;
+  const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const remaining = stats?.remaining ?? Math.max(0, total - minted);
-  const maxPerTx = stats?.maxPerTx ?? 15;
+  const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
 

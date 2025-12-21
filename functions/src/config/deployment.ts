@@ -17,8 +17,14 @@ export type FunctionsDeploymentConfig = {
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
 
-  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
-  totalSupply: number;
+  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+  treasury: string;
+  priceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  uriBase: string;
 
   // On-chain ids
   boxMinterProgramId: string;
@@ -33,8 +39,14 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: 'https://assets.mons.link/shop/drops/1',
 
-  // Optional convenience fields (not required by runtime logic, but useful to keep synced)
-  totalSupply: 333,
+  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+  treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+  priceSol: 0.01,
+  maxSupply: 333,
+  maxPerTx: 15,
+  namePrefix: 'box',
+  symbol: 'box',
+  uriBase: 'https://assets.mons.link/shop/drops/1/json/boxes/',
 
   // On-chain ids
   boxMinterProgramId: 'ArSfSR1qT9BhZTBzFgt6HdG2WNxkhKvVtBZoV9TvLHVV',
