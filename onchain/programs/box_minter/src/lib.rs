@@ -317,6 +317,30 @@ pub mod box_minter {
                 BoxMinterError::InvalidAssetPda
             );
 
+            // Prevent PDA "squatting": a pre-funded system-owned stub would make downstream Create fail.
+            // Since this is a PDA, we can sign for it and drain any prefunded lamports back to the payer.
+            let asset_seeds: &[&[u8]] = &[
+                SEED_BOX_ASSET,
+                payer_key.as_ref(),
+                &mint_id_bytes,
+                &i_seed,
+                &asset_bump_bytes,
+            ];
+            let prefund_lamports = asset_ai.lamports();
+            if prefund_lamports > 0 {
+                let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    asset_ai.key,
+                    payer.key,
+                    prefund_lamports,
+                );
+                invoke_signed(
+                    &sweep_ix,
+                    &[asset_ai.clone(), payer.clone(), system_program.clone()],
+                    &[asset_seeds],
+                )
+                .map_err(anchor_lang::error::Error::from)?;
+            }
+
             // Build metadata without allocating fresh Strings each loop.
             name_buf.clear();
             name_buf.push_str(&cfg.name_prefix);
@@ -330,13 +354,6 @@ pub mod box_minter {
             uri_buf.push_str(&boxes_uri_base);
             write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
-            let asset_seeds: &[&[u8]] = &[
-                SEED_BOX_ASSET,
-                payer_key.as_ref(),
-                &mint_id_bytes,
-                &i_seed,
-                &asset_bump_bytes,
-            ];
             let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
 
             // Reuse instruction buffers to keep heap usage flat.
@@ -397,6 +414,13 @@ pub mod box_minter {
             ctx.accounts.log_wrapper.key(),
             SPL_NOOP_PROGRAM_ID,
             BoxMinterError::InvalidLogWrapper
+        );
+
+        // `init_if_needed` makes the pending PDA resilient to "pre-funded" system-owned stubs.
+        // Still, starting an open twice for the same box must fail.
+        require!(
+            ctx.accounts.pending.owner == Pubkey::default() && ctx.accounts.pending.created_slot == 0,
+            BoxMinterError::PendingAlreadyExists
         );
 
         // Defensive: ensure the provided asset is a Mons *box* owned by payer.
@@ -514,6 +538,23 @@ pub mod box_minter {
                 &[asset_bump],
             ];
             let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+
+            // Prevent PDA "squatting": if the placeholder PDA was pre-funded, MPL-Core Create would fail.
+            // Drain any prefunded lamports back to the payer before invoking MPL-Core.
+            let prefund_lamports = asset_ai.lamports();
+            if prefund_lamports > 0 {
+                let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    asset_ai.key,
+                    payer.key,
+                    prefund_lamports,
+                );
+                invoke_signed(
+                    &sweep_ix,
+                    &[asset_ai.clone(), payer.clone(), system_program.clone()],
+                    &[asset_seeds],
+                )
+                .map_err(anchor_lang::error::Error::from)?;
+            }
 
             create_ix.accounts[0].pubkey = asset_ai.key();
             create_ix.data.clear();
@@ -827,38 +868,90 @@ pub mod box_minter {
             expected_delivery,
             BoxMinterError::InvalidDeliveryPda
         );
-        require!(
-            ctx.accounts.delivery.to_account_info().data_is_empty(),
-            BoxMinterError::DeliveryAlreadyExists
-        );
+        let delivery_ai = ctx.accounts.delivery.to_account_info();
+        if !delivery_ai.data_is_empty() {
+            return err!(BoxMinterError::DeliveryAlreadyExists);
+        }
 
-        // Create the tiny on-chain delivery record (presence == paid order).
+        // Create (or reclaim) the tiny on-chain delivery record (presence == paid order).
+        //
+        // Note: a PDA can be "pre-funded", creating a system-owned stub account that makes
+        // `system_instruction::create_account` fail ("account already in use"). Since this is a PDA,
+        // we can sign for it and reclaim it via `allocate` + `assign`.
         let delivery_space: usize = DeliveryRecord::SPACE;
         let rent_lamports = Rent::get()?.minimum_balance(delivery_space);
-        let create_delivery_ix = anchor_lang::solana_program::system_instruction::create_account(
-            &ctx.accounts.payer.key(),
-            &ctx.accounts.delivery.key(),
-            rent_lamports,
-            delivery_space as u64,
-            ctx.program_id,
-        );
         let delivery_seeds: &[&[u8]] = &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]];
-        invoke_signed(
-            &create_delivery_ix,
-            &[
-                ctx.accounts.payer.to_account_info(),
-                ctx.accounts.delivery.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-            &[delivery_seeds],
-        )?;
+        if delivery_ai.lamports() == 0 {
+            let create_delivery_ix = anchor_lang::solana_program::system_instruction::create_account(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.delivery.key(),
+                rent_lamports,
+                delivery_space as u64,
+                ctx.program_id,
+            );
+            invoke_signed(
+                &create_delivery_ix,
+                &[
+                    ctx.accounts.payer.to_account_info(),
+                    delivery_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[delivery_seeds],
+            )?;
+        } else {
+            // Reclaim pre-funded PDA stub (system-owned, unallocated).
+            require_keys_eq!(
+                *delivery_ai.owner,
+                anchor_lang::solana_program::system_program::ID,
+                BoxMinterError::InvalidDeliveryPda
+            );
+            require!(delivery_ai.data_len() == 0, BoxMinterError::DeliveryAlreadyExists);
+
+            // Ensure rent exemption for the allocated size.
+            if delivery_ai.lamports() < rent_lamports {
+                let diff = rent_lamports - delivery_ai.lamports();
+                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.payer.key(),
+                    &ctx.accounts.delivery.key(),
+                    diff,
+                );
+                invoke(
+                    &topup_ix,
+                    &[
+                        ctx.accounts.payer.to_account_info(),
+                        delivery_ai.clone(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                )?;
+            }
+
+            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
+                &ctx.accounts.delivery.key(),
+                delivery_space as u64,
+            );
+            invoke_signed(
+                &allocate_ix,
+                &[delivery_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[delivery_seeds],
+            )?;
+
+            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
+                &ctx.accounts.delivery.key(),
+                ctx.program_id,
+            );
+            invoke_signed(
+                &assign_ix,
+                &[delivery_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[delivery_seeds],
+            )?;
+        }
 
         let record = DeliveryRecord {
             payer: ctx.accounts.payer.key(),
             delivery_fee_lamports: args.delivery_fee_lamports,
             item_count: ctx.remaining_accounts.len() as u16,
         };
-        record.try_serialize(&mut &mut ctx.accounts.delivery.to_account_info().data.borrow_mut()[..])?;
+        record.try_serialize(&mut &mut delivery_ai.data.borrow_mut()[..])?;
 
         // Take delivery payment (enforced on-chain).
         if args.delivery_fee_lamports > 0 {
@@ -1378,8 +1471,12 @@ pub struct StartOpenBox<'info> {
     #[account(address = SPL_NOOP_PROGRAM_ID)]
     pub log_wrapper: UncheckedAccount<'info>,
 
+    /// Pending open record PDA.
+    ///
+    /// Uses `init_if_needed` to tolerate "pre-funded PDA stubs" (PDA squatting). The handler
+    /// enforces that an already-initialized pending record cannot be overwritten.
     #[account(
-        init,
+        init_if_needed,
         payer = payer,
         space = PendingOpenBox::SPACE,
         seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
@@ -1770,6 +1867,8 @@ pub enum BoxMinterError {
     InvalidReceiptUriBase,
     #[msg("Invalid metadata base")]
     InvalidMetadataBase,
+    #[msg("Pending open record already exists")]
+    PendingAlreadyExists,
     #[msg("Unauthorized initializer")]
     UnauthorizedInitializer,
 }
