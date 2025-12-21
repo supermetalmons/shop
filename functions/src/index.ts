@@ -17,7 +17,7 @@ import {
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
-import { randomInt } from 'crypto';
+import { createHash, randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
@@ -254,6 +254,58 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
   return parsed.data;
 }
 
+function safeJsonByteLength(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function truncateForLog(value: unknown, maxLen: number): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function safeUrlOriginForLog(value: unknown, maxLen: number): string | null {
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+  try {
+    return new URL(s).origin;
+  } catch {
+    return s.length > maxLen ? s.slice(0, maxLen) : s;
+  }
+}
+
+function hashForLog(value: string): string {
+  const salt = process.env.LOG_HASH_SALT || '';
+  return createHash('sha256').update(`${salt}${value}`).digest('hex').slice(0, 16);
+}
+
+function isExpectedHttpsErrorCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  return [
+    'invalid-argument',
+    'failed-precondition',
+    'permission-denied',
+    'unauthenticated',
+    'not-found',
+    'already-exists',
+    'out-of-range',
+    // Often thrown when the user/request rate is too high; still typically user-actionable.
+    'resource-exhausted',
+  ].includes(code);
+}
+
+function isGrpcAlreadyExists(err: unknown): boolean {
+  const anyErr = err as any;
+  const code = anyErr?.code;
+  return code === 6 || code === '6' || code === 'ALREADY_EXISTS';
+}
+
 function summarizeValue(value: unknown) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return `array(${value.length})`;
@@ -278,13 +330,18 @@ function callableMeta(request: CallableReq<any>) {
   const headers = raw?.headers || {};
   const forwarded = headers['x-forwarded-for'];
   const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : raw?.ip;
+  const origin = truncateForLog(headers.origin, 200);
+  const refererOrigin = safeUrlOriginForLog(headers.referer, 200);
+  const userAgent = truncateForLog(headers['user-agent'], 256);
+  const trace = truncateForLog(headers['x-cloud-trace-context'], 200);
   return {
     uid: request.auth?.uid || null,
-    origin: headers.origin || null,
-    referer: headers.referer || null,
-    userAgent: headers['user-agent'] || null,
-    ip: ip || null,
-    trace: headers['x-cloud-trace-context'] || null,
+    origin,
+    referer: refererOrigin,
+    userAgent,
+    // Hash IP instead of logging raw IP to reduce sensitivity of logs.
+    ipHash: ip ? hashForLog(String(ip)) : null,
+    trace,
   };
 }
 
@@ -300,7 +357,8 @@ function summarizeError(err: unknown) {
     };
   }
   if (err instanceof Error) {
-    return { kind: err.name, message: err.message, stack: err.stack };
+    const stack = typeof err.stack === 'string' ? err.stack.slice(0, 4000) : undefined;
+    return { kind: err.name, message: err.message, ...(stack ? { stack } : {}) };
   }
   return { kind: typeof err, message: String(err) };
 }
@@ -333,8 +391,15 @@ function onCallLogged<TReq, TRes>(
     } catch (err) {
       const ms = Date.now() - startedAt;
       try {
-        const errorForLog = err instanceof Error ? err : new Error(String(err));
-        logger.error(`${name}:error`, errorForLog, { ...baseMeta, ms, error: summarizeError(err) });
+        const code = (err as any)?.code;
+        const summary = summarizeError(err);
+        if (isExpectedHttpsErrorCode(code)) {
+          // Expected/user-actionable errors: avoid logging stacks and keep severity lower.
+          logger.warn(`${name}:rejected`, { ...baseMeta, ms, error: summary });
+        } else {
+          const errorForLog = err instanceof Error ? err : new Error(String(err));
+          logger.error(`${name}:error`, errorForLog, { ...baseMeta, ms, error: summary });
+        }
       } catch (logErr) {
         console.error(`${name}:error logger failed`, {
           logError: summarizeError(logErr),
@@ -1380,13 +1445,21 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
 
 export const saveAddress = onCallLogged('saveAddress', async (request) => {
   const { wallet } = await requireWalletSession(request);
+
+  // Reject obviously oversized payloads early to reduce Firestore doc size/cost risk.
+  const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
+  const rawBytes = safeJsonByteLength((request as any)?.data);
+  if (!Number.isFinite(rawBytes) || rawBytes > MAX_SAVE_ADDRESS_BYTES) {
+    throw new HttpsError('invalid-argument', 'Request payload too large');
+  }
+
   const schema = z.object({
-    encrypted: z.string(),
-    country: z.string(),
-    countryCode: z.string().optional(),
-    label: z.string().default('Home'),
-    hint: z.string(),
-    email: z.string().email().optional(),
+    encrypted: z.string().max(4096),
+    country: z.string().max(64),
+    countryCode: z.string().max(32).optional(),
+    label: z.string().max(64).default('Home'),
+    hint: z.string().max(256),
+    email: z.string().email().max(254).optional(),
   });
   const body = parseRequest(schema, request.data);
   const id = db.collection('tmp').doc().id;
@@ -1647,117 +1720,118 @@ export const prepareDeliveryTx = onCallLogged(
   const addressLookupTables = await getDeliveryLookupTable(conn);
 
   // Allocate a unique, compact delivery id and its on-chain PDA.
-  let deliveryId = 0;
-  let deliveryPda: PublicKey | null = null;
-  let deliveryBump = 0;
-  for (let attempt = 0; attempt < 12; attempt += 1) {
-    const candidate = randomInt(1, 2 ** 31);
-    const [pda, bump] = PublicKey.findProgramAddressSync([Buffer.from('delivery'), u32LE(candidate)], programId);
-    const [chainInfo, docSnap] = await Promise.all([
-      withTimeout(
-        conn.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
-        RPC_TIMEOUT_MS,
-        'getAccountInfo:deliveryPda',
-      ),
-      db.doc(`deliveryOrders/${candidate}`).get(),
-    ]);
-    if (chainInfo || docSnap.exists) continue;
-    deliveryId = candidate;
-    deliveryPda = pda;
-    deliveryBump = bump;
-    break;
-  }
-  if (!deliveryId || !deliveryPda) {
-    throw new HttpsError('unavailable', 'Failed to allocate delivery id (try again)');
-  }
-
-  const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
-
-  const deliverIx = new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-      { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-      { pubkey: ownerPk, isSigner: true, isWritable: true },
-      { pubkey: cfgTreasury, isSigner: false, isWritable: true },
-      { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: deliveryPda, isSigner: false, isWritable: true },
-      ...assetPks.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: encodeDeliverArgs({ deliveryId, feeLamports: deliveryLamports, deliveryBump }),
-  });
-
-  const instructions: TransactionInstruction[] = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    deliverIx,
-  ];
-
+  // IMPORTANT: we atomically reserve the Firestore doc via `create()` to avoid TOCTOU collisions under concurrency.
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash');
-  const tx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
-
-  const raw = tx.serialize();
   const MAX_RAW_TX_BYTES = 1232;
-  if (raw.length > MAX_RAW_TX_BYTES) {
-    let maxFit = 0;
-    for (let n = assetPks.length - 1; n >= 1; n -= 1) {
-      const candidateIx = new TransactionInstruction({
-        programId,
-        keys: [
-          { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
-          { pubkey: signer.publicKey, isSigner: true, isWritable: false },
-          { pubkey: ownerPk, isSigner: true, isWritable: true },
-          { pubkey: cfgTreasury, isSigner: false, isWritable: true },
-          { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
-          { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: deliveryPda, isSigner: false, isWritable: true },
-          ...assetPks.slice(0, n).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-        ],
-        data: encodeDeliverArgs({ deliveryId, feeLamports: deliveryLamports, deliveryBump }),
-      });
-      const candidateTx = buildTx(
-        [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), candidateIx],
-        ownerPk,
-        blockhash,
-        [signer],
-        addressLookupTables,
-      );
-      if (candidateTx.serialize().length <= MAX_RAW_TX_BYTES) {
-        maxFit = n;
-        break;
-      }
-    }
-    throw new HttpsError(
-      'failed-precondition',
-      `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try fewer items.` +
-        (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 item.'),
-      { rawBytes: raw.length, maxRawBytes: MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
+  const MAX_DELIVERY_ID_ATTEMPTS = 16;
+
+  for (let attempt = 0; attempt < MAX_DELIVERY_ID_ATTEMPTS; attempt += 1) {
+    const candidate = randomInt(1, 2 ** 31);
+    const [deliveryPda, deliveryBump] = PublicKey.findProgramAddressSync([Buffer.from('delivery'), u32LE(candidate)], programId);
+
+    const chainInfo = await withTimeout(
+      conn.getAccountInfo(deliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+      RPC_TIMEOUT_MS,
+      'getAccountInfo:deliveryPda',
     );
+    if (chainInfo) continue;
+
+    const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
+
+    const deliverIx = new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+        { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+        { pubkey: ownerPk, isSigner: true, isWritable: true },
+        { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+        { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: deliveryPda, isSigner: false, isWritable: true },
+        ...assetPks.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+      ],
+      data: encodeDeliverArgs({ deliveryId: candidate, feeLamports: deliveryLamports, deliveryBump }),
+    });
+
+    const instructions: TransactionInstruction[] = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      deliverIx,
+    ];
+
+    const solanaTx = buildTx(instructions, ownerPk, blockhash, [signer], addressLookupTables);
+    const raw = solanaTx.serialize();
+
+    if (raw.length > MAX_RAW_TX_BYTES) {
+      let maxFit = 0;
+      for (let n = assetPks.length - 1; n >= 1; n -= 1) {
+        const candidateIx = new TransactionInstruction({
+          programId,
+          keys: [
+            { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+            { pubkey: signer.publicKey, isSigner: true, isWritable: false },
+            { pubkey: ownerPk, isSigner: true, isWritable: true },
+            { pubkey: cfgTreasury, isSigner: false, isWritable: true },
+            { pubkey: cfgCoreCollection, isSigner: false, isWritable: false },
+            { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: deliveryPda, isSigner: false, isWritable: true },
+            ...assetPks.slice(0, n).map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+          ],
+          data: encodeDeliverArgs({ deliveryId: candidate, feeLamports: deliveryLamports, deliveryBump }),
+        });
+        const candidateTx = buildTx(
+          [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), candidateIx],
+          ownerPk,
+          blockhash,
+          [signer],
+          addressLookupTables,
+        );
+        if (candidateTx.serialize().length <= MAX_RAW_TX_BYTES) {
+          maxFit = n;
+          break;
+        }
+      }
+      throw new HttpsError(
+        'failed-precondition',
+        `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try fewer items.` +
+          (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 item.'),
+        { rawBytes: raw.length, maxRawBytes: MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
+      );
+    }
+
+    const orderRef = db.doc(`deliveryOrders/${candidate}`);
+    try {
+      await db.runTransaction(async (t) => {
+        t.create(orderRef, {
+          status: 'prepared',
+          owner: ownerWallet,
+          addressId,
+          addressSnapshot: {
+            ...addressData,
+            id: addressId,
+            countryCode: addressCountry || addressData?.countryCode,
+          },
+          itemIds: uniqueItemIds,
+          items: orderItems,
+          deliveryId: candidate,
+          deliveryPda: deliveryPda.toBase58(),
+          ...(deliveryLookupTableStr ? { lookupTable: deliveryLookupTableStr } : {}),
+          deliveryLamports,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (err) {
+      if (isGrpcAlreadyExists(err)) continue;
+      throw err;
+    }
+
+    return { encodedTx: Buffer.from(raw).toString('base64'), deliveryLamports, deliveryId: candidate };
   }
 
-  await db.doc(`deliveryOrders/${deliveryId}`).set({
-    status: 'prepared',
-    owner: ownerWallet,
-    addressId,
-    addressSnapshot: {
-      ...addressData,
-      id: addressId,
-      countryCode: addressCountry || addressData?.countryCode,
-    },
-    itemIds: uniqueItemIds,
-    items: orderItems,
-    deliveryId,
-    deliveryPda: deliveryPda.toBase58(),
-    ...(deliveryLookupTableStr ? { lookupTable: deliveryLookupTableStr } : {}),
-    deliveryLamports,
-    createdAt: FieldValue.serverTimestamp(),
-  });
-
-  return { encodedTx: Buffer.from(raw).toString('base64'), deliveryLamports, deliveryId };
+  throw new HttpsError('unavailable', 'Failed to allocate delivery id (try again)');
   },
   { secrets: [COSIGNER_SECRET] },
 );
