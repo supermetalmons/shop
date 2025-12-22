@@ -828,11 +828,11 @@ async function ensureDeliveryLookupTable(args: {
 // => 1332 total receipts.
 //
 // A concurrent Merkle tree can store up to 2^maxDepth leaves:
-// - depth 10 => 1024 (too small)
-// - depth 11 => 2048 (fits, with headroom)
-// - depth 12 => 4096 (more headroom, higher rent)
+// NOTE: Bubblegum only supports a fixed set of (maxDepth, maxBufferSize) constants.
+// The smallest supported depth that fits 1332 receipts is depth 14:
+// - depth 14 => 16384 (fits, with plenty of headroom)
 // ---------------------------------------------------------------------------
-const RECEIPTS_TREE_MAX_DEPTH = 11;
+const RECEIPTS_TREE_MAX_DEPTH = 14;
 const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
 // Canopy depth controls how many proof nodes are stored on-chain in the tree account.
 // NOTE: For Phantom UX, we prefer canopy depth = 0 so wallets can see the *full proof* in the tx

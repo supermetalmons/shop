@@ -3,7 +3,7 @@ use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
 
-declare_id!("FYJ8PRHzMg3UTu47TppZxgVSS7Qh7PjzwZriYm4VVoP6");
+declare_id!("8LkMiyyNgA5H4Gm89CCkLxBNm41hTz3uWABnb5E4k8MV");
 
 /// The only signer allowed to run `initialize()`.
 ///
@@ -1543,10 +1543,12 @@ pub struct StartOpenBox<'info> {
     #[account(address = SPL_NOOP_PROGRAM_ID)]
     pub log_wrapper: UncheckedAccount<'info>,
 
-    /// Pending open record PDA.
+    /// CHECK: Pending open record PDA derived from `[SEED_PENDING_OPEN, box_asset]`.
     ///
-    /// Created/reclaimed by the handler to tolerate "pre-funded PDA stubs" (PDA squatting).
-    /// The handler enforces that an already-initialized pending record cannot be overwritten.
+    /// This is intentionally `UncheckedAccount` so the handler can create it or reclaim a
+    /// pre-funded PDA stub (PDA squatting). The handler checks that the account is either
+    /// uninitialized (`data_is_empty()` / system-owned stub) or, after creation, a properly-sized
+    /// program-owned account, and it will never overwrite an initialized record.
     #[account(
         mut,
         seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
