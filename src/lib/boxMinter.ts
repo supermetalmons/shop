@@ -58,6 +58,7 @@ export interface BoxMinterConfigAccount {
   priceLamports: bigint;
   maxSupply: number;
   maxPerTx: number;
+  started: boolean;
   minted: number;
   namePrefix: string;
   symbol: string;
@@ -137,6 +138,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o = symbol.next;
   const uriBase = readBorshString(data, o);
   o = uriBase.next;
+  const started = Boolean(data[o]);
+  o += 1;
   const bump = data[o] ?? 0;
 
   return {
@@ -147,6 +150,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     priceLamports,
     maxSupply,
     maxPerTx,
+    started,
     minted,
     namePrefix: namePrefix.value,
     symbol: symbol.value,

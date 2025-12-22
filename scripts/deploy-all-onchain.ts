@@ -665,6 +665,8 @@ function decodeBoxMinterConfig(data: Buffer) {
   o = symbol.offset;
   const uriBase = readBorshString(data, o);
   o = uriBase.offset;
+  const started = Boolean(data[o]);
+  o += 1;
   const bump = data[o];
 
   return {
@@ -674,6 +676,7 @@ function decodeBoxMinterConfig(data: Buffer) {
     priceLamports,
     maxSupply,
     maxPerTx,
+    started,
     minted,
     namePrefix: namePrefix.value,
     symbol: symbol.value,

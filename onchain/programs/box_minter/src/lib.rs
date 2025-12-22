@@ -131,6 +131,8 @@ pub mod box_minter {
         cfg.price_lamports = args.price_lamports;
         cfg.max_supply = args.max_supply;
         cfg.max_per_tx = args.max_per_tx;
+        // Minting is paused by default until the admin explicitly starts it.
+        cfg.started = false;
         cfg.minted = 0;
         cfg.name_prefix = args.name_prefix;
         cfg.symbol = args.symbol;
@@ -146,6 +148,12 @@ pub mod box_minter {
         Ok(())
     }
 
+    pub fn start_mint(ctx: Context<StartMint>) -> Result<()> {
+        let cfg = &mut ctx.accounts.config;
+        cfg.started = true;
+        Ok(())
+    }
+
     pub fn mint_boxes<'a, 'b, 'c, 'info>(
         ctx: Context<'a, 'b, 'c, 'info, MintBoxes<'info>>,
         quantity: u8,
@@ -157,6 +165,9 @@ pub mod box_minter {
         box_bumps: Vec<u8>,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+
+        // Early fail-fast: do not allow minting until the admin explicitly starts the program.
+        require!(cfg.started, BoxMinterError::MintNotStarted);
 
         require_keys_eq!(
             ctx.accounts.mpl_core_program.key(),
@@ -1398,6 +1409,8 @@ pub struct BoxMinterConfig {
     pub name_prefix: String,
     pub symbol: String,
     pub uri_base: String,
+    /// If false, `mint_boxes` is paused.
+    pub started: bool,
     pub bump: u8,
 }
 
@@ -1432,6 +1445,7 @@ impl BoxMinterConfig {
         + 4 + Self::MAX_NAME_PREFIX // name_prefix
         + 4 + Self::MAX_SYMBOL // symbol
         + 4 + Self::MAX_URI_BASE // uri_base
+        + 1 // started (bool)
         + 1; // bump
 }
 
@@ -1487,6 +1501,13 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct SetTreasury<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct StartMint<'info> {
     #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
     pub admin: Signer<'info>,
@@ -1932,6 +1953,8 @@ pub enum BoxMinterError {
     PendingAlreadyExists,
     #[msg("Unauthorized initializer")]
     UnauthorizedInitializer,
+    #[msg("Minting has not started yet")]
+    MintNotStarted,
 }
 
 
