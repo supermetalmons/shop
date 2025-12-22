@@ -15,6 +15,8 @@ interface DeliveryPanelProps {
   walletConnected: boolean;
   onSignIn: () => Promise<void>;
   onAddAddress: () => void;
+  onRemoveAddress: (id: string) => Promise<void>;
+  removingAddressId?: string | null;
 }
 
 export function DeliveryPanel({
@@ -30,6 +32,8 @@ export function DeliveryPanel({
   walletConnected,
   onSignIn,
   onAddAddress,
+  onRemoveAddress,
+  removingAddressId,
 }: DeliveryPanelProps) {
   const formatCountry = (addr: ProfileAddress) => {
     const code = addr.countryCode || normalizeCountryCode(addr.country);
@@ -94,6 +98,41 @@ export function DeliveryPanel({
           ))}
         </select>
       </label>
+      {addresses.length ? (
+        <>
+          <div className="muted small">Saved addresses</div>
+          <div className="grid">
+            {addresses.map((addr) => {
+              const isSelected = addr.id === addressId;
+              return (
+                <div key={addr.id} className="card subtle">
+                  <div className="card__head">
+                    <div>
+                      <div className="card__title">{addr.label}</div>
+                      <div className="muted small">
+                        {formatCountry(addr)} · {addr.hint}
+                      </div>
+                    </div>
+                    <div className="card__actions">
+                      {isSelected ? <span className="pill">Selected</span> : null}
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          void onRemoveAddress(addr.id);
+                        }}
+                        disabled={!signedIn || Boolean(removingAddressId)}
+                      >
+                        {removingAddressId === addr.id ? 'Removing…' : 'Remove'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
       <button onClick={onRequestDelivery} disabled={!selectedCount || !addressId || loading}>
         {loading ? 'Preparing tx…' : 'Request delivery tx'}
       </button>

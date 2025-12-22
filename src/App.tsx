@@ -17,6 +17,7 @@ import {
   requestDeliveryTx,
   revealDudes,
   saveEncryptedAddress,
+  removeAddress,
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
@@ -88,6 +89,7 @@ function App() {
   const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [addAddressOpen, setAddAddressOpen] = useState(false);
+  const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
 
@@ -257,6 +259,33 @@ function App() {
     setAddressId(saved.id);
     setAddAddressOpen(false);
     setStatus('Address saved and encrypted');
+  };
+
+  const handleRemoveAddress = async (id: string) => {
+    if (!publicKey) throw new Error('Connect a wallet to manage delivery addresses');
+    setStatus('');
+    setRemoveAddressLoading(id);
+    try {
+      const session = token ? { profile } : await signIn();
+      await removeAddress(id);
+      const base = session?.profile || profile;
+      const remaining = (base?.addresses || []).filter((addr) => addr.id !== id);
+      if (updateProfile && base) {
+        updateProfile({
+          ...base,
+          addresses: remaining,
+        });
+      }
+      if (addressId === id) {
+        setAddressId(remaining.length ? remaining[0].id : null);
+      }
+      setStatus('Address removed');
+    } catch (err) {
+      console.error(err);
+      setStatus(err instanceof Error ? err.message : 'Failed to remove address');
+    } finally {
+      setRemoveAddressLoading(null);
+    }
   };
 
   const handleSignInForDelivery = async () => {
@@ -483,6 +512,8 @@ function App() {
         walletConnected={Boolean(publicKey)}
         onSignIn={handleSignInForDelivery}
         onAddAddress={() => setAddAddressOpen(true)}
+        onRemoveAddress={handleRemoveAddress}
+        removingAddressId={removeAddressLoading}
       />
 
       <Modal open={addAddressOpen} title="Add a delivery address" onClose={() => setAddAddressOpen(false)}>

@@ -417,6 +417,10 @@ export async function saveEncryptedAddress(
   >('saveAddress', { encrypted, country, countryCode, label, hint, email });
 }
 
+export async function removeAddress(addressId: string): Promise<{ id: string; removed?: boolean }> {
+  return callFunction<{ addressId: string }, { id: string; removed?: boolean }>('removeAddress', { addressId });
+}
+
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,

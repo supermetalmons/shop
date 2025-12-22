@@ -1869,6 +1869,21 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
+export const removeAddress = onCallLogged('removeAddress', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const schema = z.object({
+    addressId: z.string().min(4).max(128).regex(/^[A-Za-z0-9_-]+$/),
+  });
+  const { addressId } = parseRequest(schema, request.data);
+  const addressRef = db.doc(`profiles/${wallet}/addresses/${addressId}`);
+  const snap = await addressRef.get();
+  if (!snap.exists) {
+    return { id: addressId, removed: false };
+  }
+  await addressRef.delete();
+  return { id: addressId, removed: true };
+});
+
 export const revealDudes = onCallLogged(
   'revealDudes',
   async (request) => {
