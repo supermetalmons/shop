@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { getProfile, solanaAuth } from '../lib/api';
+import { ensureAuthenticated, getProfile, solanaAuth } from '../lib/api';
 import { Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
 
@@ -53,7 +53,7 @@ export function useSolanaAuth() {
   });
   const [error, setError] = useState<string | null>(null);
   const [sessionWalletChecked, setSessionWalletChecked] = useState<string | null>(null);
-  const lastSignedRef = useRef<{ wallet: string; message: string; signature: Uint8Array; createdAt: number } | null>(null);
+  const lastSignedRef = useRef<{ wallet: string; uid: string; message: string; signature: Uint8Array; createdAt: number } | null>(null);
   const updateProfile = useCallback((profile: Profile | null) => {
     setState((prev) => ({ ...prev, profile }));
   }, []);
@@ -105,6 +105,7 @@ export function useSolanaAuth() {
     setError(null);
     try {
       const wallet = publicKey.toBase58();
+      const uid = await ensureAuthenticated();
 
       // If the user just tried signing in and the network flaked out, reuse the last signature
       // to avoid re-prompting the wallet.
@@ -113,13 +114,13 @@ export function useSolanaAuth() {
       const now = Date.now();
       let message: string;
       let signature: Uint8Array;
-      if (cached && cached.wallet === wallet && now - cached.createdAt <= reuseWindowMs) {
+      if (cached && cached.wallet === wallet && cached.uid === uid && now - cached.createdAt <= reuseWindowMs) {
         ({ message, signature } = cached);
       } else {
-        message = buildSignInMessage(wallet);
+        message = buildSignInMessage(wallet, uid);
         const encoded = new TextEncoder().encode(message);
         signature = await signMessage(encoded);
-        lastSignedRef.current = { wallet, message, signature, createdAt: now };
+        lastSignedRef.current = { wallet, uid, message, signature, createdAt: now };
       }
 
       // Retry only the callable (idempotent) step with exponential backoff.
@@ -162,6 +163,7 @@ export function useSolanaAuth() {
   const signOut = useCallback(async () => {
     setState({ profile: null, token: null, loading: false });
     setError(null);
+    lastSignedRef.current = null;
     if (auth) await firebaseSignOut(auth);
   }, []);
 

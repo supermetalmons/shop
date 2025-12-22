@@ -29,7 +29,7 @@ async function waitForAuthStateReady(localAuth: Auth): Promise<void> {
   return authStateReadyPromise;
 }
 
-async function ensureAuthenticated(): Promise<string> {
+export async function ensureAuthenticated(): Promise<string> {
   const localAuth = auth;
   if (!localAuth) throw new Error('Firebase client is not configured');
 

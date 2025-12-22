@@ -254,6 +254,52 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
   return parsed.data;
 }
 
+type ParsedSolanaSignInMessage = {
+  wallet: string;
+  domain: string;
+  timestamp: string;
+  session: string;
+};
+
+function parseSolanaSignInMessage(message: string): ParsedSolanaSignInMessage {
+  const raw = typeof message === 'string' ? message.trim() : '';
+  if (!raw) throw new HttpsError('invalid-argument', 'Missing sign-in message');
+  if (raw.length > 1024) throw new HttpsError('invalid-argument', 'Sign-in message too long');
+
+  const lines = raw
+    .split(/\r?\n/g)
+    .map((l) => l.trim())
+    .filter((l) => l.length);
+
+  const header = lines[0] || '';
+  const prefix = 'Sign in to mons.shop as ';
+  if (!header.startsWith(prefix)) {
+    throw new HttpsError('invalid-argument', 'Invalid sign-in message (bad header)');
+  }
+  const wallet = header.slice(prefix.length).trim();
+  if (!wallet) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing wallet)');
+
+  const kv: Record<string, string> = {};
+  for (const line of lines.slice(1)) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim();
+    if (!key || !value) continue;
+    if (!(key in kv)) kv[key] = value;
+  }
+
+  const domain = kv.Domain || '';
+  const timestamp = kv.Timestamp || '';
+  const session = kv.Session || '';
+
+  if (!domain) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Domain)');
+  if (!timestamp) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Timestamp)');
+  if (!session) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Session)');
+
+  return { wallet, domain, timestamp, session };
+}
+
 function safeJsonByteLength(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
@@ -1639,9 +1685,35 @@ function getPayerFromTx(tx: any): PublicKey | null {
 }
 
 export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
-  const schema = z.object({ wallet: z.string(), message: z.string(), signature: z.array(z.number()) });
+  const schema = z.object({
+    wallet: z.string().min(32).max(64),
+    message: z.string().min(1).max(1024),
+    signature: z.array(z.number().int().min(0).max(255)).length(64),
+  });
   const { wallet: rawWallet, message, signature } = parseRequest(schema, request.data);
   const wallet = normalizeWallet(rawWallet);
+
+  const statement = parseSolanaSignInMessage(message);
+  const statementWallet = normalizeWallet(statement.wallet);
+  if (statementWallet !== wallet) {
+    throw new HttpsError('invalid-argument', 'Wallet mismatch in signed message');
+  }
+  if (statement.session !== uid) {
+    throw new HttpsError('permission-denied', 'Signed message does not match caller');
+  }
+
+  // Soft-ish sanity check: accept timestamps within ±2 days to avoid rejecting clients
+  // with mildly incorrect clocks/timezones, while still preventing very stale replays.
+  const tsMs = Date.parse(statement.timestamp);
+  if (!Number.isFinite(tsMs)) {
+    throw new HttpsError('invalid-argument', 'Invalid Timestamp in signed message');
+  }
+  const MAX_SKEW_MS = 2 * 24 * 60 * 60 * 1000;
+  const skewMs = Math.abs(Date.now() - tsMs);
+  if (skewMs > MAX_SKEW_MS) {
+    throw new HttpsError('failed-precondition', 'Signed message timestamp is too far from current time');
+  }
+
   const pubkey = new PublicKey(wallet);
   const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
   if (!verified) throw new HttpsError('unauthenticated', 'Invalid signature');

@@ -174,8 +174,8 @@ export function shortAddress(addr: string, chars = 4) {
   return addr.length <= chars * 2 ? addr : `${addr.slice(0, chars)}...${addr.slice(-chars)}`;
 }
 
-export function buildSignInMessage(wallet: string): string {
+export function buildSignInMessage(wallet: string, uid: string): string {
   const domain = window?.location?.hostname || 'mons.shop';
   const ts = new Date().toISOString();
-  return `Sign in to mons.shop as ${wallet}\nDomain: ${domain}\nTimestamp: ${ts}`;
+  return `Sign in to mons.shop as ${wallet}\nDomain: ${domain}\nTimestamp: ${ts}\nSession: ${uid}`;
 }
