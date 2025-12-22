@@ -49,6 +49,8 @@ export interface DeliveryOrderSummary {
   createdAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
+  fulfillmentStatus?: string;
+  fulfillmentUpdatedAt?: number;
 }
 
 export interface Profile {
@@ -56,6 +58,41 @@ export interface Profile {
   email?: string;
   addresses: ProfileAddress[];
   orders?: DeliveryOrderSummary[];
+}
+
+export interface FulfillmentOrderAddress {
+  label?: string;
+  email?: string;
+  country?: string;
+  countryCode?: string;
+  hint?: string;
+  encrypted?: string;
+  full?: string | null;
+}
+
+export interface FulfillmentOrderBox {
+  boxId: number;
+  assetId?: string;
+  claimCode?: string;
+  dudeIds: number[];
+}
+
+export interface FulfillmentOrder {
+  deliveryId: number;
+  owner: string;
+  status: string;
+  createdAt?: number;
+  processedAt?: number;
+  fulfillmentStatus?: string;
+  fulfillmentUpdatedAt?: number;
+  address: FulfillmentOrderAddress;
+  boxes: FulfillmentOrderBox[];
+  looseDudes: number[];
+}
+
+export interface FulfillmentOrdersCursor {
+  processedAt: number;
+  id: string;
 }
 
 export interface PreparedTxResponse {

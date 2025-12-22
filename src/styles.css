@@ -337,6 +337,31 @@ button.ghost:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+.order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.address-block {
+  white-space: pre-line;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  font-size: 13px;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.status-input {
+  min-height: 88px;
+  resize: vertical;
+}
+
 .checkbox {
   position: relative;
   display: inline-flex;

@@ -2,7 +2,16 @@ import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth'
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
 import { auth, firebaseApp } from './firebase';
-import { DeliverySelection, InventoryItem, PendingOpenBox, PreparedTxResponse, Profile, ProfileAddress } from '../types';
+import {
+  DeliverySelection,
+  FulfillmentOrder,
+  FulfillmentOrdersCursor,
+  InventoryItem,
+  PendingOpenBox,
+  PreparedTxResponse,
+  Profile,
+  ProfileAddress,
+} from '../types';
 import { boxMinterProgramId } from './boxMinter';
 import { getHeliusApiKey } from './helius';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
@@ -419,6 +428,26 @@ export async function saveEncryptedAddress(
 
 export async function removeAddress(addressId: string): Promise<{ id: string; removed?: boolean }> {
   return callFunction<{ addressId: string }, { id: string; removed?: boolean }>('removeAddress', { addressId });
+}
+
+export async function listFulfillmentOrders(args: {
+  limit?: number;
+  cursor?: FulfillmentOrdersCursor | null;
+}): Promise<{ orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }> {
+  return callFunction<
+    { limit?: number; cursor?: FulfillmentOrdersCursor | null },
+    { orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }
+  >('listFulfillmentOrders', { limit: args.limit, cursor: args.cursor || undefined });
+}
+
+export async function updateFulfillmentStatus(
+  deliveryId: number,
+  status: string,
+): Promise<{ deliveryId: number; fulfillmentStatus: string }> {
+  return callFunction<{ deliveryId: number; status: string }, { deliveryId: number; fulfillmentStatus: string }>(
+    'updateFulfillmentStatus',
+    { deliveryId, status },
+  );
 }
 
 export async function requestDeliveryTx(

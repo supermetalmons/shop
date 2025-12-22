@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase-admin/app';
-import { FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -27,6 +27,8 @@ import { FUNCTIONS_DEPLOYMENT, FUNCTIONS_PATHS } from './config/deployment.js';
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
 const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
+// Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
+const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -122,6 +124,27 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
   }
 
   return { uid, wallet: normalizeWallet(wallet) };
+}
+
+const FULFILLMENT_WALLETS = new Set<string>();
+[
+  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+].forEach((raw) => {
+  try {
+    FULFILLMENT_WALLETS.add(new PublicKey(raw).toBase58());
+  } catch (err) {
+    console.error('[mons/functions] invalid fulfillment wallet', raw, summarizeError(err));
+  }
+});
+
+async function requireFulfillmentAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
+  const { uid, wallet } = await requireWalletSession(request);
+  if (!FULFILLMENT_WALLETS.has(wallet)) {
+    throw new HttpsError('permission-denied', 'Fulfillment access denied.');
+  }
+  return { uid, wallet };
 }
 
 const DUDES_PER_BOX = 3;
@@ -230,12 +253,78 @@ function decodeSecretKey(secret: string | undefined, label: string) {
   return decoded;
 }
 
+function decodeBase64Secret(secret: string | undefined, label: string, expectedBytes: number): Uint8Array {
+  const value = (secret || '').trim();
+  if (!value) throw new Error(`${label} is not set`);
+  let decoded: Uint8Array;
+  try {
+    decoded = Buffer.from(value, 'base64');
+  } catch (err) {
+    throw new Error(`${label} must be valid base64: ${String(err)}`);
+  }
+  if (decoded.length !== expectedBytes) {
+    throw new Error(`${label} must decode to ${expectedBytes} bytes (got ${decoded.length})`);
+  }
+  return decoded;
+}
+
 let cachedCosigner: Keypair | null = null;
 function cosigner() {
   if (!cachedCosigner) {
     cachedCosigner = Keypair.fromSecretKey(decodeSecretKey(COSIGNER_SECRET.value(), 'COSIGNER_SECRET'));
   }
   return cachedCosigner;
+}
+
+let cachedAddressDecryptKey: Uint8Array | null = null;
+let cachedAddressDecryptKeyState: 'unset' | 'ready' | 'missing' = 'unset';
+function addressDecryptKeyMaybe(): Uint8Array | null {
+  if (cachedAddressDecryptKeyState === 'ready') return cachedAddressDecryptKey;
+  if (cachedAddressDecryptKeyState === 'missing') return null;
+  try {
+    cachedAddressDecryptKey = decodeBase64Secret(
+      ADDRESS_DECRYPTION_SECRET.value(),
+      'ADDRESS_DECRYPTION_SECRET',
+      nacl.box.secretKeyLength,
+    );
+    cachedAddressDecryptKeyState = 'ready';
+    return cachedAddressDecryptKey;
+  } catch (err) {
+    cachedAddressDecryptKeyState = 'missing';
+    console.warn('[mons/functions] ADDRESS_DECRYPTION_SECRET unavailable; returning encrypted addresses', summarizeError(err));
+    return null;
+  }
+}
+
+function decodeAddressCipherPart(part: string): Uint8Array | null {
+  if (!part) return null;
+  try {
+    return Buffer.from(part, 'base64');
+  } catch {
+    return null;
+  }
+}
+
+function decryptAddressPayload(payload: string): string | null {
+  try {
+    const raw = (payload || '').trim();
+    if (!raw) return null;
+    const parts = raw.split('.');
+    if (parts.length !== 3) return null;
+    const [nonceRaw, pubRaw, cipherRaw] = parts;
+    const nonce = decodeAddressCipherPart(nonceRaw);
+    const pubkey = decodeAddressCipherPart(pubRaw);
+    const cipher = decodeAddressCipherPart(cipherRaw);
+    if (!nonce || !pubkey || !cipher) return null;
+    if (nonce.length !== nacl.box.nonceLength || pubkey.length !== nacl.box.publicKeyLength) return null;
+    const secret = addressDecryptKeyMaybe();
+    if (!secret) return null;
+    const opened = nacl.box.open(cipher, nonce, pubkey, secret);
+    if (!opened) return null;
+    return new TextDecoder().decode(opened);
+  } catch {
+    return null;
+  }
 }
 
 function ensureAuthorityKeys() {
@@ -1675,6 +1764,8 @@ type DeliveryOrderSummary = {
   createdAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
+  fulfillmentStatus?: string;
+  fulfillmentUpdatedAt?: number;
 };
 
 function toMillisMaybe(value: any): number | undefined {
@@ -1705,6 +1796,8 @@ function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary
     createdAt: toMillisMaybe(order?.createdAt),
     processedAt: toMillisMaybe(order?.processedAt),
     items,
+    fulfillmentStatus: typeof order?.fulfillmentStatus === 'string' ? order.fulfillmentStatus : undefined,
+    fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
   };
 }
 
@@ -1713,13 +1806,122 @@ async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryO
     .collection('deliveryOrders')
     .where('owner', '==', ownerWallet)
     .where('status', '==', 'ready_to_ship')
-    .select('deliveryId', 'status', 'createdAt', 'processedAt', 'items')
+    .select('deliveryId', 'status', 'createdAt', 'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentUpdatedAt')
     .get();
   const summaries = snap.docs
     .map((doc) => toDeliveryOrderSummary(doc.id, doc.data()))
     .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
   summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
   return summaries;
+}
+
+type FulfillmentOrderAddress = {
+  label?: string;
+  email?: string;
+  country?: string;
+  countryCode?: string;
+  hint?: string;
+  encrypted?: string;
+  full?: string | null;
+};
+
+type FulfillmentOrderBox = {
+  boxId: number;
+  assetId?: string;
+  claimCode?: string;
+  dudeIds: number[];
+};
+
+type FulfillmentOrder = {
+  deliveryId: number;
+  owner: string;
+  status: string;
+  createdAt?: number;
+  processedAt?: number;
+  fulfillmentStatus?: string;
+  fulfillmentUpdatedAt?: number;
+  address: FulfillmentOrderAddress;
+  boxes: FulfillmentOrderBox[];
+  looseDudes: number[];
+};
+
+function toFulfillmentOrder(docId: string, order: any): FulfillmentOrder | null {
+  const deliveryIdRaw = order?.deliveryId ?? docId;
+  const deliveryId = Number(deliveryIdRaw);
+  if (!Number.isFinite(deliveryId)) return null;
+  const owner = typeof order?.owner === 'string' ? order.owner : '';
+  const status = typeof order?.status === 'string' ? order.status : 'unknown';
+
+  const addressSnapshot = order?.addressSnapshot || {};
+  const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
+  let full: string | null = null;
+  if (encrypted) {
+    full = decryptAddressPayload(encrypted);
+  }
+
+  const address: FulfillmentOrderAddress = {
+    label: typeof addressSnapshot?.label === 'string' ? addressSnapshot.label : undefined,
+    email: typeof addressSnapshot?.email === 'string' ? addressSnapshot.email : undefined,
+    country: typeof addressSnapshot?.country === 'string' ? addressSnapshot.country : undefined,
+    countryCode: typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
+    hint: typeof addressSnapshot?.hint === 'string' ? addressSnapshot.hint : undefined,
+    encrypted: encrypted || undefined,
+    full,
+  };
+
+  const itemsRaw = Array.isArray(order?.items) ? order.items : [];
+  const boxItems = itemsRaw
+    .filter((item: any) => item && item.kind === 'box')
+    .map((item: any) => ({
+      assetId: typeof item.assetId === 'string' ? item.assetId : undefined,
+      refId: Math.floor(Number(item.refId)),
+    }))
+    .filter((item: any) => Number.isFinite(item.refId) && item.refId > 0);
+
+  const looseDudes = itemsRaw
+    .filter((item: any) => item && item.kind === 'dude')
+    .map((item: any) => Math.floor(Number(item.refId)))
+    .filter((refId: number) => Number.isFinite(refId) && refId > 0)
+    .sort((a, b) => a - b);
+
+  const claimsRaw = Array.isArray(order?.irlClaims) ? order.irlClaims : [];
+  const claimsByBoxId = new Map<number, { code?: string; dudeIds?: number[]; boxAssetId?: string }>();
+  for (const claim of claimsRaw) {
+    const boxId = Math.floor(Number(claim?.boxId));
+    if (!Number.isFinite(boxId) || boxId <= 0) continue;
+    const dudeIdsRaw = Array.isArray(claim?.dudeIds) ? claim.dudeIds : [];
+    const dudeIds = dudeIdsRaw.map((id: any) => Math.floor(Number(id))).filter((id: number) => Number.isFinite(id) && id > 0);
+    claimsByBoxId.set(boxId, {
+      code: typeof claim?.code === 'string' ? claim.code : undefined,
+      dudeIds,
+      boxAssetId: typeof claim?.boxAssetId === 'string' ? claim.boxAssetId : undefined,
+    });
+  }
+
+  const boxes: FulfillmentOrderBox[] = boxItems
+    .map((item) => {
+      const claim = claimsByBoxId.get(item.refId);
+      return {
+        boxId: item.refId,
+        assetId: item.assetId || claim?.boxAssetId,
+        claimCode: claim?.code,
+        dudeIds: Array.isArray(claim?.dudeIds) ? claim.dudeIds : [],
+      };
+    })
+    .sort((a, b) => a.boxId - b.boxId);
+
+  return {
+    deliveryId,
+    owner,
+    status,
+    createdAt: toMillisMaybe(order?.createdAt),
+    processedAt: toMillisMaybe(order?.processedAt),
+    fulfillmentStatus: typeof order?.fulfillmentStatus === 'string' ? order.fulfillmentStatus : undefined,
+    fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
+    address,
+    boxes,
+    looseDudes,
+  };
 }
 
 function resolveInstructionAccounts(tx: any): PublicKey[] {
@@ -1882,6 +2084,75 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   }
   await addressRef.delete();
   return { id: addressId, removed: true };
+});
+
+export const listFulfillmentOrders = onCallLogged(
+  'listFulfillmentOrders',
+  async (request) => {
+    await requireFulfillmentAccess(request);
+    const schema = z.object({
+      limit: z.number().int().min(1).max(50).optional(),
+      cursor: z
+        .object({
+          processedAt: z.number().int().positive(),
+          id: z.string().min(1).max(128),
+        })
+        .optional(),
+    });
+    const { limit = 20, cursor } = parseRequest(schema, request.data);
+
+    let query = db
+      .collection('deliveryOrders')
+      .where('status', '==', 'ready_to_ship')
+      .orderBy('processedAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc')
+      .limit(limit);
+
+    if (cursor) {
+      query = query.startAfter(Timestamp.fromMillis(cursor.processedAt), cursor.id);
+    }
+
+    const snap = await query.get();
+    const orders = snap.docs
+      .map((doc) => toFulfillmentOrder(doc.id, doc.data()))
+      .filter((entry): entry is FulfillmentOrder => Boolean(entry));
+
+    const last = snap.docs[snap.docs.length - 1];
+    const lastProcessedAt = last ? toMillisMaybe(last.get('processedAt')) : undefined;
+    const nextCursor = last && lastProcessedAt ? { processedAt: lastProcessedAt, id: last.id } : null;
+
+    return { orders, nextCursor };
+  },
+  { secrets: [ADDRESS_DECRYPTION_SECRET] },
+);
+
+export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {
+  const { wallet } = await requireFulfillmentAccess(request);
+  const schema = z.object({
+    deliveryId: z.number().int().positive(),
+    status: z.string().max(1000).optional().nullable(),
+  });
+  const { deliveryId, status } = parseRequest(schema, request.data);
+  const trimmed = typeof status === 'string' ? status.trim() : '';
+
+  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
+  const snap = await orderRef.get();
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'Delivery order not found');
+  }
+
+  const update: Record<string, unknown> = {
+    fulfillmentUpdatedAt: FieldValue.serverTimestamp(),
+    fulfillmentUpdatedBy: wallet,
+  };
+  if (trimmed) {
+    update.fulfillmentStatus = trimmed;
+  } else {
+    update.fulfillmentStatus = FieldValue.delete();
+  }
+
+  await orderRef.set(update, { merge: true });
+  return { deliveryId, fulfillmentStatus: trimmed || '' };
 });
 
 export const revealDudes = onCallLogged(

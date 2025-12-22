@@ -557,6 +557,9 @@ function App() {
                 ) : (
                   <div className="muted small">Items unavailable.</div>
                 )}
+                {order.fulfillmentStatus ? (
+                  <div className="muted small">Fulfillment update: {order.fulfillmentStatus}</div>
+                ) : null}
               </div>
             ))}
           </div>
