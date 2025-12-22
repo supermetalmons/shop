@@ -2097,6 +2097,7 @@ export const listFulfillmentOrders = onCallLogged(
           processedAt: z.number().int().positive(),
           id: z.string().min(1).max(128),
         })
+        .nullable()
         .optional(),
     });
     const { limit = 20, cursor } = parseRequest(schema, request.data);
