@@ -38,6 +38,8 @@ type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 // ---------------------------------------------------------------------------
 // EDIT THESE CONSTANTS to change deploy behavior.
 // This script intentionally accepts NO CLI args.
+// NOTE: Metaplex programs (MPL Core/Bubblegum/etc) are often NOT deployed on Solana testnet.
+// If you hit "Attempt to load a program that does not exist", use devnet or mainnet-beta.
 const SOLANA_CLUSTER: SolanaCluster = 'devnet';
 // Optional: set a custom RPC URL; otherwise the default cluster RPC is used.
 const SOLANA_RPC_URL: string | undefined = undefined;
@@ -165,6 +167,100 @@ function parsePrivateKeyInput(input: string): Keypair {
     return keypairFromBytes(bs58.decode(raw));
   } catch {
     throw new Error('Invalid base58 private key.');
+  }
+}
+
+async function assertExecutableProgram(args: {
+  connection: Connection;
+  cluster: SolanaCluster;
+  programId: PublicKey;
+  name: string;
+}) {
+  const { connection, cluster, programId, name } = args;
+  const info = await connection.getAccountInfo(programId, { commitment: 'confirmed' });
+  if (!info) {
+    const hint =
+      cluster === 'testnet'
+        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Try SOLANA_CLUSTER='devnet'.`
+        : '';
+    throw new Error(
+      `${name} program is not deployed on this cluster.\n` +
+        `- cluster: ${cluster}\n` +
+        `- rpc    : ${connection.rpcEndpoint}\n` +
+        `- program: ${programId.toBase58()}` +
+        hint,
+    );
+  }
+  if (!info.executable) {
+    throw new Error(
+      `${name} program account exists but is not executable.\n` +
+        `- cluster: ${cluster}\n` +
+        `- rpc    : ${connection.rpcEndpoint}\n` +
+        `- program: ${programId.toBase58()}\n` +
+        `- owner  : ${info.owner.toBase58()}`,
+    );
+  }
+}
+
+async function assertExternalProgramsDeployed(connection: Connection, cluster: SolanaCluster) {
+  await assertExecutableProgram({ connection, cluster, programId: MPL_CORE_PROGRAM_ID, name: 'MPL Core' });
+  await assertExecutableProgram({ connection, cluster, programId: BUBBLEGUM_PROGRAM_ID, name: 'Metaplex Bubblegum' });
+  await assertExecutableProgram({
+    connection,
+    cluster,
+    programId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    name: 'Metaplex Account Compression',
+  });
+  await assertExecutableProgram({
+    connection,
+    cluster,
+    programId: MPL_NOOP_PROGRAM_ID,
+    name: 'Metaplex Noop (Bubblegum log wrapper)',
+  });
+}
+
+async function sendAndConfirmTx(args: {
+  connection: Connection;
+  tx: Transaction;
+  signers: Keypair[];
+  label: string;
+  commitment?: 'processed' | 'confirmed' | 'finalized';
+}): Promise<string> {
+  const { connection, tx, signers, label, commitment = 'confirmed' } = args;
+  try {
+    return await sendAndConfirmTransaction(connection, tx, signers, { commitment });
+  } catch (err) {
+    const anyErr = err as any;
+    const msg =
+      (typeof anyErr?.transactionMessage === 'string' && anyErr.transactionMessage) ||
+      (anyErr instanceof Error ? anyErr.message : String(anyErr));
+    const programIds = Array.from(new Set(tx.instructions.map((ix) => ix.programId.toBase58())));
+
+    console.error(`\n❌ Transaction failed (${label})`);
+    console.error('RPC:', connection.rpcEndpoint);
+    console.error('Program IDs in tx:', programIds.join(', ') || '(none)');
+    if (msg) console.error('Error:', msg);
+
+    // Try to print simulation logs (web3.js attaches `getLogs()` to SendTransactionError).
+    if (typeof anyErr?.getLogs === 'function') {
+      try {
+        const logs = await anyErr.getLogs(connection);
+        if (Array.isArray(logs) && logs.length) {
+          console.error('--- logs ---');
+          for (const l of logs) console.error(l);
+        }
+      } catch {
+        // ignore
+      }
+    } else if (Array.isArray(anyErr?.transactionLogs) && anyErr.transactionLogs.length) {
+      console.error('--- logs ---');
+      for (const l of anyErr.transactionLogs) console.error(l);
+    }
+
+    if (typeof msg === 'string' && msg.includes('Attempt to load a program that does not exist')) {
+      console.error('\nTip: one of the program IDs above is missing on this cluster/RPC.');
+    }
+    throw err;
   }
 }
 
@@ -810,7 +906,7 @@ async function ensureDeliveryLookupTable(args: {
   const tx = new Transaction().add(createIx, extendIx);
   tx.feePayer = payer.publicKey;
   tx.recentBlockhash = (await connection.getLatestBlockhash('finalized')).blockhash;
-  const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
+  const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'create delivery ALT', commitment: 'confirmed' });
   console.log('✅ Delivery ALT created:', sig);
   console.log('  ALT:', lutAddress.toBase58());
   return lutAddress;
@@ -902,7 +998,13 @@ async function createReceiptsMerkleTree(connection: Connection, payer: Keypair):
   const tx = new Transaction().add(createTreeAccountIx).add(createTreeConfigIx);
   tx.feePayer = payer.publicKey;
   tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-  const sig = await sendAndConfirmTransaction(connection, tx, [payer, merkleTree], { commitment: 'confirmed' });
+  const sig = await sendAndConfirmTx({
+    connection,
+    tx,
+    signers: [payer, merkleTree],
+    label: 'create receipts Merkle tree',
+    commitment: 'confirmed',
+  });
   console.log('✅ Receipt cNFT Merkle tree created:', sig);
   console.log('  RECEIPTS_MERKLE_TREE:', merkleTree.publicKey.toBase58());
   return merkleTree.publicKey;
@@ -1005,6 +1107,10 @@ async function main() {
   if (CORE_COLLECTION_PUBKEY) console.log('core collection:', CORE_COLLECTION_PUBKEY);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
+
+  // Fail fast if the target cluster/RPC does not have the Metaplex programs we depend on.
+  const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
+  await assertExternalProgramsDeployed(connection, cluster);
 
   console.log('Enter the deployer wallet private key (input is hidden).');
   console.log('Accepted formats: base58 secret key, or JSON array (like ~/.config/solana/id.json contents).');
@@ -1116,7 +1222,6 @@ async function main() {
   };
   // ---------------------------------------------------------------------------
 
-  const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
   const programPk = new PublicKey(programId);
   const configPda = boxMinterConfigPda(programPk);
 
@@ -1151,7 +1256,7 @@ async function main() {
         const tx = new Transaction().add(setIx);
         tx.feePayer = payer.publicKey;
         tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-        const sig = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
+        const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'set treasury', commitment: 'confirmed' });
         console.log('✅ Payment treasury updated:', sig);
         paymentTreasury = desired;
       }
@@ -1278,7 +1383,13 @@ async function main() {
     createCollectionTx.feePayer = payer.publicKey;
     createCollectionTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
     createCollectionTx.partialSign(collection);
-    const sig = await sendAndConfirmTransaction(connection, createCollectionTx, [payer, collection], { commitment: 'confirmed' });
+    const sig = await sendAndConfirmTx({
+      connection,
+      tx: createCollectionTx,
+      signers: [payer, collection],
+      label: 'create MPL-Core collection',
+      commitment: 'confirmed',
+    });
     console.log('✅ Collection created:', sig);
     console.log('  Collection:', collection.publicKey.toBase58());
     console.log('  Collection update authority (program config PDA):', configPda.toBase58());
@@ -1304,7 +1415,7 @@ async function main() {
   const setupTx = new Transaction().add(initIx);
   setupTx.feePayer = payer.publicKey;
   setupTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-  const setupSig = await sendAndConfirmTransaction(connection, setupTx, [payer], { commitment: 'confirmed' });
+  const setupSig = await sendAndConfirmTx({ connection, tx: setupTx, signers: [payer], label: 'initialize box minter', commitment: 'confirmed' });
   console.log('✅ Box minter configured:', setupSig);
   console.log('  Config PDA:', configPda.toBase58());
   console.log('  Payment treasury:', treasury.toBase58());
