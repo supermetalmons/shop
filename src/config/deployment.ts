@@ -17,7 +17,7 @@ export const FRONTEND_DEPLOYMENT = {
   paths: FRONTEND_PATHS,
 
   // Delivery address encryption (public key only; keep secret key offline).
-  addressEncryptionPublicKey: 't6amHtGqTyN1odz/o7m7EuXFmfS2wqegHF1r/3TAhDg=',
+  addressEncryptionPublicKey: 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=',
 
   // Firebase (non-secret parts of client config)
   firebase: {
