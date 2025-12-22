@@ -21,7 +21,7 @@ import {
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
 import { encryptAddressPayload, isBlockhashExpiredError, sendPreparedTransaction, shortAddress } from './lib/solana';
-import { InventoryItem } from './types';
+import { DeliveryOrderSummary, InventoryItem } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 function hiddenInventoryKey(wallet?: string) {
@@ -48,6 +48,18 @@ function persistHiddenAssets(wallet: string, ids: Set<string>) {
   } catch {
     // ignore storage failures
   }
+}
+
+function formatOrderStatus(status: string): string {
+  const normalized = String(status || '').replace(/_/g, ' ').trim();
+  if (!normalized) return 'Unknown';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatOrderDate(order: DeliveryOrderSummary): string {
+  const timestamp = order.processedAt ?? order.createdAt;
+  if (!timestamp) return 'Date pending';
+  return new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
 }
 
 function App() {
@@ -344,6 +356,7 @@ function App() {
   ];
 
   const savedAddresses = profile?.addresses || [];
+  const deliveryOrders = profile?.orders || [];
 
   useEffect(() => {
     if (!addressId && savedAddresses.length) {
@@ -485,6 +498,41 @@ function App() {
 
       {authError ? <div className="error">{authError}</div> : null}
       {status ? <div className="success">{status}</div> : null}
+
+      <section className="card">
+        <div className="card__title">Delivery history</div>
+        <p className="muted small">Recent deliveries tied to this wallet.</p>
+        {!profile ? (
+          <div className="muted small">Sign in to view your deliveries.</div>
+        ) : deliveryOrders.length ? (
+          <div className="grid">
+            {deliveryOrders.map((order) => (
+              <div key={order.deliveryId} className="card subtle">
+                <div className="card__head">
+                  <div>
+                    <div className="card__title">Delivery #{order.deliveryId}</div>
+                    <div className="muted small">{formatOrderDate(order)}</div>
+                  </div>
+                  <div className="pill">{formatOrderStatus(order.status)}</div>
+                </div>
+                {order.items.length ? (
+                  <div className="pill-row">
+                    {order.items.map((item, idx) => (
+                      <span key={`${order.deliveryId}:${item.kind}:${item.refId}:${idx}`} className="pill">
+                        {item.kind === 'box' ? 'Box' : 'Dude'} #{item.refId}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="muted small">Items unavailable.</div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="muted small">No deliveries yet.</div>
+        )}
+      </section>
 
       <footer className="muted small">
         {publicKey ? `Connected: ${shortAddress(publicKey.toBase58())}` : 'Connect a wallet to start'} ·

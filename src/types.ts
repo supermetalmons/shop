@@ -38,10 +38,24 @@ export interface ProfileAddress {
   email?: string;
 }
 
+export interface DeliveryOrderItemSummary {
+  kind: 'box' | 'dude';
+  refId: number;
+}
+
+export interface DeliveryOrderSummary {
+  deliveryId: number;
+  status: string;
+  createdAt?: number;
+  processedAt?: number;
+  items: DeliveryOrderItemSummary[];
+}
+
 export interface Profile {
   wallet: string;
   email?: string;
   addresses: ProfileAddress[];
+  orders?: DeliveryOrderSummary[];
 }
 
 export interface PreparedTxResponse {

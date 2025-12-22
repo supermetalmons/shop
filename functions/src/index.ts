@@ -1668,6 +1668,60 @@ function normalizeCountryCode(country?: string) {
   return '';
 }
 
+type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
+type DeliveryOrderSummary = {
+  deliveryId: number;
+  status: string;
+  createdAt?: number;
+  processedAt?: number;
+  items: DeliveryOrderItemSummary[];
+};
+
+function toMillisMaybe(value: any): number | undefined {
+  if (!value) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  return undefined;
+}
+
+function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary | null {
+  const deliveryIdRaw = order?.deliveryId ?? docId;
+  const deliveryId = Number(deliveryIdRaw);
+  if (!Number.isFinite(deliveryId)) return null;
+
+  const itemsRaw = Array.isArray(order?.items) ? order.items : [];
+  const items = itemsRaw
+    .filter((item: any) => item && (item.kind === 'box' || item.kind === 'dude'))
+    .map((item: any) => ({
+      kind: item.kind as 'box' | 'dude',
+      refId: Math.floor(Number(item.refId)),
+    }))
+    .filter((item: DeliveryOrderItemSummary) => Number.isFinite(item.refId) && item.refId > 0);
+
+  return {
+    deliveryId,
+    status: typeof order?.status === 'string' ? order.status : 'unknown',
+    createdAt: toMillisMaybe(order?.createdAt),
+    processedAt: toMillisMaybe(order?.processedAt),
+    items,
+  };
+}
+
+async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
+  const snap = await db
+    .collection('deliveryOrders')
+    .where('owner', '==', ownerWallet)
+    .where('status', '==', 'ready_to_ship')
+    .select('deliveryId', 'status', 'createdAt', 'processedAt', 'items')
+    .get();
+  const summaries = snap.docs
+    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data()))
+    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
+  summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
+  return summaries;
+}
+
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -1728,8 +1782,11 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const snap = await profileRef.get();
-  const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
+  const [snap, addressesSnap, orders] = await Promise.all([
+    profileRef.get(),
+    db.collection(`profiles/${wallet}/addresses`).get(),
+    fetchDeliveryOrderHistory(wallet),
+  ]);
   const addresses = addressesSnap.docs.map((doc) => doc.data());
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
@@ -1739,6 +1796,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
       wallet,
       email: profileData.email,
       addresses,
+      orders,
     },
   };
 });
@@ -1746,8 +1804,11 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
 export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const profileRef = db.doc(`profiles/${wallet}`);
-  const snap = await profileRef.get();
-  const addressesSnap = await db.collection(`profiles/${wallet}/addresses`).get();
+  const [snap, addressesSnap, orders] = await Promise.all([
+    profileRef.get(),
+    db.collection(`profiles/${wallet}/addresses`).get(),
+    fetchDeliveryOrderHistory(wallet),
+  ]);
   const addresses = addressesSnap.docs.map((doc) => doc.data());
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
@@ -1757,6 +1818,7 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
       wallet,
       email: profileData.email,
       addresses,
+      orders,
     },
   };
 });
@@ -2199,8 +2261,8 @@ export const issueReceipts = onCallLogged(
     throw new HttpsError('permission-denied', 'Order belongs to a different wallet');
   }
 
-  // Fast-path idempotency.
-  if (order.status === 'ready_to_ship' || order.status === 'processed') {
+  // Fast-path idempotency (already finalized).
+  if (order.status === 'ready_to_ship') {
     const conn = connection();
     const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
     let closeDeliveryTx: string | null = order.closeDeliveryTx || null;
