@@ -91,7 +91,10 @@ export interface FulfillmentOrder {
 }
 
 export interface FulfillmentOrdersCursor {
-  processedAt: number;
+  processedAt: {
+    seconds: number;
+    nanos: number;
+  };
   id: string;
 }
 

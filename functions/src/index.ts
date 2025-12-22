@@ -2094,7 +2094,10 @@ export const listFulfillmentOrders = onCallLogged(
       limit: z.number().int().min(1).max(50).optional(),
       cursor: z
         .object({
-          processedAt: z.number().int().positive(),
+          processedAt: z.object({
+            seconds: z.number().int().min(0),
+            nanos: z.number().int().min(0).max(999_999_999),
+          }),
           id: z.string().min(1).max(128),
         })
         .nullable()
@@ -2110,7 +2113,8 @@ export const listFulfillmentOrders = onCallLogged(
       .limit(limit);
 
     if (cursor) {
-      query = query.startAfter(Timestamp.fromMillis(cursor.processedAt), cursor.id);
+      const ts = new Timestamp(cursor.processedAt.seconds, cursor.processedAt.nanos);
+      query = query.startAfter(ts, cursor.id);
     }
 
     const snap = await query.get();
@@ -2119,8 +2123,13 @@ export const listFulfillmentOrders = onCallLogged(
       .filter((entry): entry is FulfillmentOrder => Boolean(entry));
 
     const last = snap.docs[snap.docs.length - 1];
-    const lastProcessedAt = last ? toMillisMaybe(last.get('processedAt')) : undefined;
-    const nextCursor = last && lastProcessedAt ? { processedAt: lastProcessedAt, id: last.id } : null;
+    const lastProcessedAt = last ? last.get('processedAt') : null;
+    const lastSeconds = typeof lastProcessedAt?.seconds === 'number' ? lastProcessedAt.seconds : null;
+    const lastNanos = typeof lastProcessedAt?.nanoseconds === 'number' ? lastProcessedAt.nanoseconds : null;
+    const nextCursor =
+      last && lastSeconds != null && lastNanos != null
+        ? { processedAt: { seconds: lastSeconds, nanos: lastNanos }, id: last.id }
+        : null;
 
     return { orders, nextCursor };
   },

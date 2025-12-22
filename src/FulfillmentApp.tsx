@@ -83,7 +83,12 @@ export default function FulfillmentApp() {
     try {
       const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor });
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
-      setOrders((prev) => prev.concat(nextOrders));
+      setOrders((prev) => {
+        if (!nextOrders.length) return prev;
+        const existing = new Set(prev.map((order) => order.deliveryId));
+        const deduped = nextOrders.filter((order) => !existing.has(order.deliveryId));
+        return prev.concat(deduped);
+      });
       mergeStatusEdits(nextOrders);
       setCursor(resp.nextCursor || null);
       setHasMore(Boolean(resp.nextCursor));
