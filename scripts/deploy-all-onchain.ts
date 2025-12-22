@@ -55,7 +55,7 @@ const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim() || 'm
 
 // Firestore collections that belong to a specific drop and should be wiped on each full on-chain deployment.
 // IMPORTANT: Do NOT add user-owned collections here (profiles/authSessions/wallets).
-const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'dudeAssignments', 'meta', 'claimCodes', 'deliveryOrders', 'mintTxs'];
+const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'dudeAssignments', 'meta', 'claimCodes', 'deliveryOrders'];
 
 // MPL-Core collection-level royalties (secondary trading).
 // NOTE: Not every marketplace enforces royalties, but this is the canonical on-chain royalty configuration.
