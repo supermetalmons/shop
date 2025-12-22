@@ -56,6 +56,10 @@ const FIREBASE_PROJECT_ID = (process.env.FIREBASE_PROJECT_ID || '').trim() || 'm
 // Firestore collections that belong to a specific drop and should be wiped on each full on-chain deployment.
 // IMPORTANT: Do NOT add user-owned collections here (profiles/authSessions/wallets).
 const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'dudeAssignments', 'meta', 'claimCodes', 'deliveryOrders', 'mintTxs'];
+
+// MPL-Core collection-level royalties (secondary trading).
+// NOTE: Not every marketplace enforces royalties, but this is the canonical on-chain royalty configuration.
+const CORE_COLLECTION_ROYALTIES_BPS = 500; // 5.00%
 // ---------------------------------------------------------------------------
 
 async function promptMaskedInput(prompt: string): Promise<string> {
@@ -534,6 +538,14 @@ function u32LE(value: number): Buffer {
   return buf;
 }
 
+function u16LE(value: number): Buffer {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 0xffff) throw new Error(`Invalid u16: ${value}`);
+  const buf = Buffer.alloc(2);
+  buf.writeUInt16LE(n & 0xffff);
+  return buf;
+}
+
 function borshString(value: string): Buffer {
   const bytes = Buffer.from(value, 'utf8');
   return Buffer.concat([u32LE(bytes.length), bytes]);
@@ -571,6 +583,42 @@ function mplCorePluginUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
   return Buffer.concat([u8(4), encodeUmiArray(additionalDelegates.map((k) => k.toBuffer()))]);
 }
 
+function mplCoreBaseRuleSetNone(): Buffer {
+  // BaseRuleSet::None enum index = 0 (None=0, ProgramAllowList=1, ProgramDenyList=2).
+  return u8(0);
+}
+
+function mplCoreCreator(address: PublicKey, percentage: number): Buffer {
+  const pct = Number(percentage);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error(`Invalid creator percentage: ${percentage}`);
+  return Buffer.concat([address.toBuffer(), u8(pct)]);
+}
+
+function mplCorePluginRoyalties(args: { basisPoints: number; creators: { address: PublicKey; percentage: number }[] }): Buffer {
+  const bps = Number(args.basisPoints);
+  if (!Number.isFinite(bps) || bps < 0 || bps > 10_000) throw new Error(`Invalid royalties basisPoints: ${args.basisPoints}`);
+  const creators = Array.isArray(args.creators) ? args.creators : [];
+
+  // BaseRoyalties = { basisPoints: u16, creators: Vec<Creator>, ruleSet: BaseRuleSet }
+  const baseRoyalties = Buffer.concat([
+    u16LE(bps),
+    encodeUmiArray(creators.map((c) => mplCoreCreator(c.address, c.percentage))),
+    mplCoreBaseRuleSetNone(),
+  ]);
+
+  // Plugin::Royalties enum index = 0. Payload = BaseRoyalties (no extra wrapper beyond tuple(1)).
+  return Buffer.concat([u8(0), baseRoyalties]);
+}
+
+function mplCorePluginAuthorityPairRoyalties(args: {
+  basisPoints: number;
+  creators: { address: PublicKey; percentage: number }[];
+  authority?: PublicKey | null;
+}): Buffer {
+  const authority = args.authority ? mplCoreBasePluginAuthorityAddress(args.authority) : null;
+  return Buffer.concat([mplCorePluginRoyalties({ basisPoints: args.basisPoints, creators: args.creators }), borshOption(authority)]);
+}
+
 function mplCorePluginAuthorityPairBubblegumV2(): Buffer {
   // PluginAuthorityPair = { plugin: Plugin, authority: Option<BasePluginAuthority> }
   // BubblegumV2 authority is fixed to the Bubblegum program (mpl-core enforces this at creation time).
@@ -606,9 +654,18 @@ function buildCreateMplCoreCollectionV2Ix(args: {
   systemProgram: PublicKey;
   name: string;
   uri: string;
+  royaltiesRecipient: PublicKey;
 }): TransactionInstruction {
   const pluginsOpt = borshOption(
     encodeUmiArray([
+      // Collection-level royalties: 5% to the same treasury used for primary mint payments.
+      // IMPORTANT: we set the *plugin authority* to the deployer key so this script can later
+      // update royalties if the on-chain payment treasury is changed (update authority is a PDA).
+      mplCorePluginAuthorityPairRoyalties({
+        basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+        creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+        authority: args.payer,
+      }),
       mplCorePluginAuthorityPairBubblegumV2(),
       mplCorePluginAuthorityPairUpdateDelegate([args.payer]),
     ]),
@@ -633,6 +690,106 @@ function buildCreateMplCoreCollectionV2Ix(args: {
     ],
     data,
   });
+}
+
+// MPL-Core instructions used to keep collection-level royalties in sync.
+const IX_MPL_CORE_ADD_COLLECTION_PLUGIN_V1 = 3;
+const IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1 = 7;
+
+function buildUpdateMplCoreCollectionRoyaltiesV1Ix(args: {
+  collection: PublicKey;
+  payer: PublicKey;
+  authority: PublicKey;
+  royaltiesRecipient: PublicKey;
+}): TransactionInstruction {
+  const plugin = mplCorePluginRoyalties({
+    basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+    creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+  });
+  const data = Buffer.concat([u8(IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1), plugin]);
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.collection, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+function buildAddMplCoreCollectionRoyaltiesV1Ix(args: {
+  collection: PublicKey;
+  payer: PublicKey;
+  authority: PublicKey;
+  royaltiesRecipient: PublicKey;
+}): TransactionInstruction {
+  const plugin = mplCorePluginRoyalties({
+    basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+    creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+  });
+  // initAuthority: Some(BasePluginAuthority::Address(authority))
+  const initAuthority = borshOption(mplCoreBasePluginAuthorityAddress(args.authority));
+  const data = Buffer.concat([u8(IX_MPL_CORE_ADD_COLLECTION_PLUGIN_V1), plugin, initAuthority]);
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.collection, isSigner: false, isWritable: true },
+      { pubkey: args.payer, isSigner: true, isWritable: true },
+      { pubkey: args.authority, isSigner: true, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data,
+  });
+}
+
+async function upsertMplCoreCollectionRoyalties(args: {
+  connection: Connection;
+  payer: Keypair;
+  collection: PublicKey;
+  royaltiesRecipient: PublicKey;
+}) {
+  const { connection, payer, collection, royaltiesRecipient } = args;
+
+  // Try update first (common path once the plugin exists).
+  try {
+    const updateIx = buildUpdateMplCoreCollectionRoyaltiesV1Ix({
+      collection,
+      payer: payer.publicKey,
+      authority: payer.publicKey,
+      royaltiesRecipient,
+    });
+    const tx = new Transaction().add(updateIx);
+    tx.feePayer = payer.publicKey;
+    tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+    const sig = await sendAndConfirmTx({
+      connection,
+      tx,
+      signers: [payer],
+      label: 'update core collection royalties',
+      commitment: 'confirmed',
+    });
+    console.log('✅ Collection royalties updated:', sig);
+    return;
+  } catch (err) {
+    console.warn('⚠️  updateCollectionPluginV1 failed (will try addCollectionPluginV1):', err instanceof Error ? err.message : String(err));
+  }
+
+  // If update failed (e.g. plugin missing), try to add.
+  const addIx = buildAddMplCoreCollectionRoyaltiesV1Ix({
+    collection,
+    payer: payer.publicKey,
+    authority: payer.publicKey,
+    royaltiesRecipient,
+  });
+  const tx = new Transaction().add(addIx);
+  tx.feePayer = payer.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'add core collection royalties', commitment: 'confirmed' });
+  console.log('✅ Collection royalties added:', sig);
 }
 
 function readBorshString(buf: Buffer, offset: number): { value: string; offset: number } {
@@ -1265,6 +1422,10 @@ async function main() {
       }
     }
 
+    // Enforce/keep collection-level royalties in sync with the payment treasury.
+    // (If the collection was created by an older version of this script, this will try to add the plugin.)
+    await upsertMplCoreCollectionRoyalties({ connection, payer, collection: cfg.coreCollection, royaltiesRecipient: paymentTreasury });
+
     console.log('');
     let receiptsTree: PublicKey | null = null;
     try {
@@ -1381,6 +1542,7 @@ async function main() {
       systemProgram: SystemProgram.programId,
       name: CORE_COLLECTION_CONFIG.name,
       uri: CORE_COLLECTION_CONFIG.uri,
+      royaltiesRecipient: treasury,
     });
     const createCollectionTx = new Transaction().add(createCollectionIx);
     createCollectionTx.feePayer = payer.publicKey;
@@ -1398,6 +1560,12 @@ async function main() {
     console.log('  Collection update authority (program config PDA):', configPda.toBase58());
     resolvedCoreCollection = collection.publicKey;
     await assertMplCoreCollection(connection, resolvedCoreCollection);
+  }
+
+  // If we are using a pre-existing collection (CORE_COLLECTION_PUBKEY), enforce royalties here.
+  // For freshly created collections, royalties are already set in `create_collection_v2`.
+  if (coreCollection) {
+    await upsertMplCoreCollectionRoyalties({ connection, payer, collection: resolvedCoreCollection, royaltiesRecipient: treasury });
   }
 
   console.log('\n[3/3] Initializing box minter…');
