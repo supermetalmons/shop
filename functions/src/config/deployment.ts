@@ -47,10 +47,10 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   symbol: 'box',
 
   // On-chain ids
-  boxMinterProgramId: '9rbaqjwtceDzU92JP9PQQfQVDms9y5Fawn1oMcuAHEVt',
-  collectionMint: '4e5jWM6pNMpucCeJP8t3kLUbkrhE4wqzk6FWoBwFC2va',
-  receiptsMerkleTree: '3v86yhVTdhiAkMxMJkGeMkeEizQ3W75RYAQbM1V3SvwR',
-  deliveryLookupTable: '3oqEqaRUZ6QevAACduAgiGegoT6HDe7KQSja2FkbiPAu',
+  boxMinterProgramId: 'CpbqLhBy62KECoug16UtXqRcDoAYYruJSxpnP1mr3hyU',
+  collectionMint: 'EqvE4pwQwXC5AzESQi1toAm8QsjZaY278kAXzbNZAcwH',
+  receiptsMerkleTree: '9Df2uhgtPwg5S6gtb5p8UPGqXGi7k3SsevMfWHu2VZK4',
+  deliveryLookupTable: 'EjfVPiVzZkaY6Qsr5JXfFYBxyj7qnAp4srWf4J6EUD1i',
 };
 
 export type DropPaths = {
