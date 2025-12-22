@@ -799,6 +799,129 @@ function readBorshString(buf: Buffer, offset: number): { value: string; offset: 
   return { value: buf.subarray(start, end).toString('utf8'), offset: end };
 }
 
+function decodeMplCoreCollectionRoyalties(data: Buffer): {
+  basisPoints: number;
+  creators: { address: PublicKey; percentage: number }[];
+  ruleSetKind: number;
+  authorityKind: number;
+  authorityAddress?: PublicKey;
+} | null {
+  let o = 0;
+  const key = data[o];
+  o += 1;
+  if (key !== 5) return null; // Not a CollectionV1 account.
+
+  // updateAuthority pubkey
+  o += 32;
+  // name + uri
+  o = readBorshString(data, o).offset;
+  o = readBorshString(data, o).offset;
+  // numMinted + currentSize
+  o += 4;
+  o += 4;
+
+  // No plugins section.
+  if (o >= data.length) return null;
+
+  // PluginHeaderV1 (key=3, pluginRegistryOffset=u64)
+  const pluginHeaderKey = data[o];
+  o += 1;
+  if (pluginHeaderKey !== 3) return null;
+  const pluginRegistryOffset = Number(data.readBigUInt64LE(o));
+  if (!Number.isFinite(pluginRegistryOffset) || pluginRegistryOffset < 0 || pluginRegistryOffset >= data.length) return null;
+
+  // PluginRegistryV1 (key=4)
+  let r = pluginRegistryOffset;
+  const regKey = data[r];
+  r += 1;
+  if (regKey !== 4) return null;
+  const registryLen = data.readUInt32LE(r);
+  r += 4;
+
+  let royaltiesPluginOffset: number | null = null;
+  let authorityKind = 0;
+  let authorityAddress: PublicKey | undefined;
+
+  // RegistryRecord[]: pluginType(u8) + authority(BasePluginAuthority) + offset(u64)
+  for (let i = 0; i < registryLen; i++) {
+    const pluginType = data[r];
+    r += 1;
+
+    const authKind = data[r];
+    r += 1;
+    if (authKind === 3) {
+      const pk = new PublicKey(data.subarray(r, r + 32));
+      r += 32;
+      if (pluginType === 0) authorityAddress = pk;
+    }
+
+    const off = Number(data.readBigUInt64LE(r));
+    r += 8;
+
+    if (pluginType === 0) {
+      royaltiesPluginOffset = off;
+      authorityKind = authKind;
+    }
+  }
+
+  if (royaltiesPluginOffset == null || !Number.isFinite(royaltiesPluginOffset) || royaltiesPluginOffset < 0 || royaltiesPluginOffset >= data.length)
+    return null;
+
+  let p = royaltiesPluginOffset;
+  const pluginVariant = data[p];
+  p += 1;
+  // Plugin variant must match Royalties (0).
+  if (pluginVariant !== 0) return null;
+
+  const basisPoints = data.readUInt16LE(p);
+  p += 2;
+  const creatorsLen = data.readUInt32LE(p);
+  p += 4;
+  const creators: { address: PublicKey; percentage: number }[] = [];
+  for (let i = 0; i < creatorsLen; i++) {
+    const address = new PublicKey(data.subarray(p, p + 32));
+    p += 32;
+    const percentage = data[p];
+    p += 1;
+    creators.push({ address, percentage });
+  }
+  const ruleSetKind = data[p];
+
+  return { basisPoints, creators, ruleSetKind, authorityKind, authorityAddress };
+}
+
+async function assertMplCoreCollectionRoyalties(args: { connection: Connection; coreCollection: PublicKey; treasury: PublicKey }) {
+  const { connection, coreCollection, treasury } = args;
+  const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
+  if (!info?.data) throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
+
+  const royalties = decodeMplCoreCollectionRoyalties(info.data);
+  if (!royalties) {
+    throw new Error(`Missing/undecodable Royalties plugin on core collection: ${coreCollection.toBase58()}`);
+  }
+
+  const ok =
+    royalties.basisPoints === CORE_COLLECTION_ROYALTIES_BPS &&
+    royalties.ruleSetKind === 0 &&
+    royalties.creators.length === 1 &&
+    royalties.creators[0].address.equals(treasury) &&
+    royalties.creators[0].percentage === 100;
+
+  if (!ok) {
+    throw new Error(
+      `Core collection royalties mismatch.\n` +
+        `Collection: ${coreCollection.toBase58()}\n` +
+        `Expected: ${CORE_COLLECTION_ROYALTIES_BPS} bps -> ${treasury.toBase58()} (100%)\n` +
+        `Actual  : ${royalties.basisPoints} bps -> ${royalties.creators.map((c) => `${c.address.toBase58()} (${c.percentage}%)`).join(', ') || '(none)'}\n`,
+    );
+  }
+
+  console.log('\n✅ Core collection royalties verified');
+  console.log(`  basisPoints: ${royalties.basisPoints}`);
+  console.log(`  recipient : ${treasury.toBase58()} (100%)`);
+  console.log(`  ruleSet   : ${royalties.ruleSetKind === 0 ? 'None' : `kind=${royalties.ruleSetKind}`}`);
+}
+
 function decodeBoxMinterConfig(data: Buffer) {
   // Anchor account discriminator is the first 8 bytes.
   let o = 8;
@@ -1561,6 +1684,9 @@ async function main() {
     resolvedCoreCollection = collection.publicKey;
     await assertMplCoreCollection(connection, resolvedCoreCollection);
   }
+
+  // Read-only check: confirm the collection Royalties plugin is present and matches the payment treasury.
+  await assertMplCoreCollectionRoyalties({ connection, coreCollection: resolvedCoreCollection, treasury });
 
   // If we are using a pre-existing collection (CORE_COLLECTION_PUBKEY), enforce royalties here.
   // For freshly created collections, royalties are already set in `create_collection_v2`.
