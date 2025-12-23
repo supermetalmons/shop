@@ -47,9 +47,6 @@ export function DeliveryPanel({
       <div className="card__head">
         <div>
           <div className="card__title">Delivery</div>
-          <p className="muted small">
-            Select boxes or dudes to burn for delivery. We mint authenticity certificates in exchange once the delivery tx lands.
-          </p>
         </div>
         <div className="card__actions">
           {!signedIn ? (
@@ -73,7 +70,6 @@ export function DeliveryPanel({
             <span className="pill">Ship: calculated on request</span>
           )
         ) : null}
-        {signedIn ? <span className="pill">{addresses.length} saved</span> : null}
       </div>
       {!walletConnected ? <div className="muted small">Connect a wallet to manage delivery addresses.</div> : null}
       {walletConnected && !signedIn && !signingIn ? (

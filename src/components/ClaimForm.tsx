@@ -27,13 +27,8 @@ export function ClaimForm({ onClaim }: ClaimFormProps) {
 
   return (
     <form className="card" onSubmit={submit}>
-      <div className="card__title">Claim IRL dudes certificates</div>
-      <p className="muted small">
-        Use the secret code inside the physical blind box. We will locate the matching blind box receipt in your wallet,
-        transfer it to the admin wallet, then mint your 3 dude receipts.
-      </p>
+      <div className="card__title">Secret Code</div>
       <label>
-        <span className="muted">Secret code</span>
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -48,7 +43,7 @@ export function ClaimForm({ onClaim }: ClaimFormProps) {
       {error ? <div className="error">{error}</div> : null}
       {success ? <div className="success">{success}</div> : null}
       <button type="submit" disabled={loading}>
-        {loading ? 'Submitting…' : 'Claim certificates'}
+        {loading ? 'Submitting…' : 'Claim receipts'}
       </button>
     </form>
   );

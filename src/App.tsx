@@ -446,7 +446,6 @@ function App() {
 
       <section className="card">
         <div className="card__title">Pending reveals</div>
-        <p className="muted small">Boxes you’ve sent to the vault. Reveal to burn the box and receive 3 dudes.</p>
         {pendingOpenBoxes.length ? (
           <div className="grid">
             {pendingOpenBoxes.map((p) => (
@@ -477,7 +476,6 @@ function App() {
 
       <section className="card">
         <div className="card__title">Inventory</div>
-        <p className="muted small">Boxes, dudes, and certificates fetched directly from Helius.</p>
         <InventoryGrid items={visibleInventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleStartOpenBox} />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
@@ -531,8 +529,7 @@ function App() {
       {status ? <div className="success">{status}</div> : null}
 
       <section className="card">
-        <div className="card__title">Delivery history</div>
-        <p className="muted small">Recent deliveries tied to this wallet.</p>
+        <div className="card__title">Deliveries</div>
         {!profile ? (
           <div className="muted small">Sign in to view your deliveries.</div>
         ) : deliveryOrders.length ? (

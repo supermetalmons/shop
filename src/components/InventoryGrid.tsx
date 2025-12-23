@@ -7,12 +7,6 @@ interface InventoryGridProps {
   onOpenBox?: (item: InventoryItem) => void;
 }
 
-const typeCopy: Record<InventoryItem['kind'], string> = {
-  box: 'Blind box',
-  dude: 'Dude',
-  certificate: 'Certificate',
-};
-
 export function InventoryGrid({ items, selected, onToggle, onOpenBox }: InventoryGridProps) {
   if (!items.length) {
     return <div className="card subtle">No items yet. Mint boxes to start.</div>;
@@ -23,46 +17,63 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
       {items.map((item) => {
         const isBox = item.kind === 'box';
         const canSelect = item.kind !== 'certificate';
-        const checked = canSelect ? selected.has(item.id) : false;
+        const isSelected = canSelect ? selected.has(item.id) : false;
+        const hasFooter = Boolean(item.assignedDudes?.length || (isBox && onOpenBox));
         return (
-          <article key={item.id} className="inventory__item">
-            <header>
-              <div className="pill">{typeCopy[item.kind]}</div>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={!canSelect}
-                  onChange={canSelect ? () => onToggle(item.id) : undefined}
-                  aria-label={`Select ${item.name}`}
-                />
-                <span />
-              </label>
-            </header>
+          <article
+            key={item.id}
+            className={[
+              'inventory__item',
+              canSelect ? 'inventory__item--selectable' : '',
+              isSelected ? 'inventory__item--selected' : '',
+              hasFooter ? 'inventory__item--hasFooter' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={canSelect ? () => onToggle(item.id) : undefined}
+            role={canSelect ? 'button' : undefined}
+            tabIndex={canSelect ? 0 : undefined}
+            aria-pressed={canSelect ? isSelected : undefined}
+            onKeyDown={
+              canSelect
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onToggle(item.id);
+                    }
+                  }
+                : undefined
+            }
+          >
             <div className="inventory__media">
               {item.image ? (
-                <img src={item.image} alt={item.name} loading="lazy" />
+                <div className="inventory__image" style={{ backgroundImage: `url(${item.image})` }} role="img" aria-label={item.name} />
               ) : (
                 <div className="placeholder" aria-hidden>
                   <span>#</span>
                 </div>
               )}
             </div>
-            <div className="inventory__body">
-              <h3>{item.name}</h3>
-              {item.assignedDudes?.length ? (
-                <p className="muted">Contains {item.assignedDudes.length} dudes</p>
-              ) : null}
-              <div className="inventory__actions">
-                {isBox && onOpenBox ? (
-                  <button className="ghost" onClick={() => onOpenBox(item)}>
-                    Start opening
-                  </button>
+            {hasFooter ? (
+              <div className="inventory__body">
+                {item.assignedDudes?.length ? (
+                  <p className="muted">Contains {item.assignedDudes.length} dudes</p>
                 ) : null}
-                <span className="muted small">{item.id.slice(0, 4)}…{item.id.slice(-4)}</span>
+                <div className="inventory__actions">
+                  {isBox && onOpenBox ? (
+                    <button
+                      className="inventory__open"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenBox(item);
+                      }}
+                    >
+                      Open
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              {!canSelect ? <p className="muted small">Certificates are already delivery outputs.</p> : null}
-            </div>
+            ) : null}
           </article>
         );
       })}

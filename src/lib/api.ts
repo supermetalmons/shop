@@ -313,11 +313,18 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
   if (!kind) return null;
   const boxId = getBoxIdFromAsset(asset);
   const dudeId = getDudeIdFromAsset(asset);
-  const image =
+  const imageRaw =
     asset?.content?.links?.image ||
     asset?.content?.metadata?.image ||
     asset?.content?.files?.[0]?.uri ||
     asset?.content?.files?.[0]?.cdn_uri;
+
+  const image =
+    kind === 'dude' && typeof imageRaw === 'string' && imageRaw
+      ? imageRaw.includes('/figures/clean/')
+        ? imageRaw
+        : imageRaw.replace('/figures/', '/figures/clean/')
+      : imageRaw;
   return {
     id: asset.id,
     name: asset.content?.metadata?.name || asset.id,
