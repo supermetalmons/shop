@@ -26,7 +26,7 @@ export type FrontendDeployedConfig = {
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: 'devnet',
-  metadataBase: 'https://assets.mons.link/shop/drops/1',
+  metadataBase: 'https://assets.mons.link/drops/lsb',
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   priceSol: 0.01,
   maxSupply: 333,
@@ -48,7 +48,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either `https://.../drops/1` or `https://.../drops/1/`.
+  // Allow callers to pass either `https://.../drops/lsb` or `https://.../drops/lsb/`.
   return String(base || '').replace(/\/+$/, '');
 }
 

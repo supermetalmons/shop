@@ -36,7 +36,7 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   solanaCluster: 'devnet',
 
   // Drop metadata base (collection.json + json/* + images/*)
-  metadataBase: 'https://assets.mons.link/shop/drops/1',
+  metadataBase: 'https://assets.mons.link/drops/lsb',
 
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
@@ -64,7 +64,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either `https://.../drops/1` or `https://.../drops/1/`.
+  // Allow callers to pass either `https://.../drops/lsb` or `https://.../drops/lsb/`.
   return String(base || '').replace(/\/+$/, '');
 }
 

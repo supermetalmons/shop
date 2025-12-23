@@ -390,7 +390,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/1\` or \`https://.../drops/1/\`.
+  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
   return String(base || '').replace(/\\/+$/, '');
 }
 
@@ -499,7 +499,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/1\` or \`https://.../drops/1/\`.
+  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
   return String(base || '').replace(/\\/+$/, '');
 }
 
@@ -985,7 +985,7 @@ function buildInitializeIx(args: {
   namePrefix: string;
   symbol: string;
   /**
-   * Drop base URL (canonical), e.g. `https://assets.mons.link/shop/drops/1`.
+   * Drop base URL (canonical), e.g. `https://assets.mons.link/drops/lsb`.
    *
    * The on-chain program derives per-asset JSON URIs from this base.
    */
@@ -1482,7 +1482,7 @@ async function main() {
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
   // EDIT THESE CONSTANTS to control drop metadata. No ENV/CLI overrides.
-  const DROP_METADATA_BASE = 'https://assets.mons.link/shop/drops/1';
+  const DROP_METADATA_BASE = 'https://assets.mons.link/drops/lsb';
   const BOX_MINTER_CONFIG = {
     // Payment + mint caps
     // Payments: SOL from box mints + delivery fees go here.

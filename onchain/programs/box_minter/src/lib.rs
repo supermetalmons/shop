@@ -105,7 +105,7 @@ pub mod box_minter {
             BoxMinterError::UriTooLong
         );
         // Canonical config: `uri_base` is the DROP BASE (not `/json/boxes/` and not a `.json` file).
-        // Example: `https://assets.mons.link/shop/drops/1`
+        // Example: `https://assets.mons.link/drops/lsb`
         let drop_base = args.uri_base.trim_end_matches('/');
         require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
         require!(!drop_base.ends_with(".json"), BoxMinterError::InvalidMetadataBase);
