@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { MintStats } from '../types';
 import { ProgressBar } from './ProgressBar';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
@@ -7,15 +7,28 @@ interface MintPanelProps {
   stats?: MintStats;
   onMint: (quantity: number) => Promise<void>;
   busy: boolean;
+  onQuantityChange?: (quantity: number) => void;
 }
 
-export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
+export function MintPanel({ stats, onMint, busy, onQuantityChange }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const remaining = stats?.remaining ?? Math.max(0, total - minted);
   const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const maxSelectable = Math.min(maxPerTx, remaining);
+
+  useEffect(() => {
+    onQuantityChange?.(quantity);
+  }, [onQuantityChange, quantity]);
+
+  useEffect(() => {
+    if (maxSelectable < 1) return;
+    if (quantity > maxSelectable) {
+      setQuantity(maxSelectable);
+    }
+  }, [maxSelectable, quantity]);
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -45,7 +58,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
             <input
               type="range"
               min={1}
-              max={Math.min(maxPerTx, remaining)}
+              max={maxSelectable}
               value={quantity}
               onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
             />
