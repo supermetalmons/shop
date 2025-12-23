@@ -2,8 +2,6 @@
 
 React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Inventory is fetched client-side via Helius DAS.
 
-Default mint params (configurable at deploy): **max 333 boxes**, **0.001 SOL per box**, **max 15 per tx**.
-
 ## Frontend
 - Install deps: `npm install`
 - Configure **secrets via env only** (local dev: in your shell, or a local `.env` that you do NOT commit):
