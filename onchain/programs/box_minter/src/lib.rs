@@ -3,7 +3,7 @@ use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
 
-declare_id!("9cEJavUm5MRXxdT33FVwJvtge4DwdNkThzm2NEsgFnxb");
+declare_id!("EjQZc3Y89f565WPZA2zRLdJYXGe6EQuikf7bMhkPe1Q1");
 
 /// The only signer allowed to run `initialize()`.
 ///

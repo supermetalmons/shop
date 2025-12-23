@@ -33,8 +33,8 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   maxPerTx: 15,
   namePrefix: 'box',
   symbol: 'box',
-  boxMinterProgramId: '9cEJavUm5MRXxdT33FVwJvtge4DwdNkThzm2NEsgFnxb',
-  collectionMint: 'BRYrDCL8TEqVywzFxLpzMQvHaytPVS7nnxtVeF7ahT3y',
+  boxMinterProgramId: 'EjQZc3Y89f565WPZA2zRLdJYXGe6EQuikf7bMhkPe1Q1',
+  collectionMint: '6xKgdNoHpKbVJkhvXoRnCbNbZcEXrPXVLJxCKjUFPd58',
 };
 
 export type DropPaths = {
