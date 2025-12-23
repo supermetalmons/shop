@@ -550,11 +550,6 @@ function App() {
           <div className="muted small">No deliveries yet.</div>
         )}
       </section>
-
-      <footer className="muted small">
-        {publicKey ? `Connected: ${shortAddress(publicKey.toBase58())}` : 'Connect a wallet to start'} ·
-        {authLoading ? ' Signing in…' : profile ? ` Signed in as ${shortAddress(profile.wallet)}` : ' Sign in for delivery'}
-      </footer>
     </div>
   );
 }
