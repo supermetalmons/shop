@@ -412,20 +412,6 @@ function App() {
         <div className="hero__media">
           <img src={`${FRONTEND_DEPLOYMENT.paths.base}/box/default.webp`} alt="mons blind box" />
         </div>
-        <div className="card hero__copy">
-          <div className="eyebrow">Mint drop</div>
-          <div className="card__title">IRL blind boxes, digital certificates</div>
-          <p className="muted small">Mint boxes on-chain, reveal dudes, then burn for delivery and certificates.</p>
-          <ul className="muted small">
-            <li>
-              Mint 1-{FRONTEND_DEPLOYMENT.maxPerTx} blind boxes per tx until the {FRONTEND_DEPLOYMENT.maxSupply} supply is gone (MPL
-              Core, uncompressed).
-            </li>
-            <li>Start opening a box to send it to the vault (no reveal yet). Then reveal to burn it and receive 3 dudes.</li>
-            <li>Select boxes + dudes for delivery; pay shipping in SOL, burn items, receive certificates.</li>
-            <li>Use the IRL code inside a shipped box to mint dudes certificates for that specific box.</li>
-          </ul>
-        </div>
       </div>
 
       <MintPanel stats={mintStats} onMint={handleMint} busy={minting} />

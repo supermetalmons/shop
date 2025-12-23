@@ -32,7 +32,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
 
   return (
     <section className="card">
-      <div className="card__title">Mint blind boxes</div>
+      <div className="card__title">Mint Boxes</div>
       {stats ? (
         <ProgressBar minted={minted} total={total} remaining={remaining} />
       ) : null}
@@ -41,7 +41,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
       ) : (
         <form className="mint" onSubmit={handleMint}>
           <label>
-            <span className="muted">Quantity (1-{maxPerTx} per tx)</span>
+            <span className="muted">Quantity</span>
             <input
               type="range"
               min={1}
