@@ -148,6 +148,13 @@ ul li {
   border: none;
 }
 
+@media (prefers-color-scheme: dark) {
+  .card.subtle {
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+}
+
 .card__title {
   font-weight: 600;
   letter-spacing: -0.02em;
