@@ -462,6 +462,10 @@ button.ghost:hover:not(:disabled) {
   gap: 16px;
 }
 
+.inventory--receipts {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+
 .inventory__item {
   aspect-ratio: 1 / 1;
   display: flex;
@@ -489,9 +493,34 @@ button.ghost:hover:not(:disabled) {
   background: var(--accent-tint);
 }
 
+.inventory__item--receipt {
+  border-radius: 0;
+}
+
+.inventory__item--receipt .inventory__image {
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 0;
+  width: 82%;
+  height: 82%;
+}
+
+.inventory__item--pending {
+  border: 2px dashed rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.02);
+}
+
 @media (prefers-color-scheme: dark) {
   .inventory__item--selectable:focus-visible {
     outline: 2px solid rgba(41, 151, 255, 0.45);
+  }
+
+  .inventory__item--receipt .inventory__image {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .inventory__item--pending {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.03);
   }
 }
 
@@ -514,6 +543,8 @@ button.ghost:hover:not(:disabled) {
 .inventory__image {
   width: 100%;
   height: 100%;
+  display: block;
+  object-fit: contain;
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;

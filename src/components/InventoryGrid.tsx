@@ -5,20 +5,44 @@ interface InventoryGridProps {
   selected: Set<string>;
   onToggle: (id: string) => void;
   onOpenBox?: (item: InventoryItem) => void;
+  itemClassName?: string;
+  className?: string;
+  pendingRevealIds?: Set<string>;
+  onReveal?: (id: string) => void;
+  revealLoadingId?: string | null;
+  revealDisabled?: boolean;
 }
 
-export function InventoryGrid({ items, selected, onToggle, onOpenBox }: InventoryGridProps) {
+export function InventoryGrid({
+  items,
+  selected,
+  onToggle,
+  onOpenBox,
+  itemClassName,
+  className,
+  pendingRevealIds,
+  onReveal,
+  revealLoadingId,
+  revealDisabled,
+}: InventoryGridProps) {
   if (!items.length) {
-    return <div className="card subtle">No items yet. Mint boxes to start.</div>;
+    return <div className="muted small">No items yet. Mint boxes to start.</div>;
   }
 
+  const gridClassName = ['inventory', className].filter(Boolean).join(' ');
+
   return (
-    <div className="inventory">
+    <div className={gridClassName}>
       {items.map((item) => {
         const isBox = item.kind === 'box';
-        const canSelect = item.kind !== 'certificate';
+        const isReceipt = item.kind === 'certificate';
+        const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
+        const canSelect = !isReceipt && !isPendingReveal;
         const isSelected = canSelect ? selected.has(item.id) : false;
-        const hasFooter = Boolean(item.assignedDudes?.length || (isBox && onOpenBox));
+        const canOpen = Boolean(isBox && onOpenBox && !isPendingReveal);
+        const canReveal = Boolean(isPendingReveal && onReveal);
+        const hasFooter = Boolean(item.assignedDudes?.length || canOpen || canReveal);
+        const isRevealing = revealLoadingId === item.id;
         return (
           <article
             key={item.id}
@@ -27,6 +51,9 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
               canSelect ? 'inventory__item--selectable' : '',
               isSelected ? 'inventory__item--selected' : '',
               hasFooter ? 'inventory__item--hasFooter' : '',
+              isPendingReveal ? 'inventory__item--pending' : '',
+              isReceipt ? 'inventory__item--receipt' : '',
+              itemClassName || '',
             ]
               .filter(Boolean)
               .join(' ')}
@@ -47,7 +74,11 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
           >
             <div className="inventory__media">
               {item.image ? (
-                <div className="inventory__image" style={{ backgroundImage: `url(${item.image})` }} role="img" aria-label={item.name} />
+                isReceipt ? (
+                  <img className="inventory__image" src={item.image} alt={item.name} loading="lazy" />
+                ) : (
+                  <div className="inventory__image" style={{ backgroundImage: `url(${item.image})` }} role="img" aria-label={item.name} />
+                )
               ) : (
                 <div className="placeholder" aria-hidden>
                   <span>#</span>
@@ -56,11 +87,11 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
             </div>
             {hasFooter ? (
               <div className="inventory__body">
-                {item.assignedDudes?.length ? (
+                {!isPendingReveal && item.assignedDudes?.length ? (
                   <p className="muted">Contains {item.assignedDudes.length} dudes</p>
                 ) : null}
                 <div className="inventory__actions">
-                  {isBox && onOpenBox ? (
+                  {canOpen ? (
                     <button
                       className="inventory__open"
                       onClick={(e) => {
@@ -69,6 +100,18 @@ export function InventoryGrid({ items, selected, onToggle, onOpenBox }: Inventor
                       }}
                     >
                       Open
+                    </button>
+                  ) : null}
+                  {canReveal ? (
+                    <button
+                      className="inventory__open"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onReveal(item.id);
+                      }}
+                      disabled={Boolean(revealDisabled) || isRevealing}
+                    >
+                      {isRevealing ? 'Revealing…' : 'Reveal dudes'}
                     </button>
                   ) : null}
                 </div>

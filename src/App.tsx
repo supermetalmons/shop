@@ -89,6 +89,7 @@ function App() {
   const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [addAddressOpen, setAddAddressOpen] = useState(false);
+  const [claimOpen, setClaimOpen] = useState(false);
   const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
@@ -115,6 +116,56 @@ function App() {
     if (!hiddenAssets.size) return inventory;
     return inventory.filter((item) => !hiddenAssets.has(item.id));
   }, [inventory, hiddenAssets]);
+
+  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/default.webp`;
+  const pendingRevealIds = useMemo(
+    () => new Set(pendingOpenBoxes.map((entry) => entry.boxAssetId).filter(Boolean)),
+    [pendingOpenBoxes],
+  );
+  const pendingRevealItems = useMemo(() => {
+    if (!pendingOpenBoxes.length) return [];
+    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const seen = new Set<string>();
+    const pendingItems: InventoryItem[] = [];
+    pendingOpenBoxes.forEach((entry) => {
+      const id = entry.boxAssetId;
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const match = inventoryById.get(id);
+      pendingItems.push({
+        id,
+        name: match?.name || `Box ${shortAddress(id)}`,
+        kind: 'box',
+        image: match?.image || defaultBoxImage,
+      });
+    });
+    return pendingItems;
+  }, [pendingOpenBoxes, inventory, defaultBoxImage]);
+
+  const inventoryItems = useMemo(() => {
+    const boxes: typeof visibleInventory = [];
+    const dudes: typeof visibleInventory = [];
+    const certificates: typeof visibleInventory = [];
+    visibleInventory.forEach((item) => {
+      if (pendingRevealIds.has(item.id)) return;
+      if (item.kind === 'box') boxes.push(item);
+      else if (item.kind === 'dude') dudes.push(item);
+      else if (item.kind === 'certificate') certificates.push(item);
+    });
+    return [...pendingRevealItems, ...boxes, ...dudes, ...certificates];
+  }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
+
+  useEffect(() => {
+    if (!pendingRevealIds.size) return;
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      pendingRevealIds.forEach((id) => {
+        if (next.delete(id)) changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [pendingRevealIds]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
@@ -307,7 +358,7 @@ function App() {
     }
     const deliverableIds = itemIds.filter((id) => {
       const item = inventory.find((entry) => entry.id === id);
-      return item && item.kind !== 'certificate';
+      return item && item.kind !== 'certificate' && !pendingRevealIds.has(id);
     });
     if (!deliverableIds.length) throw new Error('Select boxes or dudes to deliver');
     if (deliverableIds.length !== itemIds.length) {
@@ -388,6 +439,12 @@ function App() {
   const deliveryOrders = profile?.orders || [];
 
   useEffect(() => {
+    if (!deliveryOrders.length) {
+      setClaimOpen(false);
+    }
+  }, [deliveryOrders.length]);
+
+  useEffect(() => {
     if (!addressId && savedAddresses.length) {
       setAddressId(savedAddresses[0].id);
     }
@@ -425,38 +482,17 @@ function App() {
       ) : null}
 
       <section className="card">
-        <div className="card__title">Pending reveals</div>
-        {pendingOpenBoxes.length ? (
-          <div className="grid">
-            {pendingOpenBoxes.map((p) => (
-              <div key={p.pendingPda} className="card subtle">
-                <div className="card__head">
-                  <div>
-                    <div className="pill">Pending</div>
-                    <div className="muted small">Box {shortAddress(p.boxAssetId)}</div>
-                  </div>
-                  <div className="card__actions">
-                    <button
-                      className="ghost"
-                      onClick={() => handleRevealDudes(p.boxAssetId)}
-                      disabled={Boolean(revealLoading) || Boolean(startOpenLoading)}
-                    >
-                      {revealLoading === p.boxAssetId ? 'Revealing…' : 'Reveal dudes'}
-                    </button>
-                  </div>
-                </div>
-                <div className="muted small">Pending id {shortAddress(p.pendingPda)}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="muted small">No pending reveals.</div>
-        )}
-      </section>
-
-      <section className="card">
         <div className="card__title">Inventory</div>
-        <InventoryGrid items={visibleInventory} selected={selected} onToggle={toggleSelected} onOpenBox={handleStartOpenBox} />
+        <InventoryGrid
+          items={inventoryItems}
+          selected={selected}
+          onToggle={toggleSelected}
+          onOpenBox={handleStartOpenBox}
+          pendingRevealIds={pendingRevealIds}
+          onReveal={handleRevealDudes}
+          revealLoadingId={revealLoading}
+          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading)}
+        />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
 
@@ -503,13 +539,24 @@ function App() {
         />
       </Modal>
 
-      <ClaimForm onClaim={handleClaim} />
+      <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
+        <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} />
+      </Modal>
 
       {authError ? <div className="error">{authError}</div> : null}
       {status ? <div className="success">{status}</div> : null}
 
       <section className="card">
-        <div className="card__title">Deliveries</div>
+        <div className="card__head">
+          <div className="card__title">Deliveries</div>
+          {deliveryOrders.length ? (
+            <div className="card__actions">
+              <button type="button" className="ghost" onClick={() => setClaimOpen(true)}>
+                Enter code
+              </button>
+            </div>
+          ) : null}
+        </div>
         {!profile ? (
           <div className="muted small">Sign in to view your deliveries.</div>
         ) : deliveryOrders.length ? (

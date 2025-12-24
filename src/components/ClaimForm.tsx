@@ -2,9 +2,11 @@ import { FormEvent, useState } from 'react';
 
 interface ClaimFormProps {
   onClaim: (payload: { code: string }) => Promise<void>;
+  mode?: 'card' | 'modal';
+  showTitle?: boolean;
 }
 
-export function ClaimForm({ onClaim }: ClaimFormProps) {
+export function ClaimForm({ onClaim, mode = 'card', showTitle = true }: ClaimFormProps) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,8 +28,8 @@ export function ClaimForm({ onClaim }: ClaimFormProps) {
   };
 
   return (
-    <form className="card" onSubmit={submit}>
-      <div className="card__title">Secret Code</div>
+    <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={submit}>
+      {showTitle ? <div className="card__title">Secret Code</div> : null}
       <label>
         <input
           value={code}
