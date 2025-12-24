@@ -6,6 +6,7 @@ interface MintPanelProps {
   stats?: MintStats;
   onMint: (quantity: number) => Promise<void>;
   busy: boolean;
+  onError?: (message: string) => void;
 }
 
 type BoxPreviewLayout = { size: number; gap: number; cols: number };
@@ -67,13 +68,12 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
   return best;
 }
 
-export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
+export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const remaining = stats?.remaining ?? Math.max(0, total - minted);
   const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
-  const [error, setError] = useState<string | null>(null);
   const maxSelectable = Math.min(maxPerTx, remaining);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -103,11 +103,11 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
     if (quantity < 1 || quantity > maxPerTx) return;
-    setError(null);
     try {
       await onMint(quantity);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mint');
+      const message = err instanceof Error ? err.message : 'Failed to mint';
+      if (onError) onError(message);
     }
   };
 
@@ -174,7 +174,6 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
                 disabled={busy}
               />
             </label>
-            {error ? <div className="error">{error}</div> : null}
           </form>
           <div className="mint-panel__cta">
             <button

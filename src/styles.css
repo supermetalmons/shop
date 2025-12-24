@@ -70,8 +70,8 @@ header.top {
 
 .brand h1 {
   margin: 0;
-  font-size: clamp(32px, 5vw, 48px);
-  font-weight: 700;
+  font-size: 48px;
+  font-weight: 800;
   letter-spacing: -0.02em;
   display: flex;
   align-items: center;
@@ -817,6 +817,33 @@ button.inventory__open:focus-visible {
   flex-wrap: wrap;
 }
 
+.toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 1100;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  line-height: 1.4;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.toast--hidden {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -955,13 +982,16 @@ button.inventory__open:focus-visible {
     background: rgba(29, 29, 31, 0.6);
     border-color: rgba(255, 255, 255, 0.16);
   }
+
+  .toast {
+    background: rgba(29, 29, 31, 0.9);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  }
 }
 
 @media (max-width: 720px) {
   .selection-panel {
-    left: 16px;
     bottom: 16px;
-    transform: none;
     gap: 12px;
     padding: 12px 14px;
   }

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { MintPanel } from './components/MintPanel';
@@ -75,6 +75,7 @@ const MAX_SHIPMENT_ITEMS = 24;
 function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const { setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
   const { data: mintStats, refetch: refetchStats } = useMintProgress();
   const {
@@ -95,6 +96,10 @@ function App() {
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [status, setStatus] = useState<string>('');
+  const [toast, setToast] = useState<string | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
@@ -104,9 +109,39 @@ function App() {
   const owner = publicKey?.toBase58();
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
 
+  const TOAST_VISIBLE_MS = 1800;
+  const TOAST_FADE_MS = 250;
+  const showToast = (message: string) => {
+    setToast(message);
+    setToastVisible(true);
+    if (toastFadeTimeoutRef.current) {
+      clearTimeout(toastFadeTimeoutRef.current);
+    }
+    if (toastClearTimeoutRef.current) {
+      clearTimeout(toastClearTimeoutRef.current);
+    }
+    toastFadeTimeoutRef.current = setTimeout(() => {
+      setToastVisible(false);
+    }, TOAST_VISIBLE_MS);
+    toastClearTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
+  };
+
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(owner));
   }, [owner]);
+
+  useEffect(() => {
+    return () => {
+      if (toastFadeTimeoutRef.current) {
+        clearTimeout(toastFadeTimeoutRef.current);
+      }
+      if (toastClearTimeoutRef.current) {
+        clearTimeout(toastClearTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const markAssetsHidden = useMemo(() => {
     if (!owner) return (_ids: string[]) => undefined;
@@ -283,7 +318,10 @@ function App() {
   };
 
   const handleMint = async (quantity: number) => {
-    if (!publicKey) throw new Error('Connect wallet to mint');
+    if (!publicKey) {
+      setVisible(true);
+      return;
+    }
     setMinting(true);
     setStatus('');
     try {
@@ -560,6 +598,11 @@ function App() {
 
   return (
     <div className="page">
+      {toast ? (
+        <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
+          {toast}
+        </div>
+      ) : null}
       <header className="top">
         <div className="brand">
           <h1>
@@ -567,10 +610,9 @@ function App() {
             <span>mons.shop</span>
           </h1>
         </div>
-        <WalletMultiButton />
       </header>
 
-      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} />
+      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} onError={showToast} />
 
       {mintedOut ? (
         <section className="card">
