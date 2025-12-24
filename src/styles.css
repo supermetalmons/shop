@@ -523,6 +523,16 @@ button.quiet:hover:not(:disabled) {
   outline-offset: 2px;
 }
 
+.inventory__item--revealable {
+  cursor: pointer;
+}
+
+.inventory__item--revealable:focus-visible {
+  outline: none;
+  outline: 2px solid rgba(0, 113, 227, 0.35);
+  outline-offset: 2px;
+}
+
 .inventory__item--selected {
   border-color: var(--accent);
   background: var(--accent-tint);
@@ -546,6 +556,10 @@ button.quiet:hover:not(:disabled) {
 
 @media (prefers-color-scheme: dark) {
   .inventory__item--selectable:focus-visible {
+    outline: 2px solid rgba(41, 151, 255, 0.45);
+  }
+
+  .inventory__item--revealable:focus-visible {
     outline: 2px solid rgba(41, 151, 255, 0.45);
   }
 

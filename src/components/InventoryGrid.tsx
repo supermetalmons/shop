@@ -37,14 +37,18 @@ export function InventoryGrid({
         const canSelect = !isReceipt && !isPendingReveal;
         const isSelected = canSelect ? selected.has(item.id) : false;
         const canReveal = Boolean(isPendingReveal && onReveal);
-        const hasFooter = Boolean(item.assignedDudes?.length || canReveal);
         const isRevealing = revealLoadingId === item.id;
+        const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
+        const hasFooter = Boolean(item.assignedDudes?.length);
+        const canInteract = canSelect || revealEnabled;
+        const handleClick = canSelect ? () => onToggle(item.id) : revealEnabled ? () => onReveal?.(item.id) : undefined;
         return (
           <article
             key={item.id}
             className={[
               'inventory__item',
               canSelect ? 'inventory__item--selectable' : '',
+              revealEnabled ? 'inventory__item--revealable' : '',
               isSelected ? 'inventory__item--selected' : '',
               hasFooter ? 'inventory__item--hasFooter' : '',
               isPendingReveal ? 'inventory__item--pending' : '',
@@ -53,16 +57,20 @@ export function InventoryGrid({
             ]
               .filter(Boolean)
               .join(' ')}
-            onClick={canSelect ? () => onToggle(item.id) : undefined}
-            role={canSelect ? 'button' : undefined}
-            tabIndex={canSelect ? 0 : undefined}
+            onClick={handleClick}
+            role={canInteract ? 'button' : undefined}
+            tabIndex={canInteract ? 0 : undefined}
             aria-pressed={canSelect ? isSelected : undefined}
             onKeyDown={
-              canSelect
+              canSelect || revealEnabled
                 ? (e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      onToggle(item.id);
+                      if (canSelect) {
+                        onToggle(item.id);
+                      } else if (revealEnabled && onReveal) {
+                        onReveal(item.id);
+                      }
                     }
                   }
                 : undefined
@@ -86,20 +94,7 @@ export function InventoryGrid({
                 {!isPendingReveal && item.assignedDudes?.length ? (
                   <p className="muted">Contains {item.assignedDudes.length} figures</p>
                 ) : null}
-                <div className="inventory__actions">
-                  {canReveal ? (
-                    <button
-                      className="inventory__open"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onReveal(item.id);
-                      }}
-                      disabled={Boolean(revealDisabled) || isRevealing}
-                    >
-                      {isRevealing ? 'Revealing…' : 'Reveal figures'}
-                    </button>
-                  ) : null}
-                </div>
+                <div className="inventory__actions" />
               </div>
             ) : null}
           </article>
