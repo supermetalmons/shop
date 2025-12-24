@@ -377,7 +377,7 @@ ul li {
 label {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
   color: var(--fg);
   font-size: 14px;
   font-weight: 500;
@@ -831,6 +831,9 @@ button.inventory__open:focus-visible {
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
   font-size: 13px;
   line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   opacity: 1;
@@ -1082,6 +1085,161 @@ footer {
 .wallet-adapter-button-trigger:hover {
   background: var(--accent-hover) !important;
   opacity: 1;
+}
+
+/* Wallet modal overrides to match app styling */
+.wallet-adapter-modal {
+  background: transparent;
+}
+
+.wallet-adapter-modal-overlay {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.wallet-adapter-modal-wrapper {
+  max-width: 420px;
+  border-radius: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.2);
+  font-family: inherit;
+}
+
+.wallet-adapter-modal-title {
+  color: transparent;
+  text-align: left;
+  align-self: stretch;
+  padding: 32px 28px 20px;
+  font-size: 0;
+  line-height: 0;
+  font-weight: 600;
+}
+
+.wallet-adapter-modal-title::after {
+  content: 'Connect a wallet';
+  color: var(--fg);
+  display: block;
+  text-align: left;
+  font-size: 20px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.wallet-adapter-modal-button-close {
+  top: 14px;
+  right: 14px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transition: background 0.15s ease, border-color 0.15s ease;
+  z-index: 2;
+}
+
+.wallet-adapter-modal-button-close svg {
+  fill: var(--muted);
+}
+
+button.wallet-adapter-modal-button-close:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.wallet-adapter-modal-button-close:hover svg {
+  fill: var(--fg);
+}
+
+.wallet-adapter-modal-list {
+  padding: 0 20px 16px;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: var(--surface) !important;
+  color: var(--fg) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  font-weight: 500 !important;
+  font-size: 15px !important;
+  padding: 12px 14px !important;
+  box-shadow: none !important;
+  justify-content: flex-start !important;
+  gap: 8px;
+  text-align: left;
+  opacity: 1 !important;
+  transition: background 0.12s ease !important;
+  outline: none !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button:hover,
+.wallet-adapter-modal-list .wallet-adapter-button:active,
+.wallet-adapter-modal-list .wallet-adapter-button:focus,
+.wallet-adapter-modal-list .wallet-adapter-button:focus-visible {
+  background: rgba(0, 0, 0, 0.05) !important;
+  outline: none;
+  box-shadow: none;
+  opacity: 1 !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button-start-icon,
+.wallet-adapter-modal-list .wallet-adapter-button-end-icon,
+.wallet-adapter-modal-list .wallet-adapter-button-start-icon img,
+.wallet-adapter-modal-list .wallet-adapter-button-end-icon img {
+  width: 24px;
+  height: 24px;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button-start-icon {
+  margin-right: 0;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button-end-icon {
+  margin-left: 0;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button span {
+  margin-left: auto;
+  font-size: 12px !important;
+  color: var(--muted) !important;
+  opacity: 1 !important;
+}
+
+.wallet-adapter-modal-list-more {
+  color: var(--muted);
+  padding: 8px 20px 20px;
+}
+
+.wallet-adapter-modal-list-more svg {
+  fill: currentColor;
+}
+
+.wallet-adapter-modal-collapse-button svg {
+  fill: var(--muted);
+}
+
+.wallet-adapter-modal-middle {
+  padding: 0 24px 24px;
+  color: var(--muted);
+}
+
+.wallet-adapter-modal-middle-button {
+  background: var(--accent);
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .wallet-adapter-modal-list .wallet-adapter-button:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .wallet-adapter-modal-list .wallet-adapter-button:active,
+  .wallet-adapter-modal-list .wallet-adapter-button:focus,
+  .wallet-adapter-modal-list .wallet-adapter-button:focus-visible {
+    background: rgba(255, 255, 255, 0.08) !important;
+  }
 }
 
 @media (max-width: 640px) {

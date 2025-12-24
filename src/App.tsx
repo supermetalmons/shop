@@ -95,7 +95,6 @@ function App() {
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
-  const [status, setStatus] = useState<string>('');
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -323,7 +322,6 @@ function App() {
       return;
     }
     setMinting(true);
-    setStatus('');
     try {
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
@@ -337,10 +335,10 @@ function App() {
         sig = await sendOnce();
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
-        setStatus('Transaction expired before you approved it. Please approve again…');
+        showToast('Transaction expired before you approved it. Please approve again…');
         sig = await sendOnce();
       }
-      setStatus(`Minted ${quantity} boxes · ${sig}`);
+      showToast(`Minted ${quantity} boxes · ${sig}`);
       await Promise.all([refetchStats(), refetchInventory()]);
     } finally {
       setMinting(false);
@@ -350,7 +348,6 @@ function App() {
   const handleStartOpenBox = async (item: InventoryItem) => {
     if (!publicKey) throw new Error('Connect wallet to open a box');
     setStartOpenLoading(item.id);
-    setStatus('');
     setLastReveal(null);
     try {
       const cfg = await fetchBoxMinterConfig(connection);
@@ -365,16 +362,16 @@ function App() {
         sig = await sendOnce();
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
-        setStatus('Transaction expired before you approved it. Please approve again…');
+        showToast('Transaction expired before you approved it. Please approve again…');
         sig = await sendOnce();
       }
-      setStatus(`Box sent to vault · ${sig}`);
+      showToast(`Box sent to vault · ${sig}`);
       // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
       markAssetsHidden([item.id]);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to open box');
+      showToast(err instanceof Error ? err.message : 'Failed to open box');
     } finally {
       setStartOpenLoading(null);
     }
@@ -387,18 +384,17 @@ function App() {
       await signIn();
     }
     setRevealLoading(boxAssetId);
-    setStatus('');
     setLastReveal(null);
     try {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       setLastReveal({ boxId: boxAssetId, dudeIds: revealed, signature: resp.signature });
       const revealCopy = revealed.length ? ` · figures ${revealed.join(', ')}` : '';
-      setStatus(`Revealed figures · ${resp.signature}${revealCopy}`);
+      showToast(`Revealed figures · ${resp.signature}${revealCopy}`);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to reveal figures');
+      showToast(err instanceof Error ? err.message : 'Failed to reveal figures');
     } finally {
       setRevealLoading(null);
     }
@@ -439,12 +435,11 @@ function App() {
     }
     setAddressId(saved.id);
     setDeliveryAddOpen(false);
-    setStatus('Address saved and encrypted');
+    showToast('Address saved and encrypted');
   };
 
   const handleRemoveAddress = async (id: string) => {
     if (!publicKey) throw new Error('Connect a wallet to manage shipping addresses');
-    setStatus('');
     setRemoveAddressLoading(id);
     try {
       const session = token ? { profile } : await signIn();
@@ -460,19 +455,18 @@ function App() {
       if (addressId === id) {
         setAddressId(remaining.length ? remaining[0].id : null);
       }
-      setStatus('Address removed');
+      showToast('Address removed');
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to remove address');
+      showToast(err instanceof Error ? err.message : 'Failed to remove address');
     } finally {
       setRemoveAddressLoading(null);
     }
   };
 
   const handleSignInForDelivery = async () => {
-    setStatus('');
     await signIn();
-    setStatus('Signed in. Saved addresses loaded.');
+    showToast('Signed in. Saved addresses loaded.');
   };
 
   const handleRequestDelivery = async (addressId: string | null) => {
@@ -496,7 +490,6 @@ function App() {
     }
 
     setDeliveryLoading(true);
-    setStatus('');
     setDeliveryCost(undefined);
     try {
       const requestTx = () => requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
@@ -507,32 +500,32 @@ function App() {
         sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
-        setStatus('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         resp = await requestTx();
         setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
         sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
-      setStatus(`Shipment submitted${idSuffix} · ${sig}`);
+      showToast(`Shipment submitted${idSuffix} · ${sig}`);
       // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();
       if (resp.deliveryId) {
         try {
-          setStatus(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
+          showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
           const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig);
           const minted = Number(issued?.receiptsMinted || 0);
-          setStatus(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
+          showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           await refetchInventory();
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Failed to issue receipts';
-          setStatus(`Shipment submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
+          showToast(`Shipment submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
         }
       }
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to request shipment');
+      showToast(err instanceof Error ? err.message : 'Failed to request shipment');
     } finally {
       setDeliveryLoading(false);
     }
@@ -544,7 +537,6 @@ function App() {
     if (!token) {
       await signIn();
     }
-    setStatus('');
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
     let sig: string;
@@ -552,11 +544,11 @@ function App() {
       sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
     } catch (err) {
       if (!isBlockhashExpiredError(err)) throw err;
-      setStatus('Prepared transaction expired before you approved it. Preparing a fresh one…');
+      showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
       resp = await requestTx();
       sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
     }
-    setStatus(`Claimed certificates · ${sig}`);
+    showToast(`Claimed certificates · ${sig}`);
     await refetchInventory();
   };
 
@@ -808,8 +800,6 @@ function App() {
       </Modal>
 
       {authError ? <div className="error">{authError}</div> : null}
-      {status ? <div className="success">{status}</div> : null}
-
       <section className="card">
         <div className="card__head">
           <div className="card__title">Shipments</div>

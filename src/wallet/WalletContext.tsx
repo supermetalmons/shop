@@ -8,9 +8,8 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import {
   LedgerWalletAdapter,
   PhantomWalletAdapter,
-  SolflareWalletAdapter,
-  TorusWalletAdapter,
 } from '@solana/wallet-adapter-wallets';
+import { GlowWalletAdapter } from '@solana/wallet-adapter-glow';
 import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { getHeliusApiKey } from '../lib/helius';
@@ -42,9 +41,8 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
-      new SolflareWalletAdapter({ network }),
       new LedgerWalletAdapter(),
-      new TorusWalletAdapter({ params: { network } }),
+      new GlowWalletAdapter({ network }),
     ],
     [],
   );
