@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
@@ -63,65 +63,6 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
   return new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
 }
 
-type BoxPreviewLayout = { size: number; gap: number; cols: number };
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function calcBoxPreviewLayout(count: number, width: number, height: number): BoxPreviewLayout {
-  const safeCount = Math.max(1, Math.min(15, Math.floor(count)));
-  const safeWidth = Math.max(0, Math.floor(width));
-  const safeHeight = Math.max(0, Math.floor(height));
-
-  // Reasonable fallback before we know measured dimensions.
-  if (!safeWidth || !safeHeight) {
-    return { size: 120, gap: 12, cols: Math.min(safeCount, 4) };
-  }
-
-  const maxSize = Math.min(260, safeHeight);
-  let best: BoxPreviewLayout = { size: 1, gap: 8, cols: 1 };
-
-  for (let cols = 1; cols <= safeCount; cols += 1) {
-    const rows = Math.ceil(safeCount / cols);
-
-    // Start with a conservative gap, then refine once based on the resulting size.
-    let gap = 12;
-    let size = Math.min(
-      (safeWidth - (cols - 1) * gap) / cols,
-      (safeHeight - (rows - 1) * gap) / rows,
-    );
-    size = Math.min(size, maxSize);
-    gap = clampNumber(Math.round(size * 0.08), 6, 14);
-    size = Math.min(
-      (safeWidth - (cols - 1) * gap) / cols,
-      (safeHeight - (rows - 1) * gap) / rows,
-    );
-    size = Math.min(size, maxSize);
-
-    // Safety margin to avoid sub-pixel rounding clipping at some breakpoints.
-    size = Math.floor(size) - 1;
-    gap = Math.max(0, Math.floor(gap));
-
-    if (size < 1) continue;
-
-    if (size > best.size) {
-      best = { size, gap, cols };
-      continue;
-    }
-
-    // Tie-breaker: prefer fewer rows (i.e. more columns) when size is the same.
-    if (size === best.size) {
-      const bestRows = Math.ceil(safeCount / best.cols);
-      if (rows < bestRows) {
-        best = { size, gap, cols };
-      }
-    }
-  }
-
-  return best;
-}
-
 function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -140,9 +81,6 @@ function App() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
-  const [mintQuantity, setMintQuantity] = useState(1);
-  const heroBoxesRef = useRef<HTMLDivElement | null>(null);
-  const [heroBoxesBounds, setHeroBoxesBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
@@ -461,28 +399,6 @@ function App() {
     setDeliveryCost(undefined);
   }, [addressId, selected]);
 
-  useEffect(() => {
-    const el = heroBoxesRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-
-    const update = () => {
-      // Use client size to avoid sub-pixel rounding surprises.
-      const width = el.clientWidth;
-      const height = el.clientHeight;
-      setHeroBoxesBounds((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
-    };
-
-    update();
-    const ro = new ResizeObserver(() => update());
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const heroBoxLayout = useMemo(
-    () => calcBoxPreviewLayout(mintQuantity, heroBoxesBounds.width, heroBoxesBounds.height),
-    [mintQuantity, heroBoxesBounds.height, heroBoxesBounds.width],
-  );
-
   return (
     <div className="page">
       <header className="top">
@@ -492,32 +408,7 @@ function App() {
         <WalletMultiButton />
       </header>
 
-      <div className="hero">
-        <div className="hero__media">
-          <div
-            ref={heroBoxesRef}
-            className="hero__boxes"
-            style={{
-              ['--box-size' as never]: `${heroBoxLayout.size}px`,
-              ['--box-gap' as never]: `${heroBoxLayout.gap}px`,
-              ['--box-cols' as never]: String(heroBoxLayout.cols),
-            }}
-            aria-label={`Mint preview: ${mintQuantity} box${mintQuantity === 1 ? '' : 'es'}`}
-          >
-            {Array.from({ length: mintQuantity }, (_, idx) => (
-              <img
-                key={idx}
-                className="hero__box"
-                src={`${FRONTEND_DEPLOYMENT.paths.base}/box/default.webp`}
-                alt=""
-                aria-hidden="true"
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} onQuantityChange={setMintQuantity} />
+      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} />
 
       {mintedOut ? (
         <section className="card">
