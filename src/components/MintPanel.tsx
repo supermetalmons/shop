@@ -164,7 +164,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
           </div>
           <form id={formId} className="mint-panel__slider" onSubmit={handleMint}>
             <label className="mint-panel__label">
-              <span className="muted small">{quantityLabel}</span>
+              <span className="mint-panel__label-text muted small">{quantityLabel}</span>
               <input
                 type="range"
                 min={1}

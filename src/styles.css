@@ -275,13 +275,30 @@ header.top {
     padding: clamp(10px, 2vw, 16px);
   }
 
+  .mint-panel__info {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .mint-panel__remaining {
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 400;
+  }
+
   .mint-panel__slider {
     width: 100%;
     align-items: stretch;
   }
 
   .mint-panel__label {
-    text-align: left;
+    text-align: center;
+  }
+
+  .mint-panel__label-text {
+    display: none;
   }
 
   .mint-panel__cta {
