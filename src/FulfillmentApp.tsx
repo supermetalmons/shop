@@ -254,12 +254,12 @@ export default function FulfillmentApp() {
                               <div className="pill-row">
                                 {box.dudeIds.map((id) => (
                                   <span key={`${order.deliveryId}:${box.boxId}:${id}`} className="pill">
-                                    Dude #{id}
+                                    Figure #{id}
                                   </span>
                                 ))}
                               </div>
                             ) : (
-                              <div className="muted small">Assigned dudes pending</div>
+                              <div className="muted small">Assigned figures pending</div>
                             )}
                           </div>
                         ))}
@@ -269,11 +269,11 @@ export default function FulfillmentApp() {
 
                   {order.looseDudes.length ? (
                     <>
-                      <div className="muted small">Unboxed dudes</div>
+                      <div className="muted small">Unboxed figures</div>
                       <div className="pill-row">
                         {order.looseDudes.map((id) => (
                           <span key={`${order.deliveryId}:dude:${id}`} className="pill">
-                            Dude #{id}
+                            Figure #{id}
                           </span>
                         ))}
                       </div>

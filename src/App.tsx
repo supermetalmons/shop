@@ -355,12 +355,12 @@ function App() {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       setLastReveal({ boxId: boxAssetId, dudeIds: revealed, signature: resp.signature });
-      const revealCopy = revealed.length ? ` · dudes ${revealed.join(', ')}` : '';
-      setStatus(`Revealed dudes · ${resp.signature}${revealCopy}`);
+      const revealCopy = revealed.length ? ` · figures ${revealed.join(', ')}` : '';
+      setStatus(`Revealed figures · ${resp.signature}${revealCopy}`);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to reveal dudes');
+      setStatus(err instanceof Error ? err.message : 'Failed to reveal figures');
     } finally {
       setRevealLoading(null);
     }
@@ -405,7 +405,7 @@ function App() {
   };
 
   const handleRemoveAddress = async (id: string) => {
-    if (!publicKey) throw new Error('Connect a wallet to manage delivery addresses');
+    if (!publicKey) throw new Error('Connect a wallet to manage shipping addresses');
     setStatus('');
     setRemoveAddressLoading(id);
     try {
@@ -439,11 +439,11 @@ function App() {
 
   const handleRequestDelivery = async (addressId: string | null) => {
     if (!publicKey) throw new Error('Connect wallet first');
-    if (!addressId) throw new Error('Select a delivery address');
+    if (!addressId) throw new Error('Select a shipping address');
     const itemIds = Array.from(selected);
-    if (!itemIds.length) throw new Error('Select items to deliver');
+    if (!itemIds.length) throw new Error('Select items to ship');
     const addr = savedAddresses.find((a) => a.id === addressId);
-    if (!addr) throw new Error('Select a delivery address');
+    if (!addr) throw new Error('Select a shipping address');
     // Ensure wallet session exists for authenticated callable.
     if (!token) {
       await signIn();
@@ -452,7 +452,7 @@ function App() {
       const item = inventory.find((entry) => entry.id === id);
       return item && item.kind !== 'certificate' && !pendingRevealIds.has(id);
     });
-    if (!deliverableIds.length) throw new Error('Select boxes or dudes to deliver');
+    if (!deliverableIds.length) throw new Error('Select boxes or figures to ship');
     if (deliverableIds.length !== itemIds.length) {
       setSelected(new Set(deliverableIds));
     }
@@ -475,26 +475,26 @@ function App() {
         sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
-      setStatus(`Delivery submitted${idSuffix} · ${sig}`);
+      setStatus(`Shipment submitted${idSuffix} · ${sig}`);
       // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();
       if (resp.deliveryId) {
         try {
-          setStatus(`Delivery submitted${idSuffix} · ${sig} · issuing receipts…`);
+          setStatus(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
           const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig);
           const minted = Number(issued?.receiptsMinted || 0);
-          setStatus(`Delivery submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
+          setStatus(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           await refetchInventory();
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Failed to issue receipts';
-          setStatus(`Delivery submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
+          setStatus(`Shipment submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
         }
       }
     } catch (err) {
       console.error(err);
-      setStatus(err instanceof Error ? err.message : 'Failed to request delivery');
+      setStatus(err instanceof Error ? err.message : 'Failed to request shipment');
     } finally {
       setDeliveryLoading(false);
     }
@@ -599,14 +599,14 @@ function App() {
 
       {lastReveal ? (
         <section className="card subtle">
-          <div className="card__title">Revealed dudes</div>
+          <div className="card__title">Revealed figures</div>
           <p className="muted small">
             Box {shortAddress(lastReveal.boxId)} revealed:
           </p>
           <div className="row">
             {lastReveal.dudeIds.map((id) => (
               <span key={id} className="pill">
-                Dude #{id}
+                Figure #{id}
               </span>
             ))}
           </div>
@@ -616,7 +616,7 @@ function App() {
 
       <Modal
         open={deliveryOpen}
-        title="Delivery"
+        title="Shipment"
         onClose={() => {
           setDeliveryOpen(false);
           setDeliveryAddOpen(false);
@@ -641,7 +641,7 @@ function App() {
             ) : null}
           </div>
 
-          {!publicKey ? <div className="muted small">Connect a wallet to manage delivery addresses.</div> : null}
+          {!publicKey ? <div className="muted small">Connect a wallet to manage shipping addresses.</div> : null}
           {publicKey && !profile && !authLoading ? (
             <div className="muted small">
               Sign in once to load saved addresses on this device. Afterwards you can reload and still see them.
@@ -650,7 +650,7 @@ function App() {
 
           <div className="card__head">
             <div>
-              <div className="card__title">Delivery address</div>
+              <div className="card__title">Shipping address</div>
               <div className="muted small">Select a saved address or add a new one.</div>
             </div>
             <div className="card__actions">
@@ -752,7 +752,7 @@ function App() {
               Close
             </button>
             <button onClick={() => handleRequestDelivery(addressId)} disabled={!selectedCount || !addressId || deliveryLoading}>
-              {deliveryLoading ? 'Preparing tx…' : 'Request delivery tx'}
+              {deliveryLoading ? 'Preparing tx…' : 'Request shipment tx'}
             </button>
           </div>
         </div>
@@ -767,35 +767,26 @@ function App() {
 
       <section className="card">
         <div className="card__head">
-          <div className="card__title">Deliveries</div>
-          {deliveryOrders.length ? (
-            <div className="card__actions">
-              <button type="button" className="ghost" onClick={() => setClaimOpen(true)}>
-                Enter code
-              </button>
-            </div>
-          ) : null}
+          <div className="card__title">Shipments</div>
         </div>
         {!profile ? (
-          <div className="muted small">Sign in to view your deliveries.</div>
+          <div className="muted small">Sign in to view your shipments.</div>
         ) : deliveryOrders.length ? (
-          <div className="grid">
+          <div className="delivery-list">
             {deliveryOrders.map((order) => (
-              <div key={order.deliveryId} className="card subtle">
+              <div key={order.deliveryId} className="delivery-row">
                 <div className="card__head">
                   <div>
-                    <div className="card__title">Delivery #{order.deliveryId}</div>
+                    <div className="card__title">{order.deliveryId}</div>
                     <div className="muted small">{formatOrderDate(order)}</div>
                   </div>
-                  <div className="pill">{formatOrderStatus(order.status)}</div>
+                  <div className="delivery-status">Preparing</div>
                 </div>
                 {order.items.length ? (
-                  <div className="pill-row">
-                    {order.items.map((item, idx) => (
-                      <span key={`${order.deliveryId}:${item.kind}:${item.refId}:${idx}`} className="pill">
-                        {item.kind === 'box' ? 'Box' : 'Dude'} #{item.refId}
-                      </span>
-                    ))}
+                  <div className="muted small">
+                    {order.items
+                      .map((item) => `${item.kind === 'box' ? 'Box' : 'Figure'} ${item.refId}`)
+                      .join(', ')}
                   </div>
                 ) : (
                   <div className="muted small">Items unavailable.</div>
@@ -807,13 +798,20 @@ function App() {
             ))}
           </div>
         ) : (
-          <div className="muted small">No deliveries yet.</div>
+          <div className="muted small">No shipments yet.</div>
         )}
       </section>
 
       {receiptItems.length ? (
         <section className="card">
-          <div className="card__title">Receipts</div>
+          <div className="card__head">
+            <div className="card__title">Receipts</div>
+            <div className="card__actions">
+              <button type="button" className="ghost" onClick={() => setClaimOpen(true)}>
+                Enter code
+              </button>
+            </div>
+          </div>
           <InventoryGrid items={receiptItems} selected={selected} onToggle={toggleSelected} className="inventory--receipts" />
         </section>
       ) : null}
@@ -864,7 +862,7 @@ function App() {
                 setDeliveryAddOpen(false);
               }}
             >
-              Deliver
+              Ship
             </button>
           </div>
         </div>

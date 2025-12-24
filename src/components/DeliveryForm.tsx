@@ -32,7 +32,7 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
     evt.preventDefault();
     const normalizedEmail = email.trim();
     if (!normalizedEmail) {
-      setError('Email is required for delivery updates.');
+      setError('Email is required for shipping updates.');
       return;
     }
     setSaving(true);
@@ -59,8 +59,8 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
     <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={handleSubmit}>
       {mode === 'card' ? (
         <>
-          <div className="card__title">Save a delivery address</div>
-          <p className="muted small">We use your email for delivery updates.</p>
+          <div className="card__title">Save a shipping address</div>
+          <p className="muted small">We use your email for shipping updates.</p>
         </>
       ) : null}
       <div className="grid">

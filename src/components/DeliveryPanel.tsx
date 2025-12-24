@@ -46,7 +46,7 @@ export function DeliveryPanel({
     <section className="card">
       <div className="card__head">
         <div>
-          <div className="card__title">Delivery</div>
+          <div className="card__title">Shipment</div>
         </div>
         <div className="card__actions">
           {!signedIn ? (
@@ -71,7 +71,7 @@ export function DeliveryPanel({
           )
         ) : null}
       </div>
-      {!walletConnected ? <div className="muted small">Connect a wallet to manage delivery addresses.</div> : null}
+      {!walletConnected ? <div className="muted small">Connect a wallet to manage shipping addresses.</div> : null}
       {walletConnected && !signedIn && !signingIn ? (
         <div className="muted small">
           Sign in once to load saved addresses on this device. Afterwards you can reload and still see them.
@@ -130,7 +130,7 @@ export function DeliveryPanel({
         </>
       ) : null}
       <button onClick={onRequestDelivery} disabled={!selectedCount || !addressId || loading}>
-        {loading ? 'Preparing tx…' : 'Request delivery tx'}
+        {loading ? 'Preparing tx…' : 'Request shipment tx'}
       </button>
     </section>
   );

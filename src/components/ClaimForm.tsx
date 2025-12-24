@@ -19,7 +19,7 @@ export function ClaimForm({ onClaim, mode = 'card', showTitle = true }: ClaimFor
     setSuccess(null);
     try {
       await onClaim({ code: code.trim() });
-      setSuccess('Claim submitted successfully! Your box receipt was transferred and your 3 dude receipts are being minted.');
+      setSuccess('Claim submitted successfully! Your box receipt was transferred and your 3 figure receipts are being minted.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

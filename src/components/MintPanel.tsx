@@ -188,7 +188,7 @@ export function MintPanel({ stats, onMint, busy }: MintPanelProps) {
               ) : (
                 <>
                   <span className="mint-panel__submit-text">Mint</span>
-                  <span className="mint-panel__submit-price">{totalPriceLabel} sol</span>
+                  <span className="mint-panel__submit-price">{totalPriceLabel} SOL</span>
                 </>
               )}
             </button>

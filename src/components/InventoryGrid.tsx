@@ -84,7 +84,7 @@ export function InventoryGrid({
             {hasFooter ? (
               <div className="inventory__body">
                 {!isPendingReveal && item.assignedDudes?.length ? (
-                  <p className="muted">Contains {item.assignedDudes.length} dudes</p>
+                  <p className="muted">Contains {item.assignedDudes.length} figures</p>
                 ) : null}
                 <div className="inventory__actions">
                   {canReveal ? (
@@ -96,7 +96,7 @@ export function InventoryGrid({
                       }}
                       disabled={Boolean(revealDisabled) || isRevealing}
                     >
-                      {isRevealing ? 'Revealing…' : 'Reveal dudes'}
+                      {isRevealing ? 'Revealing…' : 'Reveal figures'}
                     </button>
                   ) : null}
                 </div>

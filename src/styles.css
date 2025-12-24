@@ -661,6 +661,27 @@ button.inventory__open:focus-visible {
   gap: 16px;
 }
 
+.delivery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.delivery-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.delivery-row:last-child {
+  border-bottom: none;
+}
+
+.delivery-status {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
 .address-block {
   white-space: pre-line;
   background: var(--surface);
