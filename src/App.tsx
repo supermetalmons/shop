@@ -5,7 +5,6 @@ import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
-import { DeliveryPanel } from './components/DeliveryPanel';
 import { Modal } from './components/Modal';
 import { ClaimForm } from './components/ClaimForm';
 import { useMintProgress } from './hooks/useMintProgress';
@@ -21,8 +20,16 @@ import {
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
-import { encryptAddressPayload, isBlockhashExpiredError, sendPreparedTransaction, shortAddress } from './lib/solana';
-import { DeliveryOrderSummary, InventoryItem } from './types';
+import {
+  encryptAddressPayload,
+  isBlockhashExpiredError,
+  lamportsToSol,
+  normalizeCountryCode,
+  sendPreparedTransaction,
+  shortAddress,
+} from './lib/solana';
+import { countryLabel, findCountryByCode } from './lib/countries';
+import { DeliveryOrderSummary, InventoryItem, ProfileAddress } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 function hiddenInventoryKey(wallet?: string) {
@@ -63,6 +70,8 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
   return new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
 }
 
+const MAX_SHIPMENT_ITEMS = 24;
+
 function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -88,7 +97,8 @@ function App() {
   const [status, setStatus] = useState<string>('');
   const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
-  const [addAddressOpen, setAddAddressOpen] = useState(false);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [deliveryAddOpen, setDeliveryAddOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
   const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
@@ -155,6 +165,59 @@ function App() {
     return [...pendingRevealItems, ...boxes, ...dudes, ...certificates];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
 
+  const selectedItems = useMemo(() => {
+    if (!selected.size) return [] as InventoryItem[];
+    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    return Array.from(selected)
+      .map((id) => inventoryById.get(id))
+      .filter((item): item is InventoryItem => Boolean(item));
+  }, [selected, inventory]);
+  const selectedCount = selected.size;
+  const [compactPanel, setCompactPanel] = useState(false);
+  const selectedPreview = useMemo(() => {
+    const limit = compactPanel ? 3 : 5;
+    const entries = selectedItems.map((item) => ({
+      item,
+      previewImage: item.image || (item.kind === 'box' ? defaultBoxImage : undefined),
+    }));
+    const preview: typeof entries = [];
+    const counts = new Map<string, number>();
+    const addEntry = (entry: (typeof entries)[number]) => {
+      preview.push(entry);
+      if (!entry.previewImage) return;
+      counts.set(entry.previewImage, (counts.get(entry.previewImage) || 0) + 1);
+    };
+    entries.forEach((entry) => {
+      if (preview.length < limit) {
+        addEntry(entry);
+        return;
+      }
+      if (!entry.previewImage) return;
+      if (counts.has(entry.previewImage)) return;
+      let replaceIndex = -1;
+      for (let i = 0; i < preview.length; i += 1) {
+        const img = preview[i].previewImage;
+        if (!img) continue;
+        if ((counts.get(img) || 0) > 1) {
+          replaceIndex = i;
+          break;
+        }
+      }
+      if (replaceIndex === -1) return;
+      const [removed] = preview.splice(replaceIndex, 1);
+      if (removed.previewImage) {
+        const nextCount = (counts.get(removed.previewImage) || 1) - 1;
+        if (nextCount <= 0) counts.delete(removed.previewImage);
+        else counts.set(removed.previewImage, nextCount);
+      }
+      addEntry(entry);
+    });
+    return preview;
+  }, [selectedItems, defaultBoxImage, compactPanel]);
+  const selectedOverflow = Math.max(0, selectedCount - selectedPreview.length);
+  const canOpenSelected = selectedCount === 1 && selectedItems[0]?.kind === 'box';
+  const selectedBox = canOpenSelected ? selectedItems[0] : null;
+
   useEffect(() => {
     if (!pendingRevealIds.size) return;
     setSelected((prev) => {
@@ -166,6 +229,25 @@ function App() {
       return changed ? next : prev;
     });
   }, [pendingRevealIds]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const media = window.matchMedia('(max-width: 720px)');
+    const sync = () => setCompactPanel(media.matches);
+    sync();
+    if (media.addEventListener) {
+      media.addEventListener('change', sync);
+      return () => media.removeEventListener('change', sync);
+    }
+    media.addListener(sync);
+    return () => media.removeListener(sync);
+  }, []);
+
+  useEffect(() => {
+    if (!deliveryOpen || selectedCount) return;
+    setDeliveryOpen(false);
+    setDeliveryAddOpen(false);
+  }, [deliveryOpen, selectedCount]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
@@ -189,9 +271,14 @@ function App() {
 
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
+      if (prev.has(id)) {
+        const copy = new Set(prev);
+        copy.delete(id);
+        return copy;
+      }
+      if (prev.size >= MAX_SHIPMENT_ITEMS) return prev;
       const copy = new Set(prev);
-      if (copy.has(id)) copy.delete(id);
-      else copy.add(id);
+      copy.add(id);
       return copy;
     });
   };
@@ -280,6 +367,12 @@ function App() {
     }
   };
 
+  const handleOpenSelectedBox = async () => {
+    if (!selectedBox) return;
+    setSelected(new Set());
+    await handleStartOpenBox(selectedBox);
+  };
+
   const handleSaveAddress = async ({
     formatted,
     country,
@@ -308,7 +401,7 @@ function App() {
       });
     }
     setAddressId(saved.id);
-    setAddAddressOpen(false);
+    setDeliveryAddOpen(false);
     setStatus('Address saved and encrypted');
   };
 
@@ -436,7 +529,17 @@ function App() {
   ];
 
   const savedAddresses = profile?.addresses || [];
+  const formattedAddresses = useMemo(
+    () => savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) })),
+    [savedAddresses],
+  );
   const deliveryOrders = profile?.orders || [];
+  const formatCountry = (addr: ProfileAddress) => {
+    const code = addr.countryCode || normalizeCountryCode(addr.country);
+    const option = findCountryByCode(code);
+    if (option) return countryLabel(option);
+    return addr.country || code || 'Unknown';
+  };
 
   useEffect(() => {
     if (!deliveryOrders.length) {
@@ -487,7 +590,6 @@ function App() {
           items={inventoryItems}
           selected={selected}
           onToggle={toggleSelected}
-          onOpenBox={handleStartOpenBox}
           pendingRevealIds={pendingRevealIds}
           onReveal={handleRevealDudes}
           revealLoadingId={revealLoading}
@@ -513,30 +615,148 @@ function App() {
         </section>
       ) : null}
 
-      <DeliveryPanel
-        selectedCount={selected.size}
-        addresses={savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) }))}
-        addressId={addressId}
-        onSelectAddress={setAddressId}
-        onRequestDelivery={() => handleRequestDelivery(addressId)}
-        loading={deliveryLoading}
-        costLamports={deliveryCost}
-        signedIn={Boolean(profile)}
-        signingIn={authLoading}
-        walletConnected={Boolean(publicKey)}
-        onSignIn={handleSignInForDelivery}
-        onAddAddress={() => setAddAddressOpen(true)}
-        onRemoveAddress={handleRemoveAddress}
-        removingAddressId={removeAddressLoading}
-      />
+      <Modal
+        open={deliveryOpen}
+        title="Delivery"
+        onClose={() => {
+          setDeliveryOpen(false);
+          setDeliveryAddOpen(false);
+        }}
+      >
+        <div className="modal-form delivery-modal">
+          <div className="delivery-modal__summary">
+            <div>
+              <div className="card__title">{selectedCount} selected</div>
+              <div className="muted small">Choose a saved address or add a new one.</div>
+            </div>
+            {selectedCount && addressId ? (
+              <div className="pill-row">
+                {typeof deliveryCost === 'number' ? (
+                  <span className="pill">Ship: {lamportsToSol(deliveryCost)} ◎</span>
+                ) : deliveryLoading ? (
+                  <span className="pill">Ship: calculating…</span>
+                ) : (
+                  <span className="pill">Ship: calculated on request</span>
+                )}
+              </div>
+            ) : null}
+          </div>
 
-      <Modal open={addAddressOpen} title="Add a delivery address" onClose={() => setAddAddressOpen(false)}>
-        <DeliveryForm
-          mode="modal"
-          onSave={handleSaveAddress}
-          defaultEmail={profile?.email || ''}
-          onCancel={() => setAddAddressOpen(false)}
-        />
+          {!publicKey ? <div className="muted small">Connect a wallet to manage delivery addresses.</div> : null}
+          {publicKey && !profile && !authLoading ? (
+            <div className="muted small">
+              Sign in once to load saved addresses on this device. Afterwards you can reload and still see them.
+            </div>
+          ) : null}
+
+          <div className="card__head">
+            <div>
+              <div className="card__title">Delivery address</div>
+              <div className="muted small">Select a saved address or add a new one.</div>
+            </div>
+            <div className="card__actions">
+              {!profile ? (
+                <button type="button" className="ghost" onClick={handleSignInForDelivery} disabled={!publicKey || authLoading}>
+                  {authLoading ? 'Loading…' : 'Sign in to load addresses'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setDeliveryAddOpen((prev) => !prev)}
+                disabled={!publicKey || authLoading}
+              >
+                {deliveryAddOpen ? 'Hide address form' : 'Add new address'}
+              </button>
+            </div>
+          </div>
+
+          <label>
+            <span className="muted">Send to</span>
+            <select
+              value={addressId || ''}
+              onChange={(evt) => setAddressId(evt.target.value)}
+              disabled={!formattedAddresses.length}
+            >
+              <option value="" disabled>
+                {formattedAddresses.length
+                  ? 'Choose saved address'
+                  : profile
+                    ? 'No saved addresses yet'
+                    : 'Sign in to load addresses'}
+              </option>
+              {formattedAddresses.map((addr) => (
+                <option key={addr.id} value={addr.id}>
+                  {addr.label} · {formatCountry(addr)} · {addr.hint}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {formattedAddresses.length ? (
+            <>
+              <div className="muted small">Saved addresses</div>
+              <div className="grid">
+                {formattedAddresses.map((addr) => {
+                  const isSelected = addr.id === addressId;
+                  return (
+                    <div key={addr.id} className="card subtle">
+                      <div className="card__head">
+                        <div>
+                          <div className="card__title">{addr.label}</div>
+                          <div className="muted small">
+                            {formatCountry(addr)} · {addr.hint}
+                          </div>
+                        </div>
+                        <div className="card__actions">
+                          {isSelected ? <span className="pill">Selected</span> : null}
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              void handleRemoveAddress(addr.id);
+                            }}
+                            disabled={!profile || Boolean(removeAddressLoading)}
+                          >
+                            {removeAddressLoading === addr.id ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
+
+          {deliveryAddOpen ? (
+            <div className="card subtle">
+              <div className="card__title">Add a new address</div>
+              <DeliveryForm
+                mode="modal"
+                onSave={handleSaveAddress}
+                defaultEmail={profile?.email || ''}
+                onCancel={() => setDeliveryAddOpen(false)}
+              />
+            </div>
+          ) : null}
+
+          <div className="row">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                setDeliveryOpen(false);
+                setDeliveryAddOpen(false);
+              }}
+            >
+              Close
+            </button>
+            <button onClick={() => handleRequestDelivery(addressId)} disabled={!selectedCount || !addressId || deliveryLoading}>
+              {deliveryLoading ? 'Preparing tx…' : 'Request delivery tx'}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
@@ -591,6 +811,59 @@ function App() {
           <div className="muted small">No deliveries yet.</div>
         )}
       </section>
+
+      {selectedCount ? (
+        <div className="selection-panel">
+          <div className="selection-panel__left">
+            <div className="selection-panel__preview">
+              {selectedPreview.map(({ item, previewImage }, idx) => {
+                return previewImage ? (
+                  <div
+                    key={item.id}
+                    className="selection-panel__thumb"
+                    style={{ backgroundImage: `url(${previewImage})`, zIndex: idx + 1 }}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <div
+                    key={item.id}
+                    className="selection-panel__thumb selection-panel__thumb--empty"
+                    style={{ zIndex: idx + 1 }}
+                    aria-hidden="true"
+                  >
+                    <span>#</span>
+                  </div>
+                );
+              })}
+              {selectedOverflow ? (
+                <div className="selection-panel__more" style={{ zIndex: selectedPreview.length + 2 }}>
+                  +{selectedOverflow}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="selection-panel__actions">
+            <button type="button" className="quiet" onClick={() => setSelected(new Set())}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="soft"
+              onClick={() => {
+                setDeliveryOpen(true);
+                setDeliveryAddOpen(false);
+              }}
+            >
+              Deliver
+            </button>
+            {canOpenSelected ? (
+              <button type="button" onClick={handleOpenSelectedBox} disabled={Boolean(startOpenLoading)}>
+                {startOpenLoading === selectedBox?.id ? 'Opening…' : 'Open Box'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

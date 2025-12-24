@@ -4,7 +4,6 @@ interface InventoryGridProps {
   items: InventoryItem[];
   selected: Set<string>;
   onToggle: (id: string) => void;
-  onOpenBox?: (item: InventoryItem) => void;
   itemClassName?: string;
   className?: string;
   pendingRevealIds?: Set<string>;
@@ -17,7 +16,6 @@ export function InventoryGrid({
   items,
   selected,
   onToggle,
-  onOpenBox,
   itemClassName,
   className,
   pendingRevealIds,
@@ -34,14 +32,12 @@ export function InventoryGrid({
   return (
     <div className={gridClassName}>
       {items.map((item) => {
-        const isBox = item.kind === 'box';
         const isReceipt = item.kind === 'certificate';
         const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
         const canSelect = !isReceipt && !isPendingReveal;
         const isSelected = canSelect ? selected.has(item.id) : false;
-        const canOpen = Boolean(isBox && onOpenBox && !isPendingReveal);
         const canReveal = Boolean(isPendingReveal && onReveal);
-        const hasFooter = Boolean(item.assignedDudes?.length || canOpen || canReveal);
+        const hasFooter = Boolean(item.assignedDudes?.length || canReveal);
         const isRevealing = revealLoadingId === item.id;
         return (
           <article
@@ -91,17 +87,6 @@ export function InventoryGrid({
                   <p className="muted">Contains {item.assignedDudes.length} dudes</p>
                 ) : null}
                 <div className="inventory__actions">
-                  {canOpen ? (
-                    <button
-                      className="inventory__open"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenBox(item);
-                      }}
-                    >
-                      Open
-                    </button>
-                  ) : null}
                   {canReveal ? (
                     <button
                       className="inventory__open"
