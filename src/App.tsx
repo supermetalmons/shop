@@ -155,15 +155,14 @@ function App() {
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
     const dudes: typeof visibleInventory = [];
-    const certificates: typeof visibleInventory = [];
     visibleInventory.forEach((item) => {
       if (pendingRevealIds.has(item.id)) return;
       if (item.kind === 'box') boxes.push(item);
       else if (item.kind === 'dude') dudes.push(item);
-      else if (item.kind === 'certificate') certificates.push(item);
     });
-    return [...pendingRevealItems, ...boxes, ...dudes, ...certificates];
+    return [...pendingRevealItems, ...boxes, ...dudes];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
+  const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
 
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
@@ -812,6 +811,13 @@ function App() {
         )}
       </section>
 
+      {receiptItems.length ? (
+        <section className="card">
+          <div className="card__title">Receipts</div>
+          <InventoryGrid items={receiptItems} selected={selected} onToggle={toggleSelected} className="inventory--receipts" />
+        </section>
+      ) : null}
+
       {selectedCount ? (
         <div className="selection-panel">
           <div className="selection-panel__left">
@@ -846,9 +852,13 @@ function App() {
             <button type="button" className="quiet" onClick={() => setSelected(new Set())}>
               Cancel
             </button>
+            {canOpenSelected ? (
+              <button type="button" onClick={handleOpenSelectedBox} disabled={Boolean(startOpenLoading)}>
+                {startOpenLoading === selectedBox?.id ? 'Opening…' : 'Open Box'}
+              </button>
+            ) : null}
             <button
               type="button"
-              className="soft"
               onClick={() => {
                 setDeliveryOpen(true);
                 setDeliveryAddOpen(false);
@@ -856,11 +866,6 @@ function App() {
             >
               Deliver
             </button>
-            {canOpenSelected ? (
-              <button type="button" onClick={handleOpenSelectedBox} disabled={Boolean(startOpenLoading)}>
-                {startOpenLoading === selectedBox?.id ? 'Opening…' : 'Open Box'}
-              </button>
-            ) : null}
           </div>
         </div>
       ) : null}
