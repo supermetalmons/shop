@@ -48,7 +48,8 @@ export function InventoryGrid({
       {items.map((item) => {
         const isReceipt = item.kind === 'certificate';
         const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
-        const canSelect = !isReceipt && !isPendingReveal;
+        const isPendingLocal = item.status === 'pending';
+        const canSelect = !isReceipt && !isPendingReveal && !isPendingLocal;
         const isSelected = canSelect ? selected.has(item.id) : false;
         const canReveal = Boolean(isPendingReveal && onReveal);
         const isRevealing = revealLoadingId === item.id;

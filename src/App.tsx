@@ -59,6 +59,68 @@ function persistHiddenAssets(wallet: string, ids: Set<string>) {
   }
 }
 
+function pendingRevealKey(wallet?: string) {
+  return wallet ? `monsPendingReveals:${wallet}` : 'monsPendingReveals:disconnected';
+}
+
+function loadPendingReveals(wallet?: string): LocalPendingReveal[] {
+  if (typeof window === 'undefined' || !wallet) return [];
+  try {
+    const raw = window.localStorage?.getItem(pendingRevealKey(wallet));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const entries: LocalPendingReveal[] = [];
+    parsed.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const id = typeof entry.id === 'string' ? entry.id : '';
+      const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : 0;
+      if (!id || !createdAt) return;
+      const name = typeof entry.name === 'string' ? entry.name : undefined;
+      const image = typeof entry.image === 'string' ? entry.image : undefined;
+      entries.push({ id, createdAt, name, image });
+    });
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function persistPendingReveals(wallet: string, entries: LocalPendingReveal[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage?.setItem(pendingRevealKey(wallet), JSON.stringify(entries));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function recentRevealKey(wallet?: string) {
+  return wallet ? `monsRecentReveals:${wallet}` : 'monsRecentReveals:disconnected';
+}
+
+function loadRecentReveals(wallet?: string): string[] {
+  if (typeof window === 'undefined' || !wallet) return [];
+  try {
+    const raw = window.localStorage?.getItem(recentRevealKey(wallet));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => typeof id === 'string' && id);
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentReveals(wallet: string, ids: string[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage?.setItem(recentRevealKey(wallet), JSON.stringify(ids));
+  } catch {
+    // ignore storage failures
+  }
+}
+
 function formatOrderStatus(status: string): string {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
   if (!normalized) return 'Unknown';
@@ -74,10 +136,19 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 const MAX_SHIPMENT_ITEMS = 24;
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 14;
+const LOCAL_PENDING_GRACE_MS = 10 * 60 * 1000;
+const RECENT_REVEALS_LIMIT = 10;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
 type RevealOverlayPhase = 'preparing' | 'ready' | 'revealed';
+
+type LocalPendingReveal = {
+  id: string;
+  createdAt: number;
+  name?: string;
+  image?: string;
+};
 
 type RevealOverlayState = {
   id: string;
@@ -147,6 +218,20 @@ function isUserRejectedError(err: unknown): boolean {
   );
 }
 
+function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingReveal[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    const a = left[i];
+    const b = right[i];
+    if (!a || !b) return false;
+    if (a.id !== b.id) return false;
+    if (a.createdAt !== b.createdAt) return false;
+    if ((a.name || '') !== (b.name || '')) return false;
+    if ((a.image || '') !== (b.image || '')) return false;
+  }
+  return true;
+}
+
 function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -162,7 +247,11 @@ function App() {
     updateProfile,
   } = useSolanaAuth();
   const { data: inventory = [], refetch: refetchInventory, isFetched: inventoryFetched } = useInventory();
-  const { data: pendingOpenBoxes = [], refetch: refetchPendingOpenBoxes } = usePendingOpenBoxes();
+  const {
+    data: pendingOpenBoxes = [],
+    refetch: refetchPendingOpenBoxes,
+    isFetched: pendingOpenBoxesFetched,
+  } = usePendingOpenBoxes();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
@@ -191,6 +280,10 @@ function App() {
   const owner = publicKey?.toBase58();
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
+  const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
+  const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(owner));
+  const [localRevealedDudes, setLocalRevealedDudes] = useState<InventoryItem[]>([]);
+  const localDudeCacheRef = useRef<Map<number, InventoryItem>>(new Map());
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -209,6 +302,101 @@ function App() {
     toastClearTimeoutRef.current = setTimeout(() => {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
+  };
+
+  const addLocalPendingReveal = (item: InventoryItem) => {
+    if (!owner) return;
+    const now = Date.now();
+    setLocalPendingReveals((prev) => {
+      const nextEntry: LocalPendingReveal = {
+        id: item.id,
+        createdAt: now,
+        name: item.name,
+        image: item.image || defaultBoxImage,
+      };
+      const existingIndex = prev.findIndex((entry) => entry.id === item.id);
+      if (existingIndex !== -1) {
+        const next = [...prev];
+        next[existingIndex] = { ...next[existingIndex], ...nextEntry };
+        return next;
+      }
+      return [nextEntry, ...prev];
+    });
+  };
+
+  const removeLocalPendingReveal = (id: string) => {
+    setLocalPendingReveals((prev) => {
+      const next = prev.filter((entry) => entry.id !== id);
+      return next.length === prev.length ? prev : next;
+    });
+  };
+
+  const rememberRecentReveal = (boxId: string) => {
+    if (!boxId) return;
+    setRecentRevealedBoxes((prev) => {
+      const next = [boxId, ...prev.filter((id) => id !== boxId)];
+      return next.slice(0, RECENT_REVEALS_LIMIT);
+    });
+  };
+
+  const addLocalRevealedDudes = async (ids: number[]) => {
+    const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
+    if (!uniqueIds.length) return;
+    const pending = uniqueIds.filter((id) => !localDudeCacheRef.current.has(id));
+    if (!pending.length) return;
+    const results = await Promise.all(
+      pending.map(async (id) => {
+        const metadataUrl = `${FRONTEND_DEPLOYMENT.paths.figuresJsonBase}${id}.json`;
+        try {
+          const resp = await fetch(metadataUrl);
+          if (!resp.ok) throw new Error('metadata fetch failed');
+          const data = (await resp.json()) as {
+            name?: string;
+            image?: string;
+            attributes?: { trait_type: string; value: string }[];
+          };
+          const image =
+            typeof data.image === 'string' && data.image
+              ? data.image
+              : `${FRONTEND_DEPLOYMENT.paths.base}/figures/${id}.webp`;
+          const name = typeof data.name === 'string' && data.name ? data.name : `Figure ${id}`;
+          return {
+            id: `local-dude-${id}`,
+            name,
+            kind: 'dude',
+            image,
+            attributes: Array.isArray(data.attributes) ? data.attributes : [],
+            dudeId: id,
+            status: 'pending',
+          } satisfies InventoryItem;
+        } catch (err) {
+          console.warn('[mons] failed to load figure metadata', { id, error: err });
+          return {
+            id: `local-dude-${id}`,
+            name: `Figure ${id}`,
+            kind: 'dude',
+            image: `${FRONTEND_DEPLOYMENT.paths.base}/figures/${id}.webp`,
+            dudeId: id,
+            status: 'pending',
+          } satisfies InventoryItem;
+        }
+      }),
+    );
+
+    results.forEach((item) => {
+      if (!item?.dudeId) return;
+      localDudeCacheRef.current.set(item.dudeId, item);
+    });
+    setLocalRevealedDudes((prev) => {
+      const merged = new Map<number, InventoryItem>();
+      prev.forEach((entry) => {
+        if (entry.dudeId) merged.set(entry.dudeId, entry);
+      });
+      results.forEach((entry) => {
+        if (entry?.dudeId) merged.set(entry.dudeId, entry);
+      });
+      return Array.from(merged.values());
+    });
   };
 
   const clearStartOpenLoadingForOverlay = (overlay: RevealOverlayState | null) => {
@@ -291,6 +479,88 @@ function App() {
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(owner));
   }, [owner]);
+
+  useEffect(() => {
+    setLocalPendingReveals(loadPendingReveals(owner));
+    setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
+    setLocalRevealedDudes([]);
+    localDudeCacheRef.current.clear();
+  }, [owner]);
+
+  useEffect(() => {
+    if (!owner) return;
+    persistPendingReveals(owner, localPendingReveals);
+  }, [owner, localPendingReveals]);
+
+  useEffect(() => {
+    if (!owner) return;
+    persistRecentReveals(owner, recentRevealedBoxes);
+  }, [owner, recentRevealedBoxes]);
+
+  useEffect(() => {
+    if (!owner) return;
+    const recentSet = new Set(recentRevealedBoxes);
+    const now = Date.now();
+    if (!pendingOpenBoxesFetched) {
+      const next = localPendingReveals.filter((entry) => !recentSet.has(entry.id));
+      if (!pendingRevealListEqual(next, localPendingReveals)) {
+        setLocalPendingReveals(next);
+      }
+      return;
+    }
+    const onchainIds = new Set(pendingOpenBoxes.map((entry) => entry.boxAssetId).filter(Boolean));
+    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const nextMap = new Map<string, LocalPendingReveal>();
+    pendingOpenBoxes.forEach((entry) => {
+      const id = entry.boxAssetId;
+      if (!id || recentSet.has(id)) return;
+      const existing = localPendingReveals.find((item) => item.id === id);
+      const match = inventoryById.get(id);
+      nextMap.set(id, {
+        id,
+        createdAt: existing?.createdAt || now,
+        name: existing?.name || match?.name,
+        image: existing?.image || match?.image,
+      });
+    });
+    localPendingReveals.forEach((entry) => {
+      if (recentSet.has(entry.id)) return;
+      if (onchainIds.has(entry.id)) return;
+      if (now - entry.createdAt > LOCAL_PENDING_GRACE_MS) return;
+      nextMap.set(entry.id, entry);
+    });
+    const next = Array.from(nextMap.values()).sort((a, b) => b.createdAt - a.createdAt);
+    if (!pendingRevealListEqual(next, localPendingReveals)) {
+      setLocalPendingReveals(next);
+    }
+  }, [owner, pendingOpenBoxes, pendingOpenBoxesFetched, localPendingReveals, recentRevealedBoxes, inventory]);
+
+  useEffect(() => {
+    if (!localRevealedDudes.length) return;
+    const chainDudeIds = new Set(
+      inventory.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
+    );
+    const next = localRevealedDudes.filter((entry) => !entry.dudeId || !chainDudeIds.has(entry.dudeId));
+    if (next.length !== localRevealedDudes.length) {
+      setLocalRevealedDudes(next);
+    }
+  }, [inventory, localRevealedDudes]);
+
+  useEffect(() => {
+    if (!localRevealedDudes.length) return;
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      void refetchInventory();
+    };
+    tick();
+    const interval = window.setInterval(tick, 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [localRevealedDudes.length, refetchInventory]);
 
   useEffect(() => {
     if (!revealOverlay) return;
@@ -400,35 +670,74 @@ function App() {
     };
   }, [owner]);
 
+  const localVisibleDudes = useMemo(() => {
+    if (!localRevealedDudes.length) return [] as InventoryItem[];
+    const chainDudeIds = new Set(
+      inventory.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
+    );
+    return localRevealedDudes.filter((entry) => !entry.dudeId || !chainDudeIds.has(entry.dudeId));
+  }, [inventory, localRevealedDudes]);
+
   const visibleInventory = useMemo(() => {
-    if (!hiddenAssets.size) return inventory;
-    return inventory.filter((item) => !hiddenAssets.has(item.id));
-  }, [inventory, hiddenAssets]);
+    const base = hiddenAssets.size ? inventory.filter((item) => !hiddenAssets.has(item.id)) : inventory;
+    if (!localVisibleDudes.length) return base;
+    return [...base, ...localVisibleDudes];
+  }, [inventory, hiddenAssets, localVisibleDudes]);
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
-  const pendingRevealIds = useMemo(
-    () => new Set(pendingOpenBoxes.map((entry) => entry.boxAssetId).filter(Boolean)),
-    [pendingOpenBoxes],
+  const recentRevealedSet = useMemo(() => new Set(recentRevealedBoxes), [recentRevealedBoxes]);
+  const pendingOpenBoxesFiltered = useMemo(
+    () => pendingOpenBoxes.filter((entry) => entry.boxAssetId && !recentRevealedSet.has(entry.boxAssetId)),
+    [pendingOpenBoxes, recentRevealedSet],
   );
+  const localPendingFiltered = useMemo(
+    () => localPendingReveals.filter((entry) => !recentRevealedSet.has(entry.id)),
+    [localPendingReveals, recentRevealedSet],
+  );
+  const pendingRevealIds = useMemo(() => {
+    const ids = new Set<string>();
+    pendingOpenBoxesFiltered.forEach((entry) => {
+      if (entry.boxAssetId) ids.add(entry.boxAssetId);
+    });
+    localPendingFiltered.forEach((entry) => {
+      if (entry.id) ids.add(entry.id);
+    });
+    return ids;
+  }, [pendingOpenBoxesFiltered, localPendingFiltered]);
   const pendingRevealItems = useMemo(() => {
-    if (!pendingOpenBoxes.length) return [];
+    if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
     const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const localById = new Map(localPendingFiltered.map((entry) => [entry.id, entry]));
     const seen = new Set<string>();
     const pendingItems: InventoryItem[] = [];
-    pendingOpenBoxes.forEach((entry) => {
+    pendingOpenBoxesFiltered.forEach((entry) => {
       const id = entry.boxAssetId;
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const match = inventoryById.get(id);
+      const localMatch = localById.get(id);
+      pendingItems.push({
+        id,
+        name: localMatch?.name || match?.name || `Box ${shortAddress(id)}`,
+        kind: 'box',
+        image: defaultBoxImage,
+      });
+    });
+    const localSorted = [...localPendingFiltered].sort((a, b) => b.createdAt - a.createdAt);
+    localSorted.forEach((entry) => {
+      const id = entry.id;
       if (!id || seen.has(id)) return;
       seen.add(id);
       const match = inventoryById.get(id);
       pendingItems.push({
         id,
-        name: match?.name || `Box ${shortAddress(id)}`,
+        name: entry.name || match?.name || `Box ${shortAddress(id)}`,
         kind: 'box',
-        image: match?.image || defaultBoxImage,
+        image: defaultBoxImage,
       });
     });
     return pendingItems;
-  }, [pendingOpenBoxes, inventory, defaultBoxImage]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventory, defaultBoxImage]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
@@ -619,6 +928,7 @@ function App() {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
+      addLocalPendingReveal(item);
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;
         return { ...prev, phase: 'ready', revealedIds: undefined, hasRevealAttempted: false };
@@ -651,6 +961,9 @@ function App() {
         if (!prev || prev.id !== boxAssetId) return prev;
         return { ...prev, phase: 'revealed', revealedIds: revealed };
       });
+      removeLocalPendingReveal(boxAssetId);
+      rememberRecentReveal(boxAssetId);
+      void addLocalRevealedDudes(revealed);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
