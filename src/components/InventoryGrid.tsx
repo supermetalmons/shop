@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react';
 import { InventoryItem } from '../types';
 
 interface InventoryGridProps {
@@ -7,7 +8,7 @@ interface InventoryGridProps {
   itemClassName?: string;
   className?: string;
   pendingRevealIds?: Set<string>;
-  onReveal?: (id: string) => void;
+  onReveal?: (id: string, rect: DOMRect) => void;
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
@@ -25,6 +26,11 @@ export function InventoryGrid({
   revealDisabled,
   emptyStateVisibility = 'visible',
 }: InventoryGridProps) {
+  const getRevealRect = (target: HTMLElement) => {
+    const imageEl = target.querySelector<HTMLElement>('.inventory__image');
+    return (imageEl || target).getBoundingClientRect();
+  };
+
   if (!items.length) {
     if (emptyStateVisibility === 'none') return null;
     const isHidden = emptyStateVisibility === 'hidden';
@@ -49,7 +55,13 @@ export function InventoryGrid({
         const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
         const hasFooter = Boolean(item.assignedDudes?.length);
         const canInteract = canSelect || revealEnabled;
-        const handleClick = canSelect ? () => onToggle(item.id) : revealEnabled ? () => onReveal?.(item.id) : undefined;
+        const handleClick = canSelect
+          ? () => onToggle(item.id)
+          : revealEnabled
+            ? (evt: MouseEvent<HTMLElement>) => {
+                onReveal?.(item.id, getRevealRect(evt.currentTarget));
+              }
+            : undefined;
         return (
           <article
             key={item.id}
@@ -78,7 +90,7 @@ export function InventoryGrid({
                       if (canSelect) {
                         onToggle(item.id);
                       } else if (revealEnabled && onReveal) {
-                        onReveal(item.id);
+                        onReveal(item.id, getRevealRect(e.currentTarget as HTMLElement));
                       }
                     }
                   }

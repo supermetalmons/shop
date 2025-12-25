@@ -72,6 +72,34 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 }
 
 const MAX_SHIPMENT_ITEMS = 24;
+const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+
+type OverlayRect = { left: number; top: number; width: number; height: number };
+
+type RevealOverlayState = {
+  id: string;
+  name: string;
+  image: string;
+  originRect: OverlayRect;
+  targetRect: OverlayRect;
+};
+
+function toOverlayRect(rect: DOMRect): OverlayRect {
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
+  const maxWidth = viewportWidth * 0.5;
+  const maxHeight = viewportHeight * 0.33;
+  const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * REVEAL_BOX_ASPECT_RATIO)));
+  const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
+  return {
+    left: Math.round((viewportWidth - width) / 2),
+    top: Math.round((viewportHeight - height) / 2),
+    width,
+    height,
+  };
+}
 
 function App() {
   const { connection } = useConnection();
@@ -94,12 +122,16 @@ function App() {
   const [minting, setMinting] = useState(false);
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
+  const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
+  const [revealOverlayActive, setRevealOverlayActive] = useState(false);
+  const [revealOverlayClosing, setRevealOverlayClosing] = useState(false);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
   const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revealOverlayRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
@@ -132,9 +164,65 @@ function App() {
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   };
 
+  const closeRevealOverlay = () => {
+    if (!revealOverlay) return;
+    if (revealOverlayClosing) return;
+    if (revealOverlayRafRef.current) {
+      cancelAnimationFrame(revealOverlayRafRef.current);
+      revealOverlayRafRef.current = null;
+    }
+    if (!revealOverlayActive) {
+      setRevealOverlay(null);
+      setRevealOverlayClosing(false);
+      setRevealOverlayActive(false);
+      return;
+    }
+    setRevealOverlayClosing(true);
+  };
+
+  const openRevealOverlay = (id: string, rect: DOMRect) => {
+    if (revealOverlay || revealLoading || startOpenLoading) return;
+    if (typeof window === 'undefined') return;
+    const item = inventoryIndex.get(id);
+    if (!item) return;
+    const originRect = toOverlayRect(rect);
+    const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+    setRevealOverlay({
+      id,
+      name: item.name,
+      image: item.image || defaultBoxImage,
+      originRect,
+      targetRect,
+    });
+    setRevealOverlayClosing(false);
+    setRevealOverlayActive(false);
+    if (revealOverlayRafRef.current) {
+      cancelAnimationFrame(revealOverlayRafRef.current);
+    }
+    revealOverlayRafRef.current = requestAnimationFrame(() => {
+      revealOverlayRafRef.current = requestAnimationFrame(() => {
+        setRevealOverlayActive(true);
+        revealOverlayRafRef.current = null;
+      });
+    });
+  };
+
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(owner));
   }, [owner]);
+
+  useEffect(() => {
+    if (!revealOverlay) return;
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') closeRevealOverlay();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = '';
+    };
+  }, [revealOverlay, closeRevealOverlay]);
 
   useEffect(() => {
     authLoadingSeenRef.current = false;
@@ -172,6 +260,9 @@ function App() {
       }
       if (toastClearTimeoutRef.current) {
         clearTimeout(toastClearTimeoutRef.current);
+      }
+      if (revealOverlayRafRef.current) {
+        cancelAnimationFrame(revealOverlayRafRef.current);
       }
     };
   }, []);
@@ -230,6 +321,7 @@ function App() {
     });
     return [...pendingRevealItems, ...boxes, ...dudes];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
+  const inventoryIndex = useMemo(() => new Map(inventoryItems.map((item) => [item.id, item])), [inventoryItems]);
   const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
   const inventoryEmptyStateVisibility = owner
     ? inventoryFetched
@@ -439,6 +531,16 @@ function App() {
     }
   };
 
+  const handleRevealOverlayClick = () => {
+    if (!revealOverlay || revealOverlayClosing || revealLoading) return;
+    if (!publicKey) {
+      showToast('Connect wallet first');
+      return;
+    }
+    closeRevealOverlay();
+    void handleRevealDudes(revealOverlay.id);
+  };
+
   const handleOpenSelectedBox = async () => {
     if (!selectedBox) return;
     setSelected(new Set());
@@ -645,11 +747,62 @@ function App() {
     setDeliveryCost(undefined);
   }, [addressId, selected]);
 
+  const revealOverlayBoxStyle = revealOverlay
+    ? (() => {
+        const { originRect, targetRect } = revealOverlay;
+        const safeTargetWidth = Math.max(1, targetRect.width);
+        const safeTargetHeight = Math.max(1, targetRect.height);
+        const scaleX = Math.max(0.01, originRect.width / safeTargetWidth);
+        const scaleY = Math.max(0.01, originRect.height / safeTargetHeight);
+        return {
+          left: `${targetRect.left}px`,
+          top: `${targetRect.top}px`,
+          width: `${safeTargetWidth}px`,
+          height: `${safeTargetHeight}px`,
+          ['--reveal-start-x' as never]: `${originRect.left - targetRect.left}px`,
+          ['--reveal-start-y' as never]: `${originRect.top - targetRect.top}px`,
+          ['--reveal-start-scale-x' as never]: String(scaleX),
+          ['--reveal-start-scale-y' as never]: String(scaleY),
+        };
+      })()
+    : undefined;
+
   return (
     <div className="page">
       {toast ? (
         <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
           {toast}
+        </div>
+      ) : null}
+      {revealOverlay ? (
+        <div
+          className={`reveal-overlay${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
+          role="presentation"
+          onClick={closeRevealOverlay}
+        >
+          <div className="reveal-overlay__backdrop" />
+          <button
+            type="button"
+            className="reveal-overlay__box"
+            style={revealOverlayBoxStyle}
+            aria-label={`Reveal ${revealOverlay.name}`}
+            aria-busy={revealLoading === revealOverlay.id}
+            disabled={revealOverlayClosing || revealLoading === revealOverlay.id}
+            autoFocus
+            onClick={(evt) => {
+              evt.stopPropagation();
+              handleRevealOverlayClick();
+            }}
+            onTransitionEnd={(evt) => {
+              if (evt.propertyName !== 'opacity') return;
+              if (!revealOverlayClosing) return;
+              setRevealOverlay(null);
+              setRevealOverlayClosing(false);
+              setRevealOverlayActive(false);
+            }}
+          >
+            <img src={revealOverlay.image} alt={revealOverlay.name} className="reveal-overlay__image" />
+          </button>
         </div>
       ) : null}
       <header className="top">
@@ -690,9 +843,9 @@ function App() {
           selected={selected}
           onToggle={toggleSelected}
           pendingRevealIds={pendingRevealIds}
-          onReveal={handleRevealDudes}
+          onReveal={openRevealOverlay}
           revealLoadingId={revealLoading}
-          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading)}
+          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
           emptyStateVisibility={inventoryEmptyStateVisibility}
         />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
