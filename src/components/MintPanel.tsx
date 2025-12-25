@@ -99,6 +99,7 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
   const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
+  const remainingReady = REMAINING_OVERRIDE !== null || Boolean(stats);
   const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const maxSelectable = Math.min(maxPerTx, remaining);
@@ -177,7 +178,10 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
         <div className="mint-panel__footer mint-panel__footer--soldout">
           <div className="mint-panel__info">
           <div className="mint-panel__price">Little Swag Boxes</div>
-            <div className="mint-panel__remaining">
+            <div
+              className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
+              aria-hidden={!remainingReady}
+            >
             {remaining} / {total} left
             </div>
           </div>
@@ -187,7 +191,10 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
         <div className="mint-panel__footer">
           <div className="mint-panel__info">
             <div className="mint-panel__price">Little Swag Boxes</div>
-            <div className="mint-panel__remaining">
+            <div
+              className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
+              aria-hidden={!remainingReady}
+            >
               {remaining} / {total} left
             </div>
           </div>

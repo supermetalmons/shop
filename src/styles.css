@@ -148,6 +148,12 @@ header.top {
 .mint-panel__remaining {
   font-size: 13px;
   color: var(--muted);
+  opacity: 1;
+  transition: opacity 220ms ease;
+}
+
+.mint-panel__remaining--hidden {
+  opacity: 0;
 }
 
 .mint-panel__preview {
