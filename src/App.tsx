@@ -151,6 +151,11 @@ type LocalPendingReveal = {
   image?: string;
 };
 
+type LocalMintedBox = {
+  id: string;
+  createdAt: number;
+};
+
 type FigureMetadata = {
   id: number;
   name?: string;
@@ -296,11 +301,16 @@ function App() {
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
   const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(owner));
+  const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [localRevealedDudeIds, setLocalRevealedDudeIds] = useState<number[]>([]);
   const [figureMetadataById, setFigureMetadataById] = useState<Record<number, FigureMetadata>>({});
   const figureMetadataRef = useRef<Record<number, FigureMetadata>>({});
   const figureMetadataLoadingRef = useRef<Set<number>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
+  const localMintCounterRef = useRef(0);
+  const knownBoxIdsRef = useRef<Set<string>>(new Set());
+
+  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -339,6 +349,21 @@ function App() {
       }
       return [nextEntry, ...prev];
     });
+  };
+
+  const addLocalMintedBoxes = (quantity: number) => {
+    if (!Number.isFinite(quantity) || quantity <= 0) return;
+    const now = Date.now();
+    const entries: LocalMintedBox[] = [];
+    for (let i = 0; i < Math.floor(quantity); i += 1) {
+      localMintCounterRef.current += 1;
+      entries.push({
+        id: `local-minted-${now}-${localMintCounterRef.current}`,
+        createdAt: now + i,
+      });
+    }
+    if (!entries.length) return;
+    setLocalMintedBoxes((prev) => [...entries, ...prev]);
   };
 
   const removeLocalPendingReveal = (id: string) => {
@@ -495,11 +520,14 @@ function App() {
   useEffect(() => {
     setLocalPendingReveals(loadPendingReveals(owner));
     setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
+    setLocalMintedBoxes([]);
     setLocalRevealedDudeIds([]);
     setFigureMetadataById({});
     figureMetadataRef.current = {};
     figureMetadataLoadingRef.current.clear();
     figureMetadataRetryAtRef.current.clear();
+    localMintCounterRef.current = 0;
+    knownBoxIdsRef.current = new Set();
   }, [owner]);
 
   useEffect(() => {
@@ -555,6 +583,29 @@ function App() {
   }, [owner, pendingOpenBoxes, pendingOpenBoxesFetched, localPendingReveals, recentRevealedBoxes, inventory]);
 
   useEffect(() => {
+    if (!inventoryFetched) return;
+    const currentIds = new Set(inventory.filter((item) => item.kind === 'box').map((item) => item.id));
+    const prevIds = knownBoxIdsRef.current;
+    if (localMintedBoxes.length) {
+      if (!prevIds.size) {
+        if (currentIds.size > 0) {
+          const removeCount = Math.min(currentIds.size, localMintedBoxes.length);
+          setLocalMintedBoxes((prev) => prev.slice(removeCount));
+        }
+      } else {
+        let newCount = 0;
+        currentIds.forEach((id) => {
+          if (!prevIds.has(id)) newCount += 1;
+        });
+        if (newCount > 0) {
+          setLocalMintedBoxes((prev) => prev.slice(Math.min(newCount, prev.length)));
+        }
+      }
+    }
+    knownBoxIdsRef.current = currentIds;
+  }, [inventory, inventoryFetched, localMintedBoxes.length]);
+
+  useEffect(() => {
     if (!localRevealedDudeIds.length) return;
     const chainDudes = new Map<number, InventoryItem>();
     inventory.forEach((item) => {
@@ -598,8 +649,10 @@ function App() {
     return () => window.clearInterval(interval);
   }, [figureIdsNeedingMetadata, queueFigureMetadataFetch]);
 
+  const shouldPollInventory = localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0;
+
   useEffect(() => {
-    if (!localRevealedDudeIds.length) return;
+    if (!shouldPollInventory) return;
     if (typeof window === 'undefined') return;
     let cancelled = false;
     const tick = () => {
@@ -612,7 +665,7 @@ function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [localRevealedDudeIds.length, refetchInventory]);
+  }, [shouldPollInventory, refetchInventory]);
 
   useEffect(() => {
     if (!revealOverlay) return;
@@ -748,6 +801,10 @@ function App() {
   const visibleInventory = useMemo(() => {
     const base = hiddenAssets.size ? inventory.filter((item) => !hiddenAssets.has(item.id)) : inventory;
     const enriched = base.map((item) => {
+      if (item.kind === 'box') {
+        if (item.image && String(item.image).trim()) return item;
+        return { ...item, image: defaultBoxImage };
+      }
       if (item.kind !== 'dude' || !item.dudeId) return item;
       if (item.image && String(item.image).trim()) return item;
       const meta = figureMetadataById[item.dudeId];
@@ -761,9 +818,19 @@ function App() {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventory, hiddenAssets, localRevealedDudes, figureMetadataById]);
+  }, [inventory, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage]);
 
-  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
+  const localMintedItems = useMemo<InventoryItem[]>(() => {
+    if (!localMintedBoxes.length) return [] as InventoryItem[];
+    return localMintedBoxes.map((entry) => ({
+      id: entry.id,
+      name: 'Pending box',
+      kind: 'box' as const,
+      image: defaultBoxImage,
+      status: 'pending' as const,
+    }));
+  }, [localMintedBoxes, defaultBoxImage]);
+
   const recentRevealedSet = useMemo(() => new Set(recentRevealedBoxes), [recentRevealedBoxes]);
   const pendingOpenBoxesFiltered = useMemo(
     () => pendingOpenBoxes.filter((entry) => entry.boxAssetId && !recentRevealedSet.has(entry.boxAssetId)),
@@ -826,8 +893,8 @@ function App() {
       if (item.kind === 'box') boxes.push(item);
       else if (item.kind === 'dude') dudes.push(item);
     });
-    return [...pendingRevealItems, ...boxes, ...dudes];
-  }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
+    return [...pendingRevealItems, ...localMintedItems, ...boxes, ...dudes];
+  }, [visibleInventory, pendingRevealIds, pendingRevealItems, localMintedItems]);
   const inventoryIndex = useMemo(() => new Map(inventoryItems.map((item) => [item.id, item])), [inventoryItems]);
   const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
   const inventoryEmptyStateVisibility = owner
@@ -971,15 +1038,14 @@ function App() {
         await connection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
-      let sig: string;
       try {
-        sig = await sendOnce();
+        await sendOnce();
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
         showToast('Transaction expired before you approved it. Please approve again…');
-        sig = await sendOnce();
+        await sendOnce();
       }
-      showToast(`Minted ${quantity} boxes · ${sig}`);
+      addLocalMintedBoxes(quantity);
       await Promise.all([refetchStats(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
