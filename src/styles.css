@@ -496,12 +496,27 @@ button.quiet:hover:not(:disabled) {
 
 .inventory {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
 }
 
 .inventory--receipts {
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+@media (max-width: 420px) {
+  .inventory,
+  .inventory--receipts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+}
+
+@media (max-width: 340px) {
+  .inventory,
+  .inventory--receipts {
+    gap: 8px;
+  }
 }
 
 .inventory__item {
@@ -1283,3 +1298,4 @@ button.wallet-adapter-modal-button-close:hover {
     padding: 20px;
   }
 }
+
