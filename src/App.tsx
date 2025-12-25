@@ -188,7 +188,7 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
 
 function formatRevealIds(ids?: number[]) {
   if (!ids || !ids.length) return 'Figures: none';
-  return `Figures: ${ids.join(', ')}`;
+  return `🎉 Figures: ${ids.join(', ')}`;
 }
 
 function normalizeFigureImage(imageRaw?: string): string | undefined {
