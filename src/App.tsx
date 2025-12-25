@@ -100,7 +100,6 @@ function App() {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [lastReveal, setLastReveal] = useState<{ boxId: string; dudeIds: number[]; signature: string } | null>(null);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryAddOpen, setDeliveryAddOpen] = useState(false);
@@ -349,7 +348,6 @@ function App() {
   const handleStartOpenBox = async (item: InventoryItem) => {
     if (!publicKey) throw new Error('Connect wallet to open a box');
     setStartOpenLoading(item.id);
-    setLastReveal(null);
     try {
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
@@ -385,11 +383,9 @@ function App() {
       await signIn();
     }
     setRevealLoading(boxAssetId);
-    setLastReveal(null);
     try {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
-      setLastReveal({ boxId: boxAssetId, dudeIds: revealed, signature: resp.signature });
       const revealCopy = revealed.length ? ` · figures ${revealed.join(', ')}` : '';
       showToast(`Revealed figures · ${resp.signature}${revealCopy}`);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
@@ -640,23 +636,6 @@ function App() {
         />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
-
-      {lastReveal ? (
-        <section className="card subtle">
-          <div className="card__title">Revealed figures</div>
-          <p className="muted small">
-            Box {shortAddress(lastReveal.boxId)} revealed:
-          </p>
-          <div className="row">
-            {lastReveal.dudeIds.map((id) => (
-              <span key={id} className="pill">
-                Figure #{id}
-              </span>
-            ))}
-          </div>
-          <p className="muted small">Tx {shortAddress(lastReveal.signature)}</p>
-        </section>
-      ) : null}
 
       <Modal
         open={deliveryOpen}
