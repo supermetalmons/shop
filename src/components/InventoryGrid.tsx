@@ -65,6 +65,7 @@ export function InventoryGrid({
         return (
           <article
             key={item.id}
+            data-inventory-id={item.id}
             className={[
               'inventory__item',
               item.kind === 'box' ? 'inventory__item--box' : '',

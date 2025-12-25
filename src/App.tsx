@@ -73,8 +73,11 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 
 const MAX_SHIPMENT_ITEMS = 24;
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+const REVEAL_NOTE_OFFSET = 14;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
+
+type RevealOverlayPhase = 'preparing' | 'ready' | 'revealed';
 
 type RevealOverlayState = {
   id: string;
@@ -82,6 +85,9 @@ type RevealOverlayState = {
   image: string;
   originRect: OverlayRect;
   targetRect: OverlayRect;
+  phase: RevealOverlayPhase;
+  revealedIds?: number[];
+  hasRevealAttempted?: boolean;
 };
 
 function toOverlayRect(rect: DOMRect): OverlayRect {
@@ -99,6 +105,46 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
     width,
     height,
   };
+}
+
+function formatRevealIds(ids?: number[]) {
+  if (!ids || !ids.length) return 'Figures: none';
+  return `Figures: ${ids.join(', ')}`;
+}
+
+function errorMessage(err: unknown): string {
+  if (!err) return '';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error && err.message) return err.message;
+  const anyErr = err as { message?: unknown; error?: unknown };
+  if (typeof anyErr.message === 'string') return anyErr.message;
+  if (typeof anyErr.error === 'string') return anyErr.error;
+  if (typeof (anyErr.error as { message?: unknown })?.message === 'string') {
+    return (anyErr.error as { message: string }).message;
+  }
+  return '';
+}
+
+function isUserRejectedError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as { code?: unknown; name?: unknown; cause?: unknown };
+  if (anyErr.cause && isUserRejectedError(anyErr.cause)) return true;
+  const code = anyErr.code;
+  if (code === 4001 || code === 'ACTION_REJECTED' || code === 'USER_REJECTED' || code === 'Rejected') {
+    return true;
+  }
+  const name = typeof anyErr.name === 'string' ? anyErr.name : '';
+  if (/wallet.*rejected/i.test(name)) return true;
+  const message = errorMessage(err).toLowerCase();
+  if (!message) return false;
+  return (
+    message.includes('user rejected') ||
+    message.includes('rejected the request') ||
+    message.includes('rejected the transaction') ||
+    message.includes('user denied') ||
+    message.includes('request was rejected') ||
+    message.includes('transaction was rejected')
+  );
 }
 
 function App() {
@@ -165,9 +211,16 @@ function App() {
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   };
 
+  const clearStartOpenLoadingForOverlay = (overlay: RevealOverlayState | null) => {
+    if (!overlay) return;
+    if (overlay.phase !== 'preparing') return;
+    setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
+  };
+
   const closeRevealOverlay = () => {
     if (!revealOverlay) return;
     if (revealOverlayClosing) return;
+    clearStartOpenLoadingForOverlay(revealOverlay);
     if (revealOverlayRafRef.current) {
       cancelAnimationFrame(revealOverlayRafRef.current);
       revealOverlayRafRef.current = null;
@@ -181,10 +234,25 @@ function App() {
     setRevealOverlayClosing(true);
   };
 
-  const openRevealOverlay = (id: string, rect: DOMRect) => {
+  const dismissRevealOverlay = () => {
+    if (revealOverlayRafRef.current) {
+      cancelAnimationFrame(revealOverlayRafRef.current);
+      revealOverlayRafRef.current = null;
+    }
+    setRevealOverlay(null);
+    setRevealOverlayClosing(false);
+    setRevealOverlayActive(false);
+  };
+
+  const openRevealOverlay = (
+    id: string,
+    rect: DOMRect,
+    phase: RevealOverlayPhase = 'ready',
+    itemOverride?: InventoryItem,
+  ) => {
     if (revealOverlay || revealLoading || startOpenLoading) return;
     if (typeof window === 'undefined') return;
-    const item = inventoryIndex.get(id);
+    const item = itemOverride || inventoryIndex.get(id);
     if (!item) return;
     const originRect = toOverlayRect(rect);
     const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
@@ -194,6 +262,9 @@ function App() {
       image: item.image || defaultBoxImage,
       originRect,
       targetRect,
+      phase,
+      revealedIds: undefined,
+      hasRevealAttempted: false,
     });
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
@@ -206,6 +277,15 @@ function App() {
         revealOverlayRafRef.current = null;
       });
     });
+  };
+
+  const findInventoryRect = (id: string) => {
+    if (typeof document === 'undefined') return null;
+    const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/"/g, '\\"');
+    const el = document.querySelector<HTMLElement>(`[data-inventory-id="${safeId}"]`);
+    if (!el) return null;
+    const imageEl = el.querySelector<HTMLElement>('.inventory__image');
+    return (imageEl || el).getBoundingClientRect();
   };
 
   useEffect(() => {
@@ -513,6 +593,9 @@ function App() {
       }
       showToast(`Minted ${quantity} boxes · ${sig}`);
       await Promise.all([refetchStats(), refetchInventory()]);
+    } catch (err) {
+      if (isUserRejectedError(err)) return;
+      throw err;
     } finally {
       setMinting(false);
     }
@@ -529,21 +612,26 @@ function App() {
         await connection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
-      let sig: string;
       try {
-        sig = await sendOnce();
+        await sendOnce();
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
         showToast('Transaction expired before you approved it. Please approve again…');
-        sig = await sendOnce();
+        await sendOnce();
       }
-      showToast(`Box sent to vault · ${sig}`);
+      setRevealOverlay((prev) => {
+        if (!prev || prev.id !== item.id) return prev;
+        return { ...prev, phase: 'ready', revealedIds: undefined, hasRevealAttempted: false };
+      });
       // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
       markAssetsHidden([item.id]);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
-      showToast(err instanceof Error ? err.message : 'Failed to open box');
+      if (!isUserRejectedError(err)) {
+        showToast(err instanceof Error ? err.message : 'Failed to open box');
+      }
+      dismissRevealOverlay();
     } finally {
       setStartOpenLoading(null);
     }
@@ -559,12 +647,17 @@ function App() {
     try {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
-      const revealCopy = revealed.length ? ` · figures ${revealed.join(', ')}` : '';
-      showToast(`Revealed figures · ${resp.signature}${revealCopy}`);
+      setRevealOverlay((prev) => {
+        if (!prev || prev.id !== boxAssetId) return prev;
+        return { ...prev, phase: 'revealed', revealedIds: revealed };
+      });
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);
-      showToast(err instanceof Error ? err.message : 'Failed to reveal figures');
+      const code = (err as { code?: string })?.code;
+      if (code !== 'not-found' && !isUserRejectedError(err)) {
+        showToast(err instanceof Error ? err.message : 'Failed to reveal figures');
+      }
     } finally {
       setRevealLoading(null);
     }
@@ -572,16 +665,33 @@ function App() {
 
   const handleRevealOverlayClick = () => {
     if (!revealOverlay || revealOverlayClosing || revealLoading) return;
+    if (revealOverlay.phase !== 'ready') return;
     if (!publicKey) {
       showToast('Connect wallet first');
       return;
     }
-    closeRevealOverlay();
+    setRevealOverlay((prev) => {
+      if (!prev || prev.id !== revealOverlay.id) return prev;
+      if (prev.hasRevealAttempted) return prev;
+      return { ...prev, hasRevealAttempted: true };
+    });
     void handleRevealDudes(revealOverlay.id);
   };
 
   const handleOpenSelectedBox = async () => {
     if (!selectedBox) return;
+    if (typeof window !== 'undefined') {
+      const originRect = findInventoryRect(selectedBox.id);
+      const fallbackTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+      const fallbackRect = new DOMRect(
+        fallbackTarget.left,
+        fallbackTarget.top,
+        fallbackTarget.width,
+        fallbackTarget.height,
+      );
+      const overlayItem: InventoryItem = { ...selectedBox, image: defaultBoxImage };
+      openRevealOverlay(selectedBox.id, originRect || fallbackRect, 'preparing', overlayItem);
+    }
     setSelected(new Set());
     await handleStartOpenBox(selectedBox);
   };
@@ -705,7 +815,9 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      showToast(err instanceof Error ? err.message : 'Failed to request shipment');
+      if (!isUserRejectedError(err)) {
+        showToast(err instanceof Error ? err.message : 'Failed to request shipment');
+      }
     } finally {
       setDeliveryLoading(false);
     }
@@ -786,7 +898,7 @@ function App() {
     setDeliveryCost(undefined);
   }, [addressId, selected]);
 
-  const revealOverlayBoxStyle = revealOverlay
+  const revealOverlayStyle = revealOverlay
     ? (() => {
         const { originRect, targetRect } = revealOverlay;
         const safeTargetWidth = Math.max(1, targetRect.width);
@@ -794,17 +906,28 @@ function App() {
         const scaleX = Math.max(0.01, originRect.width / safeTargetWidth);
         const scaleY = Math.max(0.01, originRect.height / safeTargetHeight);
         return {
-          left: `${targetRect.left}px`,
-          top: `${targetRect.top}px`,
-          width: `${safeTargetWidth}px`,
-          height: `${safeTargetHeight}px`,
+          ['--reveal-target-left' as never]: `${targetRect.left}px`,
+          ['--reveal-target-top' as never]: `${targetRect.top}px`,
+          ['--reveal-target-width' as never]: `${safeTargetWidth}px`,
+          ['--reveal-target-height' as never]: `${safeTargetHeight}px`,
           ['--reveal-start-x' as never]: `${originRect.left - targetRect.left}px`,
           ['--reveal-start-y' as never]: `${originRect.top - targetRect.top}px`,
           ['--reveal-start-scale-x' as never]: String(scaleX),
           ['--reveal-start-scale-y' as never]: String(scaleY),
+          ['--reveal-note-offset' as never]: `${REVEAL_NOTE_OFFSET}px`,
         };
       })()
     : undefined;
+  const revealOverlayNote =
+    revealOverlay?.phase === 'preparing'
+      ? 'preparing to unbox...'
+      : revealOverlay?.phase === 'revealed'
+        ? formatRevealIds(revealOverlay.revealedIds)
+        : revealOverlay
+          ? revealOverlay.hasRevealAttempted
+            ? 'keep clicking the box'
+            : 'click the box to open'
+          : '';
 
   return (
     <div className="page">
@@ -815,23 +938,14 @@ function App() {
       ) : null}
       {revealOverlay ? (
         <div
-          className={`reveal-overlay${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
+          className={`reveal-overlay reveal-overlay--${revealOverlay.phase}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
           role="presentation"
+          style={revealOverlayStyle}
           onClick={closeRevealOverlay}
         >
           <div className="reveal-overlay__backdrop" />
-          <button
-            type="button"
-            className="reveal-overlay__box"
-            style={revealOverlayBoxStyle}
-            aria-label={`Reveal ${revealOverlay.name}`}
-            aria-busy={revealLoading === revealOverlay.id}
-            disabled={revealOverlayClosing || revealLoading === revealOverlay.id}
-            autoFocus
-            onClick={(evt) => {
-              evt.stopPropagation();
-              handleRevealOverlayClick();
-            }}
+          <div
+            className="reveal-overlay__frame"
             onTransitionEnd={(evt) => {
               if (evt.propertyName !== 'opacity') return;
               if (!revealOverlayClosing) return;
@@ -840,8 +954,21 @@ function App() {
               setRevealOverlayActive(false);
             }}
           >
-            <img src={revealOverlay.image} alt={revealOverlay.name} className="reveal-overlay__image" />
-          </button>
+            <button
+              type="button"
+              className="reveal-overlay__box"
+              aria-label={`Reveal ${revealOverlay.name}`}
+              aria-busy={revealLoading === revealOverlay.id}
+              aria-disabled={revealOverlayClosing || revealLoading === revealOverlay.id || revealOverlay.phase !== 'ready'}
+              onClick={(evt) => {
+                evt.stopPropagation();
+                handleRevealOverlayClick();
+              }}
+            >
+              <img src={revealOverlay.image} alt={revealOverlay.name} className="reveal-overlay__image" />
+            </button>
+          </div>
+          <div className="reveal-overlay__note">{revealOverlayNote}</div>
         </div>
       ) : null}
       <header className="top">

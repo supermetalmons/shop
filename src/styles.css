@@ -648,6 +648,15 @@ button.quiet:hover:not(:disabled) {
   inset: 0;
   z-index: 1110;
   pointer-events: auto;
+  --reveal-target-left: 0px;
+  --reveal-target-top: 0px;
+  --reveal-target-width: 0px;
+  --reveal-target-height: 0px;
+  --reveal-start-x: 0px;
+  --reveal-start-y: 0px;
+  --reveal-start-scale-x: 1;
+  --reveal-start-scale-y: 1;
+  --reveal-note-offset: 14px;
 }
 
 .reveal-overlay__backdrop {
@@ -672,19 +681,16 @@ button.quiet:hover:not(:disabled) {
   opacity: 0;
 }
 
-.reveal-overlay__box {
-  position: fixed;
+.reveal-overlay__frame {
+  position: absolute;
   display: grid;
   place-items: center;
   padding: 0;
   margin: 0;
-  border: none;
-  border-radius: 12px;
-  background: transparent;
-  background-color: transparent;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
+  left: var(--reveal-target-left);
+  top: var(--reveal-target-top);
+  width: var(--reveal-target-width);
+  height: var(--reveal-target-height);
   transform-origin: top left;
   transform: translate3d(var(--reveal-start-x), var(--reveal-start-y), 0)
     scale(var(--reveal-start-scale-x), var(--reveal-start-scale-y));
@@ -694,26 +700,79 @@ button.quiet:hover:not(:disabled) {
   opacity: 1;
 }
 
-.reveal-overlay--active .reveal-overlay__box {
+.reveal-overlay--active .reveal-overlay__frame {
   transform: translate3d(0, 0, 0) scale(1);
 }
 
-.reveal-overlay--closing .reveal-overlay__box {
+.reveal-overlay--closing .reveal-overlay__frame {
+  opacity: 0;
+}
+
+.reveal-overlay__box {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: transparent;
+  background-color: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reveal-overlay__note {
+  position: absolute;
+  left: var(--reveal-target-left);
+  top: calc(var(--reveal-target-top) + var(--reveal-target-height) + var(--reveal-note-offset));
+  width: var(--reveal-target-width);
+  text-align: center;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.78);
+  opacity: 0;
+  transition: opacity 240ms ease;
+  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.reveal-overlay--active .reveal-overlay__note {
+  opacity: 1;
+}
+
+.reveal-overlay--closing .reveal-overlay__note {
   opacity: 0;
 }
 
 .reveal-overlay__box:focus-visible {
-  outline: 2px solid rgba(0, 113, 227, 0.35);
-  outline-offset: 6px;
+  outline: none;
+  box-shadow: none;
 }
 
-.reveal-overlay__box:disabled {
+.reveal-overlay__box[aria-disabled='true'] {
   cursor: default;
 }
 
-.reveal-overlay__box:hover:not(:disabled),
-.reveal-overlay__box:active:not(:disabled) {
+.reveal-overlay__box:hover,
+.reveal-overlay__box:active,
+.reveal-overlay__box:focus {
   background: transparent;
+}
+
+.reveal-overlay__box:hover:not(:disabled),
+.reveal-overlay__box:active:not(:disabled),
+.reveal-overlay__box:focus:not(:disabled),
+.reveal-overlay__box:focus-visible:not(:disabled) {
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
 }
 
 .reveal-overlay__image {
@@ -744,15 +803,12 @@ button.quiet:hover:not(:disabled) {
   .reveal-overlay__backdrop {
     background: rgba(0, 0, 0, 0.55);
   }
-
-  .reveal-overlay__box:focus-visible {
-    outline: 2px solid rgba(41, 151, 255, 0.45);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .reveal-overlay__backdrop,
-  .reveal-overlay__box {
+  .reveal-overlay__frame,
+  .reveal-overlay__note {
     transition-duration: 1ms;
   }
 }
