@@ -137,7 +137,7 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
             <img
               key={idx}
               className="mint-panel__box"
-              src={`${FRONTEND_DEPLOYMENT.paths.base}/box/default.webp`}
+              src={`${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`}
               alt=""
               aria-hidden="true"
             />

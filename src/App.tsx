@@ -161,7 +161,7 @@ function App() {
     return inventory.filter((item) => !hiddenAssets.has(item.id));
   }, [inventory, hiddenAssets]);
 
-  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/default.webp`;
+  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
   const pendingRevealIds = useMemo(
     () => new Set(pendingOpenBoxes.map((entry) => entry.boxAssetId).filter(Boolean)),
     [pendingOpenBoxes],
