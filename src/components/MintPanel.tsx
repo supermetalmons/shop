@@ -9,6 +9,13 @@ interface MintPanelProps {
   onError?: (message: string) => void;
 }
 
+/**
+ * DEV: Override the "remaining" value for MintPanel UI testing.
+ * Set to a number (e.g. 42) to force that remaining count.
+ * Leave as `null` to use real backend/on-chain stats.
+ */
+const REMAINING_OVERRIDE: number | null = null;
+
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
@@ -90,7 +97,8 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
 export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
-  const remaining = stats?.remaining ?? Math.max(0, total - minted);
+  const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
+  const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
   const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const maxSelectable = Math.min(maxPerTx, remaining);
