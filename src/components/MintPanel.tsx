@@ -105,6 +105,7 @@ export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintP
   const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const maxSelectable = Math.min(maxPerTx, remaining);
+  const showQuantitySlider = maxSelectable > 1;
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
@@ -197,7 +198,7 @@ export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintP
           ) : null}
         </div>
       ) : (
-        <div className="mint-panel__footer">
+        <div className={showQuantitySlider ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
             <div className="mint-panel__price">Little Swag Boxes</div>
             <div
@@ -207,18 +208,24 @@ export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintP
               {remaining} / {total} left
             </div>
           </div>
-          <form id={formId} className="mint-panel__slider" onSubmit={handleMint}>
-            <label className="mint-panel__label">
-              <span className="mint-panel__label-text muted small">{quantityLabel}</span>
-              <input
-                type="range"
-                min={1}
-                max={maxSelectable}
-                value={quantity}
-                onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
-                disabled={busy}
-              />
-            </label>
+          <form
+            id={formId}
+            className={showQuantitySlider ? 'mint-panel__slider' : 'mint-panel__slider mint-panel__slider--hidden'}
+            onSubmit={handleMint}
+          >
+            {showQuantitySlider ? (
+              <label className="mint-panel__label">
+                <span className="mint-panel__label-text muted small">{quantityLabel}</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={maxSelectable}
+                  value={quantity}
+                  onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
+                  disabled={busy}
+                />
+              </label>
+            ) : null}
           </form>
           <div className="mint-panel__cta">
             <button

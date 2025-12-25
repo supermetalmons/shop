@@ -210,6 +210,10 @@ header.top {
   align-items: center;
 }
 
+.mint-panel__slider--hidden {
+  display: none;
+}
+
 .mint-panel__label {
   display: grid;
   gap: 6px;
@@ -239,6 +243,14 @@ header.top {
 }
 
 .mint-panel__footer--soldout .mint-panel__cta {
+  grid-column: 3 / -1;
+}
+
+.mint-panel__footer--no-slider .mint-panel__info {
+  grid-column: 1 / 2;
+}
+
+.mint-panel__footer--no-slider .mint-panel__cta {
   grid-column: 3 / -1;
 }
 
@@ -355,7 +367,9 @@ header.top {
   }
 
   .mint-panel__footer--soldout .mint-panel__info,
-  .mint-panel__footer--soldout .mint-panel__cta {
+  .mint-panel__footer--soldout .mint-panel__cta,
+  .mint-panel__footer--no-slider .mint-panel__info,
+  .mint-panel__footer--no-slider .mint-panel__cta {
     grid-column: auto;
   }
 
