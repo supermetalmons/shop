@@ -554,7 +554,7 @@ function App() {
   };
 
   const secondaryLinks = [
-    { label: 'Tensor', href: 'https://www.tensor.trade/trade/mons' },
+    { label: 'Tensor', href: 'https://www.tensor.trade/' },
     { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
@@ -605,7 +605,13 @@ function App() {
         </div>
       </header>
 
-      <MintPanel stats={mintStats} onMint={handleMint} busy={minting} onError={showToast} />
+      <MintPanel
+        stats={mintStats}
+        onMint={handleMint}
+        busy={minting}
+        onError={showToast}
+        secondaryHref={secondaryLinks[0]?.href}
+      />
 
       {mintedOut ? (
         <section className="card">

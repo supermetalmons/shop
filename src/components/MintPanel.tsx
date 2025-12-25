@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FaChevronRight } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
@@ -7,6 +8,7 @@ interface MintPanelProps {
   onMint: (quantity: number) => Promise<void>;
   busy: boolean;
   onError?: (message: string) => void;
+  secondaryHref?: string;
 }
 
 /**
@@ -94,7 +96,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
   return best;
 }
 
-export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
+export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
@@ -182,10 +184,17 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
               aria-hidden={!remainingReady}
             >
-            {remaining} / {total} left
+            Minted out
             </div>
           </div>
-          <div className="mint-panel__soldout">Sold out. Jump to secondary or standby for next drop.</div>
+          {secondaryHref ? (
+            <div className="mint-panel__cta">
+              <a className="mint-panel__secondary" href={secondaryHref} target="_blank" rel="noreferrer">
+                <span className="mint-panel__secondary-text">Secondary</span>
+                <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
+              </a>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="mint-panel__footer">
@@ -233,3 +242,4 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
     </section>
   );
 }
+
