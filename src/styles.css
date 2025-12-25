@@ -1011,6 +1011,16 @@ button.inventory__open:focus-visible {
   white-space: nowrap;
 }
 
+.selection-panel__ship {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selection-panel__ship svg {
+  flex: 0 0 auto;
+}
+
 @media (prefers-color-scheme: dark) {
   .selection-panel {
     background: rgba(29, 29, 31, 0.82);

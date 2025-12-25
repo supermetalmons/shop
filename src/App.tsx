@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
+import { FaPlane } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -892,12 +893,14 @@ function App() {
             ) : null}
             <button
               type="button"
+              className="selection-panel__ship"
               onClick={() => {
                 setDeliveryOpen(true);
                 setDeliveryAddOpen(false);
               }}
             >
-              Ship
+              <FaPlane aria-hidden="true" focusable="false" size={16} />
+              <span>Ship</span>
             </button>
           </div>
         </div>
