@@ -132,6 +132,7 @@ function App() {
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealOverlayRafRef = useRef<number | null>(null);
+  const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
@@ -225,6 +226,41 @@ function App() {
   }, [revealOverlay, closeRevealOverlay]);
 
   useEffect(() => {
+    if (!revealOverlay) return;
+    const updateTargetRect = () => {
+      if (revealOverlayResizeRafRef.current) {
+        cancelAnimationFrame(revealOverlayResizeRafRef.current);
+      }
+      revealOverlayResizeRafRef.current = requestAnimationFrame(() => {
+        revealOverlayResizeRafRef.current = null;
+        setRevealOverlay((prev) => {
+          if (!prev) return prev;
+          const nextTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+          if (
+            prev.targetRect.left === nextTarget.left &&
+            prev.targetRect.top === nextTarget.top &&
+            prev.targetRect.width === nextTarget.width &&
+            prev.targetRect.height === nextTarget.height
+          ) {
+            return prev;
+          }
+          return { ...prev, targetRect: nextTarget };
+        });
+      });
+    };
+    window.addEventListener('resize', updateTargetRect);
+    window.addEventListener('orientationchange', updateTargetRect);
+    return () => {
+      window.removeEventListener('resize', updateTargetRect);
+      window.removeEventListener('orientationchange', updateTargetRect);
+      if (revealOverlayResizeRafRef.current) {
+        cancelAnimationFrame(revealOverlayResizeRafRef.current);
+        revealOverlayResizeRafRef.current = null;
+      }
+    };
+  }, [revealOverlay]);
+
+  useEffect(() => {
     authLoadingSeenRef.current = false;
     setAuthReady(false);
   }, [owner]);
@@ -263,6 +299,9 @@ function App() {
       }
       if (revealOverlayRafRef.current) {
         cancelAnimationFrame(revealOverlayRafRef.current);
+      }
+      if (revealOverlayResizeRafRef.current) {
+        cancelAnimationFrame(revealOverlayResizeRafRef.current);
       }
     };
   }, []);
