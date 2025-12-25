@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
-import { FaChildReaching, FaPlane } from 'react-icons/fa6';
+import { FaBoxOpen, FaPlane } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -899,7 +899,7 @@ function App() {
                 onClick={handleOpenSelectedBox}
                 disabled={Boolean(startOpenLoading)}
               >
-                <FaChildReaching aria-hidden="true" focusable="false" size={18} />
+                <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
                 <span>{startOpenLoading === selectedBox?.id ? 'Unboxing…' : 'Unbox'}</span>
               </button>
             ) : null}
