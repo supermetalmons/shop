@@ -1011,13 +1011,15 @@ button.inventory__open:focus-visible {
   white-space: nowrap;
 }
 
-.selection-panel__ship {
+.selection-panel__ship,
+.selection-panel__open {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-.selection-panel__ship svg {
+.selection-panel__ship svg,
+.selection-panel__open svg {
   flex: 0 0 auto;
 }
 
