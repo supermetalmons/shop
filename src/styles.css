@@ -547,6 +547,10 @@ button.quiet:hover:not(:disabled) {
   color: var(--muted);
 }
 
+.empty-state--hidden {
+  visibility: hidden;
+}
+
 .small {
   font-size: 13px;
 }
@@ -1373,4 +1377,3 @@ button.wallet-adapter-modal-button-close:hover {
     padding: 20px;
   }
 }
-

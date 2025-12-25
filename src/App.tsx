@@ -87,7 +87,7 @@ function App() {
     signIn,
     updateProfile,
   } = useSolanaAuth();
-  const { data: inventory = [], refetch: refetchInventory } = useInventory();
+  const { data: inventory = [], refetch: refetchInventory, isFetched: inventoryFetched } = useInventory();
   const { data: pendingOpenBoxes = [], refetch: refetchPendingOpenBoxes } = usePendingOpenBoxes();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -100,12 +100,17 @@ function App() {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const authLoadingSeenRef = useRef(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [walletIdleReady, setWalletIdleReady] = useState(false);
+  const [shipmentsReady, setShipmentsReady] = useState(false);
   const [addressId, setAddressId] = useState<string | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryAddOpen, setDeliveryAddOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
   const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
+  const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
 
   const TOAST_VISIBLE_MS = 1800;
@@ -130,6 +135,35 @@ function App() {
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(owner));
   }, [owner]);
+
+  useEffect(() => {
+    authLoadingSeenRef.current = false;
+    setAuthReady(false);
+  }, [owner]);
+
+  useEffect(() => {
+    if (!owner) return;
+    if (authLoading) {
+      authLoadingSeenRef.current = true;
+      return;
+    }
+    if (profile || authLoadingSeenRef.current) {
+      setAuthReady(true);
+    }
+  }, [owner, authLoading, profile]);
+
+  useEffect(() => {
+    if (owner || walletBusy) {
+      setWalletIdleReady(false);
+      return;
+    }
+    const timeout = setTimeout(() => {
+      setWalletIdleReady(true);
+    }, 250);
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [owner, walletBusy]);
 
   useEffect(() => {
     return () => {
@@ -197,6 +231,14 @@ function App() {
     return [...pendingRevealItems, ...boxes, ...dudes];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems]);
   const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
+  const inventoryEmptyStateVisibility = owner
+    ? inventoryFetched
+      ? 'visible'
+      : 'hidden'
+    : walletIdleReady
+      ? 'visible'
+      : 'hidden';
+  const inventoryReadyForShipments = inventoryItems.length > 0 || inventoryEmptyStateVisibility === 'visible';
 
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
@@ -560,6 +602,24 @@ function App() {
     [savedAddresses],
   );
   const deliveryOrders = profile?.orders || [];
+  const shipmentsEmptyMessage = !profile ? 'Sign in to view your shipments.' : 'No shipments yet.';
+  const shipmentsEmptyStateVisibility = owner
+    ? authReady
+      ? 'visible'
+      : 'hidden'
+    : walletIdleReady
+      ? 'visible'
+      : 'hidden';
+  const shipmentsContentVisible =
+    shipmentsReady && (deliveryOrders.length > 0 || shipmentsEmptyStateVisibility === 'visible');
+
+  useEffect(() => {
+    if (!inventoryReadyForShipments) {
+      setShipmentsReady(false);
+      return;
+    }
+    setShipmentsReady(true);
+  }, [inventoryReadyForShipments]);
   const formatCountry = (addr: ProfileAddress) => {
     const code = addr.countryCode || normalizeCountryCode(addr.country);
     const option = findCountryByCode(code);
@@ -633,6 +693,7 @@ function App() {
           onReveal={handleRevealDudes}
           revealLoadingId={revealLoading}
           revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading)}
+          emptyStateVisibility={inventoryEmptyStateVisibility}
         />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
@@ -790,9 +851,8 @@ function App() {
         <div className="card__head">
           <div className="card__title">Shipments</div>
         </div>
-        {!profile ? (
-          <div className="muted small">Sign in to view your shipments.</div>
-        ) : deliveryOrders.length ? (
+        {shipmentsReady ? (
+          deliveryOrders.length ? (
           <div className="delivery-list">
             {deliveryOrders.map((order) => (
               <div key={order.deliveryId} className="delivery-row">
@@ -818,12 +878,22 @@ function App() {
               </div>
             ))}
           </div>
+          ) : (
+          <div
+            className={`muted small${shipmentsEmptyStateVisibility === 'hidden' ? ' empty-state--hidden' : ''}`}
+            aria-hidden={shipmentsEmptyStateVisibility === 'hidden'}
+          >
+            {shipmentsEmptyMessage}
+          </div>
+          )
         ) : (
-          <div className="muted small">No shipments yet.</div>
+          <div className="muted small empty-state--hidden" aria-hidden="true">
+            {shipmentsEmptyMessage}
+          </div>
         )}
       </section>
 
-      {receiptItems.length ? (
+      {receiptItems.length && shipmentsContentVisible ? (
         <section className="card">
           <div className="card__head">
             <div className="card__title">Receipts</div>

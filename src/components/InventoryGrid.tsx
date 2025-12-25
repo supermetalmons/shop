@@ -10,6 +10,7 @@ interface InventoryGridProps {
   onReveal?: (id: string) => void;
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
+  emptyStateVisibility?: 'visible' | 'hidden' | 'none';
 }
 
 export function InventoryGrid({
@@ -22,9 +23,16 @@ export function InventoryGrid({
   onReveal,
   revealLoadingId,
   revealDisabled,
+  emptyStateVisibility = 'visible',
 }: InventoryGridProps) {
   if (!items.length) {
-    return <div className="muted small">No items yet. Mint boxes to start.</div>;
+    if (emptyStateVisibility === 'none') return null;
+    const isHidden = emptyStateVisibility === 'hidden';
+    return (
+      <div className={`muted small${isHidden ? ' empty-state--hidden' : ''}`} aria-hidden={isHidden}>
+        No items yet. Mint boxes to start.
+      </div>
+    );
   }
 
   const gridClassName = ['inventory', className].filter(Boolean).join(' ');
