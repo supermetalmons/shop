@@ -158,22 +158,25 @@ header.top {
 }
 
 .mint-panel__boxes {
-  --box-size: 120px;
-  --box-gap: 12px;
+  --box-height: 120px;
+  --box-width: 168px;
+  --box-gap-x: 12px;
+  --box-gap-y: 12px;
   --box-cols: 4;
   flex: 1;
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-columns: repeat(var(--box-cols), var(--box-size));
-  grid-auto-rows: var(--box-size);
-  gap: var(--box-gap);
+  grid-template-columns: repeat(var(--box-cols), var(--box-width));
+  grid-auto-rows: var(--box-height);
+  column-gap: var(--box-gap-x);
+  row-gap: var(--box-gap-y);
   place-content: center;
 }
 
 .mint-panel__box {
-  width: var(--box-size);
-  height: var(--box-size);
+  width: var(--box-width);
+  height: var(--box-height);
   object-fit: contain;
   display: block;
 }
@@ -511,6 +514,10 @@ button.quiet:hover:not(:disabled) {
   padding: 0;
   overflow: hidden;
   transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.inventory__item--box .inventory__media {
+  padding: 6px;
 }
 
 .inventory__item--selectable {

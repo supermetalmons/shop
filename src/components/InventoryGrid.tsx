@@ -47,6 +47,7 @@ export function InventoryGrid({
             key={item.id}
             className={[
               'inventory__item',
+              item.kind === 'box' ? 'inventory__item--box' : '',
               canSelect ? 'inventory__item--selectable' : '',
               revealEnabled ? 'inventory__item--revealable' : '',
               isSelected ? 'inventory__item--selected' : '',

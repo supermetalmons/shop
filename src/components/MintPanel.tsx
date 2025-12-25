@@ -9,7 +9,9 @@ interface MintPanelProps {
   onError?: (message: string) => void;
 }
 
-type BoxPreviewLayout = { size: number; gap: number; cols: number };
+type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
+
+const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -19,48 +21,65 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
   const safeCount = Math.max(1, Math.min(15, Math.floor(count)));
   const safeWidth = Math.max(0, Math.floor(width));
   const safeHeight = Math.max(0, Math.floor(height));
+  const gapScaleX = safeCount > 1 ? 1.8 : 1;
+  const gapScaleY = safeCount > 1 ? 2 : 1;
 
   // Reasonable fallback before we know measured dimensions.
   if (!safeWidth || !safeHeight) {
-    return { size: 120, gap: 12, cols: Math.min(safeCount, 4) };
+    const fallbackHeight = 120;
+    return {
+      height: fallbackHeight,
+      width: Math.max(1, Math.floor(fallbackHeight * BOX_ASPECT_RATIO)),
+      gapX: 12 * gapScaleX,
+      gapY: 12 * gapScaleY,
+      cols: Math.min(safeCount, 4),
+    };
   }
 
-  const maxSize = Math.min(260, safeHeight);
-  let best: BoxPreviewLayout = { size: 1, gap: 8, cols: 1 };
+  // Let the preview container height dictate the maximum box size so the image can
+  // actually fill the available space (especially for low quantities).
+  const maxHeight = safeHeight;
+  let best: BoxPreviewLayout = { height: 1, width: Math.max(1, Math.floor(BOX_ASPECT_RATIO)), gapX: 8, gapY: 8, cols: 1 };
 
   for (let cols = 1; cols <= safeCount; cols += 1) {
     const rows = Math.ceil(safeCount / cols);
 
     // Start with a conservative gap, then refine once based on the resulting size.
-    let gap = 12;
-    let size = Math.min(
-      (safeWidth - (cols - 1) * gap) / cols,
-      (safeHeight - (rows - 1) * gap) / rows,
+    let gapX = 12 * gapScaleX;
+    let gapY = 12 * gapScaleY;
+    let boxHeight = Math.min(
+      (safeWidth - (cols - 1) * gapX) / (cols * BOX_ASPECT_RATIO),
+      (safeHeight - (rows - 1) * gapY) / rows,
     );
-    size = Math.min(size, maxSize);
-    gap = clampNumber(Math.round(size * 0.08), 6, 14);
-    size = Math.min(
-      (safeWidth - (cols - 1) * gap) / cols,
-      (safeHeight - (rows - 1) * gap) / rows,
+    boxHeight = Math.min(boxHeight, maxHeight);
+    const baseGap = clampNumber(Math.round(boxHeight * 0.08), 6, 14);
+    gapX = baseGap * gapScaleX;
+    gapY = baseGap * gapScaleY;
+    boxHeight = Math.min(
+      (safeWidth - (cols - 1) * gapX) / (cols * BOX_ASPECT_RATIO),
+      (safeHeight - (rows - 1) * gapY) / rows,
     );
-    size = Math.min(size, maxSize);
+    boxHeight = Math.min(boxHeight, maxHeight);
 
     // Safety margin to avoid sub-pixel rounding clipping at some breakpoints.
-    size = Math.floor(size) - 1;
-    gap = Math.max(0, Math.floor(gap));
+    boxHeight = Math.floor(boxHeight) - 1;
+    gapX = Math.max(0, Math.floor(gapX));
+    gapY = Math.max(0, Math.floor(gapY));
 
-    if (size < 1) continue;
+    if (boxHeight < 1) continue;
 
-    if (size > best.size) {
-      best = { size, gap, cols };
+    const boxWidth = Math.max(1, Math.floor(boxHeight * BOX_ASPECT_RATIO));
+
+    if (boxHeight > best.height) {
+      best = { width: boxWidth, height: boxHeight, gapX, gapY, cols };
       continue;
     }
 
     // Tie-breaker: prefer fewer rows (i.e. more columns) when size is the same.
-    if (size === best.size) {
+    if (boxHeight === best.height) {
       const bestRows = Math.ceil(safeCount / best.cols);
       if (rows < bestRows) {
-        best = { size, gap, cols };
+        best = { width: boxWidth, height: boxHeight, gapX, gapY, cols };
       }
     }
   }
@@ -127,8 +146,10 @@ export function MintPanel({ stats, onMint, busy, onError }: MintPanelProps) {
           ref={previewRef}
           className="mint-panel__boxes"
           style={{
-            ['--box-size' as never]: `${layout.size}px`,
-            ['--box-gap' as never]: `${layout.gap}px`,
+            ['--box-width' as never]: `${layout.width}px`,
+            ['--box-height' as never]: `${layout.height}px`,
+            ['--box-gap-x' as never]: `${layout.gapX}px`,
+            ['--box-gap-y' as never]: `${layout.gapY}px`,
             ['--box-cols' as never]: String(layout.cols),
           }}
           aria-label={`Mint preview: ${quantityLabel}`}
