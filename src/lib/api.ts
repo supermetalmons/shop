@@ -262,6 +262,12 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
     const n = Number(match?.[1]);
     return Number.isFinite(n) ? n : undefined;
   }
+  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
+  if (typeof name === 'string' && name) {
+    const match = name.match(/(?:figure|dude)\s*#?\s*(\d+)/i);
+    const n = Number(match?.[1]);
+    if (Number.isFinite(n)) return n;
+  }
   return undefined;
 }
 

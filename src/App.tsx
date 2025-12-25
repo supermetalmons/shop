@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
@@ -138,6 +138,7 @@ const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 14;
 const LOCAL_PENDING_GRACE_MS = 10 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
+const FIGURE_METADATA_RETRY_MS = 3000;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -148,6 +149,13 @@ type LocalPendingReveal = {
   createdAt: number;
   name?: string;
   image?: string;
+};
+
+type FigureMetadata = {
+  id: number;
+  name?: string;
+  image?: string;
+  attributes?: { trait_type: string; value: string }[];
 };
 
 type RevealOverlayState = {
@@ -181,6 +189,12 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
 function formatRevealIds(ids?: number[]) {
   if (!ids || !ids.length) return 'Figures: none';
   return `Figures: ${ids.join(', ')}`;
+}
+
+function normalizeFigureImage(imageRaw?: string): string | undefined {
+  if (!imageRaw) return imageRaw;
+  if (imageRaw.includes('/figures/clean/')) return imageRaw;
+  return imageRaw.replace('/figures/', '/figures/clean/');
 }
 
 function errorMessage(err: unknown): string {
@@ -282,8 +296,11 @@ function App() {
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
   const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(owner));
-  const [localRevealedDudes, setLocalRevealedDudes] = useState<InventoryItem[]>([]);
-  const localDudeCacheRef = useRef<Map<number, InventoryItem>>(new Map());
+  const [localRevealedDudeIds, setLocalRevealedDudeIds] = useState<number[]>([]);
+  const [figureMetadataById, setFigureMetadataById] = useState<Record<number, FigureMetadata>>({});
+  const figureMetadataRef = useRef<Record<number, FigureMetadata>>({});
+  const figureMetadataLoadingRef = useRef<Set<number>>(new Set());
+  const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -339,14 +356,19 @@ function App() {
     });
   };
 
-  const addLocalRevealedDudes = async (ids: number[]) => {
-    const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
-    if (!uniqueIds.length) return;
-    const pending = uniqueIds.filter((id) => !localDudeCacheRef.current.has(id));
-    if (!pending.length) return;
-    const results = await Promise.all(
-      pending.map(async (id) => {
-        const metadataUrl = `${FRONTEND_DEPLOYMENT.paths.figuresJsonBase}${id}.json`;
+  const queueFigureMetadataFetch = useCallback((ids: number[]) => {
+    if (typeof window === 'undefined') return;
+    const now = Date.now();
+    ids.forEach((id) => {
+      if (!Number.isFinite(id) || id <= 0) return;
+      const cached = figureMetadataRef.current[id];
+      if (cached?.image) return;
+      if (figureMetadataLoadingRef.current.has(id)) return;
+      const retryAt = figureMetadataRetryAtRef.current.get(id);
+      if (retryAt && retryAt > now) return;
+      figureMetadataLoadingRef.current.add(id);
+      const metadataUrl = `${FRONTEND_DEPLOYMENT.paths.figuresJsonBase}${id}.json`;
+      void (async () => {
         try {
           const resp = await fetch(metadataUrl);
           if (!resp.ok) throw new Error('metadata fetch failed');
@@ -355,48 +377,38 @@ function App() {
             image?: string;
             attributes?: { trait_type: string; value: string }[];
           };
-          const image =
-            typeof data.image === 'string' && data.image
-              ? data.image
-              : `${FRONTEND_DEPLOYMENT.paths.base}/figures/${id}.webp`;
-          const name = typeof data.name === 'string' && data.name ? data.name : `Figure ${id}`;
-          return {
-            id: `local-dude-${id}`,
-            name,
-            kind: 'dude',
-            image,
-            attributes: Array.isArray(data.attributes) ? data.attributes : [],
-            dudeId: id,
-            status: 'pending',
-          } satisfies InventoryItem;
+          const rawImage = typeof data.image === 'string' ? data.image : '';
+          const image = normalizeFigureImage(rawImage) || '';
+          if (!image) throw new Error('metadata missing image');
+          const name = typeof data.name === 'string' ? data.name : undefined;
+          const attributes = Array.isArray(data.attributes) ? data.attributes : undefined;
+          setFigureMetadataById((prev) => {
+            const existing = prev[id];
+            if (existing && existing.image === image && existing.name === name) {
+              return prev;
+            }
+            return { ...prev, [id]: { id, name, image, attributes } };
+          });
+          figureMetadataRetryAtRef.current.delete(id);
         } catch (err) {
           console.warn('[mons] failed to load figure metadata', { id, error: err });
-          return {
-            id: `local-dude-${id}`,
-            name: `Figure ${id}`,
-            kind: 'dude',
-            image: `${FRONTEND_DEPLOYMENT.paths.base}/figures/${id}.webp`,
-            dudeId: id,
-            status: 'pending',
-          } satisfies InventoryItem;
+          figureMetadataRetryAtRef.current.set(id, Date.now() + FIGURE_METADATA_RETRY_MS);
+        } finally {
+          figureMetadataLoadingRef.current.delete(id);
         }
-      }),
-    );
+      })();
+    });
+  }, []);
 
-    results.forEach((item) => {
-      if (!item?.dudeId) return;
-      localDudeCacheRef.current.set(item.dudeId, item);
+  const addLocalRevealedDudes = (ids: number[]) => {
+    const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
+    if (!uniqueIds.length) return;
+    setLocalRevealedDudeIds((prev) => {
+      const next = new Set(prev);
+      uniqueIds.forEach((id) => next.add(id));
+      return Array.from(next);
     });
-    setLocalRevealedDudes((prev) => {
-      const merged = new Map<number, InventoryItem>();
-      prev.forEach((entry) => {
-        if (entry.dudeId) merged.set(entry.dudeId, entry);
-      });
-      results.forEach((entry) => {
-        if (entry?.dudeId) merged.set(entry.dudeId, entry);
-      });
-      return Array.from(merged.values());
-    });
+    queueFigureMetadataFetch(uniqueIds);
   };
 
   const clearStartOpenLoadingForOverlay = (overlay: RevealOverlayState | null) => {
@@ -483,8 +495,11 @@ function App() {
   useEffect(() => {
     setLocalPendingReveals(loadPendingReveals(owner));
     setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
-    setLocalRevealedDudes([]);
-    localDudeCacheRef.current.clear();
+    setLocalRevealedDudeIds([]);
+    setFigureMetadataById({});
+    figureMetadataRef.current = {};
+    figureMetadataLoadingRef.current.clear();
+    figureMetadataRetryAtRef.current.clear();
   }, [owner]);
 
   useEffect(() => {
@@ -496,6 +511,10 @@ function App() {
     if (!owner) return;
     persistRecentReveals(owner, recentRevealedBoxes);
   }, [owner, recentRevealedBoxes]);
+
+  useEffect(() => {
+    figureMetadataRef.current = figureMetadataById;
+  }, [figureMetadataById]);
 
   useEffect(() => {
     if (!owner) return;
@@ -536,18 +555,51 @@ function App() {
   }, [owner, pendingOpenBoxes, pendingOpenBoxesFetched, localPendingReveals, recentRevealedBoxes, inventory]);
 
   useEffect(() => {
-    if (!localRevealedDudes.length) return;
-    const chainDudeIds = new Set(
-      inventory.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
-    );
-    const next = localRevealedDudes.filter((entry) => !entry.dudeId || !chainDudeIds.has(entry.dudeId));
-    if (next.length !== localRevealedDudes.length) {
-      setLocalRevealedDudes(next);
-    }
-  }, [inventory, localRevealedDudes]);
+    if (!localRevealedDudeIds.length) return;
+    const chainDudes = new Map<number, InventoryItem>();
+    inventory.forEach((item) => {
+      if (item.kind !== 'dude') return;
+      if (!item.dudeId) return;
+      chainDudes.set(item.dudeId, item);
+    });
+    setLocalRevealedDudeIds((prev) => {
+      const next = prev.filter((id) => {
+        const item = chainDudes.get(id);
+        if (!item) return true;
+        if (item.image && String(item.image).trim()) return false;
+        const meta = figureMetadataById[id];
+        return !meta?.image;
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [inventory, localRevealedDudeIds, figureMetadataById]);
+
+  const figureIdsNeedingMetadata = useMemo(() => {
+    const ids = new Set<number>();
+    localRevealedDudeIds.forEach((id) => {
+      if (!figureMetadataById[id]?.image) ids.add(id);
+    });
+    inventory.forEach((item) => {
+      if (item.kind !== 'dude') return;
+      if (!item.dudeId) return;
+      if (item.image && String(item.image).trim()) return;
+      if (!figureMetadataById[item.dudeId]?.image) ids.add(item.dudeId);
+    });
+    return Array.from(ids);
+  }, [inventory, localRevealedDudeIds, figureMetadataById]);
 
   useEffect(() => {
-    if (!localRevealedDudes.length) return;
+    if (!figureIdsNeedingMetadata.length) return;
+    if (typeof window === 'undefined') return;
+    queueFigureMetadataFetch(figureIdsNeedingMetadata);
+    const interval = window.setInterval(() => {
+      queueFigureMetadataFetch(figureIdsNeedingMetadata);
+    }, FIGURE_METADATA_RETRY_MS);
+    return () => window.clearInterval(interval);
+  }, [figureIdsNeedingMetadata, queueFigureMetadataFetch]);
+
+  useEffect(() => {
+    if (!localRevealedDudeIds.length) return;
     if (typeof window === 'undefined') return;
     let cancelled = false;
     const tick = () => {
@@ -560,7 +612,7 @@ function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [localRevealedDudes.length, refetchInventory]);
+  }, [localRevealedDudeIds.length, refetchInventory]);
 
   useEffect(() => {
     if (!revealOverlay) return;
@@ -670,19 +722,46 @@ function App() {
     };
   }, [owner]);
 
-  const localVisibleDudes = useMemo(() => {
-    if (!localRevealedDudes.length) return [] as InventoryItem[];
+  const localRevealedDudes = useMemo(() => {
+    if (!localRevealedDudeIds.length) return [] as InventoryItem[];
     const chainDudeIds = new Set(
       inventory.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
     );
-    return localRevealedDudes.filter((entry) => !entry.dudeId || !chainDudeIds.has(entry.dudeId));
-  }, [inventory, localRevealedDudes]);
+    const out: InventoryItem[] = [];
+    localRevealedDudeIds.forEach((id) => {
+      if (chainDudeIds.has(id)) return;
+      const meta = figureMetadataById[id];
+      if (!meta?.image) return;
+      out.push({
+        id: `local-dude-${id}`,
+        name: meta.name || `Figure ${id}`,
+        kind: 'dude',
+        image: meta.image,
+        attributes: meta.attributes || [],
+        dudeId: id,
+        status: 'pending',
+      });
+    });
+    return out;
+  }, [inventory, localRevealedDudeIds, figureMetadataById]);
 
   const visibleInventory = useMemo(() => {
     const base = hiddenAssets.size ? inventory.filter((item) => !hiddenAssets.has(item.id)) : inventory;
-    if (!localVisibleDudes.length) return base;
-    return [...base, ...localVisibleDudes];
-  }, [inventory, hiddenAssets, localVisibleDudes]);
+    const enriched = base.map((item) => {
+      if (item.kind !== 'dude' || !item.dudeId) return item;
+      if (item.image && String(item.image).trim()) return item;
+      const meta = figureMetadataById[item.dudeId];
+      if (!meta?.image) return item;
+      return {
+        ...item,
+        image: meta.image,
+        name: item.name || meta.name || item.name,
+        attributes: item.attributes?.length ? item.attributes : meta.attributes,
+      };
+    });
+    if (!localRevealedDudes.length) return enriched;
+    return [...enriched, ...localRevealedDudes];
+  }, [inventory, hiddenAssets, localRevealedDudes, figureMetadataById]);
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
   const recentRevealedSet = useMemo(() => new Set(recentRevealedBoxes), [recentRevealedBoxes]);
@@ -963,7 +1042,7 @@ function App() {
       });
       removeLocalPendingReveal(boxAssetId);
       rememberRecentReveal(boxAssetId);
-      void addLocalRevealedDudes(revealed);
+      addLocalRevealedDudes(revealed);
       await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
     } catch (err) {
       console.error(err);

@@ -108,7 +108,7 @@ export function InventoryGrid({
                 )
               ) : (
                 <div className="placeholder" aria-hidden>
-                  <span>#</span>
+                  <span> </span>
                 </div>
               )}
             </div>
