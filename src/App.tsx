@@ -31,7 +31,7 @@ import {
   shortAddress,
 } from './lib/solana';
 import { countryLabel, findCountryByCode } from './lib/countries';
-import { DeliveryOrderSummary, InventoryItem, ProfileAddress } from './types';
+import { DeliveryOrderSummary, InventoryItem, PendingOpenBox, ProfileAddress } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 function hiddenInventoryKey(wallet?: string) {
@@ -136,10 +136,11 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 
 const MAX_SHIPMENT_ITEMS = 24;
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
-const REVEAL_NOTE_OFFSET = 14;
+const REVEAL_NOTE_OFFSET = 28;
 const LOCAL_PENDING_GRACE_MS = 10 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
+const BOX_FRAME_COUNT = 8;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -171,8 +172,11 @@ type RevealOverlayState = {
   originRect: OverlayRect;
   targetRect: OverlayRect;
   phase: RevealOverlayPhase;
+  frame: number;
   revealedIds?: number[];
   hasRevealAttempted?: boolean;
+  autoOpening?: boolean;
+  autoMode?: 'normal' | 'fast';
 };
 
 function toOverlayRect(rect: DOMRect): OverlayRect {
@@ -184,9 +188,10 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
   const maxHeight = viewportHeight * 0.33;
   const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * REVEAL_BOX_ASPECT_RATIO)));
   const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
+  const lift = Math.round(height * 0.42);
   return {
     left: Math.round((viewportWidth - width) / 2),
-    top: Math.round((viewportHeight - height) / 2),
+    top: Math.max(16, Math.round((viewportHeight - height) / 2) - lift),
     width,
     height,
   };
@@ -194,7 +199,7 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
 
 function formatRevealIds(ids?: number[]) {
   if (!ids || !ids.length) return 'Figures: none';
-  return '🎉';
+  return '';
 }
 
 function normalizeFigureImage(imageRaw?: string): string | undefined {
@@ -303,6 +308,10 @@ function App() {
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
   const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(owner));
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
+  const [inventorySnapshot, setInventorySnapshot] = useState<InventoryItem[]>([]);
+  const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
+  const inventoryView = revealOverlay ? inventorySnapshot : inventory;
+  const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const [localRevealedDudeIds, setLocalRevealedDudeIds] = useState<number[]>([]);
   const [figureMetadataById, setFigureMetadataById] = useState<Record<number, FigureMetadata>>({});
   const figureMetadataRef = useRef<Record<number, FigureMetadata>>({});
@@ -310,8 +319,15 @@ function App() {
   const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
   const localMintCounterRef = useRef(0);
   const knownBoxIdsRef = useRef<Set<string>>(new Set());
+  const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
+  const preloadedVideoSourcesRef = useRef<Set<string>>(new Set());
+  const preloadedVideoIdsRef = useRef<Set<number>>(new Set());
+  const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
+  const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
+  const revealOverlayRef = useRef<RevealOverlayState | null>(null);
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
+  const boxFrameBase = `${FRONTEND_DEPLOYMENT.paths.base}/box/`;
   const revealMediaBase = `${FRONTEND_DEPLOYMENT.paths.base}/figures/small-rotating/`;
 
   const TOAST_VISIBLE_MS = 1800;
@@ -332,6 +348,91 @@ function App() {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   };
+
+  const queueOverlayAction = useCallback((action: () => void) => {
+    if (revealOverlayRef.current) {
+      deferredOverlayActionsRef.current.push(action);
+      return;
+    }
+    action();
+  }, []);
+
+  const flushOverlayActions = useCallback(() => {
+    const actions = deferredOverlayActionsRef.current;
+    if (!actions.length) return;
+    deferredOverlayActionsRef.current = [];
+    actions.forEach((action) => action());
+  }, []);
+
+  const preloadBoxFrames = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    for (let i = 1; i <= BOX_FRAME_COUNT; i += 1) {
+      if (preloadedBoxFramesRef.current.has(i)) continue;
+      const img = new Image();
+      img.src = `${boxFrameBase}${i}.webp`;
+      preloadedBoxFramesRef.current.add(i);
+    }
+  }, [boxFrameBase]);
+
+  const preloadVideoSource = useCallback((src: string) => {
+    if (typeof document === 'undefined') return;
+    if (preloadedVideoSourcesRef.current.has(src)) return;
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'video';
+    link.href = src;
+    document.head.appendChild(link);
+    preloadedVideoSourcesRef.current.add(src);
+  }, []);
+
+  const ensureVideoPreloadRoot = useCallback(() => {
+    if (typeof document === 'undefined') return null;
+    if (videoPreloadRootRef.current) return videoPreloadRootRef.current;
+    const root = document.createElement('div');
+    root.setAttribute('data-reveal-video-preload', 'true');
+    root.style.position = 'absolute';
+    root.style.width = '0px';
+    root.style.height = '0px';
+    root.style.overflow = 'hidden';
+    root.style.opacity = '0';
+    root.style.pointerEvents = 'none';
+    document.body.appendChild(root);
+    videoPreloadRootRef.current = root;
+    return root;
+  }, []);
+
+  const preloadRevealVideos = useCallback(
+    (mediaIds: number[]) => {
+      if (typeof document === 'undefined') return;
+      const root = ensureVideoPreloadRoot();
+      if (!root) return;
+      mediaIds.forEach((mediaId) => {
+        if (!Number.isFinite(mediaId) || mediaId <= 0) return;
+        if (preloadedVideoIdsRef.current.has(mediaId)) return;
+        preloadedVideoIdsRef.current.add(mediaId);
+        const movSrc = `${revealMediaBase}${mediaId}.mov`;
+        const webmSrc = `${revealMediaBase}${mediaId}.webm`;
+        preloadVideoSource(movSrc);
+        preloadVideoSource(webmSrc);
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'auto';
+        video.setAttribute('aria-hidden', 'true');
+        const sourceMov = document.createElement('source');
+        sourceMov.src = movSrc;
+        sourceMov.type = 'video/quicktime; codecs="hvc1"';
+        const sourceWebm = document.createElement('source');
+        sourceWebm.src = webmSrc;
+        sourceWebm.type = 'video/webm';
+        video.appendChild(sourceMov);
+        video.appendChild(sourceWebm);
+        root.appendChild(video);
+        video.load();
+      });
+    },
+    [ensureVideoPreloadRoot, preloadVideoSource, revealMediaBase],
+  );
 
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!owner) return;
@@ -444,6 +545,14 @@ function App() {
     setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
   };
 
+  const finalizeRevealOverlayDismissal = useCallback(() => {
+    revealOverlayRef.current = null;
+    setRevealOverlay(null);
+    setRevealOverlayClosing(false);
+    setRevealOverlayActive(false);
+    flushOverlayActions();
+  }, [flushOverlayActions]);
+
   const closeRevealOverlay = () => {
     if (!revealOverlay) return;
     if (revealOverlayClosing) return;
@@ -453,9 +562,7 @@ function App() {
       revealOverlayRafRef.current = null;
     }
     if (!revealOverlayActive) {
-      setRevealOverlay(null);
-      setRevealOverlayClosing(false);
-      setRevealOverlayActive(false);
+      finalizeRevealOverlayDismissal();
       return;
     }
     setRevealOverlayClosing(true);
@@ -466,10 +573,24 @@ function App() {
       cancelAnimationFrame(revealOverlayRafRef.current);
       revealOverlayRafRef.current = null;
     }
-    setRevealOverlay(null);
-    setRevealOverlayClosing(false);
-    setRevealOverlayActive(false);
+    finalizeRevealOverlayDismissal();
   };
+
+  const startAutoOpening = useCallback((mode: 'normal' | 'fast') => {
+    setRevealOverlay((prev) => {
+      if (!prev) return prev;
+      if (prev.phase !== 'ready') return prev;
+      if (prev.autoOpening) return prev;
+      if (!prev.revealedIds || !prev.revealedIds.length) return prev;
+      if (prev.frame >= BOX_FRAME_COUNT) return prev;
+      return {
+        ...prev,
+        autoOpening: true,
+        autoMode: mode,
+        hasRevealAttempted: prev.hasRevealAttempted || mode === 'fast',
+      };
+    });
+  }, []);
 
   const openRevealOverlay = (
     id: string,
@@ -483,16 +604,23 @@ function App() {
     if (!item) return;
     const originRect = toOverlayRect(rect);
     const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
-    setRevealOverlay({
+    setInventorySnapshot(inventory);
+    setPendingOpenSnapshot(pendingOpenBoxes);
+    const nextOverlay: RevealOverlayState = {
       id,
       name: item.name,
       image: item.image || defaultBoxImage,
       originRect,
       targetRect,
       phase,
+      frame: 1,
       revealedIds: undefined,
       hasRevealAttempted: false,
-    });
+      autoOpening: false,
+      autoMode: undefined,
+    };
+    revealOverlayRef.current = nextOverlay;
+    setRevealOverlay(nextOverlay);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
     if (revealOverlayRafRef.current) {
@@ -523,6 +651,8 @@ function App() {
     setLocalPendingReveals(loadPendingReveals(owner));
     setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
+    setInventorySnapshot([]);
+    setPendingOpenSnapshot([]);
     setLocalRevealedDudeIds([]);
     setFigureMetadataById({});
     figureMetadataRef.current = {};
@@ -530,7 +660,29 @@ function App() {
     figureMetadataRetryAtRef.current.clear();
     localMintCounterRef.current = 0;
     knownBoxIdsRef.current = new Set();
+    preloadedBoxFramesRef.current.clear();
+    preloadedVideoSourcesRef.current.clear();
+    preloadedVideoIdsRef.current.clear();
+    if (videoPreloadRootRef.current) {
+      videoPreloadRootRef.current.remove();
+      videoPreloadRootRef.current = null;
+    }
+    deferredOverlayActionsRef.current = [];
   }, [owner]);
+
+  useEffect(() => {
+    if (revealOverlay) return;
+    setInventorySnapshot(inventory);
+  }, [inventory, revealOverlay]);
+
+  useEffect(() => {
+    if (revealOverlay) return;
+    setPendingOpenSnapshot(pendingOpenBoxes);
+  }, [pendingOpenBoxes, revealOverlay]);
+
+  useEffect(() => {
+    revealOverlayRef.current = revealOverlay;
+  }, [revealOverlay]);
 
   useEffect(() => {
     if (!owner) return;
@@ -548,6 +700,7 @@ function App() {
 
   useEffect(() => {
     if (!owner) return;
+    if (revealOverlay) return;
     const recentSet = new Set(recentRevealedBoxes);
     const now = Date.now();
     if (!pendingOpenBoxesFetched) {
@@ -557,10 +710,10 @@ function App() {
       }
       return;
     }
-    const onchainIds = new Set(pendingOpenBoxes.map((entry) => entry.boxAssetId).filter(Boolean));
-    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const onchainIds = new Set(pendingOpenBoxesView.map((entry) => entry.boxAssetId).filter(Boolean));
+    const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
     const nextMap = new Map<string, LocalPendingReveal>();
-    pendingOpenBoxes.forEach((entry) => {
+    pendingOpenBoxesView.forEach((entry) => {
       const id = entry.boxAssetId;
       if (!id || recentSet.has(id)) return;
       const existing = localPendingReveals.find((item) => item.id === id);
@@ -582,11 +735,20 @@ function App() {
     if (!pendingRevealListEqual(next, localPendingReveals)) {
       setLocalPendingReveals(next);
     }
-  }, [owner, pendingOpenBoxes, pendingOpenBoxesFetched, localPendingReveals, recentRevealedBoxes, inventory]);
+  }, [
+    owner,
+    pendingOpenBoxesView,
+    pendingOpenBoxesFetched,
+    localPendingReveals,
+    recentRevealedBoxes,
+    inventoryView,
+    revealOverlay,
+  ]);
 
   useEffect(() => {
+    if (revealOverlay) return;
     if (!inventoryFetched) return;
-    const currentIds = new Set(inventory.filter((item) => item.kind === 'box').map((item) => item.id));
+    const currentIds = new Set(inventoryView.filter((item) => item.kind === 'box').map((item) => item.id));
     const prevIds = knownBoxIdsRef.current;
     if (localMintedBoxes.length) {
       if (!prevIds.size) {
@@ -605,12 +767,13 @@ function App() {
       }
     }
     knownBoxIdsRef.current = currentIds;
-  }, [inventory, inventoryFetched, localMintedBoxes.length]);
+  }, [inventoryView, inventoryFetched, localMintedBoxes.length, revealOverlay]);
 
   useEffect(() => {
+    if (revealOverlay) return;
     if (!localRevealedDudeIds.length) return;
     const chainDudes = new Map<number, InventoryItem>();
-    inventory.forEach((item) => {
+    inventoryView.forEach((item) => {
       if (item.kind !== 'dude') return;
       if (!item.dudeId) return;
       chainDudes.set(item.dudeId, item);
@@ -625,21 +788,21 @@ function App() {
       });
       return next.length === prev.length ? prev : next;
     });
-  }, [inventory, localRevealedDudeIds, figureMetadataById]);
+  }, [inventoryView, localRevealedDudeIds, figureMetadataById, revealOverlay]);
 
   const figureIdsNeedingMetadata = useMemo(() => {
     const ids = new Set<number>();
     localRevealedDudeIds.forEach((id) => {
       if (!figureMetadataById[id]?.image) ids.add(id);
     });
-    inventory.forEach((item) => {
+    inventoryView.forEach((item) => {
       if (item.kind !== 'dude') return;
       if (!item.dudeId) return;
       if (item.image && String(item.image).trim()) return;
       if (!figureMetadataById[item.dudeId]?.image) ids.add(item.dudeId);
     });
     return Array.from(ids);
-  }, [inventory, localRevealedDudeIds, figureMetadataById]);
+  }, [inventoryView, localRevealedDudeIds, figureMetadataById]);
 
   useEffect(() => {
     if (!figureIdsNeedingMetadata.length) return;
@@ -651,7 +814,7 @@ function App() {
     return () => window.clearInterval(interval);
   }, [figureIdsNeedingMetadata, queueFigureMetadataFetch]);
 
-  const shouldPollInventory = localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0;
+  const shouldPollInventory = !revealOverlay && (localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0);
 
   useEffect(() => {
     if (!shouldPollInventory) return;
@@ -668,6 +831,35 @@ function App() {
       window.clearInterval(interval);
     };
   }, [shouldPollInventory, refetchInventory]);
+
+  useEffect(() => {
+    if (!revealOverlay || !revealOverlay.autoOpening) return;
+    if (revealOverlayClosing) return;
+    if (revealOverlay.frame >= BOX_FRAME_COUNT) {
+      setRevealOverlay((prev) => {
+        if (!prev) return prev;
+        if (!prev.autoOpening) return prev;
+        return { ...prev, autoOpening: false, autoMode: undefined };
+      });
+      return;
+    }
+    if (typeof window === 'undefined') return;
+    const delay = revealOverlay.autoMode === 'fast' ? 120 : 220;
+    const timeout = window.setTimeout(() => {
+      setRevealOverlay((prev) => {
+        if (!prev || !prev.autoOpening) return prev;
+        const nextFrame = Math.min(prev.frame + 1, BOX_FRAME_COUNT);
+        const nextPhase =
+          prev.phase === 'revealed'
+            ? prev.phase
+            : prev.revealedIds && prev.revealedIds.length && nextFrame >= 7
+              ? 'revealed'
+              : prev.phase;
+        return { ...prev, frame: nextFrame, phase: nextPhase };
+      });
+    }, delay);
+    return () => window.clearTimeout(timeout);
+  }, [revealOverlay, revealOverlayClosing]);
 
   useEffect(() => {
     if (!revealOverlay) return;
@@ -780,7 +972,7 @@ function App() {
   const localRevealedDudes = useMemo(() => {
     if (!localRevealedDudeIds.length) return [] as InventoryItem[];
     const chainDudeIds = new Set(
-      inventory.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
+      inventoryView.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
     );
     const out: InventoryItem[] = [];
     localRevealedDudeIds.forEach((id) => {
@@ -798,10 +990,10 @@ function App() {
       });
     });
     return out;
-  }, [inventory, localRevealedDudeIds, figureMetadataById]);
+  }, [inventoryView, localRevealedDudeIds, figureMetadataById]);
 
   const visibleInventory = useMemo(() => {
-    const base = hiddenAssets.size ? inventory.filter((item) => !hiddenAssets.has(item.id)) : inventory;
+    const base = hiddenAssets.size ? inventoryView.filter((item) => !hiddenAssets.has(item.id)) : inventoryView;
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
         if (item.image && String(item.image).trim()) return item;
@@ -820,7 +1012,7 @@ function App() {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventory, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage]);
+  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage]);
 
   const localMintedItems = useMemo<InventoryItem[]>(() => {
     if (!localMintedBoxes.length) return [] as InventoryItem[];
@@ -835,8 +1027,8 @@ function App() {
 
   const recentRevealedSet = useMemo(() => new Set(recentRevealedBoxes), [recentRevealedBoxes]);
   const pendingOpenBoxesFiltered = useMemo(
-    () => pendingOpenBoxes.filter((entry) => entry.boxAssetId && !recentRevealedSet.has(entry.boxAssetId)),
-    [pendingOpenBoxes, recentRevealedSet],
+    () => pendingOpenBoxesView.filter((entry) => entry.boxAssetId && !recentRevealedSet.has(entry.boxAssetId)),
+    [pendingOpenBoxesView, recentRevealedSet],
   );
   const localPendingFiltered = useMemo(
     () => localPendingReveals.filter((entry) => !recentRevealedSet.has(entry.id)),
@@ -852,9 +1044,18 @@ function App() {
     });
     return ids;
   }, [pendingOpenBoxesFiltered, localPendingFiltered]);
+  const shouldPreloadBoxFrames =
+    Boolean(revealOverlay) ||
+    pendingRevealIds.size > 0 ||
+    localMintedBoxes.length > 0 ||
+    inventoryView.some((item) => item.kind === 'box');
+  useEffect(() => {
+    if (!shouldPreloadBoxFrames) return;
+    preloadBoxFrames();
+  }, [shouldPreloadBoxFrames, preloadBoxFrames]);
   const pendingRevealItems = useMemo(() => {
     if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
-    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
     const localById = new Map(localPendingFiltered.map((entry) => [entry.id, entry]));
     const seen = new Set<string>();
     const pendingItems: InventoryItem[] = [];
@@ -885,7 +1086,7 @@ function App() {
       });
     });
     return pendingItems;
-  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventory, defaultBoxImage]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, defaultBoxImage]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
@@ -910,11 +1111,11 @@ function App() {
 
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
-    const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+    const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
     return Array.from(selected)
       .map((id) => inventoryById.get(id))
       .filter((item): item is InventoryItem => Boolean(item));
-  }, [selected, inventory]);
+  }, [selected, inventoryView]);
   const selectedCount = selected.size;
   const [compactPanel, setCompactPanel] = useState(false);
   const selectedPreview = useMemo(() => {
@@ -1075,14 +1276,24 @@ function App() {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalPendingReveal(item);
+      queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;
-        return { ...prev, phase: 'ready', revealedIds: undefined, hasRevealAttempted: false };
+        return {
+          ...prev,
+          phase: 'ready',
+          frame: 1,
+          revealedIds: undefined,
+          hasRevealAttempted: false,
+          autoOpening: false,
+          autoMode: undefined,
+        };
       });
       // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
-      markAssetsHidden([item.id]);
-      await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
+      queueOverlayAction(() => markAssetsHidden([item.id]));
+      queueOverlayAction(() => {
+        void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
+      });
     } catch (err) {
       console.error(err);
       if (!isUserRejectedError(err)) {
@@ -1104,14 +1315,30 @@ function App() {
     try {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
+      if (revealed.length) {
+        const mediaIds = Array.from(
+          new Set(
+            revealed
+              .map((figureId) => getMediaIdForFigureId(figureId))
+              .filter((mediaId): mediaId is number => Boolean(mediaId)),
+          ),
+        ).slice(0, 3);
+        if (mediaIds.length) {
+          preloadRevealVideos(mediaIds);
+        }
+      }
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== boxAssetId) return prev;
-        return { ...prev, phase: 'revealed', revealedIds: revealed };
+        const nextPhase =
+          prev.phase === 'preparing' ? prev.phase : prev.frame >= 7 && revealed.length ? 'revealed' : 'ready';
+        return { ...prev, phase: nextPhase, revealedIds: revealed };
       });
-      removeLocalPendingReveal(boxAssetId);
-      rememberRecentReveal(boxAssetId);
-      addLocalRevealedDudes(revealed);
-      await Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
+      queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
+      queueOverlayAction(() => rememberRecentReveal(boxAssetId));
+      queueOverlayAction(() => addLocalRevealedDudes(revealed));
+      queueOverlayAction(() => {
+        void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
+      });
     } catch (err) {
       console.error(err);
       const code = (err as { code?: string })?.code;
@@ -1124,18 +1351,47 @@ function App() {
   };
 
   const handleRevealOverlayClick = () => {
-    if (!revealOverlay || revealOverlayClosing || revealLoading) return;
+    if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.phase !== 'ready') return;
+    if (revealOverlay.autoOpening) return;
+    if (revealOverlay.frame >= BOX_FRAME_COUNT) return;
     if (!publicKey) {
       showToast('Connect wallet first');
       return;
     }
+    const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;
-      if (prev.hasRevealAttempted) return prev;
-      return { ...prev, hasRevealAttempted: true };
+      if (prev.phase !== 'ready') return prev;
+      if (prev.autoOpening) return prev;
+      const hasResults = Boolean(prev.revealedIds?.length);
+      const maxFrame = hasResults ? 6 : 5;
+      const nextFrame = prev.frame < maxFrame ? prev.frame + 1 : prev.frame;
+      const shouldAuto = hasResults && nextFrame === 6 && prev.frame !== nextFrame;
+      return {
+        ...prev,
+        frame: nextFrame,
+        hasRevealAttempted: true,
+        autoOpening: shouldAuto ? true : prev.autoOpening,
+        autoMode: shouldAuto ? 'normal' : prev.autoMode,
+      };
     });
-    void handleRevealDudes(revealOverlay.id);
+    if (shouldSendReveal) {
+      void handleRevealDudes(revealOverlay.id);
+    }
+  };
+
+  const handleRevealOverlayBackdropClick = () => {
+    if (!revealOverlay || revealOverlayClosing) return;
+    const hasResults = Boolean(revealOverlay.revealedIds?.length);
+    if (hasResults && revealOverlay.frame < BOX_FRAME_COUNT) {
+      startAutoOpening('fast');
+      return;
+    }
+    if (revealOverlay.hasRevealAttempted && revealLoading === revealOverlay.id) {
+      return;
+    }
+    closeRevealOverlay();
   };
 
   const handleOpenSelectedBox = async () => {
@@ -1231,7 +1487,7 @@ function App() {
       await signIn();
     }
     const deliverableIds = itemIds.filter((id) => {
-      const item = inventory.find((entry) => entry.id === id);
+      const item = inventoryView.find((entry) => entry.id === id);
       return item && item.kind !== 'certificate' && !pendingRevealIds.has(id);
     });
     if (!deliverableIds.length) throw new Error('Select boxes or figures to ship');
@@ -1378,22 +1634,31 @@ function App() {
         };
       })()
     : undefined;
-  const revealedMedia = useMemo(() => {
-    if (!revealOverlay || revealOverlay.phase !== 'revealed') return [] as { figureId: number; mediaId: number }[];
-    const ids = revealOverlay.revealedIds || [];
-    if (!ids.length) return [] as { figureId: number; mediaId: number }[];
+  const showRevealOutcome = Boolean(
+    revealOverlay && revealOverlay.revealedIds?.length && revealOverlay.frame >= 7,
+  );
+  const revealOverlayStage = revealOverlay
+    ? revealOverlay.phase === 'preparing'
+      ? 'preparing'
+      : showRevealOutcome
+        ? 'revealed'
+        : 'ready'
+    : 'ready';
+  const revealMediaIds = useMemo(() => {
+    if (!revealOverlay?.revealedIds?.length) return [] as number[];
     const seen = new Set<number>();
-    return ids
+    return revealOverlay.revealedIds
       .map((figureId) => {
         const mediaId = getMediaIdForFigureId(figureId);
         if (!mediaId) return null;
         if (seen.has(mediaId)) return null;
         seen.add(mediaId);
-        return { figureId, mediaId };
+        return mediaId;
       })
-      .slice(0, 3)
-      .filter((entry): entry is { figureId: number; mediaId: number } => Boolean(entry));
-  }, [revealOverlay]);
+      .filter((entry): entry is number => Boolean(entry))
+      .slice(0, 3);
+  }, [revealOverlay?.revealedIds]);
+  const revealedMedia = useMemo(() => (showRevealOutcome ? revealMediaIds : []), [revealMediaIds, showRevealOutcome]);
   const revealMediaStyle = useMemo(() => {
     if (!revealOverlay || !revealedMedia.length) return undefined;
     const width = revealOverlay.targetRect.width;
@@ -1409,11 +1674,19 @@ function App() {
       ['--reveal-media-size' as never]: `${size}px`,
     };
   }, [revealOverlay, revealedMedia.length]);
+  useEffect(() => {
+    if (!revealMediaIds.length) return;
+    preloadRevealVideos(revealMediaIds);
+  }, [revealMediaIds, preloadRevealVideos]);
+  const revealBoxFrameSrc =
+    revealOverlay && revealOverlay.frame
+      ? `${boxFrameBase}${Math.min(Math.max(revealOverlay.frame, 1), BOX_FRAME_COUNT)}.webp`
+      : '';
   const revealOverlayNote =
-    revealOverlay?.phase === 'preparing'
+    revealOverlayStage === 'preparing'
       ? 'preparing to unbox...'
-      : revealOverlay?.phase === 'revealed'
-        ? formatRevealIds(revealOverlay.revealedIds)
+      : revealOverlayStage === 'revealed'
+        ? ''
         : revealOverlay
           ? revealOverlay.hasRevealAttempted
             ? 'keep clicking the box'
@@ -1429,10 +1702,10 @@ function App() {
       ) : null}
       {revealOverlay ? (
         <div
-          className={`reveal-overlay reveal-overlay--${revealOverlay.phase}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
+          className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
           role="presentation"
           style={revealOverlayStyle}
-          onClick={closeRevealOverlay}
+          onClick={handleRevealOverlayBackdropClick}
         >
           <div className="reveal-overlay__backdrop" />
           <div
@@ -1440,16 +1713,14 @@ function App() {
             onTransitionEnd={(evt) => {
               if (evt.propertyName !== 'opacity') return;
               if (!revealOverlayClosing) return;
-              setRevealOverlay(null);
-              setRevealOverlayClosing(false);
-              setRevealOverlayActive(false);
+              finalizeRevealOverlayDismissal();
             }}
           >
             {revealedMedia.length ? (
               <div className="reveal-overlay__media" style={revealMediaStyle} aria-hidden="true">
-                {revealedMedia.map((entry, index) => (
+                {revealedMedia.map((mediaId, index) => (
                   <div
-                    key={`${entry.figureId}-${entry.mediaId}`}
+                    key={mediaId}
                     className={`reveal-overlay__media-item reveal-overlay__media-item--${['top', 'left', 'right'][index] || 'top'}`}
                   >
                     <div
@@ -1458,10 +1729,10 @@ function App() {
                     >
                       <video className="reveal-overlay__video" autoPlay muted loop playsInline preload="metadata">
                         <source
-                          src={`${revealMediaBase}${entry.mediaId}.mov`}
+                          src={`${revealMediaBase}${mediaId}.mov`}
                           type='video/quicktime; codecs="hvc1"'
                         />
-                        <source src={`${revealMediaBase}${entry.mediaId}.webm`} type="video/webm" />
+                        <source src={`${revealMediaBase}${mediaId}.webm`} type="video/webm" />
                       </video>
                     </div>
                   </div>
@@ -1473,13 +1744,18 @@ function App() {
               className="reveal-overlay__box"
               aria-label={`Reveal ${revealOverlay.name}`}
               aria-busy={revealLoading === revealOverlay.id}
-              aria-disabled={revealOverlayClosing || revealLoading === revealOverlay.id || revealOverlay.phase !== 'ready'}
+              aria-disabled={
+                revealOverlayClosing ||
+                revealOverlay.phase !== 'ready' ||
+                revealOverlay.autoOpening ||
+                revealOverlay.frame >= BOX_FRAME_COUNT
+              }
               onClick={(evt) => {
                 evt.stopPropagation();
                 handleRevealOverlayClick();
               }}
             >
-              <img src={revealOverlay.image} alt={revealOverlay.name} className="reveal-overlay__image" />
+              <img src={revealBoxFrameSrc} alt={revealOverlay.name} className="reveal-overlay__image" />
             </button>
           </div>
           <div className="reveal-overlay__note">{revealOverlayNote}</div>

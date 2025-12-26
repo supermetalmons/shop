@@ -786,11 +786,13 @@ button.quiet:hover:not(:disabled) {
 
 .reveal-overlay__note {
   position: absolute;
-  left: var(--reveal-target-left);
-  top: calc(var(--reveal-target-top) + var(--reveal-target-height) + var(--reveal-note-offset));
-  width: var(--reveal-target-width);
+  left: 50%;
+  bottom: var(--reveal-note-offset);
+  transform: translateX(-50%);
+  width: min(360px, 90vw);
   text-align: center;
   font-size: 13px;
+  font-weight: 300;
   letter-spacing: 0.01em;
   color: rgba(255, 255, 255, 0.78);
   opacity: 0;
