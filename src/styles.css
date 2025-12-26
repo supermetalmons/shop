@@ -238,6 +238,13 @@ header.top {
   align-items: flex-end;
 }
 
+.mint-panel__cta-stack {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 .mint-panel__footer--soldout .mint-panel__info {
   grid-column: 1 / 2;
 }
@@ -263,6 +270,26 @@ header.top {
   align-items: center;
   column-gap: 16px;
   text-align: left;
+}
+
+.mint-panel__discount {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 2px);
+  transform: translateX(-50%);
+  padding: 1px 10px;
+  font-size: 12px;
+  line-height: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+}
+
+.mint-panel__discount.ghost:hover:not(:disabled) {
+  background: transparent;
 }
 
 .mint-panel__secondary {
@@ -364,6 +391,10 @@ header.top {
 
   .mint-panel__cta {
     align-items: stretch;
+  }
+
+  .mint-panel__cta-stack {
+    width: 100%;
   }
 
   .mint-panel__footer--soldout .mint-panel__info,

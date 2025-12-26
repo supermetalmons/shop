@@ -291,6 +291,7 @@ function App() {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [discountSignInPending, setDiscountSignInPending] = useState(false);
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
@@ -939,6 +940,29 @@ function App() {
   }, [owner, walletBusy]);
 
   useEffect(() => {
+    if (!discountSignInPending || !publicKey || authLoading) return;
+    setDiscountSignInPending(false);
+    if (token) {
+      showToast('Signed in.');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        await signIn();
+        if (!cancelled) showToast('Signed in.');
+      } catch (err) {
+        if (cancelled) return;
+        if (isUserRejectedError(err)) return;
+        showToast(err instanceof Error ? err.message : 'Failed to sign in');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, discountSignInPending, publicKey, signIn, token]);
+
+  useEffect(() => {
     return () => {
       if (toastFadeTimeoutRef.current) {
         clearTimeout(toastFadeTimeoutRef.current);
@@ -1475,6 +1499,21 @@ function App() {
     showToast('Signed in. Saved addresses loaded.');
   };
 
+  const handleDiscountSignIn = async () => {
+    if (!publicKey) {
+      setDiscountSignInPending(true);
+      setVisible(true);
+      return;
+    }
+    try {
+      await signIn();
+      showToast('Signed in.');
+    } catch (err) {
+      if (isUserRejectedError(err)) return;
+      showToast(err instanceof Error ? err.message : 'Failed to sign in');
+    }
+  };
+
   const handleRequestDelivery = async (addressId: string | null) => {
     if (!publicKey) throw new Error('Connect wallet first');
     if (!addressId) throw new Error('Select a shipping address');
@@ -1776,6 +1815,9 @@ function App() {
         busy={minting}
         onError={showToast}
         secondaryHref={secondaryLinks[0]?.href}
+        walletConnected={Boolean(publicKey)}
+        onDiscountClick={handleDiscountSignIn}
+        discountBusy={walletBusy}
       />
 
       {mintedOut ? (

@@ -9,6 +9,9 @@ interface MintPanelProps {
   busy: boolean;
   onError?: (message: string) => void;
   secondaryHref?: string;
+  walletConnected?: boolean;
+  onDiscountClick?: () => void;
+  discountBusy?: boolean;
 }
 
 /**
@@ -96,7 +99,16 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
   return best;
 }
 
-export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintPanelProps) {
+export function MintPanel({
+  stats,
+  onMint,
+  busy,
+  onError,
+  secondaryHref,
+  walletConnected,
+  onDiscountClick,
+  discountBusy,
+}: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
@@ -150,6 +162,7 @@ export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintP
   const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
   const totalPriceLabel = String(quantity);
   const formId = 'mint-form';
+  const showDiscountButton = !walletConnected && !soldOut;
 
   return (
     <section className="card mint-panel">
@@ -228,25 +241,31 @@ export function MintPanel({ stats, onMint, busy, onError, secondaryHref }: MintP
             ) : null}
           </form>
           <div className="mint-panel__cta">
-            <button
-              type="submit"
-              form={formId}
-              className={busy ? 'mint-panel__submit mint-panel__submit--busy' : 'mint-panel__submit'}
-              disabled={busy || quantity < 1 || quantity > maxSelectable}
-            >
-              {busy ? (
-                <span className="mint-panel__submit-text">Minting…</span>
-              ) : (
-                <>
-                  <span className="mint-panel__submit-text">Mint</span>
-                  <span className="mint-panel__submit-price">{totalPriceLabel} SOL</span>
-                </>
-              )}
-            </button>
+            <div className="mint-panel__cta-stack">
+              <button
+                type="submit"
+                form={formId}
+                className={busy ? 'mint-panel__submit mint-panel__submit--busy' : 'mint-panel__submit'}
+                disabled={busy || quantity < 1 || quantity > maxSelectable}
+              >
+                {busy ? (
+                  <span className="mint-panel__submit-text">Minting…</span>
+                ) : (
+                  <>
+                    <span className="mint-panel__submit-text">Mint</span>
+                    <span className="mint-panel__submit-price">{totalPriceLabel} SOL</span>
+                  </>
+                )}
+              </button>
+              {showDiscountButton ? (
+                <button type="button" className="mint-panel__discount ghost" onClick={onDiscountClick} disabled={discountBusy}>
+                  <span className="mint-panel__discount-text">get lsw discount</span>
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       )}
     </section>
   );
 }
-

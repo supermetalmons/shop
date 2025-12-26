@@ -6,7 +6,6 @@ import {
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import {
-  LedgerWalletAdapter,
   PhantomWalletAdapter,
 } from '@solana/wallet-adapter-wallets';
 import { GlowWalletAdapter } from '@solana/wallet-adapter-glow';
@@ -41,7 +40,6 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
-      new LedgerWalletAdapter(),
       new GlowWalletAdapter({ network }),
     ],
     [],
