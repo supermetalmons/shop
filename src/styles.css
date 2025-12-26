@@ -804,6 +804,11 @@ button.quiet:hover:not(:disabled) {
   opacity: 1;
 }
 
+.reveal-overlay--revealed.reveal-overlay--active .reveal-overlay__note {
+  animation: reveal-note-fade 1.8s ease forwards;
+  animation-delay: 0.35s;
+}
+
 .reveal-overlay--closing .reveal-overlay__note {
   opacity: 0;
 }
@@ -839,6 +844,16 @@ button.quiet:hover:not(:disabled) {
   display: block;
 }
 
+@keyframes reveal-note-fade {
+  0%,
+  65% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   .inventory__item--selectable:focus-visible {
     outline: 2px solid rgba(41, 151, 255, 0.45);
@@ -870,6 +885,10 @@ button.quiet:hover:not(:disabled) {
   }
 
   .reveal-overlay__media-float {
+    animation-duration: 1ms;
+  }
+
+  .reveal-overlay--revealed.reveal-overlay--active .reveal-overlay__note {
     animation-duration: 1ms;
   }
 }
