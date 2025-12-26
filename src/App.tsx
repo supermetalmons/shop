@@ -336,6 +336,7 @@ function App() {
   const [discountMinting, setDiscountMinting] = useState(false);
   const [discountEligible, setDiscountEligible] = useState(false);
   const [discountChecking, setDiscountChecking] = useState(false);
+  const [guestDiscountReady, setGuestDiscountReady] = useState(false);
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
@@ -1277,6 +1278,23 @@ function App() {
   }, [mintStats]);
 
   useEffect(() => {
+    if (publicKey || mintedOut || walletBusy) {
+      setGuestDiscountReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setGuestDiscountReady(true), 300);
+    return () => window.clearTimeout(timer);
+  }, [mintedOut, publicKey, walletBusy]);
+
+  const discountCtaState = useMemo(() => {
+    if (mintedOut) return { visible: false, label: '' };
+    if (walletBusy) return { visible: false, label: '' };
+    if (!publicKey) return { visible: guestDiscountReady, label: 'lsw discount' };
+    if (discountChecking) return { visible: false, label: '' };
+    return { visible: discountEligible, label: 'mint one for 0.55 SOL' };
+  }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
+
+  useEffect(() => {
     if (!publicKey || mintedOut || discountUsed) {
       setDiscountEligible(false);
       setDiscountChecking(false);
@@ -1922,7 +1940,8 @@ function App() {
         busy={minting}
         onError={showToast}
         secondaryHref={secondaryLinks[0]?.href}
-        discountEligible={discountEligible}
+        discountVisible={discountCtaState.visible}
+        discountLabel={discountCtaState.label}
         onDiscountClick={handleDiscountMint}
         discountBusy={discountMinting || discountChecking || minting || walletBusy}
       />

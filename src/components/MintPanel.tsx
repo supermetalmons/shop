@@ -9,7 +9,8 @@ interface MintPanelProps {
   busy: boolean;
   onError?: (message: string) => void;
   secondaryHref?: string;
-  discountEligible?: boolean;
+  discountVisible?: boolean;
+  discountLabel?: string;
   onDiscountClick?: () => void;
   discountBusy?: boolean;
 }
@@ -105,7 +106,8 @@ export function MintPanel({
   busy,
   onError,
   secondaryHref,
-  discountEligible,
+  discountVisible,
+  discountLabel,
   onDiscountClick,
   discountBusy,
 }: MintPanelProps) {
@@ -162,7 +164,8 @@ export function MintPanel({
   const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
   const totalPriceLabel = String(quantity);
   const formId = 'mint-form';
-  const showDiscountButton = Boolean(discountEligible) && !soldOut;
+  const showDiscountButton = Boolean(discountVisible) && !soldOut;
+  const discountText = discountLabel || 'mint one for 0.55 SOL';
 
   return (
     <section className="card mint-panel">
@@ -259,7 +262,7 @@ export function MintPanel({
               </button>
               {showDiscountButton ? (
                 <button type="button" className="mint-panel__discount ghost" onClick={onDiscountClick} disabled={discountBusy}>
-                  <span className="mint-panel__discount-text">mint one for 0.55 SOL</span>
+                  <span className="mint-panel__discount-text">{discountText}</span>
                 </button>
               ) : null}
             </div>
