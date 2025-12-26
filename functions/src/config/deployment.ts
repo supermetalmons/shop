@@ -43,7 +43,7 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   priceSol: 0.01,
-  discountPriceSol: 0.55,
+  discountPriceSol: 0.005,
   discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
   maxSupply: 333,
   maxPerTx: 15,
@@ -51,10 +51,10 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   symbol: 'box',
 
   // On-chain ids
-  boxMinterProgramId: 'EjQZc3Y89f565WPZA2zRLdJYXGe6EQuikf7bMhkPe1Q1',
-  collectionMint: '6xKgdNoHpKbVJkhvXoRnCbNbZcEXrPXVLJxCKjUFPd58',
-  receiptsMerkleTree: '55mPLPSDVdk3AgYKvuPgsHkcvNf67HTGiRFB42qd5KYR',
-  deliveryLookupTable: 'A9h4kP4Z9ATtbNTrHwvgrgMVjL9JXVVKuP5R5kJxajvt',
+  boxMinterProgramId: 'Gqc3nnkYegyk4SDFdFY5hRDc4kA7cmW4SJ3PmTC65ege',
+  collectionMint: '7qyqJFvHgUftmtGkTCvAuBK55i6FZhp5dYaSd3E5BBhk',
+  receiptsMerkleTree: '6QGMeeWGjWdfDnApm4pKg29sU87RY8qBCW2v3hvcvpDT',
+  deliveryLookupTable: '5qMw1HhkohDej8mP74K2SUMPqwcDQ7qdLPDMzyHkWAJA',
 };
 
 export type DropPaths = {

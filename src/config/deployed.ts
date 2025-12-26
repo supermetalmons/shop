@@ -31,14 +31,14 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   metadataBase: 'https://assets.mons.link/drops/lsb',
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   priceSol: 0.01,
-  discountPriceSol: 0.55,
+  discountPriceSol: 0.005,
   discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
   maxSupply: 333,
   maxPerTx: 15,
   namePrefix: 'box',
   symbol: 'box',
-  boxMinterProgramId: 'EjQZc3Y89f565WPZA2zRLdJYXGe6EQuikf7bMhkPe1Q1',
-  collectionMint: '6xKgdNoHpKbVJkhvXoRnCbNbZcEXrPXVLJxCKjUFPd58',
+  boxMinterProgramId: 'Gqc3nnkYegyk4SDFdFY5hRDc4kA7cmW4SJ3PmTC65ege',
+  collectionMint: '7qyqJFvHgUftmtGkTCvAuBK55i6FZhp5dYaSd3E5BBhk',
 };
 
 export type DropPaths = {

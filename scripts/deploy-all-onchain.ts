@@ -19,7 +19,6 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
-import { getConcurrentMerkleTreeAccountSize } from '@solana/spl-account-compression';
 
 // MPL Core program id.
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
@@ -61,6 +60,15 @@ const FIRESTORE_DROP_COLLECTIONS_TO_DELETE = ['boxAssignments', 'dudeAssignments
 // NOTE: Not every marketplace enforces royalties, but this is the canonical on-chain royalty configuration.
 const CORE_COLLECTION_ROYALTIES_BPS = 500; // 5.00%
 // ---------------------------------------------------------------------------
+
+function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
+  // Matches @solana/spl-account-compression sizing (ConcurrentMerkleTreeHeaderDataV1 + tree + optional canopy).
+  const headerSize = 4 + 4 + 32 + 8 + 1 + 5;
+  const nodeSize = 40 + 32 * maxDepth;
+  const treeSize = 24 + (maxBufferSize + 1) * nodeSize;
+  const canopySize = canopyDepth > 0 ? Math.max((Math.pow(2, canopyDepth + 1) - 2) * 32, 0) : 0;
+  return 2 + headerSize + treeSize + canopySize;
+}
 
 async function promptMaskedInput(prompt: string): Promise<string> {
   if (!process.stdin.isTTY) {
@@ -1600,7 +1608,7 @@ async function main() {
     // Set to `undefined` to default payments to the deployer/admin key.
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 0.01,
-    discountPriceSol: 0.55,
+    discountPriceSol: 0.005,
     discountMerkleRoot: discountMerkle.root,
     maxSupply: 333,
     maxPerTx: 15,

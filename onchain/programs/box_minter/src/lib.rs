@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
+use solana_sha256_hasher::hashv;
 
-declare_id!("EjQZc3Y89f565WPZA2zRLdJYXGe6EQuikf7bMhkPe1Q1");
+declare_id!("Gqc3nnkYegyk4SDFdFY5hRDc4kA7cmW4SJ3PmTC65ege");
 
 /// The only signer allowed to run `initialize()`.
 ///
