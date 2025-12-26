@@ -1291,7 +1291,7 @@ function App() {
     if (walletBusy) return { visible: false, label: '' };
     if (!publicKey) return { visible: guestDiscountReady, label: 'lsw discount' };
     if (discountChecking) return { visible: false, label: '' };
-    return { visible: discountEligible, label: 'mint one for 0.55 SOL' };
+    return { visible: discountEligible, label: 'Mint one for 0.55 SOL' };
   }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
 
   useEffect(() => {
