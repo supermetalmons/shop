@@ -21,6 +21,7 @@ import {
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
+import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
@@ -193,7 +194,7 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
 
 function formatRevealIds(ids?: number[]) {
   if (!ids || !ids.length) return 'Figures: none';
-  return `🎉 Figures: ${ids.join(', ')}`;
+  return '🎉';
 }
 
 function normalizeFigureImage(imageRaw?: string): string | undefined {
@@ -311,6 +312,7 @@ function App() {
   const knownBoxIdsRef = useRef<Set<string>>(new Set());
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
+  const revealMediaBase = `${FRONTEND_DEPLOYMENT.paths.base}/figures/small-rotating/`;
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -1376,6 +1378,37 @@ function App() {
         };
       })()
     : undefined;
+  const revealedMedia = useMemo(() => {
+    if (!revealOverlay || revealOverlay.phase !== 'revealed') return [] as { figureId: number; mediaId: number }[];
+    const ids = revealOverlay.revealedIds || [];
+    if (!ids.length) return [] as { figureId: number; mediaId: number }[];
+    const seen = new Set<number>();
+    return ids
+      .map((figureId) => {
+        const mediaId = getMediaIdForFigureId(figureId);
+        if (!mediaId) return null;
+        if (seen.has(mediaId)) return null;
+        seen.add(mediaId);
+        return { figureId, mediaId };
+      })
+      .slice(0, 3)
+      .filter((entry): entry is { figureId: number; mediaId: number } => Boolean(entry));
+  }, [revealOverlay]);
+  const revealMediaStyle = useMemo(() => {
+    if (!revealOverlay || !revealedMedia.length) return undefined;
+    const width = revealOverlay.targetRect.width;
+    const height = revealOverlay.targetRect.height;
+    const base = Math.min(width, height);
+    const baseSize = Math.floor(Math.min(base * 0.7, 240));
+    const widthCap = width < 240 ? 0.42 : width < 320 ? 0.48 : width < 420 ? 0.52 : 0.6;
+    const maxByWidth = Math.floor(width * widthCap);
+    const maxByHeight = Math.floor(height * 0.9);
+    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
+    const size = Math.max(64, maxSize);
+    return {
+      ['--reveal-media-size' as never]: `${size}px`,
+    };
+  }, [revealOverlay, revealedMedia.length]);
   const revealOverlayNote =
     revealOverlay?.phase === 'preparing'
       ? 'preparing to unbox...'
@@ -1412,6 +1445,29 @@ function App() {
               setRevealOverlayActive(false);
             }}
           >
+            {revealedMedia.length ? (
+              <div className="reveal-overlay__media" style={revealMediaStyle} aria-hidden="true">
+                {revealedMedia.map((entry, index) => (
+                  <div
+                    key={`${entry.figureId}-${entry.mediaId}`}
+                    className={`reveal-overlay__media-item reveal-overlay__media-item--${['top', 'left', 'right'][index] || 'top'}`}
+                  >
+                    <div
+                      className="reveal-overlay__media-float"
+                      style={{ ['--reveal-float-delay' as never]: `${index * 0.35}s` }}
+                    >
+                      <video className="reveal-overlay__video" autoPlay muted loop playsInline preload="metadata">
+                        <source
+                          src={`${revealMediaBase}${entry.mediaId}.mov`}
+                          type='video/quicktime; codecs="hvc1"'
+                        />
+                        <source src={`${revealMediaBase}${entry.mediaId}.webm`} type="video/webm" />
+                      </video>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <button
               type="button"
               className="reveal-overlay__box"
