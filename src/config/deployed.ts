@@ -15,6 +15,8 @@ export type FrontendDeployedConfig = {
   // Drop config (kept in sync with on-chain config; useful for UI defaults)
   treasury: string;
   priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -29,6 +31,8 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   metadataBase: 'https://assets.mons.link/drops/lsb',
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   priceSol: 0.01,
+  discountPriceSol: 0.55,
+  discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
   maxSupply: 333,
   maxPerTx: 15,
   namePrefix: 'box',

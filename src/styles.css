@@ -277,7 +277,6 @@ header.top {
   left: 50%;
   top: calc(100% + 2px);
   transform: translateX(-50%);
-  padding: 1px 10px;
   font-size: 12px;
   line-height: 13px;
   font-weight: 500;
@@ -286,6 +285,10 @@ header.top {
   align-items: center;
   gap: 4px;
   background: transparent;
+}
+
+.mint-panel__discount.ghost {
+  padding: 1px 10px;
 }
 
 .mint-panel__discount.ghost:hover:not(:disabled) {

@@ -12,6 +12,7 @@ import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
+const DISCOUNT_RECORD_SEED = 'discount';
 const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
 const MAX_MINTS_PER_TX = FRONTEND_DEPLOYMENT.maxPerTx;
@@ -44,6 +45,7 @@ async function retryRpc<T>(
 // Anchor discriminators (sha256("global:<name>")[0..8]).
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
+const IX_MINT_DISCOUNTED_BOX = Uint8Array.from([0x1d, 0xe3, 0xc9, 0x63, 0xa4, 0x40, 0x25, 0x8b]);
 const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0x28, 0x8f]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
@@ -56,6 +58,8 @@ export interface BoxMinterConfigAccount {
   treasury: PublicKey;
   coreCollection: PublicKey;
   priceLamports: bigint;
+  discountPriceLamports: bigint;
+  discountMerkleRoot: Uint8Array;
   maxSupply: number;
   maxPerTx: number;
   started: boolean;
@@ -72,6 +76,10 @@ export function boxMinterProgramId(): PublicKey {
 
 export function boxMinterConfigPda(programId = boxMinterProgramId()): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
+}
+
+export function discountMintRecordPda(payer: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([utf8(DISCOUNT_RECORD_SEED), payer.toBuffer()], programId);
 }
 
 export function pendingOpenPda(boxAsset: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
@@ -125,6 +133,10 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
 
   const priceLamports = readU64(data, o);
   o += 8;
+  const discountPriceLamports = readU64(data, o);
+  o += 8;
+  const discountMerkleRoot = data.subarray(o, o + 32);
+  o += 32;
   const maxSupply = readU32(data, o);
   o += 4;
   const maxPerTx = data[o];
@@ -148,6 +160,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     treasury,
     coreCollection,
     priceLamports,
+    discountPriceLamports,
+    discountMerkleRoot,
     maxSupply,
     maxPerTx,
     started,
@@ -207,6 +221,22 @@ function randomU64(): bigint {
   return (BigInt(arr[0]) | (BigInt(arr[1]) << 32n)) & 0xffff_ffff_ffff_ffffn;
 }
 
+function deriveMintPlan(payer: PublicKey, programId: PublicKey, quantity: number) {
+  const mintId = randomU64();
+  const mintIdBytes = u64LE(mintId);
+  const boxAccounts: PublicKey[] = [];
+  const boxBumps: number[] = [];
+  for (let i = 0; i < quantity; i += 1) {
+    const [pda, bump] = PublicKey.findProgramAddressSync(
+      [Buffer.from(BOX_ASSET_SEED), payer.toBuffer(), mintIdBytes, Buffer.from([i & 0xff])],
+      programId,
+    );
+    boxAccounts.push(pda);
+    boxBumps.push(bump);
+  }
+  return { mintId, mintIdBytes, boxAccounts, boxBumps };
+}
+
 function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[]): Buffer {
   if (!Number.isFinite(quantity)) throw new Error('Invalid quantity');
   if (quantity < 1 || quantity > MAX_MINTS_PER_TX) {
@@ -225,24 +255,32 @@ function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[
   return Buffer.concat([header, u64LE(mintId), len, bumps]);
 }
 
+function encodeMintDiscountedBoxData(mintId: bigint, boxBumps: number[], proof: Uint8Array[]): Buffer {
+  if (!Array.isArray(boxBumps) || boxBumps.length !== 1) {
+    throw new Error('Discount mint requires exactly one box bump');
+  }
+  if (!Array.isArray(proof)) {
+    throw new Error('Missing discount proof');
+  }
+  const bumps = Buffer.from(boxBumps.map((b) => b & 0xff));
+  const bumpsLen = u32LE(bumps.length);
+  const proofLen = u32LE(proof.length);
+  const proofBytes = Buffer.concat(
+    proof.map((node) => {
+      if (node.length !== 32) throw new Error('Invalid discount proof node');
+      return Buffer.from(node);
+    }),
+  );
+  return Buffer.concat([Buffer.from(IX_MINT_DISCOUNTED_BOX), u64LE(mintId), bumpsLen, bumps, proofLen, proofBytes]);
+}
+
 export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, quantity: number): TransactionInstruction {
   const programId = boxMinterProgramId();
   const [configPda] = boxMinterConfigPda(programId);
 
   // IMPORTANT: derive box asset PDAs from (payer + random mintId), not from cfg.minted.
   // This avoids stale-PDA failures when many users mint concurrently.
-  const mintId = randomU64();
-  const mintIdBytes = u64LE(mintId);
-  const boxAccounts: PublicKey[] = [];
-  const boxBumps: number[] = [];
-  for (let i = 0; i < quantity; i += 1) {
-    const [pda, bump] = PublicKey.findProgramAddressSync(
-      [Buffer.from(BOX_ASSET_SEED), payer.toBuffer(), mintIdBytes, Buffer.from([i & 0xff])],
-      programId,
-    );
-    boxAccounts.push(pda);
-    boxBumps.push(bump);
-  }
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
 
   return new TransactionInstruction({
     programId,
@@ -256,6 +294,33 @@ export function buildMintBoxesIx(cfg: BoxMinterConfigAccount, payer: PublicKey, 
       ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
     data: encodeMintBoxesData(quantity, mintId, boxBumps),
+  });
+}
+
+export function buildMintDiscountedBoxIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  proof: Uint8Array[],
+): TransactionInstruction {
+  const programId = boxMinterProgramId();
+  const [configPda] = boxMinterConfigPda(programId);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const quantity = 1;
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: discountRecordPda, isSigner: false, isWritable: true },
+      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    ],
+    data: encodeMintDiscountedBoxData(mintId, boxBumps, proof),
   });
 }
 
@@ -278,6 +343,25 @@ export async function buildMintBoxesTx(
     instructions: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       // Optional: add setComputeUnitPrice here if you want priority fees.
+      mintIx,
+    ],
+  }).compileToV0Message();
+  return new VersionedTransaction(msg);
+}
+
+export async function buildMintDiscountedBoxTx(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  proof: Uint8Array[],
+): Promise<VersionedTransaction> {
+  const mintIx = buildMintDiscountedBoxIx(cfg, payer, proof);
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const msg = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       mintIx,
     ],
   }).compileToV0Message();

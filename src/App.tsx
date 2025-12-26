@@ -20,7 +20,8 @@ import {
   removeAddress,
   issueReceipts,
 } from './lib/api';
-import { buildMintBoxesTx, buildStartOpenBoxTx, fetchBoxMinterConfig } from './lib/boxMinter';
+import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, discountMintRecordPda, fetchBoxMinterConfig } from './lib/boxMinter';
+import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
   encryptAddressPayload,
@@ -117,6 +118,58 @@ function persistRecentReveals(wallet: string, ids: string[]) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage?.setItem(recentRevealKey(wallet), JSON.stringify(ids));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
+const DISCOUNT_USED_VERSION = `${FRONTEND_DEPLOYMENT.boxMinterProgramId}:${FRONTEND_DEPLOYMENT.discountMerkleRoot}`;
+
+function discountUsedKey(wallet?: string) {
+  return wallet
+    ? `${DISCOUNT_USED_STORAGE_PREFIX}:${DISCOUNT_USED_VERSION}:${wallet}`
+    : `${DISCOUNT_USED_STORAGE_PREFIX}:${DISCOUNT_USED_VERSION}:disconnected`;
+}
+
+function cleanupDiscountUsedKeys(wallet: string, keepKey: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const keysToRemove: string[] = [];
+    const walletSuffix = `:${wallet}`;
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.startsWith(`${DISCOUNT_USED_STORAGE_PREFIX}:`)) continue;
+      if (!key.endsWith(walletSuffix)) continue;
+      if (key !== keepKey) keysToRemove.push(key);
+    }
+    keysToRemove.forEach((key) => window.localStorage?.removeItem(key));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadDiscountUsed(wallet?: string): boolean {
+  if (typeof window === 'undefined' || !wallet) return false;
+  const key = discountUsedKey(wallet);
+  cleanupDiscountUsedKeys(wallet, key);
+  try {
+    return window.localStorage?.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistDiscountUsed(wallet: string, used: boolean) {
+  if (typeof window === 'undefined') return;
+  const key = discountUsedKey(wallet);
+  cleanupDiscountUsedKeys(wallet, key);
+  try {
+    if (used) {
+      window.localStorage?.setItem(key, '1');
+    } else {
+      window.localStorage?.removeItem(key);
+    }
   } catch {
     // ignore storage failures
   }
@@ -280,6 +333,9 @@ function App() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
+  const [discountMinting, setDiscountMinting] = useState(false);
+  const [discountEligible, setDiscountEligible] = useState(false);
+  const [discountChecking, setDiscountChecking] = useState(false);
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
@@ -291,7 +347,6 @@ function App() {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [discountSignInPending, setDiscountSignInPending] = useState(false);
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
@@ -304,6 +359,7 @@ function App() {
   const [claimOpen, setClaimOpen] = useState(false);
   const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
+  const [discountUsed, setDiscountUsed] = useState<boolean>(() => loadDiscountUsed(owner));
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
@@ -649,6 +705,12 @@ function App() {
   }, [owner]);
 
   useEffect(() => {
+    setDiscountUsed(loadDiscountUsed(owner));
+    setDiscountEligible(false);
+    setDiscountChecking(false);
+  }, [owner]);
+
+  useEffect(() => {
     setLocalPendingReveals(loadPendingReveals(owner));
     setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
@@ -940,29 +1002,6 @@ function App() {
   }, [owner, walletBusy]);
 
   useEffect(() => {
-    if (!discountSignInPending || !publicKey || authLoading) return;
-    setDiscountSignInPending(false);
-    if (token) {
-      showToast('Signed in.');
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        await signIn();
-        if (!cancelled) showToast('Signed in.');
-      } catch (err) {
-        if (cancelled) return;
-        if (isUserRejectedError(err)) return;
-        showToast(err instanceof Error ? err.message : 'Failed to sign in');
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [authLoading, discountSignInPending, publicKey, signIn, token]);
-
-  useEffect(() => {
     return () => {
       if (toastFadeTimeoutRef.current) {
         clearTimeout(toastFadeTimeoutRef.current);
@@ -1237,6 +1276,47 @@ function App() {
     return mintStats.remaining <= 0;
   }, [mintStats]);
 
+  useEffect(() => {
+    if (!publicKey || mintedOut || discountUsed) {
+      setDiscountEligible(false);
+      setDiscountChecking(false);
+      return;
+    }
+    const address = publicKey.toBase58();
+    if (!isDiscountListed(address)) {
+      setDiscountEligible(false);
+      setDiscountChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDiscountChecking(true);
+    (async () => {
+      try {
+        const [discountPda] = discountMintRecordPda(publicKey);
+        const info = await connection.getAccountInfo(discountPda, 'confirmed');
+        if (cancelled) return;
+        if (info) {
+          setDiscountEligible(false);
+          setDiscountUsed(true);
+          persistDiscountUsed(address, true);
+          return;
+        }
+        setDiscountEligible(true);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[mons] failed to check discount eligibility', err);
+        setDiscountEligible(false);
+      } finally {
+        if (!cancelled) setDiscountChecking(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, discountUsed, mintedOut, publicKey]);
+
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
       if (prev.has(id)) {
@@ -1279,6 +1359,48 @@ function App() {
       throw err;
     } finally {
       setMinting(false);
+    }
+  };
+
+  const handleDiscountMint = async () => {
+    if (!publicKey) {
+      setVisible(true);
+      return;
+    }
+    if (mintedOut || discountMinting || minting) return;
+    const proof = getDiscountProof(publicKey.toBase58());
+    if (!proof) {
+      setDiscountEligible(false);
+      showToast('Wallet is not eligible for the discount');
+      return;
+    }
+
+    setDiscountMinting(true);
+    try {
+      const cfg = await fetchBoxMinterConfig(connection);
+      const sendOnce = async () => {
+        const tx = await buildMintDiscountedBoxTx(connection, cfg, publicKey, proof);
+        const sig = await signAndSendViaConnection(tx);
+        await connection.confirmTransaction(sig, 'confirmed');
+        return sig;
+      };
+      try {
+        await sendOnce();
+      } catch (err) {
+        if (!isBlockhashExpiredError(err)) throw err;
+        showToast('Transaction expired before you approved it. Please approve again…');
+        await sendOnce();
+      }
+      addLocalMintedBoxes(1);
+      setDiscountUsed(true);
+      setDiscountEligible(false);
+      if (owner) persistDiscountUsed(owner, true);
+      await Promise.all([refetchStats(), refetchInventory()]);
+    } catch (err) {
+      if (isUserRejectedError(err)) return;
+      showToast(err instanceof Error ? err.message : 'Failed to mint discounted box');
+    } finally {
+      setDiscountMinting(false);
     }
   };
 
@@ -1497,21 +1619,6 @@ function App() {
   const handleSignInForDelivery = async () => {
     await signIn();
     showToast('Signed in. Saved addresses loaded.');
-  };
-
-  const handleDiscountSignIn = async () => {
-    if (!publicKey) {
-      setDiscountSignInPending(true);
-      setVisible(true);
-      return;
-    }
-    try {
-      await signIn();
-      showToast('Signed in.');
-    } catch (err) {
-      if (isUserRejectedError(err)) return;
-      showToast(err instanceof Error ? err.message : 'Failed to sign in');
-    }
   };
 
   const handleRequestDelivery = async (addressId: string | null) => {
@@ -1815,9 +1922,9 @@ function App() {
         busy={minting}
         onError={showToast}
         secondaryHref={secondaryLinks[0]?.href}
-        walletConnected={Boolean(publicKey)}
-        onDiscountClick={handleDiscountSignIn}
-        discountBusy={walletBusy}
+        discountEligible={discountEligible}
+        onDiscountClick={handleDiscountMint}
+        discountBusy={discountMinting || discountChecking || minting || walletBusy}
       />
 
       {mintedOut ? (

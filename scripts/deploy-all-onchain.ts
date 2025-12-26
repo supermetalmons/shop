@@ -326,12 +326,93 @@ function writeTextFileIfChanged(filePath: string, content: string) {
   writeFileSync(filePath, next, 'utf8');
 }
 
+function readDiscountList(filePath: string): string[] {
+  if (!existsSync(filePath)) {
+    throw new Error(`Missing discount whitelist CSV: ${filePath}`);
+  }
+  const raw = readFileSync(filePath, 'utf8');
+  const lines = raw
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalized = lines.map((addr) => new PublicKey(addr).toBase58());
+  return Array.from(new Set(normalized));
+}
+
+function sha256(data: Buffer): Buffer {
+  return createHash('sha256').update(data).digest();
+}
+
+function hashLeafAddress(address: string): Buffer {
+  return sha256(new PublicKey(address).toBuffer());
+}
+
+function hashSortedPair(left: Buffer, right: Buffer): Buffer {
+  const ordered = Buffer.compare(left, right) <= 0 ? [left, right] : [right, left];
+  return sha256(Buffer.concat(ordered));
+}
+
+function buildMerkleTree(leaves: Buffer[]): Buffer[][] {
+  if (!leaves.length) return [];
+  const levels: Buffer[][] = [leaves];
+  let level = leaves;
+  while (level.length > 1) {
+    const next: Buffer[] = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i];
+      const right = level[i + 1] ?? left;
+      next.push(hashSortedPair(left, right));
+    }
+    levels.push(next);
+    level = next;
+  }
+  return levels;
+}
+
+function buildMerkleProof(levels: Buffer[][], leafIndex: number): Buffer[] {
+  const proof: Buffer[] = [];
+  let idx = leafIndex;
+  for (let level = 0; level < levels.length - 1; level += 1) {
+    const nodes = levels[level];
+    const isRight = idx % 2 === 1;
+    const siblingIndex = isRight ? idx - 1 : idx + 1;
+    const sibling = nodes[siblingIndex] ?? nodes[idx];
+    proof.push(sibling);
+    idx = Math.floor(idx / 2);
+  }
+  return proof;
+}
+
+function buildDiscountMerkleData(addresses: string[]) {
+  const leaves = addresses
+    .map((address) => ({ address, hash: hashLeafAddress(address) }))
+    .sort((a, b) => Buffer.compare(a.hash, b.hash));
+  const leafHashes = leaves.map((leaf) => leaf.hash);
+  const levels = buildMerkleTree(leafHashes);
+  const root = levels.length ? levels[levels.length - 1][0] : Buffer.alloc(32);
+  const proofs: Record<string, string[]> = {};
+  leaves.forEach((leaf, index) => {
+    proofs[leaf.address] = buildMerkleProof(levels, index).map((buf) => buf.toString('hex'));
+  });
+  return { root, proofs };
+}
+
+function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, string[]>; filePath: string }) {
+  const payload = {
+    root: args.root.toString('hex'),
+    proofs: args.proofs,
+  };
+  writeTextFileIfChanged(args.filePath, JSON.stringify(payload, null, 2));
+}
+
 function writeFrontendDeployedConfig(args: {
   root: string;
   solanaCluster: string;
   metadataBase: string;
   treasury: string;
   priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -357,6 +438,8 @@ export type FrontendDeployedConfig = {
   // Drop config (kept in sync with on-chain config; useful for UI defaults)
   treasury: string;
   priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -371,6 +454,8 @@ export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   metadataBase: ${tsStringLiteral(args.metadataBase)},
   treasury: ${tsStringLiteral(args.treasury)},
   priceSol: ${Number(args.priceSol)},
+  discountPriceSol: ${Number(args.discountPriceSol)},
+  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
   maxSupply: ${Number(args.maxSupply)},
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
@@ -423,6 +508,8 @@ function writeFunctionsDeploymentConfig(args: {
   metadataBase: string;
   treasury: string;
   priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -455,6 +542,8 @@ export type FunctionsDeploymentConfig = {
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: string;
   priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -476,6 +565,8 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: ${tsStringLiteral(args.treasury)},
   priceSol: ${Number(args.priceSol)},
+  discountPriceSol: ${Number(args.discountPriceSol)},
+  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
   maxSupply: ${Number(args.maxSupply)},
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
@@ -933,6 +1024,10 @@ function decodeBoxMinterConfig(data: Buffer) {
   o += 32;
   const priceLamports = data.readBigUInt64LE(o);
   o += 8;
+  const discountPriceLamports = data.readBigUInt64LE(o);
+  o += 8;
+  const discountMerkleRoot = data.subarray(o, o + 32);
+  o += 32;
   const maxSupply = data.readUInt32LE(o);
   o += 4;
   const maxPerTx = data[o];
@@ -954,6 +1049,8 @@ function decodeBoxMinterConfig(data: Buffer) {
     treasury,
     coreCollection,
     priceLamports,
+    discountPriceLamports,
+    discountMerkleRoot,
     maxSupply,
     maxPerTx,
     started,
@@ -980,6 +1077,8 @@ function buildInitializeIx(args: {
   treasury: PublicKey;
   coreCollection: PublicKey;
   priceLamports: bigint;
+  discountPriceLamports: bigint;
+  discountMerkleRoot: Buffer;
   maxSupply: number;
   maxPerTx: number;
   namePrefix: string;
@@ -995,6 +1094,8 @@ function buildInitializeIx(args: {
   const data = Buffer.concat([
     IX_INITIALIZE,
     u64LE(args.priceLamports),
+    u64LE(args.discountPriceLamports),
+    Buffer.from(args.discountMerkleRoot),
     u32LE(args.maxSupply),
     Buffer.from([args.maxPerTx & 0xff]),
     borshString(args.namePrefix),
@@ -1378,6 +1479,15 @@ async function main() {
   const onchainDir = path.join(root, 'onchain');
   const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
+  const discountCsvPath = path.join(root, 'scripts', 'discount.csv');
+  const discountAddresses = readDiscountList(discountCsvPath);
+  const discountMerkle = buildDiscountMerkleData(discountAddresses);
+  const discountMerkleJsonPath = path.join(root, 'src', 'config', 'discountMerkle.json');
+  writeDiscountMerkleJson({
+    root: discountMerkle.root,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleJsonPath,
+  });
 
   const cluster: SolanaCluster = SOLANA_CLUSTER;
   const rpcUrlForApps = SOLANA_RPC_URL || clusterApiUrl(cluster);
@@ -1490,6 +1600,8 @@ async function main() {
     // Set to `undefined` to default payments to the deployer/admin key.
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 0.01,
+    discountPriceSol: 0.55,
+    discountMerkleRoot: discountMerkle.root,
     maxSupply: 333,
     maxPerTx: 15,
 
@@ -1588,6 +1700,8 @@ async function main() {
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
+      discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
+      discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
       maxSupply: cfg.maxSupply,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
@@ -1601,6 +1715,8 @@ async function main() {
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
+      discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
+      discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
       maxSupply: cfg.maxSupply,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
@@ -1624,6 +1740,8 @@ async function main() {
   // Payment treasury (defaults to deployer/admin key if unset).
   const treasury = new PublicKey(BOX_MINTER_CONFIG.treasury || payer.publicKey.toBase58());
   const priceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.priceSol) * LAMPORTS_PER_SOL));
+  const discountPriceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.discountPriceSol) * LAMPORTS_PER_SOL));
+  const discountMerkleRoot = BOX_MINTER_CONFIG.discountMerkleRoot;
   const maxSupply = Number(BOX_MINTER_CONFIG.maxSupply);
   const maxPerTx = Number(BOX_MINTER_CONFIG.maxPerTx);
   // 2) Create or reuse an MPL-Core collection (uncompressed).
@@ -1702,6 +1820,8 @@ async function main() {
     treasury,
     coreCollection: resolvedCoreCollection,
     priceLamports,
+    discountPriceLamports,
+    discountMerkleRoot,
     maxSupply,
     maxPerTx,
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
@@ -1717,6 +1837,7 @@ async function main() {
   console.log('  Config PDA:', configPda.toBase58());
   console.log('  Payment treasury:', treasury.toBase58());
   console.log('  Price (lamports):', priceLamports.toString());
+  console.log('  Discount price (lamports):', discountPriceLamports.toString());
   console.log('');
 
   let receiptsTree: PublicKey | null = null;
@@ -1755,6 +1876,8 @@ async function main() {
     metadataBase: DROP_METADATA_BASE,
     treasury: treasury.toBase58(),
     priceSol: Number(BOX_MINTER_CONFIG.priceSol),
+    discountPriceSol: Number(BOX_MINTER_CONFIG.discountPriceSol),
+    discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
     maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
@@ -1768,6 +1891,8 @@ async function main() {
     metadataBase: DROP_METADATA_BASE,
     treasury: treasury.toBase58(),
     priceSol: Number(BOX_MINTER_CONFIG.priceSol),
+    discountPriceSol: Number(BOX_MINTER_CONFIG.discountPriceSol),
+    discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
     maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
     namePrefix: BOX_MINTER_CONFIG.namePrefix,
@@ -1791,5 +1916,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
-

@@ -9,7 +9,7 @@ interface MintPanelProps {
   busy: boolean;
   onError?: (message: string) => void;
   secondaryHref?: string;
-  walletConnected?: boolean;
+  discountEligible?: boolean;
   onDiscountClick?: () => void;
   discountBusy?: boolean;
 }
@@ -105,7 +105,7 @@ export function MintPanel({
   busy,
   onError,
   secondaryHref,
-  walletConnected,
+  discountEligible,
   onDiscountClick,
   discountBusy,
 }: MintPanelProps) {
@@ -162,7 +162,7 @@ export function MintPanel({
   const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
   const totalPriceLabel = String(quantity);
   const formId = 'mint-form';
-  const showDiscountButton = !walletConnected && !soldOut;
+  const showDiscountButton = Boolean(discountEligible) && !soldOut;
 
   return (
     <section className="card mint-panel">
@@ -259,7 +259,7 @@ export function MintPanel({
               </button>
               {showDiscountButton ? (
                 <button type="button" className="mint-panel__discount ghost" onClick={onDiscountClick} disabled={discountBusy}>
-                  <span className="mint-panel__discount-text">get lsw discount</span>
+                  <span className="mint-panel__discount-text">mint one for 0.55 SOL</span>
                 </button>
               ) : null}
             </div>

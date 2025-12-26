@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
@@ -28,6 +29,7 @@ const SEED_DELIVERY: &[u8] = b"delivery";
 // Pending (two-step) box open flow.
 const SEED_PENDING_OPEN: &[u8] = b"open";
 const SEED_PENDING_DUDE_ASSET: &[u8] = b"pdude";
+const SEED_DISCOUNT_MINT: &[u8] = b"discount";
 
 // Metaplex Core program id.
 const MPL_CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -75,6 +77,303 @@ const URI_SUFFIX_FIGURES: &str = "/json/figures/";
 const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
 const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
 
+fn hash_leaf(data: &[u8]) -> [u8; 32] {
+    hashv(&[data]).to_bytes()
+}
+
+fn hash_sorted_pair(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
+    let (a, b) = if left <= right { (left, right) } else { (right, left) };
+    hashv(&[a.as_ref(), b.as_ref()]).to_bytes()
+}
+
+fn verify_merkle_proof(leaf: &[u8], proof: &[[u8; 32]], root: [u8; 32]) -> bool {
+    let mut node = hash_leaf(leaf);
+    for sibling in proof {
+        node = hash_sorted_pair(node, *sibling);
+    }
+    node == root
+}
+
+struct MintBoxesInnerAccounts<'info> {
+    payer: AccountInfo<'info>,
+    treasury: AccountInfo<'info>,
+    core_collection: AccountInfo<'info>,
+    mpl_core_program: AccountInfo<'info>,
+    system_program: AccountInfo<'info>,
+}
+
+impl<'info> MintBoxesInnerAccounts<'info> {
+    fn new(
+        payer: AccountInfo<'info>,
+        treasury: AccountInfo<'info>,
+        core_collection: AccountInfo<'info>,
+        mpl_core_program: AccountInfo<'info>,
+        system_program: AccountInfo<'info>,
+    ) -> Self {
+        Self {
+            payer,
+            treasury,
+            core_collection,
+            mpl_core_program,
+            system_program,
+        }
+    }
+}
+
+fn mint_boxes_inner<'info>(
+    cfg: &mut Account<'info, BoxMinterConfig>,
+    accounts: &MintBoxesInnerAccounts<'info>,
+    remaining_accounts: &[AccountInfo<'info>],
+    quantity: u8,
+    mint_id: u64,
+    box_bumps: Vec<u8>,
+    program_id: &Pubkey,
+    unit_price_lamports: u64,
+) -> Result<()> {
+    // Early fail-fast: do not allow minting until the admin explicitly starts the program.
+    require!(cfg.started, BoxMinterError::MintNotStarted);
+
+    require_keys_eq!(
+        accounts.mpl_core_program.key(),
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidMplCoreProgram
+    );
+
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    let max_qty = cfg.max_per_tx.min(MAX_SAFE_MINTS_PER_TX);
+    require!(quantity <= max_qty, BoxMinterError::InvalidQuantity);
+
+    let qty_u32 = quantity as u32;
+    let new_total = cfg
+        .minted
+        .checked_add(qty_u32)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
+
+    // Take payment.
+    let cost = (unit_price_lamports as u128)
+        .checked_mul(quantity as u128)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(cost <= u64::MAX as u128, BoxMinterError::MathOverflow);
+    let cost_u64 = cost as u64;
+    if cost_u64 > 0 {
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &accounts.payer.key(),
+            &accounts.treasury.key(),
+            cost_u64,
+        );
+        invoke(
+            &ix,
+            &[
+                accounts.payer.clone(),
+                accounts.treasury.clone(),
+                accounts.system_program.clone(),
+            ],
+        )?;
+    }
+
+    // Remaining accounts: `quantity` PDA addresses for the new box assets.
+    require!(
+        remaining_accounts.len() == quantity as usize,
+        BoxMinterError::InvalidRemainingAccounts
+    );
+    require!(
+        box_bumps.len() == quantity as usize,
+        BoxMinterError::InvalidRemainingAccounts
+    );
+
+    let mpl_core_program = accounts.mpl_core_program.clone();
+    let core_collection = accounts.core_collection.clone();
+    let payer = accounts.payer.clone();
+    let cfg_ai = cfg.to_account_info();
+    let system_program = accounts.system_program.clone();
+
+    let cfg_bump = cfg.bump;
+    let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg_bump]];
+    let start_index = cfg.minted + 1;
+    let payer_key = accounts.payer.key();
+    let mint_id_bytes = mint_id.to_le_bytes();
+
+    // IMPORTANT (memory): kinobi CPI builders allocate fresh Vec/Box per mint and the SBF heap is tiny.
+    // Reuse buffers across the loop so minting 10+ assets doesn't OOM.
+    // Canonical config: cfg.uri_base is the DROP BASE.
+    let drop_base = cfg.uri_base.as_str();
+    // Pre-allocate enough for: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
+    let max_uri_len: usize = drop_base.len() + URI_SUFFIX_BOXES.len() + 16;
+
+    let mut name_buf = String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12);
+    let mut uri_buf = String::with_capacity(max_uri_len);
+
+    let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+        program_id: MPL_CORE_PROGRAM_ID,
+        accounts: Vec::with_capacity(8),
+        data: Vec::with_capacity(
+            1 // discriminator
+                + 1 // data_state
+                + 4 + (BoxMinterConfig::MAX_NAME_PREFIX + 12) // name
+                + 4 + max_uri_len // uri (dynamic based on derived prefix)
+                + 1, // plugins option
+        ),
+    };
+    // Build constant accounts once; only `asset` changes per mint.
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            Pubkey::default(),
+            true,
+        )); // asset (placeholder)
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            core_collection.key(),
+            false,
+        )); // collection
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            cfg_ai.key(),
+            true,
+        )); // authority
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            payer.key(),
+            true,
+        )); // payer
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            payer.key(),
+            false,
+        )); // owner
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            MPL_CORE_PROGRAM_ID,
+            false,
+        )); // update_authority: None (placeholder)
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            system_program.key(),
+            false,
+        )); // system_program
+    create_ix
+        .accounts
+        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            MPL_CORE_PROGRAM_ID,
+            false,
+        )); // log_wrapper: None (placeholder)
+
+    for i in 0..qty_u32 {
+        // IMPORTANT: the asset address must NOT depend on `cfg.minted` (global counter), otherwise
+        // concurrent mints will frequently fail due to clients building stale PDAs.
+        //
+        // Asset PDA seeds: ["box", payer, mint_id, i, bump]
+        let i_u8: u8 = i
+            .try_into()
+            .map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
+        let i_seed = [i_u8];
+
+        let idx = start_index + i;
+        let asset_bump = box_bumps[i as usize];
+        let asset_bump_bytes = [asset_bump];
+        let expected = Pubkey::create_program_address(
+            &[
+                SEED_BOX_ASSET,
+                payer_key.as_ref(),
+                &mint_id_bytes,
+                &i_seed,
+                &asset_bump_bytes,
+            ],
+            program_id,
+        )
+        .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
+
+        let asset_ai = &remaining_accounts[i as usize];
+        require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
+        // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
+        require_keys_eq!(
+            *asset_ai.owner,
+            anchor_lang::solana_program::system_program::ID,
+            BoxMinterError::InvalidAssetPda
+        );
+
+        // Prevent PDA "squatting": a pre-funded system-owned stub would make downstream Create fail.
+        // Since this is a PDA, we can sign for it and drain any prefunded lamports back to the payer.
+        let asset_seeds: &[&[u8]] = &[
+            SEED_BOX_ASSET,
+            payer_key.as_ref(),
+            &mint_id_bytes,
+            &i_seed,
+            &asset_bump_bytes,
+        ];
+        let prefund_lamports = asset_ai.lamports();
+        if prefund_lamports > 0 {
+            let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
+                asset_ai.key,
+                payer.key,
+                prefund_lamports,
+            );
+            invoke_signed(
+                &sweep_ix,
+                &[asset_ai.clone(), payer.clone(), system_program.clone()],
+                &[asset_seeds],
+            )
+            .map_err(anchor_lang::error::Error::from)?;
+        }
+
+        // Build metadata without allocating fresh Strings each loop.
+        name_buf.clear();
+        name_buf.push_str(&cfg.name_prefix);
+        if !cfg.name_prefix.is_empty() && !cfg.name_prefix.ends_with(' ') {
+            name_buf.push(' ');
+        }
+        write!(&mut name_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+
+        uri_buf.clear();
+        // Per-box JSON URI: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
+        uri_buf.push_str(drop_base);
+        uri_buf.push_str(URI_SUFFIX_BOXES);
+        write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+        uri_buf.push_str(".json");
+        let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+
+        // Reuse instruction buffers to keep heap usage flat.
+        create_ix.accounts[0].pubkey = asset_ai.key();
+        create_ix.data.clear();
+        // discriminator for CreateV1 is 0
+        create_ix.data.push(0);
+        // DataState::AccountState is enum variant 0
+        create_ix.data.push(0);
+        create_ix
+            .data
+            .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
+        create_ix.data.extend_from_slice(name_buf.as_bytes());
+        create_ix
+            .data
+            .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
+        create_ix.data.extend_from_slice(uri_buf.as_bytes());
+        // plugins: None
+        create_ix.data.push(0);
+
+        // AccountInfos order must match mpl-core CPI expectations (program first).
+        let cpi_infos = [
+            mpl_core_program.clone(),
+            asset_ai.clone(),
+            core_collection.clone(),
+            cfg_ai.clone(),
+            payer.clone(),
+            payer.clone(), // owner (same pubkey; cheap clone)
+            system_program.clone(),
+        ];
+        invoke_signed(&create_ix, &cpi_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
+    }
+
+    cfg.minted = new_total;
+    Ok(())
+}
+
 #[program]
 pub mod box_minter {
     use super::*;
@@ -92,6 +391,18 @@ pub mod box_minter {
             BoxMinterError::InvalidMaxPerTx
         );
         require!(args.price_lamports > 0, BoxMinterError::InvalidPrice);
+        require!(
+            args.discount_price_lamports > 0,
+            BoxMinterError::InvalidDiscountPrice
+        );
+        require!(
+            args.discount_price_lamports <= args.price_lamports,
+            BoxMinterError::InvalidDiscountPrice
+        );
+        require!(
+            args.discount_merkle_root != [0u8; 32],
+            BoxMinterError::DiscountNotConfigured
+        );
         require!(
             args.name_prefix.len() <= BoxMinterConfig::MAX_NAME_PREFIX,
             BoxMinterError::NameTooLong
@@ -129,6 +440,8 @@ pub mod box_minter {
         cfg.treasury = ctx.accounts.treasury.key();
         cfg.core_collection = core_collection_ai.key();
         cfg.price_lamports = args.price_lamports;
+        cfg.discount_price_lamports = args.discount_price_lamports;
+        cfg.discount_merkle_root = args.discount_merkle_root;
         cfg.max_supply = args.max_supply;
         cfg.max_per_tx = args.max_per_tx;
         // Minting is paused by default until the admin explicitly starts it.
@@ -164,249 +477,67 @@ pub mod box_minter {
         // Passed in from the client to avoid `find_program_address` compute inside the program.
         box_bumps: Vec<u8>,
     ) -> Result<()> {
-        let cfg = &ctx.accounts.config;
-
-        // Early fail-fast: do not allow minting until the admin explicitly starts the program.
-        require!(cfg.started, BoxMinterError::MintNotStarted);
-
-        require_keys_eq!(
-            ctx.accounts.mpl_core_program.key(),
-            MPL_CORE_PROGRAM_ID,
-            BoxMinterError::InvalidMplCoreProgram
+        let accounts = MintBoxesInnerAccounts::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.treasury.to_account_info(),
+            ctx.accounts.core_collection.to_account_info(),
+            ctx.accounts.mpl_core_program.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
         );
+        let unit_price_lamports = ctx.accounts.config.price_lamports;
+        mint_boxes_inner(
+            &mut ctx.accounts.config,
+            &accounts,
+            ctx.remaining_accounts,
+            quantity,
+            mint_id,
+            box_bumps,
+            ctx.program_id,
+            unit_price_lamports,
+        )
+    }
 
-        require!(quantity >= 1, BoxMinterError::InvalidQuantity);
-        let max_qty = cfg.max_per_tx.min(MAX_SAFE_MINTS_PER_TX);
-        require!(quantity <= max_qty, BoxMinterError::InvalidQuantity);
-
-        let qty_u32 = quantity as u32;
-        let new_total = cfg
-            .minted
-            .checked_add(qty_u32)
-            .ok_or(BoxMinterError::MathOverflow)?;
-        require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
-
-        // Take payment.
-        let cost = (cfg.price_lamports as u128)
-            .checked_mul(quantity as u128)
-            .ok_or(BoxMinterError::MathOverflow)?;
-        require!(cost <= u64::MAX as u128, BoxMinterError::MathOverflow);
-        let cost_u64 = cost as u64;
-        if cost_u64 > 0 {
-            let ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.payer.key(),
-                &ctx.accounts.treasury.key(),
-                cost_u64,
-            );
-            invoke(
-                &ix,
-                &[
-                    ctx.accounts.payer.to_account_info(),
-                    ctx.accounts.treasury.to_account_info(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-            )?;
-        }
-
-        // Remaining accounts: `quantity` PDA addresses for the new box assets.
+    pub fn mint_discounted_box<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, MintDiscountedBox<'info>>,
+        mint_id: u64,
+        box_bumps: Vec<u8>,
+        proof: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        let discount_price = ctx.accounts.config.discount_price_lamports;
+        require!(discount_price > 0, BoxMinterError::InvalidDiscountPrice);
+        let discount_root = ctx.accounts.config.discount_merkle_root;
         require!(
-            ctx.remaining_accounts.len() == quantity as usize,
-            BoxMinterError::InvalidRemainingAccounts
-        );
-        require!(
-            box_bumps.len() == quantity as usize,
-            BoxMinterError::InvalidRemainingAccounts
+            discount_root != [0u8; 32],
+            BoxMinterError::DiscountNotConfigured
         );
 
-        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
-        let core_collection = ctx.accounts.core_collection.to_account_info();
-        let payer = ctx.accounts.payer.to_account_info();
-        let cfg_ai = ctx.accounts.config.to_account_info();
-        let system_program = ctx.accounts.system_program.to_account_info();
-
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
-        let start_index = cfg.minted + 1;
         let payer_key = ctx.accounts.payer.key();
-        let mint_id_bytes = mint_id.to_le_bytes();
+        require!(
+            verify_merkle_proof(payer_key.as_ref(), &proof, discount_root),
+            BoxMinterError::InvalidDiscountProof
+        );
 
-        // IMPORTANT (memory): kinobi CPI builders allocate fresh Vec/Box per mint and the SBF heap is tiny.
-        // Reuse buffers across the loop so minting 10+ assets doesn't OOM.
-        // Canonical config: cfg.uri_base is the DROP BASE.
-        let drop_base = cfg.uri_base.as_str();
-        // Pre-allocate enough for: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
-        let max_uri_len: usize = drop_base.len() + URI_SUFFIX_BOXES.len() + 16;
+        ctx.accounts.discount_record.payer = payer_key;
+        ctx.accounts.discount_record.bump = ctx.bumps.discount_record;
 
-        let mut name_buf = String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12);
-        let mut uri_buf = String::with_capacity(max_uri_len);
-
-        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
-            program_id: MPL_CORE_PROGRAM_ID,
-            accounts: Vec::with_capacity(8),
-            data: Vec::with_capacity(
-                1 // discriminator
-                + 1 // data_state
-                + 4 + (BoxMinterConfig::MAX_NAME_PREFIX + 12) // name
-                + 4 + max_uri_len // uri (dynamic based on derived prefix)
-                + 1, // plugins option
-            ),
-        };
-        // Build constant accounts once; only `asset` changes per mint.
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-                Pubkey::default(),
-                true,
-            )); // asset (placeholder)
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-                core_collection.key(),
-                false,
-            )); // collection
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                cfg_ai.key(),
-                true,
-            )); // authority
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-                payer.key(),
-                true,
-            )); // payer
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                payer.key(),
-                false,
-            )); // owner
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                MPL_CORE_PROGRAM_ID,
-                false,
-            )); // update_authority: None (placeholder)
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                system_program.key(),
-                false,
-            )); // system_program
-        create_ix
-            .accounts
-            .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                MPL_CORE_PROGRAM_ID,
-                false,
-            )); // log_wrapper: None (placeholder)
-
-        for i in 0..qty_u32 {
-            // IMPORTANT: the asset address must NOT depend on `cfg.minted` (global counter), otherwise
-            // concurrent mints will frequently fail due to clients building stale PDAs.
-            //
-            // Asset PDA seeds: ["box", payer, mint_id, i, bump]
-            let i_u8: u8 = i
-                .try_into()
-                .map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
-            let i_seed = [i_u8];
-
-            let idx = start_index + i;
-            let asset_bump = box_bumps[i as usize];
-            let asset_bump_bytes = [asset_bump];
-            let expected = Pubkey::create_program_address(
-                &[
-                    SEED_BOX_ASSET,
-                    payer_key.as_ref(),
-                    &mint_id_bytes,
-                    &i_seed,
-                    &asset_bump_bytes,
-                ],
-                ctx.program_id,
-            )
-            .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
-
-            let asset_ai = &ctx.remaining_accounts[i as usize];
-            require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-            // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
-            require_keys_eq!(
-                *asset_ai.owner,
-                anchor_lang::solana_program::system_program::ID,
-                BoxMinterError::InvalidAssetPda
-            );
-
-            // Prevent PDA "squatting": a pre-funded system-owned stub would make downstream Create fail.
-            // Since this is a PDA, we can sign for it and drain any prefunded lamports back to the payer.
-            let asset_seeds: &[&[u8]] = &[
-                SEED_BOX_ASSET,
-                payer_key.as_ref(),
-                &mint_id_bytes,
-                &i_seed,
-                &asset_bump_bytes,
-            ];
-            let prefund_lamports = asset_ai.lamports();
-            if prefund_lamports > 0 {
-                let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
-                    asset_ai.key,
-                    payer.key,
-                    prefund_lamports,
-                );
-                invoke_signed(
-                    &sweep_ix,
-                    &[asset_ai.clone(), payer.clone(), system_program.clone()],
-                    &[asset_seeds],
-                )
-                .map_err(anchor_lang::error::Error::from)?;
-            }
-
-            // Build metadata without allocating fresh Strings each loop.
-            name_buf.clear();
-            name_buf.push_str(&cfg.name_prefix);
-            if !cfg.name_prefix.is_empty() && !cfg.name_prefix.ends_with(' ') {
-                name_buf.push(' ');
-            }
-            write!(&mut name_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-
-            uri_buf.clear();
-            // Per-box JSON URI: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
-            uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_SUFFIX_BOXES);
-            write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-            uri_buf.push_str(".json");
-            let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
-
-            // Reuse instruction buffers to keep heap usage flat.
-            create_ix.accounts[0].pubkey = asset_ai.key();
-            create_ix.data.clear();
-            // discriminator for CreateV1 is 0
-            create_ix.data.push(0);
-            // DataState::AccountState is enum variant 0
-            create_ix.data.push(0);
-            create_ix
-                .data
-                .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(name_buf.as_bytes());
-            create_ix
-                .data
-                .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
-            create_ix.data.extend_from_slice(uri_buf.as_bytes());
-            // plugins: None
-            create_ix.data.push(0);
-
-            // AccountInfos order must match mpl-core CPI expectations (program first).
-            let cpi_infos = [
-                mpl_core_program.clone(),
-                asset_ai.clone(),
-                core_collection.clone(),
-                cfg_ai.clone(),
-                payer.clone(),
-                payer.clone(), // owner (same pubkey; cheap clone)
-                system_program.clone(),
-            ];
-            invoke_signed(&create_ix, &cpi_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
-        }
-
-        ctx.accounts.config.minted = new_total;
-        Ok(())
+        let accounts = MintBoxesInnerAccounts::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.treasury.to_account_info(),
+            ctx.accounts.core_collection.to_account_info(),
+            ctx.accounts.mpl_core_program.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        );
+        let quantity = 1;
+        mint_boxes_inner(
+            &mut ctx.accounts.config,
+            &accounts,
+            ctx.remaining_accounts,
+            quantity,
+            mint_id,
+            box_bumps,
+            ctx.program_id,
+            discount_price,
+        )
     }
 
     /// Starts a two-step box open flow.
@@ -1365,6 +1496,8 @@ pub mod box_minter {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeArgs {
     pub price_lamports: u64,
+    pub discount_price_lamports: u64,
+    pub discount_merkle_root: [u8; 32],
     pub max_supply: u32,
     pub max_per_tx: u8,
     pub name_prefix: String,
@@ -1403,6 +1536,8 @@ pub struct BoxMinterConfig {
     pub treasury: Pubkey,
     pub core_collection: Pubkey,
     pub price_lamports: u64,
+    pub discount_price_lamports: u64,
+    pub discount_merkle_root: [u8; 32],
     pub max_supply: u32,
     pub max_per_tx: u8,
     pub minted: u32,
@@ -1412,6 +1547,18 @@ pub struct BoxMinterConfig {
     /// If false, `mint_boxes` is paused.
     pub started: bool,
     pub bump: u8,
+}
+
+#[account]
+pub struct DiscountMintRecord {
+    pub payer: Pubkey,
+    pub bump: u8,
+}
+
+impl DiscountMintRecord {
+    pub const SPACE: usize = 8 // anchor account discriminator
+        + 32 // payer
+        + 1; // bump
 }
 
 #[account]
@@ -1439,6 +1586,8 @@ impl BoxMinterConfig {
     pub const SPACE: usize = 8 // anchor account discriminator
         + 32 * 3 // pubkeys
         + 8 // price_lamports
+        + 8 // discount_price_lamports
+        + 32 // discount_merkle_root
         + 4 // max_supply
         + 1 // max_per_tx
         + 4 // minted
@@ -1520,6 +1669,37 @@ pub struct MintBoxes<'info> {
 
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    /// CHECK: Must match config.treasury
+    #[account(mut, address = config.treasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: MPL-Core collection. Must match config.core_collection.
+    #[account(mut, address = config.core_collection)]
+    pub core_collection: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Core program
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MintDiscountedBox<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = DiscountMintRecord::SPACE,
+        seeds = [SEED_DISCOUNT_MINT, payer.key().as_ref()],
+        bump,
+    )]
+    pub discount_record: Account<'info, DiscountMintRecord>,
 
     /// CHECK: Must match config.treasury
     #[account(mut, address = config.treasury)]
@@ -1885,6 +2065,12 @@ pub enum BoxMinterError {
     InvalidMaxPerTx,
     #[msg("Invalid price")]
     InvalidPrice,
+    #[msg("Invalid discount price")]
+    InvalidDiscountPrice,
+    #[msg("Discount config missing")]
+    DiscountNotConfigured,
+    #[msg("Invalid discount proof")]
+    InvalidDiscountProof,
     #[msg("Name prefix too long")]
     NameTooLong,
     #[msg("Symbol too long")]
@@ -1956,5 +2142,3 @@ pub enum BoxMinterError {
     #[msg("Minting has not started yet")]
     MintNotStarted,
 }
-
-
