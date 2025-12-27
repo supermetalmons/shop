@@ -150,6 +150,7 @@ export function MintPanel({
     if (quantity < 1 || quantity > maxPerTx) return;
     try {
       await onMint(quantity);
+      setQuantity(1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to mint';
       if (onError) onError(message);
