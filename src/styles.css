@@ -749,12 +749,99 @@ button.quiet:hover:not(:disabled) {
   inset: 0;
   z-index: 3;
   opacity: 0;
-  transition: opacity 240ms ease;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 240ms ease, transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
   pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.reveal-overlay__shine {
+  position: absolute;
+  left: 50%;
+  top: 74%;
+  height: 220%;
+  width: auto;
+  aspect-ratio: 1 / 1;
+  max-width: 1200px;
+  max-height: 1200px;
+  transform: translate(-50%, -50%) scale(0.72) translateZ(0);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 260ms ease, transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.reveal-overlay__shine::before,
+.reveal-overlay__shine::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.reveal-overlay__shine::before {
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 255, 255, 0.42) 0%,
+    rgba(255, 255, 255, 0.24) 14%,
+    rgba(255, 250, 220, 0.18) 22%,
+    rgba(255, 250, 220, 0) 60%
+  );
+  opacity: 0.92;
+}
+
+.reveal-overlay__shine::after {
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(255, 255, 255, 0) 0deg,
+    rgba(255, 255, 255, 0.24) 1.2deg,
+    rgba(255, 250, 220, 0.14) 2.4deg,
+    rgba(255, 250, 220, 0) 7deg,
+    rgba(255, 250, 220, 0) 12deg
+  );
+  opacity: 0.7;
+  transform-origin: 50% 50%;
+  transform: rotate(0deg);
+  will-change: transform;
+}
+
+.reveal-overlay__shine--visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.reveal-overlay__shine--visible::before {
+  animation: reveal-shine-pulse 3200ms ease-in-out infinite;
+}
+
+.reveal-overlay__shine--visible::after {
+  animation: reveal-shine-rotate 16000ms linear infinite;
+}
+
+.reveal-overlay--closing .reveal-overlay__shine {
+  opacity: 0;
+}
+
+@keyframes reveal-shine-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes reveal-shine-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .reveal-overlay__media--visible {
   opacity: 1;
+  transform: translate3d(0, 3%, 0);
 }
 
 .reveal-overlay--closing .reveal-overlay__media {
@@ -838,6 +925,8 @@ button.quiet:hover:not(:disabled) {
   height: 100%;
   display: grid;
   place-items: center;
+  position: relative;
+  z-index: 1;
   border-radius: 12px;
   background: transparent;
   background-color: transparent;
@@ -950,8 +1039,14 @@ button.quiet:hover:not(:disabled) {
   .reveal-overlay__frame,
   .reveal-overlay__note,
   .reveal-overlay__media,
+  .reveal-overlay__shine,
   .reveal-overlay__media-item {
     transition-duration: 1ms;
+  }
+
+  .reveal-overlay__shine::before,
+  .reveal-overlay__shine::after {
+    animation: none !important;
   }
 
   .reveal-overlay__media-float {

@@ -933,7 +933,7 @@ function App() {
       return;
     }
     if (typeof window === 'undefined') return;
-    const delay = 23;
+    const delay = 30;
     const timeout = window.setTimeout(() => {
       setRevealOverlay((prev) => {
         if (!prev || !prev.autoOpening) return prev;
@@ -1583,13 +1583,7 @@ function App() {
       const hasResults = Boolean(prev.revealedIds?.length);
       const canAdvance =
         prev.frame < BOX_FRAME_CLICK_MAX || (prev.frame === BOX_FRAME_CLICK_MAX && hasResults);
-      const requiredClicks = prev.frame % 2 === 0 ? 2 : 1;
-      const nextAdvanceClicks = canAdvance
-        ? requiredClicks === 1
-          ? 0
-          : Math.min(prev.advanceClicks + 1, requiredClicks)
-        : prev.advanceClicks;
-      const shouldAdvanceNow = canAdvance && (requiredClicks === 1 || nextAdvanceClicks >= requiredClicks);
+      const shouldAdvanceNow = canAdvance;
       const nextFrame = shouldAdvanceNow
         ? prev.frame < BOX_FRAME_CLICK_MAX
           ? prev.frame + 1
@@ -1597,13 +1591,12 @@ function App() {
             ? BOX_FRAME_AUTOPLAY_START
             : prev.frame
         : prev.frame;
-      const normalizedAdvanceClicks = shouldAdvanceNow ? 0 : nextAdvanceClicks;
       const shouldAuto = hasResults && nextFrame === BOX_FRAME_AUTOPLAY_START && prev.frame !== nextFrame;
       return {
         ...prev,
         frame: nextFrame,
         hasRevealAttempted: true,
-        advanceClicks: shouldAuto ? 0 : normalizedAdvanceClicks,
+        advanceClicks: 0,
         autoOpening: shouldAuto ? true : prev.autoOpening,
         autoMode: shouldAuto ? 'normal' : prev.autoMode,
       };
@@ -1949,6 +1942,10 @@ function App() {
               finalizeRevealOverlayDismissal();
             }}
           >
+            <div
+              className={`reveal-overlay__shine${revealMediaVisible ? ' reveal-overlay__shine--visible' : ''}`}
+              aria-hidden="true"
+            />
             {revealMediaIds.length ? (
               <div
                 className={`reveal-overlay__media${revealMediaVisible ? ' reveal-overlay__media--visible' : ''}`}
