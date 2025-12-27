@@ -1410,23 +1410,19 @@ function App() {
     setDeliveryAddOpen(false);
   }, [deliveryOpen, selectedCount]);
 
-  // Default to our RPC connection to avoid wallet-side cluster mismatches.
-  // Pass "wallet" to use the adapter's default send path when desired.
-  const signAndSendViaConnection = async (tx: VersionedTransaction, strategy: 'connection' | 'wallet' = 'connection') => {
-    const sendOptions = {
-      skipPreflight: false,
-      preflightCommitment: 'confirmed' as const,
-      maxRetries: 3,
-    };
-    if (strategy === 'wallet') {
-      return sendTransaction(tx, connection, sendOptions);
-    }
+  // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
+  // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
+  const signAndSendViaConnection = async (tx: VersionedTransaction) => {
     if (wallet.signTransaction) {
       const signed = await wallet.signTransaction(tx);
       const raw = signed.serialize();
-      return connection.sendRawTransaction(raw, sendOptions);
+      return connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+        maxRetries: 3,
+      });
     }
-    return sendTransaction(tx, connection, sendOptions);
+    return sendTransaction(tx, connection, { skipPreflight: false });
   };
 
   const mintedOut = useMemo(() => {
@@ -1516,7 +1512,7 @@ function App() {
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
         const tx = await buildMintBoxesTx(connection, cfg, publicKey, quantity);
-        const sig = await signAndSendViaConnection(tx, 'wallet');
+        const sig = await signAndSendViaConnection(tx);
         await connection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
@@ -1555,7 +1551,7 @@ function App() {
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
         const tx = await buildMintDiscountedBoxTx(connection, cfg, publicKey, proof);
-        const sig = await signAndSendViaConnection(tx, 'wallet');
+        const sig = await signAndSendViaConnection(tx);
         await connection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
@@ -1586,7 +1582,7 @@ function App() {
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
         const tx = await buildStartOpenBoxTx(connection, cfg, publicKey, new PublicKey(item.id));
-        const sig = await signAndSendViaConnection(tx, 'wallet');
+        const sig = await signAndSendViaConnection(tx);
         await connection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
