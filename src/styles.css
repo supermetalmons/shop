@@ -575,6 +575,27 @@ button.quiet:hover:not(:disabled) {
   color: var(--fg);
 }
 
+button.link {
+  background: none;
+  color: var(--accent);
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  line-height: inherit;
+}
+
+button.link:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+.shipments-signin {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 @media (prefers-color-scheme: dark) {
   button.soft {
     background: rgba(255, 255, 255, 0.08);

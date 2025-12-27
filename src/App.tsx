@@ -189,6 +189,8 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 }
 
 const MAX_SHIPMENT_ITEMS = 24;
+const EMPTY_INVENTORY: InventoryItem[] = [];
+const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 28;
 // Keep locally-inserted pending reveals visible for a short grace window while on-chain indexing catches up.
@@ -332,12 +334,14 @@ function App() {
     signIn,
     updateProfile,
   } = useSolanaAuth();
-  const { data: inventory = [], refetch: refetchInventory, isFetched: inventoryFetched } = useInventory();
+  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory();
   const {
-    data: pendingOpenBoxes = [],
+    data: pendingOpenBoxesData,
     refetch: refetchPendingOpenBoxes,
     isSuccess: pendingOpenBoxesSuccess,
   } = usePendingOpenBoxes();
+  const inventory = inventoryData ?? EMPTY_INVENTORY;
+  const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
@@ -1865,6 +1869,20 @@ function App() {
     showToast('Signed in. Saved addresses loaded.');
   };
 
+  const handleSignInForShipments = async () => {
+    if (!publicKey) {
+      setVisible(true);
+      return;
+    }
+    if (authLoading) return;
+    try {
+      await signIn();
+    } catch (err) {
+      if (isUserRejectedError(err)) return;
+      showToast(err instanceof Error ? err.message : 'Failed to sign in');
+    }
+  };
+
   const handleRequestDelivery = async (addressId: string | null) => {
     if (!publicKey) throw new Error('Connect wallet first');
     if (!addressId) throw new Error('Select a shipping address');
@@ -1961,7 +1979,16 @@ function App() {
     [savedAddresses],
   );
   const deliveryOrders = profile?.orders || [];
-  const shipmentsEmptyMessage = !profile ? 'Sign in to view your shipments.' : 'No shipments yet.';
+  const shipmentsEmptyContent = !profile ? (
+    <span className="shipments-signin">
+      <button type="button" className="link" onClick={handleSignInForShipments} disabled={authLoading}>
+        Sign in
+      </button>
+      <span>to view your shipments.</span>
+    </span>
+  ) : (
+    'No shipments yet.'
+  );
   const shipmentsEmptyStateVisibility = owner
     ? authReady
       ? 'visible'
@@ -2448,12 +2475,12 @@ function App() {
             className={`muted small${shipmentsEmptyStateVisibility === 'hidden' ? ' empty-state--hidden' : ''}`}
             aria-hidden={shipmentsEmptyStateVisibility === 'hidden'}
           >
-            {shipmentsEmptyMessage}
+            {shipmentsEmptyContent}
           </div>
           )
         ) : (
           <div className="muted small empty-state--hidden" aria-hidden="true">
-            {shipmentsEmptyMessage}
+            {shipmentsEmptyContent}
           </div>
         )}
       </section>
