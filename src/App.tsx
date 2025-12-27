@@ -23,6 +23,7 @@ import {
 import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, discountMintRecordPda, fetchBoxMinterConfig } from './lib/boxMinter';
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
+import { soundPlayer } from './lib/SoundPlayer';
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
@@ -197,6 +198,8 @@ const BOX_FRAME_COUNT = 21;
 const BOX_FRAME_CLICK_MAX = 8;
 const BOX_FRAME_AUTOPLAY_START = 9;
 const BOX_FRAME_MEDIA_START = 10;
+const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
+const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -384,6 +387,7 @@ function App() {
   const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<number, HTMLImageElement>>(new Map());
   const autoplayFramePreloadScheduledRef = useRef(false);
+  const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
@@ -505,6 +509,27 @@ function App() {
     },
     [ensureVideoPreloadRoot, revealMediaBase],
   );
+
+  const ensureSoundReady = useCallback(() => {
+    if (soundPlayer.isInitialized) return Promise.resolve();
+    if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
+    const promise = soundPlayer.initializeOnUserInteraction(true);
+    soundInitPromiseRef.current = promise.finally(() => {
+      if (soundInitPromiseRef.current === promise) {
+        soundInitPromiseRef.current = null;
+      }
+    });
+    return soundInitPromiseRef.current;
+  }, []);
+
+  const preloadRevealSounds = useCallback(() => {
+    void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
+    void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
+    void ensureSoundReady().then(() => {
+      void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
+      void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
+    });
+  }, [ensureSoundReady]);
 
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!owner) return;
@@ -681,6 +706,7 @@ function App() {
     if (typeof window === 'undefined') return;
     const item = itemOverride || inventoryIndex.get(id);
     if (!item) return;
+    preloadRevealSounds();
     preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
     preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
     const originRect = toOverlayRect(rect);
@@ -1574,6 +1600,7 @@ function App() {
       return;
     }
 
+    void ensureSoundReady().then(() => soundPlayer.playSound(BOX_SOUND_CLICK_URL, 0.42));
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;
@@ -1622,6 +1649,7 @@ function App() {
 
   const handleOpenSelectedBox = async () => {
     if (!selectedBox) return;
+    preloadRevealSounds();
     if (typeof window !== 'undefined') {
       const originRect = findInventoryRect(selectedBox.id);
       const fallbackTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
@@ -1885,6 +1913,29 @@ function App() {
       .slice(0, 3);
   }, [revealOverlay?.revealedIds]);
   const revealMediaVisible = Boolean(revealOverlay && revealMediaIds.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START);
+
+  const revealSoundPlayedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!revealOverlay) {
+      revealSoundPlayedRef.current = null;
+      return;
+    }
+    if (!revealMediaVisible) return;
+    if (revealSoundPlayedRef.current === revealOverlay.id) return;
+    revealSoundPlayedRef.current = revealOverlay.id;
+    const play = () => {
+      void soundPlayer.playSound(BOX_SOUND_REVEAL_URL, 0.42);
+    };
+    if (soundPlayer.isInitialized) {
+      play();
+      return;
+    }
+    const pending = soundInitPromiseRef.current;
+    if (pending) {
+      void pending.then(play);
+    }
+  }, [revealOverlay?.id, revealMediaVisible]);
+
   const revealMediaStyle = useMemo(() => {
     if (!revealOverlay || !revealMediaIds.length) return undefined;
     const width = revealOverlay.targetRect.width;
