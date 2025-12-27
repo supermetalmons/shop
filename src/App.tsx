@@ -382,6 +382,8 @@ function App() {
   const localMintCounterRef = useRef(0);
   const knownBoxIdsRef = useRef<Set<string>>(new Set());
   const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
+  const boxFramePreloadImagesRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const autoplayFramePreloadScheduledRef = useRef(false);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
@@ -432,9 +434,19 @@ function App() {
       const safeTo = Math.min(BOX_FRAME_COUNT, Math.floor(toFrame));
       for (let i = safeFrom; i <= safeTo; i += 1) {
         if (preloadedBoxFramesRef.current.has(i)) continue;
+        const frame = i;
         const img = new Image();
-        img.src = `${boxFrameBase}${i}.webp`;
-        preloadedBoxFramesRef.current.add(i);
+        img.decoding = 'async';
+        img.onload = () => {
+          boxFramePreloadImagesRef.current.delete(frame);
+        };
+        img.onerror = () => {
+          boxFramePreloadImagesRef.current.delete(frame);
+          preloadedBoxFramesRef.current.delete(frame);
+        };
+        img.src = `${boxFrameBase}${frame}.webp`;
+        boxFramePreloadImagesRef.current.set(frame, img);
+        preloadedBoxFramesRef.current.add(frame);
       }
     },
     [boxFrameBase],
@@ -669,6 +681,8 @@ function App() {
     if (typeof window === 'undefined') return;
     const item = itemOverride || inventoryIndex.get(id);
     if (!item) return;
+    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
+    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
     const originRect = toOverlayRect(rect);
     const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
     setInventorySnapshot(inventory);
@@ -735,6 +749,8 @@ function App() {
     localMintCounterRef.current = 0;
     knownBoxIdsRef.current = new Set();
     preloadedBoxFramesRef.current.clear();
+    boxFramePreloadImagesRef.current.clear();
+    autoplayFramePreloadScheduledRef.current = false;
     videoPreloadKeyRef.current = '';
     if (videoPreloadRootRef.current) {
       videoPreloadRootRef.current.remove();
@@ -1122,6 +1138,25 @@ function App() {
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
     preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
+  }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
+  useEffect(() => {
+    if (!shouldPreloadBoxFramesInitial) return;
+    if (typeof window === 'undefined') return;
+    if (autoplayFramePreloadScheduledRef.current) return;
+    autoplayFramePreloadScheduledRef.current = true;
+    const run = () => preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+    const win = window as unknown as {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    if (typeof win.requestIdleCallback === 'function') {
+      const handle = win.requestIdleCallback(run, { timeout: 1500 });
+      return () => {
+        if (typeof win.cancelIdleCallback === 'function') win.cancelIdleCallback(handle);
+      };
+    }
+    const timeout = window.setTimeout(run, 750);
+    return () => window.clearTimeout(timeout);
   }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
   useEffect(() => {
     if (!revealOverlay) return;
