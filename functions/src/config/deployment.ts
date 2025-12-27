@@ -35,7 +35,7 @@ export type FunctionsDeploymentConfig = {
 };
 
 export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
-  solanaCluster: 'devnet',
+  solanaCluster: 'mainnet-beta',
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: 'https://assets.mons.link/drops/lsb',

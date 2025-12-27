@@ -39,7 +39,7 @@ type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 // This script intentionally accepts NO CLI args.
 // NOTE: Metaplex programs (MPL Core/Bubblegum/etc) are often NOT deployed on Solana testnet.
 // If you hit "Attempt to load a program that does not exist", use devnet or mainnet-beta.
-const SOLANA_CLUSTER: SolanaCluster = 'devnet';
+const SOLANA_CLUSTER: SolanaCluster = 'mainnet-beta';
 // Optional: set a custom RPC URL; otherwise the default cluster RPC is used.
 const SOLANA_RPC_URL: string | undefined = undefined;
 // Optional: set to an existing MPL-Core collection address (must have update authority = config PDA).
