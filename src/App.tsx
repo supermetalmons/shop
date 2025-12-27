@@ -229,6 +229,7 @@ type RevealOverlayState = {
   targetRect: OverlayRect;
   phase: RevealOverlayPhase;
   frame: number;
+  advanceClicks: number;
   revealedIds?: number[];
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
@@ -652,6 +653,7 @@ function App() {
         ...prev,
         autoOpening: true,
         autoMode: mode,
+        advanceClicks: 0,
         hasRevealAttempted: prev.hasRevealAttempted || mode === 'fast',
       };
     });
@@ -679,6 +681,7 @@ function App() {
       targetRect,
       phase,
       frame: 1,
+      advanceClicks: 0,
       revealedIds: undefined,
       hasRevealAttempted: false,
       autoOpening: false,
@@ -914,7 +917,7 @@ function App() {
       return;
     }
     if (typeof window === 'undefined') return;
-    const delay = 25;
+    const delay = 23;
     const timeout = window.setTimeout(() => {
       setRevealOverlay((prev) => {
         if (!prev || !prev.autoOpening) return prev;
@@ -1454,6 +1457,7 @@ function App() {
           ...prev,
           phase: 'ready',
           frame: 1,
+          advanceClicks: 0,
           revealedIds: undefined,
           hasRevealAttempted: false,
           autoOpening: false,
@@ -1534,29 +1538,42 @@ function App() {
       showToast('Connect wallet first');
       return;
     }
+
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;
       if (prev.phase !== 'ready') return prev;
       if (prev.autoOpening) return prev;
+
       const hasResults = Boolean(prev.revealedIds?.length);
-      const nextFrame =
-        prev.frame < BOX_FRAME_CLICK_MAX
+      const canAdvance =
+        prev.frame < BOX_FRAME_CLICK_MAX || (prev.frame === BOX_FRAME_CLICK_MAX && hasResults);
+      const requiredClicks = prev.frame % 2 === 0 ? 2 : 1;
+      const nextAdvanceClicks = canAdvance
+        ? requiredClicks === 1
+          ? 0
+          : Math.min(prev.advanceClicks + 1, requiredClicks)
+        : prev.advanceClicks;
+      const shouldAdvanceNow = canAdvance && (requiredClicks === 1 || nextAdvanceClicks >= requiredClicks);
+      const nextFrame = shouldAdvanceNow
+        ? prev.frame < BOX_FRAME_CLICK_MAX
           ? prev.frame + 1
-          : prev.frame === BOX_FRAME_CLICK_MAX
-            ? hasResults
-              ? BOX_FRAME_AUTOPLAY_START
-              : prev.frame
-            : prev.frame;
+          : prev.frame === BOX_FRAME_CLICK_MAX && hasResults
+            ? BOX_FRAME_AUTOPLAY_START
+            : prev.frame
+        : prev.frame;
+      const normalizedAdvanceClicks = shouldAdvanceNow ? 0 : nextAdvanceClicks;
       const shouldAuto = hasResults && nextFrame === BOX_FRAME_AUTOPLAY_START && prev.frame !== nextFrame;
       return {
         ...prev,
         frame: nextFrame,
         hasRevealAttempted: true,
+        advanceClicks: shouldAuto ? 0 : normalizedAdvanceClicks,
         autoOpening: shouldAuto ? true : prev.autoOpening,
         autoMode: shouldAuto ? 'normal' : prev.autoMode,
       };
     });
+
     if (shouldSendReveal) {
       void handleRevealDudes(revealOverlay.id);
     }
