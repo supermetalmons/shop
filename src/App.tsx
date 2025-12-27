@@ -193,7 +193,10 @@ const REVEAL_NOTE_OFFSET = 28;
 const LOCAL_PENDING_GRACE_MS = 10 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
-const BOX_FRAME_COUNT = 8;
+const BOX_FRAME_COUNT = 21;
+const BOX_FRAME_CLICK_MAX = 8;
+const BOX_FRAME_AUTOPLAY_START = 9;
+const BOX_FRAME_MEDIA_START = 10;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -378,9 +381,8 @@ function App() {
   const localMintCounterRef = useRef(0);
   const knownBoxIdsRef = useRef<Set<string>>(new Set());
   const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
-  const preloadedVideoSourcesRef = useRef<Set<string>>(new Set());
-  const preloadedVideoIdsRef = useRef<Set<number>>(new Set());
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
+  const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
 
@@ -422,26 +424,20 @@ function App() {
     actions.forEach((action) => action());
   }, []);
 
-  const preloadBoxFrames = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    for (let i = 1; i <= BOX_FRAME_COUNT; i += 1) {
-      if (preloadedBoxFramesRef.current.has(i)) continue;
-      const img = new Image();
-      img.src = `${boxFrameBase}${i}.webp`;
-      preloadedBoxFramesRef.current.add(i);
-    }
-  }, [boxFrameBase]);
-
-  const preloadVideoSource = useCallback((src: string) => {
-    if (typeof document === 'undefined') return;
-    if (preloadedVideoSourcesRef.current.has(src)) return;
-    const link = document.createElement('link');
-    link.rel = 'preload';
-    link.as = 'video';
-    link.href = src;
-    document.head.appendChild(link);
-    preloadedVideoSourcesRef.current.add(src);
-  }, []);
+  const preloadBoxFrames = useCallback(
+    (fromFrame = 1, toFrame = BOX_FRAME_COUNT) => {
+      if (typeof window === 'undefined') return;
+      const safeFrom = Math.max(1, Math.floor(fromFrame));
+      const safeTo = Math.min(BOX_FRAME_COUNT, Math.floor(toFrame));
+      for (let i = safeFrom; i <= safeTo; i += 1) {
+        if (preloadedBoxFramesRef.current.has(i)) continue;
+        const img = new Image();
+        img.src = `${boxFrameBase}${i}.webp`;
+        preloadedBoxFramesRef.current.add(i);
+      }
+    },
+    [boxFrameBase],
+  );
 
   const ensureVideoPreloadRoot = useCallback(() => {
     if (typeof document === 'undefined') return null;
@@ -464,14 +460,19 @@ function App() {
       if (typeof document === 'undefined') return;
       const root = ensureVideoPreloadRoot();
       if (!root) return;
-      mediaIds.forEach((mediaId) => {
-        if (!Number.isFinite(mediaId) || mediaId <= 0) return;
-        if (preloadedVideoIdsRef.current.has(mediaId)) return;
-        preloadedVideoIdsRef.current.add(mediaId);
+      const ids = mediaIds
+        .filter((mediaId) => Number.isFinite(mediaId) && mediaId > 0)
+        .slice(0, 3);
+      const key = ids.join(',');
+      if (!key) return;
+      if (videoPreloadKeyRef.current === key) return;
+      videoPreloadKeyRef.current = key;
+      while (root.firstChild) {
+        root.removeChild(root.firstChild);
+      }
+      ids.forEach((mediaId) => {
         const movSrc = `${revealMediaBase}${mediaId}.mov`;
         const webmSrc = `${revealMediaBase}${mediaId}.webm`;
-        preloadVideoSource(movSrc);
-        preloadVideoSource(webmSrc);
         const video = document.createElement('video');
         video.muted = true;
         video.playsInline = true;
@@ -489,7 +490,7 @@ function App() {
         video.load();
       });
     },
-    [ensureVideoPreloadRoot, preloadVideoSource, revealMediaBase],
+    [ensureVideoPreloadRoot, revealMediaBase],
   );
 
   const addLocalPendingReveal = (item: InventoryItem) => {
@@ -608,6 +609,12 @@ function App() {
     setRevealOverlay(null);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
+    videoPreloadKeyRef.current = '';
+    if (videoPreloadRootRef.current) {
+      while (videoPreloadRootRef.current.firstChild) {
+        videoPreloadRootRef.current.removeChild(videoPreloadRootRef.current.firstChild);
+      }
+    }
     flushOverlayActions();
   }, [flushOverlayActions]);
 
@@ -725,8 +732,7 @@ function App() {
     localMintCounterRef.current = 0;
     knownBoxIdsRef.current = new Set();
     preloadedBoxFramesRef.current.clear();
-    preloadedVideoSourcesRef.current.clear();
-    preloadedVideoIdsRef.current.clear();
+    videoPreloadKeyRef.current = '';
     if (videoPreloadRootRef.current) {
       videoPreloadRootRef.current.remove();
       videoPreloadRootRef.current = null;
@@ -908,7 +914,7 @@ function App() {
       return;
     }
     if (typeof window === 'undefined') return;
-    const delay = revealOverlay.autoMode === 'fast' ? 120 : 220;
+    const delay = 25;
     const timeout = window.setTimeout(() => {
       setRevealOverlay((prev) => {
         if (!prev || !prev.autoOpening) return prev;
@@ -916,7 +922,7 @@ function App() {
         const nextPhase =
           prev.phase === 'revealed'
             ? prev.phase
-            : prev.revealedIds && prev.revealedIds.length && nextFrame >= 7
+            : prev.revealedIds && prev.revealedIds.length && nextFrame >= BOX_FRAME_MEDIA_START
               ? 'revealed'
               : prev.phase;
         return { ...prev, frame: nextFrame, phase: nextPhase };
@@ -1108,15 +1114,16 @@ function App() {
     });
     return ids;
   }, [pendingOpenBoxesFiltered, localPendingFiltered]);
-  const shouldPreloadBoxFrames =
-    Boolean(revealOverlay) ||
-    pendingRevealIds.size > 0 ||
-    localMintedBoxes.length > 0 ||
-    inventoryView.some((item) => item.kind === 'box');
+  const shouldPreloadBoxFramesInitial =
+    pendingRevealIds.size > 0 || localMintedBoxes.length > 0 || inventoryView.some((item) => item.kind === 'box');
   useEffect(() => {
-    if (!shouldPreloadBoxFrames) return;
-    preloadBoxFrames();
-  }, [shouldPreloadBoxFrames, preloadBoxFrames]);
+    if (!shouldPreloadBoxFramesInitial) return;
+    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
+  }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
+  useEffect(() => {
+    if (!revealOverlay) return;
+    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+  }, [revealOverlay, preloadBoxFrames]);
   const pendingRevealItems = useMemo(() => {
     if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
     const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
@@ -1494,7 +1501,11 @@ function App() {
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== boxAssetId) return prev;
         const nextPhase =
-          prev.phase === 'preparing' ? prev.phase : prev.frame >= 7 && revealed.length ? 'revealed' : 'ready';
+          prev.phase === 'preparing'
+            ? prev.phase
+            : prev.frame >= BOX_FRAME_MEDIA_START && revealed.length
+              ? 'revealed'
+              : 'ready';
         return { ...prev, phase: nextPhase, revealedIds: revealed };
       });
       queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
@@ -1529,9 +1540,15 @@ function App() {
       if (prev.phase !== 'ready') return prev;
       if (prev.autoOpening) return prev;
       const hasResults = Boolean(prev.revealedIds?.length);
-      const maxFrame = hasResults ? 6 : 5;
-      const nextFrame = prev.frame < maxFrame ? prev.frame + 1 : prev.frame;
-      const shouldAuto = hasResults && nextFrame === 6 && prev.frame !== nextFrame;
+      const nextFrame =
+        prev.frame < BOX_FRAME_CLICK_MAX
+          ? prev.frame + 1
+          : prev.frame === BOX_FRAME_CLICK_MAX
+            ? hasResults
+              ? BOX_FRAME_AUTOPLAY_START
+              : prev.frame
+            : prev.frame;
+      const shouldAuto = hasResults && nextFrame === BOX_FRAME_AUTOPLAY_START && prev.frame !== nextFrame;
       return {
         ...prev,
         frame: nextFrame,
@@ -1799,7 +1816,7 @@ function App() {
       })()
     : undefined;
   const showRevealOutcome = Boolean(
-    revealOverlay && revealOverlay.revealedIds?.length && revealOverlay.frame >= 7,
+    revealOverlay && revealOverlay.revealedIds?.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START,
   );
   const revealOverlayStage = revealOverlay
     ? revealOverlay.phase === 'preparing'
@@ -1822,9 +1839,9 @@ function App() {
       .filter((entry): entry is number => Boolean(entry))
       .slice(0, 3);
   }, [revealOverlay?.revealedIds]);
-  const revealedMedia = useMemo(() => (showRevealOutcome ? revealMediaIds : []), [revealMediaIds, showRevealOutcome]);
+  const revealMediaVisible = Boolean(revealOverlay && revealMediaIds.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START);
   const revealMediaStyle = useMemo(() => {
-    if (!revealOverlay || !revealedMedia.length) return undefined;
+    if (!revealOverlay || !revealMediaIds.length) return undefined;
     const width = revealOverlay.targetRect.width;
     const height = revealOverlay.targetRect.height;
     const base = Math.min(width, height);
@@ -1837,7 +1854,7 @@ function App() {
     return {
       ['--reveal-media-size' as never]: `${size}px`,
     };
-  }, [revealOverlay, revealedMedia.length]);
+  }, [revealOverlay, revealMediaIds.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
     preloadRevealVideos(revealMediaIds);
@@ -1880,17 +1897,19 @@ function App() {
               finalizeRevealOverlayDismissal();
             }}
           >
-            {revealedMedia.length ? (
-              <div className="reveal-overlay__media" style={revealMediaStyle} aria-hidden="true">
-                {revealedMedia.map((mediaId, index) => (
+            {revealMediaIds.length ? (
+              <div
+                className={`reveal-overlay__media${revealMediaVisible ? ' reveal-overlay__media--visible' : ''}`}
+                style={revealMediaStyle}
+                aria-hidden="true"
+              >
+                {revealMediaIds.map((mediaId, index) => (
                   <div
-                    key={mediaId}
+                    key={`${revealOverlay.id}-${mediaId}`}
                     className={`reveal-overlay__media-item reveal-overlay__media-item--${['top', 'left', 'right'][index] || 'top'}`}
+                    style={{ ['--reveal-media-delay' as never]: `${index * 90}ms` }}
                   >
-                    <div
-                      className="reveal-overlay__media-float"
-                      style={{ ['--reveal-float-delay' as never]: `${index * 0.35}s` }}
-                    >
+                    <div className="reveal-overlay__media-float">
                       <video className="reveal-overlay__video" autoPlay muted loop playsInline preload="metadata">
                         <source
                           src={`${revealMediaBase}${mediaId}.mov`}
