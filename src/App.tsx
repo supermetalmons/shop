@@ -2193,20 +2193,6 @@ function App() {
         discountBusy={discountMinting || discountChecking || minting || walletBusy}
       />
 
-      {mintedOut ? (
-        <section className="card">
-          <div className="card__title">Minted out</div>
-          <p className="muted">All boxes are gone. Grab them on secondary.</p>
-          <div className="row">
-            {secondaryLinks.map((link) => (
-              <a key={link.href} className="pill" href={link.href} target="_blank" rel="noreferrer">
-                {link.label}
-              </a>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
 	      <section className="card">
 	        <div className="card__title">Inventory</div>
 		        <InventoryGrid
