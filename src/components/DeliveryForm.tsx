@@ -9,6 +9,7 @@ interface DeliveryFormProps {
   submitDisabled?: boolean;
   countryCode?: string;
   onCountryCodeChange?: (code: string) => void;
+  submitLabel?: string;
 }
 
 export function DeliveryForm({
@@ -19,6 +20,7 @@ export function DeliveryForm({
   submitDisabled,
   countryCode,
   onCountryCodeChange,
+  submitLabel,
 }: DeliveryFormProps) {
   const [email, setEmail] = useState(defaultEmail || '');
   const [emailTouched, setEmailTouched] = useState(false);
@@ -37,17 +39,25 @@ export function DeliveryForm({
     [selectedCountryCode],
   );
   const countryName = countryOption?.name || selectedCountryCode;
+  const shippingNote =
+    selectedCountryCode === 'US'
+      ? 'Free US shipping'
+      : 'International delivery: 0.19 SOL up to 3 figures. 0.04 SOL each additional figure.';
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);
   }, [defaultEmail, emailTouched, email]);
 
-  const handleSubmit = async (evt: FormEvent) => {
+  const handleSubmit = async (evt: FormEvent<HTMLFormElement>) => {
     evt.preventDefault();
     if (submitDisabled) return;
+    if (!evt.currentTarget.checkValidity()) {
+      setError('Please complete the required fields.');
+      return;
+    }
     const normalizedEmail = email.trim();
     if (!normalizedEmail) {
-      setError('Email is required for shipping updates.');
+      setError('Please add an email for shipping updates.');
       return;
     }
     setSaving(true);
@@ -71,7 +81,7 @@ export function DeliveryForm({
   };
 
   return (
-    <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={handleSubmit}>
+    <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={handleSubmit} noValidate>
       {mode === 'card' ? (
         <>
           <div className="card__title">Shipping address</div>
@@ -135,16 +145,16 @@ export function DeliveryForm({
           </select>
         </label>
       </div>
-      <div className="muted small">International delivery: 0.19 sol base up to 3 figures. 0.04 sol each additional figure.</div>
+      <div className="muted small">{shippingNote}</div>
       {error ? <div className="error">{error}</div> : null}
-      <div className="row">
+      <div className={`row${mode === 'modal' ? ' row--end' : ''}`}>
         {onCancel ? (
           <button type="button" className="ghost" onClick={onCancel} disabled={saving}>
             Cancel
           </button>
         ) : null}
         <button type="submit" disabled={saving || submitDisabled}>
-          {saving ? 'Shipping…' : 'Ship'}
+          {saving ? 'Sending…' : submitLabel || 'Send'}
         </button>
       </div>
     </form>

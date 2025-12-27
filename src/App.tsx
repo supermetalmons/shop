@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, type VersionedTransaction } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { FaBoxOpen, FaPlane } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
@@ -26,7 +26,6 @@ import { soundPlayer } from './lib/SoundPlayer';
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
-  lamportsToSol,
   sendPreparedTransaction,
   shortAddress,
 } from './lib/solana';
@@ -1332,10 +1331,23 @@ function App() {
     () => selectedItems.filter((item) => item.kind !== 'certificate' && !pendingRevealIds.has(item.id)),
     [selectedItems, pendingRevealIds],
   );
+  const selectionSummary = useMemo(() => {
+    const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
+    const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
+    const parts: string[] = [];
+    if (boxCount) parts.push(`${boxCount} ${boxCount === 1 ? 'box' : 'boxes'}`);
+    if (figureCount) parts.push(`${figureCount} ${figureCount === 1 ? 'figure' : 'figures'}`);
+    return parts.length ? parts.join(', ') : `${selectedCount} selected`;
+  }, [deliverableItems, selectedCount]);
   const deliveryEstimateLamports = useMemo(
     () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode),
     [deliverableItems, deliveryCountryCode],
   );
+  const deliveryCtaLabel = useMemo(() => {
+    if (deliveryEstimateLamports <= 0) return 'Send';
+    const sol = (deliveryEstimateLamports / LAMPORTS_PER_SOL).toFixed(2);
+    return `Send for ${sol} SOL`;
+  }, [deliveryEstimateLamports]);
   const [compactPanel, setCompactPanel] = useState(false);
   const selectedPreview = useMemo(() => {
     const limit = compactPanel ? 3 : 5;
@@ -2236,16 +2248,8 @@ function App() {
         <div className="modal-form delivery-modal">
           <div className="delivery-modal__summary">
             <div>
-              <div className="card__title">{selectedCount} selected</div>
-              <div className="muted small">Enter your shipping address to continue.</div>
+              <div className="card__title">{selectionSummary}</div>
             </div>
-            {deliverableItems.length ? (
-              <div className="pill-row">
-                <span className="pill">
-                  Ship: {deliveryEstimateLamports === 0 ? 'free' : `${lamportsToSol(deliveryEstimateLamports)} ◎`}
-                </span>
-              </div>
-            ) : null}
           </div>
 
           {!publicKey ? <div className="muted small">Connect a wallet to ship items.</div> : null}
@@ -2256,6 +2260,7 @@ function App() {
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
+            submitLabel={deliveryCtaLabel}
           />
         </div>
       </Modal>
@@ -2376,7 +2381,7 @@ function App() {
               onClick={handleOpenShip}
             >
               <FaPlane aria-hidden="true" focusable="false" size={16} />
-              <span>Ship</span>
+              <span>Send</span>
             </button>
           </div>
         </div>
