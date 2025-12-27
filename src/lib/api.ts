@@ -428,15 +428,14 @@ export async function revealDudes(
 export async function saveEncryptedAddress(
   encrypted: string,
   country: string,
-  label: string,
   hint: string,
   email?: string,
   countryCode?: string,
 ): Promise<ProfileAddress> {
   return callFunction<
-    { encrypted: string; country: string; countryCode?: string; label: string; hint: string; email?: string },
+    { encrypted: string; country: string; countryCode?: string; hint: string; email?: string },
     ProfileAddress
-  >('saveAddress', { encrypted, country, countryCode, label, hint, email });
+  >('saveAddress', { encrypted, country, countryCode, hint, email });
 }
 
 export async function removeAddress(addressId: string): Promise<{ id: string; removed?: boolean }> {

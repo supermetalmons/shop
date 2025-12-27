@@ -223,8 +223,14 @@ const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 // Bubblegum v2 burn discriminator (kinobi generated).
 const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
-const MIN_DELIVERY_LAMPORTS = 1_000_000; // 0.001 SOL
-const MAX_DELIVERY_LAMPORTS = 3_000_000; // 0.003 SOL
+const DELIVERY_BASE_LAMPORTS = 190_000_000;
+const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
+const DELIVERY_FIGURES_PER_BOX = 3;
+const MAX_DELIVERY_ITEMS = 32;
+const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * DELIVERY_FIGURES_PER_BOX;
+const MIN_DELIVERY_LAMPORTS = 0;
+const MAX_DELIVERY_LAMPORTS =
+  DELIVERY_BASE_LAMPORTS + Math.max(0, MAX_DELIVERY_FIGURES - DELIVERY_FIGURES_PER_BOX) * DELIVERY_EXTRA_LAMPORTS;
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
@@ -1752,9 +1758,24 @@ function normalizeCountryCode(country?: string) {
   const normalized = (country || '').trim().toUpperCase();
   if (!normalized) return '';
   if (normalized.length === 2) return normalized;
-  const compact = normalized.replace(/[\s.]/g, '');
-  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA') return 'US';
+  const compact = normalized.replace(/[\s._-]/g, '');
+  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA' || compact === 'USA' || compact === 'US') {
+    return 'US';
+  }
   return '';
+}
+
+function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>): number {
+  return items.reduce((total, item) => total + (item.kind === 'box' ? DELIVERY_FIGURES_PER_BOX : 1), 0);
+}
+
+function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, countryCode?: string): number {
+  const normalized = normalizeCountryCode(countryCode);
+  if (normalized === 'US') return 0;
+  const figureCount = countDeliveryFigures(items);
+  if (figureCount <= 0) return 0;
+  const extraFigures = Math.max(0, figureCount - DELIVERY_FIGURES_PER_BOX);
+  return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
 }
 
 type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
@@ -1984,12 +2005,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, addressesSnap, orders] = await Promise.all([
-    profileRef.get(),
-    db.collection(`profiles/${wallet}/addresses`).get(),
-    fetchDeliveryOrderHistory(wallet),
-  ]);
-  const addresses = addressesSnap.docs.map((doc) => doc.data());
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
@@ -1997,7 +2013,6 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
       ...profileData,
       wallet,
       email: profileData.email,
-      addresses,
       orders,
     },
   };
@@ -2006,12 +2021,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
 export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, addressesSnap, orders] = await Promise.all([
-    profileRef.get(),
-    db.collection(`profiles/${wallet}/addresses`).get(),
-    fetchDeliveryOrderHistory(wallet),
-  ]);
-  const addresses = addressesSnap.docs.map((doc) => doc.data());
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
@@ -2019,7 +2029,6 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
       ...profileData,
       wallet,
       email: profileData.email,
-      addresses,
       orders,
     },
   };
@@ -2039,7 +2048,6 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
     encrypted: z.string().max(4096),
     country: z.string().max(64),
     countryCode: z.string().max(32).optional(),
-    label: z.string().max(64).default('Home'),
     hint: z.string().max(256),
     email: z.string().email().max(254).optional(),
   });
@@ -2062,7 +2070,6 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   );
   return {
     id,
-    label: body.label,
     country: body.country,
     countryCode: countryCode || body.countryCode,
     encrypted: body.encrypted,
@@ -2294,9 +2301,8 @@ export const prepareDeliveryTx = onCallLogged(
   }
 
   // Keep this comfortably above realistic tx-size limits while preventing accidental huge requests.
-  const MAX_ITEMS_REQUESTED = 32;
-  if (uniqueItemIds.length > MAX_ITEMS_REQUESTED) {
-    throw new HttpsError('invalid-argument', `Too many items in one delivery request (max ${MAX_ITEMS_REQUESTED})`);
+  if (uniqueItemIds.length > MAX_DELIVERY_ITEMS) {
+    throw new HttpsError('invalid-argument', `Too many items in one delivery request (max ${MAX_DELIVERY_ITEMS})`);
   }
 
   const addressSnap = await db.doc(`profiles/${wallet}/addresses/${addressId}`).get();
@@ -2304,7 +2310,8 @@ export const prepareDeliveryTx = onCallLogged(
     throw new HttpsError('not-found', 'Address not found');
   }
   const addressData = addressSnap.data();
-  const addressCountry = addressData?.countryCode || normalizeCountryCode(addressData?.country) || addressData?.country || '';
+  const normalizedAddressCountry = normalizeCountryCode(addressData?.countryCode || addressData?.country);
+  const addressCountry = normalizedAddressCountry || addressData?.countryCode || addressData?.country || '';
 
   // Validate assets are deliverable Mons items owned by the wallet.
   const assetPks: PublicKey[] = [];
@@ -2356,6 +2363,8 @@ export const prepareDeliveryTx = onCallLogged(
       });
     }
   }
+
+  const deliveryLamports = calculateDeliveryLamports(orderItems, addressCountry);
 
   // Ensure COSIGNER_SECRET matches on-chain admin, and COLLECTION_MINT matches configured core collection.
   const cfgInfo = await withTimeout(
@@ -2410,8 +2419,6 @@ export const prepareDeliveryTx = onCallLogged(
       'getAccountInfo:deliveryPda',
     );
     if (chainInfo) continue;
-
-    const deliveryLamports = randomInt(MIN_DELIVERY_LAMPORTS, MAX_DELIVERY_LAMPORTS + 1);
 
     const deliverIx = new TransactionInstruction({
       programId,

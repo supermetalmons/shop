@@ -2,13 +2,24 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 
 interface DeliveryFormProps {
-  onSave: (payload: { formatted: string; country: string; countryCode: string; label: string; email: string }) => Promise<void>;
+  onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
   defaultEmail?: string;
   mode?: 'card' | 'modal';
   onCancel?: () => void;
+  submitDisabled?: boolean;
+  countryCode?: string;
+  onCountryCodeChange?: (code: string) => void;
 }
 
-export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: DeliveryFormProps) {
+export function DeliveryForm({
+  onSubmit,
+  defaultEmail,
+  mode = 'card',
+  onCancel,
+  submitDisabled,
+  countryCode,
+  onCountryCodeChange,
+}: DeliveryFormProps) {
   const [email, setEmail] = useState(defaultEmail || '');
   const [emailTouched, setEmailTouched] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -17,12 +28,15 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [countryCode, setCountryCode] = useState('INTL');
-  const [label, setLabel] = useState('Home');
+  const [localCountryCode, setLocalCountryCode] = useState(countryCode || 'US');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const countryOption = useMemo(() => findCountryByCode(countryCode) || findCountryByCode('INTL'), [countryCode]);
-  const countryName = countryOption?.name || countryCode;
+  const selectedCountryCode = countryCode ?? localCountryCode;
+  const countryOption = useMemo(
+    () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
+    [selectedCountryCode],
+  );
+  const countryName = countryOption?.name || selectedCountryCode;
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);
@@ -30,6 +44,7 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
 
   const handleSubmit = async (evt: FormEvent) => {
     evt.preventDefault();
+    if (submitDisabled) return;
     const normalizedEmail = email.trim();
     if (!normalizedEmail) {
       setError('Email is required for shipping updates.');
@@ -47,11 +62,11 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
       ]
         .filter(Boolean)
         .join('\n');
-      await onSave({ formatted, country: countryName, countryCode, label, email: normalizedEmail });
+      await onSubmit({ formatted, country: countryName, countryCode: selectedCountryCode, email: normalizedEmail });
       setSaving(false);
     } catch (err) {
       setSaving(false);
-      setError(err instanceof Error ? err.message : 'Failed to save');
+      setError(err instanceof Error ? err.message : 'Failed to ship');
     }
   };
 
@@ -59,7 +74,7 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
     <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={handleSubmit}>
       {mode === 'card' ? (
         <>
-          <div className="card__title">Save a shipping address</div>
+          <div className="card__title">Shipping address</div>
           <p className="muted small">We use your email for shipping updates.</p>
         </>
       ) : null}
@@ -103,7 +118,15 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
         </label>
         <label>
           <span className="muted">Country</span>
-          <select required value={countryCode} onChange={(e) => setCountryCode(e.target.value)}>
+          <select
+            required
+            value={selectedCountryCode}
+            onChange={(e) => {
+              const next = e.target.value;
+              onCountryCodeChange?.(next);
+              if (countryCode == null) setLocalCountryCode(next);
+            }}
+          >
             {COUNTRIES.map((option) => (
               <option key={option.code} value={option.code}>
                 {countryLabel(option)}
@@ -111,11 +134,8 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
             ))}
           </select>
         </label>
-        <label>
-          <span className="muted">Label</span>
-          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Home / Studio" />
-        </label>
       </div>
+      <div className="muted small">International delivery: 0.19 sol base up to 3 figures. 0.04 sol each additional figure.</div>
       {error ? <div className="error">{error}</div> : null}
       <div className="row">
         {onCancel ? (
@@ -123,8 +143,8 @@ export function DeliveryForm({ onSave, defaultEmail, mode = 'card', onCancel }: 
             Cancel
           </button>
         ) : null}
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : 'Save encrypted address'}
+        <button type="submit" disabled={saving || submitDisabled}>
+          {saving ? 'Shipping…' : 'Ship'}
         </button>
       </div>
     </form>

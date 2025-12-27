@@ -29,7 +29,6 @@ export interface MintStats {
 
 export interface ProfileAddress {
   id: string;
-  label: string;
   country: string;
   countryCode?: string;
   countryName?: string;
@@ -56,7 +55,6 @@ export interface DeliveryOrderSummary {
 export interface Profile {
   wallet: string;
   email?: string;
-  addresses: ProfileAddress[];
   orders?: DeliveryOrderSummary[];
 }
 

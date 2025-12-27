@@ -17,7 +17,6 @@ import {
   requestDeliveryTx,
   revealDudes,
   saveEncryptedAddress,
-  removeAddress,
   issueReceipts,
 } from './lib/api';
 import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, discountMintRecordPda, fetchBoxMinterConfig } from './lib/boxMinter';
@@ -28,12 +27,11 @@ import {
   encryptAddressPayload,
   isBlockhashExpiredError,
   lamportsToSol,
-  normalizeCountryCode,
   sendPreparedTransaction,
   shortAddress,
 } from './lib/solana';
-import { countryLabel, findCountryByCode } from './lib/countries';
-import { DeliveryOrderSummary, InventoryItem, PendingOpenBox, ProfileAddress } from './types';
+import { calculateDeliveryLamports } from './lib/shipping';
+import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 function hiddenInventoryKey(wallet?: string) {
@@ -354,8 +352,6 @@ function App() {
   const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
   const [revealOverlayActive, setRevealOverlayActive] = useState(false);
   const [revealOverlayClosing, setRevealOverlayClosing] = useState(false);
-  const [deliveryLoading, setDeliveryLoading] = useState(false);
-  const [deliveryCost, setDeliveryCost] = useState<number | undefined>();
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -366,11 +362,9 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [shipmentsReady, setShipmentsReady] = useState(false);
-  const [addressId, setAddressId] = useState<string | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
-  const [deliveryAddOpen, setDeliveryAddOpen] = useState(false);
+  const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
-  const [removeAddressLoading, setRemoveAddressLoading] = useState<string | null>(null);
   const owner = publicKey?.toBase58();
   const [discountUsed, setDiscountUsed] = useState<boolean>(() => loadDiscountUsed(owner));
   const walletBusy = wallet.connecting || wallet.disconnecting;
@@ -1334,6 +1328,14 @@ function App() {
       .filter((item): item is InventoryItem => Boolean(item));
   }, [selected, inventoryView]);
   const selectedCount = selected.size;
+  const deliverableItems = useMemo(
+    () => selectedItems.filter((item) => item.kind !== 'certificate' && !pendingRevealIds.has(item.id)),
+    [selectedItems, pendingRevealIds],
+  );
+  const deliveryEstimateLamports = useMemo(
+    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode),
+    [deliverableItems, deliveryCountryCode],
+  );
   const [compactPanel, setCompactPanel] = useState(false);
   const selectedPreview = useMemo(() => {
     const limit = compactPanel ? 3 : 5;
@@ -1407,7 +1409,6 @@ function App() {
   useEffect(() => {
     if (!deliveryOpen || selectedCount) return;
     setDeliveryOpen(false);
-    setDeliveryAddOpen(false);
   }, [deliveryOpen, selectedCount]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
@@ -1802,109 +1803,55 @@ function App() {
 	    }
 	  };
 
-  const handleSaveAddress = async ({
+  const handleShip = async ({
     formatted,
     country,
-    label,
     email,
     countryCode,
   }: {
     formatted: string;
     country: string;
-    label: string;
     email: string;
     countryCode: string;
   }) => {
-    const encryptionKey = (FRONTEND_DEPLOYMENT.addressEncryptionPublicKey || '').trim();
-    if (!encryptionKey) throw new Error('Missing address encryption public key (src/config/deployment.ts)');
-    const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
-    // Ensure wallet session exists for authenticated callable.
-    const session = token ? { profile } : await signIn();
-    const saved = await saveEncryptedAddress(cipherText, country, label, hint, email, countryCode);
-    const base = (session?.profile || profile) as typeof profile;
-    if (updateProfile && base) {
-      updateProfile({
-        ...base,
-        email: email || base.email,
-        addresses: [...(base.addresses || []), { ...saved, hint }],
-      });
-    }
-    setAddressId(saved.id);
-    setDeliveryAddOpen(false);
-    showToast('Address saved and encrypted');
-  };
-
-  const handleRemoveAddress = async (id: string) => {
-    if (!publicKey) throw new Error('Connect a wallet to manage shipping addresses');
-    setRemoveAddressLoading(id);
-    try {
-      const session = token ? { profile } : await signIn();
-      await removeAddress(id);
-      const base = session?.profile || profile;
-      const remaining = (base?.addresses || []).filter((addr) => addr.id !== id);
-      if (updateProfile && base) {
-        updateProfile({
-          ...base,
-          addresses: remaining,
-        });
-      }
-      if (addressId === id) {
-        setAddressId(remaining.length ? remaining[0].id : null);
-      }
-      showToast('Address removed');
-    } catch (err) {
-      console.error(err);
-      showToast(err instanceof Error ? err.message : 'Failed to remove address');
-    } finally {
-      setRemoveAddressLoading(null);
-    }
-  };
-
-  const handleSignInForDelivery = async () => {
-    await signIn();
-    showToast('Signed in. Saved addresses loaded.');
-  };
-
-  const handleSignInForShipments = async () => {
     if (!publicKey) {
       setVisible(true);
+      showToast('Connect a wallet to ship items');
       return;
     }
-    if (authLoading) return;
-    try {
-      await signIn();
-    } catch (err) {
-      if (isUserRejectedError(err)) return;
-      showToast(err instanceof Error ? err.message : 'Failed to sign in');
+    if (!selected.size) {
+      showToast('Select items to ship');
+      return;
     }
-  };
-
-  const handleRequestDelivery = async (addressId: string | null) => {
-    if (!publicKey) throw new Error('Connect wallet first');
-    if (!addressId) throw new Error('Select a shipping address');
-    const itemIds = Array.from(selected);
-    if (!itemIds.length) throw new Error('Select items to ship');
-    const addr = savedAddresses.find((a) => a.id === addressId);
-    if (!addr) throw new Error('Select a shipping address');
-    // Ensure wallet session exists for authenticated callable.
-    if (!token) {
-      await signIn();
+    const deliverableIds = deliverableItems.map((item) => item.id);
+    if (!deliverableIds.length) {
+      showToast('Select boxes or figures to ship');
+      return;
     }
-    const deliverableIds = itemIds.filter((id) => {
-      const item = inventoryView.find((entry) => entry.id === id);
-      return item && item.kind !== 'certificate' && !pendingRevealIds.has(id);
-    });
-    if (!deliverableIds.length) throw new Error('Select boxes or figures to ship');
-    if (deliverableIds.length !== itemIds.length) {
+    if (deliverableIds.length !== selected.size) {
       setSelected(new Set(deliverableIds));
     }
 
-    setDeliveryLoading(true);
-    setDeliveryCost(undefined);
+    const encryptionKey = (FRONTEND_DEPLOYMENT.addressEncryptionPublicKey || '').trim();
+    if (!encryptionKey) {
+      showToast('Missing address encryption public key (src/config/deployment.ts)');
+      return;
+    }
+
     try {
-      const requestTx = () => requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId });
+      const session = token ? { profile } : await signIn();
+      const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
+      const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
+      const base = session?.profile || profile;
+      if (updateProfile && base) {
+        updateProfile({
+          ...base,
+          email: email || base.email,
+        });
+      }
+
+      const requestTx = () => requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id });
       let resp = await requestTx();
-      setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
       let sig: string;
       try {
         sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
@@ -1912,7 +1859,6 @@ function App() {
         if (!isBlockhashExpiredError(err)) throw err;
         showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         resp = await requestTx();
-        setDeliveryCost(typeof resp.deliveryLamports === 'number' ? resp.deliveryLamports : undefined);
         sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
@@ -1936,10 +1882,22 @@ function App() {
     } catch (err) {
       console.error(err);
       if (!isUserRejectedError(err)) {
-        showToast(err instanceof Error ? err.message : 'Failed to request shipment');
+        showToast(err instanceof Error ? err.message : 'Failed to ship');
       }
-    } finally {
-      setDeliveryLoading(false);
+    }
+  };
+
+  const handleSignInForShipments = async () => {
+    if (!publicKey) {
+      setVisible(true);
+      return;
+    }
+    if (authLoading) return;
+    try {
+      await signIn();
+    } catch (err) {
+      if (isUserRejectedError(err)) return;
+      showToast(err instanceof Error ? err.message : 'Failed to sign in');
     }
   };
 
@@ -1969,11 +1927,6 @@ function App() {
     { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
-  const savedAddresses = profile?.addresses || [];
-  const formattedAddresses = useMemo(
-    () => savedAddresses.map((addr) => ({ ...addr, hint: addr.hint || addr.id.slice(0, 4) })),
-    [savedAddresses],
-  );
   const deliveryOrders = profile?.orders || [];
   const shipmentsEmptyContent = !profile ? (
     <span className="shipments-signin">
@@ -2002,30 +1955,11 @@ function App() {
     }
     setShipmentsReady(true);
   }, [inventoryReadyForShipments]);
-  const formatCountry = (addr: ProfileAddress) => {
-    const code = addr.countryCode || normalizeCountryCode(addr.country);
-    const option = findCountryByCode(code);
-    if (option) return countryLabel(option);
-    return addr.country || code || 'Unknown';
-  };
-
   useEffect(() => {
     if (!deliveryOrders.length) {
       setClaimOpen(false);
     }
   }, [deliveryOrders.length]);
-
-  useEffect(() => {
-    if (!addressId && savedAddresses.length) {
-      setAddressId(savedAddresses[0].id);
-    }
-  }, [addressId, savedAddresses]);
-
-  useEffect(() => {
-    // Delivery cost is returned by the server when preparing the delivery transaction.
-    // Clear any previously-returned value whenever the inputs change to avoid showing stale fees.
-    setDeliveryCost(undefined);
-  }, [addressId, selected]);
 
   const revealOverlayStyle = revealOverlay
     ? (() => {
@@ -2291,142 +2225,32 @@ function App() {
         title="Shipment"
         onClose={() => {
           setDeliveryOpen(false);
-          setDeliveryAddOpen(false);
         }}
       >
         <div className="modal-form delivery-modal">
           <div className="delivery-modal__summary">
             <div>
               <div className="card__title">{selectedCount} selected</div>
-              <div className="muted small">Choose a saved address or add a new one.</div>
+              <div className="muted small">Enter your shipping address to continue.</div>
             </div>
-            {selectedCount && addressId ? (
+            {deliverableItems.length ? (
               <div className="pill-row">
-                {typeof deliveryCost === 'number' ? (
-                  <span className="pill">Ship: {lamportsToSol(deliveryCost)} ◎</span>
-                ) : deliveryLoading ? (
-                  <span className="pill">Ship: calculating…</span>
-                ) : (
-                  <span className="pill">Ship: calculated on request</span>
-                )}
+                <span className="pill">
+                  Ship: {deliveryEstimateLamports === 0 ? 'free' : `${lamportsToSol(deliveryEstimateLamports)} ◎`}
+                </span>
               </div>
             ) : null}
           </div>
 
-          {!publicKey ? <div className="muted small">Connect a wallet to manage shipping addresses.</div> : null}
-          {publicKey && !profile && !authLoading ? (
-            <div className="muted small">
-              Sign in once to load saved addresses on this device. Afterwards you can reload and still see them.
-            </div>
-          ) : null}
-
-          <div className="card__head">
-            <div>
-              <div className="card__title">Shipping address</div>
-              <div className="muted small">Select a saved address or add a new one.</div>
-            </div>
-            <div className="card__actions">
-              {!profile ? (
-                <button type="button" className="ghost" onClick={handleSignInForDelivery} disabled={!publicKey || authLoading}>
-                  {authLoading ? 'Loading…' : 'Sign in to load addresses'}
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setDeliveryAddOpen((prev) => !prev)}
-                disabled={!publicKey || authLoading}
-              >
-                {deliveryAddOpen ? 'Hide address form' : 'Add new address'}
-              </button>
-            </div>
-          </div>
-
-          <label>
-            <span className="muted">Send to</span>
-            <select
-              value={addressId || ''}
-              onChange={(evt) => setAddressId(evt.target.value)}
-              disabled={!formattedAddresses.length}
-            >
-              <option value="" disabled>
-                {formattedAddresses.length
-                  ? 'Choose saved address'
-                  : profile
-                    ? 'No saved addresses yet'
-                    : 'Sign in to load addresses'}
-              </option>
-              {formattedAddresses.map((addr) => (
-                <option key={addr.id} value={addr.id}>
-                  {addr.label} · {formatCountry(addr)} · {addr.hint}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {formattedAddresses.length ? (
-            <>
-              <div className="muted small">Saved addresses</div>
-              <div className="grid">
-                {formattedAddresses.map((addr) => {
-                  const isSelected = addr.id === addressId;
-                  return (
-                    <div key={addr.id} className="card subtle">
-                      <div className="card__head">
-                        <div>
-                          <div className="card__title">{addr.label}</div>
-                          <div className="muted small">
-                            {formatCountry(addr)} · {addr.hint}
-                          </div>
-                        </div>
-                        <div className="card__actions">
-                          {isSelected ? <span className="pill">Selected</span> : null}
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => {
-                              void handleRemoveAddress(addr.id);
-                            }}
-                            disabled={!profile || Boolean(removeAddressLoading)}
-                          >
-                            {removeAddressLoading === addr.id ? 'Removing…' : 'Remove'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : null}
-
-          {deliveryAddOpen ? (
-            <div className="card subtle">
-              <div className="card__title">Add a new address</div>
-              <DeliveryForm
-                mode="modal"
-                onSave={handleSaveAddress}
-                defaultEmail={profile?.email || ''}
-                onCancel={() => setDeliveryAddOpen(false)}
-              />
-            </div>
-          ) : null}
-
-          <div className="row">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => {
-                setDeliveryOpen(false);
-                setDeliveryAddOpen(false);
-              }}
-            >
-              Close
-            </button>
-            <button onClick={() => handleRequestDelivery(addressId)} disabled={!selectedCount || !addressId || deliveryLoading}>
-              {deliveryLoading ? 'Preparing tx…' : 'Request shipment tx'}
-            </button>
-          </div>
+          {!publicKey ? <div className="muted small">Connect a wallet to ship items.</div> : null}
+          <DeliveryForm
+            mode="modal"
+            onSubmit={handleShip}
+            defaultEmail={profile?.email || ''}
+            submitDisabled={!deliverableItems.length || !publicKey}
+            countryCode={deliveryCountryCode}
+            onCountryCodeChange={setDeliveryCountryCode}
+          />
         </div>
       </Modal>
 
@@ -2545,7 +2369,6 @@ function App() {
               className="selection-panel__ship"
               onClick={() => {
                 setDeliveryOpen(true);
-                setDeliveryAddOpen(false);
               }}
             >
               <FaPlane aria-hidden="true" focusable="false" size={16} />

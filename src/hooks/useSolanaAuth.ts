@@ -58,9 +58,8 @@ export function useSolanaAuth() {
     setState((prev) => ({ ...prev, profile }));
   }, []);
 
-  // On reload, restore the saved profile/addresses if this device already has a wallet session
-  // (set by a previous `solanaAuth` call). This avoids requiring another wallet signature just
-  // to *view* saved addresses.
+  // On reload, restore the saved profile if this device already has a wallet session
+  // (set by a previous `solanaAuth` call). This avoids requiring another wallet signature.
   useEffect(() => {
     if (!auth || !connected || !publicKey) return;
     const wallet = publicKey.toBase58();
@@ -79,8 +78,7 @@ export function useSolanaAuth() {
         if (!profile || profile.wallet !== wallet) return;
         const token = await auth.currentUser?.getIdToken();
         if (!token) return;
-        const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
-        if (!cancelled) setState({ profile: normalizedProfile, token, loading: false });
+        if (!cancelled) setState({ profile, token, loading: false });
       } catch {
         // No session (or expired) is totally normal on first visit; don't surface as an error.
       } finally {
@@ -146,10 +144,9 @@ export function useSolanaAuth() {
 
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Missing Firebase auth token');
-      const normalizedProfile = { ...profile, addresses: profile.addresses || [] };
-      setState({ profile: normalizedProfile, token, loading: false });
+      setState({ profile, token, loading: false });
       setSessionWalletChecked(wallet);
-      return { profile: normalizedProfile, token };
+      return { profile, token };
     } catch (err) {
       console.error(err);
       // If we cached a bad signature payload, clear it so the next attempt forces a fresh wallet signature.
