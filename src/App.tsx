@@ -191,7 +191,8 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 const MAX_SHIPMENT_ITEMS = 24;
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 28;
-const LOCAL_PENDING_GRACE_MS = 10 * 60 * 1000;
+// Keep locally-inserted pending reveals visible for a short grace window while on-chain indexing catches up.
+const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_FRAME_COUNT = 21;
@@ -335,7 +336,7 @@ function App() {
   const {
     data: pendingOpenBoxes = [],
     refetch: refetchPendingOpenBoxes,
-    isFetched: pendingOpenBoxesFetched,
+    isSuccess: pendingOpenBoxesSuccess,
   } = usePendingOpenBoxes();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -382,6 +383,12 @@ function App() {
   const figureMetadataRef = useRef<Record<number, FigureMetadata>>({});
   const figureMetadataLoadingRef = useRef<Set<number>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
+  const authTokenRef = useRef<string | null>(null);
+  const signInPromiseRef = useRef<Promise<boolean> | null>(null);
+  const authReadyRef = useRef(false);
+  const authLoadingRef = useRef(false);
+  const openSelectedLockRef = useRef(false);
+  const openSelectedBoxIdRef = useRef<string | null>(null);
   const localMintCounterRef = useRef(0);
   const knownBoxIdsRef = useRef<Set<string>>(new Set());
   const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
@@ -393,6 +400,8 @@ function App() {
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
   const revealDismissLockedUntilRef = useRef<number>(0);
+  const revealOverlayActiveRef = useRef(false);
+  const revealOverlayClosingRef = useRef(false);
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
   const boxFrameBase = `${FRONTEND_DEPLOYMENT.paths.base}/box/`;
@@ -415,6 +424,66 @@ function App() {
     toastClearTimeoutRef.current = setTimeout(() => {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
+  };
+
+  useEffect(() => {
+    authTokenRef.current = token;
+  }, [token]);
+
+  useEffect(() => {
+    authReadyRef.current = authReady;
+  }, [authReady]);
+
+  useEffect(() => {
+    authLoadingRef.current = authLoading;
+  }, [authLoading]);
+
+  const ensureSignedIn = async (): Promise<boolean> => {
+    if (!publicKey) {
+      setVisible(true);
+      return false;
+    }
+    if (token) {
+      authTokenRef.current = token;
+      return true;
+    }
+    if (authTokenRef.current) return true;
+    if (signInPromiseRef.current) return signInPromiseRef.current;
+
+    // Wait briefly for Firebase session restoration after reload (avoid unnecessary wallet prompts).
+    if (typeof window !== 'undefined' && (!authReadyRef.current || authLoadingRef.current)) {
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        if (authTokenRef.current) return true;
+        if (signInPromiseRef.current) return signInPromiseRef.current;
+        if (authReadyRef.current && !authLoadingRef.current) break;
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      }
+    }
+
+    if (authTokenRef.current) return true;
+    if (signInPromiseRef.current) return signInPromiseRef.current;
+
+    let promise: Promise<boolean>;
+    promise = signIn()
+      .then((session) => {
+        authTokenRef.current = session?.token ?? null;
+        return true;
+      })
+      .catch((err) => {
+        if (!isUserRejectedError(err)) {
+          showToast(err instanceof Error ? err.message : 'Failed to sign in');
+        }
+        return false;
+      })
+      .finally(() => {
+        if (signInPromiseRef.current === promise) {
+          signInPromiseRef.current = null;
+        }
+      });
+
+    signInPromiseRef.current = promise;
+    return promise;
   };
 
   const queueOverlayAction = useCallback((action: () => void) => {
@@ -637,12 +706,6 @@ function App() {
     queueFigureMetadataFetch(uniqueIds);
   };
 
-  const clearStartOpenLoadingForOverlay = (overlay: RevealOverlayState | null) => {
-    if (!overlay) return;
-    if (overlay.phase !== 'preparing') return;
-    setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
-  };
-
   const finalizeRevealOverlayDismissal = useCallback(() => {
     revealOverlayRef.current = null;
     revealDismissLockedUntilRef.current = 0;
@@ -658,20 +721,23 @@ function App() {
     flushOverlayActions();
   }, [flushOverlayActions]);
 
-  const closeRevealOverlay = () => {
-    if (!revealOverlay) return;
-    if (revealOverlayClosing) return;
-    clearStartOpenLoadingForOverlay(revealOverlay);
+  const closeRevealOverlay = useCallback(() => {
+    const overlay = revealOverlayRef.current;
+    if (!overlay) return;
+    if (revealOverlayClosingRef.current) return;
+    if (overlay.phase === 'preparing') {
+      setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
+    }
     if (revealOverlayRafRef.current) {
       cancelAnimationFrame(revealOverlayRafRef.current);
       revealOverlayRafRef.current = null;
     }
-    if (!revealOverlayActive) {
+    if (!revealOverlayActiveRef.current) {
       finalizeRevealOverlayDismissal();
       return;
     }
     setRevealOverlayClosing(true);
-  };
+  }, [finalizeRevealOverlayDismissal]);
 
   const dismissRevealOverlay = () => {
     if (revealOverlayRafRef.current) {
@@ -681,11 +747,11 @@ function App() {
     finalizeRevealOverlayDismissal();
   };
 
-  const startAutoOpening = useCallback((mode: 'normal' | 'fast') => {
-    setRevealOverlay((prev) => {
-      if (!prev) return prev;
-      if (prev.phase !== 'ready') return prev;
-      if (prev.autoOpening) return prev;
+	  const startAutoOpening = useCallback((mode: 'normal' | 'fast') => {
+	    setRevealOverlay((prev) => {
+	      if (!prev) return prev;
+	      if (prev.phase !== 'ready') return prev;
+	      if (prev.autoOpening) return prev;
       if (!prev.revealedIds || !prev.revealedIds.length) return prev;
       if (prev.frame >= BOX_FRAME_COUNT) return prev;
       return {
@@ -698,17 +764,18 @@ function App() {
     });
   }, []);
 
-  const openRevealOverlay = (
-    id: string,
-    rect: DOMRect,
-    phase: RevealOverlayPhase = 'ready',
-    itemOverride?: InventoryItem,
-  ) => {
-    if (revealOverlay || revealLoading || startOpenLoading) return;
-    if (typeof window === 'undefined') return;
-    const item = itemOverride || inventoryIndex.get(id);
-    if (!item) return;
-    revealDismissLockedUntilRef.current = 0;
+	  const openRevealOverlay = (
+	    id: string,
+	    rect: DOMRect,
+	    phase: RevealOverlayPhase = 'ready',
+	    itemOverride?: InventoryItem,
+	  ) => {
+	    if (revealOverlayRef.current || revealLoading) return;
+	    if (startOpenLoading && startOpenLoading !== id) return;
+	    if (typeof window === 'undefined') return;
+	    const item = itemOverride || inventoryIndex.get(id);
+	    if (!item) return;
+	    revealDismissLockedUntilRef.current = 0;
     preloadRevealSounds();
     preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
     preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
@@ -803,6 +870,14 @@ function App() {
   }, [revealOverlay]);
 
   useEffect(() => {
+    revealOverlayActiveRef.current = revealOverlayActive;
+  }, [revealOverlayActive]);
+
+  useEffect(() => {
+    revealOverlayClosingRef.current = revealOverlayClosing;
+  }, [revealOverlayClosing]);
+
+  useEffect(() => {
     if (!owner) return;
     persistPendingReveals(owner, localPendingReveals);
   }, [owner, localPendingReveals]);
@@ -821,7 +896,7 @@ function App() {
     if (revealOverlay) return;
     const recentSet = new Set(recentRevealedBoxes);
     const now = Date.now();
-    if (!pendingOpenBoxesFetched) {
+    if (!pendingOpenBoxesSuccess) {
       const next = localPendingReveals.filter((entry) => !recentSet.has(entry.id));
       if (!pendingRevealListEqual(next, localPendingReveals)) {
         setLocalPendingReveals(next);
@@ -856,7 +931,7 @@ function App() {
   }, [
     owner,
     pendingOpenBoxesView,
-    pendingOpenBoxesFetched,
+    pendingOpenBoxesSuccess,
     localPendingReveals,
     recentRevealedBoxes,
     inventoryView,
@@ -1545,11 +1620,9 @@ function App() {
   };
 
   const handleRevealDudes = async (boxAssetId: string) => {
-    if (!publicKey) throw new Error('Connect wallet first');
-    // Ensure the wallet session exists (reveal is an authenticated callable).
-    if (!token) {
-      await signIn();
-    }
+    const signedIn = await ensureSignedIn();
+    if (!signedIn) return;
+    if (!publicKey) return;
     setRevealLoading(boxAssetId);
     try {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
@@ -1640,9 +1713,9 @@ function App() {
     }
   };
 
-  const handleRevealOverlayBackdropClick = () => {
-    if (!revealOverlay || revealOverlayClosing) return;
-    const hasResults = Boolean(revealOverlay.revealedIds?.length);
+	  const handleRevealOverlayBackdropClick = () => {
+	    if (!revealOverlay || revealOverlayClosing) return;
+	    const hasResults = Boolean(revealOverlay.revealedIds?.length);
     if (hasResults && revealOverlay.frame < BOX_FRAME_COUNT) {
       startAutoOpening('fast');
       return;
@@ -1653,27 +1726,77 @@ function App() {
     if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
       return;
     }
-    closeRevealOverlay();
-  };
+	    closeRevealOverlay();
+	  };
 
-  const handleOpenSelectedBox = async () => {
-    if (!selectedBox) return;
-    preloadRevealSounds();
-    if (typeof window !== 'undefined') {
-      const originRect = findInventoryRect(selectedBox.id);
-      const fallbackTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
-      const fallbackRect = new DOMRect(
-        fallbackTarget.left,
-        fallbackTarget.top,
-        fallbackTarget.width,
-        fallbackTarget.height,
-      );
-      const overlayItem: InventoryItem = { ...selectedBox, image: defaultBoxImage };
-      openRevealOverlay(selectedBox.id, originRect || fallbackRect, 'preparing', overlayItem);
-    }
-    setSelected(new Set());
-    await handleStartOpenBox(selectedBox);
-  };
+	  const openPreparingOverlayForBox = useCallback(
+	    (box: InventoryItem) => {
+	      preloadRevealSounds();
+	      preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
+	      preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+	      if (typeof window === 'undefined') return;
+	      const originRect = findInventoryRect(box.id);
+	      const fallbackTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+	      const fallbackRect = new DOMRect(
+	        fallbackTarget.left,
+	        fallbackTarget.top,
+	        fallbackTarget.width,
+	        fallbackTarget.height,
+	      );
+	      const overlayItem: InventoryItem = { ...box, image: defaultBoxImage };
+	      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
+	    },
+	    [defaultBoxImage, openRevealOverlay, preloadBoxFrames, preloadRevealSounds],
+	  );
+
+	  const handleOpenSelectedBox = async () => {
+	    if (!selectedBox) return;
+	    if (!publicKey) {
+	      setVisible(true);
+	      return;
+	    }
+	    if (openSelectedLockRef.current) {
+	      const activeId = openSelectedBoxIdRef.current;
+	      if (activeId && activeId !== selectedBox.id) {
+	        showToast('Check your wallet to finish the current unboxing');
+	        return;
+	      }
+	      openSelectedBoxIdRef.current = selectedBox.id;
+	      if (revealOverlayRef.current?.id === selectedBox.id) return;
+	      if (revealOverlayRef.current || revealOverlayClosingRef.current) {
+	        queueOverlayAction(() => openPreparingOverlayForBox(selectedBox));
+	        return;
+	      }
+	      openPreparingOverlayForBox(selectedBox);
+	      return;
+	    }
+	    openSelectedLockRef.current = true;
+	    openSelectedBoxIdRef.current = selectedBox.id;
+	    try {
+	      openPreparingOverlayForBox(selectedBox);
+	      const signedIn = await ensureSignedIn();
+	      if (!signedIn) {
+	        if (revealOverlayRef.current?.id === selectedBox.id) {
+	          closeRevealOverlay();
+	        }
+	        return;
+	      }
+      if (
+        !revealOverlayRef.current ||
+        revealOverlayRef.current.id !== selectedBox.id ||
+        revealOverlayClosingRef.current
+      ) {
+        return;
+      }
+	      setSelected(new Set());
+	      await handleStartOpenBox(selectedBox);
+	    } finally {
+	      if (openSelectedBoxIdRef.current === selectedBox.id) {
+	        openSelectedBoxIdRef.current = null;
+	      }
+	      openSelectedLockRef.current = false;
+	    }
+	  };
 
   const handleSaveAddress = async ({
     formatted,
@@ -2105,18 +2228,34 @@ function App() {
         </section>
       ) : null}
 
-      <section className="card">
-        <div className="card__title">Inventory</div>
-        <InventoryGrid
-          items={inventoryItems}
-          selected={selected}
-          onToggle={toggleSelected}
-          pendingRevealIds={pendingRevealIds}
-          onReveal={openRevealOverlay}
-          revealLoadingId={revealLoading}
-          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
-          emptyStateVisibility={inventoryEmptyStateVisibility}
-        />
+	      <section className="card">
+	        <div className="card__title">Inventory</div>
+		        <InventoryGrid
+		          items={inventoryItems}
+		          selected={selected}
+		          onToggle={toggleSelected}
+		          pendingRevealIds={pendingRevealIds}
+		          onReveal={async (id, rect) => {
+		            if (!publicKey) {
+		              setVisible(true);
+		              return;
+		            }
+		            preloadRevealSounds();
+		            preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
+		            preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+		            const refreshedRect = findInventoryRect(id);
+		            openRevealOverlay(id, refreshedRect || rect);
+		            const signedIn = await ensureSignedIn();
+		            if (!signedIn) {
+		              if (revealOverlayRef.current?.id === id) {
+		                closeRevealOverlay();
+		              }
+		            }
+		          }}
+		          revealLoadingId={revealLoading}
+		          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
+		          emptyStateVisibility={inventoryEmptyStateVisibility}
+		        />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
 
@@ -2268,7 +2407,7 @@ function App() {
         <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} />
       </Modal>
 
-      {authError ? <div className="error">{authError}</div> : null}
+      {authError && !isUserRejectedError(authError) ? <div className="error">{authError}</div> : null}
       <section className="card">
         <div className="card__head">
           <div className="card__title">Shipments</div>
@@ -2364,12 +2503,12 @@ function App() {
               Cancel
             </button>
             {canOpenSelected ? (
-              <button
-                type="button"
-                className="selection-panel__open"
-                onClick={handleOpenSelectedBox}
-                disabled={Boolean(startOpenLoading)}
-              >
+	              <button
+	                type="button"
+	                className="selection-panel__open"
+	                onClick={handleOpenSelectedBox}
+	                disabled={Boolean(startOpenLoading)}
+	              >
                 <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
                 <span>{startOpenLoading === selectedBox?.id ? 'Unboxing…' : 'Unbox'}</span>
               </button>
