@@ -274,11 +274,11 @@ header.top {
 
 .mint-panel__discount {
   position: absolute;
-  left: 50%;
-  top: calc(100% + 10px);
-  transform: translateX(-50%);
-  font-size: 12px;
-  line-height: 14px;
+  right: 0;
+  top: calc(100% + 11px);
+  transform: none;
+  font-size: 13px;
+  line-height: 12px;
   font-weight: 500;
   white-space: nowrap;
   display: inline-flex;
@@ -400,6 +400,12 @@ header.top {
 
   .mint-panel__cta-stack {
     width: 100%;
+  }
+
+  .mint-panel__discount {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
   }
 
   .mint-panel__footer--soldout .mint-panel__info,
