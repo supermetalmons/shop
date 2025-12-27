@@ -1607,8 +1607,8 @@ async function main() {
     // Custody/vault: boxes and delivered assets still transfer to the deployer/admin key (config.admin).
     // Set to `undefined` to default payments to the deployer/admin key.
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    priceSol: 0.01,
-    discountPriceSol: 0.005,
+    priceSol: 1,
+    discountPriceSol: 0.55,
     discountMerkleRoot: discountMerkle.root,
     maxSupply: 333,
     maxPerTx: 15,

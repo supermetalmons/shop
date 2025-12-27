@@ -1803,6 +1803,12 @@ function App() {
 	    }
 	  };
 
+  const handleOpenShip = async () => {
+    const signedIn = await ensureSignedIn();
+    if (!signedIn) return;
+    setDeliveryOpen(true);
+  };
+
   const handleShip = async ({
     formatted,
     country,
@@ -2367,9 +2373,7 @@ function App() {
             <button
               type="button"
               className="selection-panel__ship"
-              onClick={() => {
-                setDeliveryOpen(true);
-              }}
+              onClick={handleOpenShip}
             >
               <FaPlane aria-hidden="true" focusable="false" size={16} />
               <span>Ship</span>
