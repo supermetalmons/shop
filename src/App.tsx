@@ -244,8 +244,8 @@ function toOverlayRect(rect: DOMRect): OverlayRect {
 }
 
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
-  const maxWidth = viewportWidth * 0.5;
-  const maxHeight = viewportHeight * 0.33;
+  const maxWidth = viewportWidth * 0.65;
+  const maxHeight = viewportHeight * 0.43;
   const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * REVEAL_BOX_ASPECT_RATIO)));
   const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
   const lift = Math.round(height * 0.42);
@@ -1936,21 +1936,23 @@ function App() {
     }
   }, [revealOverlay?.id, revealMediaVisible]);
 
-  const revealMediaStyle = useMemo(() => {
-    if (!revealOverlay || !revealMediaIds.length) return undefined;
-    const width = revealOverlay.targetRect.width;
-    const height = revealOverlay.targetRect.height;
-    const base = Math.min(width, height);
-    const baseSize = Math.floor(Math.min(base * 0.7, 240));
-    const widthCap = width < 240 ? 0.42 : width < 320 ? 0.48 : width < 420 ? 0.52 : 0.6;
-    const maxByWidth = Math.floor(width * widthCap);
-    const maxByHeight = Math.floor(height * 0.9);
-    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
-    const size = Math.max(64, maxSize);
-    return {
-      ['--reveal-media-size' as never]: `${size}px`,
-    };
-  }, [revealOverlay, revealMediaIds.length]);
+	  const revealMediaStyle = useMemo(() => {
+	    if (!revealOverlay || !revealMediaIds.length) return undefined;
+	    const width = revealOverlay.targetRect.width;
+	    const height = revealOverlay.targetRect.height;
+	    const base = Math.min(width, height);
+	    const baseSize = Math.floor(Math.min(base * 0.7, 220));
+	    const widthCap = width < 240 ? 0.42 : width < 320 ? 0.48 : width < 420 ? 0.52 : 0.6;
+	    const maxByWidth = Math.floor(width * widthCap);
+	    const maxByHeight = Math.floor(height * 0.9);
+	    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
+	    const size = Math.max(64, Math.floor(maxSize * 0.8));
+	    const shiftY = Math.floor(size * 0.1);
+	    return {
+	      ['--reveal-media-size' as never]: `${size}px`,
+	      ['--reveal-media-shift-y' as never]: `${shiftY}px`,
+	    };
+	  }, [revealOverlay, revealMediaIds.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
     preloadRevealVideos(revealMediaIds);
