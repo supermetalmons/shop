@@ -27,18 +27,18 @@ export type FrontendDeployedConfig = {
 };
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
-  solanaCluster: 'devnet',
+  solanaCluster: 'mainnet-beta',
   metadataBase: 'https://assets.mons.link/drops/lsb',
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-  priceSol: 0.01,
-  discountPriceSol: 0.005,
+  priceSol: 1,
+  discountPriceSol: 0.55,
   discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
   maxSupply: 333,
   maxPerTx: 15,
   namePrefix: 'box',
   symbol: 'box',
-  boxMinterProgramId: 'Gqc3nnkYegyk4SDFdFY5hRDc4kA7cmW4SJ3PmTC65ege',
-  collectionMint: '7qyqJFvHgUftmtGkTCvAuBK55i6FZhp5dYaSd3E5BBhk',
+  boxMinterProgramId: '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep',
+  collectionMint: '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr',
 };
 
 export type DropPaths = {
