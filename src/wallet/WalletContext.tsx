@@ -9,6 +9,7 @@ import {
   PhantomWalletAdapter,
 } from '@solana/wallet-adapter-wallets';
 import { GlowWalletAdapter } from '@solana/wallet-adapter-glow';
+import { LedgerWalletAdapter } from '@solana/wallet-adapter-ledger';
 import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { getHeliusApiKey } from '../lib/helius';
@@ -41,6 +42,7 @@ export const WalletContextProvider: FC<Props> = ({ children }) => {
     () => [
       new PhantomWalletAdapter(),
       new GlowWalletAdapter({ network }),
+      new LedgerWalletAdapter(),
     ],
     [],
   );
