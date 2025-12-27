@@ -1923,7 +1923,7 @@ function App() {
   };
 
   const secondaryLinks = [
-    { label: 'Tensor', href: 'https://www.tensor.trade/' },
+    { label: 'Tensor', href: 'https://www.tensor.trade/trade/little_swag_boxes' },
     { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
