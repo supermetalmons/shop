@@ -690,6 +690,12 @@ button.quiet:hover:not(:disabled) {
   inset: 0;
   z-index: 1110;
   pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  overscroll-behavior: none;
   --reveal-target-left: 0px;
   --reveal-target-top: 0px;
   --reveal-target-width: 0px;
@@ -729,6 +735,7 @@ button.quiet:hover:not(:disabled) {
   place-items: center;
   padding: 0;
   margin: 0;
+  touch-action: none;
   left: var(--reveal-target-left);
   top: var(--reveal-target-top);
   width: var(--reveal-target-width);
@@ -939,6 +946,7 @@ button.quiet:hover:not(:disabled) {
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
+  touch-action: manipulation;
   border: none;
   outline: none;
   box-shadow: none;
@@ -1005,6 +1013,10 @@ button.quiet:hover:not(:disabled) {
   height: 100%;
   object-fit: contain;
   display: block;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 @keyframes reveal-note-fade {

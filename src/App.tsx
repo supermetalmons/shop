@@ -392,6 +392,7 @@ function App() {
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
+  const revealDismissLockedUntilRef = useRef<number>(0);
 
   const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
   const boxFrameBase = `${FRONTEND_DEPLOYMENT.paths.base}/box/`;
@@ -644,6 +645,7 @@ function App() {
 
   const finalizeRevealOverlayDismissal = useCallback(() => {
     revealOverlayRef.current = null;
+    revealDismissLockedUntilRef.current = 0;
     setRevealOverlay(null);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
@@ -706,6 +708,7 @@ function App() {
     if (typeof window === 'undefined') return;
     const item = itemOverride || inventoryIndex.get(id);
     if (!item) return;
+    revealDismissLockedUntilRef.current = 0;
     preloadRevealSounds();
     preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
     preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
@@ -1552,6 +1555,9 @@ function App() {
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       if (revealed.length) {
+        revealDismissLockedUntilRef.current = Date.now() + 1_000;
+      }
+      if (revealed.length) {
         const mediaIds = Array.from(
           new Set(
             revealed
@@ -1642,6 +1648,9 @@ function App() {
       return;
     }
     if (revealOverlay.hasRevealAttempted && revealLoading === revealOverlay.id) {
+      return;
+    }
+    if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
       return;
     }
     closeRevealOverlay();
@@ -1980,12 +1989,14 @@ function App() {
         </div>
       ) : null}
       {revealOverlay ? (
-        <div
-          className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
-          role="presentation"
-          style={revealOverlayStyle}
-          onClick={handleRevealOverlayBackdropClick}
-        >
+	        <div
+	          className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
+	          role="presentation"
+	          style={revealOverlayStyle}
+	          onClick={handleRevealOverlayBackdropClick}
+	          onContextMenu={(evt) => evt.preventDefault()}
+	          onDragStart={(evt) => evt.preventDefault()}
+	        >
           <div className="reveal-overlay__backdrop" />
           <div
             className="reveal-overlay__frame"
@@ -2012,7 +2023,15 @@ function App() {
                     style={{ ['--reveal-media-delay' as never]: `${index * 90}ms` }}
                   >
                     <div className="reveal-overlay__media-float">
-                      <video className="reveal-overlay__video" autoPlay muted loop playsInline preload="metadata">
+	                      <video
+	                        className="reveal-overlay__video"
+	                        autoPlay
+	                        muted
+	                        loop
+	                        playsInline
+	                        preload="metadata"
+	                        draggable={false}
+	                      >
                         <source
                           src={`${revealMediaBase}${mediaId}.mov`}
                           type='video/quicktime; codecs="hvc1"'
@@ -2039,12 +2058,17 @@ function App() {
                 evt.stopPropagation();
                 handleRevealOverlayClick();
               }}
-            >
-              <img src={revealBoxFrameSrc} alt={revealOverlay.name} className="reveal-overlay__image" />
-            </button>
-          </div>
-          <div className="reveal-overlay__note">{revealOverlayNote}</div>
-        </div>
+	            >
+	              <img
+	                src={revealBoxFrameSrc}
+	                alt={revealOverlay.name}
+	                className="reveal-overlay__image"
+	                draggable={false}
+	              />
+	            </button>
+	          </div>
+	          <div className="reveal-overlay__note">{revealOverlayNote}</div>
+	        </div>
       ) : null}
       <header className="top">
         <div className="brand">
