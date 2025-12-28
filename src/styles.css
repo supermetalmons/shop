@@ -585,6 +585,10 @@ button.link {
   line-height: inherit;
 }
 
+button.link.small {
+  font-size: 13px;
+}
+
 button.link:hover:not(:disabled) {
   background: none;
   text-decoration: underline;
@@ -1241,6 +1245,19 @@ button.inventory__open:focus-visible {
 .status-input {
   min-height: 88px;
   resize: vertical;
+}
+
+.order-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 320px;
+  text-align: right;
+}
+
+.status-readout {
+  white-space: pre-wrap;
 }
 
 .checkbox {

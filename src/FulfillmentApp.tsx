@@ -5,7 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
 import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { shortAddress } from './lib/solana';
+import { Modal } from './components/Modal';
 
 const FULFILLMENT_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -50,6 +50,7 @@ export default function FulfillmentApp() {
   const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [activeUpdateOrderId, setActiveUpdateOrderId] = useState<number | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authLoadingSeenRef = useRef(false);
@@ -171,7 +172,7 @@ export default function FulfillmentApp() {
 
   const handleSaveStatus = useCallback(
     async (deliveryId: number) => {
-      if (!allowed || !signedIn) return;
+      if (!allowed || !signedIn) return false;
       setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
       try {
@@ -184,9 +185,11 @@ export default function FulfillmentApp() {
           ),
         );
         setStatusEdits((prev) => ({ ...prev, [deliveryId]: resp.fulfillmentStatus || trimmed }));
+        return true;
       } catch (err) {
         console.error(err);
         setOrdersError(err instanceof Error ? err.message : 'Failed to update status');
+        return false;
       } finally {
         setStatusSaving((prev) => ({ ...prev, [deliveryId]: false }));
       }
@@ -203,6 +206,42 @@ export default function FulfillmentApp() {
     });
     return dirty;
   }, [orders, statusEdits]);
+
+  const activeUpdateOrder = useMemo(
+    () => orders.find((order) => order.deliveryId === activeUpdateOrderId) ?? null,
+    [activeUpdateOrderId, orders],
+  );
+  const activeUpdateText = activeUpdateOrder
+    ? statusEdits[activeUpdateOrder.deliveryId] ?? activeUpdateOrder.fulfillmentStatus ?? ''
+    : '';
+  const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrder.deliveryId) : false;
+  const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrder.deliveryId]) : false;
+
+  const handleOpenUpdateModal = useCallback((deliveryId: number) => {
+    setActiveUpdateOrderId(deliveryId);
+  }, []);
+
+  const handleCancelUpdate = useCallback(() => {
+    if (!activeUpdateOrder) {
+      setActiveUpdateOrderId(null);
+      return;
+    }
+    setStatusEdits((prev) => ({
+      ...prev,
+      [activeUpdateOrder.deliveryId]: activeUpdateOrder.fulfillmentStatus || '',
+    }));
+    setActiveUpdateOrderId(null);
+  }, [activeUpdateOrder]);
+
+  const handleSaveActiveUpdate = useCallback(async () => {
+    if (!activeUpdateOrder) return;
+    if (!activeUpdateDirty) {
+      setActiveUpdateOrderId(null);
+      return;
+    }
+    const ok = await handleSaveStatus(activeUpdateOrder.deliveryId);
+    if (ok) setActiveUpdateOrderId(null);
+  }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus]);
 
   const handleSolanaSignIn = useCallback(() => {
     if (authLoading) return;
@@ -275,6 +314,23 @@ export default function FulfillmentApp() {
                           {formatOrderDate(order.processedAt || order.createdAt)}
                         </div>
                       </div>
+                      <div className="order-update">
+                        {(() => {
+                          const updateText = (order.fulfillmentStatus || '').trim();
+                          return updateText ? (
+                            <div className="status-readout small">{updateText}</div>
+                          ) : (
+                            <em className="muted small">No updates yet</em>
+                          );
+                        })()}
+                        <button
+                          type="button"
+                          className="link small"
+                          onClick={() => handleOpenUpdateModal(order.deliveryId)}
+                        >
+                          {(order.fulfillmentStatus || '').trim() ? 'Edit an update' : 'Post an update'}
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid">
@@ -288,28 +344,6 @@ export default function FulfillmentApp() {
                           </div>
                         )}
                         {order.address.email ? <div className="muted small">{order.address.email}</div> : null}
-                      </div>
-
-                      <div className="card subtle">
-                        <div className="card__title">Fulfillment update</div>
-                        <textarea
-                          className="status-input"
-                          value={statusEdits[order.deliveryId] ?? ''}
-                          onChange={(evt) =>
-                            setStatusEdits((prev) => ({ ...prev, [order.deliveryId]: evt.target.value }))
-                          }
-                          placeholder="Type a status update for the buyer…"
-                        />
-                        <div className="row">
-                          <button
-                            type="button"
-                            onClick={() => void handleSaveStatus(order.deliveryId)}
-                            disabled={statusSaving[order.deliveryId]}
-                          >
-                            {statusSaving[order.deliveryId] ? 'Saving…' : statusDirty.has(order.deliveryId) ? 'Save update' : 'Saved'}
-                          </button>
-                          {statusDirty.has(order.deliveryId) ? <span className="muted small">Unsaved changes</span> : null}
-                        </div>
                       </div>
                     </div>
 
@@ -362,6 +396,36 @@ export default function FulfillmentApp() {
           </section>
         )
       ) : null}
+
+      <Modal
+        open={activeUpdateOrderId !== null}
+        title="Fulfillment update"
+        onClose={handleCancelUpdate}
+      >
+        <div className="modal-form">
+          <textarea
+            className="status-input"
+            value={activeUpdateText}
+            onChange={(evt) => {
+              if (!activeUpdateOrder) return;
+              setStatusEdits((prev) => ({ ...prev, [activeUpdateOrder.deliveryId]: evt.target.value }));
+            }}
+            placeholder="Type a status update for the buyer…"
+          />
+          <div className="row row--end">
+            <button type="button" className="ghost" onClick={handleCancelUpdate}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveActiveUpdate()}
+              disabled={!activeUpdateOrder || activeUpdateSaving || !activeUpdateDirty}
+            >
+              {activeUpdateSaving ? 'Saving…' : activeUpdateDirty ? 'Save update' : 'Saved'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {authError ? <div className="error">{authError}</div> : null}
     </div>
