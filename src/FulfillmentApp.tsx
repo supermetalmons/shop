@@ -354,7 +354,7 @@ export default function FulfillmentApp() {
                     </div>
 
                     <div className="grid">
-                      <div className="card subtle">
+                      <div className="card subtle address-card">
                         {order.address.full ? (
                           <div className="address-block">{order.address.full}</div>
                         ) : (
@@ -371,7 +371,7 @@ export default function FulfillmentApp() {
                       <>
                         <div className="grid">
                           {order.boxes.map((box) => (
-                            <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle">
+                          <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
                               <div className="card__title">Box</div>
                               {box.claimCode ? <div className="pill">Secret {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
                               {box.dudeIds.length ? (

@@ -1262,7 +1262,7 @@ button.inventory__open:focus-visible {
 
 .figure-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 12px;
 }
 
@@ -1279,9 +1279,20 @@ button.inventory__open:focus-visible {
   aspect-ratio: 1 / 1;
   object-fit: contain;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 6px;
+}
+
+.card.subtle.box-contents {
+  border: 3px dashed var(--fg);
+}
+
+.card.subtle.address-card {
+  border: none;
+}
+
+.figure-tile .small {
+  font-size: 12px;
 }
 
 .checkbox {
