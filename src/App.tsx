@@ -198,6 +198,14 @@ const BOX_FRAME_COUNT = 21;
 const BOX_FRAME_CLICK_MAX = 8;
 const BOX_FRAME_AUTOPLAY_START = 9;
 const BOX_FRAME_MEDIA_START = 10;
+// Set true to skip mint stats fetches and force sold-out UI.
+const MINTED_OUT_OVERRIDE = true;
+const MINTED_OUT_STATS = {
+  minted: FRONTEND_DEPLOYMENT.maxSupply,
+  total: FRONTEND_DEPLOYMENT.maxSupply,
+  remaining: 0,
+  maxPerTx: FRONTEND_DEPLOYMENT.maxPerTx,
+};
 const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 
@@ -322,7 +330,8 @@ function App() {
   const wallet = useWallet();
   const { setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
-  const { data: mintStats, refetch: refetchStats } = useMintProgress();
+  const shouldFetchMintStats = !MINTED_OUT_OVERRIDE;
+  const { data: mintStats, refetch: refetchStats } = useMintProgress(shouldFetchMintStats);
   const {
     profile,
     token,
@@ -339,6 +348,7 @@ function App() {
   } = usePendingOpenBoxes();
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
+  const effectiveMintStats = MINTED_OUT_OVERRIDE ? MINTED_OUT_STATS : mintStats;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
@@ -1439,6 +1449,7 @@ function App() {
   };
 
   const mintedOut = useMemo(() => {
+    if (MINTED_OUT_OVERRIDE) return true;
     if (!mintStats) return false;
     return mintStats.remaining <= 0;
   }, [mintStats]);
@@ -1537,7 +1548,7 @@ function App() {
         await sendOnce();
       }
       addLocalMintedBoxes(quantity);
-      await Promise.all([refetchStats(), refetchInventory()]);
+      await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
       throw err;
@@ -1579,7 +1590,7 @@ function App() {
       setDiscountUsed(true);
       setDiscountEligible(false);
       if (owner) persistDiscountUsed(owner, true);
-      await Promise.all([refetchStats(), refetchInventory()]);
+      await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
       showToast(err instanceof Error ? err.message : 'Failed to mint discounted box');
@@ -2182,7 +2193,7 @@ function App() {
       </header>
 
       <MintPanel
-        stats={mintStats}
+        stats={effectiveMintStats}
         onMint={handleMint}
         busy={minting}
         onError={showToast}
