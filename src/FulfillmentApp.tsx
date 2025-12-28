@@ -17,7 +17,7 @@ const PAGE_SIZE = 20;
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
-  return new Date(ts).toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(ts).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function formatOrderStatus(status: string) {
@@ -270,18 +270,15 @@ export default function FulfillmentApp() {
                   <div key={order.deliveryId} className="card subtle">
                     <div className="card__head">
                       <div>
-                        <div className="card__title">Order #{order.deliveryId}</div>
+                        <div className="card__title">Order {order.deliveryId}</div>
                         <div className="muted small">
-                          {formatOrderDate(order.processedAt || order.createdAt)} · {shortAddress(order.owner)}
+                          {formatOrderDate(order.processedAt || order.createdAt)}
                         </div>
                       </div>
-                      <div className="pill">{formatOrderStatus(order.status)}</div>
                     </div>
 
                     <div className="grid">
                       <div className="card subtle">
-                        <div className="card__title">Destination</div>
-                        <div className="muted small">{order.address.label || 'Address'}</div>
                         {order.address.full ? (
                           <div className="address-block">{order.address.full}</div>
                         ) : (
@@ -290,8 +287,7 @@ export default function FulfillmentApp() {
                             <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
                           </div>
                         )}
-                        {order.address.email ? <div className="muted small">Email {order.address.email}</div> : null}
-                        {order.address.hint ? <div className="muted small">Hint {order.address.hint}</div> : null}
+                        {order.address.email ? <div className="muted small">{order.address.email}</div> : null}
                       </div>
 
                       <div className="card subtle">
@@ -344,7 +340,7 @@ export default function FulfillmentApp() {
 
                     {order.looseDudes.length ? (
                       <>
-                        <div className="muted small">Unboxed figures</div>
+                        <div className="muted small">Unboxed</div>
                         <div className="pill-row">
                           {order.looseDudes.map((id) => (
                             <span key={`${order.deliveryId}:dude:${id}`} className="pill">
