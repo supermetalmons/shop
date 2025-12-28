@@ -1941,7 +1941,7 @@ function App() {
   };
 
   const secondaryLinks = [
-    { label: 'Tensor', href: 'https://www.tensor.trade/trade/a08a5260-f6e0-455d-abf7-9bd73c10dd14' },
+    { label: 'Tensor', href: 'https://www.tensor.trade/trade/little_swag_boxes' },
     { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
