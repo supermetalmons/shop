@@ -395,7 +395,9 @@ export default function FulfillmentApp() {
                         <div className="muted small">
                           {formatOrderDate(order.processedAt || order.createdAt)}
                         </div>
-                        {order.address.email ? <div className="muted small">{order.address.email}</div> : null}
+                        {order.address.full !== '***' && order.address.email ? (
+                          <div className="muted small">{order.address.email}</div>
+                        ) : null}
                       </div>
                       <div className="order-update">
                         {(() => {
@@ -419,7 +421,11 @@ export default function FulfillmentApp() {
                     <div className="order-items">
                       <div className="address-lines">
                         {order.address.full ? (
-                          <div className="address-text">{order.address.full}</div>
+                          <div className="address-text">
+                            {order.address.full === '***'
+                              ? order.address.country || order.address.countryCode || '***'
+                              : order.address.full}
+                          </div>
                         ) : (
                           <>
                             <div className="muted small">Encrypted address payload</div>
