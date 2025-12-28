@@ -36,7 +36,7 @@ export function InventoryGrid({
     const isHidden = emptyStateVisibility === 'hidden';
     return (
       <div className={`muted small${isHidden ? ' empty-state--hidden' : ''}`} aria-hidden={isHidden}>
-        No items yet. Mint boxes to start.
+        No items yet.
       </div>
     );
   }
