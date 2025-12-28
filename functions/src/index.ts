@@ -139,6 +139,18 @@ const FULFILLMENT_WALLETS = new Set<string>();
   }
 });
 
+const SHIPPER_WALLETS = new Set<string>();
+[
+  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+].forEach((raw) => {
+  try {
+    SHIPPER_WALLETS.add(new PublicKey(raw).toBase58());
+  } catch (err) {
+    console.error('[mons/functions] invalid shipper wallet', raw, summarizeError(err));
+  }
+});
+
 async function requireFulfillmentAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
   if (!FULFILLMENT_WALLETS.has(wallet)) {
@@ -1867,7 +1879,11 @@ type FulfillmentOrder = {
   looseDudes: number[];
 };
 
-function toFulfillmentOrder(docId: string, order: any): FulfillmentOrder | null {
+function toFulfillmentOrder(
+  docId: string,
+  order: any,
+  options: { canViewSensitiveAddress: boolean },
+): FulfillmentOrder | null {
   const deliveryIdRaw = order?.deliveryId ?? docId;
   const deliveryId = Number(deliveryIdRaw);
   if (!Number.isFinite(deliveryId)) return null;
@@ -1876,18 +1892,26 @@ function toFulfillmentOrder(docId: string, order: any): FulfillmentOrder | null 
 
   const addressSnapshot = order?.addressSnapshot || {};
   const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
+  const rawEmail = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email : undefined;
   let full: string | null = null;
-  if (encrypted) {
-    full = decryptAddressPayload(encrypted);
+  let email = rawEmail;
+  let encryptedPayload = encrypted || undefined;
+  if (options.canViewSensitiveAddress) {
+    if (encrypted) {
+      full = decryptAddressPayload(encrypted);
+    }
+  } else {
+    full = encrypted ? '***' : null;
+    encryptedPayload = undefined;
   }
 
   const address: FulfillmentOrderAddress = {
     label: typeof addressSnapshot?.label === 'string' ? addressSnapshot.label : undefined,
-    email: typeof addressSnapshot?.email === 'string' ? addressSnapshot.email : undefined,
+    email,
     country: typeof addressSnapshot?.country === 'string' ? addressSnapshot.country : undefined,
     countryCode: typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
     hint: typeof addressSnapshot?.hint === 'string' ? addressSnapshot.hint : undefined,
-    encrypted: encrypted || undefined,
+    encrypted: encryptedPayload,
     full,
   };
 
@@ -2098,7 +2122,8 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
 export const listFulfillmentOrders = onCallLogged(
   'listFulfillmentOrders',
   async (request) => {
-    await requireFulfillmentAccess(request);
+    const { wallet } = await requireFulfillmentAccess(request);
+    const canViewSensitiveAddress = SHIPPER_WALLETS.has(wallet);
     const schema = z.object({
       limit: z.number().int().min(1).max(50).optional(),
       cursor: z
@@ -2128,7 +2153,7 @@ export const listFulfillmentOrders = onCallLogged(
 
     const snap = await query.get();
     const orders = snap.docs
-      .map((doc) => toFulfillmentOrder(doc.id, doc.data()))
+      .map((doc) => toFulfillmentOrder(doc.id, doc.data(), { canViewSensitiveAddress }))
       .filter((entry): entry is FulfillmentOrder => Boolean(entry));
 
     const last = snap.docs[snap.docs.length - 1];
