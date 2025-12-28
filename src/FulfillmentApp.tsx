@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
 import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
@@ -26,11 +27,19 @@ function formatOrderStatus(status: string) {
 }
 
 export default function FulfillmentApp() {
-  const { publicKey } = useWallet();
+  const walletAdapter = useWallet();
+  const { publicKey } = walletAdapter;
+  const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
   const { profile, signIn, loading: authLoading, error: authError } = useSolanaAuth();
-  const wallet = publicKey?.toBase58() || '';
-  const allowed = wallet ? FULFILLMENT_WALLETS.has(wallet) : false;
-  const signedIn = Boolean(profile && profile.wallet === wallet);
+  const walletAddress = publicKey?.toBase58() || '';
+  const allowed = walletAddress ? FULFILLMENT_WALLETS.has(walletAddress) : false;
+  const signedIn = Boolean(profile && profile.wallet === walletAddress);
+  const walletBusy = walletAdapter.connecting || walletAdapter.disconnecting;
+  const walletReadyState = walletAdapter.wallet?.readyState;
+  const autoConnectPossible =
+    Boolean(walletAdapter.wallet) &&
+    walletAdapter.autoConnect &&
+    (walletReadyState === WalletReadyState.Installed || walletReadyState === WalletReadyState.Loadable);
 
   const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
   const [cursor, setCursor] = useState<FulfillmentOrdersCursor | null>(null);
@@ -40,7 +49,48 @@ export default function FulfillmentApp() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
+  const [pendingSignIn, setPendingSignIn] = useState(false);
+  const walletConnectingSeenRef = useRef(false);
+  const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
+  const authLoadingSeenRef = useRef(false);
+  const [authReady, setAuthReady] = useState(() => !walletAddress);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    walletConnectingSeenRef.current = false;
+    setWalletReady(!walletAdapter.wallet || !autoConnectPossible);
+  }, [autoConnectPossible, walletAdapter.wallet]);
+
+  useEffect(() => {
+    if (!walletAdapter.wallet) return;
+    if (!autoConnectPossible) {
+      setWalletReady(true);
+      return;
+    }
+    if (walletAdapter.connecting) {
+      walletConnectingSeenRef.current = true;
+      return;
+    }
+    if (publicKey || walletConnectingSeenRef.current) {
+      setWalletReady(true);
+    }
+  }, [autoConnectPossible, publicKey, walletAdapter.connecting, walletAdapter.wallet]);
+
+  useEffect(() => {
+    authLoadingSeenRef.current = false;
+    setAuthReady(!walletAddress);
+  }, [walletAddress]);
+
+  useEffect(() => {
+    if (!walletAddress) return;
+    if (authLoading) {
+      authLoadingSeenRef.current = true;
+      return;
+    }
+    if (profile?.wallet === walletAddress || authLoadingSeenRef.current) {
+      setAuthReady(true);
+    }
+  }, [authLoading, profile?.wallet, walletAddress]);
 
   const mergeStatusEdits = useCallback((incoming: FulfillmentOrder[]) => {
     setStatusEdits((prev) => {
@@ -154,6 +204,33 @@ export default function FulfillmentApp() {
     return dirty;
   }, [orders, statusEdits]);
 
+  const handleSolanaSignIn = useCallback(() => {
+    if (authLoading) return;
+    if (!publicKey) {
+      setPendingSignIn(true);
+      setWalletModalVisible(true);
+      return;
+    }
+    if (!allowed || signedIn) return;
+    void signIn();
+  }, [allowed, authLoading, publicKey, setWalletModalVisible, signIn, signedIn]);
+
+  useEffect(() => {
+    if (!pendingSignIn || !publicKey) return;
+    if (!allowed || signedIn) {
+      setPendingSignIn(false);
+      return;
+    }
+    if (authLoading) return;
+    setPendingSignIn(false);
+    void signIn();
+  }, [allowed, authLoading, pendingSignIn, publicKey, signIn, signedIn]);
+
+  useEffect(() => {
+    if (!pendingSignIn || walletModalVisible || publicKey) return;
+    setPendingSignIn(false);
+  }, [pendingSignIn, publicKey, walletModalVisible]);
+
   return (
     <div className="page">
       <header className="top">
@@ -165,130 +242,130 @@ export default function FulfillmentApp() {
         </div>
       </header>
 
-      {!publicKey ? (
-        <section className="card">
-          <div className="card__title">Connect wallet</div>
-          <p className="muted small">Connect an approved Solana wallet to access fulfillment orders.</p>
-        </section>
-      ) : !allowed ? (
-        <section className="card">
-          <div className="card__title">Access denied</div>
-          <p className="muted small">This wallet is not authorized for fulfillment.</p>
-          <div className="pill">Wallet {shortAddress(wallet)}</div>
-        </section>
-      ) : !signedIn ? (
-        <section className="card">
-          <div className="card__title">Sign in for fulfillment</div>
-          <p className="muted small">Approve a one-time signature to access the fulfillment queue.</p>
-          <button type="button" onClick={() => void signIn()} disabled={authLoading}>
-            {authLoading ? 'Signing in…' : 'Sign in'}
-          </button>
-        </section>
-      ) : (
-        <section className="card">
-          {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
-          {ordersError ? <div className="error">{ordersError}</div> : null}
-          {orders.length ? (
-            <div className="order-list">
-              {orders.map((order) => (
-                <div key={order.deliveryId} className="card subtle">
-                  <div className="card__head">
-                    <div>
-                      <div className="card__title">Order #{order.deliveryId}</div>
-                      <div className="muted small">
-                        {formatOrderDate(order.processedAt || order.createdAt)} · {shortAddress(order.owner)}
-                      </div>
-                    </div>
-                    <div className="pill">{formatOrderStatus(order.status)}</div>
-                  </div>
-
-                  <div className="grid">
-                    <div className="card subtle">
-                      <div className="card__title">Destination</div>
-                      <div className="muted small">{order.address.label || 'Address'}</div>
-                      {order.address.full ? (
-                        <div className="address-block">{order.address.full}</div>
-                      ) : (
-                        <div className="address-block">
-                          <div className="muted small">Encrypted address payload</div>
-                          <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+      {!walletBusy && walletReady && (walletAddress ? (!allowed || authReady) : true) ? (
+        !walletAddress ? (
+          <section className="card">
+            <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>
+              {authLoading ? 'Signing in…' : 'Sign in with Solana'}
+            </button>
+          </section>
+        ) : !allowed ? (
+          <section className="card">
+            <div className="card__title">Access denied</div>
+            <p className="muted small">This wallet is not authorized for fulfillment.</p>
+          </section>
+        ) : !signedIn ? (
+          <section className="card">
+            <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>
+              {authLoading ? 'Signing in…' : 'Sign in with Solana'}
+            </button>
+          </section>
+        ) : (
+          <section className="card">
+            {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
+            {ordersError ? <div className="error">{ordersError}</div> : null}
+            {orders.length ? (
+              <div className="order-list">
+                {orders.map((order) => (
+                  <div key={order.deliveryId} className="card subtle">
+                    <div className="card__head">
+                      <div>
+                        <div className="card__title">Order #{order.deliveryId}</div>
+                        <div className="muted small">
+                          {formatOrderDate(order.processedAt || order.createdAt)} · {shortAddress(order.owner)}
                         </div>
-                      )}
-                      {order.address.email ? <div className="muted small">Email {order.address.email}</div> : null}
-                      {order.address.hint ? <div className="muted small">Hint {order.address.hint}</div> : null}
-                    </div>
-
-                    <div className="card subtle">
-                      <div className="card__title">Fulfillment update</div>
-                      <textarea
-                        className="status-input"
-                        value={statusEdits[order.deliveryId] ?? ''}
-                        onChange={(evt) =>
-                          setStatusEdits((prev) => ({ ...prev, [order.deliveryId]: evt.target.value }))
-                        }
-                        placeholder="Type a status update for the buyer…"
-                      />
-                      <div className="row">
-                        <button
-                          type="button"
-                          onClick={() => void handleSaveStatus(order.deliveryId)}
-                          disabled={statusSaving[order.deliveryId]}
-                        >
-                          {statusSaving[order.deliveryId] ? 'Saving…' : statusDirty.has(order.deliveryId) ? 'Save update' : 'Saved'}
-                        </button>
-                        {statusDirty.has(order.deliveryId) ? <span className="muted small">Unsaved changes</span> : null}
                       </div>
+                      <div className="pill">{formatOrderStatus(order.status)}</div>
                     </div>
-                  </div>
 
-                  {order.boxes.length ? (
-                    <>
-                      <div className="muted small">Boxes</div>
-                      <div className="grid">
-                        {order.boxes.map((box) => (
-                          <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle">
-                            <div className="card__title">Box #{box.boxId}</div>
-                            {box.claimCode ? <div className="pill">Claim code {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
-                            {box.dudeIds.length ? (
-                              <div className="pill-row">
-                                {box.dudeIds.map((id) => (
-                                  <span key={`${order.deliveryId}:${box.boxId}:${id}`} className="pill">
-                                    Figure #{id}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="muted small">Assigned figures pending</div>
-                            )}
+                    <div className="grid">
+                      <div className="card subtle">
+                        <div className="card__title">Destination</div>
+                        <div className="muted small">{order.address.label || 'Address'}</div>
+                        {order.address.full ? (
+                          <div className="address-block">{order.address.full}</div>
+                        ) : (
+                          <div className="address-block">
+                            <div className="muted small">Encrypted address payload</div>
+                            <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
                           </div>
-                        ))}
+                        )}
+                        {order.address.email ? <div className="muted small">Email {order.address.email}</div> : null}
+                        {order.address.hint ? <div className="muted small">Hint {order.address.hint}</div> : null}
                       </div>
-                    </>
-                  ) : null}
 
-                  {order.looseDudes.length ? (
-                    <>
-                      <div className="muted small">Unboxed figures</div>
-                      <div className="pill-row">
-                        {order.looseDudes.map((id) => (
-                          <span key={`${order.deliveryId}:dude:${id}`} className="pill">
-                            Figure #{id}
-                          </span>
-                        ))}
+                      <div className="card subtle">
+                        <div className="card__title">Fulfillment update</div>
+                        <textarea
+                          className="status-input"
+                          value={statusEdits[order.deliveryId] ?? ''}
+                          onChange={(evt) =>
+                            setStatusEdits((prev) => ({ ...prev, [order.deliveryId]: evt.target.value }))
+                          }
+                          placeholder="Type a status update for the buyer…"
+                        />
+                        <div className="row">
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveStatus(order.deliveryId)}
+                            disabled={statusSaving[order.deliveryId]}
+                          >
+                            {statusSaving[order.deliveryId] ? 'Saving…' : statusDirty.has(order.deliveryId) ? 'Save update' : 'Saved'}
+                          </button>
+                          {statusDirty.has(order.deliveryId) ? <span className="muted small">Unsaved changes</span> : null}
+                        </div>
                       </div>
-                    </>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : loading ? null : (
-            <div className="muted small">No orders ready for fulfillment.</div>
-          )}
+                    </div>
 
-          {loadingMore ? <div className="muted small">Loading more…</div> : null}
-          <div ref={sentinelRef} />
-        </section>
-      )}
+                    {order.boxes.length ? (
+                      <>
+                        <div className="muted small">Boxes</div>
+                        <div className="grid">
+                          {order.boxes.map((box) => (
+                            <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle">
+                              <div className="card__title">Box #{box.boxId}</div>
+                              {box.claimCode ? <div className="pill">Claim code {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
+                              {box.dudeIds.length ? (
+                                <div className="pill-row">
+                                  {box.dudeIds.map((id) => (
+                                    <span key={`${order.deliveryId}:${box.boxId}:${id}`} className="pill">
+                                      Figure #{id}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="muted small">Assigned figures pending</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+
+                    {order.looseDudes.length ? (
+                      <>
+                        <div className="muted small">Unboxed figures</div>
+                        <div className="pill-row">
+                          {order.looseDudes.map((id) => (
+                            <span key={`${order.deliveryId}:dude:${id}`} className="pill">
+                              Figure #{id}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : loading ? null : (
+              <div className="muted small">No orders ready for fulfillment.</div>
+            )}
+
+            {loadingMore ? <div className="muted small">Loading more…</div> : null}
+            <div ref={sentinelRef} />
+          </section>
+        )
+      ) : null}
 
       {authError ? <div className="error">{authError}</div> : null}
     </div>
