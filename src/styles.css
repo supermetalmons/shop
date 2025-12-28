@@ -1261,9 +1261,12 @@ button.inventory__open:focus-visible {
 }
 
 .figure-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  display: inline-flex;
+  flex-wrap: wrap;
   gap: 12px;
+  align-items: flex-start;
+  justify-content: flex-start;
+  max-width: 100%;
 }
 
 .figure-tile {
@@ -1272,6 +1275,7 @@ button.inventory__open:focus-visible {
   align-items: center;
   gap: 6px;
   text-align: center;
+  flex: 0 0 130px;
 }
 
 .figure-image {
@@ -1285,6 +1289,10 @@ button.inventory__open:focus-visible {
 
 .card.subtle.box-contents {
   border: 3px dashed var(--fg);
+  justify-self: start;
+  align-self: start;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .card.subtle.address-card {

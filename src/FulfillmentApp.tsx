@@ -372,8 +372,7 @@ export default function FulfillmentApp() {
                         <div className="grid">
                           {order.boxes.map((box) => (
                           <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                              <div className="card__title">Box</div>
-                              {box.claimCode ? <div className="pill">Secret {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
+                              <div className="card__title">Box Secret {box.claimCode}</div>
                               {box.dudeIds.length ? (
                                 renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
                               ) : (
