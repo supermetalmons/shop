@@ -320,7 +320,7 @@ export default function FulfillmentApp() {
             </button>
           </section>
         ) : (
-          <section className="card">
+          <section className="orders">
             {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
             {ordersError ? <div className="error">{ordersError}</div> : null}
             {orders.length ? (
@@ -354,8 +354,28 @@ export default function FulfillmentApp() {
                       </div>
                     </div>
 
-                    <div className="grid">
-                      <div className="card subtle address-card">
+                    <div className="order-body">
+                      <div className="order-items">
+                        {order.boxes.length ? (
+                          <div className="grid">
+                            {order.boxes.map((box) => (
+                              <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
+                                <div className="card__title">Box Secret {box.claimCode}</div>
+                                {box.dudeIds.length ? (
+                                  renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
+                                ) : (
+                                  <div className="muted small">Assigned figures pending</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {order.looseDudes.length
+                          ? renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)
+                          : null}
+                      </div>
+                      <div className="order-address">
                         <div className="address-lines">
                           {order.address.full ? (
                             <div className="address-text">{order.address.full}</div>
@@ -368,29 +388,6 @@ export default function FulfillmentApp() {
                         </div>
                       </div>
                     </div>
-
-                    {order.boxes.length ? (
-                      <>
-                        <div className="grid">
-                          {order.boxes.map((box) => (
-                          <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                              <div className="card__title">Box Secret {box.claimCode}</div>
-                              {box.dudeIds.length ? (
-                                renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
-                              ) : (
-                                <div className="muted small">Assigned figures pending</div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
-
-                  {order.looseDudes.length ? (
-                    <>
-                      {renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)}
-                    </>
-                  ) : null}
                   </div>
                 ))}
               </div>
