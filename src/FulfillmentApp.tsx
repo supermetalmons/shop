@@ -369,12 +369,11 @@ export default function FulfillmentApp() {
 
                     {order.boxes.length ? (
                       <>
-                        <div className="muted small">Boxes</div>
                         <div className="grid">
                           {order.boxes.map((box) => (
                             <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle">
-                              <div className="card__title">Box #{box.boxId}</div>
-                              {box.claimCode ? <div className="pill">Claim code {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
+                              <div className="card__title">Box</div>
+                              {box.claimCode ? <div className="pill">Secret {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
                               {box.dudeIds.length ? (
                                 renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
                               ) : (
@@ -388,7 +387,6 @@ export default function FulfillmentApp() {
 
                   {order.looseDudes.length ? (
                     <>
-                      <div className="muted small">Unboxed</div>
                       {renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)}
                     </>
                   ) : null}
