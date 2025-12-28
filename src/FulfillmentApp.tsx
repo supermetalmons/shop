@@ -333,6 +333,7 @@ export default function FulfillmentApp() {
                         <div className="muted small">
                           {formatOrderDate(order.processedAt || order.createdAt)}
                         </div>
+                        {order.address.email ? <div className="muted small">{order.address.email}</div> : null}
                       </div>
                       <div className="order-update">
                         {(() => {
@@ -355,15 +356,16 @@ export default function FulfillmentApp() {
 
                     <div className="grid">
                       <div className="card subtle address-card">
-                        {order.address.full ? (
-                          <div className="address-block">{order.address.full}</div>
-                        ) : (
-                          <div className="address-block">
-                            <div className="muted small">Encrypted address payload</div>
-                            <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-                          </div>
-                        )}
-                        {order.address.email ? <div className="muted small">{order.address.email}</div> : null}
+                        <div className="address-lines">
+                          {order.address.full ? (
+                            <div className="address-text">{order.address.full}</div>
+                          ) : (
+                            <>
+                              <div className="muted small">Encrypted address payload</div>
+                              <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
 

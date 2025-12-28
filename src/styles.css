@@ -1228,16 +1228,6 @@ button.inventory__open:focus-visible {
   color: var(--muted);
 }
 
-.address-block {
-  white-space: pre-line;
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  font-size: 13px;
-  color: var(--fg);
-  word-break: break-word;
-}
-
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
@@ -1297,6 +1287,25 @@ button.inventory__open:focus-visible {
 
 .card.subtle.address-card {
   border: none;
+  align-items: flex-start;
+  gap: 0;
+  text-align: left;
+  padding: 0;
+}
+
+.address-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.address-text {
+  white-space: pre-line;
+  font-size: 13px;
+  color: var(--fg);
+  word-break: break-word;
 }
 
 .figure-tile .small {
