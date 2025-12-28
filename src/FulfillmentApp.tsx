@@ -5,6 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
 import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { Modal } from './components/Modal';
 
 const FULFILLMENT_WALLETS = new Set<string>([
@@ -14,6 +15,7 @@ const FULFILLMENT_WALLETS = new Set<string>([
 ]);
 
 const PAGE_SIZE = 20;
+const FIGURE_MEDIA_BASE = 'https://assets.mons.link/drops/lsb/figures/clean';
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -24,6 +26,24 @@ function formatOrderStatus(status: string) {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
   if (!normalized) return 'Unknown';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function renderFigureMediaTiles(figureIds: number[], keyPrefix: string) {
+  return (
+    <div className="figure-grid">
+      {figureIds.map((figureId, index) => {
+        const mediaId = getMediaIdForFigureId(figureId);
+        if (!mediaId) return null;
+        const src = `${FIGURE_MEDIA_BASE}/${mediaId}.webp`;
+        return (
+          <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
+            <img src={src} alt={`Media ${mediaId}`} loading="lazy" className="figure-image" />
+            <div className="muted small">{mediaId}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function FulfillmentApp() {
@@ -356,13 +376,7 @@ export default function FulfillmentApp() {
                               <div className="card__title">Box #{box.boxId}</div>
                               {box.claimCode ? <div className="pill">Claim code {box.claimCode}</div> : <div className="muted small">Claim code pending</div>}
                               {box.dudeIds.length ? (
-                                <div className="pill-row">
-                                  {box.dudeIds.map((id) => (
-                                    <span key={`${order.deliveryId}:${box.boxId}:${id}`} className="pill">
-                                      Figure #{id}
-                                    </span>
-                                  ))}
-                                </div>
+                                renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
                               ) : (
                                 <div className="muted small">Assigned figures pending</div>
                               )}
@@ -372,18 +386,12 @@ export default function FulfillmentApp() {
                       </>
                     ) : null}
 
-                    {order.looseDudes.length ? (
-                      <>
-                        <div className="muted small">Unboxed</div>
-                        <div className="pill-row">
-                          {order.looseDudes.map((id) => (
-                            <span key={`${order.deliveryId}:dude:${id}`} className="pill">
-                              Figure #{id}
-                            </span>
-                          ))}
-                        </div>
-                      </>
-                    ) : null}
+                  {order.looseDudes.length ? (
+                    <>
+                      <div className="muted small">Unboxed</div>
+                      {renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)}
+                    </>
+                  ) : null}
                   </div>
                 ))}
               </div>
