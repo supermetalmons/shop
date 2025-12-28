@@ -354,39 +354,36 @@ export default function FulfillmentApp() {
                       </div>
                     </div>
 
-                    <div className="order-body">
-                      <div className="order-items">
-                        {order.boxes.length ? (
-                          <div className="grid">
-                            {order.boxes.map((box) => (
-                              <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                                <div className="card__title">Box Secret {box.claimCode}</div>
-                                {box.dudeIds.length ? (
-                                  renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
-                                ) : (
-                                  <div className="muted small">Assigned figures pending</div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
+                    <div className="order-items">
+                      <div className="address-lines">
+                        {order.address.full ? (
+                          <div className="address-text">{order.address.full}</div>
+                        ) : (
+                          <>
+                            <div className="muted small">Encrypted address payload</div>
+                            <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+                          </>
+                        )}
+                      </div>
 
-                        {order.looseDudes.length
-                          ? renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)
-                          : null}
-                      </div>
-                      <div className="order-address">
-                        <div className="address-lines">
-                          {order.address.full ? (
-                            <div className="address-text">{order.address.full}</div>
-                          ) : (
-                            <>
-                              <div className="muted small">Encrypted address payload</div>
-                              <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-                            </>
-                          )}
+                      {order.boxes.length ? (
+                        <div className="grid">
+                          {order.boxes.map((box) => (
+                            <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
+                              <div className="card__title">Box Secret {box.claimCode}</div>
+                              {box.dudeIds.length ? (
+                                renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
+                              ) : (
+                                <div className="muted small">Assigned figures pending</div>
+                              )}
+                            </div>
+                          ))}
                         </div>
-                      </div>
+                      ) : null}
+
+                      {order.looseDudes.length
+                        ? renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)
+                        : null}
                     </div>
                   </div>
                 ))}
