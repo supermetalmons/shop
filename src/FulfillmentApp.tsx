@@ -158,9 +158,11 @@ export default function FulfillmentApp() {
     <div className="page">
       <header className="top">
         <div className="brand">
-          <h1><img src="/favicon.svg" alt="" className="brand-icon" />mons.shop</h1>
+          <h1>
+            <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
+            <span>mons.shop</span>
+          </h1>
         </div>
-        <WalletMultiButton />
       </header>
 
       {!publicKey ? (
