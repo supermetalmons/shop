@@ -158,8 +158,7 @@ export default function FulfillmentApp() {
     <div className="page">
       <header className="top">
         <div className="brand">
-          <h1><img src="/favicon.svg" alt="" className="brand-icon" />mons.fulfillment</h1>
-          <p className="sub">Private fulfillment dashboard for delivery orders.</p>
+          <h1><img src="/favicon.svg" alt="" className="brand-icon" />mons.shop</h1>
         </div>
         <WalletMultiButton />
       </header>
@@ -185,8 +184,6 @@ export default function FulfillmentApp() {
         </section>
       ) : (
         <section className="card">
-          <div className="card__title">Orders</div>
-          <p className="muted small">Newest first. Scroll to load more automatically.</p>
           {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
           {ordersError ? <div className="error">{ordersError}</div> : null}
           {orders.length ? (
