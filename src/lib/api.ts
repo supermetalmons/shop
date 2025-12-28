@@ -462,6 +462,16 @@ export async function updateFulfillmentStatus(
   );
 }
 
+export async function updateFulfillmentInternalStatus(
+  deliveryId: number,
+  status: string,
+): Promise<{ deliveryId: number; fulfillmentInternalStatus: string }> {
+  return callFunction<
+    { deliveryId: number; status: string },
+    { deliveryId: number; fulfillmentInternalStatus: string }
+  >('updateFulfillmentInternalStatus', { deliveryId, status });
+}
+
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,

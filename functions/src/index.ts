@@ -1861,6 +1861,7 @@ type FulfillmentOrder = {
   processedAt?: number;
   fulfillmentStatus?: string;
   fulfillmentUpdatedAt?: number;
+  fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
@@ -1939,6 +1940,7 @@ function toFulfillmentOrder(docId: string, order: any): FulfillmentOrder | null 
     processedAt: toMillisMaybe(order?.processedAt),
     fulfillmentStatus: typeof order?.fulfillmentStatus === 'string' ? order.fulfillmentStatus : undefined,
     fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
+    fulfillmentInternalStatus: typeof order?.fulfillmentInternalStatus === 'string' ? order.fulfillmentInternalStatus : undefined,
     address,
     boxes,
     looseDudes,
@@ -2170,6 +2172,32 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
 
   await orderRef.set(update, { merge: true });
   return { deliveryId, fulfillmentStatus: trimmed || '' };
+});
+
+export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {
+  const { wallet } = await requireFulfillmentAccess(request);
+  const schema = z.object({
+    deliveryId: z.number().int().positive(),
+    status: z.enum(['🟢', '🟡', '🔴', '🏁']),
+  });
+  const { deliveryId, status } = parseRequest(schema, request.data);
+
+  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
+  const snap = await orderRef.get();
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'Delivery order not found');
+  }
+
+  await orderRef.set(
+    {
+      fulfillmentInternalStatus: status,
+      fulfillmentInternalUpdatedAt: FieldValue.serverTimestamp(),
+      fulfillmentInternalUpdatedBy: wallet,
+    },
+    { merge: true },
+  );
+
+  return { deliveryId, fulfillmentInternalStatus: status };
 });
 
 export const revealDudes = onCallLogged(

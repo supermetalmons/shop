@@ -1259,6 +1259,70 @@ button.inventory__open:focus-visible {
   text-align: right;
 }
 
+.order-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.order-status {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+button.order-status-button {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.order-status-button:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
+.order-status-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.12);
+  z-index: 10;
+}
+
+button.order-status-option {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.order-status-option:hover:not(:disabled) {
+  background: var(--bg-secondary);
+}
+
 .status-readout {
   white-space: pre-wrap;
 }

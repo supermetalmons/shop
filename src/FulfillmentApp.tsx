@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
+import { listFulfillmentOrders, updateFulfillmentInternalStatus, updateFulfillmentStatus } from './lib/api';
 import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
@@ -16,6 +16,8 @@ const FULFILLMENT_WALLETS = new Set<string>([
 
 const PAGE_SIZE = 20;
 const FIGURE_MEDIA_BASE = 'https://assets.mons.link/drops/lsb/figures/clean';
+const INTERNAL_STATUS_OPTIONS = ['🟢', '🟡', '🔴', '🏁'] as const;
+const INTERNAL_STATUS_DEFAULT = '🆕';
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -69,7 +71,9 @@ export default function FulfillmentApp() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
+  const [internalStatusSaving, setInternalStatusSaving] = useState<Record<number, boolean>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [statusMenuOpenFor, setStatusMenuOpenFor] = useState<number | null>(null);
   const [activeUpdateOrderId, setActiveUpdateOrderId] = useState<number | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
@@ -217,6 +221,35 @@ export default function FulfillmentApp() {
     [allowed, signedIn, statusEdits],
   );
 
+  const handleInternalStatusSelect = useCallback(
+    async (deliveryId: number, status: (typeof INTERNAL_STATUS_OPTIONS)[number]) => {
+      if (!allowed || !signedIn) return;
+      setInternalStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
+      setOrdersError(null);
+      try {
+        const resp = await updateFulfillmentInternalStatus(deliveryId, status);
+        setOrders((prev) =>
+          prev.map((order) =>
+            order.deliveryId === deliveryId
+              ? { ...order, fulfillmentInternalStatus: resp.fulfillmentInternalStatus }
+              : order,
+          ),
+        );
+      } catch (err) {
+        console.error(err);
+        setOrdersError(err instanceof Error ? err.message : 'Failed to update internal status');
+      } finally {
+        setInternalStatusSaving((prev) => ({ ...prev, [deliveryId]: false }));
+        setStatusMenuOpenFor((prev) => (prev === deliveryId ? null : prev));
+      }
+    },
+    [allowed, signedIn],
+  );
+
+  const toggleStatusMenu = useCallback((deliveryId: number) => {
+    setStatusMenuOpenFor((prev) => (prev === deliveryId ? null : deliveryId));
+  }, []);
+
   const statusDirty = useMemo(() => {
     const dirty = new Set<number>();
     orders.forEach((order) => {
@@ -329,7 +362,36 @@ export default function FulfillmentApp() {
                   <div key={order.deliveryId} className="card subtle">
                     <div className="card__head">
                       <div>
-                        <div className="card__title">Order {order.deliveryId}</div>
+                        <div className="order-title-row">
+                          <div className="order-status">
+                            <button
+                              type="button"
+                              className="order-status-button"
+                              onClick={() => toggleStatusMenu(order.deliveryId)}
+                              disabled={internalStatusSaving[order.deliveryId]}
+                              aria-haspopup="listbox"
+                              aria-expanded={statusMenuOpenFor === order.deliveryId}
+                            >
+                              {order.fulfillmentInternalStatus || INTERNAL_STATUS_DEFAULT}
+                            </button>
+                            {statusMenuOpenFor === order.deliveryId ? (
+                              <div className="order-status-menu" role="listbox" aria-label="Internal status">
+                                {INTERNAL_STATUS_OPTIONS.map((status) => (
+                                  <button
+                                    key={`${order.deliveryId}:${status}`}
+                                    type="button"
+                                    className="order-status-option"
+                                    onClick={() => void handleInternalStatusSelect(order.deliveryId, status)}
+                                    disabled={internalStatusSaving[order.deliveryId]}
+                                  >
+                                    {status}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="card__title">Order {order.deliveryId}</div>
+                        </div>
                         <div className="muted small">
                           {formatOrderDate(order.processedAt || order.createdAt)}
                         </div>

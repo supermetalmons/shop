@@ -83,6 +83,7 @@ export interface FulfillmentOrder {
   processedAt?: number;
   fulfillmentStatus?: string;
   fulfillmentUpdatedAt?: number;
+  fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
