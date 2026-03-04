@@ -444,7 +444,7 @@ export default function DrifApp() {
         <div className="drif-card-showcase">
           <div
             ref={cardRef}
-            className={`drif-card water interactive masked${interacting ? ' interacting' : ''}${loading ? ' loading' : ''}`}
+            className={`drif-card water interactive masked glowing${interacting ? ' interacting' : ''}${loading ? ' loading' : ''}`}
             data-number="001"
             data-set="custom"
             data-subtypes="v"

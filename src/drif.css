@@ -339,6 +339,7 @@ button.drif-card__rotator:disabled {
     0 0 20px 0 transparent;
 }
 
+.drif-card.glowing .drif-card__rotator,
 .drif-card.active .drif-card__rotator,
 .drif-card__rotator:focus {
   box-shadow:
