@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './drif.css';
-
-const CARD_BACK = 'https://tcg.pokemon.com/assets/img/global/tcg-card-back-2x.jpg';
 const HOLO_TEXTURE = '/drif/layers/7-holo-texture.webp';
 const CARD_LAYERS = [
   '/drif/layers/1-bottom-layer.webp',
@@ -448,15 +446,7 @@ export default function DrifApp() {
                 aria-label="Expand the Pokemon Card; Custom Card."
                 tabIndex={0}
               >
-                <img
-                  className="drif-card__back"
-                  src={CARD_BACK}
-                  alt="The back of a Pokemon Card, a Pokeball in the center with Pokemon logo above and below"
-                  loading="lazy"
-                  width="660"
-                  height="921"
-                  draggable={false}
-                />
+                <div className="drif-card__back" aria-hidden="true" />
                 <div className="drif-card__front" style={frontStyle}>
                   {CARD_LAYERS.map((layerSrc, index) => (
                     <img

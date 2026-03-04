@@ -284,7 +284,7 @@ button.drif-card__rotator:disabled {
 }
 
 .drif-card__back {
-  background-color: var(--card-back);
+  background: var(--card-back);
   -webkit-transform: rotateY(180deg) translateZ(1px);
   transform: rotateY(180deg) translateZ(1px);
   backface-visibility: visible;
