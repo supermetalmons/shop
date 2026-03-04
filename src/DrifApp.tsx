@@ -423,6 +423,7 @@ export default function DrifApp() {
   }, [clearInteractTimer]);
 
   const signupRef = useRef<HTMLDivElement | null>(null);
+  const [showForm, setShowForm] = useState(false);
 
   useLayoutEffect(() => {
     const container = signupRef.current;
@@ -483,7 +484,14 @@ export default function DrifApp() {
           </div>
         </div>
       </main>
-      <div id="signup" ref={signupRef} className="drif-signup" />
+      <div className="drif-notify-area">
+        {!showForm && (
+          <button className="drif-notify-btn" onClick={() => setShowForm(true)}>
+            notify me
+          </button>
+        )}
+        <div id="signup" ref={signupRef} className={`drif-signup${showForm ? ' drif-signup--visible' : ''}`} />
+      </div>
     </div>
   );
 }

@@ -82,7 +82,7 @@
   margin: 0 auto;
 }
 
-.drif-signup {
+.drif-notify-area {
   position: absolute;
   bottom: 0;
   left: 50%;
@@ -101,7 +101,40 @@
   pointer-events: auto;
 }
 
-.drif-signup * {
+.drif-notify-btn {
+  margin-bottom: clamp(24px, 4vh, 60px);
+  padding: 14px 36px;
+  border: none;
+  border-radius: 980px;
+  background: #0b84ff;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drif-notify-btn:active {
+  opacity: 0.75;
+}
+
+.drif-signup {
+  width: 100%;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.drif-signup--visible {
+  display: flex;
+}
+
+.drif-signup *,
+.drif-notify-area * {
   touch-action: auto;
   -webkit-user-select: auto;
   -moz-user-select: auto;
