@@ -17,7 +17,9 @@
 }
 
 .drif-page {
-  min-height: 100vh;
+  position: relative;
+  height: 100vh;
+  height: 100svh;
   color: #fff;
   overflow: hidden;
   overscroll-behavior: none;
@@ -78,6 +80,43 @@
   padding: 30px 20px 60px;
   max-width: 420px;
   margin: 0 auto;
+}
+
+.drif-signup {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(600px, 92vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-bottom: 12px;
+  gap: 12px;
+  touch-action: auto;
+  -webkit-user-select: auto;
+  -moz-user-select: auto;
+  -ms-user-select: auto;
+  user-select: auto;
+  pointer-events: auto;
+}
+
+.drif-signup * {
+  touch-action: auto;
+  -webkit-user-select: auto;
+  -moz-user-select: auto;
+  -ms-user-select: auto;
+  user-select: auto;
+  pointer-events: auto;
+}
+
+@media (min-width: 768px) and (min-aspect-ratio: 1/1) {
+  .drif-page {
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    padding-bottom: clamp(120px, 18vh, 220px);
+  }
 }
 
 .drif-card-showcase .drif-card {

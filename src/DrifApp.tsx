@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './drif.css';
 const HOLO_TEXTURE = '/drif/layers/7-holo-texture.webp';
 const CARD_LAYERS = [
@@ -422,6 +422,21 @@ export default function DrifApp() {
     };
   }, [clearInteractTimer]);
 
+  const signupRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const container = signupRef.current;
+    if (!container) return;
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = 'https://eomail5.com/form/578237fe-8fb4-11f0-8bba-a35988c2be69.js';
+    script.dataset.form = '578237fe-8fb4-11f0-8bba-a35988c2be69';
+    container.appendChild(script);
+    return () => {
+      container.removeChild(script);
+    };
+  }, []);
+
   return (
     <div className="drif-page">
       <main className="drif-main">
@@ -468,6 +483,7 @@ export default function DrifApp() {
           </div>
         </div>
       </main>
+      <div id="signup" ref={signupRef} className="drif-signup" />
     </div>
   );
 }
