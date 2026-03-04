@@ -3,6 +3,7 @@ import './drif.css';
 type CardConfig = {
   layers: string[];
   holoTexture: string;
+  glowType: string;
 };
 
 const CARDS: CardConfig[] = [
@@ -16,11 +17,12 @@ const CARDS: CardConfig[] = [
       '/drif/layers/6-poncho-drif.webp',
     ],
     holoTexture: '/drif/layers/7-holo-texture.webp',
+    glowType: 'water',
   },
-  { layers: ['/drif/extra/1-img.webp'], holoTexture: '/drif/extra/1-texture.webp' },
-  { layers: ['/drif/extra/2-img.webp'], holoTexture: '/drif/extra/2-texture.webp' },
-  { layers: ['/drif/extra/3-img.webp'], holoTexture: '/drif/extra/3-texture.webp' },
-  { layers: ['/drif/extra/4-img.webp'], holoTexture: '/drif/extra/4-texture.webp' },
+  { layers: ['/drif/extra/1-img.webp'], holoTexture: '/drif/extra/1-texture.webp', glowType: 'lightning' },
+  { layers: ['/drif/extra/2-img.webp'], holoTexture: '/drif/extra/2-texture.webp', glowType: 'metal' },
+  { layers: ['/drif/extra/3-img.webp'], holoTexture: '/drif/extra/3-texture.webp', glowType: 'darkness' },
+  { layers: ['/drif/extra/4-img.webp'], holoTexture: '/drif/extra/4-texture.webp', glowType: 'psychic' },
 ];
 
 function round(value: number, precision = 3) {
@@ -391,12 +393,7 @@ export default function DrifApp() {
     applyStylesFromSprings();
   }, [applyStylesFromSprings, interactEnd]);
 
-  const switchingRef = useRef(false);
-
-  const handleDoubleClick = useCallback((event: React.MouseEvent) => {
-    if (event.detail !== 2 || switchingRef.current) return;
-    switchingRef.current = true;
-    firstImageLoadedRef.current = false;
+  const handleCardClick = useCallback(() => {
     const nextIndex = (cardIndex + 1) % CARDS.length;
     const nextCard = CARDS[nextIndex];
     setFoilStyle({
@@ -409,7 +406,6 @@ export default function DrifApp() {
   const onLayerLoad = useCallback(() => {
     if (firstImageLoadedRef.current) return;
     firstImageLoadedRef.current = true;
-    switchingRef.current = false;
     setLoading(false);
     setFoilStyle({
       ['--mask' as never]: `url(${currentCard.holoTexture})`,
@@ -475,7 +471,7 @@ export default function DrifApp() {
         <div className="drif-card-showcase">
           <div
             ref={cardRef}
-            className={`drif-card water interactive masked glowing${interacting ? ' interacting' : ''}${loading ? ' loading' : ''}`}
+            className={`drif-card ${currentCard.glowType} interactive masked glowing${interacting ? ' interacting' : ''}${loading ? ' loading' : ''}`}
             data-number="001"
             data-set="custom"
             data-subtypes="v"
@@ -490,24 +486,26 @@ export default function DrifApp() {
                 onPointerLeave={() => interactEnd()}
                 onPointerCancel={() => interactEnd()}
                 onBlur={() => interactEnd(0)}
-                onClick={handleDoubleClick}
+                onClick={handleCardClick}
                 aria-label="Expand the Pokemon Card; Custom Card."
                 tabIndex={0}
               >
                 <div className="drif-card__back" aria-hidden="true" />
                 <div className="drif-card__front" style={frontStyle}>
-                  {currentCard.layers.map((layerSrc, index) => (
-                    <img
-                      key={index}
-                      src={layerSrc}
-                      alt={`Card layer ${index + 1}`}
-                      onLoad={onLayerLoad}
-                      loading="lazy"
-                      width="1000"
-                      height="1400"
-                      draggable={false}
-                    />
-                  ))}
+                  {CARDS.map((card, ci) =>
+                    card.layers.map((layerSrc, li) => (
+                      <img
+                        key={`${ci}-${li}`}
+                        src={layerSrc}
+                        alt=""
+                        onLoad={onLayerLoad}
+                        width="1000"
+                        height="1400"
+                        draggable={false}
+                        style={ci !== cardIndex ? { display: 'none' } : undefined}
+                      />
+                    )),
+                  )}
                   <div className="drif-card__shine" />
                   <div className="drif-card__glare" />
                 </div>
