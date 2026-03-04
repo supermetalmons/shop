@@ -1,13 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './drif.css';
-const HOLO_TEXTURE = '/drif/layers/7-holo-texture.webp';
-const CARD_LAYERS = [
-  '/drif/layers/1-bottom-layer.webp',
-  '/drif/layers/2-under-holo.webp',
-  '/drif/layers/3-dratini-sprites.webp',
-  '/drif/layers/4-egg.webp',
-  '/drif/layers/5-sparkle.webp',
-  '/drif/layers/6-poncho-drif.webp',
+type CardConfig = {
+  layers: string[];
+  holoTexture: string;
+};
+
+const CARDS: CardConfig[] = [
+  {
+    layers: [
+      '/drif/layers/1-bottom-layer.webp',
+      '/drif/layers/2-under-holo.webp',
+      '/drif/layers/3-dratini-sprites.webp',
+      '/drif/layers/4-egg.webp',
+      '/drif/layers/5-sparkle.webp',
+      '/drif/layers/6-poncho-drif.webp',
+    ],
+    holoTexture: '/drif/layers/7-holo-texture.webp',
+  },
+  { layers: ['/drif/extra/1-img.webp'], holoTexture: '/drif/extra/1-texture.webp' },
+  { layers: ['/drif/extra/2-img.webp'], holoTexture: '/drif/extra/2-texture.webp' },
+  { layers: ['/drif/extra/3-img.webp'], holoTexture: '/drif/extra/3-texture.webp' },
+  { layers: ['/drif/extra/4-img.webp'], holoTexture: '/drif/extra/4-texture.webp' },
 ];
 
 function round(value: number, precision = 3) {
@@ -189,6 +202,8 @@ export default function DrifApp() {
   const [loading, setLoading] = useState(true);
   const [interacting, setInteracting] = useState(false);
   const [foilStyle, setFoilStyle] = useState<React.CSSProperties>({});
+  const [cardIndex, setCardIndex] = useState(0);
+  const currentCard = CARDS[cardIndex];
 
   const staticFrontStyle = useMemo<React.CSSProperties>(() => {
     const randomSeed = {
@@ -376,15 +391,31 @@ export default function DrifApp() {
     applyStylesFromSprings();
   }, [applyStylesFromSprings, interactEnd]);
 
-  const imageLoader = useCallback(() => {
+  const switchingRef = useRef(false);
+
+  const handleDoubleClick = useCallback((event: React.MouseEvent) => {
+    if (event.detail !== 2 || switchingRef.current) return;
+    switchingRef.current = true;
+    firstImageLoadedRef.current = false;
+    const nextIndex = (cardIndex + 1) % CARDS.length;
+    const nextCard = CARDS[nextIndex];
+    setFoilStyle({
+      ['--mask' as never]: `url(${nextCard.holoTexture})`,
+      ['--foil' as never]: `url(${nextCard.holoTexture})`,
+    });
+    setCardIndex(nextIndex);
+  }, [cardIndex]);
+
+  const onLayerLoad = useCallback(() => {
     if (firstImageLoadedRef.current) return;
     firstImageLoadedRef.current = true;
+    switchingRef.current = false;
     setLoading(false);
     setFoilStyle({
-      ['--mask' as never]: `url(${HOLO_TEXTURE})`,
-      ['--foil' as never]: `url(${HOLO_TEXTURE})`,
+      ['--mask' as never]: `url(${currentCard.holoTexture})`,
+      ['--foil' as never]: `url(${currentCard.holoTexture})`,
     });
-  }, []);
+  }, [currentCard.holoTexture]);
 
   useEffect(() => {
     applyStylesFromSprings();
@@ -459,17 +490,18 @@ export default function DrifApp() {
                 onPointerLeave={() => interactEnd()}
                 onPointerCancel={() => interactEnd()}
                 onBlur={() => interactEnd(0)}
+                onClick={handleDoubleClick}
                 aria-label="Expand the Pokemon Card; Custom Card."
                 tabIndex={0}
               >
                 <div className="drif-card__back" aria-hidden="true" />
                 <div className="drif-card__front" style={frontStyle}>
-                  {CARD_LAYERS.map((layerSrc, index) => (
+                  {currentCard.layers.map((layerSrc, index) => (
                     <img
-                      key={layerSrc}
+                      key={index}
                       src={layerSrc}
                       alt={`Card layer ${index + 1}`}
-                      onLoad={imageLoader}
+                      onLoad={onLayerLoad}
                       loading="lazy"
                       width="1000"
                       height="1400"
