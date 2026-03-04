@@ -6,15 +6,22 @@
   scroll-padding-top: 2em;
   font-family: Roboto, sans-serif;
   background-color: #000;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
 }
 
 .drif-body #root {
   min-height: 100%;
+  overflow: hidden;
 }
 
 .drif-page {
   min-height: 100vh;
   color: #fff;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
   --pointer-x: 50%;
   --pointer-y: 50%;
   --card-scale: 1;
@@ -45,6 +52,16 @@
   --sunpillar-clr-4: var(--sunpillar-4);
   --sunpillar-clr-5: var(--sunpillar-5);
   --sunpillar-clr-6: var(--sunpillar-6);
+}
+
+.drif-page,
+.drif-page * {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .drif-main {
