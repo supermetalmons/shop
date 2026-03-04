@@ -131,6 +131,41 @@ function awsCli(
   };
 }
 
+function formatAwsFailure(
+  operation: string,
+  result: { status: number; stdout: string; stderr: string },
+  context: { region?: string; profile?: string } = {},
+): string {
+  const stderr = result.stderr.trim();
+  const stdout = result.stdout.trim();
+  const combined = [stderr, stdout].filter(Boolean).join("\n");
+  const hints: string[] = [];
+
+  if (/NoRegion|You must specify a region/i.test(combined)) {
+    hints.push("Set region via --region or AMPLIFY_REGION (for example: AMPLIFY_REGION=us-east-1).");
+  }
+  if (/NoCredentials|Unable to locate credentials|UnrecognizedClientException|ExpiredToken/i.test(combined)) {
+    hints.push(
+      "Authenticate AWS CLI (for example: aws configure sso, then aws sso login --profile <name>; or aws configure).",
+    );
+  }
+  if (!context.region) {
+    hints.push("No region provided via --region, AMPLIFY_REGION, AWS_REGION, or AWS_DEFAULT_REGION.");
+  }
+  if (!context.profile) {
+    hints.push("No profile provided via --profile or AWS_PROFILE (default profile will be used if configured).");
+  }
+
+  const lines = [`${operation}.`];
+  if (combined) {
+    lines.push("", "AWS CLI output:", combined);
+  }
+  if (hints.length > 0) {
+    lines.push("", "Hints:", ...hints.map((h) => `- ${h}`));
+  }
+  return lines.join("\n");
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
@@ -176,7 +211,7 @@ async function main() {
     "pipe",
   );
   if (start.status !== 0) {
-    fail("Failed to start Amplify job (aws amplify start-job).");
+    fail(formatAwsFailure("Failed to start Amplify job (aws amplify start-job)", start, { region, profile }));
   }
 
   let jobId: string | undefined;
@@ -228,7 +263,7 @@ async function main() {
       "pipe",
     );
     if (job.status !== 0) {
-      fail("Failed to poll job status (aws amplify get-job).");
+      fail(formatAwsFailure("Failed to poll job status (aws amplify get-job)", job, { region, profile }));
     }
 
     let status = "UNKNOWN";
