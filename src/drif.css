@@ -1,0 +1,462 @@
+.drif-body {
+  min-height: 100%;
+  padding: 0;
+  margin: 0;
+  scroll-behavior: smooth;
+  scroll-padding-top: 2em;
+  font-family: Roboto, sans-serif;
+  background-color: #000;
+}
+
+.drif-body #root {
+  min-height: 100%;
+}
+
+.drif-page {
+  min-height: 100vh;
+  color: #fff;
+  --pointer-x: 50%;
+  --pointer-y: 50%;
+  --card-scale: 1;
+  --card-opacity: 0;
+  --translate-x: 0px;
+  --translate-y: 0px;
+  --rotate-x: 0deg;
+  --rotate-y: 0deg;
+  --background-x: var(--pointer-x);
+  --background-y: var(--pointer-y);
+  --pointer-from-center: 0;
+  --pointer-from-top: var(--pointer-from-center);
+  --pointer-from-left: var(--pointer-from-center);
+  --card-aspect: 0.718;
+  --card-radius: 4.55% / 3.5%;
+  --card-edge: hsl(47, 100%, 78%);
+  --card-back: hsl(205, 100%, 25%);
+  --card-glow: hsl(175, 100%, 90%);
+  --sunpillar-1: hsl(2, 100%, 73%);
+  --sunpillar-2: hsl(53, 100%, 69%);
+  --sunpillar-3: hsl(93, 100%, 69%);
+  --sunpillar-4: hsl(176, 100%, 76%);
+  --sunpillar-5: hsl(228, 100%, 74%);
+  --sunpillar-6: hsl(283, 100%, 73%);
+  --sunpillar-clr-1: var(--sunpillar-1);
+  --sunpillar-clr-2: var(--sunpillar-2);
+  --sunpillar-clr-3: var(--sunpillar-3);
+  --sunpillar-clr-4: var(--sunpillar-4);
+  --sunpillar-clr-5: var(--sunpillar-5);
+  --sunpillar-clr-6: var(--sunpillar-6);
+}
+
+.drif-main {
+  color: #fff;
+  padding: 50px;
+  max-width: 1200px;
+  margin: auto;
+}
+
+.drif-card-showcase {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 30px 20px 60px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.drif-card-showcase .drif-card {
+  width: 100%;
+}
+
+/* cards.css */
+.drif-card {
+  --grain: url('/drif/img/grain.webp');
+  --glitter: url('/drif/img/glitter.png');
+  --glittersize: 25%;
+  --space: 5%;
+  --angle: 133deg;
+  --imgsize: cover;
+  --red: #f80e35;
+  --yellow: #eedf10;
+  --green: #21e985;
+  --blue: #0dbde9;
+  --violet: #c929f1;
+  --clip: inset(9.85% 8% 52.85% 8%);
+  --clip-invert: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%, 0 47.15%, 91.5% 47.15%, 91.5% 9.85%, 8% 9.85%, 8% 47.15%, 0 50%);
+  --clip-stage: polygon(91.5% 9.85%, 57% 9.85%, 54% 12%, 17% 12%, 16% 14%, 12% 16%, 8% 16%, 8% 47.15%, 92% 47.15%);
+  --clip-stage-invert: polygon(
+    0% 0%,
+    100% 0%,
+    100% 100%,
+    0% 100%,
+    0 47.15%,
+    91.5% 47.15%,
+    91.5% 9.85%,
+    57% 9.85%,
+    54% 12%,
+    17% 12%,
+    16% 14%,
+    12% 16%,
+    8% 16%,
+    8% 47.15%,
+    0 50%
+  );
+  --clip-trainer: inset(14.5% 8.5% 48.2% 8.5%);
+  --clip-borders: inset(2.8% 4% round 2.55% / 1.5%);
+}
+
+.drif-card__shine,
+.drif-card__glare {
+  will-change: transform, opacity, background-image, background-size, background-position, background-blend-mode, filter;
+}
+
+/* base.css */
+.drif-card {
+  -webkit-transform: translate3d(0px, 0px, 0.01px);
+  transform: translate3d(0px, 0px, 0.01px);
+  pointer-events: none;
+  z-index: calc(var(--card-scale) * 2);
+  will-change: transform, visibility, z-index;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+}
+
+.drif-card,
+.drif-card * {
+  outline: 1px solid transparent;
+}
+
+.drif-card:not(.interactive) .drif-card__translater,
+.drif-card:not(.interactive) .drif-card__rotator,
+.drif-card:not(.interactive) .drif-card__shine,
+.drif-card:not(.interactive) .drif-card__glare {
+  transition: all 0.3s ease;
+}
+
+.drif-card:not(.interactive):hover {
+  --pointer-x: 25% !important;
+  --pointer-y: 10% !important;
+  --card-scale: 1.1 !important;
+  --card-opacity: 1 !important;
+  --translate-x: 0px !important;
+  --translate-y: -10px !important;
+  --rotate-x: 7deg !important;
+  --rotate-y: -19deg !important;
+  --background-x: 44% !important;
+  --background-y: 36% !important;
+  --pointer-from-center: 0.9 !important;
+  --pointer-from-top: 0.11 !important;
+  --pointer-from-left: 0.25 !important;
+}
+
+.drif-card.water {
+  --card-glow: hsl(192, 97%, 60%);
+}
+.drif-card.fire {
+  --card-glow: hsl(9, 81%, 59%);
+}
+.drif-card.grass {
+  --card-glow: hsl(96, 81%, 65%);
+}
+.drif-card.lightning {
+  --card-glow: hsl(54, 87%, 63%);
+}
+.drif-card.psychic {
+  --card-glow: hsl(281, 62%, 58%);
+}
+.drif-card.fighting {
+  --card-glow: rgb(145, 90, 39);
+}
+.drif-card.darkness {
+  --card-glow: hsl(189, 77%, 27%);
+}
+.drif-card.metal {
+  --card-glow: hsl(184, 20%, 70%);
+}
+.drif-card.dragon {
+  --card-glow: hsl(51, 60%, 35%);
+}
+.drif-card.fairy {
+  --card-glow: hsl(323, 100%, 89%);
+}
+
+.drif-card,
+.drif-card__rotator {
+  aspect-ratio: var(--card-aspect);
+  border-radius: var(--card-radius);
+}
+
+.drif-card.interacting {
+  z-index: calc(var(--card-scale) * 120);
+}
+
+.drif-card.active .drif-card__translater,
+.drif-card.active .drif-card__rotator {
+  touch-action: none;
+}
+
+.drif-card__translater,
+.drif-card__rotator {
+  display: grid;
+  perspective: 600px;
+  will-change: transform, box-shadow;
+  transform-origin: center;
+  -webkit-transform-origin: center;
+  transform-style: preserve-3d;
+}
+
+.drif-card__translater {
+  width: auto;
+  position: relative;
+  --translate-z: calc(var(--card-scale) * 150px + 0.01px);
+  -webkit-transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
+  transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
+}
+
+.drif-card__rotator {
+  -webkit-transform: rotateY(var(--rotate-x)) rotateX(var(--rotate-y));
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  transform: rotateY(var(--rotate-x)) rotateX(var(--rotate-y));
+  pointer-events: auto;
+}
+
+button.drif-card__rotator {
+  border: none;
+  background: transparent;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  color: inherit;
+}
+
+button.drif-card__rotator:hover,
+button.drif-card__rotator:focus,
+button.drif-card__rotator:focus-visible,
+button.drif-card__rotator:active,
+button.drif-card__rotator:disabled {
+  background: transparent !important;
+  color: inherit !important;
+  opacity: 1;
+}
+
+.drif-card__rotator,
+.drif-card.active .drif-card__rotator:focus {
+  transition: box-shadow 0.4s ease, opacity 0.33s ease-out;
+  box-shadow:
+    0 0 5px -2px rgba(255, 255, 255, 0.08),
+    0 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 10px 30px -5px rgba(0, 0, 0, 0.6),
+    0 2px 15px -5px rgba(0, 0, 0, 0.4),
+    0 0 20px 0 transparent;
+}
+
+.drif-card.active .drif-card__rotator,
+.drif-card__rotator:focus {
+  box-shadow:
+    0 0 4px -1px #fff,
+    0 0 4px 1px var(--card-edge),
+    0 0 18px 2px var(--card-glow),
+    0 10px 25px -5px rgba(0, 0, 0, 0.5),
+    0 0 50px -20px var(--card-glow),
+    0 0 70px -15px var(--card-glow);
+}
+
+.drif-card__rotator * {
+  width: 100%;
+  display: grid;
+  grid-area: 1 / 1;
+  aspect-ratio: var(--card-aspect);
+  border-radius: var(--card-radius);
+  image-rendering: optimizeQuality;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.drif-card__rotator img {
+  height: auto;
+}
+
+.drif-card__rotator img:not(.drif-card__back) {
+  -webkit-transform: translate3d(0px, 0px, 0.01px);
+  transform: translate3d(0px, 0px, 0.01px);
+}
+
+.drif-card__back {
+  background-color: var(--card-back);
+  -webkit-transform: rotateY(180deg) translateZ(1px);
+  transform: rotateY(180deg) translateZ(1px);
+  backface-visibility: visible;
+}
+
+.drif-card__front,
+.drif-card__front * {
+  backface-visibility: hidden;
+}
+
+.drif-card__front {
+  opacity: 1;
+  transition: opacity 0.33s ease-out;
+  -webkit-transform: translate3d(0px, 0px, 0.01px);
+  transform: translate3d(0px, 0px, 0.01px);
+}
+
+.loading .drif-card__front {
+  opacity: 0;
+}
+
+.loading .drif-card__back {
+  -webkit-transform: rotateY(0deg);
+  transform: rotateY(0deg);
+}
+
+.drif-card__shine {
+  display: grid;
+  transform: translateZ(1px);
+  overflow: hidden;
+  z-index: 3;
+  background: transparent;
+  background-size: cover;
+  background-position: center;
+  filter: brightness(0.85) contrast(2.75) saturate(0.65);
+  mix-blend-mode: color-dodge;
+  opacity: var(--card-opacity);
+}
+
+.drif-card__shine:before,
+.drif-card__shine:after {
+  --sunpillar-clr-1: var(--sunpillar-5);
+  --sunpillar-clr-2: var(--sunpillar-6);
+  --sunpillar-clr-3: var(--sunpillar-1);
+  --sunpillar-clr-4: var(--sunpillar-2);
+  --sunpillar-clr-5: var(--sunpillar-3);
+  --sunpillar-clr-6: var(--sunpillar-4);
+  grid-area: 1 / 1;
+  transform: translateZ(1px);
+  border-radius: var(--card-radius);
+}
+
+.drif-card__shine:after {
+  --sunpillar-clr-1: var(--sunpillar-6);
+  --sunpillar-clr-2: var(--sunpillar-1);
+  --sunpillar-clr-3: var(--sunpillar-2);
+  --sunpillar-clr-4: var(--sunpillar-3);
+  --sunpillar-clr-5: var(--sunpillar-4);
+  --sunpillar-clr-6: var(--sunpillar-5);
+  transform: translateZ(1.2px);
+}
+
+.drif-card__glare {
+  transform: translateZ(1.41px);
+  overflow: hidden;
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsla(0, 0%, 100%, 0.8) 10%,
+    hsla(0, 0%, 100%, 0.65) 20%,
+    hsla(0, 0%, 0%, 0.5) 90%
+  );
+  opacity: var(--card-opacity);
+  mix-blend-mode: overlay;
+}
+
+.drif-card.masked .drif-card__shine,
+.drif-card.masked .drif-card__shine:before,
+.drif-card.masked .drif-card__shine:after {
+  -webkit-mask-image: var(--mask);
+  mask-image: var(--mask);
+  -webkit-mask-size: cover;
+  mask-size: cover;
+  -webkit-mask-position: center center;
+  mask-position: center center;
+}
+
+.drif-card[data-rarity='rare holo'] .drif-card__glare:after,
+.drif-card[data-rarity='rare holo cosmos'] .drif-card__glare:after,
+.drif-card[data-rarity$='reverse holo'] .drif-card__glare:after {
+  clip-path: var(--clip);
+}
+
+.drif-card[data-rarity='rare holo'][data-subtypes^='stage'] .drif-card__glare:after,
+.drif-card[data-rarity='rare holo cosmos'][data-subtypes^='stage'] .drif-card__glare:after,
+.drif-card[data-rarity$='reverse holo'][data-subtypes^='stage'] .drif-card__glare:after {
+  clip-path: var(--clip-stage);
+}
+
+.drif-card[data-rarity='rare holo'][data-supertype='trainer'] .drif-card__glare:after,
+.drif-card[data-rarity='rare holo cosmos'][data-supertype='trainer'] .drif-card__glare:after,
+.drif-card[data-rarity$='reverse holo'][data-supertype='trainer'] .drif-card__glare:after {
+  clip-path: var(--clip-trainer);
+}
+
+/* v-regular.css */
+.drif-card[data-rarity='rare holo v']:not(.masked) .drif-card__shine,
+.drif-card[data-subtypes='v-union']:not(.masked) .drif-card__shine {
+  filter: brightness(0.7) contrast(2) saturate(0.5);
+}
+
+.drif-card[data-rarity='rare holo v'] .drif-card__shine,
+.drif-card[data-rarity='rare holo v'] .drif-card__shine:after,
+.drif-card[data-subtypes='v-union'] .drif-card__shine,
+.drif-card[data-subtypes='v-union'] .drif-card__shine:after {
+  --space: 5%;
+  --angle: 133deg;
+  --imgsize: 500px;
+  background-image:
+    var(--grain),
+    repeating-linear-gradient(
+      0deg,
+      var(--sunpillar-clr-1) calc(var(--space) * 1),
+      var(--sunpillar-clr-2) calc(var(--space) * 2),
+      var(--sunpillar-clr-3) calc(var(--space) * 3),
+      var(--sunpillar-clr-4) calc(var(--space) * 4),
+      var(--sunpillar-clr-5) calc(var(--space) * 5),
+      var(--sunpillar-clr-6) calc(var(--space) * 6),
+      var(--sunpillar-clr-1) calc(var(--space) * 7)
+    ),
+    repeating-linear-gradient(
+      var(--angle),
+      #0e152e 0%,
+      hsl(180, 10%, 60%) 3.8%,
+      hsl(180, 29%, 66%) 4.5%,
+      hsl(180, 10%, 60%) 5.2%,
+      #0e152e 10%,
+      #0e152e 12%
+    ),
+    radial-gradient(
+      farthest-corner circle at var(--pointer-x) var(--pointer-y),
+      hsla(0, 0%, 0%, 0.1) 12%,
+      hsla(0, 0%, 0%, 0.15) 20%,
+      hsla(0, 0%, 0%, 0.25) 120%
+    );
+  background-blend-mode: screen, hue, hard-light;
+  background-size: var(--imgsize) 100%, 200% 700%, 300% 100%, 200% 100%;
+  background-position: center, 0% var(--background-y), var(--background-x) var(--background-y), var(--background-x) var(--background-y);
+  filter: brightness(0.8) contrast(2.95) saturate(0.65);
+}
+
+.drif-card[data-rarity='rare holo v'] .drif-card__shine:after,
+.drif-card[data-subtypes='v-union'] .drif-card__shine:after {
+  content: '';
+  background-position:
+    center,
+    0% var(--background-y),
+    calc(var(--background-x) * -1) calc(var(--background-y) * -1),
+    var(--background-x) var(--background-y);
+  background-size: var(--imgsize) 100%, 200% 400%, 195% 100%, 200% 100%;
+  filter: brightness(1) contrast(2.5) saturate(1.75);
+  mix-blend-mode: soft-light;
+}
+
+.drif-card[data-rarity='rare holo v'] .drif-card__glare,
+.drif-card[data-subtypes='v-union'] .drif-card__glare {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsl(0, 0%, 100%) 0%,
+    hsla(210, 3%, 54%, 0.33) 45%,
+    hsla(0, 0%, 20%, 0.9) 130%
+  );
+  opacity: calc(var(--card-opacity) * 0.5);
+  mix-blend-mode: hard-light;
+  filter: brightness(0.9) contrast(1.75);
+}

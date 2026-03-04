@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import FulfillmentApp from './FulfillmentApp';
+import DrifApp from './DrifApp';
 import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
 
@@ -13,7 +14,7 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
-const RootApp = path === '/ff' ? FulfillmentApp : App;
+const RootApp = path === '/ff' ? FulfillmentApp : path === '/drif' ? DrifApp : App;
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
