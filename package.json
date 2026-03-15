@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && tsc --noEmit",
+    "check-irl-claims": "node --experimental-strip-types functions/scripts/checkIrlClaims.ts",
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy:functions": "firebase deploy --only functions",
