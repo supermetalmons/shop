@@ -203,7 +203,7 @@ export default function DrifApp() {
   const [loading, setLoading] = useState(true);
   const [interacting, setInteracting] = useState(false);
   const [foilStyle, setFoilStyle] = useState<React.CSSProperties>({});
-  const [cardIndex, setCardIndex] = useState(0);
+  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * CARDS.length));
   const currentCard = CARDS[cardIndex];
 
   const staticFrontStyle = useMemo<React.CSSProperties>(() => {
