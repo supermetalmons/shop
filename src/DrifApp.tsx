@@ -1,28 +1,27 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './drif.css';
 type CardConfig = {
-  layers: string[];
-  holoTexture: string;
-  glowType: string;
+  imageSrc: string;
+  glowType: GlowType;
 };
 
+type GlowType = 'water' | 'fire' | 'grass' | 'lightning' | 'psychic' | 'fighting' | 'darkness' | 'metal' | 'dragon' | 'fairy';
+
+const DRIFS_TEXTURE = '/Poncho_Drifella/drifs/texture.webp';
+
 const CARDS: CardConfig[] = [
-  {
-    layers: [
-      '/Poncho_Drifella/layers/1-bottom-layer.webp',
-      '/Poncho_Drifella/layers/2-under-holo.webp',
-      '/Poncho_Drifella/layers/3-dratini-sprites.webp',
-      '/Poncho_Drifella/layers/4-egg.webp',
-      '/Poncho_Drifella/layers/5-sparkle.webp',
-      '/Poncho_Drifella/layers/6-poncho-drif.webp',
-    ],
-    holoTexture: '/Poncho_Drifella/layers/7-holo-texture.webp',
-    glowType: 'water',
-  },
-  { layers: ['/Poncho_Drifella/extra/1-img.webp'], holoTexture: '/Poncho_Drifella/extra/1-texture.webp', glowType: 'lightning' },
-  { layers: ['/Poncho_Drifella/extra/2-img.webp'], holoTexture: '/Poncho_Drifella/extra/2-texture.webp', glowType: 'metal' },
-  { layers: ['/Poncho_Drifella/extra/3-img.webp'], holoTexture: '/Poncho_Drifella/extra/3-texture.webp', glowType: 'darkness' },
-  { layers: ['/Poncho_Drifella/extra/4-img.webp'], holoTexture: '/Poncho_Drifella/extra/4-texture.webp', glowType: 'psychic' },
+  { imageSrc: '/Poncho_Drifella/drifs/0.webp', glowType: 'water' },
+  { imageSrc: '/Poncho_Drifella/drifs/1.jpeg', glowType: 'fairy' },
+  { imageSrc: '/Poncho_Drifella/drifs/2.jpeg', glowType: 'fighting' },
+  { imageSrc: '/Poncho_Drifella/drifs/3.jpg', glowType: 'water' },
+  { imageSrc: '/Poncho_Drifella/drifs/4.jpeg', glowType: 'dragon' },
+  { imageSrc: '/Poncho_Drifella/drifs/5.jpeg', glowType: 'psychic' },
+  { imageSrc: '/Poncho_Drifella/drifs/6.jpeg', glowType: 'fire' },
+  { imageSrc: '/Poncho_Drifella/drifs/7.jpeg', glowType: 'metal' },
+  { imageSrc: '/Poncho_Drifella/drifs/8.jpeg', glowType: 'grass' },
+  { imageSrc: '/Poncho_Drifella/drifs/9.jpeg', glowType: 'lightning' },
+  { imageSrc: '/Poncho_Drifella/drifs/10.jpeg', glowType: 'darkness' },
+  { imageSrc: '/Poncho_Drifella/drifs/11.jpeg', glowType: 'fairy' },
 ];
 
 function round(value: number, precision = 3) {
@@ -395,10 +394,9 @@ export default function DrifApp() {
 
   const handleCardClick = useCallback(() => {
     const nextIndex = (cardIndex + 1) % CARDS.length;
-    const nextCard = CARDS[nextIndex];
     setFoilStyle({
-      ['--mask' as never]: `url(${nextCard.holoTexture})`,
-      ['--foil' as never]: `url(${nextCard.holoTexture})`,
+      ['--mask' as never]: `url(${DRIFS_TEXTURE})`,
+      ['--foil' as never]: `url(${DRIFS_TEXTURE})`,
     });
     setCardIndex(nextIndex);
   }, [cardIndex]);
@@ -408,10 +406,10 @@ export default function DrifApp() {
     firstImageLoadedRef.current = true;
     setLoading(false);
     setFoilStyle({
-      ['--mask' as never]: `url(${currentCard.holoTexture})`,
-      ['--foil' as never]: `url(${currentCard.holoTexture})`,
+      ['--mask' as never]: `url(${DRIFS_TEXTURE})`,
+      ['--foil' as never]: `url(${DRIFS_TEXTURE})`,
     });
-  }, [currentCard.holoTexture]);
+  }, []);
 
   useEffect(() => {
     applyStylesFromSprings();
@@ -492,20 +490,18 @@ export default function DrifApp() {
               >
                 <div className="drif-card__back" aria-hidden="true" />
                 <div className="drif-card__front" style={frontStyle}>
-                  {CARDS.map((card, ci) =>
-                    card.layers.map((layerSrc, li) => (
-                      <img
-                        key={`${ci}-${li}`}
-                        src={layerSrc}
-                        alt=""
-                        onLoad={onLayerLoad}
-                        width="1000"
-                        height="1400"
-                        draggable={false}
-                        style={ci !== cardIndex ? { display: 'none' } : undefined}
-                      />
-                    )),
-                  )}
+                  {CARDS.map((card, ci) => (
+                    <img
+                      key={card.imageSrc}
+                      src={card.imageSrc}
+                      alt=""
+                      onLoad={onLayerLoad}
+                      width="1000"
+                      height="1400"
+                      draggable={false}
+                      style={ci !== cardIndex ? { display: 'none' } : undefined}
+                    />
+                  ))}
                   <div className="drif-card__shine" />
                   <div className="drif-card__glare" />
                 </div>
