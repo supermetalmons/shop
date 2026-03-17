@@ -9,20 +9,20 @@ type CardConfig = {
 const CARDS: CardConfig[] = [
   {
     layers: [
-      '/drif/layers/1-bottom-layer.webp',
-      '/drif/layers/2-under-holo.webp',
-      '/drif/layers/3-dratini-sprites.webp',
-      '/drif/layers/4-egg.webp',
-      '/drif/layers/5-sparkle.webp',
-      '/drif/layers/6-poncho-drif.webp',
+      '/Poncho_Drifella/layers/1-bottom-layer.webp',
+      '/Poncho_Drifella/layers/2-under-holo.webp',
+      '/Poncho_Drifella/layers/3-dratini-sprites.webp',
+      '/Poncho_Drifella/layers/4-egg.webp',
+      '/Poncho_Drifella/layers/5-sparkle.webp',
+      '/Poncho_Drifella/layers/6-poncho-drif.webp',
     ],
-    holoTexture: '/drif/layers/7-holo-texture.webp',
+    holoTexture: '/Poncho_Drifella/layers/7-holo-texture.webp',
     glowType: 'water',
   },
-  { layers: ['/drif/extra/1-img.webp'], holoTexture: '/drif/extra/1-texture.webp', glowType: 'lightning' },
-  { layers: ['/drif/extra/2-img.webp'], holoTexture: '/drif/extra/2-texture.webp', glowType: 'metal' },
-  { layers: ['/drif/extra/3-img.webp'], holoTexture: '/drif/extra/3-texture.webp', glowType: 'darkness' },
-  { layers: ['/drif/extra/4-img.webp'], holoTexture: '/drif/extra/4-texture.webp', glowType: 'psychic' },
+  { layers: ['/Poncho_Drifella/extra/1-img.webp'], holoTexture: '/Poncho_Drifella/extra/1-texture.webp', glowType: 'lightning' },
+  { layers: ['/Poncho_Drifella/extra/2-img.webp'], holoTexture: '/Poncho_Drifella/extra/2-texture.webp', glowType: 'metal' },
+  { layers: ['/Poncho_Drifella/extra/3-img.webp'], holoTexture: '/Poncho_Drifella/extra/3-texture.webp', glowType: 'darkness' },
+  { layers: ['/Poncho_Drifella/extra/4-img.webp'], holoTexture: '/Poncho_Drifella/extra/4-texture.webp', glowType: 'psychic' },
 ];
 
 function round(value: number, precision = 3) {

@@ -14,7 +14,7 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
-const RootApp = path === '/ff' ? FulfillmentApp : path === '/drif' ? DrifApp : App;
+const RootApp = path === '/ff' ? FulfillmentApp : path === '/Poncho_Drifella' ? DrifApp : App;
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

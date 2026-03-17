@@ -161,8 +161,8 @@
 
 /* cards.css */
 .drif-card {
-  --grain: url('/drif/img/grain.webp');
-  --glitter: url('/drif/img/glitter.png');
+  --grain: url('/Poncho_Drifella/img/grain.webp');
+  --glitter: url('/Poncho_Drifella/img/glitter.png');
   --glittersize: 25%;
   --space: 5%;
   --angle: 133deg;
