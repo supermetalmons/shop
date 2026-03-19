@@ -2,7 +2,7 @@
   "name": "shop",
   "private": true,
   "version": "1.0.0",
-  "description": "mons.shop – blind boxes drop with on-chain & Firebase helpers",
+  "description": "mons.shop – physically redeemable nft drops",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
