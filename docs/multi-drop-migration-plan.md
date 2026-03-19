@@ -1,6 +1,6 @@
 # Multi-Drop Migration Plan (Firebase + Shop + Onchain)
 
-Status: Draft v3 (decision-locked + deep risk patches)  
+Status: Draft v6 (control-path validity + rollback/finality hardening patch)  
 Last updated: 2026-03-19  
 Scope: migrate from single-drop setup to multi-drop shop without risking current production data
 
@@ -20,6 +20,7 @@ No implementation changes are included yet. This is a planning artifact for care
 1. Onchain strategy: **new program per drop** (no shared multi-config program path).
 2. `dudeId` uniqueness: **per-drop**, not global across all drops.
 3. API/data scoping: **explicit drop scoping** for drop-sensitive flows.
+4. Claim code canonical lock: **global across normalization versions** (`claimCodeCanonical/{codeCanonical}`).
 
 ## Audit Findings (Current State)
 
@@ -152,11 +153,11 @@ Problem:
 
 Safe plan patch:
 1. Define an explicit default read authority flag:
-   - `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=legacy|namespace`
+   - `READ_AUTHORITY_DEFAULT=legacy|namespace` in `drops/{dropId}/meta/migrationControl`
 2. Add optional canary override for segmented rollout:
    - cohort routing (wallet allowlist hash) decides if request is canary
-   - canary requests may use `drops/{dropId}/migrationFlags/CANARY_READ_AUTHORITY`
-   - non-canary requests always use `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT`
+   - canary requests may use `CANARY_READ_AUTHORITY` from `drops/{dropId}/meta/migrationControl`
+   - non-canary requests always use `READ_AUTHORITY_DEFAULT` from `drops/{dropId}/meta/migrationControl`
 3. In transition, each request reads from exactly one authority source.
 4. Shadow-read the non-authority source asynchronously and record parity mismatches.
 5. Cutover default authority only after mismatch rate is under threshold.
@@ -176,7 +177,7 @@ Safe plan patch:
    - `v1_numeric_legacy`: strip non-digits (compat with existing 10-digit codes)
    - `v2_text`: Unicode NFKC + trim + uppercase
 3. Store both `codeRaw` and `codeCanonical`; keep `codeRaw` for display only.
-4. Enforce canonical uniqueness with a lock document (`claimCodeCanonical/{codeCanonical}`) created transactionally.
+4. Enforce canonical uniqueness with a global lock document (`claimCodeCanonical/{codeCanonical}`) created transactionally (shared across normalization versions).
 5. Add immutable `dropId`, `codeVersion`, and `codeNormalizationVersion` fields.
 6. Adopt a two-step redemption state machine compatible with user-signed claim transactions:
    - `available` -> `pending_redeem` (reservation in transaction during tx preparation)
@@ -261,16 +262,16 @@ Problem:
 
 Safe plan patch:
 1. Introduce global compatibility router policy (used before drop context is known):
-   - `migration/global/COMPAT_DROPID_REQUIRED_AFTER_DEFAULT` (UTC timestamp)
-   - `migration/global/ALLOW_LEGACY_DROPID_FALLBACK_DEFAULT` (`true|false`)
-   - `migration/global/LEGACY_CLIENT_ALLOWLIST` (approved version/build policy)
-2. Allow per-drop override at `drops/{dropId}/migrationFlags/COMPAT_DROPID_REQUIRED_AFTER` for exceptional rollout cases.
+   - `migrationControl/global.COMPAT_DROPID_REQUIRED_AFTER_DEFAULT` (UTC timestamp)
+   - `migrationControl/global.ALLOW_LEGACY_DROPID_FALLBACK_DEFAULT` (`true|false`)
+   - `migrationControl/global.LEGACY_CLIENT_ALLOWLIST` (approved version/build policy)
+2. Allow per-drop override at `drops/{dropId}/meta/migrationControl.COMPAT_DROPID_REQUIRED_AFTER` for exceptional rollout cases.
 3. Require callable payload `clientInfo` on all drop-sensitive requests:
    - `clientInfo.version`
    - `clientInfo.build`
    - optional `clientInfo.platform`
 4. For non-drop-sensitive endpoints, `clientInfo` is optional but recommended for telemetry.
-5. Optionally mirror from headers for observability, but payload is authoritative.
+5. Optionally mirror from headers for observability; payload is canonical for analytics but **not trusted alone** for compatibility exemption decisions.
 6. Before deadline: missing `dropId` allowed only for approved legacy client versions and only where backend can deterministically derive one drop from immutable identifiers.
 7. Add telemetry dashboard for missing `dropId` by client version and endpoint.
 8. After deadline: missing `dropId` hard-fails with actionable error.
@@ -278,11 +279,16 @@ Safe plan patch:
 10. Compatibility exemption is fail-closed:
    - missing/invalid `clientInfo` is treated as unapproved client for mutation fallback decisions
    - unknown client versions are measured and explicitly allowlisted before any fallback is granted
+11. Compatibility exemption trust model:
+   - allowlist decision uses server-side policy plus at least one server-validated signal (default: Firebase App Check verdict; approved equivalent attestation allowed)
+   - self-reported payload fields (`clientInfo.*`) alone can never grant fallback eligibility
+   - when trusted signal is unavailable, fallback defaults to denied (fail-closed)
 
 Acceptance criteria:
 - Compatibility mode cannot persist indefinitely.
 - Cutoff is version-aware and does not blindside unknown client populations.
 - Compatibility fallback never relies on implicit default-drop selection.
+- Compatibility fallback cannot be granted by spoofed client payload data alone.
 
 ### H) Backfill ordering and prerequisites
 
@@ -437,6 +443,260 @@ Acceptance criteria:
 - No production command can recursively wipe mixed-era collections during migration phases.
 - Active drop `programId` cannot be rotated by default deploy paths.
 
+### P) Endpoint rollout order and compatibility coupling
+
+Problem:
+- The current phase ordering can force backend `dropId` strictness before deployed clients send `dropId`.
+
+Safe plan patch:
+1. Add per-endpoint rollout state (`accept_compat_without_dropId` vs `require_dropId`).
+2. Flip an endpoint to `require_dropId` only after:
+   - released client versions sending `dropId` exceed threshold, and
+   - compatibility fallback is deterministic for that endpoint (or explicitly disabled).
+3. Treat `getProfile`/order history and fulfillment list/update endpoints as special:
+   - no implicit fallback by default-drop is allowed,
+   - require either explicit `dropId` or a dedicated cross-drop endpoint contract.
+4. Make strictness changes endpoint-family scoped (claim, delivery, fulfillment, inventory) instead of one global switch.
+
+Acceptance criteria:
+- No endpoint breaks currently-supported clients during phased rollout.
+- No endpoint relies on implicit default-drop behavior during compatibility windows.
+
+### Q) User order history + fulfillment API contract completeness
+
+Problem:
+- The plan scopes admin fulfillment APIs but does not explicitly define user order-history contract behavior (`getProfile` today returns orders).
+
+Safe plan patch:
+1. Define explicit contracts:
+   - drop-scoped order API: `getProfile(dropId)` or `listMyOrders(dropId)`.
+   - optional cross-drop API: `listMyOrdersAcrossDrops()` (explicitly separate endpoint).
+2. Require `dropId` in all fulfillment mutation/list endpoints unless using explicit cross-drop admin endpoint.
+3. All order payloads must include `dropId` and use tuple identity `(dropId, deliveryId)`.
+4. Cursor and dedupe semantics must include `dropId` to avoid overlapping `deliveryId` collisions.
+
+Acceptance criteria:
+- User and admin order views remain unambiguous when `deliveryId` overlaps across drops.
+- No fulfillment mutation can target an order by `deliveryId` alone.
+
+### R) Singleton deployment-config decommissioning
+
+Problem:
+- Current deploy tooling rewrites singleton frontend/functions deployment config files, which can repoint runtime behavior to the most recently deployed drop.
+
+Safe plan patch:
+1. Introduce per-drop deployment manifests (`deploy-manifests/{dropId}.json` or equivalent registry-backed record).
+2. Treat `src/config/deployed.ts` and `functions/src/config/deployment.ts` as legacy compatibility only during migration.
+3. Runtime drop resolution must read from drop registry/manifest by `dropId`, not singleton constants, for all drop-sensitive paths.
+4. Deploy script must never implicitly activate a drop; activation is a separate explicit registry workflow.
+
+Acceptance criteria:
+- Deploying a new drop does not silently repoint active traffic for other drops.
+- Production behavior is driven by registry/flags, not by whichever deploy ran last.
+
+### S) Asset discovery scalability and deterministic lookup
+
+Problem:
+- Current asset discovery patterns are effectively first-page (`limit=1000`) and can fail for larger multi-drop inventories.
+
+Safe plan patch:
+1. Add paginated asset discovery utility with bounded continuation and telemetry.
+2. For claim and delivery critical paths, prefer deterministic lookups (expected asset id / immutable references) over full-wallet scans.
+3. Add truncation detection telemetry and hard-fail actionable errors when discovery limits are exceeded.
+4. Add migration/load tests with wallets exceeding 1000 owned assets.
+
+Acceptance criteria:
+- Claim/delivery flows remain correct for high-asset wallets.
+- No silent false negatives caused by pagination truncation.
+
+### T) Claim replay checks must be asset-bound (not `dudeId`-only)
+
+Problem:
+- A drop-scoped design can still fail if replay/used checks are implemented by `dudeId` presence alone.
+
+Safe plan patch:
+1. Reservation must bind claim to an expected certificate identity/fingerprint:
+   - minimum: `(dropId, boxId, receiptsMerkleTree)`,
+   - preferred: include expected `certificateAssetId` when derivable.
+2. Finalization verifies that the burned certificate and minted receipts match reservation fingerprint.
+3. "Already used" checks must be drop-scoped and certificate-bound, never global by `dudeId` only.
+4. Add explicit negative tests for overlapping `dudeId` across different drops.
+
+Acceptance criteria:
+- No false "already used" caused by same `dudeId` in another drop.
+- No successful claim finalization when reserved certificate identity does not match.
+
+### U) Onchain readiness parity must cover full config
+
+Problem:
+- Readiness checks limited to a subset of fields can still allow wrong-drop or partially mismatched activation.
+
+Safe plan patch:
+1. Extend readiness verifier to include full config parity:
+   - `programId`, `configPda`, `collectionMint`, `metadataBase`,
+   - `treasury`, `price`, `discountPrice`, `discountMerkleRoot`,
+   - `maxSupply`, `maxPerTx`, `started`.
+2. Verify receipts tree and lookup table account existence/ownership for the selected cluster.
+3. Verify server cosigner/admin alignment required by runtime callable flows.
+4. Block `mintable` activation on any parity mismatch (single failing field is hard fail).
+
+Acceptance criteria:
+- No drop reaches `mintable` with partial or stale config alignment.
+- Onchain/runtime mismatch is detected before user traffic is exposed.
+
+### V) Delivery finalization resilience (lost-callback safe)
+
+Problem:
+- Delivery currently relies on a follow-up client callback after transaction submit; if callback is lost, orders can remain stuck in `prepared`.
+
+Safe plan patch:
+1. Define delivery order state machine:
+   - `prepared` -> `processing` -> `ready_to_ship`
+   - `prepared` -> `expired_prepared` (never submitted / timed out)
+   - `processing` -> `failed_recoverable|failed_terminal` (with reason codes)
+2. Make delivery finalization idempotent by `(dropId, deliveryId, deliverySignature)` and deterministic mutation key.
+3. Add processing lease fields (`processingLeaseOwner`, `processingLeaseExpiresAt`) to prevent duplicate workers.
+4. Add delivery reconciler worker (interval 60s):
+   - scans stale `prepared` and expired `processing` leases,
+   - uses deterministic recovery (known signature first; otherwise bounded chain verification for expected `(programId, deliveryId, deliveryPda)`),
+   - transitions to terminal state (`ready_to_ship` or explicit failure/expiry), never silent no-op.
+5. Replace request-path hard deletes of reserved delivery docs with explicit terminal statuses + audit metadata.
+6. Ensure receipt mint + claim-code generation side effects run behind idempotent outbox semantics for recovered deliveries.
+7. Operating defaults:
+   - `DELIVERY_PREPARED_TTL_SECONDS = 300`
+   - `DELIVERY_RECOVERY_SLA_SECONDS = 300`
+
+Acceptance criteria:
+- No delivery order remains `prepared` beyond SLA without automated recovery action.
+- Lost client callbacks cannot leave shippable orders permanently unresolved.
+- Recovery is idempotent and auditable per delivery mutation.
+
+### W) Canonical control-plane schema and fail-safe defaults
+
+Problem:
+- Migration flags are defined conceptually, but canonical document shape and missing/invalid behavior are not explicit.
+
+Safe plan patch:
+1. Materialize canonical control documents:
+   - `migrationControl/global`
+   - `drops/{dropId}/meta/migrationControl`
+2. Require schema versioning and revision metadata on each control doc:
+   - `schemaVersion`, `migrationControlRevision`, `updatedAt`, `updatedBy`
+3. Require all per-drop flags to live in one `migrationControl` snapshot document (no split-reads).
+4. Enforce CAS-style flag updates (`expectedRevision`) to prevent concurrent mixed-state writes.
+5. Runtime fail-safe behavior for missing/invalid per-drop control doc:
+   - pre-PONR (`drops/{dropId}.migration.ponrReached=false`): safe mode (`WRITE_MODE=LEGACY_ONLY`, `READ_AUTHORITY_DEFAULT=legacy`, canary/shadow off),
+   - post-PONR (`drops/{dropId}.migration.ponrReached=true`): no implicit legacy fallback; freeze drop-sensitive mutations and keep namespace read authority until control integrity is restored,
+   - emit high-severity alert and block further rollout changes until reconciled.
+6. Drop activation prerequisite: valid `migrationControl` doc must exist before `status=active`.
+7. Distinguish transient control-doc read errors from invalid schema/missing doc:
+   - on transient read failure, use last-known-good control snapshot for a short TTL (`CONTROL_SNAPSHOT_MAX_STALENESS_SECONDS`),
+   - enter fail-safe only when no valid snapshot exists within staleness budget or when schema validation fails.
+
+Acceptance criteria:
+- Every active drop has a valid, versioned control doc.
+- Missing/invalid control data cannot cause implicit namespace cutover.
+- Concurrent flag edits cannot produce mixed rollout state.
+- Transient control-doc read failures do not flap read/write authority during healthy rollout.
+
+### X) Parity telemetry redaction and sensitive-data handling
+
+Problem:
+- Shadow/parity comparisons on fulfillment flows risk logging decrypted address data.
+
+Safe plan patch:
+1. Define per-endpoint parity projection schemas; compare projected fields only.
+2. For sensitive fields, log only:
+   - presence booleans,
+   - deterministic HMAC/hash fingerprints (salted server-side),
+   - non-sensitive structural metadata.
+3. Prohibit plaintext address/email payloads in parity logs, mismatch events, and debug traces.
+4. Add explicit log allowlist for fulfillment endpoints; block raw object dumps.
+5. Add privacy verification tests for parity pipelines and incident exports.
+
+Acceptance criteria:
+- Parity observability retains diagnostic value without exposing plaintext PII.
+- No fulfillment parity log contains decrypted address content.
+
+### Y) Endpoint classification matrix as a rollout gate
+
+Problem:
+- “Drop-sensitive” vs “non-drop-sensitive” classification remains implicit and can drift across teams.
+
+Safe plan patch:
+1. Create a canonical endpoint matrix artifact (versioned in repo + mirrored in control plane).
+2. For each callable endpoint and each drop-sensitive worker entrypoint (reconciler/outbox), record:
+   - `dropSensitivity` (`drop_sensitive|non_drop_sensitive`)
+   - `dropIdRequirementMode` (`compat|required|internal_required`)
+   - `compatDerivationPolicy` (if any)
+   - `piiClass` (`none|masked|sensitive`)
+   - owning team/engineer
+3. Add CI guard: every exported callable endpoint and registered worker entrypoint must exist in the matrix.
+4. Rollout gate: endpoint family strictness change is blocked unless all endpoints in that family are marked rollout-ready.
+
+Acceptance criteria:
+- No callable endpoint or drop-sensitive worker entrypoint enters production without explicit classification.
+- Strict `dropId` rollout is consistent across all endpoints in a family.
+
+### Z) Hard mismatch rollback semantics (false-positive resistant)
+
+Problem:
+- “Any hard mismatch” rollback wording is ambiguous and can cause unnecessary rollback on noisy single events.
+
+Safe plan patch:
+1. Define hard mismatch classes explicitly:
+   - ownership authority mismatch,
+   - assignment divergence,
+   - claim redemption divergence,
+   - fulfillment enqueue divergence.
+2. Each detector event must include immutable evidence (`eventId`, `requestId`, `dropId`, `class`, `evidenceHash`).
+3. Automatic rollback triggers when either:
+   - deterministic replay checker confirms a classed hard mismatch, or
+   - two independent hard mismatch events of same class+drop occur within 10 minutes from distinct request ids.
+4. Deduplicate repeated emissions from the same root cause using `evidenceHash`.
+5. Keep immediate incident-owner override to force rollback regardless of detector threshold.
+
+Acceptance criteria:
+- Rollback remains fast for real hard failures.
+- Single noisy detector events do not cause unnecessary rollback.
+
+### AA) Rollback-safe write-mode progression (no pre-PONR data loss)
+
+Problem:
+- A pre-PONR `NAMESPACE_ONLY` phase can break "immediate rollback" by creating one-sided writes that never reach legacy storage.
+
+Safe plan patch:
+1. Enforce write-mode progression:
+   - `LEGACY_ONLY` -> `DUAL_LEGACY_PRIMARY` -> `DUAL_NAMESPACE_PRIMARY` -> `NAMESPACE_ONLY`
+2. Restrict `NAMESPACE_ONLY` to **post-PONR** only.
+3. Run pre-PONR burn-in in `DUAL_NAMESPACE_PRIMARY` so namespace is primary while legacy remains rollback-warm.
+4. Add write-divergence detector in `DUAL_NAMESPACE_PRIMARY`:
+   - compare acknowledged mutation coverage in legacy vs namespace by `mutationId`
+   - block PONR crossing if unresolved divergence is non-zero beyond SLA.
+
+Acceptance criteria:
+- No acknowledged mutation is namespace-only before PONR.
+- Pre-PONR rollback to legacy cannot lose acknowledged writes from cutover windows.
+
+### AB) Onchain finality policy for terminal state transitions
+
+Problem:
+- Terminal transitions can be incorrectly finalized if they rely only on non-final chain observations.
+
+Safe plan patch:
+1. Define finality policy for claim and delivery terminal transitions:
+   - default `ONCHAIN_FINALITY_TARGET=finalized`
+   - non-final observations stay provisional (`processing_confirmed`) and are not terminal.
+2. Reconciler re-checks provisional states until finality target is reached or timeout budget is exceeded (`ONCHAIN_FINALITY_TIMEOUT_SECONDS`).
+3. Persist finalization evidence on terminal transitions:
+   - `finalizedSignature`, `finalizedSlot`, `finalizedAt`, `finalityTarget`.
+4. Hard mismatch detectors and rollback automation use finalized evidence only (provisional observations are excluded).
+5. Operating default: `ONCHAIN_FINALITY_TIMEOUT_SECONDS = 900`.
+
+Acceptance criteria:
+- No claim/delivery record reaches terminal state from a transaction that later drops out before finality.
+- Every terminal transition is traceable to explicit finality evidence.
+
 ## Safety Invariants (Non-Negotiable)
 
 1. No destructive operation on production without explicit, environment-validated opt-in.
@@ -450,6 +710,14 @@ Acceptance criteria:
 9. Active mintable drops must use unique `programId` values.
 10. `dudeId` uniqueness is enforced per-drop, never globally across drops.
 11. Claim codes can be redeemed only through the reservation + finalization state machine.
+12. Delivery orders must converge to a terminal status via callback or automated reconciliation; no indefinite `prepared` state.
+13. Compatibility fallback eligibility cannot be granted from self-reported client payload alone.
+14. Shadow/parity observability must never log plaintext sensitive fulfillment address data.
+15. Every callable endpoint and drop-sensitive worker entrypoint must have explicit drop-sensitivity classification before rollout.
+16. Automatic rollback on hard mismatches must follow validated detector semantics.
+17. Pre-PONR rollout phases must keep rollback-warm writes in both stores (`DUAL_*`), never namespace-only.
+18. Claim and delivery terminal transitions require configured onchain finality evidence.
+19. PONR state must be stored in drop registry, not inside mutable migration-control snapshots.
 
 ## Target Data Model (Draft)
 
@@ -466,6 +734,10 @@ Acceptance criteria:
   - `sales`
     - pricing, windows, limits
     - `dudeIdRange` (per-drop uniqueness bounds; example `1..999`)
+  - `migration`
+    - `ponrReached` (`true|false`, default `false`)
+    - `ponrReachedAt` (timestamp, required when `ponrReached=true`)
+    - rule: once `ponrReached=true`, it is immutable
   - `fulfillment` (policy/version flags)
 
 ### Drop-scoped operational data
@@ -490,13 +762,13 @@ Acceptance criteria:
 
 ## Flag Model (Control Plane)
 
-Compatibility router flags can be evaluated before `dropId` is resolved. Read/write authority flags are per-drop at `drops/{dropId}/migrationFlags/*`.
+Compatibility router flags can be evaluated before `dropId` is resolved. Read/write authority flags are per-drop and materialized in `drops/{dropId}/meta/migrationControl`.
 
-- Global compatibility router flags:
+- Global compatibility router flags (logical keys; stored in `migrationControl/global`):
   - `COMPAT_DROPID_REQUIRED_AFTER_DEFAULT`: UTC timestamp
   - `ALLOW_LEGACY_DROPID_FALLBACK_DEFAULT`: `true|false`
   - `LEGACY_CLIENT_ALLOWLIST`: approved version/build policy
-- Per-drop migration flags (`drops/{dropId}/migrationFlags/*`):
+- Per-drop migration flags (logical keys; stored in `drops/{dropId}/meta/migrationControl`):
   - `WRITE_MODE`: `LEGACY_ONLY|DUAL_LEGACY_PRIMARY|DUAL_NAMESPACE_PRIMARY|NAMESPACE_ONLY`
   - `READ_AUTHORITY_DEFAULT`: `legacy|namespace`
   - `CANARY_ROUTING_MODE`: `off|wallet_allowlist`
@@ -506,8 +778,19 @@ Compatibility router flags can be evaluated before `dropId` is resolved. Read/wr
   - `CLAIM_RESERVATION_TTL_SECONDS`: integer (default `900`)
   - `ENABLE_SHADOW_READS`: `true|false`
   - `SHADOW_READ_SAMPLE_RATE`: `0..1`
+  - `CONTROL_SNAPSHOT_MAX_STALENESS_SECONDS`: integer
+  - `ONCHAIN_FINALITY_TIMEOUT_SECONDS`: integer
   - `ROLLBACK_COOLDOWN_MINUTES`: integer (for anti-flap)
 - Global (not per-drop): incident lock metadata
+
+Canonical control-plane storage contract:
+- `migrationControl/global` document contains global compatibility fields and revision metadata.
+- `drops/{dropId}/meta/migrationControl` document contains all per-drop rollout flags in one snapshot.
+- Required control metadata on both docs:
+  - `schemaVersion`
+  - `migrationControlRevision`
+  - `updatedAt`
+  - `updatedBy`
 
 Rule:
 - Only one write/read authority change per drop at a time.
@@ -518,6 +801,12 @@ Rule:
 - Request authority resolution order (after `dropId` context is resolved):
   1. If canary routing is enabled and request is in canary cohort, use `CANARY_READ_AUTHORITY`.
   2. Otherwise use `READ_AUTHORITY_DEFAULT`.
+- Missing/invalid per-drop control doc behavior:
+  - pre-PONR (`drops/{dropId}.migration.ponrReached=false`): runtime enters safe mode (`WRITE_MODE=LEGACY_ONLY`, `READ_AUTHORITY_DEFAULT=legacy`, canary/shadow off),
+  - post-PONR (`drops/{dropId}.migration.ponrReached=true`): runtime freezes drop-sensitive mutations and keeps namespace reads (no implicit legacy authority fallback),
+  - transient control-doc read errors use last-known-good snapshot up to `CONTROL_SNAPSHOT_MAX_STALENESS_SECONDS`,
+  - high-severity alert is emitted,
+  - forward rollout actions are blocked until control doc integrity is restored.
 
 ## Migration Plan (Phased, Production-Safe)
 
@@ -550,40 +839,47 @@ Exit criteria:
 4. Add required `onchain` fields for `mintable` drops (`programId`, `configPda`, `collectionMint`, `metadataBase`, `receiptsMerkleTree`; optional `deliveryLookupTable`).
 5. Define canonical `dropId` format and immutability policy (`dropId -> programId` immutable after activation).
 6. Create namespaced operational paths including `drops/{dropId}/meta/dudePool`.
+7. Seed registry migration marker defaults (`drops/{dropId}.migration.ponrReached=false`).
 
 Exit criteria:
 
 - Drop registry exists and validates all active drops.
 - Schema validators enforce program-per-drop and per-drop `dudeId` range rules.
 - `mintable` drops cannot pass validation unless `dudeIdRange` is compatible with deployed onchain constraints.
+- Active drops have explicit registry PONR markers (`migration.ponrReached`, `migration.ponrReachedAt` semantics).
 
 ### Phase 2: Context plumbing and compatibility controls
 
 1. Add backend `resolveDropContext(dropId)` with strict validation.
-2. Add compatibility flags and read/write mode flags.
-3. Require explicit `dropId` for all drop-sensitive endpoints (compat fallback only for approved legacy clients and only when backend can deterministically derive one drop from immutable identifiers).
-4. Require request payload `clientInfo` (`version`, `build`, optional `platform`) and start telemetry by version.
-5. Define canonical scoped identifiers for APIs (`dropId + resourceId`).
-6. Define and set global `COMPAT_DROPID_REQUIRED_AFTER_DEFAULT` (plus any approved per-drop override) before leaving this phase.
+2. Add compatibility flags and read/write mode flags in canonical control docs (`migrationControl/global`, `drops/{dropId}/meta/migrationControl`) with revisioned updates.
+3. Add `dropId` support to all drop-sensitive endpoints; enforce strict requirement per endpoint family only when rollout-state gates pass (compat fallback only for approved legacy clients and only when backend can deterministically derive one drop from immutable identifiers).
+4. Require request payload `clientInfo` (`version`, `build`, optional `platform`) and start telemetry by version; use trusted server-validated signals for compatibility exemption decisions.
+5. Publish and enforce endpoint classification matrix (`drop_sensitive|non_drop_sensitive`, `dropIdRequirementMode=compat|required|internal_required`, compatibility policy, owner).
+6. Define canonical scoped identifiers for APIs (`dropId + resourceId`).
+7. Define and set global `COMPAT_DROPID_REQUIRED_AFTER_DEFAULT` (plus any approved per-drop override) before leaving this phase.
 
 Exit criteria:
 
 - All drop-sensitive endpoints resolve context through one shared path.
 - Compatibility sunset date is committed in config.
+- Active drops have valid canonical control docs with revision metadata.
 - Missing `dropId` and legacy traffic are measurable by client version.
+- No endpoint is forced to strict `dropId` before compatible client rollout gates are met.
 - Drop-sensitive requests cannot proceed with implicit/default drop context.
 - Missing `dropId` compatibility routing is deterministic and auditable.
+- Endpoint/worker classification matrix is complete and CI-validated.
 
 ### Phase 3: Dual-write foundation (legacy primary)
 
-1. Enable `drops/{dropId}/migrationFlags/WRITE_MODE=DUAL_LEGACY_PRIMARY`.
-2. Keep `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=legacy`.
+1. Enable `WRITE_MODE=DUAL_LEGACY_PRIMARY` in `drops/{dropId}/meta/migrationControl`.
+2. Keep `READ_AUTHORITY_DEFAULT=legacy` in `drops/{dropId}/meta/migrationControl`.
 3. Add `mutationId`, `updatedAt`, and write-audit emission.
 4. Add claim-code reservation/finalization flow (`available -> pending_redeem -> redeemed`) with TTL sweeper and explicit `prepareClaimRedemption` / `finalizeClaimRedemption` handshake.
-5. Add transactional outbox for any external side effects.
-6. Ensure write failures fail closed (no silent partial success).
-7. Update assignment writes to keep `dudeAssignments` and `meta/dudePool` consistent inside transactional boundaries.
-8. Key runtime caches by `dropId` + onchain tuple (no singleton cache keys).
+5. Add delivery finalization resilience (`prepared -> processing -> ready_to_ship|expired_prepared|failed_*`) with reconciler job, lease-based idempotency, and finalized-evidence policy for terminal transitions.
+6. Add transactional outbox for any external side effects.
+7. Ensure write failures fail closed (no silent partial success).
+8. Update assignment writes to keep `dudeAssignments` and `meta/dudePool` consistent inside transactional boundaries.
+9. Key runtime caches by `dropId` + onchain tuple (no singleton cache keys).
 
 Exit criteria:
 
@@ -592,6 +888,7 @@ Exit criteria:
 - Outbox processing is idempotent and dead-letter monitoring is active.
 - No stale claim reservations beyond configured TTL without automated recovery.
 - Lost client finalize callbacks do not leave claims permanently stuck in `pending_redeem`.
+- No delivery orders remain in `prepared` beyond delivery recovery SLA without automated reconciliation.
 
 ### Phase 4: Backfill (idempotent, checkpointed)
 
@@ -617,9 +914,9 @@ Exit criteria:
 
 ### Phase 5: Shadow parity and security verification
 
-1. Enable `drops/{dropId}/migrationFlags/ENABLE_SHADOW_READS=true` while keeping `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=legacy`.
-2. Ramp `drops/{dropId}/migrationFlags/SHADOW_READ_SAMPLE_RATE` (`1% -> 10% -> 50% -> 100%`) while observing quota/cost guardrails.
-3. Compare authority vs mirror responses for critical flows (assignment, claim status, delivery status, fulfillment views).
+1. Enable `ENABLE_SHADOW_READS=true` in `drops/{dropId}/meta/migrationControl` while keeping `READ_AUTHORITY_DEFAULT=legacy`.
+2. Ramp `SHADOW_READ_SAMPLE_RATE` (`1% -> 10% -> 50% -> 100%`) in `drops/{dropId}/meta/migrationControl` while observing quota/cost guardrails.
+3. Compare authority vs mirror responses for critical flows (assignment, claim status, delivery status, fulfillment views) using redacted parity projection schemas.
 4. Execute endpoint auth matrix tests (drop existence/status, wallet ownership, admin scope, scoped identifiers).
 5. Run cache-segregation checks (no mixed-drop cache hits for backend/frontend keys).
 6. Deploy necessary Firestore indexes/rules updates.
@@ -630,6 +927,7 @@ Exit criteria:
 - Auth matrix passes for all critical endpoints.
 - Capacity and budget guardrails remain within thresholds.
 - Cross-drop cache-collision count remains zero.
+- Parity telemetry contains no plaintext sensitive fulfillment address data.
 
 ### Phase 6: Frontend drop-awareness
 
@@ -649,36 +947,39 @@ Exit criteria:
 
 ### Phase 7: Canary and authority cutover
 
-1. Enable canary cohort routing (`drops/{dropId}/migrationFlags/CANARY_ROUTING_MODE=wallet_allowlist`).
-2. Keep `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=legacy` and set `drops/{dropId}/migrationFlags/CANARY_READ_AUTHORITY=namespace`.
+1. Enable canary cohort routing (`CANARY_ROUTING_MODE=wallet_allowlist` in `drops/{dropId}/meta/migrationControl`).
+2. Keep `READ_AUTHORITY_DEFAULT=legacy` and set `CANARY_READ_AUTHORITY=namespace` in `drops/{dropId}/meta/migrationControl`.
 3. Run canary with internal wallet allowlist and evaluate SLOs at minimum sample volume.
-4. If SLOs hold, flip `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=namespace` for general traffic.
-5. Enforce compatibility fallback disablement after deadline via global router default and/or `drops/{dropId}/migrationFlags/ALLOW_LEGACY_DROPID_FALLBACK_OVERRIDE=false`.
+4. If SLOs hold, flip `READ_AUTHORITY_DEFAULT=namespace` in `drops/{dropId}/meta/migrationControl` for general traffic.
+5. Enforce compatibility fallback disablement after deadline via global router default and/or `ALLOW_LEGACY_DROPID_FALLBACK_OVERRIDE=false` in `drops/{dropId}/meta/migrationControl`.
 6. Permit `mintable` only for drops that pass program-manifest verifier checks.
 
 Exit criteria:
 
 - Canary and full rollout pass objective SLOs.
 
-### Phase 8: Namespace-only burn-in (rollback still available)
+### Phase 8: Namespace-primary dual-write burn-in (rollback still available)
 
-1. Move to `drops/{dropId}/migrationFlags/WRITE_MODE=NAMESPACE_ONLY`.
-2. Keep legacy read path and compatibility code present but disabled by flags.
+1. Move to `WRITE_MODE=DUAL_NAMESPACE_PRIMARY` in `drops/{dropId}/meta/migrationControl`.
+2. Keep legacy fallback code present but disabled for normal traffic; retain legacy shadow writes for rollback safety.
 3. Run burn-in window with rollback readiness checks and incident drills (including claim reservation expiry recovery and outbox replay).
-4. Capture signed PONR readiness review.
+4. Monitor legacy-vs-namespace write divergence by `mutationId`; block PONR if unresolved divergence exceeds SLA.
+5. Capture signed PONR readiness review.
 
 Exit criteria:
 
-- Namespace-only operation is stable for the agreed burn-in period.
+- `DUAL_NAMESPACE_PRIMARY` operation is stable for the agreed burn-in period.
+- Legacy-vs-namespace write divergence remains within threshold.
 - Rollback path remains verified and immediate.
 
 ### Phase 9: Final legacy retirement (post-PONR)
 
-1. Cross PONR with explicit sign-off.
-2. Remove legacy fallback reads/writes and migration-only compatibility flags.
-3. Remove global-path assumptions (`deliveryId`-only, global assignment docs) from runtime and tooling.
-4. Archive migration logs and publish final post-migration report.
-5. Update rollback docs to restore-based recovery only.
+1. Cross PONR with explicit sign-off and set `drops/{dropId}.migration.ponrReached=true` with `ponrReachedAt`.
+2. Move to `WRITE_MODE=NAMESPACE_ONLY` and keep `READ_AUTHORITY_DEFAULT=namespace`.
+3. Remove legacy fallback reads/writes and migration-only compatibility flags.
+4. Remove global-path assumptions (`deliveryId`-only, global assignment docs) from runtime and tooling.
+5. Archive migration logs and publish final post-migration report.
+6. Update rollback docs to restore-based recovery only.
 
 Exit criteria:
 
@@ -694,18 +995,28 @@ Cutover SLOs:
 - Fulfillment enqueue mismatch `= 0`
 - p95 latency regression `< 20%`
 - Cross-drop cache collisions `= 0`
+- Legacy-vs-namespace acknowledged write divergence in `DUAL_NAMESPACE_PRIMARY` `= 0`
 - Expired claim reservations unrecovered beyond SLA (`300s`) `= 0`
+- Prepared delivery orders unrecovered beyond SLA (`DELIVERY_RECOVERY_SLA_SECONDS`) `= 0`
+- Provisional claim/delivery transitions unreconciled beyond `ONCHAIN_FINALITY_TIMEOUT_SECONDS` `= 0`
 - Minimum sample volume met before evaluating go/no-go (configured per endpoint)
 
 Automatic rollback trigger:
 
-- Any hard mismatch, or any SLO breach for 15 continuous minutes during canary/cutover.
+- Any validated hard mismatch, or any SLO breach for 15 continuous minutes during canary/cutover.
 - On rollback trigger, enforce `ROLLBACK_COOLDOWN_MINUTES` before any forward re-rollout.
+
+Validated hard mismatch policy:
+- detector event must include `eventId`, `requestId`, `dropId`, `class`, and `evidenceHash`
+- auto-rollback triggers when either:
+  - deterministic replay checker confirms mismatch, or
+  - two independent events of same `class + dropId` occur within 10 minutes from distinct request ids
+- repeated identical events are deduplicated by `evidenceHash`
 
 Pre-PONR rollback actions (ordered):
 
-1. Set `drops/{dropId}/migrationFlags/READ_AUTHORITY_DEFAULT=legacy` and `drops/{dropId}/migrationFlags/CANARY_ROUTING_MODE=off`.
-2. Keep `drops/{dropId}/migrationFlags/WRITE_MODE=DUAL_LEGACY_PRIMARY`.
+1. Set `READ_AUTHORITY_DEFAULT=legacy` and `CANARY_ROUTING_MODE=off` in `drops/{dropId}/meta/migrationControl`.
+2. Keep `WRITE_MODE=DUAL_LEGACY_PRIMARY` in `drops/{dropId}/meta/migrationControl`.
 3. Re-enable temporary compatibility fallback for the affected `dropId` only, if required for client continuity.
 4. Pause rollout and open incident report with mismatch sample IDs.
 
@@ -735,6 +1046,11 @@ Operational ownership:
 10. `clientInfo.version` and `clientInfo.build` enforcement/telemetry works on all drop-sensitive callable endpoints.
 11. Missing-`dropId` compatibility path succeeds only when backend can derive exactly one drop from immutable identifiers; otherwise request is rejected.
 12. Claim replay checks are drop-scoped (no false "already claimed" from same `dudeId` in a different drop).
+13. Delivery callback-loss path is recoverable: stale `prepared` orders are reconciled to terminal state by worker logic.
+14. Compatibility fallback is denied when trusted server-validated client signal is missing, even if payload `clientInfo` is present.
+15. Fulfillment parity/mismatch telemetry never contains plaintext sensitive address data.
+16. Pre-PONR write-mode guard blocks `NAMESPACE_ONLY` when `drops/{dropId}.migration.ponrReached=false`.
+17. Claim/delivery terminal transitions require finalized evidence; non-final observations remain provisional.
 
 ## Open Decisions (Still Blocking)
 
@@ -742,7 +1058,7 @@ Operational ownership:
 2. Exact canary cohort size and timeline.
 3. Minimum sample-volume thresholds required for cutover SLO evaluation.
 4. Final values for capacity headroom gate and `ROLLBACK_COOLDOWN_MINUTES`.
-5. Claim code namespace policy across normalization versions (`claimCodeCanonical` global lock behavior vs version-scoped lock key).
+5. Final contract for user order history API (`drop-scoped default` vs dedicated cross-drop aggregate endpoint).
 
 ## Immediate Next Step
 
