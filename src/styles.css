@@ -1044,6 +1044,148 @@ button.link:hover:not(:disabled) {
   -webkit-user-drag: none;
 }
 
+.wip-page {
+  width: 100vw;
+  height: 100vh;
+  height: 100svh;
+  min-height: 100vh;
+  min-height: 100svh;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.wip-body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+  background: #000;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.wip-body #root {
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow: hidden;
+}
+
+.wip-overlay .reveal-overlay__backdrop {
+  background: #000;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.wip-reveal__media {
+  z-index: 4;
+}
+
+.wip-reveal__media.reveal-overlay__media--visible {
+  pointer-events: auto;
+}
+
+.wip-reveal__card-item .drif-card__rotator {
+  touch-action: none;
+}
+
+.wip-reveal__card-item {
+  left: 50%;
+  top: 56%;
+  width: min(54vw, 360px);
+  max-width: 86%;
+  aspect-ratio: 745 / 1040;
+  filter: none;
+  transform: translate(-50%, -50%);
+}
+
+.wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
+  left: 50%;
+  top: 56%;
+  transform: translate(-50%, -50%);
+}
+
+.wip-reveal__card-item .drif-card {
+  width: 100%;
+  max-width: 100%;
+}
+
+.wip-reveal__card-item .drif-card__translater,
+.wip-reveal__card-item .drif-card__rotator,
+.wip-reveal__card-item .drif-card__front,
+.wip-reveal__card-item .drif-card__back {
+  width: 100%;
+}
+
+button.wip-reset-btn {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1120;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #b8b8b8;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button.wip-reset-btn:hover:not(:disabled),
+button.wip-reset-btn:active:not(:disabled) {
+  background: transparent;
+  color: #d2d2d2;
+}
+
+button.wip-reset-btn:focus {
+  outline: 2px solid rgba(255, 255, 255, 0.68);
+  outline-offset: 3px;
+  border-radius: 2px;
+  background: transparent;
+  color: #f0f0f0;
+  box-shadow: none;
+}
+
+button.wip-reset-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.68);
+  outline-offset: 3px;
+  border-radius: 2px;
+  background: transparent;
+  color: #f0f0f0;
+  box-shadow: none;
+}
+
+.wip-reset-btn:focus:not(:focus-visible) {
+  outline: none;
+  color: #e0e0e0;
+}
+
+.wip-overlay .reveal-overlay__box:focus {
+  outline: 2px solid rgba(255, 255, 255, 0.62);
+  outline-offset: 4px;
+}
+
+.wip-overlay .reveal-overlay__box:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.62);
+  outline-offset: 4px;
+}
+
+.wip-overlay .reveal-overlay__box:focus:not(:focus-visible) {
+  outline: none;
+}
+
 @keyframes reveal-note-fade {
   0%,
   65% {
@@ -1074,6 +1216,22 @@ button.link:hover:not(:disabled) {
 
   .reveal-overlay__backdrop {
     background: rgba(0, 0, 0, 0.55);
+  }
+}
+
+@media (max-width: 720px) {
+  .wip-reveal__card-item {
+    width: min(70vw, 300px);
+    top: 58%;
+  }
+
+  .wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
+    top: 58%;
+  }
+
+  button.wip-reset-btn {
+    right: 12px;
+    bottom: 12px;
   }
 }
 

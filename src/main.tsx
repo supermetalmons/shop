@@ -14,13 +14,21 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
+const WipApp = React.lazy(() => import('./WipApp'));
+const isWipRoute = path === '/wip';
 const RootApp = path === '/ff' ? FulfillmentApp : path === '/Poncho_Drifella' ? DrifApp : App;
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <WalletContextProvider>
-        <RootApp />
+        {isWipRoute ? (
+          <React.Suspense fallback={null}>
+            <WipApp />
+          </React.Suspense>
+        ) : (
+          <RootApp />
+        )}
       </WalletContextProvider>
     </QueryClientProvider>
   </React.StrictMode>,
