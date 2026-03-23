@@ -69,13 +69,33 @@ header.top {
 }
 
 .top__settings {
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
+}
+
+.top__settings:hover:not(:disabled) {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.9;
 }
 
 .top__settings--active {
-  background: var(--surface);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.95;
+}
+
+.top__settings:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .top__submenu {

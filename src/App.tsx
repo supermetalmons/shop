@@ -2372,13 +2372,13 @@ function App() {
           <div className="top__actions" ref={settingsRef}>
             <button
               type="button"
-              className={`ghost top__settings${settingsOpen ? ' top__settings--active' : ''}`}
+              className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
               onClick={() => setSettingsOpen((prev) => !prev)}
+              aria-label="Admin settings"
               aria-haspopup="menu"
               aria-expanded={settingsOpen}
             >
               <FaGear aria-hidden />
-              <span>Settings</span>
             </button>
             {settingsOpen ? (
               <div className="top__submenu" role="menu" aria-label="Admin settings">
