@@ -1859,6 +1859,13 @@ function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, count
   return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
 }
 
+const FULFILLMENT_STATUS_OPTIONS = ['Pending', 'Shipped'] as const;
+type FulfillmentStatus = (typeof FULFILLMENT_STATUS_OPTIONS)[number];
+
+function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | undefined {
+  return value === 'Pending' || value === 'Shipped' ? value : undefined;
+}
+
 type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
 type DeliveryOrderSummary = {
   deliveryId: number;
@@ -1866,7 +1873,7 @@ type DeliveryOrderSummary = {
   createdAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
-  fulfillmentStatus?: string;
+  fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
 };
 
@@ -1898,7 +1905,7 @@ function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary
     createdAt: toMillisMaybe(order?.createdAt),
     processedAt: toMillisMaybe(order?.processedAt),
     items,
-    fulfillmentStatus: typeof order?.fulfillmentStatus === 'string' ? order.fulfillmentStatus : undefined,
+    fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
     fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
   };
 }
@@ -1940,7 +1947,7 @@ type FulfillmentOrder = {
   status: string;
   createdAt?: number;
   processedAt?: number;
-  fulfillmentStatus?: string;
+  fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
   fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;
@@ -2031,7 +2038,7 @@ function toFulfillmentOrder(
     status,
     createdAt: toMillisMaybe(order?.createdAt),
     processedAt: toMillisMaybe(order?.processedAt),
-    fulfillmentStatus: typeof order?.fulfillmentStatus === 'string' ? order.fulfillmentStatus : undefined,
+    fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
     fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
     fulfillmentInternalStatus: typeof order?.fulfillmentInternalStatus === 'string' ? order.fulfillmentInternalStatus : undefined,
     address,
@@ -2307,11 +2314,11 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
   const schema = z.object({
     dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
-    status: z.string().max(1000).optional().nullable(),
+    status: z.union([z.enum(FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
   });
   const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
-  const trimmed = typeof status === 'string' ? status.trim() : '';
+  const nextStatus = status || '';
 
   const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
   const snap = await orderRef.get();
@@ -2324,14 +2331,14 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
     fulfillmentUpdatedAt: FieldValue.serverTimestamp(),
     fulfillmentUpdatedBy: wallet,
   };
-  if (trimmed) {
-    update.fulfillmentStatus = trimmed;
+  if (nextStatus) {
+    update.fulfillmentStatus = nextStatus;
   } else {
     update.fulfillmentStatus = FieldValue.delete();
   }
 
   await orderRef.set(update, { merge: true });
-  return { deliveryId, fulfillmentStatus: trimmed || '' };
+  return { deliveryId, fulfillmentStatus: nextStatus };
 });
 
 export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {

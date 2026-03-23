@@ -4,6 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import { auth, firebaseApp } from './firebase';
 import {
   DeliverySelection,
+  FulfillmentStatus,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
   InventoryItem,
@@ -461,13 +462,13 @@ export async function listFulfillmentOrders(args: {
 
 export async function updateFulfillmentStatus(
   deliveryId: number,
-  status: string,
+  status: FulfillmentStatus | '' | null,
   dropId: string,
-): Promise<{ deliveryId: number; fulfillmentStatus: string }> {
-  return callFunction<{ deliveryId: number; status: string; dropId: string }, { deliveryId: number; fulfillmentStatus: string }>(
-    'updateFulfillmentStatus',
-    { deliveryId, status, dropId },
-  );
+): Promise<{ deliveryId: number; fulfillmentStatus: FulfillmentStatus | '' }> {
+  return callFunction<
+    { deliveryId: number; status: FulfillmentStatus | '' | null; dropId: string },
+    { deliveryId: number; fulfillmentStatus: FulfillmentStatus | '' }
+  >('updateFulfillmentStatus', { deliveryId, status, dropId });
 }
 
 export async function updateFulfillmentInternalStatus(

@@ -3,7 +3,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { listFulfillmentOrders, updateFulfillmentInternalStatus, updateFulfillmentStatus } from './lib/api';
-import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
+import { FulfillmentOrder, FulfillmentOrdersCursor, FulfillmentStatus } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { Modal } from './components/Modal';
@@ -19,6 +19,11 @@ const PAGE_SIZE = 20;
 const FIGURE_MEDIA_BASE = 'https://assets.mons.link/drops/lsb/figures/clean';
 const INTERNAL_STATUS_OPTIONS = ['🟢', '🟡', '🔴', '🏁'] as const;
 const INTERNAL_STATUS_DEFAULT = '🆕';
+const FULFILLMENT_STATUS_OPTIONS = ['Pending', 'Shipped'] as const;
+
+function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
+  return value === 'Pending' || value === 'Shipped' ? value : '';
+}
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -70,7 +75,7 @@ export default function FulfillmentApp() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
+  const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
   const [internalStatusSaving, setInternalStatusSaving] = useState<Record<number, boolean>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
@@ -123,7 +128,7 @@ export default function FulfillmentApp() {
       const next = { ...prev };
       incoming.forEach((order) => {
         if (!(order.deliveryId in next)) {
-          next[order.deliveryId] = order.fulfillmentStatus || '';
+          next[order.deliveryId] = normalizeFulfillmentStatus(order.fulfillmentStatus);
         }
       });
       return next;
@@ -201,15 +206,15 @@ export default function FulfillmentApp() {
       setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
       try {
-        const raw = statusEdits[deliveryId] ?? '';
-        const trimmed = raw.trim();
-        const resp = await updateFulfillmentStatus(deliveryId, trimmed, FRONTEND_DEPLOYMENT.dropId);
+        const nextStatus = normalizeFulfillmentStatus(statusEdits[deliveryId]);
+        const resp = await updateFulfillmentStatus(deliveryId, nextStatus, FRONTEND_DEPLOYMENT.dropId);
+        const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
         setOrders((prev) =>
           prev.map((order) =>
-            order.deliveryId === deliveryId ? { ...order, fulfillmentStatus: resp.fulfillmentStatus || trimmed } : order,
+            order.deliveryId === deliveryId ? { ...order, fulfillmentStatus: normalized || undefined } : order,
           ),
         );
-        setStatusEdits((prev) => ({ ...prev, [deliveryId]: resp.fulfillmentStatus || trimmed }));
+        setStatusEdits((prev) => ({ ...prev, [deliveryId]: normalized }));
         return true;
       } catch (err) {
         console.error(err);
@@ -254,9 +259,9 @@ export default function FulfillmentApp() {
   const statusDirty = useMemo(() => {
     const dirty = new Set<number>();
     orders.forEach((order) => {
-      const current = order.fulfillmentStatus || '';
+      const current = normalizeFulfillmentStatus(order.fulfillmentStatus);
       const edited = statusEdits[order.deliveryId] ?? '';
-      if (current.trim() !== edited.trim()) dirty.add(order.deliveryId);
+      if (current !== edited) dirty.add(order.deliveryId);
     });
     return dirty;
   }, [orders, statusEdits]);
@@ -266,7 +271,7 @@ export default function FulfillmentApp() {
     [activeUpdateOrderId, orders],
   );
   const activeUpdateText = activeUpdateOrder
-    ? statusEdits[activeUpdateOrder.deliveryId] ?? activeUpdateOrder.fulfillmentStatus ?? ''
+    ? statusEdits[activeUpdateOrder.deliveryId] ?? normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus)
     : '';
   const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrder.deliveryId) : false;
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrder.deliveryId]) : false;
@@ -282,7 +287,7 @@ export default function FulfillmentApp() {
     }
     setStatusEdits((prev) => ({
       ...prev,
-      [activeUpdateOrder.deliveryId]: activeUpdateOrder.fulfillmentStatus || '',
+      [activeUpdateOrder.deliveryId]: normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus),
     }));
     setActiveUpdateOrderId(null);
   }, [activeUpdateOrder]);
@@ -402,11 +407,11 @@ export default function FulfillmentApp() {
                       </div>
                       <div className="order-update">
                         {(() => {
-                          const updateText = (order.fulfillmentStatus || '').trim();
-                          return updateText ? (
-                            <div className="status-readout small">{updateText}</div>
+                          const statusText = normalizeFulfillmentStatus(order.fulfillmentStatus);
+                          return statusText ? (
+                            <div className="status-readout small">{statusText}</div>
                           ) : (
-                            <em className="muted small">No updates yet</em>
+                            <em className="muted small">Not set</em>
                           );
                         })()}
                         <button
@@ -414,7 +419,7 @@ export default function FulfillmentApp() {
                           className="link small"
                           onClick={() => handleOpenUpdateModal(order.deliveryId)}
                         >
-                          {(order.fulfillmentStatus || '').trim() ? 'Edit an update' : 'Post an update'}
+                          {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}
                         </button>
                       </div>
                     </div>
@@ -469,19 +474,27 @@ export default function FulfillmentApp() {
 
       <Modal
         open={activeUpdateOrderId !== null}
-        title="Fulfillment update"
+        title="Fulfillment status"
         onClose={handleCancelUpdate}
       >
         <div className="modal-form">
-          <textarea
+          <select
             className="status-input"
             value={activeUpdateText}
             onChange={(evt) => {
               if (!activeUpdateOrder) return;
-              setStatusEdits((prev) => ({ ...prev, [activeUpdateOrder.deliveryId]: evt.target.value }));
+              const nextStatus = normalizeFulfillmentStatus(evt.target.value);
+              setStatusEdits((prev) => ({ ...prev, [activeUpdateOrder.deliveryId]: nextStatus }));
             }}
-            placeholder="Type a status update for the buyer…"
-          />
+            aria-label="Fulfillment status"
+          >
+            <option value="">Not set</option>
+            {FULFILLMENT_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
           <div className="row row--end">
             <button type="button" className="ghost" onClick={handleCancelUpdate}>
               Cancel
@@ -491,7 +504,7 @@ export default function FulfillmentApp() {
               onClick={() => void handleSaveActiveUpdate()}
               disabled={!activeUpdateOrder || activeUpdateSaving || !activeUpdateDirty}
             >
-              {activeUpdateSaving ? 'Saving…' : activeUpdateDirty ? 'Save update' : 'Saved'}
+              {activeUpdateSaving ? 'Saving…' : activeUpdateDirty ? 'Save status' : 'Saved'}
             </button>
           </div>
         </div>

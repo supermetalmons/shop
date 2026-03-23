@@ -42,13 +42,15 @@ export interface DeliveryOrderItemSummary {
   refId: number;
 }
 
+export type FulfillmentStatus = 'Pending' | 'Shipped';
+
 export interface DeliveryOrderSummary {
   deliveryId: number;
   status: string;
   createdAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
-  fulfillmentStatus?: string;
+  fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
 }
 
@@ -81,7 +83,7 @@ export interface FulfillmentOrder {
   status: string;
   createdAt?: number;
   processedAt?: number;
-  fulfillmentStatus?: string;
+  fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
   fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;

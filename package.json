@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && tsc --noEmit",
     "check-irl-claims": "node --experimental-strip-types functions/scripts/checkIrlClaims.ts",
+    "check-fulfillment-statuses": "node --experimental-strip-types functions/scripts/checkFulfillmentStatuses.ts",
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",

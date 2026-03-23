@@ -1480,8 +1480,7 @@ button.inventory__open:focus-visible {
 }
 
 .status-input {
-  min-height: 88px;
-  resize: vertical;
+  width: 100%;
 }
 
 .order-update {
