@@ -3,9 +3,9 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { fetchPendingOpenBoxes } from '../lib/api';
 import type { PendingOpenBox } from '../types';
 
-export function usePendingOpenBoxes() {
+export function usePendingOpenBoxes(ownerOverride?: string) {
   const { publicKey } = useWallet();
-  const owner = publicKey?.toBase58();
+  const owner = ownerOverride || publicKey?.toBase58();
 
   return useQuery<PendingOpenBox[]>({
     queryKey: ['pendingOpenBoxes', owner],
@@ -14,5 +14,4 @@ export function usePendingOpenBoxes() {
     refetchInterval: 20_000,
   });
 }
-
 

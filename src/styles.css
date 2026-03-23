@@ -62,6 +62,59 @@ header.top {
   gap: 16px;
 }
 
+.top__actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.top__settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top__settings--active {
+  background: var(--surface);
+}
+
+.top__submenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+}
+
+.top__submenu-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.top__submenu select {
+  width: 100%;
+}
+
+.top__submenu-more {
+  align-self: flex-start;
+}
+
+@media (max-width: 560px) {
+  .top__submenu {
+    min-width: min(300px, calc(100vw - 32px));
+  }
+}
+
 .brand {
   display: flex;
   flex-direction: column;
@@ -94,6 +147,12 @@ header.top {
   font-size: 14px;
   font-weight: 400;
   max-width: 420px;
+}
+
+.admin-viewer-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .hero {

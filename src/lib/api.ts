@@ -526,6 +526,23 @@ export async function solanaAuth(
   });
 }
 
-export async function getProfile(dropId: string): Promise<{ profile: Profile }> {
-  return callFunction<{ dropId: string }, { profile: Profile }>('getProfile', { dropId });
+export async function getProfile(dropId: string, ownerWallet?: string): Promise<{ profile: Profile }> {
+  return callFunction<{ dropId: string; ownerWallet?: string }, { profile: Profile }>('getProfile', {
+    dropId,
+    ownerWallet,
+  });
+}
+
+export async function listDeliveryOrderOwners(
+  dropId: string,
+  options?: { cursor?: string; pageSize?: number },
+): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
+  return callFunction<
+    { dropId: string; cursor?: string; pageSize?: number },
+    { owners: string[]; nextCursor: string | null; hasMore: boolean }
+  >('listDeliveryOrderOwners', {
+    dropId,
+    cursor: options?.cursor,
+    pageSize: options?.pageSize,
+  });
 }

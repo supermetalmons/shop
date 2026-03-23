@@ -3,9 +3,9 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { fetchInventory } from '../lib/api';
 import { InventoryItem } from '../types';
 
-export function useInventory() {
+export function useInventory(ownerOverride?: string) {
   const { publicKey } = useWallet();
-  const owner = publicKey?.toBase58();
+  const owner = ownerOverride || publicKey?.toBase58();
 
   return useQuery<InventoryItem[]>({
     queryKey: ['inventory', owner],

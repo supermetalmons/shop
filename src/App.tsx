@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
-import { FaBoxOpen, FaPlane } from 'react-icons/fa6';
+import { FaBoxOpen, FaGear, FaPlane } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -13,6 +14,8 @@ import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
+  getProfile,
+  listDeliveryOrderOwners,
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
@@ -208,6 +211,12 @@ const MINTED_OUT_STATS = {
 };
 const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
+const ADMIN_WALLETS = new Set<string>([
+  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+]);
+const ADMIN_OWNER_DOC_PAGE_SIZE = 200;
+const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -340,12 +349,74 @@ function App() {
     signIn,
     updateProfile,
   } = useSolanaAuth();
-  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory();
+  const connectedWallet = publicKey?.toBase58();
+  const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
+  const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
+  const isSignedInWallet = Boolean(token && connectedWallet && profile?.wallet === connectedWallet);
+  const canUseAdminViewer = isAdminWallet && isSignedInWallet;
+  const owner = canUseAdminViewer && adminViewedOwner ? adminViewedOwner : connectedWallet;
+  const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement | null>(null);
+  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner);
   const {
     data: pendingOpenBoxesData,
     refetch: refetchPendingOpenBoxes,
     isSuccess: pendingOpenBoxesSuccess,
-  } = usePendingOpenBoxes();
+  } = usePendingOpenBoxes(owner);
+
+  const {
+    data: deliveryOrderOwnersData,
+    isFetching: deliveryOrderOwnersFetching,
+    isFetchingNextPage: deliveryOrderOwnersLoadingMore,
+    hasNextPage: deliveryOrderOwnersHasNextPage,
+    fetchNextPage: fetchNextDeliveryOrderOwners,
+    error: deliveryOrderOwnersError,
+  } = useInfiniteQuery({
+    queryKey: ['adminDeliveryOrderOwners', connectedWallet],
+    enabled: Boolean(canUseAdminViewer && settingsOpen),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      listDeliveryOrderOwners(FRONTEND_DEPLOYMENT.dropId, {
+        cursor: typeof pageParam === 'string' && pageParam ? pageParam : undefined,
+        pageSize: ADMIN_OWNER_DOC_PAGE_SIZE,
+      }),
+    getNextPageParam: (lastPage) => (lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined),
+    staleTime: 30_000,
+  });
+  const deliveryOrderOwnersLoading = deliveryOrderOwnersFetching && !deliveryOrderOwnersData?.pages?.length;
+  const deliveryOrderOwners = useMemo(() => {
+    const unique = new Set<string>();
+    if (connectedWallet) unique.add(connectedWallet);
+    const fromApi =
+      deliveryOrderOwnersData?.pages?.flatMap((page) => (Array.isArray(page?.owners) ? page.owners : [])) || [];
+    fromApi.forEach((entry) => {
+      if (typeof entry === 'string' && entry) unique.add(entry);
+    });
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [connectedWallet, deliveryOrderOwnersData]);
+
+  const {
+    data: viewedProfileData,
+    isFetching: viewedProfileLoading,
+    error: viewedProfileError,
+  } = useQuery({
+    queryKey: ['viewedProfile', connectedWallet, owner, isSignedInWallet],
+    enabled: Boolean(
+      isSignedInWallet &&
+        connectedWallet &&
+        owner &&
+        (owner === connectedWallet || canUseAdminViewer) &&
+        (isViewerMode || !profile || profile.wallet !== owner),
+    ),
+    queryFn: () => getProfile(FRONTEND_DEPLOYMENT.dropId, owner || undefined),
+    staleTime: 10_000,
+  });
+
+  const viewedProfile = useMemo(() => {
+    if (profile && profile.wallet === owner) return profile;
+    return viewedProfileData?.profile || null;
+  }, [owner, profile, viewedProfileData?.profile]);
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
   const effectiveMintStats = MINTED_OUT_OVERRIDE ? MINTED_OUT_STATS : mintStats;
@@ -374,12 +445,13 @@ function App() {
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
-  const owner = publicKey?.toBase58();
-  const [discountUsed, setDiscountUsed] = useState<boolean>(() => loadDiscountUsed(owner));
+  const [discountUsed, setDiscountUsed] = useState<boolean>(() => loadDiscountUsed(connectedWallet));
   const walletBusy = wallet.connecting || wallet.disconnecting;
-  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(owner));
-  const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() => loadPendingReveals(owner));
-  const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(owner));
+  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
+  const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
+    loadPendingReveals(connectedWallet),
+  );
+  const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(connectedWallet));
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [inventorySnapshot, setInventorySnapshot] = useState<InventoryItem[]>([]);
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
@@ -391,6 +463,7 @@ function App() {
   const figureMetadataLoadingRef = useRef<Set<number>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
   const authTokenRef = useRef<string | null>(null);
+  const authTokenWalletRef = useRef<string | null>(null);
   const signInPromiseRef = useRef<Promise<boolean> | null>(null);
   const authReadyRef = useRef(false);
   const authLoadingRef = useRef(false);
@@ -433,9 +506,54 @@ function App() {
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   };
 
+  const blockViewerModeAction = () => {
+    if (!isViewerMode) return false;
+    showToast(ADMIN_VIEWER_READ_ONLY_MESSAGE);
+    return true;
+  };
+
+  useEffect(() => {
+    if (!connectedWallet) {
+      setAdminViewedOwner(null);
+      setSettingsOpen(false);
+      return;
+    }
+    if (adminViewedOwner === connectedWallet) {
+      setAdminViewedOwner(null);
+    }
+  }, [adminViewedOwner, connectedWallet]);
+
+  useEffect(() => {
+    if (canUseAdminViewer) return;
+    if (adminViewedOwner) setAdminViewedOwner(null);
+    if (settingsOpen) setSettingsOpen(false);
+  }, [adminViewedOwner, canUseAdminViewer, settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointerDown = (evt: MouseEvent) => {
+      const root = settingsRef.current;
+      if (!root) return;
+      if (!root.contains(evt.target as Node)) {
+        setSettingsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    authTokenRef.current = null;
+    authTokenWalletRef.current = null;
+    signInPromiseRef.current = null;
+  }, [connectedWallet]);
+
   useEffect(() => {
     authTokenRef.current = token;
-  }, [token]);
+    authTokenWalletRef.current = token && profile?.wallet ? profile.wallet : null;
+  }, [token, profile?.wallet]);
 
   useEffect(() => {
     authReadyRef.current = authReady;
@@ -446,35 +564,56 @@ function App() {
   }, [authLoading]);
 
   const ensureSignedIn = async (): Promise<boolean> => {
+    const hasWalletBoundToken =
+      Boolean(connectedWallet) &&
+      Boolean(authTokenRef.current) &&
+      Boolean(authTokenWalletRef.current) &&
+      authTokenWalletRef.current === connectedWallet;
     if (!publicKey) {
       setVisible(true);
       return false;
     }
-    if (token) {
+    if (isSignedInWallet && token) {
       authTokenRef.current = token;
+      authTokenWalletRef.current = connectedWallet || null;
       return true;
     }
-    if (authTokenRef.current) return true;
+    if (hasWalletBoundToken) return true;
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
     // Wait briefly for Firebase session restoration after reload (avoid unnecessary wallet prompts).
     if (typeof window !== 'undefined' && (!authReadyRef.current || authLoadingRef.current)) {
       const deadline = Date.now() + 1500;
       while (Date.now() < deadline) {
-        if (authTokenRef.current) return true;
+        if (
+          connectedWallet &&
+          authTokenRef.current &&
+          authTokenWalletRef.current &&
+          authTokenWalletRef.current === connectedWallet
+        ) {
+          return true;
+        }
         if (signInPromiseRef.current) return signInPromiseRef.current;
         if (authReadyRef.current && !authLoadingRef.current) break;
         await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
       }
     }
 
-    if (authTokenRef.current) return true;
+    if (
+      connectedWallet &&
+      authTokenRef.current &&
+      authTokenWalletRef.current &&
+      authTokenWalletRef.current === connectedWallet
+    ) {
+      return true;
+    }
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
     let promise: Promise<boolean>;
     promise = signIn()
       .then((session) => {
         authTokenRef.current = session?.token ?? null;
+        authTokenWalletRef.current = session?.token && session.profile?.wallet ? session.profile.wallet : null;
         return true;
       })
       .catch((err) => {
@@ -609,7 +748,7 @@ function App() {
   }, [ensureSoundReady]);
 
   const addLocalPendingReveal = (item: InventoryItem) => {
-    if (!owner) return;
+    if (!connectedWallet || isViewerMode) return;
     const now = Date.now();
     setLocalPendingReveals((prev) => {
       const nextEntry: LocalPendingReveal = {
@@ -629,6 +768,7 @@ function App() {
   };
 
   const addLocalMintedBoxes = (quantity: number) => {
+    if (isViewerMode) return;
     if (!Number.isFinite(quantity) || quantity <= 0) return;
     const now = Date.now();
     const entries: LocalMintedBox[] = [];
@@ -651,6 +791,7 @@ function App() {
   };
 
   const rememberRecentReveal = (boxId: string) => {
+    if (isViewerMode) return;
     if (!boxId) return;
     setRecentRevealedBoxes((prev) => {
       const next = [boxId, ...prev.filter((id) => id !== boxId)];
@@ -829,18 +970,25 @@ function App() {
   };
 
   useEffect(() => {
-    setHiddenAssets(loadHiddenAssets(owner));
-  }, [owner]);
+    closeRevealOverlay();
+    setSelected(new Set());
+    setDeliveryOpen(false);
+    setClaimOpen(false);
+  }, [owner, closeRevealOverlay]);
 
   useEffect(() => {
-    setDiscountUsed(loadDiscountUsed(owner));
+    setHiddenAssets(loadHiddenAssets(connectedWallet));
+  }, [connectedWallet]);
+
+  useEffect(() => {
+    setDiscountUsed(loadDiscountUsed(connectedWallet));
     setDiscountEligible(false);
     setDiscountChecking(false);
-  }, [owner]);
+  }, [connectedWallet]);
 
   useEffect(() => {
-    setLocalPendingReveals(loadPendingReveals(owner));
-    setRecentRevealedBoxes(loadRecentReveals(owner).slice(0, RECENT_REVEALS_LIMIT));
+    setLocalPendingReveals(loadPendingReveals(connectedWallet));
+    setRecentRevealedBoxes(loadRecentReveals(connectedWallet).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
     setInventorySnapshot([]);
     setPendingOpenSnapshot([]);
@@ -860,7 +1008,7 @@ function App() {
       videoPreloadRootRef.current = null;
     }
     deferredOverlayActionsRef.current = [];
-  }, [owner]);
+  }, [connectedWallet]);
 
   useEffect(() => {
     if (revealOverlay) return;
@@ -885,21 +1033,21 @@ function App() {
   }, [revealOverlayClosing]);
 
   useEffect(() => {
-    if (!owner) return;
-    persistPendingReveals(owner, localPendingReveals);
-  }, [owner, localPendingReveals]);
+    if (!connectedWallet || isViewerMode) return;
+    persistPendingReveals(connectedWallet, localPendingReveals);
+  }, [connectedWallet, localPendingReveals, isViewerMode]);
 
   useEffect(() => {
-    if (!owner) return;
-    persistRecentReveals(owner, recentRevealedBoxes);
-  }, [owner, recentRevealedBoxes]);
+    if (!connectedWallet || isViewerMode) return;
+    persistRecentReveals(connectedWallet, recentRevealedBoxes);
+  }, [connectedWallet, recentRevealedBoxes, isViewerMode]);
 
   useEffect(() => {
     figureMetadataRef.current = figureMetadataById;
   }, [figureMetadataById]);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!owner || isViewerMode) return;
     if (revealOverlay) return;
     const recentSet = new Set(recentRevealedBoxes);
     const now = Date.now();
@@ -937,6 +1085,7 @@ function App() {
     }
   }, [
     owner,
+    isViewerMode,
     pendingOpenBoxesView,
     pendingOpenBoxesSuccess,
     localPendingReveals,
@@ -946,6 +1095,7 @@ function App() {
   ]);
 
   useEffect(() => {
+    if (isViewerMode) return;
     if (revealOverlay) return;
     if (!inventoryFetched) return;
     const currentIds = new Set(inventoryView.filter((item) => item.kind === 'box').map((item) => item.id));
@@ -967,9 +1117,10 @@ function App() {
       }
     }
     knownBoxIdsRef.current = currentIds;
-  }, [inventoryView, inventoryFetched, localMintedBoxes.length, revealOverlay]);
+  }, [inventoryView, inventoryFetched, localMintedBoxes.length, revealOverlay, isViewerMode]);
 
   useEffect(() => {
+    if (isViewerMode) return;
     if (revealOverlay) return;
     if (!localRevealedDudeIds.length) return;
     const chainDudes = new Map<number, InventoryItem>();
@@ -988,7 +1139,7 @@ function App() {
       });
       return next.length === prev.length ? prev : next;
     });
-  }, [inventoryView, localRevealedDudeIds, figureMetadataById, revealOverlay]);
+  }, [inventoryView, localRevealedDudeIds, figureMetadataById, revealOverlay, isViewerMode]);
 
   const figureIdsNeedingMetadata = useMemo(() => {
     const ids = new Set<number>();
@@ -1014,7 +1165,8 @@ function App() {
     return () => window.clearInterval(interval);
   }, [figureIdsNeedingMetadata, queueFigureMetadataFetch]);
 
-  const shouldPollInventory = !revealOverlay && (localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0);
+  const shouldPollInventory =
+    !isViewerMode && !revealOverlay && (localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0);
 
   useEffect(() => {
     if (!shouldPollInventory) return;
@@ -1112,10 +1264,10 @@ function App() {
   useEffect(() => {
     authLoadingSeenRef.current = false;
     setAuthReady(false);
-  }, [owner]);
+  }, [connectedWallet]);
 
   useEffect(() => {
-    if (!owner) return;
+    if (!connectedWallet) return;
     if (authLoading) {
       authLoadingSeenRef.current = true;
       return;
@@ -1123,10 +1275,10 @@ function App() {
     if (profile || authLoadingSeenRef.current) {
       setAuthReady(true);
     }
-  }, [owner, authLoading, profile]);
+  }, [connectedWallet, authLoading, profile]);
 
   useEffect(() => {
-    if (owner || walletBusy) {
+    if (connectedWallet || walletBusy) {
       setWalletIdleReady(false);
       return;
     }
@@ -1136,7 +1288,7 @@ function App() {
     return () => {
       clearTimeout(timeout);
     };
-  }, [owner, walletBusy]);
+  }, [connectedWallet, walletBusy]);
 
   useEffect(() => {
     return () => {
@@ -1156,20 +1308,21 @@ function App() {
   }, []);
 
   const markAssetsHidden = useMemo(() => {
-    if (!owner) return (_ids: string[]) => undefined;
+    if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
     return (ids: string[]) => {
       setHiddenAssets((prev) => {
         const next = new Set(prev);
         ids.forEach((id) => {
           if (typeof id === 'string' && id) next.add(id);
         });
-        persistHiddenAssets(owner, next);
+        persistHiddenAssets(connectedWallet, next);
         return next;
       });
     };
-  }, [owner]);
+  }, [connectedWallet, isViewerMode]);
 
   const localRevealedDudes = useMemo(() => {
+    if (isViewerMode) return [] as InventoryItem[];
     if (!localRevealedDudeIds.length) return [] as InventoryItem[];
     const chainDudeIds = new Set(
       inventoryView.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
@@ -1190,10 +1343,11 @@ function App() {
       });
     });
     return out;
-  }, [inventoryView, localRevealedDudeIds, figureMetadataById]);
+  }, [inventoryView, localRevealedDudeIds, figureMetadataById, isViewerMode]);
 
   const visibleInventory = useMemo(() => {
-    const base = hiddenAssets.size ? inventoryView.filter((item) => !hiddenAssets.has(item.id)) : inventoryView;
+    const base =
+      isViewerMode || !hiddenAssets.size ? inventoryView : inventoryView.filter((item) => !hiddenAssets.has(item.id));
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
         if (item.image && String(item.image).trim()) return item;
@@ -1212,9 +1366,10 @@ function App() {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage]);
+  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage, isViewerMode]);
 
   const localMintedItems = useMemo<InventoryItem[]>(() => {
+    if (isViewerMode) return [] as InventoryItem[];
     if (!localMintedBoxes.length) return [] as InventoryItem[];
     return localMintedBoxes.map((entry) => ({
       id: entry.id,
@@ -1223,16 +1378,19 @@ function App() {
       image: defaultBoxImage,
       status: 'pending' as const,
     }));
-  }, [localMintedBoxes, defaultBoxImage]);
+  }, [localMintedBoxes, defaultBoxImage, isViewerMode]);
 
-  const recentRevealedSet = useMemo(() => new Set(recentRevealedBoxes), [recentRevealedBoxes]);
+  const recentRevealedSet = useMemo(
+    () => (isViewerMode ? new Set<string>() : new Set(recentRevealedBoxes)),
+    [recentRevealedBoxes, isViewerMode],
+  );
   const pendingOpenBoxesFiltered = useMemo(
     () => pendingOpenBoxesView.filter((entry) => entry.boxAssetId && !recentRevealedSet.has(entry.boxAssetId)),
     [pendingOpenBoxesView, recentRevealedSet],
   );
   const localPendingFiltered = useMemo(
-    () => localPendingReveals.filter((entry) => !recentRevealedSet.has(entry.id)),
-    [localPendingReveals, recentRevealedSet],
+    () => (isViewerMode ? [] : localPendingReveals.filter((entry) => !recentRevealedSet.has(entry.id))),
+    [localPendingReveals, recentRevealedSet, isViewerMode],
   );
   const pendingRevealIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1245,7 +1403,7 @@ function App() {
     return ids;
   }, [pendingOpenBoxesFiltered, localPendingFiltered]);
   const shouldPreloadBoxFramesInitial =
-    pendingRevealIds.size > 0 || localMintedBoxes.length > 0 || inventoryView.some((item) => item.kind === 'box');
+    pendingRevealIds.size > 0 || localMintedItems.length > 0 || inventoryView.some((item) => item.kind === 'box');
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
     preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
@@ -1320,7 +1478,7 @@ function App() {
   }, [visibleInventory, pendingRevealIds, pendingRevealItems, localMintedItems]);
   const inventoryIndex = useMemo(() => new Map(inventoryItems.map((item) => [item.id, item])), [inventoryItems]);
   const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
-  const inventoryEmptyStateVisibility = owner
+  const inventoryEmptyStateVisibility = connectedWallet
     ? inventoryFetched
       ? 'visible'
       : 'hidden'
@@ -1527,6 +1685,7 @@ function App() {
   };
 
   const handleMint = async (quantity: number) => {
+    if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
       return;
@@ -1558,6 +1717,7 @@ function App() {
   };
 
   const handleDiscountMint = async () => {
+    if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
       return;
@@ -1589,7 +1749,7 @@ function App() {
       addLocalMintedBoxes(1);
       setDiscountUsed(true);
       setDiscountEligible(false);
-      if (owner) persistDiscountUsed(owner, true);
+      if (connectedWallet) persistDiscountUsed(connectedWallet, true);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -1600,6 +1760,7 @@ function App() {
   };
 
   const handleStartOpenBox = async (item: InventoryItem) => {
+    if (blockViewerModeAction()) return;
     if (!publicKey) throw new Error('Connect wallet to open a box');
     setStartOpenLoading(item.id);
     try {
@@ -1648,6 +1809,7 @@ function App() {
   };
 
   const handleRevealDudes = async (boxAssetId: string) => {
+    if (blockViewerModeAction()) return;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
     if (!publicKey) return;
@@ -1698,6 +1860,7 @@ function App() {
   };
 
   const handleRevealOverlayClick = () => {
+    if (blockViewerModeAction()) return;
     if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.phase !== 'ready') return;
     if (revealOverlay.autoOpening) return;
@@ -1778,6 +1941,7 @@ function App() {
 	  );
 
 	  const handleOpenSelectedBox = async () => {
+      if (blockViewerModeAction()) return;
 	    if (!selectedBox) return;
 	    if (!publicKey) {
 	      setVisible(true);
@@ -1827,6 +1991,7 @@ function App() {
 	  };
 
   const handleOpenShip = async () => {
+    if (blockViewerModeAction()) return;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
     setDeliveryOpen(true);
@@ -1843,6 +2008,7 @@ function App() {
     email: string;
     countryCode: string;
   }) => {
+    if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
       showToast('Connect a wallet to ship items');
@@ -1868,7 +2034,7 @@ function App() {
     }
 
     try {
-      const session = token ? { profile } : await signIn();
+      const session = isSignedInWallet ? { profile } : await signIn();
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
       const base = session?.profile || profile;
@@ -1932,9 +2098,10 @@ function App() {
   };
 
   const handleClaim = async ({ code }: { code: string }) => {
+    if (blockViewerModeAction()) return;
     if (!publicKey) throw new Error('Connect wallet to claim');
     // Ensure wallet session exists for authenticated callable.
-    if (!token) {
+    if (!isSignedInWallet) {
       await signIn();
     }
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
@@ -1957,18 +2124,23 @@ function App() {
     { label: 'Magic Eden', href: 'https://magiceden.io/' },
   ];
 
-  const deliveryOrders = profile?.orders || [];
-  const shipmentsEmptyContent = !profile ? (
-    <span className="shipments-signin">
-      <button type="button" className="link" onClick={handleSignInForShipments} disabled={authLoading}>
-        Sign in
-      </button>
-      <span>to view your shipments.</span>
-    </span>
-  ) : (
-    'No shipments yet.'
-  );
-  const shipmentsEmptyStateVisibility = owner
+  const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
+  const deliveryOrders = viewedProfile?.orders || [];
+  const shipmentsEmptyContent = !viewedProfile
+    ? isSignedInWallet && owner
+      ? profileLoadingForView
+        ? 'Loading shipments…'
+        : 'No shipments yet.'
+      : (
+        <span className="shipments-signin">
+          <button type="button" className="link" onClick={handleSignInForShipments} disabled={authLoading}>
+            Sign in
+          </button>
+          <span>to view your shipments.</span>
+        </span>
+      )
+    : 'No shipments yet.';
+  const shipmentsEmptyStateVisibility = connectedWallet
     ? authReady
       ? 'visible'
       : 'hidden'
@@ -2094,6 +2266,11 @@ function App() {
             ? 'keep clicking the box'
             : 'click the box to open'
           : '';
+  const ownerPickerValue = owner || '';
+  const viewedProfileErrorMessage = viewedProfileError instanceof Error ? viewedProfileError.message : '';
+  const deliveryOrderOwnersErrorMessage = deliveryOrderOwnersError instanceof Error ? deliveryOrderOwnersError.message : '';
+  const canLoadMoreOwners = Boolean(deliveryOrderOwnersHasNextPage);
+  const activeError = authError && !isUserRejectedError(authError) ? authError : viewedProfileErrorMessage;
 
   return (
     <div className="page">
@@ -2190,7 +2367,70 @@ function App() {
             <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
             <span>mons.shop</span>
           </h1>
+          {isViewerMode && owner ? <p className="admin-viewer-note">Viewing as {shortAddress(owner)}</p> : null}
         </div>
+        {canUseAdminViewer ? (
+          <div className="top__actions" ref={settingsRef}>
+            <button
+              type="button"
+              className={`ghost top__settings${settingsOpen ? ' top__settings--active' : ''}`}
+              onClick={() => setSettingsOpen((prev) => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+            >
+              <FaGear aria-hidden />
+              <span>Settings</span>
+            </button>
+            {settingsOpen ? (
+              <div className="top__submenu" role="menu" aria-label="Admin settings">
+                <label className="top__submenu-label" htmlFor="admin-owner-picker">
+                  Viewer owner
+                </label>
+                <select
+                  id="admin-owner-picker"
+                  value={ownerPickerValue}
+                  onChange={(evt) => {
+                    const value = evt.target.value.trim();
+                    if (!connectedWallet || !value || value === connectedWallet) {
+                      setAdminViewedOwner(null);
+                      return;
+                    }
+                    setAdminViewedOwner(value);
+                  }}
+                  disabled={deliveryOrderOwnersLoading}
+                >
+                  {connectedWallet ? (
+                    <option value={connectedWallet}>My wallet ({shortAddress(connectedWallet)})</option>
+                  ) : null}
+                  {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
+                    <option value={adminViewedOwner}>{adminViewedOwner}</option>
+                  ) : null}
+                  {deliveryOrderOwners
+                    .filter((entry) => entry !== connectedWallet)
+                    .map((entry) => (
+                      <option key={entry} value={entry}>
+                        {entry}
+                      </option>
+                    ))}
+                </select>
+                {deliveryOrderOwnersLoading ? <div className="muted small">Loading owners…</div> : null}
+                {canLoadMoreOwners ? (
+                  <button
+                    type="button"
+                    className="link small top__submenu-more"
+                    disabled={deliveryOrderOwnersLoadingMore}
+                    onClick={() => {
+                      void fetchNextDeliveryOrderOwners();
+                    }}
+                  >
+                    {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
+                  </button>
+                ) : null}
+                {deliveryOrderOwnersErrorMessage ? <div className="error small">{deliveryOrderOwnersErrorMessage}</div> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       <MintPanel
@@ -2213,6 +2453,7 @@ function App() {
 		          onToggle={toggleSelected}
 		          pendingRevealIds={pendingRevealIds}
 		          onReveal={async (id, rect) => {
+                if (blockViewerModeAction()) return;
 		            if (!publicKey) {
 		              setVisible(true);
 		              return;
@@ -2254,7 +2495,7 @@ function App() {
           <DeliveryForm
             mode="modal"
             onSubmit={handleShip}
-            defaultEmail={profile?.email || ''}
+            defaultEmail={viewedProfile?.email || ''}
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
@@ -2267,7 +2508,7 @@ function App() {
         <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} />
       </Modal>
 
-      {authError && !isUserRejectedError(authError) ? <div className="error">{authError}</div> : null}
+      {activeError ? <div className="error">{activeError}</div> : null}
       <section className="card">
         <div className="card__head">
           <div className="card__title">Shipments</div>
@@ -2319,7 +2560,14 @@ function App() {
           <div className="card__head">
             <div className="card__title">Receipts</div>
             <div className="card__actions">
-              <button type="button" className="ghost" onClick={() => setClaimOpen(true)}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  if (blockViewerModeAction()) return;
+                  setClaimOpen(true);
+                }}
+              >
                 Enter code
               </button>
             </div>

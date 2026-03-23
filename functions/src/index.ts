@@ -195,10 +195,30 @@ const SHIPPER_WALLETS = new Set<string>();
   }
 });
 
+const ADMIN_WALLETS = new Set<string>();
+[
+  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+].forEach((raw) => {
+  try {
+    ADMIN_WALLETS.add(new PublicKey(raw).toBase58());
+  } catch (err) {
+    console.error('[mons/functions] invalid admin wallet', raw, summarizeError(err));
+  }
+});
+
 async function requireFulfillmentAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
   if (!FULFILLMENT_WALLETS.has(wallet)) {
     throw new HttpsError('permission-denied', 'Fulfillment access denied.');
+  }
+  return { uid, wallet };
+}
+
+async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
+  const { uid, wallet } = await requireWalletSession(request);
+  if (!ADMIN_WALLETS.has(wallet)) {
+    throw new HttpsError('permission-denied', 'Admin access denied.');
   }
   return { uid, wallet };
 }
@@ -2099,20 +2119,74 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({
     dropId: z.string().min(1).max(64),
+    ownerWallet: z.string().optional(),
   });
-  const { dropId: requestDropId } = parseRequest(schema, request.data || {});
+  const { dropId: requestDropId, ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
   const dropId = requireDropId(requestDropId);
-  const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet, dropId)]);
+
+  let profileWallet = wallet;
+  if (typeof rawOwnerWallet === 'string' && rawOwnerWallet.trim()) {
+    const requestedWallet = normalizeWallet(rawOwnerWallet.trim());
+    if (requestedWallet !== wallet) {
+      await requireAdminAccess(request);
+    }
+    profileWallet = requestedWallet;
+  }
+
+  const profileRef = db.doc(`profiles/${profileWallet}`);
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(profileWallet, dropId)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
-  if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
+  if (!snap.exists && profileWallet === wallet) {
+    await profileRef.set({ wallet: profileWallet }, { merge: true });
+  }
   return {
     profile: {
       ...profileData,
-      wallet,
+      wallet: profileWallet,
       email: profileData.email,
       orders,
     },
+  };
+});
+
+export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {
+  await requireAdminAccess(request);
+  const schema = z.object({
+    dropId: z.string().min(1).max(64),
+    cursor: z.string().min(1).max(1500).optional(),
+    pageSize: z.number().int().min(1).max(500).optional(),
+  });
+  const { dropId: requestDropId, cursor: rawCursor, pageSize: rawPageSize } = parseRequest(schema, request.data || {});
+  const dropId = requireDropId(requestDropId);
+  const ordersRef = db.collection(dropDeliveryOrdersCollectionPath(dropId));
+  const owners = new Set<string>();
+  const cursor = typeof rawCursor === 'string' && rawCursor.trim() ? rawCursor.trim() : null;
+  const pageSize = rawPageSize ?? 200;
+  const fetchLimit = Math.min(pageSize + 1, 501);
+
+  let query = ordersRef.select('owner').orderBy(FieldPath.documentId()).limit(fetchLimit);
+  if (cursor) {
+    query = query.startAfter(cursor);
+  }
+
+  const snap = await query.get();
+  const docs = snap.docs.slice(0, pageSize);
+  docs.forEach((doc) => {
+    const rawOwner = doc.get('owner');
+    if (typeof rawOwner !== 'string' || !rawOwner.trim()) return;
+    try {
+      owners.add(normalizeWallet(rawOwner.trim()));
+    } catch {
+      // Ignore malformed historical values.
+    }
+  });
+
+  const hasMore = snap.size > pageSize;
+  const nextCursor = hasMore ? docs[docs.length - 1]?.id || null : null;
+  return {
+    owners: Array.from(owners).sort((a, b) => a.localeCompare(b)),
+    nextCursor,
+    hasMore: Boolean(nextCursor),
   };
 });
 
