@@ -2,26 +2,25 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import './drif.css';
 type CardConfig = {
   imageSrc: string;
+  textureSrc: string;
   glowType: GlowType;
 };
 
 type GlowType = 'water' | 'fire' | 'grass' | 'lightning' | 'psychic' | 'fighting' | 'darkness' | 'metal' | 'dragon' | 'fairy';
 
-const DRIFS_TEXTURE = '/Poncho_Drifella/drifs/texture.webp';
-
 const CARDS: CardConfig[] = [
-  { imageSrc: '/Poncho_Drifella/drifs/0.webp', glowType: 'water' },
-  { imageSrc: '/Poncho_Drifella/drifs/1.jpeg', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/2.jpeg', glowType: 'fairy' },
-  { imageSrc: '/Poncho_Drifella/drifs/3.jpg', glowType: 'dragon' },
-  { imageSrc: '/Poncho_Drifella/drifs/4.jpeg', glowType: 'grass' },
-  { imageSrc: '/Poncho_Drifella/drifs/5.jpeg', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/6.jpeg', glowType: 'lightning' },
-  { imageSrc: '/Poncho_Drifella/drifs/7.jpeg', glowType: 'water' },
-  { imageSrc: '/Poncho_Drifella/drifs/8.jpeg', glowType: 'psychic' },
-  { imageSrc: '/Poncho_Drifella/drifs/9.jpeg', glowType: 'dragon' },
-  { imageSrc: '/Poncho_Drifella/drifs/10.jpeg', glowType: 'darkness' },
-  { imageSrc: '/Poncho_Drifella/drifs/11.jpeg', glowType: 'fairy' },
+  { imageSrc: '/Poncho_Drifella/drifs/0.webp', textureSrc: '/Poncho_Drifella/textures/0.webp', glowType: 'water' },
+  { imageSrc: '/Poncho_Drifella/drifs/1.webp', textureSrc: '/Poncho_Drifella/textures/1.webp', glowType: 'metal' },
+  { imageSrc: '/Poncho_Drifella/drifs/2.webp', textureSrc: '/Poncho_Drifella/textures/2.webp', glowType: 'fairy' },
+  { imageSrc: '/Poncho_Drifella/drifs/3.webp', textureSrc: '/Poncho_Drifella/textures/3.webp', glowType: 'dragon' },
+  { imageSrc: '/Poncho_Drifella/drifs/4.webp', textureSrc: '/Poncho_Drifella/textures/4.webp', glowType: 'grass' },
+  { imageSrc: '/Poncho_Drifella/drifs/5.webp', textureSrc: '/Poncho_Drifella/textures/5.webp', glowType: 'metal' },
+  { imageSrc: '/Poncho_Drifella/drifs/6.webp', textureSrc: '/Poncho_Drifella/textures/6.webp', glowType: 'lightning' },
+  { imageSrc: '/Poncho_Drifella/drifs/7.webp', textureSrc: '/Poncho_Drifella/textures/7.webp', glowType: 'water' },
+  { imageSrc: '/Poncho_Drifella/drifs/8.webp', textureSrc: '/Poncho_Drifella/textures/8.webp', glowType: 'psychic' },
+  { imageSrc: '/Poncho_Drifella/drifs/9.webp', textureSrc: '/Poncho_Drifella/textures/9.webp', glowType: 'dragon' },
+  { imageSrc: '/Poncho_Drifella/drifs/10.webp', textureSrc: '/Poncho_Drifella/textures/10.webp', glowType: 'darkness' },
+  { imageSrc: '/Poncho_Drifella/drifs/11.webp', textureSrc: '/Poncho_Drifella/textures/11.webp', glowType: 'fairy' },
 ];
 
 function round(value: number, precision = 3) {
@@ -202,7 +201,6 @@ export default function DrifApp() {
   });
   const [loading, setLoading] = useState(true);
   const [interacting, setInteracting] = useState(false);
-  const [foilStyle, setFoilStyle] = useState<React.CSSProperties>({});
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * CARDS.length));
   const currentCard = CARDS[cardIndex];
 
@@ -222,8 +220,12 @@ export default function DrifApp() {
     };
   }, []);
   const frontStyle = useMemo<React.CSSProperties>(() => {
-    return { ...staticFrontStyle, ...foilStyle };
-  }, [foilStyle, staticFrontStyle]);
+    return {
+      ...staticFrontStyle,
+      ['--mask' as never]: `url(${currentCard.textureSrc})`,
+      ['--foil' as never]: `url(${currentCard.textureSrc})`,
+    };
+  }, [currentCard.textureSrc, staticFrontStyle]);
 
   const applyStylesFromSprings = useCallback(() => {
     const card = cardRef.current;
@@ -393,22 +395,13 @@ export default function DrifApp() {
   }, [applyStylesFromSprings, interactEnd]);
 
   const handleCardClick = useCallback(() => {
-    const nextIndex = (cardIndex + 1) % CARDS.length;
-    setFoilStyle({
-      ['--mask' as never]: `url(${DRIFS_TEXTURE})`,
-      ['--foil' as never]: `url(${DRIFS_TEXTURE})`,
-    });
-    setCardIndex(nextIndex);
-  }, [cardIndex]);
+    setCardIndex((prevIndex) => (prevIndex + 1) % CARDS.length);
+  }, []);
 
   const onLayerLoad = useCallback(() => {
     if (firstImageLoadedRef.current) return;
     firstImageLoadedRef.current = true;
     setLoading(false);
-    setFoilStyle({
-      ['--mask' as never]: `url(${DRIFS_TEXTURE})`,
-      ['--foil' as never]: `url(${DRIFS_TEXTURE})`,
-    });
   }, []);
 
   useEffect(() => {

@@ -15,10 +15,9 @@ export type GlowType =
 
 export type WipCardConfig = {
   imageSrc: string;
+  textureSrc: string;
   glowType: GlowType;
 };
-
-const DRIFS_TEXTURE = '/Poncho_Drifella/drifs/texture.webp';
 
 function round(value: number, precision = 3) {
   return Number(value.toFixed(precision));
@@ -199,10 +198,10 @@ export default function WipInteractiveCard({ card }: { card: WipCardConfig }) {
       loading
         ? {}
         : {
-            ['--mask' as never]: `url(${DRIFS_TEXTURE})`,
-            ['--foil' as never]: `url(${DRIFS_TEXTURE})`,
+            ['--mask' as never]: `url(${card.textureSrc})`,
+            ['--foil' as never]: `url(${card.textureSrc})`,
           },
-    [loading],
+    [card.textureSrc, loading],
   );
   const baseCardStyle = useMemo<React.CSSProperties>(
     () => ({
