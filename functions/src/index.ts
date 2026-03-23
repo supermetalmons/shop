@@ -3199,7 +3199,7 @@ export const prepareIrlClaimTx = onCallLogged(
 
   const claim = claimDoc.data() as any;
   if (typeof claim?.dropId !== 'string' || !claim.dropId.trim()) {
-    throw new HttpsError('failed-precondition', 'Claim code is missing dropId. Run claim dropId backfill migration first.');
+    throw new HttpsError('failed-precondition', 'Claim code record is missing dropId.');
   }
   const claimDropId = normalizeDropId(claim.dropId);
   if (claimDropId !== CONFIGURED_DROP_ID) {
