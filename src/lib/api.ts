@@ -527,22 +527,26 @@ export async function solanaAuth(
 }
 
 export async function getProfile(dropId: string, ownerWallet?: string): Promise<{ profile: Profile }> {
-  return callFunction<{ dropId: string; ownerWallet?: string }, { profile: Profile }>('getProfile', {
-    dropId,
-    ownerWallet,
-  });
+  const payload: { dropId: string; ownerWallet?: string } = { dropId };
+  if (typeof ownerWallet === 'string' && ownerWallet.trim()) {
+    payload.ownerWallet = ownerWallet;
+  }
+  return callFunction<{ dropId: string; ownerWallet?: string }, { profile: Profile }>('getProfile', payload);
 }
 
 export async function listDeliveryOrderOwners(
   dropId: string,
   options?: { cursor?: string; pageSize?: number },
 ): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
+  const payload: { dropId: string; cursor?: string; pageSize?: number } = { dropId };
+  if (typeof options?.cursor === 'string' && options.cursor) {
+    payload.cursor = options.cursor;
+  }
+  if (typeof options?.pageSize === 'number' && Number.isFinite(options.pageSize)) {
+    payload.pageSize = options.pageSize;
+  }
   return callFunction<
     { dropId: string; cursor?: string; pageSize?: number },
     { owners: string[]; nextCursor: string | null; hasMore: boolean }
-  >('listDeliveryOrderOwners', {
-    dropId,
-    cursor: options?.cursor,
-    pageSize: options?.pageSize,
-  });
+  >('listDeliveryOrderOwners', payload);
 }
