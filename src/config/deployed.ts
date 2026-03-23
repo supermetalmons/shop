@@ -9,6 +9,7 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FrontendDeployedConfig = {
   solanaCluster: SolanaCluster;
+  dropId: string;
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
 
@@ -28,6 +29,7 @@ export type FrontendDeployedConfig = {
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: 'mainnet-beta',
+  dropId: 'little_swag_boxes',
   metadataBase: 'https://assets.mons.link/drops/lsb',
   treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   priceSol: 1,

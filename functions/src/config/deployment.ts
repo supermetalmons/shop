@@ -13,6 +13,7 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FunctionsDeploymentConfig = {
   solanaCluster: SolanaCluster;
+  dropId: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
@@ -36,6 +37,7 @@ export type FunctionsDeploymentConfig = {
 
 export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   solanaCluster: 'mainnet-beta',
+  dropId: 'little_swag_boxes',
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: 'https://assets.mons.link/drops/lsb',

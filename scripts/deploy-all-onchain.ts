@@ -408,6 +408,7 @@ function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, st
 function writeFrontendDeployedConfig(args: {
   root: string;
   solanaCluster: string;
+  dropId: string;
   metadataBase: string;
   treasury: string;
   priceSol: number;
@@ -432,6 +433,7 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FrontendDeployedConfig = {
   solanaCluster: SolanaCluster;
+  dropId: string;
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
 
@@ -451,6 +453,7 @@ export type FrontendDeployedConfig = {
 
 export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
   solanaCluster: ${tsStringLiteral(args.solanaCluster)},
+  dropId: ${tsStringLiteral(args.dropId)},
   metadataBase: ${tsStringLiteral(args.metadataBase)},
   treasury: ${tsStringLiteral(args.treasury)},
   priceSol: ${Number(args.priceSol)},
@@ -505,6 +508,7 @@ export const FRONTEND_PATHS = dropPathsFromBase(FRONTEND_DEPLOYED.metadataBase);
 function writeFunctionsDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
+  dropId: string;
   metadataBase: string;
   treasury: string;
   priceSol: number;
@@ -535,6 +539,7 @@ export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type FunctionsDeploymentConfig = {
   solanaCluster: SolanaCluster;
+  dropId: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
@@ -558,6 +563,7 @@ export type FunctionsDeploymentConfig = {
 
 export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   solanaCluster: ${tsStringLiteral(args.solanaCluster)},
+  dropId: ${tsStringLiteral(args.dropId)},
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: ${tsStringLiteral(args.metadataBase)},
@@ -1563,6 +1569,7 @@ async function main() {
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
   // EDIT THESE CONSTANTS to control drop metadata. No ENV/CLI overrides.
+  const DROP_ID = 'little_swag_boxes';
   const DROP_METADATA_BASE = 'https://assets.mons.link/drops/lsb';
   const BOX_MINTER_CONFIG = {
     // Payment + mint caps
@@ -1668,6 +1675,7 @@ async function main() {
     const frontendCfgPath = writeFrontendDeployedConfig({
       root,
       solanaCluster: cluster,
+      dropId: DROP_ID,
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
@@ -1683,6 +1691,7 @@ async function main() {
     const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
       root,
       solanaCluster: cluster,
+      dropId: DROP_ID,
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
@@ -1843,6 +1852,7 @@ async function main() {
   const frontendCfgPath = writeFrontendDeployedConfig({
     root,
     solanaCluster: cluster,
+    dropId: DROP_ID,
     metadataBase: DROP_METADATA_BASE,
     treasury: treasury.toBase58(),
     priceSol: Number(BOX_MINTER_CONFIG.priceSol),
@@ -1858,6 +1868,7 @@ async function main() {
   const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
     root,
     solanaCluster: cluster,
+    dropId: DROP_ID,
     metadataBase: DROP_METADATA_BASE,
     treasury: treasury.toBase58(),
     priceSol: Number(BOX_MINTER_CONFIG.priceSol),

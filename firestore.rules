@@ -19,24 +19,29 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    match /boxAssignments/{boxAssetId} {
-      allow read, write: if false;
-    }
-
-    match /dudeAssignments/{dudeId} {
-      allow read, write: if false;
-    }
-
-    match /meta/dudePool {
-      allow read, write: if false;
-    }
-
     match /claimCodes/{code} {
       allow read, write: if false;
     }
 
-    match /deliveryOrders/{deliveryId} {
+    // Drop-scoped backend-only collections.
+    match /drops/{dropId} {
       allow read, write: if false;
+
+      match /boxAssignments/{boxAssetId} {
+        allow read, write: if false;
+      }
+
+      match /dudeAssignments/{dudeId} {
+        allow read, write: if false;
+      }
+
+      match /deliveryOrders/{deliveryId} {
+        allow read, write: if false;
+      }
+
+      match /meta/dudePool {
+        allow read, write: if false;
+      }
     }
 
     // Default deny: nothing else is accessible from the client.

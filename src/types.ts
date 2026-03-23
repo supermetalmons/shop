@@ -99,6 +99,7 @@ export interface FulfillmentOrdersCursor {
 
 export interface PreparedTxResponse {
   encodedTx: string;
+  dropId?: string;
   feeLamports?: number;
   deliveryLamports?: number;
   deliveryId?: number;

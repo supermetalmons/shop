@@ -94,6 +94,51 @@ function requireAuth(request: CallableReq<any>): string {
 
 const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_DROP_ID = normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId || 'little_swag_boxes');
+
+function normalizeDropId(dropId: string): string {
+  const value = String(dropId || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value)) {
+    throw new HttpsError('invalid-argument', 'Invalid dropId');
+  }
+  return value;
+}
+
+function resolveDropId(rawDropId: unknown): string {
+  if (rawDropId == null || rawDropId === '') return DEFAULT_DROP_ID;
+  if (typeof rawDropId !== 'string') {
+    throw new HttpsError('invalid-argument', 'Invalid dropId');
+  }
+  return normalizeDropId(rawDropId);
+}
+
+function shouldUseLegacyDropFallback(dropId: string): boolean {
+  return dropId === DEFAULT_DROP_ID;
+}
+
+function dropRootPath(dropId: string): string {
+  return `drops/${dropId}`;
+}
+
+function dropBoxAssignmentPath(dropId: string, boxAssetId: string): string {
+  return `${dropRootPath(dropId)}/boxAssignments/${boxAssetId}`;
+}
+
+function dropDudeAssignmentPath(dropId: string, dudeId: number): string {
+  return `${dropRootPath(dropId)}/dudeAssignments/${dudeId}`;
+}
+
+function dropDudePoolPath(dropId: string): string {
+  return `${dropRootPath(dropId)}/meta/dudePool`;
+}
+
+function dropDeliveryOrdersCollectionPath(dropId: string): string {
+  return `${dropRootPath(dropId)}/deliveryOrders`;
+}
+
+function dropDeliveryOrderPath(dropId: string, deliveryId: number): string {
+  return `${dropDeliveryOrdersCollectionPath(dropId)}/${deliveryId}`;
+}
 
 function normalizeWallet(wallet: string): string {
   try {
@@ -1421,9 +1466,12 @@ function decodePendingOpenBox(data: Buffer): {
   return { owner, boxAsset, dudeAssets, createdSlot, bump };
 }
 
-async function assignDudes(boxAssetId: string): Promise<number[]> {
-  const ref = db.doc(`boxAssignments/${boxAssetId}`);
-  const poolRef = db.doc('meta/dudePool');
+async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
+  const ref = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
+  const poolRef = db.doc(dropDudePoolPath(dropId));
+  const useLegacyFallback = shouldUseLegacyDropFallback(dropId);
+  const legacyAssignmentRef = useLegacyFallback ? db.doc(`boxAssignments/${boxAssetId}`) : null;
+  const legacyPoolRef = useLegacyFallback ? db.doc('meta/dudePool') : null;
 
   // Firestore `runTransaction` retries internally on contention, but under heavy concurrency it can still
   // surface transient gRPC errors. Add a small outer retry/backoff layer so callers get a clean
@@ -1476,8 +1524,41 @@ async function assignDudes(boxAssetId: string): Promise<number[]> {
           return dudeIds;
         }
 
-        const poolSnap = await tx.get(poolRef);
-        const rawPool = (poolSnap.data() as any)?.available;
+        if (legacyAssignmentRef) {
+          const legacyExisting = await tx.get(legacyAssignmentRef);
+          if (legacyExisting.exists) {
+            const dudeIdsRaw = (legacyExisting.data() as any)?.dudeIds;
+            const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
+            if (dudeIds.length !== DUDES_PER_BOX) {
+              throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${DUDES_PER_BOX})`, {
+                boxAssetId,
+                dudeIds,
+              });
+            }
+            dudeIds.forEach((id) => {
+              if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+                throw new HttpsError('failed-precondition', 'Invalid stored dude id', { boxAssetId, dudeId: id });
+              }
+            });
+            if (new Set(dudeIds).size !== dudeIds.length) {
+              throw new HttpsError('failed-precondition', 'Duplicate stored dudeIds for box', { boxAssetId, dudeIds });
+            }
+
+            // Migration safety: mirror legacy assignment into the drop-scoped path.
+            tx.set(ref, { dudeIds, createdAt: FieldValue.serverTimestamp() }, { merge: true });
+            return dudeIds;
+          }
+        }
+
+        let poolSnap = await tx.get(poolRef);
+        let rawPool = (poolSnap.data() as any)?.available;
+        if (!Array.isArray(rawPool) && legacyPoolRef) {
+          const legacyPoolSnap = await tx.get(legacyPoolRef);
+          if (legacyPoolSnap.exists && Array.isArray((legacyPoolSnap.data() as any)?.available)) {
+            poolSnap = legacyPoolSnap;
+            rawPool = (legacyPoolSnap.data() as any)?.available;
+          }
+        }
         const usedDefaultPool = !Array.isArray(rawPool);
         const rawPoolLen = Array.isArray(rawPool) ? rawPool.length : null;
 
@@ -1506,7 +1587,7 @@ async function assignDudes(boxAssetId: string): Promise<number[]> {
         let staleAssigned = 0;
 
         // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
-        // across *all* boxes by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
+        // across boxes *within the same drop* by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
         while (chosen.length < DUDES_PER_BOX) {
           if (!pool.length) {
             throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
@@ -1525,9 +1606,15 @@ async function assignDudes(boxAssetId: string): Promise<number[]> {
           if (!Number.isFinite(candidate) || candidate < 1 || candidate > MAX_DUDE_ID) continue;
           if (chosenSet.has(candidate)) continue;
 
-          const dudeRef = db.doc(`dudeAssignments/${candidate}`);
+          const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
           const dudeSnap = await tx.get(dudeRef);
-          if (dudeSnap.exists) {
+          let alreadyAssigned = dudeSnap.exists;
+          if (!alreadyAssigned && useLegacyFallback) {
+            const legacyDudeRef = db.doc(`dudeAssignments/${candidate}`);
+            const legacyDudeSnap = await tx.get(legacyDudeRef);
+            alreadyAssigned = legacyDudeSnap.exists;
+          }
+          if (alreadyAssigned) {
             // Pool is stale/corrupt (it includes an already-assigned dude). Keep it removed from `pool` so the
             // pool doc gets self-healed on commit.
             staleAssigned += 1;
@@ -1540,7 +1627,7 @@ async function assignDudes(boxAssetId: string): Promise<number[]> {
 
         // Reserve dudes (uniqueness across boxes, even if the pool doc is corrupted).
         for (const dudeId of chosen) {
-          const dudeRef = db.doc(`dudeAssignments/${dudeId}`);
+          const dudeRef = db.doc(dropDudeAssignmentPath(dropId, dudeId));
           tx.create(dudeRef, {
             dudeId,
             boxAssetId,
@@ -1636,12 +1723,14 @@ function normalizeIrlClaimCode(code: string): string {
 }
 
 async function ensureIrlClaimCodeForBox(params: {
+  dropId: string;
   ownerWallet: string;
   deliveryId: number;
   boxAssetId: string;
   boxId: number;
   dudeIds: number[];
 }): Promise<string> {
+  const dropId = normalizeDropId(params.dropId);
   const ownerWallet = normalizeWallet(params.ownerWallet);
   const deliveryId = Number(params.deliveryId);
   const boxAssetId = String(params.boxAssetId || '');
@@ -1667,10 +1756,15 @@ async function ensureIrlClaimCodeForBox(params: {
     throw new HttpsError('failed-precondition', 'Duplicate dude ids for IRL claim code');
   }
 
-  const assignmentRef = db.doc(`boxAssignments/${boxAssetId}`);
+  const assignmentRef = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
+  const legacyAssignmentRef = shouldUseLegacyDropFallback(dropId) ? db.doc(`boxAssignments/${boxAssetId}`) : null;
   return db.runTransaction(async (tx) => {
     const assignmentSnap = await tx.get(assignmentRef);
-    const assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
+    let assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
+    if (!assignmentSnap.exists && legacyAssignmentRef) {
+      const legacySnap = await tx.get(legacyAssignmentRef);
+      if (legacySnap.exists) assignment = legacySnap.data() as any;
+    }
 
     const existingCodeRaw = assignment?.irlClaimCode;
     const existingCode = typeof existingCodeRaw === 'string' ? normalizeIrlClaimCode(existingCodeRaw) : '';
@@ -1683,6 +1777,7 @@ async function ensureIrlClaimCodeForBox(params: {
           version: 2,
           namespace: IRL_CLAIM_CODE_NAMESPACE,
           code: existingCode,
+          dropId,
           boxId,
           boxAssetId,
           owner: ownerWallet,
@@ -1690,6 +1785,25 @@ async function ensureIrlClaimCodeForBox(params: {
           dudeIds,
           createdAt: FieldValue.serverTimestamp(),
         });
+      }
+      if (!assignmentSnap.exists) {
+        tx.set(
+          assignmentRef,
+          {
+            irlClaimCode: existingCode,
+            irlClaim: {
+              namespace: IRL_CLAIM_CODE_NAMESPACE,
+              code: existingCode,
+              dropId,
+              boxId,
+              deliveryId,
+              owner: ownerWallet,
+              dudeIds,
+              createdAt: FieldValue.serverTimestamp(),
+            },
+          },
+          { merge: true },
+        );
       }
       return existingCode;
     }
@@ -1705,6 +1819,7 @@ async function ensureIrlClaimCodeForBox(params: {
         version: 2,
         namespace: IRL_CLAIM_CODE_NAMESPACE,
         code,
+        dropId,
         boxId,
         boxAssetId,
         owner: ownerWallet,
@@ -1719,6 +1834,7 @@ async function ensureIrlClaimCodeForBox(params: {
           irlClaim: {
             namespace: IRL_CLAIM_CODE_NAMESPACE,
             code,
+            dropId,
             boxId,
             deliveryId,
             owner: ownerWallet,
@@ -1834,9 +1950,9 @@ function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary
   };
 }
 
-async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
+async function fetchDeliveryOrderHistory(ownerWallet: string, dropId: string): Promise<DeliveryOrderSummary[]> {
   const snap = await db
-    .collection('deliveryOrders')
+    .collection(dropDeliveryOrdersCollectionPath(dropId))
     .where('owner', '==', ownerWallet)
     .where('status', '==', 'ready_to_ship')
     .select('deliveryId', 'status', 'createdAt', 'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentUpdatedAt')
@@ -1846,6 +1962,25 @@ async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryO
     .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
   summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
   return summaries;
+}
+
+async function resolveDeliveryOrderRef(dropId: string, deliveryId: number): Promise<{
+  ref: FirebaseFirestore.DocumentReference;
+  snap: FirebaseFirestore.DocumentSnapshot;
+}> {
+  const scopedRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+  const scopedSnap = await scopedRef.get();
+  if (scopedSnap.exists || !shouldUseLegacyDropFallback(dropId)) {
+    return { ref: scopedRef, snap: scopedSnap };
+  }
+
+  const legacyRef = db.doc(`deliveryOrders/${deliveryId}`);
+  const legacySnap = await legacyRef.get();
+  if (legacySnap.exists) {
+    return { ref: legacyRef, snap: legacySnap };
+  }
+
+  return { ref: scopedRef, snap: scopedSnap };
 }
 
 type FulfillmentOrderAddress = {
@@ -1992,8 +2127,10 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
     wallet: z.string().min(32).max(64),
     message: z.string().min(1).max(1024),
     signature: z.array(z.number().int().min(0).max(255)).length(64),
+    dropId: z.string().min(1).max(64).optional(),
   });
-  const { wallet: rawWallet, message, signature } = parseRequest(schema, request.data);
+  const { wallet: rawWallet, message, signature, dropId: rawDropId } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
   const wallet = normalizeWallet(rawWallet);
 
   const statement = parseSolanaSignInMessage(message);
@@ -2031,7 +2168,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet, dropId)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
@@ -2046,8 +2183,13 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
 
 export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
+  const schema = z.object({
+    dropId: z.string().min(1).max(64).optional(),
+  });
+  const { dropId: rawDropId } = parseRequest(schema, request.data || {});
+  const dropId = resolveDropId(rawDropId);
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet, dropId)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
@@ -2125,6 +2267,7 @@ export const listFulfillmentOrders = onCallLogged(
     const { wallet } = await requireFulfillmentAccess(request);
     const canViewSensitiveAddress = SHIPPER_WALLETS.has(wallet);
     const schema = z.object({
+      dropId: z.string().min(1).max(64).optional(),
       limit: z.number().int().min(1).max(50).optional(),
       cursor: z
         .object({
@@ -2137,10 +2280,11 @@ export const listFulfillmentOrders = onCallLogged(
         .nullable()
         .optional(),
     });
-    const { limit = 20, cursor } = parseRequest(schema, request.data);
+    const { dropId: rawDropId, limit = 20, cursor } = parseRequest(schema, request.data);
+    const dropId = resolveDropId(rawDropId);
 
     let query = db
-      .collection('deliveryOrders')
+      .collection(dropDeliveryOrdersCollectionPath(dropId))
       .where('status', '==', 'ready_to_ship')
       .orderBy('processedAt', 'desc')
       .orderBy(FieldPath.documentId(), 'desc')
@@ -2173,19 +2317,21 @@ export const listFulfillmentOrders = onCallLogged(
 export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {
   const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
+    dropId: z.string().min(1).max(64).optional(),
     deliveryId: z.number().int().positive(),
     status: z.string().max(1000).optional().nullable(),
   });
-  const { deliveryId, status } = parseRequest(schema, request.data);
+  const { dropId: rawDropId, deliveryId, status } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
   const trimmed = typeof status === 'string' ? status.trim() : '';
 
-  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
-  const snap = await orderRef.get();
+  const { ref: orderRef, snap } = await resolveDeliveryOrderRef(dropId, deliveryId);
   if (!snap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
 
   const update: Record<string, unknown> = {
+    dropId,
     fulfillmentUpdatedAt: FieldValue.serverTimestamp(),
     fulfillmentUpdatedBy: wallet,
   };
@@ -2202,19 +2348,21 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
 export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {
   const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
+    dropId: z.string().min(1).max(64).optional(),
     deliveryId: z.number().int().positive(),
     status: z.enum(['🟢', '🟡', '🔴', '🏁']),
   });
-  const { deliveryId, status } = parseRequest(schema, request.data);
+  const { dropId: rawDropId, deliveryId, status } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
 
-  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
-  const snap = await orderRef.get();
+  const { ref: orderRef, snap } = await resolveDeliveryOrderRef(dropId, deliveryId);
   if (!snap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
 
   await orderRef.set(
     {
+      dropId,
       fulfillmentInternalStatus: status,
       fulfillmentInternalUpdatedAt: FieldValue.serverTimestamp(),
       fulfillmentInternalUpdatedBy: wallet,
@@ -2229,8 +2377,9 @@ export const revealDudes = onCallLogged(
   'revealDudes',
   async (request) => {
   const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), boxAssetId: z.string() });
-  const { owner, boxAssetId } = parseRequest(schema, request.data);
+  const schema = z.object({ owner: z.string(), boxAssetId: z.string(), dropId: z.string().min(1).max(64).optional() });
+  const { owner, boxAssetId, dropId: rawDropId } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
@@ -2303,7 +2452,7 @@ export const revealDudes = onCallLogged(
   }
 
   // Assign dudes NOW (after the box has already been transferred away); keep this admin-only.
-  const dudeIds = await assignDudes(boxAssetId);
+  const dudeIds = await assignDudes(dropId, boxAssetId);
 
   const finalizeIx = new TransactionInstruction({
     programId,
@@ -2341,8 +2490,14 @@ export const prepareDeliveryTx = onCallLogged(
   'prepareDeliveryTx',
   async (request) => {
   const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), itemIds: z.array(z.string()).min(1), addressId: z.string() });
-  const { owner, itemIds, addressId } = parseRequest(schema, request.data);
+  const schema = z.object({
+    owner: z.string(),
+    itemIds: z.array(z.string()).min(1),
+    addressId: z.string(),
+    dropId: z.string().min(1).max(64).optional(),
+  });
+  const { owner, itemIds, addressId, dropId: rawDropId } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
@@ -2538,10 +2693,11 @@ export const prepareDeliveryTx = onCallLogged(
       );
     }
 
-    const orderRef = db.doc(`deliveryOrders/${candidate}`);
+    const orderRef = db.doc(dropDeliveryOrderPath(dropId, candidate));
     try {
       await db.runTransaction(async (t) => {
         t.create(orderRef, {
+          dropId,
           status: 'prepared',
           owner: ownerWallet,
           addressId,
@@ -2594,8 +2750,14 @@ export const issueReceipts = onCallLogged(
   'issueReceipts',
   async (request) => {
   const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), deliveryId: z.number().int().positive(), signature: z.string() });
-  const { owner, deliveryId, signature } = parseRequest(schema, request.data);
+  const schema = z.object({
+    owner: z.string(),
+    deliveryId: z.number().int().positive(),
+    signature: z.string(),
+    dropId: z.string().min(1).max(64).optional(),
+  });
+  const { owner, deliveryId, signature, dropId: rawDropId } = parseRequest(schema, request.data);
+  const dropId = resolveDropId(rawDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
@@ -2607,8 +2769,7 @@ export const issueReceipts = onCallLogged(
     );
   }
 
-  const orderRef = db.doc(`deliveryOrders/${deliveryId}`);
-  const orderSnap = await orderRef.get();
+  const { ref: orderRef, snap: orderSnap } = await resolveDeliveryOrderRef(dropId, deliveryId);
   if (!orderSnap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
@@ -2671,7 +2832,7 @@ export const issueReceipts = onCallLogged(
             confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
           });
           closeDeliveryTx = closeSig;
-          await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+          await orderRef.set({ dropId, closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
         } catch (err) {
           console.error('[mons/functions] late closeDelivery failed (non-fatal)', summarizeError(err), { deliveryId });
         }
@@ -2790,7 +2951,7 @@ export const issueReceipts = onCallLogged(
 
   // Best-effort processing lock (avoid concurrent minting).
   await orderRef.set(
-    { status: 'processing', deliverySignature: signature, processingAt: FieldValue.serverTimestamp() },
+    { dropId, status: 'processing', deliverySignature: signature, processingAt: FieldValue.serverTimestamp() },
     { merge: true },
   );
 
@@ -3038,14 +3199,15 @@ export const issueReceipts = onCallLogged(
     const boxAssetId = String(box.assetId);
     const boxId = Number(box.refId);
     if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) continue;
-    const dudeIds = await assignDudes(boxAssetId);
-    const code = await ensureIrlClaimCodeForBox({ ownerWallet, deliveryId, boxAssetId, boxId, dudeIds });
+    const dudeIds = await assignDudes(dropId, boxAssetId);
+    const code = await ensureIrlClaimCodeForBox({ dropId, ownerWallet, deliveryId, boxAssetId, boxId, dudeIds });
     irlClaims.push({ code, boxId, boxAssetId, dudeIds });
   }
 
   // Mark Firestore ready-to-ship BEFORE closing on-chain delivery record.
   await orderRef.set(
     {
+      dropId,
       status: 'ready_to_ship',
       deliverySignature: signature,
       receiptsMinted,
@@ -3087,7 +3249,7 @@ export const issueReceipts = onCallLogged(
   }
 
   if (closeDeliveryTx) {
-    await orderRef.set({ closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await orderRef.set({ dropId, closeDeliveryTx, deliveryClosedAt: FieldValue.serverTimestamp() }, { merge: true });
   }
 
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
@@ -3119,6 +3281,8 @@ export const prepareIrlClaimTx = onCallLogged(
   }
 
   const claim = claimDoc.data() as any;
+  const claimDropId =
+    typeof claim?.dropId === 'string' && claim.dropId.trim() ? normalizeDropId(claim.dropId) : DEFAULT_DROP_ID;
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
   if (!Number.isFinite(boxIdNum) || boxIdNum <= 0 || boxIdNum > 0xffff_ffff || !boxIdStr) {
@@ -3359,6 +3523,7 @@ export const prepareIrlClaimTx = onCallLogged(
 
   return {
     encodedTx: Buffer.from(raw).toString('base64'),
+    dropId: claimDropId,
     certificates: dudeIds,
     certificateId,
     message: 'Sign and send to burn your box receipt and mint your dude receipts.',

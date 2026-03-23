@@ -14,6 +14,7 @@ type Args = {
 
 type ClaimRecord = {
   code: string;
+  dropId?: string;
   owner: string;
   boxId: number;
   boxAssetId: string;
@@ -435,6 +436,7 @@ function timestampToIso(value: unknown): string | undefined {
 
 function parseClaimData(data: any, docId: string): ClaimRecord | null {
   const code = normalizeIrlClaimCode(typeof data?.code === 'string' ? data.code : docId);
+  const dropId = typeof data?.dropId === 'string' && data.dropId.trim() ? data.dropId.trim() : undefined;
   const owner = normalizeWalletMaybe(data?.owner);
   const boxId = Math.floor(Number(data?.boxId));
   const boxAssetId = typeof data?.boxAssetId === 'string' ? data.boxAssetId.trim() : '';
@@ -450,6 +452,7 @@ function parseClaimData(data: any, docId: string): ClaimRecord | null {
 
   return {
     code,
+    ...(dropId ? { dropId } : {}),
     owner,
     boxId,
     boxAssetId,
@@ -755,6 +758,7 @@ function printText(results: ClaimInspection[]) {
 
   for (const result of results) {
     console.log(`Code: ${result.code}`);
+    if (result.dropId) console.log(`Drop: ${result.dropId}`);
     console.log(`Status: ${result.status}`);
     console.log(`Claim owner: ${result.owner}`);
     console.log(`Box id: ${result.boxId}`);

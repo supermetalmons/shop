@@ -137,6 +137,11 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   }
 }
 
+function requestDropId(dropId?: string): string | undefined {
+  const raw = String(dropId || FRONTEND_DEPLOYMENT.dropId || '').trim();
+  return raw || undefined;
+}
+
 const heliusApiKey = getHeliusApiKey();
 const heliusCluster = FRONTEND_DEPLOYMENT.solanaCluster;
 const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
@@ -418,10 +423,13 @@ export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenB
 export async function revealDudes(
   owner: string,
   boxAssetId: string,
+  dropId?: string,
 ): Promise<{ signature: string; dudeIds: number[] }> {
-  return callFunction<{ owner: string; boxAssetId: string }, { signature: string; dudeIds: number[] }>('revealDudes', {
+  const scopedDropId = requestDropId(dropId);
+  return callFunction<{ owner: string; boxAssetId: string; dropId?: string }, { signature: string; dudeIds: number[] }>('revealDudes', {
     owner,
     boxAssetId,
+    ...(scopedDropId ? { dropId: scopedDropId } : {}),
   });
 }
 
@@ -445,49 +453,67 @@ export async function removeAddress(addressId: string): Promise<{ id: string; re
 export async function listFulfillmentOrders(args: {
   limit?: number;
   cursor?: FulfillmentOrdersCursor | null;
+  dropId?: string;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }> {
+  const scopedDropId = requestDropId(args.dropId);
   return callFunction<
-    { limit?: number; cursor?: FulfillmentOrdersCursor | null },
+    { limit?: number; cursor?: FulfillmentOrdersCursor | null; dropId?: string },
     { orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }
-  >('listFulfillmentOrders', { limit: args.limit, cursor: args.cursor || undefined });
+  >('listFulfillmentOrders', {
+    limit: args.limit,
+    cursor: args.cursor || undefined,
+    ...(scopedDropId ? { dropId: scopedDropId } : {}),
+  });
 }
 
 export async function updateFulfillmentStatus(
   deliveryId: number,
   status: string,
+  dropId?: string,
 ): Promise<{ deliveryId: number; fulfillmentStatus: string }> {
-  return callFunction<{ deliveryId: number; status: string }, { deliveryId: number; fulfillmentStatus: string }>(
+  const scopedDropId = requestDropId(dropId);
+  return callFunction<{ deliveryId: number; status: string; dropId?: string }, { deliveryId: number; fulfillmentStatus: string }>(
     'updateFulfillmentStatus',
-    { deliveryId, status },
+    { deliveryId, status, ...(scopedDropId ? { dropId: scopedDropId } : {}) },
   );
 }
 
 export async function updateFulfillmentInternalStatus(
   deliveryId: number,
   status: string,
+  dropId?: string,
 ): Promise<{ deliveryId: number; fulfillmentInternalStatus: string }> {
+  const scopedDropId = requestDropId(dropId);
   return callFunction<
-    { deliveryId: number; status: string },
+    { deliveryId: number; status: string; dropId?: string },
     { deliveryId: number; fulfillmentInternalStatus: string }
-  >('updateFulfillmentInternalStatus', { deliveryId, status });
+  >('updateFulfillmentInternalStatus', { deliveryId, status, ...(scopedDropId ? { dropId: scopedDropId } : {}) });
 }
 
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,
+  dropId?: string,
 ): Promise<PreparedTxResponse> {
-  return callFunction<{ owner: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', { owner, ...selection });
+  const scopedDropId = requestDropId(dropId);
+  return callFunction<{ owner: string; dropId?: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', {
+    owner,
+    ...selection,
+    ...(scopedDropId ? { dropId: scopedDropId } : {}),
+  });
 }
 
 export async function issueReceipts(
   owner: string,
   deliveryId: number,
   signature: string,
+  dropId?: string,
 ): Promise<{ processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }> {
+  const scopedDropId = requestDropId(dropId);
   return callFunction<
-    { owner: string; deliveryId: number; signature: string },
+    { owner: string; deliveryId: number; signature: string; dropId?: string },
     { processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }
-  >('issueReceipts', { owner, deliveryId, signature });
+  >('issueReceipts', { owner, deliveryId, signature, ...(scopedDropId ? { dropId: scopedDropId } : {}) });
 }
 
 export async function requestClaimTx(
@@ -501,14 +527,18 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
+  dropId?: string,
 ): Promise<{ profile: Profile }> {
-  return callFunction<{ wallet: string; message: string; signature: number[] }, { profile: Profile }>('solanaAuth', {
+  const scopedDropId = requestDropId(dropId);
+  return callFunction<{ wallet: string; message: string; signature: number[]; dropId?: string }, { profile: Profile }>('solanaAuth', {
     wallet,
     message,
     signature: Array.from(signature),
+    ...(scopedDropId ? { dropId: scopedDropId } : {}),
   });
 }
 
-export async function getProfile(): Promise<{ profile: Profile }> {
-  return callFunction<{}, { profile: Profile }>('getProfile', {});
+export async function getProfile(dropId?: string): Promise<{ profile: Profile }> {
+  const scopedDropId = requestDropId(dropId);
+  return callFunction<{ dropId?: string }, { profile: Profile }>('getProfile', scopedDropId ? { dropId: scopedDropId } : {});
 }
