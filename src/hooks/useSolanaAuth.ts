@@ -5,6 +5,7 @@ import { auth } from '../lib/firebase';
 import { ensureAuthenticated, getProfile, solanaAuth } from '../lib/api';
 import { Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -74,7 +75,7 @@ export function useSolanaAuth() {
     setError(null);
     (async () => {
       try {
-        const { profile } = await getProfile();
+        const { profile } = await getProfile(FRONTEND_DEPLOYMENT.dropId);
         if (!profile || profile.wallet !== wallet) return;
         const token = await auth.currentUser?.getIdToken();
         if (!token) return;
@@ -127,7 +128,7 @@ export function useSolanaAuth() {
       let profile: Profile | null = null;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
-          ({ profile } = await solanaAuth(wallet, message, signature));
+          ({ profile } = await solanaAuth(wallet, message, signature, FRONTEND_DEPLOYMENT.dropId));
           break;
         } catch (err) {
           lastErr = err;

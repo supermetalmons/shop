@@ -94,7 +94,7 @@ function requireAuth(request: CallableReq<any>): string {
 
 const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEFAULT_DROP_ID = normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId || 'little_swag_boxes');
+const CONFIGURED_DROP_ID = normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId);
 
 function normalizeDropId(dropId: string): string {
   const value = String(dropId || '').trim().toLowerCase();
@@ -104,16 +104,15 @@ function normalizeDropId(dropId: string): string {
   return value;
 }
 
-function resolveDropId(rawDropId: unknown): string {
-  if (rawDropId == null || rawDropId === '') return DEFAULT_DROP_ID;
-  if (typeof rawDropId !== 'string') {
-    throw new HttpsError('invalid-argument', 'Invalid dropId');
+function requireDropId(rawDropId: unknown): string {
+  if (typeof rawDropId !== 'string' || !rawDropId.trim()) {
+    throw new HttpsError('invalid-argument', 'dropId is required');
   }
-  return normalizeDropId(rawDropId);
-}
-
-function shouldUseLegacyDropFallback(dropId: string): boolean {
-  return dropId === DEFAULT_DROP_ID;
+  const dropId = normalizeDropId(rawDropId);
+  if (dropId !== CONFIGURED_DROP_ID) {
+    throw new HttpsError('invalid-argument', `Unsupported dropId: ${dropId}`);
+  }
+  return dropId;
 }
 
 function dropRootPath(dropId: string): string {
@@ -1469,9 +1468,6 @@ function decodePendingOpenBox(data: Buffer): {
 async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
   const ref = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
   const poolRef = db.doc(dropDudePoolPath(dropId));
-  const useLegacyFallback = shouldUseLegacyDropFallback(dropId);
-  const legacyAssignmentRef = useLegacyFallback ? db.doc(`boxAssignments/${boxAssetId}`) : null;
-  const legacyPoolRef = useLegacyFallback ? db.doc('meta/dudePool') : null;
 
   // Firestore `runTransaction` retries internally on contention, but under heavy concurrency it can still
   // surface transient gRPC errors. Add a small outer retry/backoff layer so callers get a clean
@@ -1524,41 +1520,8 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
           return dudeIds;
         }
 
-        if (legacyAssignmentRef) {
-          const legacyExisting = await tx.get(legacyAssignmentRef);
-          if (legacyExisting.exists) {
-            const dudeIdsRaw = (legacyExisting.data() as any)?.dudeIds;
-            const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
-            if (dudeIds.length !== DUDES_PER_BOX) {
-              throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${DUDES_PER_BOX})`, {
-                boxAssetId,
-                dudeIds,
-              });
-            }
-            dudeIds.forEach((id) => {
-              if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
-                throw new HttpsError('failed-precondition', 'Invalid stored dude id', { boxAssetId, dudeId: id });
-              }
-            });
-            if (new Set(dudeIds).size !== dudeIds.length) {
-              throw new HttpsError('failed-precondition', 'Duplicate stored dudeIds for box', { boxAssetId, dudeIds });
-            }
-
-            // Migration safety: mirror legacy assignment into the drop-scoped path.
-            tx.set(ref, { dudeIds, createdAt: FieldValue.serverTimestamp() }, { merge: true });
-            return dudeIds;
-          }
-        }
-
-        let poolSnap = await tx.get(poolRef);
-        let rawPool = (poolSnap.data() as any)?.available;
-        if (!Array.isArray(rawPool) && legacyPoolRef) {
-          const legacyPoolSnap = await tx.get(legacyPoolRef);
-          if (legacyPoolSnap.exists && Array.isArray((legacyPoolSnap.data() as any)?.available)) {
-            poolSnap = legacyPoolSnap;
-            rawPool = (legacyPoolSnap.data() as any)?.available;
-          }
-        }
+        const poolSnap = await tx.get(poolRef);
+        const rawPool = (poolSnap.data() as any)?.available;
         const usedDefaultPool = !Array.isArray(rawPool);
         const rawPoolLen = Array.isArray(rawPool) ? rawPool.length : null;
 
@@ -1608,13 +1571,7 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
 
           const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
           const dudeSnap = await tx.get(dudeRef);
-          let alreadyAssigned = dudeSnap.exists;
-          if (!alreadyAssigned && useLegacyFallback) {
-            const legacyDudeRef = db.doc(`dudeAssignments/${candidate}`);
-            const legacyDudeSnap = await tx.get(legacyDudeRef);
-            alreadyAssigned = legacyDudeSnap.exists;
-          }
-          if (alreadyAssigned) {
+          if (dudeSnap.exists) {
             // Pool is stale/corrupt (it includes an already-assigned dude). Keep it removed from `pool` so the
             // pool doc gets self-healed on commit.
             staleAssigned += 1;
@@ -1757,14 +1714,9 @@ async function ensureIrlClaimCodeForBox(params: {
   }
 
   const assignmentRef = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
-  const legacyAssignmentRef = shouldUseLegacyDropFallback(dropId) ? db.doc(`boxAssignments/${boxAssetId}`) : null;
   return db.runTransaction(async (tx) => {
     const assignmentSnap = await tx.get(assignmentRef);
-    let assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
-    if (!assignmentSnap.exists && legacyAssignmentRef) {
-      const legacySnap = await tx.get(legacyAssignmentRef);
-      if (legacySnap.exists) assignment = legacySnap.data() as any;
-    }
+    const assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
 
     const existingCodeRaw = assignment?.irlClaimCode;
     const existingCode = typeof existingCodeRaw === 'string' ? normalizeIrlClaimCode(existingCodeRaw) : '';
@@ -1785,25 +1737,6 @@ async function ensureIrlClaimCodeForBox(params: {
           dudeIds,
           createdAt: FieldValue.serverTimestamp(),
         });
-      }
-      if (!assignmentSnap.exists) {
-        tx.set(
-          assignmentRef,
-          {
-            irlClaimCode: existingCode,
-            irlClaim: {
-              namespace: IRL_CLAIM_CODE_NAMESPACE,
-              code: existingCode,
-              dropId,
-              boxId,
-              deliveryId,
-              owner: ownerWallet,
-              dudeIds,
-              createdAt: FieldValue.serverTimestamp(),
-            },
-          },
-          { merge: true },
-        );
       }
       return existingCode;
     }
@@ -1964,25 +1897,6 @@ async function fetchDeliveryOrderHistory(ownerWallet: string, dropId: string): P
   return summaries;
 }
 
-async function resolveDeliveryOrderRef(dropId: string, deliveryId: number): Promise<{
-  ref: FirebaseFirestore.DocumentReference;
-  snap: FirebaseFirestore.DocumentSnapshot;
-}> {
-  const scopedRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-  const scopedSnap = await scopedRef.get();
-  if (scopedSnap.exists || !shouldUseLegacyDropFallback(dropId)) {
-    return { ref: scopedRef, snap: scopedSnap };
-  }
-
-  const legacyRef = db.doc(`deliveryOrders/${deliveryId}`);
-  const legacySnap = await legacyRef.get();
-  if (legacySnap.exists) {
-    return { ref: legacyRef, snap: legacySnap };
-  }
-
-  return { ref: scopedRef, snap: scopedSnap };
-}
-
 type FulfillmentOrderAddress = {
   label?: string;
   email?: string;
@@ -2127,10 +2041,10 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
     wallet: z.string().min(32).max(64),
     message: z.string().min(1).max(1024),
     signature: z.array(z.number().int().min(0).max(255)).length(64),
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
   });
-  const { wallet: rawWallet, message, signature, dropId: rawDropId } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const { wallet: rawWallet, message, signature, dropId: requestDropId } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
   const wallet = normalizeWallet(rawWallet);
 
   const statement = parseSolanaSignInMessage(message);
@@ -2184,10 +2098,10 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
 export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
   });
-  const { dropId: rawDropId } = parseRequest(schema, request.data || {});
-  const dropId = resolveDropId(rawDropId);
+  const { dropId: requestDropId } = parseRequest(schema, request.data || {});
+  const dropId = requireDropId(requestDropId);
   const profileRef = db.doc(`profiles/${wallet}`);
   const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet, dropId)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
@@ -2267,7 +2181,7 @@ export const listFulfillmentOrders = onCallLogged(
     const { wallet } = await requireFulfillmentAccess(request);
     const canViewSensitiveAddress = SHIPPER_WALLETS.has(wallet);
     const schema = z.object({
-      dropId: z.string().min(1).max(64).optional(),
+      dropId: z.string().min(1).max(64),
       limit: z.number().int().min(1).max(50).optional(),
       cursor: z
         .object({
@@ -2280,8 +2194,8 @@ export const listFulfillmentOrders = onCallLogged(
         .nullable()
         .optional(),
     });
-    const { dropId: rawDropId, limit = 20, cursor } = parseRequest(schema, request.data);
-    const dropId = resolveDropId(rawDropId);
+    const { dropId: requestDropId, limit = 20, cursor } = parseRequest(schema, request.data);
+    const dropId = requireDropId(requestDropId);
 
     let query = db
       .collection(dropDeliveryOrdersCollectionPath(dropId))
@@ -2317,15 +2231,16 @@ export const listFulfillmentOrders = onCallLogged(
 export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {
   const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
     status: z.string().max(1000).optional().nullable(),
   });
-  const { dropId: rawDropId, deliveryId, status } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
   const trimmed = typeof status === 'string' ? status.trim() : '';
 
-  const { ref: orderRef, snap } = await resolveDeliveryOrderRef(dropId, deliveryId);
+  const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+  const snap = await orderRef.get();
   if (!snap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
@@ -2348,14 +2263,15 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
 export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {
   const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
     status: z.enum(['🟢', '🟡', '🔴', '🏁']),
   });
-  const { dropId: rawDropId, deliveryId, status } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
 
-  const { ref: orderRef, snap } = await resolveDeliveryOrderRef(dropId, deliveryId);
+  const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+  const snap = await orderRef.get();
   if (!snap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
@@ -2377,9 +2293,9 @@ export const revealDudes = onCallLogged(
   'revealDudes',
   async (request) => {
   const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), boxAssetId: z.string(), dropId: z.string().min(1).max(64).optional() });
-  const { owner, boxAssetId, dropId: rawDropId } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const schema = z.object({ owner: z.string(), boxAssetId: z.string(), dropId: z.string().min(1).max(64) });
+  const { owner, boxAssetId, dropId: requestDropId } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
@@ -2494,10 +2410,10 @@ export const prepareDeliveryTx = onCallLogged(
     owner: z.string(),
     itemIds: z.array(z.string()).min(1),
     addressId: z.string(),
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
   });
-  const { owner, itemIds, addressId, dropId: rawDropId } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const { owner, itemIds, addressId, dropId: requestDropId } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
@@ -2754,10 +2670,10 @@ export const issueReceipts = onCallLogged(
     owner: z.string(),
     deliveryId: z.number().int().positive(),
     signature: z.string(),
-    dropId: z.string().min(1).max(64).optional(),
+    dropId: z.string().min(1).max(64),
   });
-  const { owner, deliveryId, signature, dropId: rawDropId } = parseRequest(schema, request.data);
-  const dropId = resolveDropId(rawDropId);
+  const { owner, deliveryId, signature, dropId: requestDropId } = parseRequest(schema, request.data);
+  const dropId = requireDropId(requestDropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
@@ -2769,7 +2685,8 @@ export const issueReceipts = onCallLogged(
     );
   }
 
-  const { ref: orderRef, snap: orderSnap } = await resolveDeliveryOrderRef(dropId, deliveryId);
+  const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+  const orderSnap = await orderRef.get();
   if (!orderSnap.exists) {
     throw new HttpsError('not-found', 'Delivery order not found');
   }
@@ -3281,8 +3198,13 @@ export const prepareIrlClaimTx = onCallLogged(
   }
 
   const claim = claimDoc.data() as any;
-  const claimDropId =
-    typeof claim?.dropId === 'string' && claim.dropId.trim() ? normalizeDropId(claim.dropId) : DEFAULT_DROP_ID;
+  if (typeof claim?.dropId !== 'string' || !claim.dropId.trim()) {
+    throw new HttpsError('failed-precondition', 'Claim code is missing dropId. Run claim dropId backfill migration first.');
+  }
+  const claimDropId = normalizeDropId(claim.dropId);
+  if (claimDropId !== CONFIGURED_DROP_ID) {
+    throw new HttpsError('failed-precondition', `Claim code belongs to unsupported dropId: ${claimDropId}`);
+  }
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
   if (!Number.isFinite(boxIdNum) || boxIdNum <= 0 || boxIdNum > 0xffff_ffff || !boxIdStr) {

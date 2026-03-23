@@ -7,6 +7,7 @@ import { FulfillmentOrder, FulfillmentOrdersCursor } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { Modal } from './components/Modal';
+import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 const FULFILLMENT_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -137,7 +138,7 @@ export default function FulfillmentApp() {
     setCursor(null);
     setOrders([]);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor: null });
+      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor: null, dropId: FRONTEND_DEPLOYMENT.dropId });
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
       setOrders(nextOrders);
       mergeStatusEdits(nextOrders);
@@ -156,7 +157,7 @@ export default function FulfillmentApp() {
     setLoadingMore(true);
     setOrdersError(null);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor });
+      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor, dropId: FRONTEND_DEPLOYMENT.dropId });
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
       setOrders((prev) => {
         if (!nextOrders.length) return prev;
@@ -202,7 +203,7 @@ export default function FulfillmentApp() {
       try {
         const raw = statusEdits[deliveryId] ?? '';
         const trimmed = raw.trim();
-        const resp = await updateFulfillmentStatus(deliveryId, trimmed);
+        const resp = await updateFulfillmentStatus(deliveryId, trimmed, FRONTEND_DEPLOYMENT.dropId);
         setOrders((prev) =>
           prev.map((order) =>
             order.deliveryId === deliveryId ? { ...order, fulfillmentStatus: resp.fulfillmentStatus || trimmed } : order,
@@ -227,7 +228,7 @@ export default function FulfillmentApp() {
       setInternalStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
       try {
-        const resp = await updateFulfillmentInternalStatus(deliveryId, status);
+        const resp = await updateFulfillmentInternalStatus(deliveryId, status, FRONTEND_DEPLOYMENT.dropId);
         setOrders((prev) =>
           prev.map((order) =>
             order.deliveryId === deliveryId

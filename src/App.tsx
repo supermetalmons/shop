@@ -1653,7 +1653,7 @@ function App() {
     if (!publicKey) return;
     setRevealLoading(boxAssetId);
     try {
-      const resp = await revealDudes(publicKey.toBase58(), boxAssetId);
+      const resp = await revealDudes(publicKey.toBase58(), boxAssetId, FRONTEND_DEPLOYMENT.dropId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
@@ -1879,7 +1879,8 @@ function App() {
         });
       }
 
-      const requestTx = () => requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id });
+      const requestTx = () =>
+        requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id }, FRONTEND_DEPLOYMENT.dropId);
       let resp = await requestTx();
       let sig: string;
       try {
@@ -1899,7 +1900,7 @@ function App() {
       if (resp.deliveryId) {
         try {
           showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
-          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig);
+          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, FRONTEND_DEPLOYMENT.dropId);
           const minted = Number(issued?.receiptsMinted || 0);
           showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           await refetchInventory();
