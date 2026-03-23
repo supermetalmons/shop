@@ -11,11 +11,11 @@ const REVEAL_NOTE_OFFSET = 28;
 const FRAME_AUTOPLAY_DELAY_MS = 30;
 
 const CARDS: WipCardConfig[] = [
-  { imageSrc: '/Poncho_Drifella/drifs/0.webp', textureSrc: '/Poncho_Drifella/textures/0.webp', glowType: 'water' },
+  { imageSrc: '/Poncho_Drifella/drifs/0.webp', textureSrc: '/Poncho_Drifella/textures/0.webp', glowType: 'fire' },
   { imageSrc: '/Poncho_Drifella/drifs/1.webp', textureSrc: '/Poncho_Drifella/textures/1.webp', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/2.webp', textureSrc: '/Poncho_Drifella/textures/2.webp', glowType: 'fairy' },
-  { imageSrc: '/Poncho_Drifella/drifs/3.webp', textureSrc: '/Poncho_Drifella/textures/3.webp', glowType: 'dragon' },
-  { imageSrc: '/Poncho_Drifella/drifs/4.webp', textureSrc: '/Poncho_Drifella/textures/4.webp', glowType: 'grass' },
+  { imageSrc: '/Poncho_Drifella/drifs/2.webp', textureSrc: '/Poncho_Drifella/textures/2.webp', glowType: 'dragon' },
+  { imageSrc: '/Poncho_Drifella/drifs/3.webp', textureSrc: '/Poncho_Drifella/textures/3.webp', glowType: 'metal' },
+  { imageSrc: '/Poncho_Drifella/drifs/4.webp', textureSrc: '/Poncho_Drifella/textures/4.webp', glowType: 'fairy' },
   { imageSrc: '/Poncho_Drifella/drifs/5.webp', textureSrc: '/Poncho_Drifella/textures/5.webp', glowType: 'metal' },
   { imageSrc: '/Poncho_Drifella/drifs/6.webp', textureSrc: '/Poncho_Drifella/textures/6.webp', glowType: 'lightning' },
   { imageSrc: '/Poncho_Drifella/drifs/7.webp', textureSrc: '/Poncho_Drifella/textures/7.webp', glowType: 'water' },
