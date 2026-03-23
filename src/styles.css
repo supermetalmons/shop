@@ -149,12 +149,6 @@ header.top {
   max-width: 420px;
 }
 
-.admin-viewer-note {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
 .hero {
   width: 100%;
 }

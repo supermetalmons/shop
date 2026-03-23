@@ -2367,7 +2367,6 @@ function App() {
             <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
             <span>mons.shop</span>
           </h1>
-          {isViewerMode && owner ? <p className="admin-viewer-note">Viewing as {shortAddress(owner)}</p> : null}
         </div>
         {canUseAdminViewer ? (
           <div className="top__actions" ref={settingsRef}>
