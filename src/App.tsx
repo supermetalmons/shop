@@ -2515,29 +2515,30 @@ function App() {
         {shipmentsReady ? (
           deliveryOrders.length ? (
           <div className="delivery-list">
-            {deliveryOrders.map((order) => (
-              <div key={order.deliveryId} className="delivery-row">
-                <div className="card__head">
-                  <div>
-                    <div className="card__title">{order.deliveryId}</div>
-                    <div className="muted small">{formatOrderDate(order)}</div>
+            {deliveryOrders.map((order) => {
+              const fulfillmentStatus =
+                typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
+              return (
+                <div key={order.deliveryId} className="delivery-row">
+                  <div className="card__head">
+                    <div>
+                      <div className="card__title">{order.deliveryId}</div>
+                      <div className="muted small">{formatOrderDate(order)}</div>
+                    </div>
+                    <div className="delivery-status">{fulfillmentStatus || 'Preparing'}</div>
                   </div>
-                  <div className="delivery-status">Preparing</div>
+                  {order.items.length ? (
+                    <div className="muted small">
+                      {order.items
+                        .map((item) => `${item.kind === 'box' ? 'Box' : 'Figure'} ${item.refId}`)
+                        .join(', ')}
+                    </div>
+                  ) : (
+                    <div className="muted small">Items unavailable.</div>
+                  )}
                 </div>
-                {order.items.length ? (
-                  <div className="muted small">
-                    {order.items
-                      .map((item) => `${item.kind === 'box' ? 'Box' : 'Figure'} ${item.refId}`)
-                      .join(', ')}
-                  </div>
-                ) : (
-                  <div className="muted small">Items unavailable.</div>
-                )}
-                {order.fulfillmentStatus ? (
-                  <div className="muted small">Fulfillment status: {order.fulfillmentStatus}</div>
-                ) : null}
-              </div>
-            ))}
+              );
+            })}
           </div>
           ) : (
           <div
