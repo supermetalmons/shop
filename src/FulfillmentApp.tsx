@@ -22,7 +22,6 @@ const INTERNAL_STATUS_DEFAULT = '🆕';
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
-  if (value === 'Pending') return 'Preparing';
   return value === 'Preparing' || value === 'Shipped' ? value : '';
 }
 
