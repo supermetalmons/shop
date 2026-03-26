@@ -1699,6 +1699,91 @@ function normalizeIrlClaimCode(code: string): string {
   return String(code || '').replace(/\D/g, '');
 }
 
+function normalizeDropIdMaybe(rawDropId: unknown): string | null {
+  if (typeof rawDropId !== 'string' || !rawDropId.trim()) return null;
+  try {
+    return normalizeDropId(rawDropId);
+  } catch {
+    return null;
+  }
+}
+
+function claimCodeDocMatchesBox(claim: any, expected: { dropId: string; boxAssetId: string; boxId: number }): boolean {
+  const claimDropId = normalizeDropIdMaybe(claim?.dropId);
+  const claimBoxAssetId = typeof claim?.boxAssetId === 'string' ? String(claim.boxAssetId) : '';
+  const claimBoxId = Number(claim?.boxId);
+  return (
+    claimDropId === expected.dropId &&
+    claimBoxAssetId === expected.boxAssetId &&
+    Number.isFinite(claimBoxId) &&
+    Math.floor(claimBoxId) === Math.floor(expected.boxId)
+  );
+}
+
+function buildIrlClaimCodeDoc(params: {
+  code: string;
+  dropId: string;
+  boxId: number;
+  boxAssetId: string;
+  ownerWallet: string;
+  deliveryId: number;
+  dudeIds: number[];
+}) {
+  return {
+    version: 2,
+    namespace: IRL_CLAIM_CODE_NAMESPACE,
+    code: params.code,
+    dropId: params.dropId,
+    boxId: params.boxId,
+    boxAssetId: params.boxAssetId,
+    owner: params.ownerWallet,
+    deliveryId: params.deliveryId,
+    dudeIds: params.dudeIds,
+    createdAt: FieldValue.serverTimestamp(),
+  };
+}
+
+function buildIrlClaimAssignment(code: string, params: { dropId: string; boxId: number; deliveryId: number; ownerWallet: string; dudeIds: number[] }) {
+  return {
+    irlClaimCode: code,
+    irlClaim: {
+      namespace: IRL_CLAIM_CODE_NAMESPACE,
+      code,
+      dropId: params.dropId,
+      boxId: params.boxId,
+      deliveryId: params.deliveryId,
+      owner: params.ownerWallet,
+      dudeIds: params.dudeIds,
+      createdAt: FieldValue.serverTimestamp(),
+    },
+  };
+}
+
+function dropIdFromBoxAssignmentPath(path: string): string | null {
+  const parts = String(path || '').split('/');
+  if (parts.length !== 4) return null;
+  if (parts[0] !== 'drops' || parts[2] !== 'boxAssignments') return null;
+  return normalizeDropIdMaybe(parts[1]);
+}
+
+async function resolveClaimDropIdForCode(code: string, claim: any): Promise<string> {
+  const fromClaim = normalizeDropIdMaybe(claim?.dropId);
+  if (fromClaim) return fromClaim;
+
+  const byCodeSnap = await db.collectionGroup('boxAssignments').where('irlClaimCode', '==', code).limit(2).get();
+  const dropIds = new Set<string>();
+  byCodeSnap.docs.forEach((doc) => {
+    const dropId = dropIdFromBoxAssignmentPath(doc.ref.path);
+    if (dropId) dropIds.add(dropId);
+  });
+  if (dropIds.size === 1) return Array.from(dropIds)[0];
+  if (dropIds.size > 1) {
+    throw new HttpsError('failed-precondition', 'Claim code is linked to multiple drops; contact support.');
+  }
+
+  throw new HttpsError('failed-precondition', 'Claim code record is missing dropId and could not be resolved.');
+}
+
 async function ensureIrlClaimCodeForBox(params: {
   dropId: string;
   ownerWallet: string;
@@ -1739,26 +1824,42 @@ async function ensureIrlClaimCodeForBox(params: {
     const assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
 
     const existingCodeRaw = assignment?.irlClaimCode;
-    const existingCode = typeof existingCodeRaw === 'string' ? normalizeIrlClaimCode(existingCodeRaw) : '';
+    const existingCodeNormalized = typeof existingCodeRaw === 'string' ? normalizeIrlClaimCode(existingCodeRaw) : '';
+    const existingCode = existingCodeNormalized.length === IRL_CLAIM_CODE_DIGITS ? existingCodeNormalized : '';
+    if (existingCodeNormalized && !existingCode) {
+      logger.warn('ensureIrlClaimCodeForBox:invalid_existing_claim_code_format', {
+        dropId,
+        boxAssetId,
+        boxId,
+        existingCodeRaw: String(existingCodeRaw),
+      });
+    }
     if (existingCode) {
       const existingRef = db.doc(`claimCodes/${existingCode}`);
       const existingSnap = await tx.get(existingRef);
       if (!existingSnap.exists) {
         // Backfill if the assignment doc was written but claimCodes doc was not.
-        tx.set(existingRef, {
-          version: 2,
-          namespace: IRL_CLAIM_CODE_NAMESPACE,
-          code: existingCode,
-          dropId,
-          boxId,
-          boxAssetId,
-          owner: ownerWallet,
-          deliveryId,
-          dudeIds,
-          createdAt: FieldValue.serverTimestamp(),
-        });
+        tx.set(existingRef, buildIrlClaimCodeDoc({ code: existingCode, dropId, boxId, boxAssetId, ownerWallet, deliveryId, dudeIds }));
+        tx.set(assignmentRef, buildIrlClaimAssignment(existingCode, { dropId, boxId, deliveryId, ownerWallet, dudeIds }), { merge: true });
       }
-      return existingCode;
+      if (existingSnap.exists) {
+        const existingClaim = existingSnap.data() as any;
+        if (!claimCodeDocMatchesBox(existingClaim, { dropId, boxAssetId, boxId })) {
+          logger.warn('ensureIrlClaimCodeForBox:mismatched_existing_claim_code', {
+            dropId,
+            boxAssetId,
+            boxId,
+            existingCode,
+            claimDropId: normalizeDropIdMaybe(existingClaim?.dropId),
+            claimBoxAssetId: typeof existingClaim?.boxAssetId === 'string' ? existingClaim.boxAssetId : null,
+            claimBoxId: existingClaim?.boxId ?? null,
+          });
+        } else {
+          return existingCode;
+        }
+      } else {
+        return existingCode;
+      }
     }
 
     // Allocate a unique 10-digit claim code.
@@ -1768,35 +1869,8 @@ async function ensureIrlClaimCodeForBox(params: {
       const snap = await tx.get(claimRef);
       if (snap.exists) continue;
 
-      tx.set(claimRef, {
-        version: 2,
-        namespace: IRL_CLAIM_CODE_NAMESPACE,
-        code,
-        dropId,
-        boxId,
-        boxAssetId,
-        owner: ownerWallet,
-        deliveryId,
-        dudeIds,
-        createdAt: FieldValue.serverTimestamp(),
-      });
-      tx.set(
-        assignmentRef,
-        {
-          irlClaimCode: code,
-          irlClaim: {
-            namespace: IRL_CLAIM_CODE_NAMESPACE,
-            code,
-            dropId,
-            boxId,
-            deliveryId,
-            owner: ownerWallet,
-            dudeIds,
-            createdAt: FieldValue.serverTimestamp(),
-          },
-        },
-        { merge: true },
-      );
+      tx.set(claimRef, buildIrlClaimCodeDoc({ code, dropId, boxId, boxAssetId, ownerWallet, deliveryId, dudeIds }));
+      tx.set(assignmentRef, buildIrlClaimAssignment(code, { dropId, boxId, deliveryId, ownerWallet, dudeIds }), { merge: true });
       return code;
     }
 
@@ -3279,12 +3353,13 @@ export const prepareIrlClaimTx = onCallLogged(
   }
 
   const claim = claimDoc.data() as any;
-  if (typeof claim?.dropId !== 'string' || !claim.dropId.trim()) {
-    throw new HttpsError('failed-precondition', 'Claim code record is missing dropId.');
-  }
-  const claimDropId = normalizeDropId(claim.dropId);
+  const claimDropId = await resolveClaimDropIdForCode(normalizedCode, claim);
   if (claimDropId !== CONFIGURED_DROP_ID) {
-    throw new HttpsError('failed-precondition', `Claim code belongs to unsupported dropId: ${claimDropId}`);
+    logger.warn('prepareIrlClaimTx:claim_drop_differs_from_configured', {
+      code: normalizedCode,
+      claimDropId,
+      configuredDropId: CONFIGURED_DROP_ID,
+    });
   }
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
