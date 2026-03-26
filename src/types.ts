@@ -42,7 +42,7 @@ export interface DeliveryOrderItemSummary {
   refId: number;
 }
 
-export type FulfillmentStatus = 'Pending' | 'Shipped';
+export type FulfillmentStatus = 'Preparing' | 'Shipped';
 
 export interface DeliveryOrderSummary {
   deliveryId: number;

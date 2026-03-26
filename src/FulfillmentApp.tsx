@@ -19,10 +19,11 @@ const PAGE_SIZE = 20;
 const FIGURE_MEDIA_BASE = 'https://assets.mons.link/drops/lsb/figures/clean';
 const INTERNAL_STATUS_OPTIONS = ['🟢', '🟡', '🔴', '🏁'] as const;
 const INTERNAL_STATUS_DEFAULT = '🆕';
-const FULFILLMENT_STATUS_OPTIONS = ['Pending', 'Shipped'] as const;
+const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
-  return value === 'Pending' || value === 'Shipped' ? value : '';
+  if (value === 'Pending') return 'Preparing';
+  return value === 'Preparing' || value === 'Shipped' ? value : '';
 }
 
 function formatOrderDate(ts?: number) {

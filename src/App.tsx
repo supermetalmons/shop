@@ -2516,8 +2516,9 @@ function App() {
           deliveryOrders.length ? (
           <div className="delivery-list">
             {deliveryOrders.map((order) => {
-              const fulfillmentStatus =
+              const fulfillmentStatusRaw =
                 typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
+              const fulfillmentStatus = fulfillmentStatusRaw === 'Pending' ? 'Preparing' : fulfillmentStatusRaw;
               return (
                 <div key={order.deliveryId} className="delivery-row">
                   <div className="card__head">

@@ -1859,11 +1859,14 @@ function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, count
   return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
 }
 
-const FULFILLMENT_STATUS_OPTIONS = ['Pending', 'Shipped'] as const;
+const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
+const LEGACY_FULFILLMENT_STATUS_OPTIONS = ['Pending'] as const;
+const ACCEPTED_FULFILLMENT_STATUS_OPTIONS = [...FULFILLMENT_STATUS_OPTIONS, ...LEGACY_FULFILLMENT_STATUS_OPTIONS] as const;
 type FulfillmentStatus = (typeof FULFILLMENT_STATUS_OPTIONS)[number];
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | undefined {
-  return value === 'Pending' || value === 'Shipped' ? value : undefined;
+  if (value === 'Pending') return 'Preparing';
+  return value === 'Preparing' || value === 'Shipped' ? value : undefined;
 }
 
 type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
@@ -2314,11 +2317,11 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
   const schema = z.object({
     dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
-    status: z.union([z.enum(FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
+    status: z.union([z.enum(ACCEPTED_FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
   });
   const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
-  const nextStatus = status || '';
+  const nextStatus = normalizeFulfillmentStatus(status) || '';
 
   const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
   const snap = await orderRef.get();
