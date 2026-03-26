@@ -517,29 +517,26 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
-  dropId: string,
 ): Promise<{ profile: Profile }> {
-  return callFunction<{ wallet: string; message: string; signature: number[]; dropId: string }, { profile: Profile }>('solanaAuth', {
+  return callFunction<{ wallet: string; message: string; signature: number[] }, { profile: Profile }>('solanaAuth', {
     wallet,
     message,
     signature: Array.from(signature),
-    dropId,
   });
 }
 
-export async function getProfile(dropId: string, ownerWallet?: string): Promise<{ profile: Profile }> {
-  const payload: { dropId: string; ownerWallet?: string } = { dropId };
+export async function getProfile(ownerWallet?: string): Promise<{ profile: Profile }> {
+  const payload: { ownerWallet?: string } = {};
   if (typeof ownerWallet === 'string' && ownerWallet.trim()) {
     payload.ownerWallet = ownerWallet;
   }
-  return callFunction<{ dropId: string; ownerWallet?: string }, { profile: Profile }>('getProfile', payload);
+  return callFunction<{ ownerWallet?: string }, { profile: Profile }>('getProfile', payload);
 }
 
 export async function listDeliveryOrderOwners(
-  dropId: string,
   options?: { cursor?: string; pageSize?: number },
 ): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
-  const payload: { dropId: string; cursor?: string; pageSize?: number } = { dropId };
+  const payload: { cursor?: string; pageSize?: number } = {};
   if (typeof options?.cursor === 'string' && options.cursor) {
     payload.cursor = options.cursor;
   }
@@ -547,7 +544,7 @@ export async function listDeliveryOrderOwners(
     payload.pageSize = options.pageSize;
   }
   return callFunction<
-    { dropId: string; cursor?: string; pageSize?: number },
+    { cursor?: string; pageSize?: number },
     { owners: string[]; nextCursor: string | null; hasMore: boolean }
   >('listDeliveryOrderOwners', payload);
 }

@@ -1942,6 +1942,7 @@ function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | undefin
 
 type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
 type DeliveryOrderSummary = {
+  dropId: string;
   deliveryId: number;
   status: string;
   createdAt?: number;
@@ -1949,6 +1950,11 @@ type DeliveryOrderSummary = {
   items: DeliveryOrderItemSummary[];
   fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
+};
+
+type DeliveryOrderOwnersCursor = {
+  owner: string;
+  path: string;
 };
 
 function toMillisMaybe(value: any): number | undefined {
@@ -1959,10 +1965,23 @@ function toMillisMaybe(value: any): number | undefined {
   return undefined;
 }
 
-function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary | null {
+function dropIdFromDeliveryOrderPath(path: string): string | null {
+  const parts = String(path || '').split('/');
+  if (parts.length !== 4) return null;
+  if (parts[0] !== 'drops' || parts[2] !== 'deliveryOrders') return null;
+  return normalizeDropIdMaybe(parts[1]);
+}
+
+function resolveDeliveryOrderDropId(order: any, docPath: string): string | null {
+  return normalizeDropIdMaybe(order?.dropId) || dropIdFromDeliveryOrderPath(docPath);
+}
+
+function toDeliveryOrderSummary(docId: string, order: any, docPath: string): DeliveryOrderSummary | null {
   const deliveryIdRaw = order?.deliveryId ?? docId;
   const deliveryId = Number(deliveryIdRaw);
   if (!Number.isFinite(deliveryId)) return null;
+  const dropId = resolveDeliveryOrderDropId(order, docPath);
+  if (!dropId) return null;
 
   const itemsRaw = Array.isArray(order?.items) ? order.items : [];
   const items = itemsRaw
@@ -1974,6 +1993,7 @@ function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary
     .filter((item: DeliveryOrderItemSummary) => Number.isFinite(item.refId) && item.refId > 0);
 
   return {
+    dropId,
     deliveryId,
     status: typeof order?.status === 'string' ? order.status : 'unknown',
     createdAt: toMillisMaybe(order?.createdAt),
@@ -1984,18 +2004,34 @@ function toDeliveryOrderSummary(docId: string, order: any): DeliveryOrderSummary
   };
 }
 
-async function fetchDeliveryOrderHistory(ownerWallet: string, dropId: string): Promise<DeliveryOrderSummary[]> {
+async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
   const snap = await db
-    .collection(dropDeliveryOrdersCollectionPath(dropId))
+    .collectionGroup('deliveryOrders')
     .where('owner', '==', ownerWallet)
     .where('status', '==', 'ready_to_ship')
-    .select('deliveryId', 'status', 'createdAt', 'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentUpdatedAt')
+    .select('dropId', 'deliveryId', 'status', 'createdAt', 'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentUpdatedAt')
     .get();
   const summaries = snap.docs
-    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data()))
+    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data(), doc.ref.path))
     .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
   summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
   return summaries;
+}
+
+function encodeDeliveryOrderOwnersCursor(cursor: DeliveryOrderOwnersCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function parseDeliveryOrderOwnersCursor(rawCursor: unknown): DeliveryOrderOwnersCursor | null {
+  if (typeof rawCursor !== 'string' || !rawCursor.trim()) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8')) as Partial<DeliveryOrderOwnersCursor>;
+    if (typeof parsed?.owner !== 'string') throw new Error('owner');
+    if (typeof parsed?.path !== 'string' || !dropIdFromDeliveryOrderPath(parsed.path)) throw new Error('path');
+    return { owner: parsed.owner, path: parsed.path };
+  } catch {
+    throw new HttpsError('invalid-argument', 'Invalid cursor');
+  }
 }
 
 type FulfillmentOrderAddress = {
@@ -2142,10 +2178,8 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
     wallet: z.string().min(32).max(64),
     message: z.string().min(1).max(1024),
     signature: z.array(z.number().int().min(0).max(255)).length(64),
-    dropId: z.string().min(1).max(64),
   });
-  const { wallet: rawWallet, message, signature, dropId: requestDropId } = parseRequest(schema, request.data);
-  const dropId = requireDropId(requestDropId);
+  const { wallet: rawWallet, message, signature } = parseRequest(schema, request.data);
   const wallet = normalizeWallet(rawWallet);
 
   const statement = parseSolanaSignInMessage(message);
@@ -2183,7 +2217,7 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet, dropId)]);
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
   return {
@@ -2199,11 +2233,9 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
 export const getProfile = onCallLogged('getProfile', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({
-    dropId: z.string().min(1).max(64),
     ownerWallet: z.string().optional(),
   });
-  const { dropId: requestDropId, ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
-  const dropId = requireDropId(requestDropId);
+  const { ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
 
   let profileWallet = wallet;
   if (typeof rawOwnerWallet === 'string' && rawOwnerWallet.trim()) {
@@ -2215,7 +2247,7 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
   }
 
   const profileRef = db.doc(`profiles/${profileWallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(profileWallet, dropId)]);
+  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(profileWallet)]);
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists && profileWallet === wallet) {
     await profileRef.set({ wallet: profileWallet }, { merge: true });
@@ -2233,39 +2265,82 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
 export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {
   await requireAdminAccess(request);
   const schema = z.object({
-    dropId: z.string().min(1).max(64),
-    cursor: z.string().min(1).max(1500).optional(),
+    cursor: z.string().min(1).max(2000).optional(),
     pageSize: z.number().int().min(1).max(500).optional(),
   });
-  const { dropId: requestDropId, cursor: rawCursor, pageSize: rawPageSize } = parseRequest(schema, request.data || {});
-  const dropId = requireDropId(requestDropId);
-  const ordersRef = db.collection(dropDeliveryOrdersCollectionPath(dropId));
-  const owners = new Set<string>();
-  const cursor = typeof rawCursor === 'string' && rawCursor.trim() ? rawCursor.trim() : null;
+  const { cursor: rawCursor, pageSize: rawPageSize } = parseRequest(schema, request.data || {});
+  const owners: string[] = [];
+  const seenOwners = new Set<string>();
+  let cursor = parseDeliveryOrderOwnersCursor(rawCursor);
   const pageSize = rawPageSize ?? 200;
-  const fetchLimit = Math.min(pageSize + 1, 501);
+  const fetchLimit = Math.min(Math.max(pageSize * 3, pageSize + 1), 500);
+  let hasMore = false;
 
-  let query = ordersRef.select('owner').orderBy(FieldPath.documentId()).limit(fetchLimit);
-  if (cursor) {
-    query = query.startAfter(cursor);
+  while (owners.length < pageSize) {
+    let query = db
+      .collectionGroup('deliveryOrders')
+      .select('owner')
+      .orderBy('owner', 'asc')
+      .orderBy(FieldPath.documentId(), 'asc')
+      .limit(fetchLimit);
+    if (cursor) {
+      query = query.startAfter(cursor.owner, cursor.path);
+    }
+
+    const snap = await query.get();
+    if (snap.empty) {
+      hasMore = false;
+      cursor = null;
+      break;
+    }
+
+    let lastProcessedCursor: DeliveryOrderOwnersCursor | null = null;
+    let lastProcessedIndex = -1;
+    for (let index = 0; index < snap.docs.length; index += 1) {
+      const doc = snap.docs[index];
+      const rawOwner = doc.get('owner');
+      if (typeof rawOwner === 'string') {
+        lastProcessedCursor = { owner: rawOwner, path: doc.ref.path };
+      }
+      lastProcessedIndex = index;
+
+      if (typeof rawOwner !== 'string' || !rawOwner.trim()) continue;
+      try {
+        const owner = normalizeWallet(rawOwner.trim());
+        if (seenOwners.has(owner)) continue;
+        seenOwners.add(owner);
+        owners.push(owner);
+        if (owners.length >= pageSize) break;
+      } catch {
+        // Ignore malformed historical values.
+      }
+    }
+
+    if (!lastProcessedCursor || lastProcessedIndex < 0) {
+      hasMore = false;
+      cursor = null;
+      break;
+    }
+
+    cursor = lastProcessedCursor;
+    const endedEarly = lastProcessedIndex < snap.docs.length - 1;
+    if (owners.length >= pageSize) {
+      hasMore = endedEarly || snap.size === fetchLimit;
+      break;
+    }
+
+    if (snap.size < fetchLimit) {
+      hasMore = false;
+      cursor = null;
+      break;
+    }
+
+    hasMore = true;
   }
 
-  const snap = await query.get();
-  const docs = snap.docs.slice(0, pageSize);
-  docs.forEach((doc) => {
-    const rawOwner = doc.get('owner');
-    if (typeof rawOwner !== 'string' || !rawOwner.trim()) return;
-    try {
-      owners.add(normalizeWallet(rawOwner.trim()));
-    } catch {
-      // Ignore malformed historical values.
-    }
-  });
-
-  const hasMore = snap.size > pageSize;
-  const nextCursor = hasMore ? docs[docs.length - 1]?.id || null : null;
+  const nextCursor = hasMore && cursor ? encodeDeliveryOrderOwnersCursor(cursor) : null;
   return {
-    owners: Array.from(owners).sort((a, b) => a.localeCompare(b)),
+    owners,
     nextCursor,
     hasMore: Boolean(nextCursor),
   };

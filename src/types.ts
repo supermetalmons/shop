@@ -45,6 +45,7 @@ export interface DeliveryOrderItemSummary {
 export type FulfillmentStatus = 'Preparing' | 'Shipped';
 
 export interface DeliveryOrderSummary {
+  dropId: string;
   deliveryId: number;
   status: string;
   createdAt?: number;

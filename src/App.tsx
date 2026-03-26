@@ -377,7 +377,7 @@ function App() {
     enabled: Boolean(canUseAdminViewer && settingsOpen),
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) =>
-      listDeliveryOrderOwners(FRONTEND_DEPLOYMENT.dropId, {
+      listDeliveryOrderOwners({
         cursor: typeof pageParam === 'string' && pageParam ? pageParam : undefined,
         pageSize: ADMIN_OWNER_DOC_PAGE_SIZE,
       }),
@@ -409,7 +409,7 @@ function App() {
         (owner === connectedWallet || canUseAdminViewer) &&
         (isViewerMode || !profile || profile.wallet !== owner),
     ),
-    queryFn: () => getProfile(FRONTEND_DEPLOYMENT.dropId, owner || undefined),
+    queryFn: () => getProfile(owner || undefined),
     staleTime: 10_000,
   });
 
@@ -2519,7 +2519,7 @@ function App() {
               const fulfillmentStatus =
                 typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
               return (
-                <div key={order.deliveryId} className="delivery-row">
+                <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="card__head">
                     <div>
                       <div className="card__title">{order.deliveryId}</div>
