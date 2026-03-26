@@ -1953,7 +1953,6 @@ type DeliveryOrderSummary = {
 };
 
 type DeliveryOrderOwnersCursor = {
-  owner: string;
   path: string;
 };
 
@@ -2025,10 +2024,11 @@ function encodeDeliveryOrderOwnersCursor(cursor: DeliveryOrderOwnersCursor): str
 function parseDeliveryOrderOwnersCursor(rawCursor: unknown): DeliveryOrderOwnersCursor | null {
   if (typeof rawCursor !== 'string' || !rawCursor.trim()) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8')) as Partial<DeliveryOrderOwnersCursor>;
-    if (typeof parsed?.owner !== 'string') throw new Error('owner');
-    if (typeof parsed?.path !== 'string' || !dropIdFromDeliveryOrderPath(parsed.path)) throw new Error('path');
-    return { owner: parsed.owner, path: parsed.path };
+    const decoded = Buffer.from(rawCursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(decoded) as unknown;
+    const path = typeof parsed === 'string' ? parsed : (parsed as Partial<DeliveryOrderOwnersCursor>)?.path;
+    if (typeof path !== 'string' || !dropIdFromDeliveryOrderPath(path)) throw new Error('path');
+    return { path };
   } catch {
     throw new HttpsError('invalid-argument', 'Invalid cursor');
   }
@@ -2280,11 +2280,10 @@ export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', a
     let query = db
       .collectionGroup('deliveryOrders')
       .select('owner')
-      .orderBy('owner', 'asc')
       .orderBy(FieldPath.documentId(), 'asc')
       .limit(fetchLimit);
     if (cursor) {
-      query = query.startAfter(cursor.owner, cursor.path);
+      query = query.startAfter(cursor.path);
     }
 
     const snap = await query.get();
@@ -2298,11 +2297,9 @@ export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', a
     let lastProcessedIndex = -1;
     for (let index = 0; index < snap.docs.length; index += 1) {
       const doc = snap.docs[index];
-      const rawOwner = doc.get('owner');
-      if (typeof rawOwner === 'string') {
-        lastProcessedCursor = { owner: rawOwner, path: doc.ref.path };
-      }
+      lastProcessedCursor = { path: doc.ref.path };
       lastProcessedIndex = index;
+      const rawOwner = doc.get('owner');
 
       if (typeof rawOwner !== 'string' || !rawOwner.trim()) continue;
       try {
