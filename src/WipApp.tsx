@@ -54,6 +54,7 @@ export default function WipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [frame, setFrame] = useState(1);
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARDS.length));
+  const frameRef = useRef(1);
   const constrainedNetwork = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
     const connection = (
@@ -79,6 +80,10 @@ export default function WipApp() {
   const revealNote = cardVisible ? '' : frame > 1 ? 'keep clicking the pack' : 'click the pack to open';
   const revealBoxFrameSrc = getPackFrameSrc(frame);
   const currentCard = DRIF_CARDS[cardIndex];
+
+  useEffect(() => {
+    frameRef.current = frame;
+  }, [frame]);
 
   const preloadBoxFrame = useCallback((frameSrc: string) => {
     if (preloadedBoxFramesRef.current.has(frameSrc)) return;
@@ -194,32 +199,45 @@ export default function WipApp() {
     preloadRevealSounds();
   }, [preloadRevealSounds]);
 
-  const handleRevealBoxPointerDown = useCallback(() => {
-    void ensureSoundReady().then(() => {
-      preloadRevealSounds();
-    });
-  }, [ensureSoundReady, preloadRevealSounds]);
-
-  const handleRevealBoxClick = useCallback(() => {
-    if (revealComplete) return;
-    const nextFrame = Math.min(frame + 1, BOX_FRAME_COUNT);
+  const advanceRevealFrame = useCallback(() => {
+    const prevFrame = frameRef.current;
+    if (prevFrame >= BOX_FRAME_COUNT) return;
+    const nextFrame = Math.min(prevFrame + 1, BOX_FRAME_COUNT);
+    frameRef.current = nextFrame;
+    setFrame(nextFrame);
     const soundUrl = nextFrame >= BOX_FRAME_COUNT ? BOX_SOUND_REVEAL_URL : BOX_SOUND_CLICK_URL;
     void ensureSoundReady().then(() => {
       void soundPlayer.playSound(soundUrl, 0.42);
     });
-    setFrame(nextFrame);
-  }, [ensureSoundReady, frame, revealComplete]);
+  }, [ensureSoundReady]);
+
+  const handleRevealBoxPress = useCallback(() => {
+    void ensureSoundReady().then(() => {
+      preloadRevealSounds();
+    });
+    advanceRevealFrame();
+  }, [advanceRevealFrame, ensureSoundReady, preloadRevealSounds]);
+
+  const handleRevealBoxPointerDown = useCallback(
+    (evt: React.PointerEvent<HTMLDivElement>) => {
+      if (evt.pointerType === 'mouse' && evt.button !== 0) return;
+      evt.stopPropagation();
+      handleRevealBoxPress();
+    },
+    [handleRevealBoxPress],
+  );
 
   const handleRevealBoxKeyDown = useCallback(
     (evt: React.KeyboardEvent<HTMLDivElement>) => {
       if (evt.key !== 'Enter' && evt.key !== ' ') return;
       evt.preventDefault();
-      handleRevealBoxClick();
+      handleRevealBoxPress();
     },
-    [handleRevealBoxClick],
+    [handleRevealBoxPress],
   );
 
   const handleReset = useCallback(() => {
+    frameRef.current = 1;
     setFrame(1);
     setCardIndex((prev) => {
       if (DRIF_CARDS.length < 2) return prev;
@@ -258,10 +276,6 @@ export default function WipApp() {
             aria-label="Open pack"
             aria-disabled={revealComplete}
             onPointerDown={handleRevealBoxPointerDown}
-            onClick={(evt) => {
-              evt.stopPropagation();
-              handleRevealBoxClick();
-            }}
             onKeyDown={handleRevealBoxKeyDown}
           >
             <img src={revealBoxFrameSrc} alt="Mystery pack" className="reveal-overlay__image" draggable={false} />
