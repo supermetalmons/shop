@@ -16,12 +16,22 @@ const PACK_AUTOPLAY_TRIGGER_ID = 107;
 const PACK_AUTOPLAY_TRIGGER_INDEX = PACK_FRAME_IDS.findIndex((frameId) => frameId === PACK_AUTOPLAY_TRIGGER_ID);
 const PACK_AUTOPLAY_TRIGGER_FRAME = PACK_AUTOPLAY_TRIGGER_INDEX >= 0 ? PACK_AUTOPLAY_TRIGGER_INDEX + 1 : BOX_FRAME_COUNT;
 const PACK_AUTOPLAY_DELAY_MS = 35;
+const PACK_PRELOAD_IMMEDIATE_COUNT_FAST = 4;
+const PACK_PRELOAD_IMMEDIATE_COUNT_SLOW = 2;
+const PACK_PRELOAD_DELAY_MS_FAST = 70;
+const PACK_PRELOAD_DELAY_MS_SLOW = 180;
+const PACK_PRELOAD_LOOKAHEAD_FAST = 10;
+const PACK_PRELOAD_LOOKAHEAD_SLOW = 6;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
 function getPackFrameSrc(frameIndex: number) {
   const frameId = PACK_FRAME_IDS[Math.min(Math.max(frameIndex, 1), BOX_FRAME_COUNT) - 1];
   return `${PACK_FRAME_BASE}1_${frameId}.webp`;
+}
+
+function getAllPackFrameSrcs() {
+  return PACK_FRAME_IDS.map((_, index) => getPackFrameSrc(index + 1));
 }
 
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
@@ -91,10 +101,17 @@ export default function WipApp() {
     frameRef.current = frame;
   }, [frame]);
 
-  const preloadBoxFrame = useCallback((frameSrc: string) => {
-    if (preloadedBoxFramesRef.current.has(frameSrc)) return;
+  const preloadBoxFrame = useCallback((frameSrc: string, fetchPriority: 'high' | 'low' | 'auto' = 'low') => {
+    if (preloadedBoxFramesRef.current.has(frameSrc)) {
+      const pendingImage = boxFramePreloadImagesRef.current.get(frameSrc);
+      if (pendingImage && fetchPriority === 'high') {
+        pendingImage.fetchPriority = 'high';
+      }
+      return;
+    }
     const img = new Image();
     img.decoding = 'async';
+    img.fetchPriority = fetchPriority;
     img.onload = () => {
       boxFramePreloadImagesRef.current.delete(frameSrc);
     };
@@ -106,6 +123,19 @@ export default function WipApp() {
     preloadedBoxFramesRef.current.add(frameSrc);
     img.src = frameSrc;
   }, []);
+
+  const preloadUpcomingPackFrames = useCallback(
+    (fromFrame: number, lookaheadCount: number, fetchPriority: 'high' | 'low' | 'auto' = 'auto') => {
+      if (lookaheadCount <= 0) return;
+      const startFrame = fromFrame + 1;
+      if (startFrame > BOX_FRAME_COUNT) return;
+      const endFrame = Math.min(BOX_FRAME_COUNT, fromFrame + lookaheadCount);
+      for (let frameIndex = startFrame; frameIndex <= endFrame; frameIndex += 1) {
+        preloadBoxFrame(getPackFrameSrc(frameIndex), fetchPriority);
+      }
+    },
+    [preloadBoxFrame],
+  );
 
   const preloadCard = useCallback((imageSrc: string) => {
     if (!imageSrc || preloadedCardsRef.current.has(imageSrc)) return;
@@ -178,11 +208,69 @@ export default function WipApp() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const queue = getAllPackFrameSrcs();
+    const immediateCount = constrainedNetwork ? PACK_PRELOAD_IMMEDIATE_COUNT_SLOW : PACK_PRELOAD_IMMEDIATE_COUNT_FAST;
+    const preloadDelayMs = constrainedNetwork ? PACK_PRELOAD_DELAY_MS_SLOW : PACK_PRELOAD_DELAY_MS_FAST;
+    const immediateQueue = queue.slice(0, immediateCount);
+    const backgroundQueue = queue.slice(immediateCount);
+    let timeoutId: number | undefined;
+    let idleId: number | undefined;
+    let nextIndex = 0;
+    let isActive = true;
+
+    immediateQueue.forEach((frameSrc) => {
+      preloadBoxFrame(frameSrc, 'auto');
+    });
+
+    const scheduleNextFrame = () => {
+      if (!isActive) return;
+      if (nextIndex >= backgroundQueue.length) return;
+      if (idleWindow.requestIdleCallback) {
+        idleId = idleWindow.requestIdleCallback(
+          () => {
+            if (!isActive) return;
+            idleId = undefined;
+            preloadNextFrame();
+          },
+          { timeout: preloadDelayMs },
+        );
+        return;
+      }
+      timeoutId = window.setTimeout(preloadNextFrame, preloadDelayMs);
+    };
+
+    const preloadNextFrame = () => {
+      if (!isActive) return;
+      if (nextIndex >= backgroundQueue.length) return;
+      preloadBoxFrame(backgroundQueue[nextIndex], 'auto');
+      nextIndex += 1;
+      scheduleNextFrame();
+    };
+
+    scheduleNextFrame();
+
+    return () => {
+      isActive = false;
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      if (idleId !== undefined && idleWindow.cancelIdleCallback) {
+        idleWindow.cancelIdleCallback(idleId);
+      }
+    };
+  }, [constrainedNetwork, preloadBoxFrame]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
-    for (let frameIndex = 1; frameIndex <= BOX_FRAME_COUNT; frameIndex += 1) {
-      preloadBoxFrame(getPackFrameSrc(frameIndex));
-    }
-  }, [preloadBoxFrame]);
+    const lookaheadCount = constrainedNetwork ? PACK_PRELOAD_LOOKAHEAD_SLOW : PACK_PRELOAD_LOOKAHEAD_FAST;
+    const fetchPriority: 'high' | 'auto' = autoOpening ? 'high' : 'auto';
+    preloadUpcomingPackFrames(frame, lookaheadCount, fetchPriority);
+  }, [autoOpening, constrainedNetwork, frame, preloadUpcomingPackFrames]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
