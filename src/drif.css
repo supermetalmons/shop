@@ -324,6 +324,18 @@ button.drif-effect-card__rotator:disabled {
     0 0 70px -15px var(--card-glow);
 }
 
+.drif-effect-card.no-glow .drif-effect-card__rotator,
+.drif-effect-card.no-glow.active .drif-effect-card__rotator,
+.drif-effect-card.no-glow .drif-effect-card__rotator:focus {
+  box-shadow:
+    0 0 3px -1px transparent,
+    0 0 2px 1px transparent,
+    0 0 5px 0 transparent,
+    0 10px 20px -5px black,
+    0 2px 15px -5px black,
+    0 0 20px 0 transparent;
+}
+
 .drif-effect-card__rotator * {
   width: 100%;
   display: grid;

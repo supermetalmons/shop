@@ -7,6 +7,7 @@ export default function WipInteractiveCard({ card }: { card: DrifCardConfig }) {
       card={card}
       ariaLabel="Revealed Poncho Drifella card"
       imageAlt="Revealed Poncho Drifella card"
+      disableGlow
     />
   );
 }

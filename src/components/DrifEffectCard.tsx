@@ -38,6 +38,7 @@ type DrifEffectCardProps = {
   ariaLabel: string;
   imageAlt?: string;
   onClick?: () => void;
+  disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
   preloadCards?: readonly DrifCardConfig[];
 };
@@ -171,6 +172,7 @@ export default function DrifEffectCard({
   ariaLabel,
   imageAlt = '',
   onClick,
+  disableGlow = false,
   preserveTransformOnCardChange = false,
   preloadCards,
 }: DrifEffectCardProps) {
@@ -477,7 +479,15 @@ export default function DrifEffectCard({
   }, [clearInteractTimer]);
 
   const glowType = card.glowType ?? card.effect.typeClass;
-  const cardClassName = ['drif-effect-card', glowType, 'interactive', 'masked', 'glowing', interacting ? 'interacting' : '', loading ? 'loading' : '']
+  const cardClassName = [
+    'drif-effect-card',
+    glowType,
+    'interactive',
+    'masked',
+    disableGlow ? 'no-glow' : 'glowing',
+    interacting ? 'interacting' : '',
+    loading ? 'loading' : '',
+  ]
     .filter(Boolean)
     .join(' ');
 
