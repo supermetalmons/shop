@@ -462,7 +462,7 @@ export default function DrifEffectCard({
   }, [clearInteractTimer]);
 
   const glowType = card.glowType ?? card.effect.typeClass;
-  const cardClassName = ['card', glowType, 'interactive', 'masked', 'glowing', interacting ? 'interacting' : '', loading ? 'loading' : '']
+  const cardClassName = ['drif-effect-card', glowType, 'interactive', 'masked', 'glowing', interacting ? 'interacting' : '', loading ? 'loading' : '']
     .filter(Boolean)
     .join(' ');
 
@@ -482,9 +482,9 @@ export default function DrifEffectCard({
       data-effect={card.effect.effectKey}
       style={cardStyle}
     >
-      <div className="card__translater">
+      <div className="drif-effect-card__translater">
         <button
-          className="card__rotator"
+          className="drif-effect-card__rotator"
           onPointerEnter={interact}
           onPointerMove={interact}
           onPointerLeave={() => interactEnd()}
@@ -494,13 +494,13 @@ export default function DrifEffectCard({
           aria-label={ariaLabel}
           tabIndex={0}
         >
-          <div className="card__back" aria-hidden="true" />
-          <div className="card__front">
+          <div className="drif-effect-card__back" aria-hidden="true" />
+          <div className="drif-effect-card__front">
             <img src={card.imageSrc} alt={imageAlt} onLoad={onImageLoad} loading="lazy" width="660" height="921" draggable={false} />
-            <div className="card__shine" />
-            <div className="card__glitter" />
-            <div className="card__glare" />
-            <div className="card__glare2" />
+            <div className="drif-effect-card__shine" />
+            <div className="drif-effect-card__glitter" />
+            <div className="drif-effect-card__glare" />
+            <div className="drif-effect-card__glare2" />
           </div>
         </button>
       </div>

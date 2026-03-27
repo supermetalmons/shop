@@ -43,14 +43,14 @@
   margin: 0 auto;
 }
 
-.drif-card-showcase .card {
+.drif-card-showcase .drif-effect-card {
   width: 100%;
   max-height: calc(100vh - 210px);
   max-height: calc(100svh - 210px);
 }
 
-.drif-page .card,
-.wip-reveal__card-item .card {
+.drif-page .drif-effect-card,
+.wip-reveal__card-item .drif-effect-card {
   background: transparent;
   border: none;
   border-radius: var(--card-radius);
@@ -123,7 +123,7 @@
   }
 }
 
-.card {
+.drif-effect-card {
   --pointer-x: 50%;
   --pointer-y: 50%;
   --card-scale: 1;
@@ -178,10 +178,8 @@
   transform-style: preserve-3d;
 }
 
-.card,
-.card *,
-.drif-page,
-.drif-page * {
+.drif-effect-card,
+.drif-effect-card * {
   outline: 1px solid transparent;
   -webkit-user-select: none;
   user-select: none;
@@ -189,79 +187,79 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.card img,
-.card button {
+.drif-effect-card img,
+.drif-effect-card button {
   -webkit-user-drag: none;
 }
 
-.card__shine,
-.card__glare {
+.drif-effect-card__shine,
+.drif-effect-card__glare {
   will-change: transform, opacity, background-image, background-size, background-position, background-blend-mode, filter;
 }
 
-.card.water {
+.drif-effect-card.water {
   --card-glow: hsl(192, 97%, 60%);
 }
 
-.card.fire {
+.drif-effect-card.fire {
   --card-glow: hsl(9, 81%, 59%);
 }
 
-.card.grass {
+.drif-effect-card.grass {
   --card-glow: hsl(96, 81%, 65%);
 }
 
-.card.lightning {
+.drif-effect-card.lightning {
   --card-glow: hsl(54, 87%, 63%);
 }
 
-.card.psychic {
+.drif-effect-card.psychic {
   --card-glow: hsl(281, 62%, 58%);
 }
 
-.card.fighting {
+.drif-effect-card.fighting {
   --card-glow: rgb(145, 90, 39);
 }
 
-.card.darkness {
+.drif-effect-card.darkness {
   --card-glow: hsl(189, 77%, 27%);
 }
 
-.card.metal {
+.drif-effect-card.metal {
   --card-glow: hsl(184, 20%, 70%);
 }
 
-.card.dragon {
+.drif-effect-card.dragon {
   --card-glow: hsl(51, 60%, 35%);
 }
 
-.card.fairy {
+.drif-effect-card.fairy {
   --card-glow: hsl(323, 100%, 89%);
 }
 
-.card,
-.card__translater,
-.card__rotator {
+.drif-effect-card,
+.drif-effect-card__translater,
+.drif-effect-card__rotator {
   width: 100%;
 }
 
-.card,
-.card__rotator {
+.drif-effect-card,
+.drif-effect-card__rotator {
   aspect-ratio: var(--card-aspect);
   border-radius: var(--card-radius);
 }
 
-.card.interacting {
+.drif-effect-card.interacting {
   z-index: calc(var(--card-scale) * 120);
 }
 
-.card.active .card__translater,
-.card.active .card__rotator {
+.drif-effect-card.active .drif-effect-card__translater,
+.drif-effect-card.active .drif-effect-card__rotator {
   touch-action: none;
 }
 
-.card__translater,
-.card__rotator {
+.drif-effect-card__translater,
+.drif-effect-card__rotator {
   display: grid;
   perspective: 600px;
   will-change: transform, box-shadow;
@@ -270,13 +268,13 @@
   transform-style: preserve-3d;
 }
 
-.card__translater {
+.drif-effect-card__translater {
   position: relative;
   -webkit-transform: translate3d(var(--translate-x), var(--translate-y), 0.1px) scale(var(--card-scale));
   transform: translate3d(var(--translate-x), var(--translate-y), 0.1px) scale(var(--card-scale));
 }
 
-.card__rotator {
+.drif-effect-card__rotator {
   -webkit-transform: rotateY(var(--rotate-x)) rotateX(var(--rotate-y));
   -webkit-transform-style: preserve-3d;
   transform-style: preserve-3d;
@@ -284,7 +282,7 @@
   pointer-events: auto;
 }
 
-button.card__rotator {
+button.drif-effect-card__rotator {
   border: none;
   background: transparent;
   padding: 0;
@@ -292,18 +290,18 @@ button.card__rotator {
   appearance: none;
 }
 
-button.card__rotator:hover,
-button.card__rotator:focus,
-button.card__rotator:focus-visible,
-button.card__rotator:active,
-button.card__rotator:disabled {
+button.drif-effect-card__rotator:hover,
+button.drif-effect-card__rotator:focus,
+button.drif-effect-card__rotator:focus-visible,
+button.drif-effect-card__rotator:active,
+button.drif-effect-card__rotator:disabled {
   background: transparent;
   color: inherit;
   opacity: 1;
 }
 
-.card__rotator,
-.card.active .card__rotator:focus {
+.drif-effect-card__rotator,
+.drif-effect-card.active .drif-effect-card__rotator:focus {
   transition: box-shadow 0.4s ease, opacity 0.33s ease-out;
   box-shadow:
     0 0 3px -1px transparent,
@@ -314,9 +312,9 @@ button.card__rotator:disabled {
     0 0 20px 0 transparent;
 }
 
-.card.glowing .card__rotator,
-.card.active .card__rotator,
-.card__rotator:focus {
+.drif-effect-card.glowing .drif-effect-card__rotator,
+.drif-effect-card.active .drif-effect-card__rotator,
+.drif-effect-card__rotator:focus {
   box-shadow:
     0 0 4px -1px #fff,
     0 0 4px 1px var(--card-edge),
@@ -326,7 +324,7 @@ button.card__rotator:disabled {
     0 0 70px -15px var(--card-glow);
 }
 
-.card__rotator * {
+.drif-effect-card__rotator * {
   width: 100%;
   display: grid;
   grid-area: 1 / 1;
@@ -339,28 +337,28 @@ button.card__rotator:disabled {
   overflow: hidden;
 }
 
-.card__rotator img {
+.drif-effect-card__rotator img {
   height: auto;
 }
 
-.card__rotator img:not(.card__back) {
+.drif-effect-card__rotator img:not(.drif-effect-card__back) {
   -webkit-transform: translate3d(0px, 0px, 0.01px);
   transform: translate3d(0px, 0px, 0.01px);
 }
 
-.card__back {
+.drif-effect-card__back {
   background-color: var(--card-back);
   -webkit-transform: rotateY(180deg) translateZ(1px);
   transform: rotateY(180deg) translateZ(1px);
   backface-visibility: visible;
 }
 
-.card__front,
-.card__front * {
+.drif-effect-card__front,
+.drif-effect-card__front * {
   backface-visibility: hidden;
 }
 
-.card__front {
+.drif-effect-card__front {
   background-color: #000;
   opacity: 1;
   transition: opacity 0.33s ease-out;
@@ -368,17 +366,17 @@ button.card__rotator:disabled {
   transform: translate3d(0px, 0px, 0.01px);
 }
 
-.loading .card__front {
+.drif-effect-card.loading .drif-effect-card__front {
   opacity: 0;
 }
 
-.loading .card__back {
+.drif-effect-card.loading .drif-effect-card__back {
   -webkit-transform: rotateY(0deg);
   transform: rotateY(0deg);
 }
 
-.card__shine,
-.card__glitter {
+.drif-effect-card__shine,
+.drif-effect-card__glitter {
   display: grid;
   transform: translateZ(1px);
   overflow: hidden;
@@ -392,15 +390,15 @@ button.card__rotator:disabled {
   opacity: var(--card-opacity);
 }
 
-.card__glitter {
+.drif-effect-card__glitter {
   display: none;
   z-index: 2;
 }
 
-.card__shine:before,
-.card__shine:after,
-.card__glitter:before,
-.card__glitter:after {
+.drif-effect-card__shine:before,
+.drif-effect-card__shine:after,
+.drif-effect-card__glitter:before,
+.drif-effect-card__glitter:after {
   --sunpillar-clr-1: var(--sunpillar-5);
   --sunpillar-clr-2: var(--sunpillar-6);
   --sunpillar-clr-3: var(--sunpillar-1);
@@ -412,7 +410,7 @@ button.card__rotator:disabled {
   border-radius: var(--card-radius);
 }
 
-.card__shine:after {
+.drif-effect-card__shine:after {
   --sunpillar-clr-1: var(--sunpillar-6);
   --sunpillar-clr-2: var(--sunpillar-1);
   --sunpillar-clr-3: var(--sunpillar-2);
@@ -422,8 +420,8 @@ button.card__rotator:disabled {
   transform: translateZ(1.2px);
 }
 
-.card__glare,
-.card__glare2 {
+.drif-effect-card__glare,
+.drif-effect-card__glare2 {
   transform: translateZ(1.41px);
   overflow: hidden;
   background-image: radial-gradient(
@@ -436,13 +434,13 @@ button.card__rotator:disabled {
   mix-blend-mode: overlay;
 }
 
-.card__glare2 {
+.drif-effect-card__glare2 {
   display: none;
 }
 
-.card.masked .card__shine,
-.card.masked .card__shine:before,
-.card.masked .card__shine:after {
+.drif-effect-card.masked .drif-effect-card__shine,
+.drif-effect-card.masked .drif-effect-card__shine:before,
+.drif-effect-card.masked .drif-effect-card__shine:after {
   -webkit-mask-image: var(--mask);
   mask-image: var(--mask);
   -webkit-mask-size: cover;
@@ -453,33 +451,33 @@ button.card__rotator:disabled {
   mask-mode: luminance;
 }
 
-.card[data-source='swsh'] .card__translater {
+.drif-effect-card[data-source='swsh'] .drif-effect-card__translater {
   --translate-z: calc(var(--card-scale) * 150px + 0.01px);
   -webkit-transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
   transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
 }
 
-.card[data-source='swsh'] .card__rotator {
+.drif-effect-card[data-source='swsh'] .drif-effect-card__rotator {
   transform-style: preserve-3d;
 }
 
-.card[data-source='swsh'] .card__shine {
+.drif-effect-card[data-source='swsh'] .drif-effect-card__shine {
   filter: brightness(0.85) contrast(2.75) saturate(0.65);
 }
 
-.card[data-source='swsh'].masked .card__shine,
-.card[data-source='swsh'].masked .card__shine:before,
-.card[data-source='swsh'].masked .card__shine:after {
+.drif-effect-card[data-source='swsh'].masked .drif-effect-card__shine,
+.drif-effect-card[data-source='swsh'].masked .drif-effect-card__shine:before,
+.drif-effect-card[data-source='swsh'].masked .drif-effect-card__shine:after {
   -webkit-mask-mode: match-source;
   mask-mode: match-source;
 }
 
-.card[data-rarity='rare holo v'] .card__shine {
+.drif-effect-card[data-rarity='rare holo v'] .drif-effect-card__shine {
   filter: brightness(0.7) contrast(2) saturate(0.5);
 }
 
-.card[data-rarity='rare holo v'] .card__shine,
-.card[data-rarity='rare holo v'] .card__shine:after {
+.drif-effect-card[data-rarity='rare holo v'] .drif-effect-card__shine,
+.drif-effect-card[data-rarity='rare holo v'] .drif-effect-card__shine:after {
   --space: 5%;
   --angle: 133deg;
   --imgsize: 500px;
@@ -516,7 +514,7 @@ button.card__rotator:disabled {
   filter: brightness(0.8) contrast(2.95) saturate(0.65);
 }
 
-.card[data-rarity='rare holo v'] .card__shine:after {
+.drif-effect-card[data-rarity='rare holo v'] .drif-effect-card__shine:after {
   content: '';
   background-position: center, 0% var(--background-y), calc(var(--background-x) * -1) calc(var(--background-y) * -1), var(--background-x) var(--background-y);
   background-size: var(--imgsize) 100%, 200% 400%, 195% 100%, 200% 100%;
@@ -524,7 +522,7 @@ button.card__rotator:disabled {
   mix-blend-mode: soft-light;
 }
 
-.card[data-rarity='rare holo v'] .card__glare {
+.drif-effect-card[data-rarity='rare holo v'] .drif-effect-card__glare {
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
     hsl(0, 0%, 100%) 0%,
@@ -536,7 +534,7 @@ button.card__rotator:disabled {
   filter: brightness(0.9) contrast(1.75);
 }
 
-.card[data-source='swsh'][data-rarity='rare holo'] .card__shine {
+.drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__shine {
   --scanlines-space: 1px;
   --scanlines-light: #666;
   --scanlines-dark: black;
@@ -578,7 +576,7 @@ button.card__rotator:disabled {
   mix-blend-mode: color-dodge;
 }
 
-.card[data-source='swsh'][data-rarity='rare holo'] .card__shine:before {
+.drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__shine:before {
   content: '';
   background-image:
     repeating-linear-gradient(
@@ -608,7 +606,7 @@ button.card__rotator:disabled {
   mix-blend-mode: hard-light;
 }
 
-.card[data-source='swsh'][data-rarity='rare holo'] .card__shine:after {
+.drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__shine:after {
   content: '';
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
@@ -623,18 +621,18 @@ button.card__rotator:disabled {
 }
 
 @media screen and (max-width: 900px) {
-  .card[data-source='swsh'][data-rarity='rare holo'] .card__shine {
+  .drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__shine {
     --scanlines-space: 0.5px;
   }
 }
 
-.card[data-source='swsh'][data-rarity='rare holo'] .card__glare {
+.drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__glare {
   opacity: calc(var(--card-opacity) * 0.8);
   filter: brightness(0.8) contrast(1.5);
   mix-blend-mode: overlay;
 }
 
-.card[data-source='swsh'][data-rarity='rare holo'] .card__glare:after {
+.drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__glare:after {
   content: '';
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
@@ -646,8 +644,8 @@ button.card__rotator:disabled {
   filter: brightness(0.6) contrast(3);
 }
 
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine,
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:after {
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine,
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:after {
   --space: 5%;
   --angle: 133deg;
   --imgsize: cover;
@@ -688,7 +686,7 @@ button.card__rotator:disabled {
   filter: brightness(calc((var(--pointer-from-center) * 0.4) + 0.4)) contrast(1.4) saturate(2.25);
 }
 
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:after {
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:after {
   content: '';
   background-position:
     center center,
@@ -700,7 +698,7 @@ button.card__rotator:disabled {
   mix-blend-mode: exclusion;
 }
 
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:before {
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:before {
   content: '';
   -webkit-mask-image: none;
   mask-image: none;
@@ -716,7 +714,7 @@ button.card__rotator:disabled {
   z-index: 1;
 }
 
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__glare {
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__glare {
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
     hsl(0, 0%, 75%) 5%,
@@ -730,15 +728,15 @@ button.card__rotator:disabled {
   opacity: calc(var(--card-opacity) * 0.75);
 }
 
-.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine {
+.drif-effect-card[data-subtypes*='supporter'][data-rarity='rare ultra'] .drif-effect-card__shine {
   filter: brightness(calc((var(--pointer-from-center) * 0.05) + 0.8)) contrast(1.75) saturate(1.2);
 }
 
-.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine:after {
+.drif-effect-card[data-subtypes*='supporter'][data-rarity='rare ultra'] .drif-effect-card__shine:after {
   filter: brightness(calc((var(--pointer-from-center) * 0.4) + 0.85)) contrast(2) saturate(0.5);
 }
 
-.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine:before {
+.drif-effect-card[data-subtypes*='supporter'][data-rarity='rare ultra'] .drif-effect-card__shine:before {
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
     hsl(0, 0%, 100%) 0%,
@@ -748,14 +746,14 @@ button.card__rotator:disabled {
   opacity: 0.5;
 }
 
-.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__glare {
+.drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__glare {
   opacity: calc(var(--card-opacity) * 0.75);
   mix-blend-mode: multiply;
   filter: brightness(1.5) contrast(1.4) saturate(1);
   background-size: 170% 170%;
 }
 
-.card[data-rarity='amazing rare'] .card__shine {
+.drif-effect-card[data-rarity='amazing rare'] .drif-effect-card__shine {
   background-image:
     var(--glitter),
     var(--glitter),
@@ -771,7 +769,7 @@ button.card__rotator:disabled {
   filter: brightness(1) contrast(1) saturate(0.9);
 }
 
-.card[data-rarity='amazing rare'] .card__shine:before {
+.drif-effect-card[data-rarity='amazing rare'] .drif-effect-card__shine:before {
   content: '';
   -webkit-mask-image: none !important;
   mask-image: none !important;
@@ -791,7 +789,7 @@ button.card__rotator:disabled {
   opacity: 0.5;
 }
 
-.card[data-rarity='amazing rare'] .card__shine:after {
+.drif-effect-card[data-rarity='amazing rare'] .drif-effect-card__shine:after {
   content: '';
   -webkit-mask-image: none !important;
   mask-image: none !important;
@@ -811,7 +809,7 @@ button.card__rotator:disabled {
   mix-blend-mode: saturation;
 }
 
-.card.masked[data-rarity='amazing rare'] .card__glare {
+.drif-effect-card.masked[data-rarity='amazing rare'] .drif-effect-card__glare {
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
     hsla(50, 20%, 90%, 0.45) 0%,
@@ -821,7 +819,7 @@ button.card__rotator:disabled {
   filter: brightness(0.9) contrast(2);
 }
 
-.card.masked[data-rarity='amazing rare'] .card__glare:after {
+.drif-effect-card.masked[data-rarity='amazing rare'] .drif-effect-card__glare:after {
   content: '';
   -webkit-mask-image: var(--mask);
   mask-image: var(--mask);
