@@ -11,8 +11,7 @@ React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fu
 - Configure everything else in **committed config**:
   - `src/lib/firebase.ts` (Firebase non-secret config, functions region)
   - `src/App.tsx` (delivery encryption public key)
-  - `src/config/deployment.ts` (drop-specific frontend deployment config)
-  - `src/config/deployed.ts` (auto-updated by `npm run deploy-all-onchain`)
+  - `src/config/deployment.ts` (drop-specific frontend deployment config, auto-updated by `npm run deploy-all-onchain`)
 - Run dev server: `npm run dev`
 - Build for production: `npm run build` (outputs `dist/`)
 
@@ -57,7 +56,7 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
     - To change cluster/RPC/reuse behavior or pin an existing MPL-Core collection, edit the constants at the top of `scripts/deploy-all-onchain.ts`.
   - Reuse the existing program id/keypair (upgrade in-place): set `REUSE_PROGRAM_ID = true` in `scripts/deploy-all-onchain.ts` (skips init if the config PDA already exists).
   - Updates tracked config files:
-    - `src/config/deployed.ts` (frontend)
+    - `src/config/deployment.ts` (frontend)
     - `functions/src/config/deployment.ts` (cloud functions)
   - Prints remaining required config keys (does **not** print `COSIGNER_SECRET`).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).

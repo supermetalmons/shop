@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -148,20 +148,35 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const root = path.resolve(__dirname, '..');
 
-  const deployedCfgPath = path.join(root, 'src', 'config', 'deployed.ts');
-  const clusterStr = readExistingTsObjectStringField(deployedCfgPath, 'solanaCluster') as SolanaCluster | undefined;
-  const programIdStr = readExistingTsObjectStringField(deployedCfgPath, 'boxMinterProgramId');
+  const frontendDeploymentCfgPath = path.join(root, 'src', 'config', 'deployment.ts');
+  const legacyFrontendDeployedCfgPath = path.join(root, 'src', 'config', 'deployed.ts');
+
+  // Prefer the canonical config path. Keep a legacy fallback only for older checkouts.
+  const frontendCfgPath = existsSync(frontendDeploymentCfgPath) ? frontendDeploymentCfgPath : legacyFrontendDeployedCfgPath;
+  if (!existsSync(frontendCfgPath)) {
+    throw new Error(
+      `Could not find frontend deployment config.\n` +
+        `Checked:\n` +
+        `  - ${frontendDeploymentCfgPath}\n` +
+        `  - ${legacyFrontendDeployedCfgPath}\n` +
+        `Make sure you've run:\n` +
+        `  npm run deploy-all-onchain\n`,
+    );
+  }
+
+  const clusterStr = readExistingTsObjectStringField(frontendCfgPath, 'solanaCluster') as SolanaCluster | undefined;
+  const programIdStr = readExistingTsObjectStringField(frontendCfgPath, 'boxMinterProgramId');
 
   if (!clusterStr || !['devnet', 'testnet', 'mainnet-beta'].includes(clusterStr)) {
     throw new Error(
-      `Could not read solanaCluster from ${deployedCfgPath}.\n` +
+      `Could not read solanaCluster from ${frontendCfgPath}.\n` +
         `Make sure you've run:\n` +
         `  npm run deploy-all-onchain\n`,
     );
   }
   if (!programIdStr) {
     throw new Error(
-      `Could not read boxMinterProgramId from ${deployedCfgPath}.\n` +
+      `Could not read boxMinterProgramId from ${frontendCfgPath}.\n` +
         `Make sure you've run:\n` +
         `  npm run deploy-all-onchain\n`,
     );
@@ -218,5 +233,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
-

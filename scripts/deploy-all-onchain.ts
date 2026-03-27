@@ -405,7 +405,7 @@ function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, st
   writeTextFileIfChanged(args.filePath, JSON.stringify(payload, null, 2));
 }
 
-function writeFrontendDeployedConfig(args: {
+function writeFrontendDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
@@ -421,18 +421,24 @@ function writeFrontendDeployedConfig(args: {
   boxMinterProgramId: string;
   collectionMint: string;
 }) {
-  const filePath = path.join(args.root, 'src', 'config', 'deployed.ts');
+  const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
   const content = `/**
- * Frontend values produced by on-chain deployment (COMMITTED).
+ * Frontend deployment constants (COMMITTED).
  *
- * This file is intended to be overwritten by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`).
- * Keep non-deployment frontend runtime config outside this file.
+ * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
+ * an on-chain deployment.
+ *
+ * Secrets:
+ * - Do NOT put secrets here.
+ * - \`VITE_HELIUS_API_KEY\` and \`VITE_FIREBASE_API_KEY\` may be provided via env to
+ *   override the bundled frontend defaults in \`src/lib/helius.ts\` and \`src/lib/firebase.ts\`.
  */
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
-export type FrontendDeployedConfig = {
+export type FrontendDeploymentConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
 
@@ -446,24 +452,12 @@ export type FrontendDeployedConfig = {
   namePrefix: string;
   symbol: string;
 
+  // On-chain ids
   boxMinterProgramId: string;
   collectionMint: string;
-};
 
-export const FRONTEND_DEPLOYED: FrontendDeployedConfig = {
-  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
-  dropId: ${tsStringLiteral(args.dropId)},
-  metadataBase: ${tsStringLiteral(args.metadataBase)},
-  treasury: ${tsStringLiteral(args.treasury)},
-  priceSol: ${Number(args.priceSol)},
-  discountPriceSol: ${Number(args.discountPriceSol)},
-  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
-  maxSupply: ${Number(args.maxSupply)},
-  maxPerTx: ${Number(args.maxPerTx)},
-  namePrefix: ${tsStringLiteral(args.namePrefix)},
-  symbol: ${tsStringLiteral(args.symbol)},
-  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
-  collectionMint: ${tsStringLiteral(args.collectionMint)},
+  // Canonical derived drop paths (avoid duplicating URL strings).
+  paths: DropPaths;
 };
 
 export type DropPaths = {
@@ -493,12 +487,32 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
   };
 }
 
-/**
- * Canonical derived paths for the current drop.
- *
- * Keep all path building in one place to avoid duplicating URL strings.
- */
-export const FRONTEND_PATHS = dropPathsFromBase(FRONTEND_DEPLOYED.metadataBase);
+const FRONTEND_METADATA_BASE = ${tsStringLiteral(args.metadataBase)};
+
+export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = {
+  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
+  dropId: ${tsStringLiteral(args.dropId)},
+
+  // Drop metadata base (collection.json + json/* + images/*)
+  metadataBase: FRONTEND_METADATA_BASE,
+
+  // Drop config (kept in sync with on-chain config; useful for UI defaults)
+  treasury: ${tsStringLiteral(args.treasury)},
+  priceSol: ${Number(args.priceSol)},
+  discountPriceSol: ${Number(args.discountPriceSol)},
+  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
+  maxSupply: ${Number(args.maxSupply)},
+  maxPerTx: ${Number(args.maxPerTx)},
+  namePrefix: ${tsStringLiteral(args.namePrefix)},
+  symbol: ${tsStringLiteral(args.symbol)},
+
+  // On-chain ids
+  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
+  collectionMint: ${tsStringLiteral(args.collectionMint)},
+
+  // Canonical derived drop paths (avoid duplicating URL strings).
+  paths: dropPathsFromBase(FRONTEND_METADATA_BASE),
+};
 `;
   writeTextFileIfChanged(filePath, content);
   return filePath;
@@ -1671,7 +1685,7 @@ async function main() {
 
     const resolvedDropBase = normalizeDropBase(cfg.uriBase) || normalizeDropBase(DROP_METADATA_BASE);
 
-    const frontendCfgPath = writeFrontendDeployedConfig({
+    const frontendCfgPath = writeFrontendDeploymentConfig({
       root,
       solanaCluster: cluster,
       dropId: DROP_ID,
@@ -1848,7 +1862,7 @@ async function main() {
   const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
   const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
 
-  const frontendCfgPath = writeFrontendDeployedConfig({
+  const frontendCfgPath = writeFrontendDeploymentConfig({
     root,
     solanaCluster: cluster,
     dropId: DROP_ID,
