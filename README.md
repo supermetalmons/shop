@@ -9,7 +9,9 @@ React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fu
   - `VITE_FIREBASE_API_KEY`
 - If unset, the frontend falls back to the bundled defaults in `src/lib/helius.ts` and `src/lib/firebase.ts`.
 - Configure everything else in **committed config**:
-  - `src/config/deployment.ts` (Firebase non-secret config, delivery encryption public key)
+  - `src/lib/firebase.ts` (Firebase non-secret config, functions region)
+  - `src/App.tsx` (delivery encryption public key)
+  - `src/config/deployment.ts` (drop-specific frontend deployment config)
   - `src/config/deployed.ts` (auto-updated by `npm run deploy-all-onchain`)
 - Run dev server: `npm run dev`
 - Build for production: `npm run build` (outputs `dist/`)
@@ -26,7 +28,7 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Wait for the Amplify job to finish: `npm run deploy -- <branch> --wait`
 
 #### Address encryption key
-- Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `src/config/deployment.ts` (`addressEncryptionPublicKey`):
+- Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `src/App.tsx` (`ADDRESS_ENCRYPTION_PUBLIC_KEY`):
   ```bash
   node -e "const nacl=require('tweetnacl');const kp=nacl.box.keyPair();console.log('pub',Buffer.from(kp.publicKey).toString('base64'));console.log('secret',Buffer.from(kp.secretKey).toString('base64'));"
   ```

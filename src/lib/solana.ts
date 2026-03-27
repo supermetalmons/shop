@@ -137,9 +137,7 @@ export function encryptAddressPayload(
 ): { cipherText: string; hint: string } {
   const rawKey = (recipientPublicKey || '').trim();
   if (!rawKey) {
-    throw new Error(
-      'Missing address encryption public key (set src/config/deployment.ts `addressEncryptionPublicKey` to a base64 Curve25519 public key)',
-    );
+    throw new Error('Missing address encryption public key (set `ADDRESS_ENCRYPTION_PUBLIC_KEY` in src/App.tsx)');
   }
 
   let remoteKey: Uint8Array;

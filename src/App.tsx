@@ -36,6 +36,8 @@ import { calculateDeliveryLamports } from './lib/shipping';
 import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
+const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
+
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
 }
@@ -2028,9 +2030,9 @@ function App() {
       setSelected(new Set(deliverableIds));
     }
 
-    const encryptionKey = (FRONTEND_DEPLOYMENT.addressEncryptionPublicKey || '').trim();
+    const encryptionKey = (ADDRESS_ENCRYPTION_PUBLIC_KEY || '').trim();
     if (!encryptionKey) {
-      showToast('Missing address encryption public key (src/config/deployment.ts)');
+      showToast('Missing address encryption public key (src/App.tsx)');
       return;
     }
 

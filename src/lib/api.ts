@@ -1,7 +1,7 @@
 import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
-import { auth, firebaseApp } from './firebase';
+import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp } from './firebase';
 import {
   DeliverySelection,
   FulfillmentStatus,
@@ -17,7 +17,7 @@ import { boxMinterProgramId } from './boxMinter';
 import { getHeliusApiKey } from './helius';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
-const region = FRONTEND_DEPLOYMENT.firebaseFunctionsRegion;
+const region = FIREBASE_FUNCTIONS_REGION;
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
 
 let authReadyPromise: Promise<string> | null = null;

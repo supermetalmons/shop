@@ -2,8 +2,7 @@
  * Frontend values produced by on-chain deployment (COMMITTED).
  *
  * This file is intended to be overwritten by `scripts/deploy-all-onchain.ts` (`npm run deploy-all-onchain`).
- * Put anything that is NOT produced by deployment (Firebase non-secret config,
- * encryption public key, etc) in `src/config/deployment.ts`.
+ * Keep non-deployment frontend runtime config outside this file.
  */
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
