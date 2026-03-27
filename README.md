@@ -4,9 +4,10 @@ React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fu
 
 ## Frontend
 - Install deps: `npm install`
-- Configure **secrets via env only** (local dev: in your shell, or a local `.env` that you do NOT commit):
+- Optional env overrides for the frontend's public client-side API keys (local dev: in your shell, or a local `.env` that you do NOT commit):
   - `VITE_HELIUS_API_KEY`
   - `VITE_FIREBASE_API_KEY`
+- If unset, the frontend falls back to the bundled defaults in `src/lib/helius.ts` and `src/lib/firebase.ts`.
 - Configure everything else in **committed config**:
   - `src/config/deployment.ts` (Firebase non-secret config, delivery encryption public key)
   - `src/config/deployed.ts` (auto-updated by `npm run deploy-all-onchain`)
@@ -14,10 +15,10 @@ React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fu
 - Build for production: `npm run build` (outputs `dist/`)
 
 ## Deployment
-The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amplify, Netlify, Vercel, S3/CloudFront, etc). Only the two env vars above are required at build time; everything else is in committed config.
+The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amplify, Netlify, Vercel, S3/CloudFront, etc). The two env vars above are optional overrides; everything else is in committed config.
 
 ### Deploy to Amplify
-- Set Amplify branch env vars:
+- Set Amplify branch env vars if you want to override the bundled frontend API-key defaults:
   - `VITE_HELIUS_API_KEY`
   - `VITE_FIREBASE_API_KEY`
 - Deploy: `npm run deploy -- <branch>`

@@ -6,7 +6,8 @@
  *
  * Secrets:
  * - Do NOT put secrets here.
- * - Only `VITE_HELIUS_API_KEY` and `VITE_FIREBASE_API_KEY` should be provided via env.
+ * - `VITE_HELIUS_API_KEY` and `VITE_FIREBASE_API_KEY` may be provided via env to
+ *   override the bundled frontend defaults in `src/lib/helius.ts` and `src/lib/firebase.ts`.
  */
 import { FRONTEND_DEPLOYED, FRONTEND_PATHS } from './deployed';
 
@@ -33,5 +34,4 @@ export const FRONTEND_DEPLOYMENT = {
 } as const;
 
 export type FrontendDeploymentConfig = typeof FRONTEND_DEPLOYMENT;
-
 

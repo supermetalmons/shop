@@ -1,9 +1,9 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
-import { FRONTEND_RUNTIME } from '../config/runtime';
 
-const firebaseApiKey = FRONTEND_RUNTIME.firebaseApiKey;
+const DEFAULT_FIREBASE_API_KEY = 'AIzaSyA3NTv_zfVYMB2VNORxbKg3rJUsiMXIhko';
+const firebaseApiKey = (import.meta.env?.VITE_FIREBASE_API_KEY || '').trim() || DEFAULT_FIREBASE_API_KEY;
 
 const firebaseConfig = {
   apiKey: firebaseApiKey,

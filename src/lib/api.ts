@@ -61,7 +61,7 @@ export async function ensureAuthenticated(): Promise<string> {
 }
 
 const DEBUG_FUNCTIONS =
-  import.meta.env.DEV ||
+  import.meta.env?.DEV ||
   (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugFunctions') === '1');
 
 function summarizeValue(value: unknown) {
