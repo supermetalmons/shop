@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { DRIF_CARDS } from './drifCards';
+import { soundPlayer } from './lib/SoundPlayer';
 
 const PACK_FRAME_IDS = [
   1, 20, 55, 56, 57, 59, 60, 61, 69, 79, 89, 104, 106, 107, 109, 110, 111, 113, 114, 115, 116, 118, 119, 123, 132,
@@ -9,6 +10,8 @@ const PACK_FRAME_BASE = '/Poncho_Drifella/pack/';
 const BOX_FRAME_COUNT = PACK_FRAME_IDS.length;
 const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
+const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
+const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -68,6 +71,7 @@ export default function WipApp() {
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const preloadedCardsRef = useRef<Set<string>>(new Set());
   const cardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const soundInitPromiseRef = useRef<Promise<void> | null>(null);
 
   const revealComplete = frame >= BOX_FRAME_COUNT;
   const cardVisible = revealComplete;
@@ -106,6 +110,23 @@ export default function WipApp() {
     cardPreloadImagesRef.current.set(imageSrc, card);
     preloadedCardsRef.current.add(imageSrc);
     card.src = imageSrc;
+  }, []);
+
+  const ensureSoundReady = useCallback(() => {
+    if (soundPlayer.isInitialized) return Promise.resolve();
+    if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
+    const promise = soundPlayer.initializeOnUserInteraction(true);
+    soundInitPromiseRef.current = promise.finally(() => {
+      if (soundInitPromiseRef.current === promise) {
+        soundInitPromiseRef.current = null;
+      }
+    });
+    return soundInitPromiseRef.current;
+  }, []);
+
+  const preloadRevealSounds = useCallback(() => {
+    void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
+    void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
   }, []);
 
   const revealOverlayStyle = useMemo<React.CSSProperties>(() => {
@@ -168,10 +189,26 @@ export default function WipApp() {
     });
   }, [constrainedNetwork, preloadCard]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    preloadRevealSounds();
+  }, [preloadRevealSounds]);
+
+  const handleRevealBoxPointerDown = useCallback(() => {
+    void ensureSoundReady().then(() => {
+      preloadRevealSounds();
+    });
+  }, [ensureSoundReady, preloadRevealSounds]);
+
   const handleRevealBoxClick = useCallback(() => {
     if (revealComplete) return;
-    setFrame((prev) => Math.min(prev + 1, BOX_FRAME_COUNT));
-  }, [revealComplete]);
+    const nextFrame = Math.min(frame + 1, BOX_FRAME_COUNT);
+    const soundUrl = nextFrame >= BOX_FRAME_COUNT ? BOX_SOUND_REVEAL_URL : BOX_SOUND_CLICK_URL;
+    void ensureSoundReady().then(() => {
+      void soundPlayer.playSound(soundUrl, 0.42);
+    });
+    setFrame(nextFrame);
+  }, [ensureSoundReady, frame, revealComplete]);
 
   const handleRevealBoxKeyDown = useCallback(
     (evt: React.KeyboardEvent<HTMLDivElement>) => {
@@ -220,6 +257,7 @@ export default function WipApp() {
             tabIndex={revealComplete ? -1 : 0}
             aria-label="Open pack"
             aria-disabled={revealComplete}
+            onPointerDown={handleRevealBoxPointerDown}
             onClick={(evt) => {
               evt.stopPropagation();
               handleRevealBoxClick();
