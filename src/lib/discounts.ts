@@ -3,19 +3,18 @@ type DiscountMerkleJson = {
   proofs: Record<string, string[]>;
 };
 
-const discountMerkleModules = import.meta.glob<{ default: DiscountMerkleJson }>(
-  '../drops/discountMerkles/*.json',
-  { eager: true },
-);
+const discountMerkleModules = import.meta.glob<{ default: DiscountMerkleJson }>('../drops/discountMerkles/*.json');
 
-const discountMerkleByDropId: Record<string, DiscountMerkleJson> = {};
-for (const [modulePath, moduleData] of Object.entries(discountMerkleModules)) {
+const discountMerkleByDropId = new Map<string, DiscountMerkleJson>();
+const discountMerkleLoadersByDropId = new Map<string, () => Promise<{ default: DiscountMerkleJson }>>();
+for (const [modulePath, moduleLoader] of Object.entries(discountMerkleModules)) {
   const match = modulePath.match(/\/([^/]+)\.json$/);
   if (!match) continue;
-  discountMerkleByDropId[normalizeDropId(match[1])] = moduleData.default;
+  discountMerkleLoadersByDropId.set(normalizeDropId(match[1]), moduleLoader);
 }
 
 const warnedDropIds = new Set<string>();
+const loadByDropId = new Map<string, Promise<DiscountMerkleJson | null>>();
 
 function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
@@ -28,15 +27,41 @@ function warnDiscountMerkleIssue(dropId: string, message: string): void {
   console.warn(`[mons] ${message}`);
 }
 
-function resolveDiscountMerkle(dropId: string): DiscountMerkleJson | null {
+async function resolveDiscountMerkle(dropId: string): Promise<DiscountMerkleJson | null> {
   const normalizedDropId = normalizeDropId(dropId);
   if (!normalizedDropId) {
     warnDiscountMerkleIssue(dropId, 'Discount merkle lookup skipped: dropId is empty');
     return null;
   }
-  const merkle = discountMerkleByDropId[normalizedDropId];
-  if (!merkle) {
+  const cached = discountMerkleByDropId.get(normalizedDropId);
+  if (cached) return cached;
+
+  const pending = loadByDropId.get(normalizedDropId);
+  if (pending) return pending;
+
+  const loader = discountMerkleLoadersByDropId.get(normalizedDropId);
+  if (!loader) {
     warnDiscountMerkleIssue(dropId, `Missing discount merkle data for dropId: ${normalizedDropId}`);
+    return null;
+  }
+  const merklePromise = loader()
+    .then((moduleData) => {
+      discountMerkleByDropId.set(normalizedDropId, moduleData.default);
+      return moduleData.default;
+    })
+    .catch((err) => {
+      warnDiscountMerkleIssue(
+        dropId,
+        `Failed to load discount merkle data for dropId ${normalizedDropId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    })
+    .finally(() => {
+      loadByDropId.delete(normalizedDropId);
+    });
+  loadByDropId.set(normalizedDropId, merklePromise);
+  const merkle = await merklePromise;
+  if (!merkle) {
     return null;
   }
   return merkle;
@@ -54,18 +79,18 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-export function getDiscountMerkleRootHex(dropId: string): string | null {
-  return resolveDiscountMerkle(dropId)?.root ?? null;
+export async function getDiscountMerkleRootHex(dropId: string): Promise<string | null> {
+  return (await resolveDiscountMerkle(dropId))?.root ?? null;
 }
 
-export function isDiscountListed(dropId: string, address: string): boolean {
-  const proofs = resolveDiscountMerkle(dropId)?.proofs;
+export async function isDiscountListed(dropId: string, address: string): Promise<boolean> {
+  const proofs = (await resolveDiscountMerkle(dropId))?.proofs;
   if (!proofs) return false;
   return Boolean(proofs[address]);
 }
 
-export function getDiscountProof(dropId: string, address: string): Uint8Array[] | null {
-  const proofs = resolveDiscountMerkle(dropId)?.proofs;
+export async function getDiscountProof(dropId: string, address: string): Promise<Uint8Array[] | null> {
+  const proofs = (await resolveDiscountMerkle(dropId))?.proofs;
   if (!proofs) return null;
   const proof = proofs[address];
   if (!proof) return null;

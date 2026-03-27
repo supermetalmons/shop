@@ -1635,17 +1635,17 @@ function App() {
       setDiscountChecking(false);
       return;
     }
-    const address = publicKey.toBase58();
-    if (!isDiscountListed(FRONTEND_DEPLOYMENT.dropId, address)) {
-      setDiscountEligible(false);
-      setDiscountChecking(false);
-      return;
-    }
-
     let cancelled = false;
     setDiscountChecking(true);
     (async () => {
+      const address = publicKey.toBase58();
       try {
+        const listed = await isDiscountListed(FRONTEND_DEPLOYMENT.dropId, address);
+        if (cancelled) return;
+        if (!listed) {
+          setDiscountEligible(false);
+          return;
+        }
         const [discountPda] = discountMintRecordPda(publicKey);
         const info = await connection.getAccountInfo(discountPda, 'confirmed');
         if (cancelled) return;
@@ -1726,7 +1726,7 @@ function App() {
 
     setDiscountMinting(true);
     try {
-      const proof = getDiscountProof(FRONTEND_DEPLOYMENT.dropId, publicKey.toBase58());
+      const proof = await getDiscountProof(FRONTEND_DEPLOYMENT.dropId, publicKey.toBase58());
       if (!proof) {
         setDiscountEligible(false);
         showToast('Wallet is not eligible for the discount');
