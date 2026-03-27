@@ -154,7 +154,7 @@ function toCssVars(glare: SpringVec3, rotate: SpringVec2, background: SpringVec2
     ['--pointer-from-center' as never]: String(pointerFromCenter),
     ['--pointer-from-top' as never]: String(glare.y / 100),
     ['--pointer-from-left' as never]: String(glare.x / 100),
-    ['--card-opacity' as never]: String(glare.o),
+    ['--card-opacity' as never]: String(Math.min(glare.o, 0.99)),
     ['--rotate-x' as never]: `${rotate.x}deg`,
     ['--rotate-y' as never]: `${rotate.y}deg`,
     ['--rotate-delta' as never]: '0deg',
@@ -185,6 +185,7 @@ export default function DrifEffectCard({
     glare: SpringVec3;
   } | null>(null);
   const interactTimerRef = useRef<number | null>(null);
+  const interactingRef = useRef(false);
   const visibleRef = useRef(typeof document === 'undefined' ? true : document.visibilityState === 'visible');
   const springsRef = useRef({
     rotate: createSpring<SpringVec2>({ x: 0, y: 0 }, { stiffness: 0.066, damping: 0.25 }),
@@ -260,8 +261,18 @@ export default function DrifEffectCard({
 
       applyStylesFromSprings();
 
-      if (!settled) {
+      if (!settled || interactingRef.current) {
         animationFrameRef.current = requestAnimationFrame(tickSprings);
+        if (settled && interactingRef.current) {
+          const el = cardRef.current;
+          if (el) {
+            const gl = springs.glare.current as SpringVec3;
+            const bg = springs.background.current as SpringVec2;
+            const nudge = Math.sin(now * 0.002) * 0.01;
+            el.style.setProperty('--pointer-x', `${gl.x + nudge}%`);
+            el.style.setProperty('--background-x', `${bg.x + nudge}%`);
+          }
+        }
         return;
       }
 
@@ -306,6 +317,7 @@ export default function DrifEffectCard({
       };
 
       clearInteractTimer();
+      interactingRef.current = true;
       setInteracting(true);
 
       pendingSpringUpdateRef.current = {
@@ -344,6 +356,7 @@ export default function DrifEffectCard({
   const interact = useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
       if (!visibleRef.current) {
+        interactingRef.current = false;
         setInteracting(false);
         return;
       }
@@ -369,11 +382,12 @@ export default function DrifEffectCard({
       }
       pendingSpringUpdateRef.current = null;
 
-      interactTimerRef.current = window.setTimeout(() => {
-        const springs = springsRef.current;
-        const snapStiff = 0.01;
-        const snapDamp = 0.06;
-        setInteracting(false);
+    interactTimerRef.current = window.setTimeout(() => {
+      const springs = springsRef.current;
+      const snapStiff = 0.01;
+      const snapDamp = 0.06;
+      interactingRef.current = false;
+      setInteracting(false);
 
         springs.rotate.stiffness = snapStiff;
         springs.rotate.damping = snapDamp;
@@ -429,6 +443,7 @@ export default function DrifEffectCard({
   useEffect(() => {
     if (preserveTransformOnCardChange) return;
     setLoading(true);
+    interactingRef.current = false;
     setInteracting(false);
     reset();
   }, [card.imageSrc, preserveTransformOnCardChange, reset]);

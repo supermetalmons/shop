@@ -410,6 +410,13 @@ button.drif-effect-card__rotator:disabled {
   border-radius: var(--card-radius);
 }
 
+.drif-effect-card__shine:before,
+.drif-effect-card__shine:after,
+.drif-effect-card__glare:before,
+.drif-effect-card__glare:after {
+  opacity: 0.99;
+}
+
 .drif-effect-card__shine:after {
   --sunpillar-clr-1: var(--sunpillar-6);
   --sunpillar-clr-2: var(--sunpillar-1);
@@ -833,5 +840,5 @@ button.drif-effect-card__rotator:disabled {
   );
   filter: brightness(1) contrast(1.5);
   mix-blend-mode: overlay;
-  opacity: 1;
+  opacity: 0.99;
 }
