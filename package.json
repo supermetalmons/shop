@@ -12,7 +12,8 @@
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
-    "start-mint": "node --experimental-strip-types scripts/startMint.ts"
+    "start-mint": "node --experimental-strip-types scripts/startMint.ts",
+    "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts"
   },
   "repository": {
     "type": "git",
