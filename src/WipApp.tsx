@@ -12,6 +12,10 @@ const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
 const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
+const PACK_AUTOPLAY_TRIGGER_ID = 107;
+const PACK_AUTOPLAY_TRIGGER_INDEX = PACK_FRAME_IDS.findIndex((frameId) => frameId === PACK_AUTOPLAY_TRIGGER_ID);
+const PACK_AUTOPLAY_TRIGGER_FRAME = PACK_AUTOPLAY_TRIGGER_INDEX >= 0 ? PACK_AUTOPLAY_TRIGGER_INDEX + 1 : BOX_FRAME_COUNT;
+const PACK_AUTOPLAY_DELAY_MS = 35;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -73,11 +77,13 @@ export default function WipApp() {
   const preloadedCardsRef = useRef<Set<string>>(new Set());
   const cardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const revealSoundPlayedRef = useRef(false);
 
   const revealComplete = frame >= BOX_FRAME_COUNT;
+  const autoOpening = frame >= PACK_AUTOPLAY_TRIGGER_FRAME && frame < BOX_FRAME_COUNT;
   const cardVisible = revealComplete;
   const stage = cardVisible ? 'revealed' : 'ready';
-  const revealNote = cardVisible ? '' : frame > 1 ? 'keep clicking the pack' : 'click the pack to open';
+  const revealNote = cardVisible ? '' : autoOpening ? 'opening...' : frame > 1 ? 'keep clicking the pack' : 'click the pack to open';
   const revealBoxFrameSrc = getPackFrameSrc(frame);
   const currentCard = DRIF_CARDS[cardIndex];
 
@@ -199,24 +205,54 @@ export default function WipApp() {
     preloadRevealSounds();
   }, [preloadRevealSounds]);
 
+  useEffect(() => {
+    if (!autoOpening) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      const prevFrame = frameRef.current;
+      if (prevFrame >= BOX_FRAME_COUNT) return;
+      const nextFrame = Math.min(prevFrame + 1, BOX_FRAME_COUNT);
+      frameRef.current = nextFrame;
+      setFrame(nextFrame);
+    }, PACK_AUTOPLAY_DELAY_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [autoOpening, frame]);
+
+  useEffect(() => {
+    if (!revealComplete || revealSoundPlayedRef.current) return;
+    revealSoundPlayedRef.current = true;
+    void ensureSoundReady().then(() => {
+      void soundPlayer.playSound(BOX_SOUND_REVEAL_URL, 0.42);
+    });
+  }, [ensureSoundReady, revealComplete]);
+
+  const playClickSound = useCallback(() => {
+    void ensureSoundReady().then(() => {
+      void soundPlayer.playSound(BOX_SOUND_CLICK_URL, 0.42);
+    });
+  }, [ensureSoundReady]);
+
   const advanceRevealFrame = useCallback(() => {
     const prevFrame = frameRef.current;
     if (prevFrame >= BOX_FRAME_COUNT) return;
+    if (prevFrame >= PACK_AUTOPLAY_TRIGGER_FRAME) return;
     const nextFrame = Math.min(prevFrame + 1, BOX_FRAME_COUNT);
     frameRef.current = nextFrame;
     setFrame(nextFrame);
-    const soundUrl = nextFrame >= BOX_FRAME_COUNT ? BOX_SOUND_REVEAL_URL : BOX_SOUND_CLICK_URL;
-    void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(soundUrl, 0.42);
-    });
-  }, [ensureSoundReady]);
+    playClickSound();
+  }, [playClickSound]);
 
   const handleRevealBoxPress = useCallback(() => {
     void ensureSoundReady().then(() => {
       preloadRevealSounds();
     });
+    if (frameRef.current >= PACK_AUTOPLAY_TRIGGER_FRAME && frameRef.current < BOX_FRAME_COUNT) {
+      playClickSound();
+      return;
+    }
     advanceRevealFrame();
-  }, [advanceRevealFrame, ensureSoundReady, preloadRevealSounds]);
+  }, [advanceRevealFrame, ensureSoundReady, playClickSound, preloadRevealSounds]);
 
   const handleRevealBoxPointerDown = useCallback(
     (evt: React.PointerEvent<HTMLDivElement>) => {
@@ -237,6 +273,7 @@ export default function WipApp() {
   );
 
   const handleReset = useCallback(() => {
+    revealSoundPlayedRef.current = false;
     frameRef.current = 1;
     setFrame(1);
     setCardIndex((prev) => {
