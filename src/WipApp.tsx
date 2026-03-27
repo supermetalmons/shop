@@ -1,27 +1,34 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FRONTEND_DEPLOYMENT } from './config/deployment';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { DRIF_CARDS } from './drifCards';
 
-const BOX_FRAME_COUNT = 21;
-const BOX_FRAME_CLICK_MAX = 8;
-const BOX_FRAME_AUTOPLAY_START = 9;
-const BOX_FRAME_MEDIA_START = 10;
-const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+const PACK_FRAME_IDS = [
+  1, 20, 55, 56, 57, 59, 60, 61, 69, 79, 89, 104, 106, 107, 109, 110, 111, 113, 114, 115, 116, 118, 119, 123, 132,
+] as const;
+const PACK_FRAME_BASE = '/Poncho_Drifella/pack/';
+const BOX_FRAME_COUNT = PACK_FRAME_IDS.length;
+const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
-const FRAME_AUTOPLAY_DELAY_MS = 30;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
+function getPackFrameSrc(frameIndex: number) {
+  const frameId = PACK_FRAME_IDS[Math.min(Math.max(frameIndex, 1), BOX_FRAME_COUNT) - 1];
+  return `${PACK_FRAME_BASE}1_${frameId}.webp`;
+}
+
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
-  const maxWidth = viewportWidth * 0.65;
-  const maxHeight = viewportHeight * 0.43;
-  const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * REVEAL_BOX_ASPECT_RATIO)));
+  const portrait = viewportHeight >= viewportWidth;
+  const gutter = portrait ? 8 : 16;
+  const width = portrait
+    ? Math.max(1, Math.floor(Math.min(viewportWidth * 1.4, viewportHeight - gutter * 2)))
+    : Math.max(1, Math.floor(viewportHeight * 0.82 * REVEAL_BOX_ASPECT_RATIO));
   const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
-  const lift = Math.round(height * 0.42);
+  const visualLift = portrait ? Math.min(44, Math.round(height * 0.08)) : Math.min(32, Math.round(height * 0.06));
+  const maxTop = Math.max(gutter, viewportHeight - height - gutter);
   return {
     left: Math.round((viewportWidth - width) / 2),
-    top: Math.max(16, Math.round((viewportHeight - height) / 2) - lift),
+    top: Math.min(maxTop, Math.max(gutter, Math.round((viewportHeight - height) / 2) - visualLift)),
     width,
     height,
   };
@@ -43,7 +50,6 @@ function getInitialTargetRect(): OverlayRect {
 export default function WipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [frame, setFrame] = useState(1);
-  const [autoOpening, setAutoOpening] = useState(false);
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARDS.length));
   const constrainedNetwork = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
@@ -62,27 +68,13 @@ export default function WipApp() {
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const preloadedCardsRef = useRef<Set<string>>(new Set());
   const cardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const autoOpenTimeoutRef = useRef<number | null>(null);
-  const boxFrameBase = `${FRONTEND_DEPLOYMENT.paths.base}/box/`;
 
   const revealComplete = frame >= BOX_FRAME_COUNT;
-  const cardVisible = frame >= BOX_FRAME_MEDIA_START;
+  const cardVisible = revealComplete;
   const stage = cardVisible ? 'revealed' : 'ready';
-  const revealNote = cardVisible
-    ? ''
-    : autoOpening
-      ? 'opening...'
-      : frame >= BOX_FRAME_CLICK_MAX
-        ? 'keep clicking the box'
-        : 'click the box to open';
-  const revealBoxFrameSrc = `${boxFrameBase}${Math.min(Math.max(frame, 1), BOX_FRAME_COUNT)}.webp`;
+  const revealNote = cardVisible ? '' : frame > 1 ? 'keep clicking the pack' : 'click the pack to open';
+  const revealBoxFrameSrc = getPackFrameSrc(frame);
   const currentCard = DRIF_CARDS[cardIndex];
-
-  const clearAutoOpenTimeout = useCallback(() => {
-    if (autoOpenTimeoutRef.current === null) return;
-    window.clearTimeout(autoOpenTimeoutRef.current);
-    autoOpenTimeoutRef.current = null;
-  }, []);
 
   const preloadBoxFrame = useCallback((frameSrc: string) => {
     if (preloadedBoxFramesRef.current.has(frameSrc)) return;
@@ -156,10 +148,9 @@ export default function WipApp() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     for (let frameIndex = 1; frameIndex <= BOX_FRAME_COUNT; frameIndex += 1) {
-      const frameSrc = `${boxFrameBase}${frameIndex}.webp`;
-      preloadBoxFrame(frameSrc);
+      preloadBoxFrame(getPackFrameSrc(frameIndex));
     }
-  }, [boxFrameBase, preloadBoxFrame]);
+  }, [preloadBoxFrame]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -177,38 +168,10 @@ export default function WipApp() {
     });
   }, [constrainedNetwork, preloadCard]);
 
-  useEffect(() => {
-    if (!autoOpening) {
-      clearAutoOpenTimeout();
-      return;
-    }
-    if (revealComplete) {
-      clearAutoOpenTimeout();
-      setAutoOpening(false);
-      return;
-    }
-    clearAutoOpenTimeout();
-    autoOpenTimeoutRef.current = window.setTimeout(() => {
-      autoOpenTimeoutRef.current = null;
-      setFrame((prev) => Math.min(prev + 1, BOX_FRAME_COUNT));
-    }, FRAME_AUTOPLAY_DELAY_MS);
-    return clearAutoOpenTimeout;
-  }, [autoOpening, clearAutoOpenTimeout, revealComplete, frame]);
-
-  useEffect(() => clearAutoOpenTimeout, [clearAutoOpenTimeout]);
-
   const handleRevealBoxClick = useCallback(() => {
-    if (autoOpening || revealComplete) return;
-    if (frame < BOX_FRAME_CLICK_MAX) {
-      setFrame((prev) => Math.min(prev + 1, BOX_FRAME_CLICK_MAX));
-      return;
-    }
-    if (frame === BOX_FRAME_CLICK_MAX) {
-      clearAutoOpenTimeout();
-      setFrame(BOX_FRAME_AUTOPLAY_START);
-      setAutoOpening(true);
-    }
-  }, [autoOpening, clearAutoOpenTimeout, frame, revealComplete]);
+    if (revealComplete) return;
+    setFrame((prev) => Math.min(prev + 1, BOX_FRAME_COUNT));
+  }, [revealComplete]);
 
   const handleRevealBoxKeyDown = useCallback(
     (evt: React.KeyboardEvent<HTMLDivElement>) => {
@@ -220,8 +183,6 @@ export default function WipApp() {
   );
 
   const handleReset = useCallback(() => {
-    clearAutoOpenTimeout();
-    setAutoOpening(false);
     setFrame(1);
     setCardIndex((prev) => {
       if (DRIF_CARDS.length < 2) return prev;
@@ -231,7 +192,7 @@ export default function WipApp() {
       }
       return next;
     });
-  }, [clearAutoOpenTimeout]);
+  }, []);
 
   return (
     <div className="wip-page">
@@ -254,18 +215,18 @@ export default function WipApp() {
             </div>
           </div>
           <div
-            className="reveal-overlay__box"
+            className={`reveal-overlay__box${cardVisible ? ' wip-reveal__box--discarded' : ''}`}
             role="button"
             tabIndex={revealComplete ? -1 : 0}
-            aria-label="Unbox card"
-            aria-disabled={autoOpening || revealComplete}
+            aria-label="Open pack"
+            aria-disabled={revealComplete}
             onClick={(evt) => {
               evt.stopPropagation();
               handleRevealBoxClick();
             }}
             onKeyDown={handleRevealBoxKeyDown}
           >
-            <img src={revealBoxFrameSrc} alt="Mystery box" className="reveal-overlay__image" draggable={false} />
+            <img src={revealBoxFrameSrc} alt="Mystery pack" className="reveal-overlay__image" draggable={false} />
           </div>
         </div>
         <div className="reveal-overlay__note">{revealNote}</div>
