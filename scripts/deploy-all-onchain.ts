@@ -1459,12 +1459,6 @@ async function main() {
   const discountCsvPath = path.join(root, 'scripts', 'discount.csv');
   const discountAddresses = readDiscountList(discountCsvPath);
   const discountMerkle = buildDiscountMerkleData(discountAddresses);
-  const discountMerkleJsonPath = path.join(root, 'src', 'config', 'discountMerkle.json');
-  writeDiscountMerkleJson({
-    root: discountMerkle.root,
-    proofs: discountMerkle.proofs,
-    filePath: discountMerkleJsonPath,
-  });
 
   const cluster: SolanaCluster = SOLANA_CLUSTER;
   const rpcUrlForApps = SOLANA_RPC_URL || clusterApiUrl(cluster);
@@ -1571,6 +1565,12 @@ async function main() {
   // EDIT THESE CONSTANTS to control drop metadata. No ENV/CLI overrides.
   const DROP_ID = 'little_swag_boxes';
   const DROP_METADATA_BASE = 'https://assets.mons.link/drops/lsb';
+  const discountMerkleJsonPath = path.join(root, 'src', 'drops', 'discountMerkles', `${DROP_ID}.json`);
+  writeDiscountMerkleJson({
+    root: discountMerkle.root,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleJsonPath,
+  });
   const BOX_MINTER_CONFIG = {
     // Payment + mint caps
     // Payments: SOL from box mints + delivery fees go here.

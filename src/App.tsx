@@ -1636,7 +1636,7 @@ function App() {
       return;
     }
     const address = publicKey.toBase58();
-    if (!isDiscountListed(address)) {
+    if (!isDiscountListed(FRONTEND_DEPLOYMENT.dropId, address)) {
       setDiscountEligible(false);
       setDiscountChecking(false);
       return;
@@ -1723,15 +1723,16 @@ function App() {
       return;
     }
     if (mintedOut || discountMinting || minting) return;
-    const proof = getDiscountProof(publicKey.toBase58());
-    if (!proof) {
-      setDiscountEligible(false);
-      showToast('Wallet is not eligible for the discount');
-      return;
-    }
 
     setDiscountMinting(true);
     try {
+      const proof = getDiscountProof(FRONTEND_DEPLOYMENT.dropId, publicKey.toBase58());
+      if (!proof) {
+        setDiscountEligible(false);
+        showToast('Wallet is not eligible for the discount');
+        return;
+      }
+
       const cfg = await fetchBoxMinterConfig(connection);
       const sendOnce = async () => {
         const tx = await buildMintDiscountedBoxTx(connection, cfg, publicKey, proof);
