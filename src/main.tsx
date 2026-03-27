@@ -4,7 +4,6 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import FulfillmentApp from './FulfillmentApp';
-import DrifApp from './DrifApp';
 import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
 
@@ -14,9 +13,11 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
+const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
+const isDrifRoute = path === '/Poncho_Drifella';
 const isWipRoute = path === '/wip';
-const RootApp = path === '/ff' ? FulfillmentApp : path === '/Poncho_Drifella' ? DrifApp : App;
+const RootApp = path === '/ff' ? FulfillmentApp : App;
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
@@ -25,6 +26,10 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         {isWipRoute ? (
           <React.Suspense fallback={null}>
             <WipApp />
+          </React.Suspense>
+        ) : isDrifRoute ? (
+          <React.Suspense fallback={null}>
+            <DrifApp />
           </React.Suspense>
         ) : (
           <RootApp />

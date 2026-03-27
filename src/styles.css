@@ -1163,7 +1163,7 @@ body.wip-body #root {
   pointer-events: auto;
 }
 
-.wip-reveal__card-item .drif-card__rotator {
+.wip-reveal__card-item .card__rotator {
   touch-action: none;
 }
 
@@ -1183,15 +1183,15 @@ body.wip-body #root {
   transform: translate(-50%, -50%);
 }
 
-.wip-reveal__card-item .drif-card {
+.wip-reveal__card-item .card {
   width: 100%;
   max-width: 100%;
 }
 
-.wip-reveal__card-item .drif-card__translater,
-.wip-reveal__card-item .drif-card__rotator,
-.wip-reveal__card-item .drif-card__front,
-.wip-reveal__card-item .drif-card__back {
+.wip-reveal__card-item .card__translater,
+.wip-reveal__card-item .card__rotator,
+.wip-reveal__card-item .card__front,
+.wip-reveal__card-item .card__back {
   width: 100%;
 }
 

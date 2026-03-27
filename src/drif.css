@@ -20,50 +20,11 @@
   position: relative;
   height: 100vh;
   height: 100svh;
+  background-color: #000;
   color: #fff;
   overflow: hidden;
   overscroll-behavior: none;
   touch-action: none;
-  --pointer-x: 50%;
-  --pointer-y: 50%;
-  --card-scale: 1;
-  --card-opacity: 0;
-  --translate-x: 0px;
-  --translate-y: 0px;
-  --rotate-x: 0deg;
-  --rotate-y: 0deg;
-  --background-x: var(--pointer-x);
-  --background-y: var(--pointer-y);
-  --pointer-from-center: 0;
-  --pointer-from-top: var(--pointer-from-center);
-  --pointer-from-left: var(--pointer-from-center);
-  --card-aspect: 0.718;
-  --card-radius: 4.55% / 3.5%;
-  --card-edge: hsl(47, 100%, 78%);
-  --card-back: hsl(205, 100%, 25%);
-  --card-glow: hsl(175, 100%, 90%);
-  --sunpillar-1: hsl(2, 100%, 73%);
-  --sunpillar-2: hsl(53, 100%, 69%);
-  --sunpillar-3: hsl(93, 100%, 69%);
-  --sunpillar-4: hsl(176, 100%, 76%);
-  --sunpillar-5: hsl(228, 100%, 74%);
-  --sunpillar-6: hsl(283, 100%, 73%);
-  --sunpillar-clr-1: var(--sunpillar-1);
-  --sunpillar-clr-2: var(--sunpillar-2);
-  --sunpillar-clr-3: var(--sunpillar-3);
-  --sunpillar-clr-4: var(--sunpillar-4);
-  --sunpillar-clr-5: var(--sunpillar-5);
-  --sunpillar-clr-6: var(--sunpillar-6);
-}
-
-.drif-page,
-.drif-page * {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .drif-main {
@@ -82,6 +43,22 @@
   margin: 0 auto;
 }
 
+.drif-card-showcase .card {
+  width: 100%;
+  max-height: calc(100vh - 210px);
+  max-height: calc(100svh - 210px);
+}
+
+.drif-page .card,
+.wip-reveal__card-item .card {
+  background: transparent;
+  border: none;
+  border-radius: var(--card-radius);
+  padding: 0;
+  display: block;
+  gap: 0;
+}
+
 .drif-notify-area {
   position: absolute;
   bottom: 0;
@@ -94,9 +71,6 @@
   padding-bottom: 12px;
   gap: 12px;
   touch-action: auto;
-  -webkit-user-select: auto;
-  -moz-user-select: auto;
-  -ms-user-select: auto;
   user-select: auto;
   pointer-events: auto;
 }
@@ -136,9 +110,6 @@
 .drif-signup *,
 .drif-notify-area * {
   touch-action: auto;
-  -webkit-user-select: auto;
-  -moz-user-select: auto;
-  -ms-user-select: auto;
   user-select: auto;
   pointer-events: auto;
 }
@@ -152,15 +123,21 @@
   }
 }
 
-.drif-card-showcase .drif-card {
-  width: auto;
-  max-width: 100%;
-  max-height: calc(100vh - 210px);
-  max-height: calc(100svh - 210px);
-}
-
-/* cards.css */
-.drif-card {
+.card {
+  --pointer-x: 50%;
+  --pointer-y: 50%;
+  --card-scale: 1;
+  --card-opacity: 0;
+  --translate-x: 0px;
+  --translate-y: 0px;
+  --rotate-x: 0deg;
+  --rotate-y: 0deg;
+  --rotate-delta: 0deg;
+  --background-x: var(--pointer-x);
+  --background-y: var(--pointer-y);
+  --pointer-from-center: 0;
+  --pointer-from-top: var(--pointer-from-center);
+  --pointer-from-left: var(--pointer-from-center);
   --grain: url('/Poncho_Drifella/img/grain.webp');
   --glitter: url('/Poncho_Drifella/img/glitter.png');
   --glittersize: 25%;
@@ -173,36 +150,25 @@
   --blue: #0dbde9;
   --violet: #c929f1;
   --clip: inset(9.85% 8% 52.85% 8%);
-  --clip-invert: polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%, 0 47.15%, 91.5% 47.15%, 91.5% 9.85%, 8% 9.85%, 8% 47.15%, 0 50%);
   --clip-stage: polygon(91.5% 9.85%, 57% 9.85%, 54% 12%, 17% 12%, 16% 14%, 12% 16%, 8% 16%, 8% 47.15%, 92% 47.15%);
-  --clip-stage-invert: polygon(
-    0% 0%,
-    100% 0%,
-    100% 100%,
-    0% 100%,
-    0 47.15%,
-    91.5% 47.15%,
-    91.5% 9.85%,
-    57% 9.85%,
-    54% 12%,
-    17% 12%,
-    16% 14%,
-    12% 16%,
-    8% 16%,
-    8% 47.15%,
-    0 50%
-  );
   --clip-trainer: inset(14.5% 8.5% 48.2% 8.5%);
-  --clip-borders: inset(2.8% 4% round 2.55% / 1.5%);
-}
-
-.drif-card__shine,
-.drif-card__glare {
-  will-change: transform, opacity, background-image, background-size, background-position, background-blend-mode, filter;
-}
-
-/* base.css */
-.drif-card {
+  --card-aspect: 0.718;
+  --card-radius: 4.55% / 3.5%;
+  --card-edge: hsl(47, 100%, 78%);
+  --card-back: hsl(205, 100%, 25%);
+  --card-glow: hsl(175, 100%, 90%);
+  --sunpillar-1: hsl(2, 100%, 73%);
+  --sunpillar-2: hsl(53, 100%, 69%);
+  --sunpillar-3: hsl(93, 100%, 69%);
+  --sunpillar-4: hsl(176, 100%, 76%);
+  --sunpillar-5: hsl(228, 100%, 74%);
+  --sunpillar-6: hsl(283, 100%, 73%);
+  --sunpillar-clr-1: var(--sunpillar-1);
+  --sunpillar-clr-2: var(--sunpillar-2);
+  --sunpillar-clr-3: var(--sunpillar-3);
+  --sunpillar-clr-4: var(--sunpillar-4);
+  --sunpillar-clr-5: var(--sunpillar-5);
+  --sunpillar-clr-6: var(--sunpillar-6);
   -webkit-transform: translate3d(0px, 0px, 0.01px);
   transform: translate3d(0px, 0px, 0.01px);
   pointer-events: none;
@@ -212,82 +178,90 @@
   transform-style: preserve-3d;
 }
 
-.drif-card,
-.drif-card * {
+.card,
+.card *,
+.drif-page,
+.drif-page * {
   outline: 1px solid transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.drif-card:not(.interactive) .drif-card__translater,
-.drif-card:not(.interactive) .drif-card__rotator,
-.drif-card:not(.interactive) .drif-card__shine,
-.drif-card:not(.interactive) .drif-card__glare {
-  transition: all 0.3s ease;
+.card img,
+.card button {
+  -webkit-user-drag: none;
 }
 
-.drif-card:not(.interactive):hover {
-  --pointer-x: 25% !important;
-  --pointer-y: 10% !important;
-  --card-scale: 1.1 !important;
-  --card-opacity: 1 !important;
-  --translate-x: 0px !important;
-  --translate-y: -10px !important;
-  --rotate-x: 7deg !important;
-  --rotate-y: -19deg !important;
-  --background-x: 44% !important;
-  --background-y: 36% !important;
-  --pointer-from-center: 0.9 !important;
-  --pointer-from-top: 0.11 !important;
-  --pointer-from-left: 0.25 !important;
+.card__shine,
+.card__glare {
+  will-change: transform, opacity, background-image, background-size, background-position, background-blend-mode, filter;
 }
 
-.drif-card.water {
+.card.water {
   --card-glow: hsl(192, 97%, 60%);
 }
-.drif-card.fire {
+
+.card.fire {
   --card-glow: hsl(9, 81%, 59%);
 }
-.drif-card.grass {
+
+.card.grass {
   --card-glow: hsl(96, 81%, 65%);
 }
-.drif-card.lightning {
+
+.card.lightning {
   --card-glow: hsl(54, 87%, 63%);
 }
-.drif-card.psychic {
+
+.card.psychic {
   --card-glow: hsl(281, 62%, 58%);
 }
-.drif-card.fighting {
+
+.card.fighting {
   --card-glow: rgb(145, 90, 39);
 }
-.drif-card.darkness {
+
+.card.darkness {
   --card-glow: hsl(189, 77%, 27%);
 }
-.drif-card.metal {
+
+.card.metal {
   --card-glow: hsl(184, 20%, 70%);
 }
-.drif-card.dragon {
+
+.card.dragon {
   --card-glow: hsl(51, 60%, 35%);
 }
-.drif-card.fairy {
+
+.card.fairy {
   --card-glow: hsl(323, 100%, 89%);
 }
 
-.drif-card,
-.drif-card__rotator {
+.card,
+.card__translater,
+.card__rotator {
+  width: 100%;
+}
+
+.card,
+.card__rotator {
   aspect-ratio: var(--card-aspect);
   border-radius: var(--card-radius);
 }
 
-.drif-card.interacting {
+.card.interacting {
   z-index: calc(var(--card-scale) * 120);
 }
 
-.drif-card.active .drif-card__translater,
-.drif-card.active .drif-card__rotator {
+.card.active .card__translater,
+.card.active .card__rotator {
   touch-action: none;
 }
 
-.drif-card__translater,
-.drif-card__rotator {
+.card__translater,
+.card__rotator {
   display: grid;
   perspective: 600px;
   will-change: transform, box-shadow;
@@ -296,15 +270,13 @@
   transform-style: preserve-3d;
 }
 
-.drif-card__translater {
-  width: auto;
+.card__translater {
   position: relative;
-  --translate-z: calc(var(--card-scale) * 150px + 0.01px);
-  -webkit-transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
-  transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
+  -webkit-transform: translate3d(var(--translate-x), var(--translate-y), 0.1px) scale(var(--card-scale));
+  transform: translate3d(var(--translate-x), var(--translate-y), 0.1px) scale(var(--card-scale));
 }
 
-.drif-card__rotator {
+.card__rotator {
   -webkit-transform: rotateY(var(--rotate-x)) rotateX(var(--rotate-y));
   -webkit-transform-style: preserve-3d;
   transform-style: preserve-3d;
@@ -312,39 +284,39 @@
   pointer-events: auto;
 }
 
-button.drif-card__rotator {
+button.card__rotator {
   border: none;
   background: transparent;
   padding: 0;
   -webkit-appearance: none;
   appearance: none;
-  color: inherit;
 }
 
-button.drif-card__rotator:hover,
-button.drif-card__rotator:focus,
-button.drif-card__rotator:focus-visible,
-button.drif-card__rotator:active,
-button.drif-card__rotator:disabled {
-  background: transparent !important;
-  color: inherit !important;
+button.card__rotator:hover,
+button.card__rotator:focus,
+button.card__rotator:focus-visible,
+button.card__rotator:active,
+button.card__rotator:disabled {
+  background: transparent;
+  color: inherit;
   opacity: 1;
 }
 
-.drif-card__rotator,
-.drif-card.active .drif-card__rotator:focus {
+.card__rotator,
+.card.active .card__rotator:focus {
   transition: box-shadow 0.4s ease, opacity 0.33s ease-out;
   box-shadow:
-    0 0 5px -2px rgba(255, 255, 255, 0.08),
-    0 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 10px 30px -5px rgba(0, 0, 0, 0.6),
-    0 2px 15px -5px rgba(0, 0, 0, 0.4),
+    0 0 3px -1px transparent,
+    0 0 2px 1px transparent,
+    0 0 5px 0 transparent,
+    0 10px 20px -5px black,
+    0 2px 15px -5px black,
     0 0 20px 0 transparent;
 }
 
-.drif-card.glowing .drif-card__rotator,
-.drif-card.active .drif-card__rotator,
-.drif-card__rotator:focus {
+.card.glowing .card__rotator,
+.card.active .card__rotator,
+.card__rotator:focus {
   box-shadow:
     0 0 4px -1px #fff,
     0 0 4px 1px var(--card-edge),
@@ -354,7 +326,7 @@ button.drif-card__rotator:disabled {
     0 0 70px -15px var(--card-glow);
 }
 
-.drif-card__rotator * {
+.card__rotator * {
   width: 100%;
   display: grid;
   grid-area: 1 / 1;
@@ -367,44 +339,46 @@ button.drif-card__rotator:disabled {
   overflow: hidden;
 }
 
-.drif-card__rotator img {
+.card__rotator img {
   height: auto;
 }
 
-.drif-card__rotator img:not(.drif-card__back) {
+.card__rotator img:not(.card__back) {
   -webkit-transform: translate3d(0px, 0px, 0.01px);
   transform: translate3d(0px, 0px, 0.01px);
 }
 
-.drif-card__back {
-  background: var(--card-back);
+.card__back {
+  background-color: var(--card-back);
   -webkit-transform: rotateY(180deg) translateZ(1px);
   transform: rotateY(180deg) translateZ(1px);
   backface-visibility: visible;
 }
 
-.drif-card__front,
-.drif-card__front * {
+.card__front,
+.card__front * {
   backface-visibility: hidden;
 }
 
-.drif-card__front {
+.card__front {
+  background-color: #000;
   opacity: 1;
   transition: opacity 0.33s ease-out;
   -webkit-transform: translate3d(0px, 0px, 0.01px);
   transform: translate3d(0px, 0px, 0.01px);
 }
 
-.loading .drif-card__front {
+.loading .card__front {
   opacity: 0;
 }
 
-.loading .drif-card__back {
+.loading .card__back {
   -webkit-transform: rotateY(0deg);
   transform: rotateY(0deg);
 }
 
-.drif-card__shine {
+.card__shine,
+.card__glitter {
   display: grid;
   transform: translateZ(1px);
   overflow: hidden;
@@ -412,13 +386,21 @@ button.drif-card__rotator:disabled {
   background: transparent;
   background-size: cover;
   background-position: center;
-  filter: brightness(0.85) contrast(2.75) saturate(0.65);
+  border-radius: var(--card-radius);
+  filter: brightness(0.45) contrast(1.5) saturate(1.2);
   mix-blend-mode: color-dodge;
   opacity: var(--card-opacity);
 }
 
-.drif-card__shine:before,
-.drif-card__shine:after {
+.card__glitter {
+  display: none;
+  z-index: 2;
+}
+
+.card__shine:before,
+.card__shine:after,
+.card__glitter:before,
+.card__glitter:after {
   --sunpillar-clr-1: var(--sunpillar-5);
   --sunpillar-clr-2: var(--sunpillar-6);
   --sunpillar-clr-3: var(--sunpillar-1);
@@ -430,7 +412,7 @@ button.drif-card__rotator:disabled {
   border-radius: var(--card-radius);
 }
 
-.drif-card__shine:after {
+.card__shine:after {
   --sunpillar-clr-1: var(--sunpillar-6);
   --sunpillar-clr-2: var(--sunpillar-1);
   --sunpillar-clr-3: var(--sunpillar-2);
@@ -440,7 +422,8 @@ button.drif-card__rotator:disabled {
   transform: translateZ(1.2px);
 }
 
-.drif-card__glare {
+.card__glare,
+.card__glare2 {
   transform: translateZ(1.41px);
   overflow: hidden;
   background-image: radial-gradient(
@@ -453,45 +436,50 @@ button.drif-card__rotator:disabled {
   mix-blend-mode: overlay;
 }
 
-.drif-card.masked .drif-card__shine,
-.drif-card.masked .drif-card__shine:before,
-.drif-card.masked .drif-card__shine:after {
+.card__glare2 {
+  display: none;
+}
+
+.card.masked .card__shine,
+.card.masked .card__shine:before,
+.card.masked .card__shine:after {
   -webkit-mask-image: var(--mask);
   mask-image: var(--mask);
   -webkit-mask-size: cover;
   mask-size: cover;
   -webkit-mask-position: center center;
   mask-position: center center;
+  -webkit-mask-mode: luminance;
+  mask-mode: luminance;
 }
 
-.drif-card[data-rarity='rare holo'] .drif-card__glare:after,
-.drif-card[data-rarity='rare holo cosmos'] .drif-card__glare:after,
-.drif-card[data-rarity$='reverse holo'] .drif-card__glare:after {
-  clip-path: var(--clip);
+.card[data-source='swsh'] .card__translater {
+  --translate-z: calc(var(--card-scale) * 150px + 0.01px);
+  -webkit-transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
+  transform: translate3d(var(--translate-x), var(--translate-y), var(--translate-z)) scale(var(--card-scale));
 }
 
-.drif-card[data-rarity='rare holo'][data-subtypes^='stage'] .drif-card__glare:after,
-.drif-card[data-rarity='rare holo cosmos'][data-subtypes^='stage'] .drif-card__glare:after,
-.drif-card[data-rarity$='reverse holo'][data-subtypes^='stage'] .drif-card__glare:after {
-  clip-path: var(--clip-stage);
+.card[data-source='swsh'] .card__rotator {
+  transform-style: preserve-3d;
 }
 
-.drif-card[data-rarity='rare holo'][data-supertype='trainer'] .drif-card__glare:after,
-.drif-card[data-rarity='rare holo cosmos'][data-supertype='trainer'] .drif-card__glare:after,
-.drif-card[data-rarity$='reverse holo'][data-supertype='trainer'] .drif-card__glare:after {
-  clip-path: var(--clip-trainer);
+.card[data-source='swsh'] .card__shine {
+  filter: brightness(0.85) contrast(2.75) saturate(0.65);
 }
 
-/* v-regular.css */
-.drif-card[data-rarity='rare holo v']:not(.masked) .drif-card__shine,
-.drif-card[data-subtypes='v-union']:not(.masked) .drif-card__shine {
+.card[data-source='swsh'].masked .card__shine,
+.card[data-source='swsh'].masked .card__shine:before,
+.card[data-source='swsh'].masked .card__shine:after {
+  -webkit-mask-mode: match-source;
+  mask-mode: match-source;
+}
+
+.card[data-rarity='rare holo v'] .card__shine {
   filter: brightness(0.7) contrast(2) saturate(0.5);
 }
 
-.drif-card[data-rarity='rare holo v'] .drif-card__shine,
-.drif-card[data-rarity='rare holo v'] .drif-card__shine:after,
-.drif-card[data-subtypes='v-union'] .drif-card__shine,
-.drif-card[data-subtypes='v-union'] .drif-card__shine:after {
+.card[data-rarity='rare holo v'] .card__shine,
+.card[data-rarity='rare holo v'] .card__shine:after {
   --space: 5%;
   --angle: 133deg;
   --imgsize: 500px;
@@ -528,21 +516,15 @@ button.drif-card__rotator:disabled {
   filter: brightness(0.8) contrast(2.95) saturate(0.65);
 }
 
-.drif-card[data-rarity='rare holo v'] .drif-card__shine:after,
-.drif-card[data-subtypes='v-union'] .drif-card__shine:after {
+.card[data-rarity='rare holo v'] .card__shine:after {
   content: '';
-  background-position:
-    center,
-    0% var(--background-y),
-    calc(var(--background-x) * -1) calc(var(--background-y) * -1),
-    var(--background-x) var(--background-y);
+  background-position: center, 0% var(--background-y), calc(var(--background-x) * -1) calc(var(--background-y) * -1), var(--background-x) var(--background-y);
   background-size: var(--imgsize) 100%, 200% 400%, 195% 100%, 200% 100%;
   filter: brightness(1) contrast(2.5) saturate(1.75);
   mix-blend-mode: soft-light;
 }
 
-.drif-card[data-rarity='rare holo v'] .drif-card__glare,
-.drif-card[data-subtypes='v-union'] .drif-card__glare {
+.card[data-rarity='rare holo v'] .card__glare {
   background-image: radial-gradient(
     farthest-corner circle at var(--pointer-x) var(--pointer-y),
     hsl(0, 0%, 100%) 0%,
@@ -552,4 +534,306 @@ button.drif-card__rotator:disabled {
   opacity: calc(var(--card-opacity) * 0.5);
   mix-blend-mode: hard-light;
   filter: brightness(0.9) contrast(1.75);
+}
+
+.card[data-source='swsh'][data-rarity='rare holo'] .card__shine {
+  --scanlines-space: 1px;
+  --scanlines-light: #666;
+  --scanlines-dark: black;
+  --bars: 3%;
+  --bar-color: hsla(0, 0%, 70%, 1);
+  --bar-bg: hsla(0, 0%, 0%, 1);
+  background-image:
+    repeating-linear-gradient(
+      110deg,
+      var(--violet),
+      var(--blue),
+      var(--green),
+      var(--yellow),
+      var(--red),
+      var(--violet),
+      var(--blue),
+      var(--green),
+      var(--yellow),
+      var(--red),
+      var(--violet),
+      var(--blue),
+      var(--green),
+      var(--yellow),
+      var(--red)
+    ),
+    repeating-linear-gradient(
+      90deg,
+      var(--scanlines-dark) calc(var(--scanlines-space) * 0),
+      var(--scanlines-dark) calc(var(--scanlines-space) * 2),
+      var(--scanlines-light) calc(var(--scanlines-space) * 2),
+      var(--scanlines-light) calc(var(--scanlines-space) * 4)
+    );
+  background-position:
+    calc(((50% - var(--background-x)) * 2.6) + 50%) calc(((50% - var(--background-y)) * 3.5) + 50%),
+    center center;
+  background-size: 400% 400%, cover;
+  background-blend-mode: overlay;
+  filter: brightness(1.1) contrast(1.1) saturate(1.2);
+  mix-blend-mode: color-dodge;
+}
+
+.card[data-source='swsh'][data-rarity='rare holo'] .card__shine:before {
+  content: '';
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      var(--bar-bg) calc(var(--bars) * 2),
+      var(--bar-color) calc(var(--bars) * 3),
+      var(--bar-bg) calc(var(--bars) * 3.5),
+      var(--bar-color) calc(var(--bars) * 4),
+      var(--bar-bg) calc(var(--bars) * 5),
+      var(--bar-bg) calc(var(--bars) * 14)
+    ),
+    repeating-linear-gradient(
+      90deg,
+      var(--bar-bg) calc(var(--bars) * 2),
+      var(--bar-color) calc(var(--bars) * 3),
+      var(--bar-bg) calc(var(--bars) * 3.5),
+      var(--bar-color) calc(var(--bars) * 4),
+      var(--bar-bg) calc(var(--bars) * 5),
+      var(--bar-bg) calc(var(--bars) * 10)
+    );
+  background-position:
+    calc((((50% - var(--background-x)) * 1.65) + 50%) + (var(--background-y) * 0.5)) var(--background-x),
+    calc((((50% - var(--background-x)) * -0.9) + 50%) - (var(--background-y) * 0.75)) var(--background-y);
+  background-size: 200% 200%, 200% 200%;
+  background-blend-mode: screen;
+  filter: brightness(1.15) contrast(1.1);
+  mix-blend-mode: hard-light;
+}
+
+.card[data-source='swsh'][data-rarity='rare holo'] .card__shine:after {
+  content: '';
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsla(0, 0%, 90%, 0.8) 0%,
+    hsla(0, 0%, 78%, 0.1) 25%,
+    hsl(0, 0%, 0%) 90%
+  );
+  background-position: center center;
+  background-size: cover;
+  mix-blend-mode: luminosity;
+  filter: brightness(0.6) contrast(4);
+}
+
+@media screen and (max-width: 900px) {
+  .card[data-source='swsh'][data-rarity='rare holo'] .card__shine {
+    --scanlines-space: 0.5px;
+  }
+}
+
+.card[data-source='swsh'][data-rarity='rare holo'] .card__glare {
+  opacity: calc(var(--card-opacity) * 0.8);
+  filter: brightness(0.8) contrast(1.5);
+  mix-blend-mode: overlay;
+}
+
+.card[data-source='swsh'][data-rarity='rare holo'] .card__glare:after {
+  content: '';
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsl(180, 100%, 95%) 5%,
+    hsla(0, 0%, 39%, 0.25) 55%,
+    hsla(0, 0%, 0%, 0.36) 110%
+  );
+  mix-blend-mode: overlay;
+  filter: brightness(0.6) contrast(3);
+}
+
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine,
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:after {
+  --space: 5%;
+  --angle: 133deg;
+  --imgsize: cover;
+  background-image:
+    var(--foil),
+    repeating-linear-gradient(
+      0deg,
+      var(--sunpillar-clr-1) calc(var(--space) * 1),
+      var(--sunpillar-clr-2) calc(var(--space) * 2),
+      var(--sunpillar-clr-3) calc(var(--space) * 3),
+      var(--sunpillar-clr-4) calc(var(--space) * 4),
+      var(--sunpillar-clr-5) calc(var(--space) * 5),
+      var(--sunpillar-clr-6) calc(var(--space) * 6),
+      var(--sunpillar-clr-1) calc(var(--space) * 7)
+    ),
+    repeating-linear-gradient(
+      var(--angle),
+      #0e152e 0%,
+      hsl(180, 10%, 60%) 3.8%,
+      hsl(180, 29%, 66%) 4.5%,
+      hsl(180, 10%, 60%) 5.2%,
+      #0e152e 10%,
+      #0e152e 12%
+    ),
+    radial-gradient(
+      farthest-corner circle at var(--pointer-x) var(--pointer-y),
+      hsla(0, 0%, 0%, 0.1) 12%,
+      hsla(0, 0%, 0%, 0.15) 20%,
+      hsla(0, 0%, 0%, 0.25) 120%
+    );
+  background-position:
+    center center,
+    0% var(--background-y),
+    calc(var(--background-x) + (var(--background-y) * 0.2)) var(--background-y),
+    var(--background-x) var(--background-y);
+  background-blend-mode: soft-light, hue, hard-light;
+  background-size: var(--imgsize), 200% 700%, 300% 100%, 200% 100%;
+  filter: brightness(calc((var(--pointer-from-center) * 0.4) + 0.4)) contrast(1.4) saturate(2.25);
+}
+
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:after {
+  content: '';
+  background-position:
+    center center,
+    0% var(--background-y),
+    calc((var(--background-x) + (var(--background-y) * 0.2)) * -1) calc(var(--background-y) * -1),
+    var(--background-x) var(--background-y);
+  background-size: var(--imgsize), 200% 400%, 195% 100%, 200% 100%;
+  filter: brightness(calc((var(--pointer-from-center) * 0.4) + 0.8)) contrast(1.5) saturate(1.25);
+  mix-blend-mode: exclusion;
+}
+
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__shine:before {
+  content: '';
+  -webkit-mask-image: none;
+  mask-image: none;
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsl(0, 0%, 100%) 0%,
+    hsla(0, 0%, 0%, 0) 40%
+  );
+  background-position: center;
+  background-size: cover;
+  mix-blend-mode: overlay;
+  opacity: 0.75;
+  z-index: 1;
+}
+
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__glare {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsl(0, 0%, 75%) 5%,
+    hsl(200, 5%, 35%) 60%,
+    hsl(320, 40%, 10%) 150%
+  );
+  background-size: 120% 150%;
+  background-position: center center;
+  mix-blend-mode: hard-light;
+  filter: brightness(1) contrast(1.2) saturate(1);
+  opacity: calc(var(--card-opacity) * 0.75);
+}
+
+.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine {
+  filter: brightness(calc((var(--pointer-from-center) * 0.05) + 0.8)) contrast(1.75) saturate(1.2);
+}
+
+.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine:after {
+  filter: brightness(calc((var(--pointer-from-center) * 0.4) + 0.85)) contrast(2) saturate(0.5);
+}
+
+.card[data-subtypes*='supporter'][data-rarity='rare ultra'] .card__shine:before {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsl(0, 0%, 100%) 0%,
+    hsla(0, 0%, 0%, 0) 80%
+  );
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+
+.card[data-rarity='rare ultra'][data-subtypes*='supporter'] .card__glare {
+  opacity: calc(var(--card-opacity) * 0.75);
+  mix-blend-mode: multiply;
+  filter: brightness(1.5) contrast(1.4) saturate(1);
+  background-size: 170% 170%;
+}
+
+.card[data-rarity='amazing rare'] .card__shine {
+  background-image:
+    var(--glitter),
+    var(--glitter),
+    radial-gradient(
+      farthest-corner circle at var(--pointer-x) var(--pointer-y),
+      hsla(150, 20%, 10%, 1) 10%,
+      hsla(177, 22%, 80%, 0.1) 50%,
+      hsla(0, 0%, 95%, 0.98) 90%
+    );
+  background-size: var(--glittersize) var(--glittersize), var(--glittersize) var(--glittersize), cover;
+  background-position: 40% 45%, 55% 55%, center center;
+  background-blend-mode: soft-light, color-burn;
+  filter: brightness(1) contrast(1) saturate(0.9);
+}
+
+.card[data-rarity='amazing rare'] .card__shine:before {
+  content: '';
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  background-image:
+    var(--foil),
+    radial-gradient(
+      farthest-corner circle at var(--pointer-x) var(--pointer-y),
+      hsla(50, 20%, 90%, 0.95) 10%,
+      rgba(181, 139, 164, 0.5) 50%,
+      hsl(0, 0%, 0%) 60%
+    );
+  background-size: cover, cover;
+  background-position: center center, center center;
+  background-blend-mode: color-burn;
+  mix-blend-mode: lighten;
+  filter: brightness(1) contrast(1) saturate(1);
+  opacity: 0.5;
+}
+
+.card[data-rarity='amazing rare'] .card__shine:after {
+  content: '';
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  background-image: repeating-linear-gradient(
+    calc(var(--angle)),
+    var(--sunpillar-clr-1) calc(var(--space) * 1),
+    var(--sunpillar-clr-2) calc(var(--space) * 2),
+    var(--sunpillar-clr-3) calc(var(--space) * 3),
+    var(--sunpillar-clr-4) calc(var(--space) * 4),
+    var(--sunpillar-clr-5) calc(var(--space) * 5),
+    var(--sunpillar-clr-6) calc(var(--space) * 6),
+    var(--sunpillar-clr-1) calc(var(--space) * 7)
+  );
+  background-size: 400% 800%;
+  background-position: calc(50% + (50% - var(--background-x)) * 3) calc(50% + (50% - var(--background-y)) * 3);
+  filter: brightness(calc(0.75 - (var(--pointer-from-center) * 0.5))) contrast(1) saturate(1);
+  mix-blend-mode: saturation;
+}
+
+.card.masked[data-rarity='amazing rare'] .card__glare {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsla(50, 20%, 90%, 0.45) 0%,
+    hsla(150, 20%, 30%, 0.45) 45%,
+    hsla(0, 0%, 0%, 0.9) 120%
+  );
+  filter: brightness(0.9) contrast(2);
+}
+
+.card.masked[data-rarity='amazing rare'] .card__glare:after {
+  content: '';
+  -webkit-mask-image: var(--mask);
+  mask-image: var(--mask);
+  -webkit-mask-size: cover;
+  mask-size: cover;
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsla(50, 20%, 90%, 0.75) 0%,
+    hsla(150, 20%, 30%, 0.65) 45%,
+    hsla(0, 0%, 0%, 1) 90%
+  );
+  filter: brightness(1) contrast(1.5);
+  mix-blend-mode: overlay;
+  opacity: 1;
 }

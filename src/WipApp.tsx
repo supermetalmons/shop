@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
-import WipInteractiveCard, { type WipCardConfig } from './components/WipInteractiveCard';
+import WipInteractiveCard from './components/WipInteractiveCard';
+import { DRIF_CARDS } from './drifCards';
 
 const BOX_FRAME_COUNT = 21;
 const BOX_FRAME_CLICK_MAX = 8;
@@ -9,21 +10,6 @@ const BOX_FRAME_MEDIA_START = 10;
 const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 28;
 const FRAME_AUTOPLAY_DELAY_MS = 30;
-
-const CARDS: WipCardConfig[] = [
-  { imageSrc: '/Poncho_Drifella/drifs/0.webp', textureSrc: '/Poncho_Drifella/textures/0.webp', glowType: 'fire' },
-  { imageSrc: '/Poncho_Drifella/drifs/1.webp', textureSrc: '/Poncho_Drifella/textures/1.webp', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/2.webp', textureSrc: '/Poncho_Drifella/textures/2.webp', glowType: 'dragon' },
-  { imageSrc: '/Poncho_Drifella/drifs/3.webp', textureSrc: '/Poncho_Drifella/textures/3.webp', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/4.webp', textureSrc: '/Poncho_Drifella/textures/4.webp', glowType: 'fairy' },
-  { imageSrc: '/Poncho_Drifella/drifs/5.webp', textureSrc: '/Poncho_Drifella/textures/5.webp', glowType: 'metal' },
-  { imageSrc: '/Poncho_Drifella/drifs/6.webp', textureSrc: '/Poncho_Drifella/textures/6.webp', glowType: 'lightning' },
-  { imageSrc: '/Poncho_Drifella/drifs/7.webp', textureSrc: '/Poncho_Drifella/textures/7.webp', glowType: 'water' },
-  { imageSrc: '/Poncho_Drifella/drifs/8.webp', textureSrc: '/Poncho_Drifella/textures/8.webp', glowType: 'psychic' },
-  { imageSrc: '/Poncho_Drifella/drifs/9.webp', textureSrc: '/Poncho_Drifella/textures/9.webp', glowType: 'dragon' },
-  { imageSrc: '/Poncho_Drifella/drifs/10.webp', textureSrc: '/Poncho_Drifella/textures/10.webp', glowType: 'darkness' },
-  { imageSrc: '/Poncho_Drifella/drifs/11.webp', textureSrc: '/Poncho_Drifella/textures/11.webp', glowType: 'fairy' },
-];
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -58,7 +44,7 @@ export default function WipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [frame, setFrame] = useState(1);
   const [autoOpening, setAutoOpening] = useState(false);
-  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * CARDS.length));
+  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARDS.length));
   const constrainedNetwork = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
     const connection = (
@@ -90,7 +76,7 @@ export default function WipApp() {
         ? 'keep clicking the box'
         : 'click the box to open';
   const revealBoxFrameSrc = `${boxFrameBase}${Math.min(Math.max(frame, 1), BOX_FRAME_COUNT)}.webp`;
-  const currentCard = CARDS[cardIndex];
+  const currentCard = DRIF_CARDS[cardIndex];
 
   const clearAutoOpenTimeout = useCallback(() => {
     if (autoOpenTimeoutRef.current === null) return;
@@ -179,13 +165,15 @@ export default function WipApp() {
     if (typeof window === 'undefined') return;
     preloadCard(currentCard.imageSrc);
     preloadCard(currentCard.textureSrc);
-  }, [currentCard.imageSrc, currentCard.textureSrc, preloadCard]);
+    preloadCard(currentCard.foilSrc);
+  }, [currentCard.foilSrc, currentCard.imageSrc, currentCard.textureSrc, preloadCard]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || constrainedNetwork) return;
-    CARDS.forEach(({ imageSrc, textureSrc }) => {
+    DRIF_CARDS.forEach(({ imageSrc, textureSrc, foilSrc }) => {
       preloadCard(imageSrc);
       preloadCard(textureSrc);
+      preloadCard(foilSrc);
     });
   }, [constrainedNetwork, preloadCard]);
 
@@ -236,10 +224,10 @@ export default function WipApp() {
     setAutoOpening(false);
     setFrame(1);
     setCardIndex((prev) => {
-      if (CARDS.length < 2) return prev;
+      if (DRIF_CARDS.length < 2) return prev;
       let next = prev;
       while (next === prev) {
-        next = Math.floor(Math.random() * CARDS.length);
+        next = Math.floor(Math.random() * DRIF_CARDS.length);
       }
       return next;
     });
