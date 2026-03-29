@@ -138,6 +138,12 @@ header.top {
   align-self: flex-start;
 }
 
+.top__build-info {
+  margin-top: 2px;
+  width: 100%;
+  text-align: center;
+}
+
 @media (max-width: 560px) {
   .top__submenu {
     min-width: min(300px, calc(100vw - 32px));

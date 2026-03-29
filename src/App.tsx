@@ -26,6 +26,7 @@ import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, discou
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { soundPlayer } from './lib/SoundPlayer';
+import { getBuildInfo } from './lib/buildInfo';
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
@@ -37,6 +38,7 @@ import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
+const BUILD_INFO = getBuildInfo();
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -2438,6 +2440,7 @@ function App() {
                   </button>
                 ) : null}
                 {deliveryOrderOwnersErrorMessage ? <div className="error small">{deliveryOrderOwnersErrorMessage}</div> : null}
+                <div className="muted small top__build-info">{BUILD_INFO}</div>
               </div>
             ) : null}
           </div>
