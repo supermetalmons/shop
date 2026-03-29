@@ -200,14 +200,6 @@ export default function WipApp() {
   }, []);
 
   useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
-    document.body.classList.add('wip-body');
-    return () => {
-      document.body.classList.remove('wip-body');
-    };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;

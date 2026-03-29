@@ -134,8 +134,14 @@ header.top {
   background-size: 10px 6px;
 }
 
+.top__submenu-nav,
 .top__submenu-more {
   align-self: flex-start;
+}
+
+.top__submenu-nav {
+  align-self: center;
+  text-align: center;
 }
 
 .top__build-info {
@@ -156,6 +162,21 @@ header.top {
   gap: 4px;
 }
 
+.brand__home-link {
+  display: inline-flex;
+  color: inherit;
+  text-decoration: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.brand__home-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
 .brand h1 {
   margin: 0;
   font-size: 48px;
@@ -164,12 +185,17 @@ header.top {
   display: flex;
   align-items: center;
   gap: 4px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brand-icon {
   width: 57px;
   height: 57px;
   margin-top: 2px;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 .brand h1 span {
@@ -1133,41 +1159,13 @@ button.link:hover:not(:disabled) {
 }
 
 .wip-page {
-  width: 100vw;
-  height: 100vh;
-  height: 100svh;
-  min-height: 100vh;
-  min-height: 100svh;
-  background: #000;
-  position: relative;
+  position: fixed;
+  inset: 0;
+  background: transparent;
   overflow: hidden;
   overscroll-behavior: none;
   touch-action: none;
-}
-
-body.wip-body {
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
-  min-height: 100svh;
-  background: #000;
-  overflow: hidden;
-  overscroll-behavior: none;
-  touch-action: none;
-}
-
-body.wip-body #root {
-  width: 100%;
-  height: 100%;
-  min-height: 100vh;
-  min-height: 100svh;
-  overflow: hidden;
-}
-
-.wip-overlay .reveal-overlay__backdrop {
-  background: #000;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  z-index: 1110;
 }
 
 .wip-overlay .reveal-overlay__shine {

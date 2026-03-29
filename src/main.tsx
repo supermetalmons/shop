@@ -13,20 +13,30 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
+const canonicalFulfillmentPath = '/fullfillment';
+if (path === '/ff') {
+  const search = window.location?.search || '';
+  const hash = window.location?.hash || '';
+  window.history.replaceState(window.history.state, '', `${canonicalFulfillmentPath}${search}${hash}`);
+}
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
 const isDrifRoute = path === '/Poncho_Drifella';
 const isWipRoute = path === '/wip';
-const RootApp = path === '/ff' ? FulfillmentApp : App;
+const isFulfillmentRoute = path === '/ff' || path === canonicalFulfillmentPath;
+const RootApp = isFulfillmentRoute ? FulfillmentApp : App;
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <WalletContextProvider>
         {isWipRoute ? (
-          <React.Suspense fallback={null}>
-            <WipApp />
-          </React.Suspense>
+          <>
+            <App />
+            <React.Suspense fallback={null}>
+              <WipApp />
+            </React.Suspense>
+          </>
         ) : isDrifRoute ? (
           <React.Suspense fallback={null}>
             <DrifApp />

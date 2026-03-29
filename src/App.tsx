@@ -2372,10 +2372,23 @@ function App() {
       ) : null}
       <header className={`top${canUseAdminViewer ? ' top--with-admin' : ''}`}>
         <div className="brand">
-          <h1>
-            <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
-            <span>mons.shop</span>
-          </h1>
+          <a
+            href="/"
+            className="brand__home-link"
+            aria-label="Go to mons.shop home"
+            draggable={false}
+            onClick={(evt) => {
+              evt.preventDefault();
+            }}
+            onDragStart={(evt) => {
+              evt.preventDefault();
+            }}
+          >
+            <h1>
+              <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
+              <span>mons.shop</span>
+            </h1>
+          </a>
         </div>
         {canUseAdminViewer ? (
           <div className="top__actions" ref={settingsRef}>
@@ -2427,6 +2440,24 @@ function App() {
                       </option>
                     ))}
                 </select>
+                <button
+                  type="button"
+                  className="link small top__submenu-nav"
+                  onClick={() => {
+                    window.location.assign('/wip');
+                  }}
+                >
+                  /wip
+                </button>
+                <button
+                  type="button"
+                  className="link small top__submenu-nav"
+                  onClick={() => {
+                    window.location.assign('/ff');
+                  }}
+                >
+                  /fullfillment
+                </button>
                 {canLoadMoreOwners ? (
                   <button
                     type="button"

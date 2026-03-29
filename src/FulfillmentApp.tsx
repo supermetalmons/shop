@@ -300,10 +300,20 @@ export default function FulfillmentApp() {
     <div className="page">
       <header className="top">
         <div className="brand">
-          <h1>
-            <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
-            <span>mons.shop</span>
-          </h1>
+          <a
+            href="/"
+            className="brand__home-link"
+            aria-label="Go to mons.shop home"
+            draggable={false}
+            onDragStart={(evt) => {
+              evt.preventDefault();
+            }}
+          >
+            <h1>
+              <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
+              <span>mons.shop</span>
+            </h1>
+          </a>
         </div>
       </header>
 
