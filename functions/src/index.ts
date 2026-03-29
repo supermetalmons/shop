@@ -199,6 +199,7 @@ const ADMIN_WALLETS = new Set<string>();
 [
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
 ].forEach((raw) => {
   try {
     ADMIN_WALLETS.add(new PublicKey(raw).toBase58());
