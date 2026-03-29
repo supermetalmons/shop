@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import DrifEffectCard from './components/DrifEffectCard';
 import { DRIF_CARDS } from './drifCards';
+import { navigate } from './navigation';
 
 export default function DrifApp() {
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARDS.length));
@@ -37,6 +38,28 @@ export default function DrifApp() {
 
   return (
     <div className="drif-page">
+      <header className="top drif-top">
+        <div className="brand">
+          <a
+            href="/"
+            className="brand__home-link"
+            aria-label="Go to mons.shop home"
+            draggable={false}
+            onClick={(evt) => {
+              evt.preventDefault();
+              navigate('/');
+            }}
+            onDragStart={(evt) => {
+              evt.preventDefault();
+            }}
+          >
+            <h1>
+              <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
+              <span>mons.shop</span>
+            </h1>
+          </a>
+        </div>
+      </header>
       <main className="drif-main">
         <div className="drif-card-showcase">
           <DrifEffectCard
@@ -50,7 +73,7 @@ export default function DrifApp() {
       </main>
       <div className="drif-notify-area">
         {!showForm && (
-          <button className="drif-notify-btn" onClick={() => setShowForm(true)}>
+          <button type="button" className="drif-notify-btn" onClick={() => setShowForm(true)}>
             notify me
           </button>
         )}
