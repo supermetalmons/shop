@@ -201,6 +201,18 @@ export default function WipApp() {
   }, []);
 
   useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const html = document.documentElement;
+    const body = document.body;
+    html.classList.add('wip-scroll-lock');
+    body.classList.add('wip-scroll-lock');
+    return () => {
+      html.classList.remove('wip-scroll-lock');
+      body.classList.remove('wip-scroll-lock');
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;

@@ -1168,6 +1168,19 @@ button.link:hover:not(:disabled) {
   z-index: 1110;
 }
 
+html.wip-scroll-lock,
+body.wip-scroll-lock {
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.wip-scroll-lock #root {
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+}
+
 .wip-overlay .reveal-overlay__shine {
   display: none;
 }
