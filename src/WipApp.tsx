@@ -5,7 +5,7 @@ import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
 const PACK_FRAME_IDS = [
-  1, 20, 55, 56, 57, 59, 60, 61, 69, 79, 89, 104, 106, 107, 109, 110, 111, 113, 114, 115, 116, 118, 119, 123, 132,
+  1, 48, 59, 69, 80, 86, 89, 90, 92, 95, 96, 99, 102,
 ] as const;
 const PACK_FRAME_BASE = '/Poncho_Drifella/pack/';
 const BOX_FRAME_COUNT = PACK_FRAME_IDS.length;
@@ -13,7 +13,7 @@ const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
 const BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
 const BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
-const PACK_AUTOPLAY_TRIGGER_ID = 107;
+const PACK_AUTOPLAY_TRIGGER_ID = 89;
 const PACK_AUTOPLAY_TRIGGER_INDEX = PACK_FRAME_IDS.findIndex((frameId) => frameId === PACK_AUTOPLAY_TRIGGER_ID);
 const PACK_AUTOPLAY_TRIGGER_FRAME = PACK_AUTOPLAY_TRIGGER_INDEX >= 0 ? PACK_AUTOPLAY_TRIGGER_INDEX + 1 : BOX_FRAME_COUNT;
 const PACK_AUTOPLAY_DELAY_MS = 35;
@@ -28,7 +28,7 @@ type OverlayRect = { left: number; top: number; width: number; height: number };
 
 function getPackFrameSrc(frameIndex: number) {
   const frameId = PACK_FRAME_IDS[Math.min(Math.max(frameIndex, 1), BOX_FRAME_COUNT) - 1];
-  return `${PACK_FRAME_BASE}1_${frameId}.webp`;
+  return `${PACK_FRAME_BASE}1_${String(frameId).padStart(4, '0')}.webp`;
 }
 
 function getAllPackFrameSrcs() {
