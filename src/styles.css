@@ -60,6 +60,7 @@ header.top {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  position: relative;
 }
 
 .top__actions {
@@ -2203,6 +2204,16 @@ button.wallet-adapter-modal-button-close:hover {
   header.top {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  header.top.top--with-admin {
+    padding-right: 40px;
+  }
+
+  .top__actions {
+    position: absolute;
+    top: 0;
+    right: 0;
   }
   
   .mint__qty {

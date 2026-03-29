@@ -3,7 +3,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
-import { FaBoxOpen, FaGear, FaPlane } from 'react-icons/fa6';
+import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -2364,7 +2364,7 @@ function App() {
 	          <div className="reveal-overlay__note">{revealOverlayNote}</div>
 	        </div>
       ) : null}
-      <header className="top">
+      <header className={`top${canUseAdminViewer ? ' top--with-admin' : ''}`}>
         <div className="brand">
           <h1>
             <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" />
@@ -2381,7 +2381,7 @@ function App() {
               aria-haspopup="menu"
               aria-expanded={settingsOpen}
             >
-              <FaGear aria-hidden />
+              <FaTableCellsLarge aria-hidden />
             </button>
             {settingsOpen ? (
               <div className="top__submenu" role="menu" aria-label="Admin settings">
