@@ -16,7 +16,7 @@
   height: calc(100svh - 88px);
   min-height: calc(100vh - 88px);
   min-height: calc(100svh - 88px);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .drif-page {
@@ -33,7 +33,7 @@
   margin: 0 auto;
   background-color: #000;
   color: #fff;
-  overflow: hidden;
+  overflow: visible;
   overscroll-behavior: none;
   touch-action: none;
 }
