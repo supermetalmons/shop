@@ -17,15 +17,31 @@ const canonicalFulfillmentPath = '/fullfillment';
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
 
+type RouteAlias = {
+  targetPath: string;
+  replaceUrl: boolean;
+};
+
+const ROUTE_ALIASES: Record<string, RouteAlias> = {
+  '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
+  '/little_swag_boxes': { targetPath: '/', replaceUrl: false },
+};
+
 const resolveCurrentPath = (): string => {
   const path = getNormalizedPathname();
-  if (path === '/ff') {
+  const alias = ROUTE_ALIASES[path];
+
+  if (!alias) {
+    return path;
+  }
+
+  if (alias.replaceUrl) {
     const search = window.location.search || '';
     const hash = window.location.hash || '';
-    window.history.replaceState(window.history.state, '', `${canonicalFulfillmentPath}${search}${hash}`);
-    return canonicalFulfillmentPath;
+    window.history.replaceState(window.history.state, '', `${alias.targetPath}${search}${hash}`);
   }
-  return path;
+
+  return alias.targetPath;
 };
 
 function RoutedApp() {

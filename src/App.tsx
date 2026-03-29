@@ -36,10 +36,11 @@ import {
 import { calculateDeliveryLamports } from './lib/shipping';
 import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
-import { navigate } from './navigation';
+import { getNormalizedPathname, navigate } from './navigation';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
+const LITTLE_SWAG_BOXES_PATH = '/little_swag_boxes';
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -2380,6 +2381,9 @@ function App() {
             draggable={false}
             onClick={(evt) => {
               evt.preventDefault();
+              if (getNormalizedPathname() === LITTLE_SWAG_BOXES_PATH) {
+                navigate('/');
+              }
             }}
             onDragStart={(evt) => {
               evt.preventDefault();
@@ -2467,6 +2471,15 @@ function App() {
                   }}
                 >
                   /Poncho_Drifella
+                </button>
+                <button
+                  type="button"
+                  className="link small top__submenu-nav"
+                  onClick={() => {
+                    navigate('/little_swag_boxes');
+                  }}
+                >
+                  /little_swag_boxes
                 </button>
                 {canLoadMoreOwners ? (
                   <button
