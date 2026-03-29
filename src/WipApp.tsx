@@ -400,6 +400,16 @@ export default function WipApp() {
         </div>
         <div className="reveal-overlay__note">{revealNote}</div>
       </div>
+      <button
+        type="button"
+        className="wip-close-btn"
+        onClick={() => {
+          window.location.assign('/');
+        }}
+        aria-label="Close wip overlay"
+      >
+        Close
+      </button>
       <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset unboxing">
         Reset
       </button>

@@ -1240,17 +1240,17 @@ button.link:hover:not(:disabled) {
   width: 100%;
 }
 
+button.wip-close-btn,
 button.wip-reset-btn {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
   z-index: 1120;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
-  color: #b8b8b8;
+  color: rgba(255, 255, 255, 0.78);
   font-size: 13px;
+  font-weight: 500;
   line-height: 1;
   letter-spacing: 0.01em;
   cursor: pointer;
@@ -1262,35 +1262,39 @@ button.wip-reset-btn {
   -webkit-user-select: none;
   user-select: none;
   touch-action: manipulation;
+  opacity: 0.82;
+  transition: opacity 0.15s ease;
 }
 
+button.wip-close-btn {
+  left: 18px;
+  bottom: 18px;
+}
+
+button.wip-reset-btn {
+  right: 18px;
+  bottom: 18px;
+}
+
+button.wip-close-btn:hover:not(:disabled),
+button.wip-close-btn:active:not(:disabled),
 button.wip-reset-btn:hover:not(:disabled),
 button.wip-reset-btn:active:not(:disabled) {
   background: transparent;
-  color: #d2d2d2;
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 1;
 }
 
-button.wip-reset-btn:focus {
-  outline: 2px solid rgba(255, 255, 255, 0.68);
-  outline-offset: 3px;
-  border-radius: 2px;
-  background: transparent;
-  color: #f0f0f0;
-  box-shadow: none;
-}
-
+button.wip-close-btn:focus-visible,
 button.wip-reset-btn:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.68);
-  outline-offset: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
   border-radius: 2px;
-  background: transparent;
-  color: #f0f0f0;
-  box-shadow: none;
 }
 
-.wip-reset-btn:focus:not(:focus-visible) {
+button.wip-close-btn:focus:not(:focus-visible),
+button.wip-reset-btn:focus:not(:focus-visible) {
   outline: none;
-  color: #e0e0e0;
 }
 
 .wip-overlay .reveal-overlay__box:focus {
@@ -1348,6 +1352,11 @@ button.wip-reset-btn:focus-visible {
 
   .wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
     top: 50%;
+  }
+
+  button.wip-close-btn {
+    left: 12px;
+    bottom: 12px;
   }
 
   button.wip-reset-btn {
