@@ -36,6 +36,7 @@ import {
 import { calculateDeliveryLamports } from './lib/shipping';
 import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { FRONTEND_DEPLOYMENT } from './config/deployment';
+import { navigate } from './navigation';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
@@ -2444,7 +2445,7 @@ function App() {
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    window.location.assign('/wip');
+                    navigate('/wip');
                   }}
                 >
                   /wip
@@ -2453,7 +2454,7 @@ function App() {
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    window.location.assign('/ff');
+                    navigate('/ff');
                   }}
                 >
                   /fullfillment

@@ -4,6 +4,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import FulfillmentApp from './FulfillmentApp';
+import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
 
@@ -12,38 +13,65 @@ if (!window.Buffer) {
 }
 
 const queryClient = new QueryClient();
-const path = window.location?.pathname?.replace(/\/+$/, '') || '/';
 const canonicalFulfillmentPath = '/fullfillment';
-if (path === '/ff') {
-  const search = window.location?.search || '';
-  const hash = window.location?.hash || '';
-  window.history.replaceState(window.history.state, '', `${canonicalFulfillmentPath}${search}${hash}`);
-}
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
-const isDrifRoute = path === '/Poncho_Drifella';
-const isWipRoute = path === '/wip';
-const isFulfillmentRoute = path === '/ff' || path === canonicalFulfillmentPath;
-const RootApp = isFulfillmentRoute ? FulfillmentApp : App;
+
+const resolveCurrentPath = (): string => {
+  const path = getNormalizedPathname();
+  if (path === '/ff') {
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
+    window.history.replaceState(window.history.state, '', `${canonicalFulfillmentPath}${search}${hash}`);
+    return canonicalFulfillmentPath;
+  }
+  return path;
+};
+
+function RoutedApp() {
+  const [path, setPath] = React.useState(() => resolveCurrentPath());
+
+  React.useEffect(() => {
+    const handleNavigation = () => {
+      setPath(resolveCurrentPath());
+    };
+
+    return subscribeToNavigation(handleNavigation);
+  }, []);
+
+  const isDrifRoute = path === '/Poncho_Drifella';
+  const isWipRoute = path === '/wip';
+  const isFulfillmentRoute = path === canonicalFulfillmentPath;
+
+  if (isDrifRoute) {
+    return (
+      <React.Suspense fallback={null}>
+        <DrifApp />
+      </React.Suspense>
+    );
+  }
+
+  if (isFulfillmentRoute) {
+    return <FulfillmentApp />;
+  }
+
+  return (
+    <>
+      <App />
+      {isWipRoute ? (
+        <React.Suspense fallback={null}>
+          <WipApp />
+        </React.Suspense>
+      ) : null}
+    </>
+  );
+}
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <WalletContextProvider>
-        {isWipRoute ? (
-          <>
-            <App />
-            <React.Suspense fallback={null}>
-              <WipApp />
-            </React.Suspense>
-          </>
-        ) : isDrifRoute ? (
-          <React.Suspense fallback={null}>
-            <DrifApp />
-          </React.Suspense>
-        ) : (
-          <RootApp />
-        )}
+        <RoutedApp />
       </WalletContextProvider>
     </QueryClientProvider>
   </React.StrictMode>,

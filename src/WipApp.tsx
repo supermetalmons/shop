@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { DRIF_CARDS } from './drifCards';
 import { soundPlayer } from './lib/SoundPlayer';
+import { navigate } from './navigation';
 
 const PACK_FRAME_IDS = [
   1, 20, 55, 56, 57, 59, 60, 61, 69, 79, 89, 104, 106, 107, 109, 110, 111, 113, 114, 115, 116, 118, 119, 123, 132,
@@ -404,7 +405,7 @@ export default function WipApp() {
         type="button"
         className="wip-close-btn"
         onClick={() => {
-          window.location.assign('/');
+          navigate('/');
         }}
         aria-label="Close wip overlay"
       >
