@@ -359,6 +359,7 @@ function App() {
   const owner = canUseAdminViewer && adminViewedOwner ? adminViewedOwner : connectedWallet;
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner);
   const {
@@ -369,14 +370,13 @@ function App() {
 
   const {
     data: deliveryOrderOwnersData,
-    isFetching: deliveryOrderOwnersFetching,
     isFetchingNextPage: deliveryOrderOwnersLoadingMore,
     hasNextPage: deliveryOrderOwnersHasNextPage,
     fetchNextPage: fetchNextDeliveryOrderOwners,
     error: deliveryOrderOwnersError,
   } = useInfiniteQuery({
     queryKey: ['adminDeliveryOrderOwners', connectedWallet],
-    enabled: Boolean(canUseAdminViewer && settingsOpen),
+    enabled: Boolean(canUseAdminViewer && settingsOpen && ownerPickerOpened),
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) =>
       listDeliveryOrderOwners({
@@ -386,7 +386,6 @@ function App() {
     getNextPageParam: (lastPage) => (lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined),
     staleTime: 30_000,
   });
-  const deliveryOrderOwnersLoading = deliveryOrderOwnersFetching && !deliveryOrderOwnersData?.pages?.length;
   const deliveryOrderOwners = useMemo(() => {
     const unique = new Set<string>();
     if (connectedWallet) unique.add(connectedWallet);
@@ -530,6 +529,11 @@ function App() {
     if (adminViewedOwner) setAdminViewedOwner(null);
     if (settingsOpen) setSettingsOpen(false);
   }, [adminViewedOwner, canUseAdminViewer, settingsOpen]);
+
+  useEffect(() => {
+    if (settingsOpen) return;
+    setOwnerPickerOpened(false);
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -2385,12 +2389,19 @@ function App() {
             </button>
             {settingsOpen ? (
               <div className="top__submenu" role="menu" aria-label="Admin settings">
-                <label className="top__submenu-label" htmlFor="admin-owner-picker">
-                  Viewer owner
-                </label>
                 <select
                   id="admin-owner-picker"
+                  aria-label="Viewer owner"
                   value={ownerPickerValue}
+                  onPointerDown={() => {
+                    if (!ownerPickerOpened) setOwnerPickerOpened(true);
+                  }}
+                  onKeyDown={(evt) => {
+                    if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp' && evt.key !== 'Enter' && evt.key !== ' ') {
+                      return;
+                    }
+                    if (!ownerPickerOpened) setOwnerPickerOpened(true);
+                  }}
                   onChange={(evt) => {
                     const value = evt.target.value.trim();
                     if (!connectedWallet || !value || value === connectedWallet) {
@@ -2399,10 +2410,9 @@ function App() {
                     }
                     setAdminViewedOwner(value);
                   }}
-                  disabled={deliveryOrderOwnersLoading}
                 >
                   {connectedWallet ? (
-                    <option value={connectedWallet}>My wallet ({shortAddress(connectedWallet)})</option>
+                    <option value={connectedWallet}>{connectedWallet}</option>
                   ) : null}
                   {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
                     <option value={adminViewedOwner}>{adminViewedOwner}</option>
@@ -2415,7 +2425,6 @@ function App() {
                       </option>
                     ))}
                 </select>
-                {deliveryOrderOwnersLoading ? <div className="muted small">Loading owners…</div> : null}
                 {canLoadMoreOwners ? (
                   <button
                     type="button"
