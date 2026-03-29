@@ -5,19 +5,34 @@ export class SoundPlayer {
   private arrayBufferPromises = new Map<string, Promise<ArrayBuffer>>();
   public isInitialized = false;
   private isResuming = false;
+  private restartListenersAttached = false;
+  private readonly restartEvents: Array<"pointerdown" | "touchstart" | "touchend" | "click"> = [
+    "pointerdown",
+    "touchstart",
+    "touchend",
+    "click",
+  ];
+  private readonly restartHandler = () => {
+    void this.initializeOnUserInteraction(true).finally(() => {
+      if (this.audioContext && this.audioContext.state === "running") {
+        this.teardownRestartListeners();
+      }
+    });
+  };
 
   constructor() {
-    document.addEventListener("touchend", () => this.initializeOnUserInteraction(false), { once: true });
-    document.addEventListener("click", () => this.initializeOnUserInteraction(false), { once: true });
+    this.setupRestartListeners();
   }
 
   public async initializeOnUserInteraction(force: boolean) {
-    if (this.isInitialized || (!force)) return;
-    if (document.visibilityState !== "visible" && !force) return;
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    this.attachStateChangeHandler();
+    if (document.visibilityState !== "visible") return;
+    if (!this.audioContext || this.audioContext.state === "closed") {
+      if (!force) return;
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      this.attachStateChangeHandler();
+    }
     await this.unlockOnce(force);
-    this.isInitialized = true;
+    this.isInitialized = this.audioContext.state !== "closed";
   }
 
   private unlockOnce = async (force: boolean = false) => {
@@ -81,14 +96,24 @@ export class SoundPlayer {
     return audioBuffer;
   }
 
+  private teardownRestartListeners(): void {
+    if (!this.restartListenersAttached) return;
+    this.restartEvents.forEach((eventName) => {
+      document.removeEventListener(eventName, this.restartHandler);
+    });
+    this.restartListenersAttached = false;
+  }
+
   private setupRestartListeners(): void {
-    const handler = async () => {
-      await this.unlockOnce();
-      document.removeEventListener("touchend", handler);
-      document.removeEventListener("click", handler);
-    };
-    document.addEventListener("touchend", handler, { once: true });
-    document.addEventListener("click", handler, { once: true });
+    if (this.restartListenersAttached) return;
+    this.restartListenersAttached = true;
+    this.restartEvents.forEach((eventName) => {
+      if (eventName === "touchstart") {
+        document.addEventListener(eventName, this.restartHandler, { passive: true });
+        return;
+      }
+      document.addEventListener(eventName, this.restartHandler);
+    });
   }
 
   private async prepareContext(): Promise<AudioContext | null> {
