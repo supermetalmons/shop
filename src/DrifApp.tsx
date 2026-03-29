@@ -29,7 +29,9 @@ export default function DrifApp() {
     script.dataset.form = '578237fe-8fb4-11f0-8bba-a35988c2be69';
     container.appendChild(script);
     return () => {
-      container.removeChild(script);
+      if (script.parentNode === container) {
+        container.removeChild(script);
+      }
     };
   }, []);
 

@@ -27,10 +27,12 @@ export const navigate = (pathname: string, options?: { replace?: boolean }): voi
 
 export const subscribeToNavigation = (onChange: () => void): (() => void) => {
   window.addEventListener('popstate', onChange);
+  window.addEventListener('pageshow', onChange);
   window.addEventListener(NAVIGATION_EVENT, onChange);
 
   return () => {
     window.removeEventListener('popstate', onChange);
+    window.removeEventListener('pageshow', onChange);
     window.removeEventListener(NAVIGATION_EVENT, onChange);
   };
 };

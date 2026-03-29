@@ -39,6 +39,11 @@ function RoutedApp() {
     return subscribeToNavigation(handleNavigation);
   }, []);
 
+  React.useEffect(() => {
+    if (path === '/Poncho_Drifella') return;
+    document.body.classList.remove('drif-body');
+  }, [path]);
+
   const isDrifRoute = path === '/Poncho_Drifella';
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
