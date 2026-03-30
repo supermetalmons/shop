@@ -43,6 +43,8 @@ export type NewDropConfig = {
 // Toggle this to pick deployment network from one place.
 const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
+const dropSymbol = 'lsb';
+const sellerFeeBasisPoints = 500;
 
 /**
  * Single source of truth for editable deploy + drop metadata.
@@ -60,8 +62,8 @@ export const NEW_DROP: NewDropConfig = {
     metadataBase: 'https://assets.mons.link/drops/lsb',
     collectionMetadata: {
       name: 'Little Swag Boxes',
-      symbol: 'lsb',
-      sellerFeeBasisPoints: 500,
+      symbol: dropSymbol,
+      sellerFeeBasisPoints,
       description: 'a collection of little swag boxes, figures and receipts',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/lsb/box/default.webp',
@@ -72,7 +74,7 @@ export const NEW_DROP: NewDropConfig = {
       maxBufferSize: 64,
       canopyDepth: 0,
     },
-    coreCollectionRoyaltiesBps: 500,
+    coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 1,
     discountPriceSol: 0.55,
@@ -80,6 +82,6 @@ export const NEW_DROP: NewDropConfig = {
     itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'box',
-    symbol: 'box',
+    symbol: dropSymbol,
   },
 };
