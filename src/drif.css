@@ -185,7 +185,7 @@
   --clip: inset(9.85% 8% 52.85% 8%);
   --clip-stage: polygon(91.5% 9.85%, 57% 9.85%, 54% 12%, 17% 12%, 16% 14%, 12% 16%, 8% 16%, 8% 47.15%, 92% 47.15%);
   --clip-trainer: inset(14.5% 8.5% 48.2% 8.5%);
-  --card-aspect: 0.718;
+  --card-aspect: 0.7142857143;
   --card-radius: 4.55% / 3.5%;
   --card-edge: hsl(47, 100%, 78%);
   --card-back: hsl(205, 100%, 25%);
@@ -301,6 +301,14 @@
   transform-style: preserve-3d;
 }
 
+.drif-effect-card__translater,
+.drif-effect-card__rotator,
+.drif-effect-card__front,
+.drif-effect-card__back {
+  height: 100%;
+  min-height: 0;
+}
+
 .drif-effect-card__translater {
   position: relative;
   -webkit-transform: translate3d(var(--translate-x), var(--translate-y), 0.1px) scale(var(--card-scale));
@@ -319,6 +327,7 @@ button.drif-effect-card__rotator {
   border: none;
   background: transparent;
   padding: 0;
+  line-height: 0;
   -webkit-appearance: none;
   appearance: none;
 }
@@ -369,7 +378,7 @@ button.drif-effect-card__rotator:disabled {
     0 0 20px 0 transparent;
 }
 
-.drif-effect-card__rotator * {
+.drif-effect-card__rotator > * {
   width: 100%;
   display: grid;
   grid-area: 1 / 1;
@@ -382,8 +391,23 @@ button.drif-effect-card__rotator:disabled {
   overflow: hidden;
 }
 
+.drif-effect-card__front > * {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-area: 1 / 1;
+  border-radius: var(--card-radius);
+  image-rendering: optimizeQuality;
+  -webkit-transform-style: preserve-3d;
+  transform-style: preserve-3d;
+  pointer-events: none;
+  overflow: hidden;
+}
+
 .drif-effect-card__rotator img {
-  height: auto;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .drif-effect-card__rotator img:not(.drif-effect-card__back) {

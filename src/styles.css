@@ -1226,11 +1226,14 @@ body.wip-scroll-lock #root {
 }
 
 .wip-reveal__card-item {
+  --wip-card-max-height: calc(100vh - 196px);
+  --wip-card-max-height: calc(100svh - 196px);
   left: 50%;
   top: 50%;
-  width: min(54vw, 360px);
+  width: min(54vw, calc(var(--wip-card-max-height) * (5 / 7)), 360px);
   max-width: 86%;
-  aspect-ratio: 745 / 1040;
+  max-height: var(--wip-card-max-height);
+  aspect-ratio: 5 / 7;
   filter: none;
   transform: translate(-50%, -50%);
 }
@@ -1243,7 +1246,9 @@ body.wip-scroll-lock #root {
 
 .wip-reveal__card-item .drif-effect-card {
   width: 100%;
+  height: 100%;
   max-width: 100%;
+  max-height: 100%;
 }
 
 .wip-reveal__card-item .drif-effect-card__translater,
@@ -1251,6 +1256,7 @@ body.wip-scroll-lock #root {
 .wip-reveal__card-item .drif-effect-card__front,
 .wip-reveal__card-item .drif-effect-card__back {
   width: 100%;
+  height: 100%;
 }
 
 button.wip-close-btn,
@@ -1359,7 +1365,10 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 
 @media (max-width: 720px) {
   .wip-reveal__card-item {
-    width: min(70vw, 300px);
+    --wip-card-max-height: calc(100vh - 160px);
+    --wip-card-max-height: calc(100svh - 160px);
+    width: min(70vw, calc(var(--wip-card-max-height) * (5 / 7)), 300px);
+    max-height: var(--wip-card-max-height);
     top: 50%;
   }
 

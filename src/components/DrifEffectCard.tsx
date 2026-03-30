@@ -521,7 +521,7 @@ export default function DrifEffectCard({
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">
-            <img src={card.imageSrc} alt={imageAlt} onLoad={onImageLoad} loading="lazy" width="660" height="921" draggable={false} />
+            <img src={card.imageSrc} alt={imageAlt} onLoad={onImageLoad} loading="lazy" width="1000" height="1400" draggable={false} />
             <div className="drif-effect-card__shine" />
             <div className="drif-effect-card__glitter" />
             <div className="drif-effect-card__glare" />
