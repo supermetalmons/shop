@@ -1,5 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+
+const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
@@ -42,7 +45,9 @@ export function DeliveryForm({
   const shippingNote =
     selectedCountryCode === 'US'
       ? 'Free US shipping'
-      : 'International delivery: 0.19 SOL up to 3 figures. 0.04 SOL each additional figure.';
+      : `International delivery: 0.19 SOL up to ${DELIVERY_FIGURES_PER_BOX} ${
+          DELIVERY_FIGURES_PER_BOX === 1 ? 'figure' : 'figures'
+        }. 0.04 SOL each additional figure.`;
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);

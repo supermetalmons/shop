@@ -357,8 +357,44 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const FIGURE_RECEIPTS_PER_BOX = 3;
-const RECEIPTS_PER_BOX = 1 + FIGURE_RECEIPTS_PER_BOX;
+const MIN_ITEMS_PER_BOX = 1;
+const MAX_ITEMS_PER_BOX = 5;
+
+function requireItemsPerBox(value: number, label: string): number {
+  return requireIntegerInRange({
+    value,
+    label,
+    min: MIN_ITEMS_PER_BOX,
+    max: MAX_ITEMS_PER_BOX,
+  });
+}
+
+function requireMaxFigureIdWithinU16(args: {
+  maxSupply: number;
+  maxSupplyLabel: string;
+  itemsPerBox: number;
+  itemsPerBoxLabel: string;
+}) {
+  const maxSupply = requireIntegerInRange({
+    value: args.maxSupply,
+    label: args.maxSupplyLabel,
+    min: 1,
+    max: 0xffff_ffff,
+  });
+  const itemsPerBox = requireItemsPerBox(args.itemsPerBox, args.itemsPerBoxLabel);
+  const maxFigureId = maxSupply * itemsPerBox;
+  if (!Number.isSafeInteger(maxFigureId) || maxFigureId > 0xffff) {
+    throw new Error(
+      `Configured figure id space exceeds on-chain u16 capacity.\n` +
+        `- ${args.maxSupplyLabel}: ${maxSupply}\n` +
+        `- ${args.itemsPerBoxLabel}: ${itemsPerBox}\n` +
+        `- max figure id (maxSupply * itemsPerBox): ${maxFigureId}\n` +
+        `- maximum supported                     : 65535\n` +
+        `\n` +
+        `Fix: lower maxSupply or itemsPerBox in scripts/newDrop.ts.`,
+    );
+  }
+}
 
 function prepareReceiptsTreeConfig(dropCfg: typeof NEW_DROP.onchain): PreparedReceiptsTreeConfig {
   if (!dropCfg.receiptsTree || typeof dropCfg.receiptsTree !== 'object') {
@@ -390,6 +426,8 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
   tree: PreparedReceiptsTreeConfig;
   maxSupply: number;
   maxSupplyLabel: string;
+  itemsPerBox: number;
+  itemsPerBoxLabel: string;
 }) {
   const maxSupply = requireIntegerInRange({
     value: args.maxSupply,
@@ -397,14 +435,23 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
     min: 1,
     max: 0xffff_ffff,
   });
+  const itemsPerBox = requireItemsPerBox(args.itemsPerBox, args.itemsPerBoxLabel);
+  requireMaxFigureIdWithinU16({
+    maxSupply,
+    maxSupplyLabel: args.maxSupplyLabel,
+    itemsPerBox,
+    itemsPerBoxLabel: args.itemsPerBoxLabel,
+  });
   // Receipts are minted as one "box receipt" + one "figure receipt" per revealed figure.
-  const requiredLeaves = maxSupply * RECEIPTS_PER_BOX;
+  const receiptsPerBox = 1 + itemsPerBox;
+  const requiredLeaves = maxSupply * receiptsPerBox;
   const treeCapacity = 2 ** args.tree.maxDepth;
   if (treeCapacity < requiredLeaves) {
     throw new Error(
       `NEW_DROP.onchain.receiptsTree is too small for this drop.\n` +
         `- max supply source                       : ${args.maxSupplyLabel}\n` +
-        `- required leaves (maxSupply * ${RECEIPTS_PER_BOX}) : ${requiredLeaves}\n` +
+        `- itemsPerBox source                      : ${args.itemsPerBoxLabel}\n` +
+        `- required leaves (maxSupply * ${receiptsPerBox}) : ${requiredLeaves}\n` +
         `- configured capacity (2^maxDepth)               : ${treeCapacity}\n` +
         `\n` +
         `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in scripts/newDrop.ts.`,
@@ -835,6 +882,7 @@ function writeFrontendDeploymentConfig(args: {
   discountPriceSol: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -868,6 +916,7 @@ export type FrontendDeploymentConfig = {
   discountPriceSol: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -922,6 +971,7 @@ export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = {
   discountPriceSol: ${Number(args.discountPriceSol)},
   discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
   maxSupply: ${Number(args.maxSupply)},
+  itemsPerBox: ${Number(args.itemsPerBox)},
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
   symbol: ${tsStringLiteral(args.symbol)},
@@ -948,6 +998,7 @@ function writeFunctionsDeploymentConfig(args: {
   discountPriceSol: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -983,6 +1034,7 @@ export type FunctionsDeploymentConfig = {
   discountPriceSol: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -1007,6 +1059,7 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
   discountPriceSol: ${Number(args.discountPriceSol)},
   discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
   maxSupply: ${Number(args.maxSupply)},
+  itemsPerBox: ${Number(args.itemsPerBox)},
   maxPerTx: ${Number(args.maxPerTx)},
   namePrefix: ${tsStringLiteral(args.namePrefix)},
   symbol: ${tsStringLiteral(args.symbol)},
@@ -1502,6 +1555,34 @@ async function ensureMplCoreCollectionRoyalties(args: {
 }
 
 function decodeBoxMinterConfig(data: Buffer) {
+  const expectedMinLen =
+    8 + // anchor discriminator
+    32 * 3 +
+    8 +
+    8 +
+    32 +
+    4 +
+    1 +
+    1 +
+    4 +
+    4 +
+    8 +
+    4 +
+    10 +
+    4 +
+    96 +
+    1 +
+    1;
+  if (data.length < expectedMinLen) {
+    throw new Error(
+      `Existing on-chain config uses an older schema and cannot be reused.\n` +
+        `- expected config account size >= ${expectedMinLen} bytes\n` +
+        `- actual config account size      : ${data.length} bytes\n` +
+        `\n` +
+        `This configurable items-per-box change requires a fresh deployment/init.\n` +
+        `Fix: set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts and redeploy.`,
+    );
+  }
   // Anchor account discriminator is the first 8 bytes.
   let o = 8;
   const admin = new PublicKey(data.subarray(o, o + 32));
@@ -1519,6 +1600,8 @@ function decodeBoxMinterConfig(data: Buffer) {
   const maxSupply = data.readUInt32LE(o);
   o += 4;
   const maxPerTx = data[o];
+  o += 1;
+  const itemsPerBox = data[o];
   o += 1;
   const minted = data.readUInt32LE(o);
   o += 4;
@@ -1541,6 +1624,7 @@ function decodeBoxMinterConfig(data: Buffer) {
     discountMerkleRoot,
     maxSupply,
     maxPerTx,
+    itemsPerBox,
     started,
     minted,
     namePrefix: namePrefix.value,
@@ -1568,6 +1652,7 @@ function buildInitializeIx(args: {
   discountPriceLamports: bigint;
   discountMerkleRoot: Buffer;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -1586,6 +1671,7 @@ function buildInitializeIx(args: {
     Buffer.from(args.discountMerkleRoot),
     u32LE(args.maxSupply),
     Buffer.from([args.maxPerTx & 0xff]),
+    Buffer.from([args.itemsPerBox & 0xff]),
     borshString(args.namePrefix),
     borshString(args.symbol),
     borshString(args.metadataBase),
@@ -2037,6 +2123,8 @@ async function main() {
       tree: receiptsTreeConfig,
       maxSupply: preflightCfg.maxSupply,
       maxSupplyLabel: 'on-chain cfg.maxSupply',
+      itemsPerBox: preflightCfg.itemsPerBox,
+      itemsPerBoxLabel: 'on-chain cfg.itemsPerBox',
     });
     if (!payer.publicKey.equals(preflightCfg.admin)) {
       throw new Error(
@@ -2063,6 +2151,8 @@ async function main() {
       tree: receiptsTreeConfig,
       maxSupply: dropCfg.maxSupply,
       maxSupplyLabel: 'NEW_DROP.onchain.maxSupply',
+      itemsPerBox: dropCfg.itemsPerBox,
+      itemsPerBoxLabel: 'NEW_DROP.onchain.itemsPerBox',
     });
     preparedInitDropInputs = prepareInitDropInputs({
       root,
@@ -2267,6 +2357,7 @@ async function main() {
       discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
       discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
       maxSupply: cfg.maxSupply,
+      itemsPerBox: cfg.itemsPerBox,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
       symbol: cfg.symbol,
@@ -2283,6 +2374,7 @@ async function main() {
       discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
       discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
       maxSupply: cfg.maxSupply,
+      itemsPerBox: cfg.itemsPerBox,
       maxPerTx: cfg.maxPerTx,
       namePrefix: cfg.namePrefix,
       symbol: cfg.symbol,
@@ -2327,6 +2419,7 @@ async function main() {
     discountPriceSol: dropCfg.discountPriceSol,
     discountMerkleRoot: discountMerkle.root,
     maxSupply: dropCfg.maxSupply,
+    itemsPerBox: requireItemsPerBox(dropCfg.itemsPerBox, 'NEW_DROP.onchain.itemsPerBox'),
     maxPerTx: dropCfg.maxPerTx,
 
     // Box metadata (stored on-chain)
@@ -2346,6 +2439,7 @@ async function main() {
   const discountPriceLamports = BigInt(Math.round(Number(boxMinterConfig.discountPriceSol) * LAMPORTS_PER_SOL));
   const discountMerkleRoot = boxMinterConfig.discountMerkleRoot;
   const maxSupply = Number(boxMinterConfig.maxSupply);
+  const itemsPerBox = Number(boxMinterConfig.itemsPerBox);
   const maxPerTx = Number(boxMinterConfig.maxPerTx);
   // 2) Create or reuse an MPL-Core collection (uncompressed).
   // IMPORTANT: for the on-chain program to mint into the collection, the collection update authority
@@ -2438,6 +2532,7 @@ async function main() {
     discountPriceLamports,
     discountMerkleRoot,
     maxSupply,
+    itemsPerBox,
     maxPerTx,
     namePrefix: boxMinterConfig.namePrefix,
     symbol: boxMinterConfig.symbol,
@@ -2504,6 +2599,7 @@ async function main() {
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),
+    itemsPerBox: Number(boxMinterConfig.itemsPerBox),
     maxPerTx: Number(boxMinterConfig.maxPerTx),
     namePrefix: boxMinterConfig.namePrefix,
     symbol: boxMinterConfig.symbol,
@@ -2520,6 +2616,7 @@ async function main() {
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),
+    itemsPerBox: Number(boxMinterConfig.itemsPerBox),
     maxPerTx: Number(boxMinterConfig.maxPerTx),
     namePrefix: boxMinterConfig.namePrefix,
     symbol: boxMinterConfig.symbol,

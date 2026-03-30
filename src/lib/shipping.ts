@@ -1,9 +1,10 @@
 import { normalizeCountryCode } from './solana';
 import { InventoryItem } from '../types';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
-const DELIVERY_FIGURES_PER_BOX = 3;
+const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 export function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>): number {
   return items.reduce((total, item) => total + (item.kind === 'box' ? DELIVERY_FIGURES_PER_BOX : 1), 0);

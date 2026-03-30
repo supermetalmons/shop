@@ -19,9 +19,9 @@ const MAX_SAFE_MINTS_PER_TX: u8 = 15;
 // Delivery is mostly limited by tx size; keep this high enough to not be the limiting factor.
 const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
 
-// Figure IDs are globally unique, 1..=999 for a 333 box supply (3 figures per box).
-const DUDES_PER_BOX: usize = 3;
-const MAX_DUDE_ID: u16 = 999;
+const MIN_ITEMS_PER_BOX: u8 = 1;
+// Keep this conservative: start_open_box + finalize_open_box do multiple MPL-Core CPIs per figure.
+const MAX_ITEMS_PER_BOX: u8 = 5;
 
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
@@ -390,6 +390,17 @@ pub mod box_minter {
             args.max_per_tx <= MAX_SAFE_MINTS_PER_TX,
             BoxMinterError::InvalidMaxPerTx
         );
+        require!(
+            args.items_per_box >= MIN_ITEMS_PER_BOX && args.items_per_box <= MAX_ITEMS_PER_BOX,
+            BoxMinterError::InvalidItemsPerBox
+        );
+        let max_figure_id = (args.max_supply as u64)
+            .checked_mul(args.items_per_box as u64)
+            .ok_or(BoxMinterError::MathOverflow)?;
+        require!(
+            max_figure_id > 0 && max_figure_id <= u16::MAX as u64,
+            BoxMinterError::InvalidItemsPerBox
+        );
         require!(args.price_lamports > 0, BoxMinterError::InvalidPrice);
         require!(
             args.discount_price_lamports > 0,
@@ -444,6 +455,7 @@ pub mod box_minter {
         cfg.discount_merkle_root = args.discount_merkle_root;
         cfg.max_supply = args.max_supply;
         cfg.max_per_tx = args.max_per_tx;
+        cfg.items_per_box = args.items_per_box;
         // Minting is paused by default until the admin explicitly starts it.
         cfg.started = false;
         cfg.minted = 0;
@@ -548,11 +560,13 @@ pub mod box_minter {
     ///
     /// Side effects (all in this one transaction):
     /// - creates a `PendingOpenBox` PDA keyed by the box asset pubkey
-    /// - mints 3 placeholder Core assets (empty metadata, no collection) owned by `config.admin`
+    /// - mints `config.items_per_box` placeholder Core assets (empty metadata, no collection)
+    ///   owned by `config.admin`
     pub fn start_open_box<'a, 'b, 'c, 'info>(
         ctx: Context<'a, 'b, 'c, 'info, StartOpenBox<'info>>,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+        let items_per_box = cfg.items_per_box_len();
 
         require_keys_eq!(
             ctx.accounts.mpl_core_program.key(),
@@ -579,7 +593,7 @@ pub mod box_minter {
         // Note: a PDA can be "pre-funded", creating a system-owned stub account that makes
         // `system_instruction::create_account` fail ("account already in use"). Since this is a PDA,
         // we can sign for it and reclaim it via `allocate` + `assign`.
-        let pending_space: usize = PendingOpenBox::SPACE;
+        let pending_space: usize = PendingOpenBox::space(cfg.items_per_box);
         let rent_lamports = Rent::get()?.minimum_balance(pending_space);
         let pending_bump: u8 = ctx.bumps.pending;
         let box_asset_key = ctx.accounts.box_asset.key();
@@ -676,9 +690,9 @@ pub mod box_minter {
             None,
         )?;
 
-        // Remaining accounts: exactly 3 new placeholder dude asset PDAs.
+        // Remaining accounts: exactly `items_per_box` new placeholder figure asset PDAs.
         require!(
-            ctx.remaining_accounts.len() == DUDES_PER_BOX,
+            ctx.remaining_accounts.len() == items_per_box,
             BoxMinterError::InvalidRemainingAccounts
         );
 
@@ -723,12 +737,12 @@ pub mod box_minter {
             ],
         )?;
 
-        // Create 3 placeholder Core assets:
+        // Create placeholder Core assets:
         // - owner: config.admin (vault/admin)
         // - update authority: config PDA (so only the program can later "reveal" by updating metadata + setting collection)
         // - collection: None (placeholder) so the assets do NOT appear in the collection until reveal.
         let pending_key = ctx.accounts.pending.key();
-        let mut dudes: [Pubkey; DUDES_PER_BOX] = [Pubkey::default(); DUDES_PER_BOX];
+        let mut dudes: Vec<Pubkey> = Vec::with_capacity(items_per_box);
 
         let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
@@ -753,7 +767,7 @@ pub mod box_minter {
             data: Vec::with_capacity(32),
         };
 
-        for i in 0..DUDES_PER_BOX {
+        for (i, asset_ai) in ctx.remaining_accounts.iter().enumerate() {
             let i_u8: u8 = i
                 .try_into()
                 .map_err(|_| error!(BoxMinterError::InvalidRemainingAccounts))?;
@@ -763,7 +777,6 @@ pub mod box_minter {
                 ctx.program_id,
             );
 
-            let asset_ai = &ctx.remaining_accounts[i];
             require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
             // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
             require_keys_eq!(
@@ -772,7 +785,7 @@ pub mod box_minter {
                 BoxMinterError::InvalidAssetPda
             );
 
-            dudes[i] = expected;
+            dudes.push(expected);
 
             let asset_seeds: &[&[u8]] = &[
                 SEED_PENDING_DUDE_ASSET,
@@ -849,6 +862,9 @@ pub mod box_minter {
         args: FinalizeOpenBoxArgs,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+        let items_per_box = cfg.items_per_box_len();
+        let max_dude_id = cfg.max_figure_id()?;
+        let dude_ids = &args.dude_ids;
 
         // Admin-only. The admin key is the custody vault for delivered/opened assets.
         require_keys_eq!(
@@ -868,16 +884,16 @@ pub mod box_minter {
             BoxMinterError::InvalidLogWrapper
         );
 
-        // Validate dude IDs.
-        for id in args.dude_ids {
-            require!(id >= 1 && id <= MAX_DUDE_ID, BoxMinterError::InvalidDudeId);
+        // Validate figure IDs.
+        require!(dude_ids.len() == items_per_box, BoxMinterError::InvalidDudeId);
+        for id in dude_ids.iter() {
+            require!(*id >= 1 && *id <= max_dude_id, BoxMinterError::InvalidDudeId);
         }
-        require!(
-            args.dude_ids[0] != args.dude_ids[1]
-                && args.dude_ids[0] != args.dude_ids[2]
-                && args.dude_ids[1] != args.dude_ids[2],
-            BoxMinterError::DuplicateDudeId
-        );
+        for i in 0..dude_ids.len() {
+            for j in (i + 1)..dude_ids.len() {
+                require!(dude_ids[i] != dude_ids[j], BoxMinterError::DuplicateDudeId);
+            }
+        }
 
         // Pending record must belong to the provided user, and must correspond to this box.
         require_keys_eq!(
@@ -891,12 +907,16 @@ pub mod box_minter {
             BoxMinterError::InvalidPendingRecord
         );
 
-        // Remaining accounts: exactly 3 placeholder dude assets, in the order stored on-chain.
         require!(
-            ctx.remaining_accounts.len() == DUDES_PER_BOX,
+            ctx.accounts.pending.dudes.len() == items_per_box,
+            BoxMinterError::InvalidPendingRecord
+        );
+        // Remaining accounts: exactly `items_per_box` placeholder figure assets, in the order stored on-chain.
+        require!(
+            ctx.remaining_accounts.len() == items_per_box,
             BoxMinterError::InvalidRemainingAccounts
         );
-        for i in 0..DUDES_PER_BOX {
+        for i in 0..items_per_box {
             require_keys_eq!(
                 ctx.remaining_accounts[i].key(),
                 ctx.accounts.pending.dudes[i],
@@ -994,8 +1014,8 @@ pub mod box_minter {
             data: vec![14u8, 0u8],
         };
 
-        for i in 0..DUDES_PER_BOX {
-            let dude_id = args.dude_ids[i];
+        for (i, asset_ai) in ctx.remaining_accounts.iter().enumerate() {
+            let dude_id = dude_ids[i];
             name_buf.clear();
             name_buf.push_str("figure ");
             write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
@@ -1005,8 +1025,6 @@ pub mod box_minter {
             uri_buf.push_str(URI_SUFFIX_FIGURES);
             write!(&mut uri_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
-
-            let asset_ai = &ctx.remaining_accounts[i];
 
             // UpdateV2:
             // - newName: Some(name)
@@ -1314,6 +1332,7 @@ pub mod box_minter {
 
         let box_ids = args.box_ids;
         let dude_ids = args.dude_ids;
+        let max_dude_id = cfg.max_figure_id()?;
 
         // Defensive caps (Bubblegum mints are compute-heavy).
         let total = box_ids.len().checked_add(dude_ids.len()).ok_or(BoxMinterError::MathOverflow)?;
@@ -1327,7 +1346,7 @@ pub mod box_minter {
         }
         // Validate dude IDs.
         for id in dude_ids.iter() {
-            require!(*id >= 1 && *id <= MAX_DUDE_ID, BoxMinterError::InvalidDudeId);
+            require!(*id >= 1 && *id <= max_dude_id, BoxMinterError::InvalidDudeId);
         }
         // Ensure there are no duplicates (cheap O(n^2) since n is tiny).
         for i in 0..box_ids.len() {
@@ -1500,14 +1519,15 @@ pub struct InitializeArgs {
     pub discount_merkle_root: [u8; 32],
     pub max_supply: u32,
     pub max_per_tx: u8,
+    pub items_per_box: u8,
     pub name_prefix: String,
     pub symbol: String,
     pub uri_base: String,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct FinalizeOpenBoxArgs {
-    pub dude_ids: [u16; DUDES_PER_BOX],
+    pub dude_ids: Vec<u16>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1540,6 +1560,7 @@ pub struct BoxMinterConfig {
     pub discount_merkle_root: [u8; 32],
     pub max_supply: u32,
     pub max_per_tx: u8,
+    pub items_per_box: u8,
     pub minted: u32,
     pub name_prefix: String,
     pub symbol: String,
@@ -1590,12 +1611,28 @@ impl BoxMinterConfig {
         + 32 // discount_merkle_root
         + 4 // max_supply
         + 1 // max_per_tx
+        + 1 // items_per_box
         + 4 // minted
         + 4 + Self::MAX_NAME_PREFIX // name_prefix
         + 4 + Self::MAX_SYMBOL // symbol
         + 4 + Self::MAX_URI_BASE // uri_base
         + 1 // started (bool)
         + 1; // bump
+
+    pub fn items_per_box_len(&self) -> usize {
+        self.items_per_box as usize
+    }
+
+    pub fn max_figure_id(&self) -> Result<u16> {
+        let total = (self.max_supply as u64)
+            .checked_mul(self.items_per_box as u64)
+            .ok_or(BoxMinterError::MathOverflow)?;
+        require!(
+            total > 0 && total <= u16::MAX as u64,
+            BoxMinterError::InvalidItemsPerBox
+        );
+        Ok(total as u16)
+    }
 }
 
 #[account]
@@ -1605,7 +1642,7 @@ pub struct PendingOpenBox {
     /// The box asset being opened (now owned by the vault).
     pub box_asset: Pubkey,
     /// Placeholder dude asset accounts to be updated + transferred on finalize.
-    pub dudes: [Pubkey; DUDES_PER_BOX],
+    pub dudes: Vec<Pubkey>,
     /// Slot when the pending record was created (for UX ordering).
     pub created_slot: u64,
     /// PDA bump for this record.
@@ -1613,12 +1650,15 @@ pub struct PendingOpenBox {
 }
 
 impl PendingOpenBox {
-    pub const SPACE: usize = 8 // anchor discriminator
+    pub fn space(items_per_box: u8) -> usize {
+        8 // anchor discriminator
         + 32 // owner
         + 32 // box_asset
-        + 32 * DUDES_PER_BOX // dudes
+        + 4 // dudes vec len
+        + 32 * items_per_box as usize // dudes
         + 8 // created_slot
-        + 1; // bump
+        + 1 // bump
+    }
 }
 
 #[derive(Accounts)]
@@ -2063,6 +2103,8 @@ pub enum BoxMinterError {
     InvalidMaxSupply,
     #[msg("Invalid max per transaction")]
     InvalidMaxPerTx,
+    #[msg("Invalid items per box")]
+    InvalidItemsPerBox,
     #[msg("Invalid price")]
     InvalidPrice,
     #[msg("Invalid discount price")]

@@ -16,6 +16,8 @@ const DISCOUNT_RECORD_SEED = 'discount';
 const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
 const MAX_MINTS_PER_TX = FRONTEND_DEPLOYMENT.maxPerTx;
+const MIN_ITEMS_PER_BOX = 1;
+const MAX_ITEMS_PER_BOX = 5;
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -62,6 +64,7 @@ export interface BoxMinterConfigAccount {
   discountMerkleRoot: Uint8Array;
   maxSupply: number;
   maxPerTx: number;
+  itemsPerBox: number;
   started: boolean;
   minted: number;
   namePrefix: string;
@@ -86,9 +89,17 @@ export function pendingOpenPda(boxAsset: PublicKey, programId = boxMinterProgram
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_OPEN_SEED), boxAsset.toBuffer()], programId);
 }
 
-export function pendingDudeAssetPda(pending: PublicKey, index: number, programId = boxMinterProgramId()): [PublicKey, number] {
+export function pendingDudeAssetPda(
+  pending: PublicKey,
+  index: number,
+  itemsPerBox: number,
+  programId = boxMinterProgramId(),
+): [PublicKey, number] {
   const i = Number(index);
-  if (!Number.isFinite(i) || i < 0 || i >= 3) throw new Error('Invalid pending dude index');
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new Error(`Invalid itemsPerBox in config (expected ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
+  }
+  if (!Number.isFinite(i) || i < 0 || i >= itemsPerBox) throw new Error('Invalid pending dude index');
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_DUDE_ASSET_SEED), pending.toBuffer(), Buffer.from([i & 0xff])], programId);
 }
 
@@ -122,6 +133,28 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     }
   }
 
+  const expectedMinLen =
+    8 + // discriminator
+    32 * 3 +
+    8 +
+    8 +
+    32 +
+    4 +
+    1 +
+    1 +
+    4 +
+    4 +
+    8 +
+    4 +
+    10 +
+    4 +
+    96 +
+    1 +
+    1;
+  if (data.length < expectedMinLen) {
+    throw new Error('Unsupported box minter config schema. Re-run deploy-all-onchain for a fresh configurable-items deployment.');
+  }
+
   // Layout matches `onchain/programs/box_minter/src/lib.rs` BoxMinterConfig.
   let o = 8;
   const admin = readPubkey(data, o);
@@ -141,6 +174,11 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 4;
   const maxPerTx = data[o];
   o += 1;
+  const itemsPerBox = data[o];
+  o += 1;
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new Error(`Invalid on-chain itemsPerBox: ${itemsPerBox} (expected ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
+  }
   const minted = readU32(data, o);
   o += 4;
 
@@ -164,6 +202,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     discountMerkleRoot,
     maxSupply,
     maxPerTx,
+    itemsPerBox,
     started,
     minted,
     namePrefix: namePrefix.value,
@@ -372,7 +411,7 @@ export function buildStartOpenBoxIx(cfg: BoxMinterConfigAccount, payer: PublicKe
   const programId = boxMinterProgramId();
   const [configPda] = boxMinterConfigPda(programId);
   const [pendingPda] = pendingOpenPda(boxAsset, programId);
-  const dudePdas = [0, 1, 2].map((i) => pendingDudeAssetPda(pendingPda, i, programId)[0]);
+  const dudePdas = Array.from({ length: cfg.itemsPerBox }, (_, i) => pendingDudeAssetPda(pendingPda, i, cfg.itemsPerBox, programId)[0]);
 
   return new TransactionInstruction({
     programId,

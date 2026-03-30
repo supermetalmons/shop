@@ -25,6 +25,7 @@ export type FrontendDeploymentConfig = {
   discountPriceSol: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -79,6 +80,7 @@ export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = {
   discountPriceSol: 0.55,
   discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
   maxSupply: 333,
+  itemsPerBox: 3,
   maxPerTx: 15,
   namePrefix: 'box',
   symbol: 'box',

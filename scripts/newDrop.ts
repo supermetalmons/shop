@@ -29,6 +29,7 @@ export type NewDropOnchainConfig = {
   priceSol: number;
   discountPriceSol: number;
   maxSupply: number;
+  itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
@@ -72,6 +73,7 @@ export const NEW_DROP: NewDropConfig = {
     priceSol: 1,
     discountPriceSol: 0.55,
     maxSupply: 333,
+    itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'box',
     symbol: 'box',

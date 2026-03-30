@@ -1,4 +1,9 @@
 import { FormEvent, useState } from 'react';
+import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+
+const ITEMS_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
+const FIGURE_LABEL = ITEMS_PER_BOX === 1 ? 'figure receipt' : 'figure receipts';
+const FIGURE_VERB = ITEMS_PER_BOX === 1 ? 'is' : 'are';
 
 interface ClaimFormProps {
   onClaim: (payload: { code: string }) => Promise<void>;
@@ -19,7 +24,9 @@ export function ClaimForm({ onClaim, mode = 'card', showTitle = true }: ClaimFor
     setSuccess(null);
     try {
       await onClaim({ code: code.trim() });
-      setSuccess('Claim submitted successfully! Your box receipt was transferred and your 3 figure receipts are being minted.');
+      setSuccess(
+        `Claim submitted successfully! Your box receipt was transferred and your ${ITEMS_PER_BOX} ${FIGURE_LABEL} ${FIGURE_VERB} being minted.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

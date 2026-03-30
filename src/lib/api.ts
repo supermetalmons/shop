@@ -145,6 +145,10 @@ const heliusCollection = FRONTEND_DEPLOYMENT.collectionMint;
 
 type DasAsset = Record<string, any>;
 
+function readU32(buf: Uint8Array, offset: number): number {
+  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset, true);
+}
+
 // Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
 const ACCOUNT_PENDING_OPEN_BOX = Uint8Array.from([0x45, 0x07, 0x45, 0x1a, 0xf0, 0x0c, 0x43, 0xa1]);
 // base58(ACCOUNT_PENDING_OPEN_BOX)
@@ -396,14 +400,17 @@ export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenB
           : null;
     if (!pendingPda || !dataB64) continue;
     const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
-    if (buf.length < 8 + 32 + 32 + 32 * 3 + 8 + 1) continue;
+    if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) continue;
     if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) continue;
     const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
     if (ownerFromChain !== owner) continue;
     const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
     const dudeAssetIds: string[] = [];
     let o = 8 + 32 + 32;
-    for (let i = 0; i < 3; i += 1) {
+    const dudeCount = readU32(buf, o);
+    o += 4;
+    if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) continue;
+    for (let i = 0; i < dudeCount; i += 1) {
       dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
       o += 32;
     }

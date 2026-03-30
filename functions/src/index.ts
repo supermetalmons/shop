@@ -224,8 +224,33 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
   return { uid, wallet };
 }
 
-const DUDES_PER_BOX = 3;
-const MAX_DUDE_ID = 999;
+const MIN_ITEMS_PER_BOX = 1;
+const MAX_ITEMS_PER_BOX = 5;
+const ITEMS_PER_BOX = (() => {
+  const value = Number(FUNCTIONS_DEPLOYMENT.itemsPerBox);
+  if (!Number.isInteger(value) || value < MIN_ITEMS_PER_BOX || value > MAX_ITEMS_PER_BOX) {
+    throw new Error(
+      `itemsPerBox is invalid in functions/src/config/deployment.ts: ${FUNCTIONS_DEPLOYMENT.itemsPerBox} (expected integer ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`,
+    );
+  }
+  return value;
+})();
+const MAX_SUPPLY = (() => {
+  const value = Number(FUNCTIONS_DEPLOYMENT.maxSupply);
+  if (!Number.isInteger(value) || value < 1 || value > 0xffff_ffff) {
+    throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts: ${FUNCTIONS_DEPLOYMENT.maxSupply}`);
+  }
+  return value;
+})();
+const MAX_DUDE_ID = (() => {
+  const value = MAX_SUPPLY * ITEMS_PER_BOX;
+  if (!Number.isFinite(value) || value < 1 || value > 0xffff) {
+    throw new Error(
+      `Configured max figure id is invalid in functions/src/config/deployment.ts: maxSupply=${MAX_SUPPLY}, itemsPerBox=${ITEMS_PER_BOX}`,
+    );
+  }
+  return value;
+})();
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
 // Issue-receipts tx retry/confirm tuning.
@@ -302,7 +327,7 @@ const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
-const DELIVERY_FIGURES_PER_BOX = 3;
+const DELIVERY_FIGURES_PER_BOX = ITEMS_PER_BOX;
 const MAX_DELIVERY_ITEMS = 32;
 const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * DELIVERY_FIGURES_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
@@ -855,7 +880,7 @@ async function ensureOnchainCoreConfig(force = false) {
 
   const pubkeys = [collectionMint, boxMinterConfigPda];
   const infos = await withTimeout(
-    connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+    connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getMultipleAccountsInfo',
   );
@@ -882,6 +907,7 @@ async function ensureOnchainCoreConfig(force = false) {
   }
 
   const collectionInfo = infos[0];
+  const configInfo = infos[1];
   if (collectionInfo && !collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
     onchainConfigOk = false;
     throw new HttpsError(
@@ -891,6 +917,40 @@ async function ensureOnchainCoreConfig(force = false) {
         collection: collectionMint.toBase58(),
         expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
         actualOwner: collectionInfo.owner.toBase58(),
+      },
+    );
+  }
+
+  if (!configInfo?.data) {
+    onchainConfigOk = false;
+    throw new HttpsError(
+      'failed-precondition',
+      'On-chain mint config is missing or unreadable. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
+      { configPda: boxMinterConfigPda.toBase58() },
+    );
+  }
+  const decoded = decodeBoxMinterConfigData(Buffer.from(configInfo.data));
+  if (decoded.itemsPerBox !== ITEMS_PER_BOX) {
+    onchainConfigOk = false;
+    throw new HttpsError(
+      'failed-precondition',
+      'functions/src/config/deployment.ts is out of sync with the on-chain itemsPerBox value.',
+      {
+        configuredItemsPerBox: ITEMS_PER_BOX,
+        onchainItemsPerBox: decoded.itemsPerBox,
+        configPda: boxMinterConfigPda.toBase58(),
+      },
+    );
+  }
+  if (decoded.maxSupply !== MAX_SUPPLY) {
+    onchainConfigOk = false;
+    throw new HttpsError(
+      'failed-precondition',
+      'functions/src/config/deployment.ts is out of sync with the on-chain maxSupply value.',
+      {
+        configuredMaxSupply: MAX_SUPPLY,
+        onchainMaxSupply: decoded.maxSupply,
+        configPda: boxMinterConfigPda.toBase58(),
       },
     );
   }
@@ -1414,9 +1474,89 @@ function bubblegumBurnV2Ix(args: {
   });
 }
 
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN =
+  8 + // discriminator
+  32 * 3 +
+  8 +
+  8 +
+  32 +
+  4 +
+  1 +
+  1 +
+  4 +
+  4 +
+  8 +
+  4 +
+  10 +
+  4 +
+  96 +
+  1 +
+  1;
+
+type DecodedBoxMinterConfig = {
+  admin: PublicKey;
+  treasury: PublicKey;
+  coreCollection: PublicKey;
+  maxSupply: number;
+  maxPerTx: number;
+  itemsPerBox: number;
+};
+
+function readBorshString(data: Buffer, offset: number): { value: string; next: number } {
+  const len = data.readUInt32LE(offset);
+  const start = offset + 4;
+  const end = start + len;
+  return { value: data.subarray(start, end).toString('utf8'), next: end };
+}
+
+function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterConfig {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (buf.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Box minter config uses an older schema. Re-run deploy-all-onchain for a fresh configurable-items deployment.',
+      { expectedMinBytes: BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN, actualBytes: buf.length },
+    );
+  }
+
+  let o = 8;
+  const admin = new PublicKey(buf.subarray(o, o + 32));
+  o += 32;
+  const treasury = new PublicKey(buf.subarray(o, o + 32));
+  o += 32;
+  const coreCollection = new PublicKey(buf.subarray(o, o + 32));
+  o += 32;
+  o += 8; // priceLamports
+  o += 8; // discountPriceLamports
+  o += 32; // discountMerkleRoot
+  const maxSupply = buf.readUInt32LE(o);
+  o += 4;
+  const maxPerTx = buf.readUInt8(o);
+  o += 1;
+  const itemsPerBox = buf.readUInt8(o);
+  o += 1;
+  o += 4; // minted
+  o = readBorshString(buf, o).next;
+  o = readBorshString(buf, o).next;
+  o = readBorshString(buf, o).next;
+
+  if (!Number.isFinite(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new HttpsError('failed-precondition', 'On-chain config has invalid itemsPerBox', { itemsPerBox });
+  }
+
+  return {
+    admin,
+    treasury,
+    coreCollection,
+    maxSupply,
+    maxPerTx,
+    itemsPerBox,
+  };
+}
+
 function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
-  if (!Array.isArray(dudeIds) || dudeIds.length !== DUDES_PER_BOX) {
-    throw new HttpsError('invalid-argument', `dudeIds must have length ${DUDES_PER_BOX}`);
+  if (!Array.isArray(dudeIds) || dudeIds.length !== ITEMS_PER_BOX) {
+    throw new HttpsError('invalid-argument', `dudeIds must have length ${ITEMS_PER_BOX}`);
   }
   const ids = dudeIds.map((n) => Number(n));
   ids.forEach((id) => {
@@ -1427,7 +1567,7 @@ function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
   if (new Set(ids).size !== ids.length) {
     throw new HttpsError('invalid-argument', 'Duplicate dude ids');
   }
-  return Buffer.concat([IX_FINALIZE_OPEN_BOX, ...ids.map(u16LE)]);
+  return Buffer.concat([IX_FINALIZE_OPEN_BOX, u32LE(ids.length), ...ids.map(u16LE)]);
 }
 
 function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }): Buffer {
@@ -1462,7 +1602,7 @@ function decodePendingOpenBox(data: Buffer): {
   bump: number;
 } {
   if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
-  const minLen = 8 + 32 + 32 + 32 * DUDES_PER_BOX + 8 + 1;
+  const minLen = 8 + 32 + 32 + 4 + 8 + 1;
   if (data.length < minLen) {
     throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (too short)');
   }
@@ -1475,8 +1615,13 @@ function decodePendingOpenBox(data: Buffer): {
   o += 32;
   const boxAsset = new PublicKey(data.subarray(o, o + 32));
   o += 32;
+  const dudeCount = data.readUInt32LE(o);
+  o += 4;
+  if (data.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) {
+    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (truncated vector)');
+  }
   const dudeAssets: PublicKey[] = [];
-  for (let i = 0; i < DUDES_PER_BOX; i += 1) {
+  for (let i = 0; i < dudeCount; i += 1) {
     dudeAssets.push(new PublicKey(data.subarray(o, o + 32)));
     o += 32;
   }
@@ -1523,8 +1668,8 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
         if (existing.exists) {
           const dudeIdsRaw = (existing.data() as any)?.dudeIds;
           const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
-          if (dudeIds.length !== DUDES_PER_BOX) {
-            throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${DUDES_PER_BOX})`, {
+          if (dudeIds.length !== ITEMS_PER_BOX) {
+            throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${ITEMS_PER_BOX})`, {
               boxAssetId,
               dudeIds,
             });
@@ -1556,12 +1701,12 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
         const dupRemoved = sanitized.length - pool.length;
         const poolLenAfterSanitize = pool.length;
 
-        if (pool.length < DUDES_PER_BOX) {
+        if (pool.length < ITEMS_PER_BOX) {
           throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
             boxAssetId,
             poolDocExists: poolSnap.exists,
             poolLen: pool.length,
-            required: DUDES_PER_BOX,
+            required: ITEMS_PER_BOX,
           });
         }
 
@@ -1572,7 +1717,7 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
 
         // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
         // across boxes *within the same drop* by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
-        while (chosen.length < DUDES_PER_BOX) {
+        while (chosen.length < ITEMS_PER_BOX) {
           if (!pool.length) {
             throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
               boxAssetId,
@@ -1807,8 +1952,8 @@ async function ensureIrlClaimCodeForBox(params: {
   if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) {
     throw new HttpsError('failed-precondition', 'Invalid box id for IRL claim code');
   }
-  if (dudeIds.length !== DUDES_PER_BOX) {
-    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${DUDES_PER_BOX})`);
+  if (dudeIds.length !== ITEMS_PER_BOX) {
+    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${ITEMS_PER_BOX})`);
   }
   dudeIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
@@ -2552,8 +2697,9 @@ export const revealDudes = onCallLogged(
       { configPda: boxMinterConfigPda.toBase58() },
     );
   }
-  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfgAdmin = cfg.admin;
+  const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new HttpsError(
@@ -2593,6 +2739,18 @@ export const revealDudes = onCallLogged(
       boxAssetId,
       pending: pendingPda.toBase58(),
     });
+  }
+  if (pending.dudeAssets.length !== ITEMS_PER_BOX) {
+    throw new HttpsError(
+      'failed-precondition',
+      `Pending open has invalid figure placeholder count (expected ${ITEMS_PER_BOX})`,
+      {
+        pending: pendingPda.toBase58(),
+        boxAssetId,
+        expected: ITEMS_PER_BOX,
+        actual: pending.dudeAssets.length,
+      },
+    );
   }
 
   // Assign dudes NOW (after the box has already been transferred away); keep this admin-only.
@@ -2731,9 +2889,10 @@ export const prepareDeliveryTx = onCallLogged(
       { configPda: boxMinterConfigPda.toBase58() },
     );
   }
-  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
-  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfgAdmin = cfg.admin;
+  const cfgTreasury = cfg.treasury;
+  const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new HttpsError(
@@ -2945,7 +3104,8 @@ export const issueReceipts = onCallLogged(
           if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
             throw new HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
           }
-          const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+          const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+          const cfgAdmin = cfg.admin;
           const signer = cosigner();
           if (!signer.publicKey.equals(cfgAdmin)) {
             throw new HttpsError('failed-precondition', 'Server key does not match on-chain admin (late close)');
@@ -3083,9 +3243,10 @@ export const issueReceipts = onCallLogged(
       'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
     );
   }
-  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgTreasury = new PublicKey(cfgInfo.data.subarray(8 + 32, 8 + 32 + 32));
-  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfgAdmin = cfg.admin;
+  const cfgTreasury = cfg.treasury;
+  const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
@@ -3442,8 +3603,8 @@ export const prepareIrlClaimTx = onCallLogged(
 
   const dudeIdsRaw = claim?.dudeIds ?? claim?.dude_ids ?? claim?.dudes ?? [];
   const dudeIds: number[] = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n: any) => Number(n)) : [];
-  if (dudeIds.length !== DUDES_PER_BOX) {
-    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${DUDES_PER_BOX})`);
+  if (dudeIds.length !== ITEMS_PER_BOX) {
+    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${ITEMS_PER_BOX})`);
   }
   dudeIds.forEach((id) => {
     if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
@@ -3513,8 +3674,9 @@ export const prepareIrlClaimTx = onCallLogged(
       { configPda: boxMinterConfigPda.toBase58() },
     );
   }
-  const cfgAdmin = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
-  const cfgCoreCollection = new PublicKey(cfgInfo.data.subarray(8 + 32 + 32, 8 + 32 + 32 + 32));
+  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfgAdmin = cfg.admin;
+  const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {
     throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
@@ -3596,7 +3758,7 @@ export const prepareIrlClaimTx = onCallLogged(
     }),
   );
 
-  // 2) Mint the 3 dude receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
+  // 2) Mint the configured figure receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
   const treeConfig = deriveTreeConfigPda(receiptsMerkleTree);
   instructions.push(
     new TransactionInstruction({

@@ -704,9 +704,7 @@ function App() {
       if (typeof document === 'undefined') return;
       const root = ensureVideoPreloadRoot();
       if (!root) return;
-      const ids = mediaIds
-        .filter((mediaId) => Number.isFinite(mediaId) && mediaId > 0)
-        .slice(0, 3);
+      const ids = Array.from(new Set(mediaIds.filter((mediaId) => Number.isFinite(mediaId) && mediaId > 0)));
       const key = ids.join(',');
       if (!key) return;
       if (videoPreloadKeyRef.current === key) return;
@@ -1839,7 +1837,7 @@ function App() {
               .map((figureId) => getMediaIdForFigureId(figureId))
               .filter((mediaId): mediaId is number => Boolean(mediaId)),
           ),
-        ).slice(0, 3);
+        );
         if (mediaIds.length) {
           preloadRevealVideos(mediaIds);
         }
@@ -2205,21 +2203,22 @@ function App() {
         ? 'revealed'
         : 'ready'
     : 'ready';
-  const revealMediaIds = useMemo(() => {
-    if (!revealOverlay?.revealedIds?.length) return [] as number[];
-    const seen = new Set<number>();
-    return revealOverlay.revealedIds
+  const revealMediaItems = useMemo(() => {
+    if (!revealOverlay?.revealedIds?.length) return [] as Array<{ figureId: number; mediaId: number; index: number }>;
+    const resolved = revealOverlay.revealedIds
       .map((figureId) => {
         const mediaId = getMediaIdForFigureId(figureId);
         if (!mediaId) return null;
-        if (seen.has(mediaId)) return null;
-        seen.add(mediaId);
-        return mediaId;
+        return { figureId, mediaId };
       })
-      .filter((entry): entry is number => Boolean(entry))
-      .slice(0, 3);
+      .filter((entry): entry is { figureId: number; mediaId: number } => Boolean(entry));
+    return resolved.map((entry, index) => ({ ...entry, index }));
   }, [revealOverlay?.revealedIds]);
-  const revealMediaVisible = Boolean(revealOverlay && revealMediaIds.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START);
+  const revealMediaIds = useMemo(
+    () => Array.from(new Set(revealMediaItems.map((entry) => entry.mediaId))),
+    [revealMediaItems],
+  );
+  const revealMediaVisible = Boolean(revealOverlay && revealMediaItems.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START);
 
   const revealSoundPlayedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2244,7 +2243,7 @@ function App() {
   }, [revealOverlay?.id, revealMediaVisible]);
 
 	  const revealMediaStyle = useMemo(() => {
-	    if (!revealOverlay || !revealMediaIds.length) return undefined;
+	    if (!revealOverlay || !revealMediaItems.length) return undefined;
 	    const width = revealOverlay.targetRect.width;
 	    const height = revealOverlay.targetRect.height;
 	    const base = Math.min(width, height);
@@ -2253,13 +2252,15 @@ function App() {
 	    const maxByWidth = Math.floor(width * widthCap);
 	    const maxByHeight = Math.floor(height * 0.9);
 	    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
-	    const size = Math.max(64, Math.floor(maxSize * 0.8));
+	    const count = revealMediaItems.length;
+	    const densityScale = count <= 3 ? 0.8 : count <= 5 ? 0.68 : count <= 8 ? 0.56 : 0.48;
+	    const size = Math.max(48, Math.floor(maxSize * densityScale));
 	    const shiftY = Math.floor(size * 0.1);
 	    return {
 	      ['--reveal-media-size' as never]: `${size}px`,
 	      ['--reveal-media-shift-y' as never]: `${shiftY}px`,
 	    };
-	  }, [revealOverlay, revealMediaIds.length]);
+	  }, [revealOverlay, revealMediaItems.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
     preloadRevealVideos(revealMediaIds);
@@ -2313,17 +2314,27 @@ function App() {
               className={`reveal-overlay__shine${revealMediaVisible ? ' reveal-overlay__shine--visible' : ''}`}
               aria-hidden="true"
             />
-            {revealMediaIds.length ? (
+            {revealMediaItems.length ? (
               <div
                 className={`reveal-overlay__media${revealMediaVisible ? ' reveal-overlay__media--visible' : ''}`}
                 style={revealMediaStyle}
                 aria-hidden="true"
               >
-                {revealMediaIds.map((mediaId, index) => (
+                {revealMediaItems.map(({ figureId, mediaId, index }) => {
+                  const count = revealMediaItems.length;
+                  const angle = -Math.PI / 2 + (index * (Math.PI * 2)) / Math.max(count, 1);
+                  const ring = count <= 1 ? 0 : count <= 3 ? 28 : count <= 5 ? 32 : count <= 8 ? 36 : 40;
+                  const left = 50 + Math.cos(angle) * ring;
+                  const top = 50 + Math.sin(angle) * ring;
+                  return (
                   <div
-                    key={`${revealOverlay.id}-${mediaId}`}
-                    className={`reveal-overlay__media-item reveal-overlay__media-item--${['top', 'left', 'right'][index] || 'top'}`}
-                    style={{ ['--reveal-media-delay' as never]: `${index * 90}ms` }}
+                    key={`${revealOverlay.id}-${figureId}-${index}`}
+                    className="reveal-overlay__media-item"
+                    style={{
+                      left: revealMediaVisible ? `${left}%` : '50%',
+                      top: revealMediaVisible ? `${top}%` : '50%',
+                      ['--reveal-media-delay' as never]: `${index * 70}ms`,
+                    }}
                   >
                     <div className="reveal-overlay__media-float">
 	                      <video
@@ -2343,7 +2354,8 @@ function App() {
                       </video>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
             <button
