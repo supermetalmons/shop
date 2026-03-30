@@ -10,6 +10,14 @@ export type NewDropDeployConfig = {
 export type NewDropOnchainConfig = {
   dropId: string;
   metadataBase: string;
+  collectionMetadata: {
+    name: string;
+    symbol: string;
+    sellerFeeBasisPoints: number;
+    description?: string;
+    externalUrl?: string;
+    image?: string;
+  };
   discountWhitelistCsvRelativePath: string;
   receiptsTree: {
     maxDepth: number;
@@ -24,7 +32,6 @@ export type NewDropOnchainConfig = {
   maxPerTx: number;
   namePrefix: string;
   symbol: string;
-  coreCollectionName: string;
 };
 
 export type NewDropConfig = {
@@ -46,6 +53,14 @@ export const NEW_DROP: NewDropConfig = {
   onchain: {
     dropId: 'little_swag_boxes',
     metadataBase: 'https://assets.mons.link/drops/lsb',
+    collectionMetadata: {
+      name: 'Little Swag Boxes',
+      symbol: 'lsb',
+      sellerFeeBasisPoints: 500,
+      description: 'a collection of little swag boxes, figures and receipts',
+      externalUrl: 'https://mons.shop',
+      image: 'https://assets.mons.link/drops/lsb/box/default.webp',
+    },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
     receiptsTree: {
       maxDepth: 14,
@@ -60,6 +75,5 @@ export const NEW_DROP: NewDropConfig = {
     maxPerTx: 15,
     namePrefix: 'box',
     symbol: 'box',
-    coreCollectionName: 'little swag figures',
   },
 };

@@ -414,9 +414,149 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
 
 type PreparedInitDropInputs = {
   requiredDropMetadataBase: string;
-  coreCollectionName: string;
   discountMerkle: { root: Buffer; proofs: Record<string, string[]> };
 };
+
+type PreparedCollectionMetadata = {
+  name: string;
+  symbol: string;
+  sellerFeeBasisPoints: number;
+  description?: string;
+  externalUrl?: string;
+  image?: string;
+};
+
+function prepareCollectionMetadata(dropCfg: typeof NEW_DROP.onchain): PreparedCollectionMetadata {
+  if (!dropCfg.collectionMetadata || typeof dropCfg.collectionMetadata !== 'object') {
+    throw new Error('Missing NEW_DROP.onchain.collectionMetadata in scripts/newDrop.ts');
+  }
+  const collectionMetadataCfg = dropCfg.collectionMetadata;
+  const name = requireNonEmptyString(collectionMetadataCfg.name, 'NEW_DROP.onchain.collectionMetadata.name');
+  const symbol = requireNonEmptyString(collectionMetadataCfg.symbol, 'NEW_DROP.onchain.collectionMetadata.symbol');
+  const sellerFeeBasisPoints = requireIntegerInRange({
+    value: collectionMetadataCfg.sellerFeeBasisPoints,
+    label: 'NEW_DROP.onchain.collectionMetadata.sellerFeeBasisPoints',
+    min: 0,
+    max: 10_000,
+  });
+  return {
+    name,
+    symbol,
+    sellerFeeBasisPoints,
+    description: trimToUndefined(collectionMetadataCfg.description),
+    externalUrl: trimToUndefined(collectionMetadataCfg.externalUrl),
+    image: trimToUndefined(collectionMetadataCfg.image),
+  };
+}
+
+function formatJsonValueForError(value: unknown): string {
+  if (typeof value === 'undefined') return '(missing)';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractTrimmedStringField(value: unknown): string | undefined {
+  return typeof value === 'string' ? trimToUndefined(value) : undefined;
+}
+
+function extractIntegerField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+async function assertCollectionMetadataJsonMatchesNewDrop(args: {
+  metadataBase: string;
+  expected: PreparedCollectionMetadata;
+}) {
+  const collectionJsonUrl = `${args.metadataBase}/collection.json`;
+  let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    response = await fetch(collectionJsonUrl, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch collection metadata JSON for preflight validation.\n` +
+        `- url: ${collectionJsonUrl}\n` +
+        `- error: ${errorMessage(err)}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch collection metadata JSON for preflight validation.\n` +
+        `- url: ${collectionJsonUrl}\n` +
+        `- http status: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await response.json();
+  } catch (err) {
+    throw new Error(
+      `Invalid JSON at collection metadata URL.\n` +
+        `- url: ${collectionJsonUrl}\n` +
+        `- error: ${errorMessage(err)}`,
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `Invalid collection metadata payload at ${collectionJsonUrl} (expected a JSON object at top-level).`,
+    );
+  }
+
+  const json = parsed as Record<string, unknown>;
+  const mismatches: string[] = [];
+  const checkStringField = (field: string, expected: string, actualValue: unknown) => {
+    const actual = extractTrimmedStringField(actualValue);
+    if (actual !== expected) {
+      mismatches.push(`${field}: expected "${expected}", got ${formatJsonValueForError(actualValue)}`);
+    }
+  };
+
+  checkStringField('name', args.expected.name, json.name);
+  checkStringField('symbol', args.expected.symbol, json.symbol);
+
+  const actualSellerFeeBps = extractIntegerField(json.seller_fee_basis_points);
+  if (actualSellerFeeBps !== args.expected.sellerFeeBasisPoints) {
+    mismatches.push(
+      `seller_fee_basis_points: expected ${args.expected.sellerFeeBasisPoints}, got ${formatJsonValueForError(
+        json.seller_fee_basis_points,
+      )}`,
+    );
+  }
+
+  if (typeof args.expected.description === 'string') {
+    checkStringField('description', args.expected.description, json.description);
+  }
+  if (typeof args.expected.externalUrl === 'string') {
+    checkStringField('external_url', args.expected.externalUrl, json.external_url);
+  }
+  if (typeof args.expected.image === 'string') {
+    checkStringField('image', args.expected.image, json.image);
+  }
+
+  if (mismatches.length) {
+    throw new Error(
+      `collection.json preflight validation failed.\n` +
+        `- url: ${collectionJsonUrl}\n` +
+        mismatches.map((line) => `- ${line}`).join('\n') +
+        `\n` +
+        `Fix scripts/newDrop.ts or the collection.json content before deploying.`,
+    );
+  }
+}
 
 function prepareInitDropInputs(args: {
   root: string;
@@ -428,13 +568,11 @@ function prepareInitDropInputs(args: {
     'NEW_DROP.onchain.discountWhitelistCsvRelativePath',
   );
   const requiredDropMetadataBase = requireNonEmptyString(args.dropMetadataBase, 'NEW_DROP.onchain.metadataBase');
-  const coreCollectionName = requireNonEmptyString(args.dropCfg.coreCollectionName, 'NEW_DROP.onchain.coreCollectionName');
   const discountCsvPath = path.join(args.root, discountWhitelistCsvRelativePath);
   const discountAddresses = readDiscountList(discountCsvPath);
   const discountMerkle = buildDiscountMerkleData(discountAddresses);
   return {
     requiredDropMetadataBase,
-    coreCollectionName,
     discountMerkle,
   };
 }
@@ -1810,9 +1948,19 @@ async function main() {
   const deployCfg = NEW_DROP.deploy;
   const dropCfg = NEW_DROP.onchain;
   const dropId = requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId');
-  const dropMetadataBase = normalizeDropBase(dropCfg.metadataBase);
+  const dropMetadataBase = normalizeDropBase(requireNonEmptyString(dropCfg.metadataBase, 'NEW_DROP.onchain.metadataBase'));
+  const collectionMetadata = prepareCollectionMetadata(dropCfg);
   const receiptsTreeConfig = prepareReceiptsTreeConfig(dropCfg);
   const coreCollectionRoyaltiesBps = requireRoyaltiesBps(dropCfg.coreCollectionRoyaltiesBps);
+  if (collectionMetadata.sellerFeeBasisPoints !== coreCollectionRoyaltiesBps) {
+    throw new Error(
+      `Mismatch in scripts/newDrop.ts for collection royalties.\n` +
+        `- NEW_DROP.onchain.collectionMetadata.sellerFeeBasisPoints: ${collectionMetadata.sellerFeeBasisPoints}\n` +
+        `- NEW_DROP.onchain.coreCollectionRoyaltiesBps            : ${coreCollectionRoyaltiesBps}\n` +
+        `\n` +
+        `These values must match before deploying.`,
+    );
+  }
   const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
 
@@ -1828,9 +1976,16 @@ async function main() {
     'receipts tree:',
     `depth=${receiptsTreeConfig.maxDepth}, buffer=${receiptsTreeConfig.maxBufferSize}, canopy=${receiptsTreeConfig.canopyDepth}`,
   );
+  console.log('collection metadata url:', `${dropMetadataBase}/collection.json`);
   if (deployCfg.coreCollectionPubkey) console.log('core collection:', deployCfg.coreCollectionPubkey);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
+
+  await assertCollectionMetadataJsonMatchesNewDrop({
+    metadataBase: dropMetadataBase,
+    expected: collectionMetadata,
+  });
+  console.log('✅ collection.json preflight matches scripts/newDrop.ts');
 
   // Fail fast if the target cluster/RPC does not have the Metaplex programs we depend on.
   const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
@@ -2198,7 +2353,7 @@ async function main() {
   const coreCollection = deployCfg.coreCollectionPubkey ? new PublicKey(deployCfg.coreCollectionPubkey) : undefined;
 
   const coreCollectionConfig = {
-    name: initDropInputs.coreCollectionName,
+    name: collectionMetadata.name,
     uri: `${requiredDropMetadataBase}/collection.json`,
   };
 
