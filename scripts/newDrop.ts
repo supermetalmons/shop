@@ -40,13 +40,17 @@ export type NewDropConfig = {
   onchain: NewDropOnchainConfig;
 };
 
+// Toggle this to pick deployment network from one place.
+const isMainnet = false;
+const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
+
 /**
  * Single source of truth for editable deploy + drop metadata.
  * Update this file for each new drop.
  */
 export const NEW_DROP: NewDropConfig = {
   deploy: {
-    solanaCluster: 'mainnet-beta',
+    solanaCluster,
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
     reuseProgramId: false,
