@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
 import { clusterApiUrl, Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { NEW_DROP } from './newDrop.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -110,15 +111,58 @@ function parsePrivateKeyInput(input: string): Keypair {
   }
 }
 
-function readExistingTsObjectStringField(filePath: string, field: string): string | undefined {
+const deploymentConfigObjectCache = new Map<string, Record<string, unknown> | null>();
+
+async function readDeploymentConfigObject(filePath: string): Promise<Record<string, unknown> | undefined> {
+  if (!existsSync(filePath)) return undefined;
+
+  if (deploymentConfigObjectCache.has(filePath)) {
+    return deploymentConfigObjectCache.get(filePath) || undefined;
+  }
+
+  try {
+    const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
+    const candidates = ['FRONTEND_DEPLOYMENT', 'DEPLOYMENT', 'default'];
+    for (const key of candidates) {
+      const candidate = mod[key];
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        const value = candidate as Record<string, unknown>;
+        deploymentConfigObjectCache.set(filePath, value);
+        return value;
+      }
+    }
+  } catch {
+    // Fall back to text parsing below.
+  }
+
+  deploymentConfigObjectCache.set(filePath, null);
+  return undefined;
+}
+
+function readExistingTsObjectStringFieldByRegexFallback(filePath: string, field: string): string | undefined {
+  if (!existsSync(filePath)) return undefined;
   try {
     const content = readFileSync(filePath, 'utf8');
-    const re = new RegExp(`${field}\\s*:\\s*'([^']*)'`, 'm');
+    const re = new RegExp(`${field}\\s*:\\s*(?:'([^']*)'|"([^"]*)"|\\\`([^\\\`]*)\\\`)`, 'm');
     const match = content.match(re);
-    return match?.[1] || undefined;
+    const value = match?.[1] ?? match?.[2] ?? match?.[3];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   } catch {
     return undefined;
   }
+}
+
+async function readExistingTsObjectStringField(filePath: string, field: string): Promise<string | undefined> {
+  const cfg = await readDeploymentConfigObject(filePath);
+  if (cfg && typeof cfg[field] === 'string') {
+    const value = String(cfg[field]).trim();
+    return value || undefined;
+  }
+  return readExistingTsObjectStringFieldByRegexFallback(filePath, field);
+}
+
+function normalizeDropId(value: string | undefined): string {
+  return String(value || '').trim().toLowerCase();
 }
 
 async function promptYConfirmation(prompt: string): Promise<boolean> {
@@ -164,8 +208,21 @@ async function main() {
     );
   }
 
-  const clusterStr = readExistingTsObjectStringField(frontendCfgPath, 'solanaCluster') as SolanaCluster | undefined;
-  const programIdStr = readExistingTsObjectStringField(frontendCfgPath, 'boxMinterProgramId');
+  const clusterStr = (await readExistingTsObjectStringField(frontendCfgPath, 'solanaCluster')) as SolanaCluster | undefined;
+  const programIdStr = await readExistingTsObjectStringField(frontendCfgPath, 'boxMinterProgramId');
+  const deployedDropId = await readExistingTsObjectStringField(frontendCfgPath, 'dropId');
+  const configuredDropId = String(NEW_DROP?.onchain?.dropId || '').trim() || undefined;
+  const normalizedConfiguredDropId = normalizeDropId(configuredDropId);
+  const normalizedDeployedDropId = normalizeDropId(deployedDropId);
+  if (normalizedDeployedDropId && normalizedConfiguredDropId && normalizedDeployedDropId !== normalizedConfiguredDropId) {
+    console.warn(
+      `⚠️  Drop mismatch between deployment config and scripts/newDrop.ts.\n` +
+        `   deployment.ts dropId   : ${deployedDropId}\n` +
+        `   newDrop.ts dropId      : ${configuredDropId}\n` +
+        `   Continuing with deployed program/config from ${frontendCfgPath}.`,
+    );
+  }
+  const activeDropId = deployedDropId || configuredDropId || '(unknown)';
 
   if (!clusterStr || !['devnet', 'testnet', 'mainnet-beta'].includes(clusterStr)) {
     throw new Error(
@@ -191,6 +248,7 @@ async function main() {
   console.log('--- start mint (box_minter) ---');
   console.log('cluster:', clusterStr);
   console.log('rpc    :', rpcUrl);
+  console.log('drop   :', activeDropId);
   console.log('program:', programId.toBase58());
   console.log('config :', configPda.toBase58());
   console.log('');

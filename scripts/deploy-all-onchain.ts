@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
+import { NEW_DROP, type SolanaCluster } from './newDrop.ts';
 import {
   clusterApiUrl,
   AddressLookupTableProgram,
@@ -32,25 +33,11 @@ const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRL
 const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 // NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
-type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-
 // ---------------------------------------------------------------------------
-// EDIT THESE CONSTANTS to change deploy behavior.
+// Edit scripts/newDrop.ts to change deploy + drop behavior.
 // This script intentionally accepts NO CLI args.
 // NOTE: Metaplex programs (MPL Core/Bubblegum/etc) are often NOT deployed on Solana testnet.
 // If you hit "Attempt to load a program that does not exist", use devnet or mainnet-beta.
-const SOLANA_CLUSTER: SolanaCluster = 'mainnet-beta';
-// Optional: set a custom RPC URL; otherwise the default cluster RPC is used.
-const SOLANA_RPC_URL: string | undefined = undefined;
-// Optional: set to an existing MPL-Core collection address (must have update authority = config PDA).
-// If unset, the script auto-creates a new collection on first deploy.
-const CORE_COLLECTION_PUBKEY: string | undefined = undefined;
-// If true, reuse the existing program id/keypair (upgrade in-place). If false, auto-generate a fresh program id.
-const REUSE_PROGRAM_ID = false;
-
-// MPL-Core collection-level royalties (secondary trading).
-// NOTE: Not every marketplace enforces royalties, but this is the canonical on-chain royalty configuration.
-const CORE_COLLECTION_ROYALTIES_BPS = 500; // 5.00%
 // ---------------------------------------------------------------------------
 
 function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
@@ -185,7 +172,7 @@ async function assertExecutableProgram(args: {
   if (!info) {
     const hint =
       cluster === 'testnet'
-        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Try SOLANA_CLUSTER='devnet'.`
+        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Try NEW_DROP.deploy.solanaCluster='devnet' in scripts/newDrop.ts.`
         : '';
     throw new Error(
       `${name} program is not deployed on this cluster.\n` +
@@ -306,16 +293,273 @@ function normalizeDropBase(base: string): string {
   return (base || '').trim().replace(/\/+$/, '');
 }
 
-function readExistingTsObjectStringField(filePath: string, field: string): string | undefined {
+function normalizeDropId(value: string | undefined): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function trimToUndefined(value: string | undefined): string | undefined {
+  const trimmed = String(value || '').trim();
+  return trimmed || undefined;
+}
+
+function requireNonEmptyString(value: string, label: string): string {
+  const trimmed = trimToUndefined(value);
+  if (!trimmed) {
+    throw new Error(`Missing ${label} in scripts/newDrop.ts`);
+  }
+  return trimmed;
+}
+
+function requireRoyaltiesBps(value: number): number {
+  const bps = Number(value);
+  if (!Number.isInteger(bps) || bps < 0 || bps > 10_000) {
+    throw new Error(`Invalid NEW_DROP.onchain.coreCollectionRoyaltiesBps: ${value} (expected an integer from 0 to 10000)`);
+  }
+  return bps;
+}
+
+function requireIntegerInRange(args: {
+  value: number;
+  label: string;
+  min: number;
+  max?: number;
+}): number {
+  const n = Number(args.value);
+  if (!Number.isInteger(n) || n < args.min || (typeof args.max === 'number' && n > args.max)) {
+    const range = typeof args.max === 'number' ? `${args.min}..${args.max}` : `>= ${args.min}`;
+    throw new Error(`Invalid ${args.label}: ${args.value} (expected an integer in ${range})`);
+  }
+  return n;
+}
+
+type PreparedReceiptsTreeConfig = {
+  maxDepth: number;
+  maxBufferSize: number;
+  canopyDepth: number;
+};
+
+function formatReceiptsTreeConfig(tree: PreparedReceiptsTreeConfig): string {
+  return `maxDepth=${tree.maxDepth}, maxBufferSize=${tree.maxBufferSize}, canopyDepth=${tree.canopyDepth}`;
+}
+
+function parseOptionalPublicKey(value: string | undefined, label: string): PublicKey | undefined {
+  const trimmed = trimToUndefined(value);
+  if (!trimmed) return undefined;
+  try {
+    return new PublicKey(trimmed);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid ${label}: ${trimmed}\n${detail}`);
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+const FIGURE_RECEIPTS_PER_BOX = 3;
+const RECEIPTS_PER_BOX = 1 + FIGURE_RECEIPTS_PER_BOX;
+
+function prepareReceiptsTreeConfig(dropCfg: typeof NEW_DROP.onchain): PreparedReceiptsTreeConfig {
+  if (!dropCfg.receiptsTree || typeof dropCfg.receiptsTree !== 'object') {
+    throw new Error('Missing NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts');
+  }
+  const receiptsTreeCfg = dropCfg.receiptsTree;
+  const maxDepth = requireIntegerInRange({
+    value: receiptsTreeCfg.maxDepth,
+    label: 'NEW_DROP.onchain.receiptsTree.maxDepth',
+    min: 1,
+    max: 30,
+  });
+  const maxBufferSize = requireIntegerInRange({
+    value: receiptsTreeCfg.maxBufferSize,
+    label: 'NEW_DROP.onchain.receiptsTree.maxBufferSize',
+    min: 1,
+  });
+  const canopyDepth = requireIntegerInRange({
+    value: receiptsTreeCfg.canopyDepth,
+    label: 'NEW_DROP.onchain.receiptsTree.canopyDepth',
+    min: 0,
+    max: maxDepth - 1,
+  });
+
+  return { maxDepth, maxBufferSize, canopyDepth };
+}
+
+function assertReceiptsTreeCapacityForMaxSupply(args: {
+  tree: PreparedReceiptsTreeConfig;
+  maxSupply: number;
+  maxSupplyLabel: string;
+}) {
+  const maxSupply = requireIntegerInRange({
+    value: args.maxSupply,
+    label: args.maxSupplyLabel,
+    min: 1,
+    max: 0xffff_ffff,
+  });
+  // Receipts are minted as one "box receipt" + one "figure receipt" per revealed figure.
+  const requiredLeaves = maxSupply * RECEIPTS_PER_BOX;
+  const treeCapacity = 2 ** args.tree.maxDepth;
+  if (treeCapacity < requiredLeaves) {
+    throw new Error(
+      `NEW_DROP.onchain.receiptsTree is too small for this drop.\n` +
+        `- max supply source                       : ${args.maxSupplyLabel}\n` +
+        `- required leaves (maxSupply * ${RECEIPTS_PER_BOX}) : ${requiredLeaves}\n` +
+        `- configured capacity (2^maxDepth)               : ${treeCapacity}\n` +
+        `\n` +
+        `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in scripts/newDrop.ts.`,
+    );
+  }
+}
+
+type PreparedInitDropInputs = {
+  requiredDropMetadataBase: string;
+  coreCollectionName: string;
+  discountMerkle: { root: Buffer; proofs: Record<string, string[]> };
+};
+
+function prepareInitDropInputs(args: {
+  root: string;
+  dropCfg: typeof NEW_DROP.onchain;
+  dropMetadataBase: string;
+}): PreparedInitDropInputs {
+  const discountWhitelistCsvRelativePath = requireNonEmptyString(
+    args.dropCfg.discountWhitelistCsvRelativePath,
+    'NEW_DROP.onchain.discountWhitelistCsvRelativePath',
+  );
+  const requiredDropMetadataBase = requireNonEmptyString(args.dropMetadataBase, 'NEW_DROP.onchain.metadataBase');
+  const coreCollectionName = requireNonEmptyString(args.dropCfg.coreCollectionName, 'NEW_DROP.onchain.coreCollectionName');
+  const discountCsvPath = path.join(args.root, discountWhitelistCsvRelativePath);
+  const discountAddresses = readDiscountList(discountCsvPath);
+  const discountMerkle = buildDiscountMerkleData(discountAddresses);
+  return {
+    requiredDropMetadataBase,
+    coreCollectionName,
+    discountMerkle,
+  };
+}
+
+function resolveDropIdForExistingConfig(args: {
+  configuredDropId: string;
+  frontendDropId: string | undefined;
+  functionsDropId: string | undefined;
+  frontendConfigPath: string;
+  functionsConfigPath: string;
+}): string {
+  const configuredDropId = requireNonEmptyString(args.configuredDropId, 'NEW_DROP.onchain.dropId');
+  const frontendDropId = trimToUndefined(args.frontendDropId);
+  const functionsDropId = trimToUndefined(args.functionsDropId);
+
+  const normalizedConfiguredDropId = normalizeDropId(configuredDropId);
+  const normalizedFrontendDropId = normalizeDropId(frontendDropId);
+  const normalizedFunctionsDropId = normalizeDropId(functionsDropId);
+
+  if (normalizedFrontendDropId && normalizedFunctionsDropId && normalizedFrontendDropId !== normalizedFunctionsDropId) {
+    throw new Error(
+      `Conflicting dropId values in deployment config files.\n` +
+        `- ${args.frontendConfigPath}: ${frontendDropId}\n` +
+        `- ${args.functionsConfigPath}: ${functionsDropId}\n` +
+        `Fix this mismatch before re-running deploy-all-onchain.`,
+    );
+  }
+
+  const persistedDropId = frontendDropId || functionsDropId;
+  const normalizedPersistedDropId = normalizeDropId(persistedDropId);
+  if (!normalizedPersistedDropId) {
+    console.warn(
+      `⚠️  Existing on-chain config detected, but no persisted dropId was found in deployment config files.\n` +
+        `   Using NEW_DROP.onchain.dropId: ${configuredDropId}`,
+    );
+    return configuredDropId;
+  }
+
+  if (normalizedPersistedDropId !== normalizedConfiguredDropId) {
+    throw new Error(
+      `Refusing to mutate existing on-chain config because dropId does not match scripts/newDrop.ts.\n` +
+        `- existing deployment dropId : ${persistedDropId}\n` +
+        `- NEW_DROP.onchain.dropId    : ${configuredDropId}\n` +
+        `\n` +
+        `Fix: set NEW_DROP.onchain.dropId to the existing drop before rerunning this script.`,
+    );
+  }
+
+  return persistedDropId!;
+}
+
+function normalizeDropBaseForComparison(base: string | undefined): string {
+  const normalized = normalizeDropBase(String(base || ''));
+  // Legacy configs may store `${base}/json/boxes/` directly in `uriBase`.
+  return normalized.replace(/\/json\/boxes$/i, '');
+}
+
+function assertMetadataBaseMatchesExistingConfig(args: {
+  configuredMetadataBase: string;
+  onchainMetadataBase: string;
+}) {
+  const configuredMetadataBase = trimToUndefined(args.configuredMetadataBase);
+  const onchainMetadataBase = trimToUndefined(args.onchainMetadataBase);
+  if (!configuredMetadataBase || !onchainMetadataBase) return;
+
+  const normalizedConfigured = normalizeDropBaseForComparison(configuredMetadataBase);
+  const normalizedOnchain = normalizeDropBaseForComparison(onchainMetadataBase);
+  if (normalizedConfigured !== normalizedOnchain) {
+    throw new Error(
+      `Refusing to mutate existing on-chain config because metadata base does not match scripts/newDrop.ts.\n` +
+        `- on-chain cfg.uriBase         : ${onchainMetadataBase}\n` +
+        `- NEW_DROP.onchain.metadataBase: ${configuredMetadataBase}\n` +
+        `\n` +
+        `Fix: point NEW_DROP.onchain.metadataBase to the existing drop before rerunning this script.`,
+    );
+  }
+}
+
+const deploymentConfigObjectCache = new Map<string, Record<string, unknown> | null>();
+
+async function readDeploymentConfigObject(filePath: string): Promise<Record<string, unknown> | undefined> {
+  if (!existsSync(filePath)) return undefined;
+
+  if (deploymentConfigObjectCache.has(filePath)) {
+    return deploymentConfigObjectCache.get(filePath) || undefined;
+  }
+
+  try {
+    const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
+    const candidates = ['FRONTEND_DEPLOYMENT', 'FUNCTIONS_DEPLOYMENT', 'DEPLOYMENT', 'default'];
+    for (const key of candidates) {
+      const candidate = mod[key];
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        const value = candidate as Record<string, unknown>;
+        deploymentConfigObjectCache.set(filePath, value);
+        return value;
+      }
+    }
+  } catch {
+    // Fall back to text parsing below.
+  }
+
+  deploymentConfigObjectCache.set(filePath, null);
+  return undefined;
+}
+
+function readExistingTsObjectStringFieldByRegexFallback(filePath: string, field: string): string | undefined {
   if (!existsSync(filePath)) return undefined;
   try {
     const content = readFileSync(filePath, 'utf8');
-    const re = new RegExp(`${field}\\s*:\\s*'([^']*)'`, 'm');
+    const re = new RegExp(`${field}\\s*:\\s*(?:'([^']*)'|"([^"]*)"|\\\`([^\\\`]*)\\\`)`, 'm');
     const match = content.match(re);
-    return match?.[1] || undefined;
+    const value = match?.[1] ?? match?.[2] ?? match?.[3];
+    return trimToUndefined(value);
   } catch {
     return undefined;
   }
+}
+
+async function readExistingTsObjectStringField(filePath: string, field: string): Promise<string | undefined> {
+  const cfg = await readDeploymentConfigObject(filePath);
+  if (cfg && typeof cfg[field] === 'string') {
+    return trimToUndefined(cfg[field] as string);
+  }
+  return readExistingTsObjectStringFieldByRegexFallback(filePath, field);
 }
 
 function writeTextFileIfChanged(filePath: string, content: string) {
@@ -405,6 +649,44 @@ function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, st
   writeTextFileIfChanged(args.filePath, JSON.stringify(payload, null, 2));
 }
 
+function syncDiscountMerkleJsonFromCsvIfMatchingOnchain(args: {
+  root: string;
+  dropId: string;
+  csvRelativePath: string | undefined;
+  onchainRoot: Buffer;
+}) {
+  const csvRelativePath = trimToUndefined(args.csvRelativePath);
+  if (!csvRelativePath) return;
+
+  const csvPath = path.join(args.root, csvRelativePath);
+  if (!existsSync(csvPath)) {
+    console.warn(`⚠️  Discount whitelist CSV not found (skipping merkle JSON sync): ${csvPath}`);
+    return;
+  }
+
+  try {
+    const discountAddresses = readDiscountList(csvPath);
+    const discountMerkle = buildDiscountMerkleData(discountAddresses);
+    if (!discountMerkle.root.equals(args.onchainRoot)) {
+      console.warn(
+        `⚠️  Discount CSV merkle root does not match on-chain config (skipping merkle JSON sync).\n` +
+          `   csv root    : ${discountMerkle.root.toString('hex')}\n` +
+          `   on-chain root: ${args.onchainRoot.toString('hex')}`,
+      );
+      return;
+    }
+
+    const discountMerkleJsonPath = path.join(args.root, 'src', 'drops', 'discountMerkles', `${args.dropId}.json`);
+    writeDiscountMerkleJson({
+      root: discountMerkle.root,
+      proofs: discountMerkle.proofs,
+      filePath: discountMerkleJsonPath,
+    });
+  } catch (err) {
+    console.warn('⚠️  Failed to sync discount merkle JSON from CSV:', err instanceof Error ? err.message : String(err));
+  }
+}
+
 function writeFrontendDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
@@ -471,7 +753,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
+  // Allow callers to pass either \`https://.../drops/your-drop\` or \`https://.../drops/your-drop/\`.
   return String(base || '').replace(/\\/+$/, '');
 }
 
@@ -609,7 +891,7 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
+  // Allow callers to pass either \`https://.../drops/your-drop\` or \`https://.../drops/your-drop/\`.
   return String(base || '').replace(/\\/+$/, '');
 }
 
@@ -764,15 +1046,16 @@ function buildCreateMplCoreCollectionV2Ix(args: {
   systemProgram: PublicKey;
   name: string;
   uri: string;
+  royaltiesBps: number;
   royaltiesRecipient: PublicKey;
 }): TransactionInstruction {
   const pluginsOpt = borshOption(
     encodeUmiArray([
-      // Collection-level royalties: 5% to the same treasury used for primary mint payments.
+      // Collection-level royalties to the same treasury used for primary mint payments.
       // IMPORTANT: we set the *plugin authority* to the deployer key so this script can later
       // update royalties if the on-chain payment treasury is changed (update authority is a PDA).
       mplCorePluginAuthorityPairRoyalties({
-        basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+        basisPoints: args.royaltiesBps,
         creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
         authority: args.payer,
       }),
@@ -810,10 +1093,11 @@ function buildUpdateMplCoreCollectionRoyaltiesV1Ix(args: {
   collection: PublicKey;
   payer: PublicKey;
   authority: PublicKey;
+  royaltiesBps: number;
   royaltiesRecipient: PublicKey;
 }): TransactionInstruction {
   const plugin = mplCorePluginRoyalties({
-    basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+    basisPoints: args.royaltiesBps,
     creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
   });
   const data = Buffer.concat([u8(IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1), plugin]);
@@ -834,10 +1118,11 @@ function buildAddMplCoreCollectionRoyaltiesV1Ix(args: {
   collection: PublicKey;
   payer: PublicKey;
   authority: PublicKey;
+  royaltiesBps: number;
   royaltiesRecipient: PublicKey;
 }): TransactionInstruction {
   const plugin = mplCorePluginRoyalties({
-    basisPoints: CORE_COLLECTION_ROYALTIES_BPS,
+    basisPoints: args.royaltiesBps,
     creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
   });
   // initAuthority: Some(BasePluginAuthority::Address(authority))
@@ -860,9 +1145,10 @@ async function upsertMplCoreCollectionRoyalties(args: {
   connection: Connection;
   payer: Keypair;
   collection: PublicKey;
+  royaltiesBps: number;
   royaltiesRecipient: PublicKey;
 }) {
-  const { connection, payer, collection, royaltiesRecipient } = args;
+  const { connection, payer, collection, royaltiesBps, royaltiesRecipient } = args;
 
   // Try update first (common path once the plugin exists).
   try {
@@ -870,6 +1156,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
       collection,
       payer: payer.publicKey,
       authority: payer.publicKey,
+      royaltiesBps,
       royaltiesRecipient,
     });
     const tx = new Transaction().add(updateIx);
@@ -893,6 +1180,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
     collection,
     payer: payer.publicKey,
     authority: payer.publicKey,
+    royaltiesBps,
     royaltiesRecipient,
   });
   const tx = new Transaction().add(addIx);
@@ -1000,8 +1288,13 @@ function decodeMplCoreCollectionRoyalties(data: Buffer): {
   return { basisPoints, creators, ruleSetKind, authorityKind, authorityAddress };
 }
 
-async function assertMplCoreCollectionRoyalties(args: { connection: Connection; coreCollection: PublicKey; treasury: PublicKey }) {
-  const { connection, coreCollection, treasury } = args;
+async function assertMplCoreCollectionRoyalties(args: {
+  connection: Connection;
+  coreCollection: PublicKey;
+  treasury: PublicKey;
+  royaltiesBps: number;
+}) {
+  const { connection, coreCollection, treasury, royaltiesBps } = args;
   const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
   if (!info?.data) throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
 
@@ -1011,7 +1304,7 @@ async function assertMplCoreCollectionRoyalties(args: { connection: Connection; 
   }
 
   const ok =
-    royalties.basisPoints === CORE_COLLECTION_ROYALTIES_BPS &&
+    royalties.basisPoints === royaltiesBps &&
     royalties.ruleSetKind === 0 &&
     royalties.creators.length === 1 &&
     royalties.creators[0].address.equals(treasury) &&
@@ -1021,7 +1314,7 @@ async function assertMplCoreCollectionRoyalties(args: { connection: Connection; 
     throw new Error(
       `Core collection royalties mismatch.\n` +
         `Collection: ${coreCollection.toBase58()}\n` +
-        `Expected: ${CORE_COLLECTION_ROYALTIES_BPS} bps -> ${treasury.toBase58()} (100%)\n` +
+        `Expected: ${royaltiesBps} bps -> ${treasury.toBase58()} (100%)\n` +
         `Actual  : ${royalties.basisPoints} bps -> ${royalties.creators.map((c) => `${c.address.toBase58()} (${c.percentage}%)`).join(', ') || '(none)'}\n`,
     );
   }
@@ -1030,6 +1323,44 @@ async function assertMplCoreCollectionRoyalties(args: { connection: Connection; 
   console.log(`  basisPoints: ${royalties.basisPoints}`);
   console.log(`  recipient : ${treasury.toBase58()} (100%)`);
   console.log(`  ruleSet   : ${royalties.ruleSetKind === 0 ? 'None' : `kind=${royalties.ruleSetKind}`}`);
+}
+
+async function ensureMplCoreCollectionRoyalties(args: {
+  connection: Connection;
+  payer: Keypair;
+  collection: PublicKey;
+  treasury: PublicKey;
+  royaltiesBps: number;
+}) {
+  const { connection, payer, collection, treasury, royaltiesBps } = args;
+  try {
+    await assertMplCoreCollectionRoyalties({
+      connection,
+      coreCollection: collection,
+      treasury,
+      royaltiesBps,
+    });
+    return;
+  } catch (err) {
+    console.warn(
+      '⚠️  Core collection royalties are not in the desired state (will attempt to upsert):',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  await upsertMplCoreCollectionRoyalties({
+    connection,
+    payer,
+    collection,
+    royaltiesBps,
+    royaltiesRecipient: treasury,
+  });
+  await assertMplCoreCollectionRoyalties({
+    connection,
+    coreCollection: collection,
+    treasury,
+    royaltiesBps,
+  });
 }
 
 function decodeBoxMinterConfig(data: Buffer) {
@@ -1103,7 +1434,7 @@ function buildInitializeIx(args: {
   namePrefix: string;
   symbol: string;
   /**
-   * Drop base URL (canonical), e.g. `https://assets.mons.link/drops/lsb`.
+   * Drop base URL (canonical), e.g. `https://assets.example.com/drops/your-drop`.
    *
    * The on-chain program derives per-asset JSON URIs from this base.
    */
@@ -1292,23 +1623,9 @@ async function ensureDeliveryLookupTable(args: {
 // This tree ONLY stores *compressed receipt NFTs* minted via `box_minter::mint_receipts`.
 // The uncompressed MPL-Core assets (boxes + revealed figures) are NOT stored in this tree.
 //
-// Max receipts in this drop:
-// - 333 box receipts (1 per box id)
-// - 999 figure receipts (1 per figure id)
-// => 1332 total receipts.
-//
-// A concurrent Merkle tree can store up to 2^maxDepth leaves:
-// NOTE: Bubblegum only supports a fixed set of (maxDepth, maxBufferSize) constants.
-// The smallest supported depth that fits 1332 receipts is depth 14:
-// - depth 14 => 16384 (fits, with plenty of headroom)
+// Sizing is configured in NEW_DROP.onchain.receiptsTree (scripts/newDrop.ts) and validated
+// against NEW_DROP.onchain.maxSupply before deploy side effects begin.
 // ---------------------------------------------------------------------------
-const RECEIPTS_TREE_MAX_DEPTH = 14;
-const RECEIPTS_TREE_MAX_BUFFER_SIZE = 64;
-// Canopy depth controls how many proof nodes are stored on-chain in the tree account.
-// NOTE: For Phantom UX, we prefer canopy depth = 0 so wallets can see the *full proof* in the tx
-// (this can make previews more reliable). Our IRL-claim tx now fits in one packet without canopy
-// by minting the 3 dude receipts via a single `box_minter` instruction (server-cosigned).
-const RECEIPTS_TREE_CANOPY_DEPTH = 0;
 const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
 
 function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
@@ -1348,9 +1665,14 @@ function buildCreateBubblegumTreeConfigV2Ix(args: {
   });
 }
 
-async function createReceiptsMerkleTree(connection: Connection, payer: Keypair): Promise<PublicKey> {
+async function createReceiptsMerkleTree(args: {
+  connection: Connection;
+  payer: Keypair;
+  tree: PreparedReceiptsTreeConfig;
+}): Promise<PublicKey> {
+  const { connection, payer, tree } = args;
   const merkleTree = Keypair.generate();
-  const space = getConcurrentMerkleTreeAccountSize(RECEIPTS_TREE_MAX_DEPTH, RECEIPTS_TREE_MAX_BUFFER_SIZE, RECEIPTS_TREE_CANOPY_DEPTH);
+  const space = getConcurrentMerkleTreeAccountSize(tree.maxDepth, tree.maxBufferSize, tree.canopyDepth);
   const lamports = await connection.getMinimumBalanceForRentExemption(space, 'confirmed');
 
   const createTreeAccountIx = SystemProgram.createAccount({
@@ -1364,8 +1686,8 @@ async function createReceiptsMerkleTree(connection: Connection, payer: Keypair):
     merkleTree: merkleTree.publicKey,
     payer: payer.publicKey,
     treeCreator: payer.publicKey,
-    maxDepth: RECEIPTS_TREE_MAX_DEPTH,
-    maxBufferSize: RECEIPTS_TREE_MAX_BUFFER_SIZE,
+    maxDepth: tree.maxDepth,
+    maxBufferSize: tree.maxBufferSize,
     isPublic: null,
   });
 
@@ -1407,6 +1729,22 @@ function generateFreshProgramKeypair(programKeypairPath: string): { programId: s
   return { programId: kp.publicKey.toBase58(), backupPath };
 }
 
+function readProgramIdFromKeypair(programKeypairPath: string): string {
+  if (!existsSync(programKeypairPath)) {
+    throw new Error(`Missing program keypair: ${programKeypairPath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(programKeypairPath, 'utf8'));
+  } catch {
+    throw new Error(`Invalid program keypair JSON: ${programKeypairPath}`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((n) => typeof n !== 'number')) {
+    throw new Error(`Invalid program keypair format: ${programKeypairPath}`);
+  }
+  return keypairFromBytes(Uint8Array.from(parsed as number[])).publicKey.toBase58();
+}
+
 function cargoLockHasPackage(onchainDir: string, name: string, version: string): boolean {
   const lockPath = path.join(onchainDir, 'Cargo.lock');
   if (!existsSync(lockPath)) return false;
@@ -1420,7 +1758,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
   if (!info) {
     throw new Error(
       `Missing core collection account: ${coreCollection.toBase58()}\n` +
-        `Make sure SOLANA_CLUSTER / SOLANA_RPC_URL are correct (scripts/deploy-all-onchain.ts).`,
+        `Make sure NEW_DROP.deploy.solanaCluster / NEW_DROP.deploy.solanaRpcUrl are correct (scripts/newDrop.ts).`,
     );
   }
   if (!info.owner.equals(MPL_CORE_PROGRAM_ID)) {
@@ -1428,7 +1766,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
       `coreCollection ${coreCollection.toBase58()} is not owned by the MPL-Core program.\n` +
         `Expected owner: ${MPL_CORE_PROGRAM_ID.toBase58()}\n` +
         `Actual owner  : ${info.owner.toBase58()}\n` +
-        `If you set CORE_COLLECTION_PUBKEY, it must be an MPL-Core collection address (not a Token Metadata mint).`,
+        `If you set NEW_DROP.deploy.coreCollectionPubkey, it must be an MPL-Core collection address (not a Token Metadata mint).`,
     );
   }
 }
@@ -1459,7 +1797,7 @@ async function main() {
         `Run:\n` +
         `  npm run deploy-all-onchain\n` +
         `\n` +
-        `To change cluster/RPC/core collection or reuse settings, edit constants at the top of scripts/deploy-all-onchain.ts.\n`,
+        `To change deploy/drop settings, edit scripts/newDrop.ts.\n`,
     );
   }
 
@@ -1467,21 +1805,30 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const root = path.resolve(__dirname, '..');
   const onchainDir = path.join(root, 'onchain');
+  const frontendDeploymentCfgPath = path.join(root, 'src', 'config', 'deployment.ts');
+  const functionsDeploymentCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
+  const deployCfg = NEW_DROP.deploy;
+  const dropCfg = NEW_DROP.onchain;
+  const dropId = requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId');
+  const dropMetadataBase = normalizeDropBase(dropCfg.metadataBase);
+  const receiptsTreeConfig = prepareReceiptsTreeConfig(dropCfg);
+  const coreCollectionRoyaltiesBps = requireRoyaltiesBps(dropCfg.coreCollectionRoyaltiesBps);
   const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
-  const discountCsvPath = path.join(root, 'scripts', 'discount.csv');
-  const discountAddresses = readDiscountList(discountCsvPath);
-  const discountMerkle = buildDiscountMerkleData(discountAddresses);
 
-  const cluster: SolanaCluster = SOLANA_CLUSTER;
-  const rpcUrlForApps = SOLANA_RPC_URL || clusterApiUrl(cluster);
-  const solanaUrl = SOLANA_RPC_URL || cluster;
+  const cluster: SolanaCluster = deployCfg.solanaCluster;
+  const rpcUrlForApps = deployCfg.solanaRpcUrl || clusterApiUrl(cluster);
+  const solanaUrl = deployCfg.solanaRpcUrl || cluster;
   const solanaBinDir = readSolanaActiveReleaseBinDir();
 
   console.log('--- deploy ALL (program + MPL Core collection + config) ---');
   console.log('cluster:', cluster);
   console.log('rpc url :', rpcUrlForApps);
-  if (CORE_COLLECTION_PUBKEY) console.log('core collection:', CORE_COLLECTION_PUBKEY);
+  console.log(
+    'receipts tree:',
+    `depth=${receiptsTreeConfig.maxDepth}, buffer=${receiptsTreeConfig.maxBufferSize}, canopy=${receiptsTreeConfig.canopyDepth}`,
+  );
+  if (deployCfg.coreCollectionPubkey) console.log('core collection:', deployCfg.coreCollectionPubkey);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
 
@@ -1502,13 +1849,13 @@ async function main() {
     ANCHOR_WALLET: tempKeypairPath,
   };
 
-  const reuseProgramId = REUSE_PROGRAM_ID;
+  const reuseProgramId = deployCfg.reuseProgramId;
   let expectedProgramId: string | undefined;
   if (reuseProgramId) {
     if (!existsSync(programKeypair)) {
       throw new Error(
         `Missing program keypair: ${programKeypair}\n` +
-          `Either create it first, or set REUSE_PROGRAM_ID=false to auto-generate a fresh program id.\n` +
+          `Either create it first, or set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts to auto-generate a fresh program id.\n` +
           `Generate it with:\n` +
           `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n`,
       );
@@ -1520,6 +1867,53 @@ async function main() {
     console.log('Generated fresh program id:', programId);
     console.log('Program keypair:', programKeypair);
     if (backupPath) console.log('Backed up previous program keypair to:', backupPath);
+  }
+
+  // Safety preflight: validate target drop/admin and required NEW_DROP init fields before any build/deploy side effects.
+  const preflightProgramId = reuseProgramId ? readProgramIdFromKeypair(programKeypair) : expectedProgramId!;
+  const preflightProgramPk = new PublicKey(preflightProgramId);
+  const preflightConfigPda = boxMinterConfigPda(preflightProgramPk);
+  const preflightCfgInfo = await connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' });
+  let preparedInitDropInputs: PreparedInitDropInputs | null = null;
+
+  if (preflightCfgInfo) {
+    const preflightCfg = decodeBoxMinterConfig(preflightCfgInfo.data);
+    assertReceiptsTreeCapacityForMaxSupply({
+      tree: receiptsTreeConfig,
+      maxSupply: preflightCfg.maxSupply,
+      maxSupplyLabel: 'on-chain cfg.maxSupply',
+    });
+    if (!payer.publicKey.equals(preflightCfg.admin)) {
+      throw new Error(
+        `Config admin pubkey does not match the deployer key you entered.\n` +
+          `- deployer: ${payer.publicKey.toBase58()}\n` +
+          `- admin   : ${preflightCfg.admin.toBase58()}\n` +
+          `\n` +
+          `Fix: re-run with the admin keypair, or use a fresh program id (NEW_DROP.deploy.reuseProgramId=false).`,
+      );
+    }
+    resolveDropIdForExistingConfig({
+      configuredDropId: dropId,
+      frontendDropId: await readExistingTsObjectStringField(frontendDeploymentCfgPath, 'dropId'),
+      functionsDropId: await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'dropId'),
+      frontendConfigPath: frontendDeploymentCfgPath,
+      functionsConfigPath: functionsDeploymentCfgPath,
+    });
+    assertMetadataBaseMatchesExistingConfig({
+      configuredMetadataBase: dropMetadataBase,
+      onchainMetadataBase: preflightCfg.uriBase,
+    });
+  } else {
+    assertReceiptsTreeCapacityForMaxSupply({
+      tree: receiptsTreeConfig,
+      maxSupply: dropCfg.maxSupply,
+      maxSupplyLabel: 'NEW_DROP.onchain.maxSupply',
+    });
+    preparedInitDropInputs = prepareInitDropInputs({
+      root,
+      dropCfg,
+      dropMetadataBase,
+    });
   }
 
   const hasSolanaCargo = canRunSolanaCargo();
@@ -1575,39 +1969,6 @@ async function main() {
 
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
-  // EDIT THESE CONSTANTS to control drop metadata. No ENV/CLI overrides.
-  const DROP_ID = 'little_swag_boxes';
-  const DROP_METADATA_BASE = 'https://assets.mons.link/drops/lsb';
-  const discountMerkleJsonPath = path.join(root, 'src', 'drops', 'discountMerkles', `${DROP_ID}.json`);
-  writeDiscountMerkleJson({
-    root: discountMerkle.root,
-    proofs: discountMerkle.proofs,
-    filePath: discountMerkleJsonPath,
-  });
-  const BOX_MINTER_CONFIG = {
-    // Payment + mint caps
-    // Payments: SOL from box mints + delivery fees go here.
-    // Custody/vault: boxes and delivered assets still transfer to the deployer/admin key (config.admin).
-    // Set to `undefined` to default payments to the deployer/admin key.
-    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    priceSol: 1,
-    discountPriceSol: 0.55,
-    discountMerkleRoot: discountMerkle.root,
-    maxSupply: 333,
-    maxPerTx: 15,
-
-    // Box metadata (stored on-chain)
-    namePrefix: 'box',
-    symbol: 'box',
-    // Canonical drop base. The on-chain program derives:
-    // - boxes   : `${metadataBase}/json/boxes/{id}.json`
-    // - figures : `${metadataBase}/json/figures/{id}.json`
-    // - receipts: `${metadataBase}/json/receipts/{kind}/{id}.json`
-    // (The program also supports legacy configs where the stored value is already `${base}/json/boxes/`.)
-    metadataBase: DROP_METADATA_BASE,
-  };
-  // ---------------------------------------------------------------------------
-
   const programPk = new PublicKey(programId);
   const configPda = boxMinterConfigPda(programPk);
 
@@ -1628,12 +1989,23 @@ async function main() {
           `Fix: re-run with the admin keypair, or redeploy fresh without reusing this config PDA.`,
       );
     }
+    const activeDropId = resolveDropIdForExistingConfig({
+      configuredDropId: dropId,
+      frontendDropId: await readExistingTsObjectStringField(frontendDeploymentCfgPath, 'dropId'),
+      functionsDropId: await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'dropId'),
+      frontendConfigPath: frontendDeploymentCfgPath,
+      functionsConfigPath: functionsDeploymentCfgPath,
+    });
+    assertMetadataBaseMatchesExistingConfig({
+      configuredMetadataBase: dropMetadataBase,
+      onchainMetadataBase: cfg.uriBase,
+    });
     await assertMplCoreCollection(connection, cfg.coreCollection);
 
-    // Optional: update payment treasury if configured in BOX_MINTER_CONFIG.
+    // Optional: update payment treasury if configured in NEW_DROP.
     let paymentTreasury = cfg.treasury;
-    if (BOX_MINTER_CONFIG.treasury) {
-      const desired = new PublicKey(BOX_MINTER_CONFIG.treasury);
+    if (dropCfg.treasury) {
+      const desired = new PublicKey(dropCfg.treasury);
       if (!desired.equals(cfg.treasury)) {
         console.log('\nUpdating payment treasury…');
         console.log('  from:', cfg.treasury.toBase58());
@@ -1649,16 +2021,52 @@ async function main() {
     }
 
     // Enforce/keep collection-level royalties in sync with the payment treasury.
-    // (If the collection was created by an older version of this script, this will try to add the plugin.)
-    await upsertMplCoreCollectionRoyalties({ connection, payer, collection: cfg.coreCollection, royaltiesRecipient: paymentTreasury });
+    // (If the collection was created by an older version of this script, this will try to add/update the plugin.)
+    await ensureMplCoreCollectionRoyalties({
+      connection,
+      payer,
+      collection: cfg.coreCollection,
+      treasury: paymentTreasury,
+      royaltiesBps: coreCollectionRoyaltiesBps,
+    });
+
+    const previousReceipts = await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'receiptsMerkleTree');
+    const previousLut = await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'deliveryLookupTable');
 
     console.log('');
-    let receiptsTree: PublicKey | null = null;
+    let createdReceiptsTree: PublicKey | null = null;
+    let receiptsTreeCreateError: unknown = null;
     try {
-      receiptsTree = await createReceiptsMerkleTree(connection, payer);
-      console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+      createdReceiptsTree = await createReceiptsMerkleTree({
+        connection,
+        payer,
+        tree: receiptsTreeConfig,
+      });
+      console.log(`RECEIPTS_MERKLE_TREE=${createdReceiptsTree.toBase58()}`);
     } catch (err) {
-      console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+      receiptsTreeCreateError = err;
+      console.warn('⚠️  Failed to create receipts merkle tree:', errorMessage(err));
+    }
+
+    const fallbackReceiptsTree =
+      createdReceiptsTree ||
+      parseOptionalPublicKey(previousReceipts, `${path.relative(root, functionsDeploymentCfgPath)}#receiptsMerkleTree`);
+    const effectiveReceiptsTree = createdReceiptsTree || fallbackReceiptsTree;
+    if (!effectiveReceiptsTree) {
+      throw new Error(
+        `Failed to resolve receipts Merkle tree for this existing deployment.\n` +
+          `- attempted tree config : ${formatReceiptsTreeConfig(receiptsTreeConfig)}\n` +
+          `- create error          : ${receiptsTreeCreateError ? errorMessage(receiptsTreeCreateError) : '(none)'}\n` +
+          `- fallback from ${path.relative(root, functionsDeploymentCfgPath)}: receiptsMerkleTree is missing\n` +
+          `\n` +
+          `Fix: choose a valid NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts and rerun deploy-all-onchain.`,
+      );
+    }
+    if (!createdReceiptsTree && fallbackReceiptsTree) {
+      console.warn(
+        `⚠️  Reusing existing receipts tree from ${path.relative(root, functionsDeploymentCfgPath)}: ${fallbackReceiptsTree.toBase58()}\n` +
+          `   (new tree creation failed for config ${formatReceiptsTreeConfig(receiptsTreeConfig)}).`,
+      );
     }
 
     let deliveryLut: PublicKey | null = null;
@@ -1670,25 +2078,34 @@ async function main() {
         configPda,
         treasury: paymentTreasury,
         coreCollection: cfg.coreCollection,
-        receiptsMerkleTree: receiptsTree || undefined,
+        receiptsMerkleTree: effectiveReceiptsTree,
       });
       console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
     } catch (err) {
-      console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
+      console.warn('⚠️  Failed to create/reuse delivery ALT:', errorMessage(err));
     }
 
-    const functionsCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
-    const previousReceipts = readExistingTsObjectStringField(functionsCfgPath, 'receiptsMerkleTree');
-    const previousLut = readExistingTsObjectStringField(functionsCfgPath, 'deliveryLookupTable');
-    const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
+    const receiptsTreeStr = effectiveReceiptsTree.toBase58();
     const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
 
-    const resolvedDropBase = normalizeDropBase(cfg.uriBase) || normalizeDropBase(DROP_METADATA_BASE);
+    syncDiscountMerkleJsonFromCsvIfMatchingOnchain({
+      root,
+      dropId: activeDropId,
+      csvRelativePath: dropCfg.discountWhitelistCsvRelativePath,
+      onchainRoot: cfg.discountMerkleRoot,
+    });
+    const resolvedDropBase = normalizeDropBase(cfg.uriBase) || normalizeDropBase(dropMetadataBase);
+    if (!resolvedDropBase) {
+      throw new Error(
+        `Could not resolve metadata base for existing on-chain config.\n` +
+          `Set NEW_DROP.onchain.metadataBase in scripts/newDrop.ts, or ensure cfg.uriBase is set on-chain.`,
+      );
+    }
 
     const frontendCfgPath = writeFrontendDeploymentConfig({
       root,
       solanaCluster: cluster,
-      dropId: DROP_ID,
+      dropId: activeDropId,
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
@@ -1704,7 +2121,7 @@ async function main() {
     const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
       root,
       solanaCluster: cluster,
-      dropId: DROP_ID,
+      dropId: activeDropId,
       metadataBase: resolvedDropBase,
       treasury: paymentTreasury.toBase58(),
       priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
@@ -1729,22 +2146,60 @@ async function main() {
     return;
   }
 
+  const initDropInputs =
+    preparedInitDropInputs ||
+    prepareInitDropInputs({
+      root,
+      dropCfg,
+      dropMetadataBase,
+    });
+  const requiredDropMetadataBase = initDropInputs.requiredDropMetadataBase;
+  const discountMerkle = initDropInputs.discountMerkle;
+  const discountMerkleJsonPath = path.join(root, 'src', 'drops', 'discountMerkles', `${dropId}.json`);
+  writeDiscountMerkleJson({
+    root: discountMerkle.root,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleJsonPath,
+  });
+
+  const boxMinterConfig = {
+    // Payment + mint caps
+    // Payments: SOL from box mints + delivery fees go here.
+    // Custody/vault: boxes and delivered assets still transfer to the deployer/admin key (config.admin).
+    // Set to `undefined` to default payments to the deployer/admin key.
+    treasury: dropCfg.treasury,
+    priceSol: dropCfg.priceSol,
+    discountPriceSol: dropCfg.discountPriceSol,
+    discountMerkleRoot: discountMerkle.root,
+    maxSupply: dropCfg.maxSupply,
+    maxPerTx: dropCfg.maxPerTx,
+
+    // Box metadata (stored on-chain)
+    namePrefix: dropCfg.namePrefix,
+    symbol: dropCfg.symbol,
+    // Canonical drop base. The on-chain program derives:
+    // - boxes   : `${metadataBase}/json/boxes/{id}.json`
+    // - figures : `${metadataBase}/json/figures/{id}.json`
+    // - receipts: `${metadataBase}/json/receipts/{kind}/{id}.json`
+    // (The program also supports legacy configs where the stored value is already `${base}/json/boxes/`.)
+    metadataBase: requiredDropMetadataBase,
+  };
+
   // Payment treasury (defaults to deployer/admin key if unset).
-  const treasury = new PublicKey(BOX_MINTER_CONFIG.treasury || payer.publicKey.toBase58());
-  const priceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.priceSol) * LAMPORTS_PER_SOL));
-  const discountPriceLamports = BigInt(Math.round(Number(BOX_MINTER_CONFIG.discountPriceSol) * LAMPORTS_PER_SOL));
-  const discountMerkleRoot = BOX_MINTER_CONFIG.discountMerkleRoot;
-  const maxSupply = Number(BOX_MINTER_CONFIG.maxSupply);
-  const maxPerTx = Number(BOX_MINTER_CONFIG.maxPerTx);
+  const treasury = new PublicKey(boxMinterConfig.treasury || payer.publicKey.toBase58());
+  const priceLamports = BigInt(Math.round(Number(boxMinterConfig.priceSol) * LAMPORTS_PER_SOL));
+  const discountPriceLamports = BigInt(Math.round(Number(boxMinterConfig.discountPriceSol) * LAMPORTS_PER_SOL));
+  const discountMerkleRoot = boxMinterConfig.discountMerkleRoot;
+  const maxSupply = Number(boxMinterConfig.maxSupply);
+  const maxPerTx = Number(boxMinterConfig.maxPerTx);
   // 2) Create or reuse an MPL-Core collection (uncompressed).
   // IMPORTANT: for the on-chain program to mint into the collection, the collection update authority
   // must be the program config PDA.
-  const coreCollection = CORE_COLLECTION_PUBKEY ? new PublicKey(CORE_COLLECTION_PUBKEY) : undefined;
+  const coreCollection = deployCfg.coreCollectionPubkey ? new PublicKey(deployCfg.coreCollectionPubkey) : undefined;
 
-  // EDIT THESE CONSTANTS to control the MPL-Core collection metadata.
-  const CORE_COLLECTION_CONFIG = {
-    name: 'little swag figures',
-    uri: `${DROP_METADATA_BASE}/collection.json`,
+  const coreCollectionConfig = {
+    name: initDropInputs.coreCollectionName,
+    uri: `${requiredDropMetadataBase}/collection.json`,
   };
 
   let resolvedCoreCollection: PublicKey;
@@ -1754,12 +2209,12 @@ async function main() {
     const updateAuthority = await getMplCoreCollectionUpdateAuthority(connection, resolvedCoreCollection);
     if (!updateAuthority.equals(configPda)) {
       throw new Error(
-        `CORE_COLLECTION_PUBKEY is not configured for this deployment.\n` +
+        `NEW_DROP.deploy.coreCollectionPubkey is not configured for this deployment.\n` +
           `Collection: ${resolvedCoreCollection.toBase58()}\n` +
           `Expected update authority (program config PDA): ${configPda.toBase58()}\n` +
           `Actual update authority: ${updateAuthority.toBase58()}\n` +
           `\n` +
-          `Fix: unset CORE_COLLECTION_PUBKEY to auto-create one, or transfer collection update authority to the config PDA.`,
+          `Fix: unset NEW_DROP.deploy.coreCollectionPubkey in scripts/newDrop.ts to auto-create one, or transfer collection update authority to the config PDA.`,
       );
     }
     console.log('\n[2/3] Using existing MPL-Core collection…');
@@ -1773,8 +2228,9 @@ async function main() {
       updateAuthority: configPda,
       payer: payer.publicKey,
       systemProgram: SystemProgram.programId,
-      name: CORE_COLLECTION_CONFIG.name,
-      uri: CORE_COLLECTION_CONFIG.uri,
+      name: coreCollectionConfig.name,
+      uri: coreCollectionConfig.uri,
+      royaltiesBps: coreCollectionRoyaltiesBps,
       royaltiesRecipient: treasury,
     });
     const createCollectionTx = new Transaction().add(createCollectionIx);
@@ -1795,13 +2251,25 @@ async function main() {
     await assertMplCoreCollection(connection, resolvedCoreCollection);
   }
 
-  // Read-only check: confirm the collection Royalties plugin is present and matches the payment treasury.
-  await assertMplCoreCollectionRoyalties({ connection, coreCollection: resolvedCoreCollection, treasury });
-
-  // If we are using a pre-existing collection (CORE_COLLECTION_PUBKEY), enforce royalties here.
+  // If we are using a pre-existing collection (NEW_DROP.deploy.coreCollectionPubkey), enforce royalties here.
   // For freshly created collections, royalties are already set in `create_collection_v2`.
   if (coreCollection) {
-    await upsertMplCoreCollectionRoyalties({ connection, payer, collection: resolvedCoreCollection, royaltiesRecipient: treasury });
+    await ensureMplCoreCollectionRoyalties({
+      connection,
+      payer,
+      collection: resolvedCoreCollection,
+      treasury,
+      royaltiesBps: coreCollectionRoyaltiesBps,
+    });
+  }
+  if (!coreCollection) {
+    // Read-only check: newly-created collections should already contain the expected royalties plugin.
+    await assertMplCoreCollectionRoyalties({
+      connection,
+      coreCollection: resolvedCoreCollection,
+      treasury,
+      royaltiesBps: coreCollectionRoyaltiesBps,
+    });
   }
 
   console.log('\n[3/3] Initializing box minter…');
@@ -1816,9 +2284,9 @@ async function main() {
     discountMerkleRoot,
     maxSupply,
     maxPerTx,
-    namePrefix: BOX_MINTER_CONFIG.namePrefix,
-    symbol: BOX_MINTER_CONFIG.symbol,
-    metadataBase: normalizeDropBase(BOX_MINTER_CONFIG.metadataBase),
+    namePrefix: boxMinterConfig.namePrefix,
+    symbol: boxMinterConfig.symbol,
+    metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
   });
 
   const setupTx = new Transaction().add(initIx);
@@ -1832,12 +2300,23 @@ async function main() {
   console.log('  Discount price (lamports):', discountPriceLamports.toString());
   console.log('');
 
-  let receiptsTree: PublicKey | null = null;
+  let receiptsTree: PublicKey;
   try {
-    receiptsTree = await createReceiptsMerkleTree(connection, payer);
+    receiptsTree = await createReceiptsMerkleTree({
+      connection,
+      payer,
+      tree: receiptsTreeConfig,
+    });
     console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
   } catch (err) {
-    console.warn('⚠️  Failed to create receipts merkle tree:', err instanceof Error ? err.message : String(err));
+    throw new Error(
+      `Failed to create receipts Merkle tree for a fresh deployment.\n` +
+        `- configured tree : ${formatReceiptsTreeConfig(receiptsTreeConfig)}\n` +
+        `- error           : ${errorMessage(err)}\n` +
+        `\n` +
+        `Aborting to avoid writing stale receipts tree values from previous deployments.\n` +
+        `Fix NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts and rerun.`,
+    );
   }
 
   let deliveryLut: PublicKey | null = null;
@@ -1849,48 +2328,46 @@ async function main() {
       configPda,
       treasury,
       coreCollection: resolvedCoreCollection,
-      receiptsMerkleTree: receiptsTree || undefined,
+      receiptsMerkleTree: receiptsTree,
     });
     console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
   } catch (err) {
-    console.warn('⚠️  Failed to create/reuse delivery ALT:', err instanceof Error ? err.message : String(err));
+    console.warn('⚠️  Failed to create/reuse delivery ALT:', errorMessage(err));
   }
 
-  const functionsCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
-  const previousReceipts = readExistingTsObjectStringField(functionsCfgPath, 'receiptsMerkleTree');
-  const previousLut = readExistingTsObjectStringField(functionsCfgPath, 'deliveryLookupTable');
-  const receiptsTreeStr = receiptsTree?.toBase58() || previousReceipts || '';
-  const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
+  const receiptsTreeStr = receiptsTree.toBase58();
+  // For fresh deployments, never reuse a previous drop's LUT: use the newly created LUT or leave empty.
+  const deliveryLutStr = deliveryLut?.toBase58() || '';
 
   const frontendCfgPath = writeFrontendDeploymentConfig({
     root,
     solanaCluster: cluster,
-    dropId: DROP_ID,
-    metadataBase: DROP_METADATA_BASE,
+    dropId,
+    metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),
-    priceSol: Number(BOX_MINTER_CONFIG.priceSol),
-    discountPriceSol: Number(BOX_MINTER_CONFIG.discountPriceSol),
+    priceSol: Number(boxMinterConfig.priceSol),
+    discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
-    maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
-    maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
-    namePrefix: BOX_MINTER_CONFIG.namePrefix,
-    symbol: BOX_MINTER_CONFIG.symbol,
+    maxSupply: Number(boxMinterConfig.maxSupply),
+    maxPerTx: Number(boxMinterConfig.maxPerTx),
+    namePrefix: boxMinterConfig.namePrefix,
+    symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
   });
   const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
     root,
     solanaCluster: cluster,
-    dropId: DROP_ID,
-    metadataBase: DROP_METADATA_BASE,
+    dropId,
+    metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),
-    priceSol: Number(BOX_MINTER_CONFIG.priceSol),
-    discountPriceSol: Number(BOX_MINTER_CONFIG.discountPriceSol),
+    priceSol: Number(boxMinterConfig.priceSol),
+    discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
-    maxSupply: Number(BOX_MINTER_CONFIG.maxSupply),
-    maxPerTx: Number(BOX_MINTER_CONFIG.maxPerTx),
-    namePrefix: BOX_MINTER_CONFIG.namePrefix,
-    symbol: BOX_MINTER_CONFIG.symbol,
+    maxSupply: Number(boxMinterConfig.maxSupply),
+    maxPerTx: Number(boxMinterConfig.maxPerTx),
+    namePrefix: boxMinterConfig.namePrefix,
+    symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,
