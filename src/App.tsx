@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
+import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { InventoryGrid } from './components/InventoryGrid';
@@ -35,12 +35,17 @@ import {
 } from './lib/solana';
 import { calculateDeliveryLamports } from './lib/shipping';
 import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
-import { FRONTEND_DEPLOYMENT } from './config/deployment';
+import { type FrontendDeploymentConfig, getFrontendDrop } from './config/deployment';
 import { getNormalizedPathname, navigate } from './navigation';
+import {
+  dropPath,
+  listFrontendDrops,
+  resolveFrontendDropByPath,
+  rpcEndpointForCluster,
+} from './lib/dropConfig';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
-const LITTLE_SWAG_BOXES_PATH = '/little_swag_boxes';
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -85,9 +90,10 @@ function loadPendingReveals(wallet?: string): LocalPendingReveal[] {
       const id = typeof entry.id === 'string' ? entry.id : '';
       const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : 0;
       if (!id || !createdAt) return;
+      const dropId = typeof entry.dropId === 'string' ? entry.dropId : undefined;
       const name = typeof entry.name === 'string' ? entry.name : undefined;
       const image = typeof entry.image === 'string' ? entry.image : undefined;
-      entries.push({ id, createdAt, name, image });
+      entries.push({ id, createdAt, dropId, name, image });
     });
     return entries;
   } catch {
@@ -131,22 +137,28 @@ function persistRecentReveals(wallet: string, ids: string[]) {
 }
 
 const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
-const DISCOUNT_USED_VERSION = `${FRONTEND_DEPLOYMENT.boxMinterProgramId}:${FRONTEND_DEPLOYMENT.discountMerkleRoot}`;
-
-function discountUsedKey(wallet?: string) {
-  return wallet
-    ? `${DISCOUNT_USED_STORAGE_PREFIX}:${DISCOUNT_USED_VERSION}:${wallet}`
-    : `${DISCOUNT_USED_STORAGE_PREFIX}:${DISCOUNT_USED_VERSION}:disconnected`;
+function discountUsedVersion(drop: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'discountMerkleRoot'>): string {
+  return `${String(drop.dropId || '').trim().toLowerCase()}:${drop.boxMinterProgramId}:${drop.discountMerkleRoot}`;
 }
 
-function cleanupDiscountUsedKeys(wallet: string, keepKey: string) {
+function discountUsedScope(drop: Pick<FrontendDeploymentConfig, 'dropId'>): string {
+  return `${DISCOUNT_USED_STORAGE_PREFIX}:${String(drop.dropId || '').trim().toLowerCase()}`;
+}
+
+function discountUsedKey(version: string, wallet?: string) {
+  return wallet
+    ? `${DISCOUNT_USED_STORAGE_PREFIX}:${version}:${wallet}`
+    : `${DISCOUNT_USED_STORAGE_PREFIX}:${version}:disconnected`;
+}
+
+function cleanupDiscountUsedKeys(scopePrefix: string, wallet: string, keepKey: string) {
   if (typeof window === 'undefined') return;
   try {
     const keysToRemove: string[] = [];
     const walletSuffix = `:${wallet}`;
     for (let i = 0; i < window.localStorage.length; i += 1) {
       const key = window.localStorage.key(i);
-      if (!key || !key.startsWith(`${DISCOUNT_USED_STORAGE_PREFIX}:`)) continue;
+      if (!key || !key.startsWith(`${scopePrefix}:`)) continue;
       if (!key.endsWith(walletSuffix)) continue;
       if (key !== keepKey) keysToRemove.push(key);
     }
@@ -156,10 +168,10 @@ function cleanupDiscountUsedKeys(wallet: string, keepKey: string) {
   }
 }
 
-function loadDiscountUsed(wallet?: string): boolean {
+function loadDiscountUsed(scopePrefix: string, version: string, wallet?: string): boolean {
   if (typeof window === 'undefined' || !wallet) return false;
-  const key = discountUsedKey(wallet);
-  cleanupDiscountUsedKeys(wallet, key);
+  const key = discountUsedKey(version, wallet);
+  cleanupDiscountUsedKeys(scopePrefix, wallet, key);
   try {
     return window.localStorage?.getItem(key) === '1';
   } catch {
@@ -167,10 +179,10 @@ function loadDiscountUsed(wallet?: string): boolean {
   }
 }
 
-function persistDiscountUsed(wallet: string, used: boolean) {
+function persistDiscountUsed(scopePrefix: string, version: string, wallet: string, used: boolean) {
   if (typeof window === 'undefined') return;
-  const key = discountUsedKey(wallet);
-  cleanupDiscountUsedKeys(wallet, key);
+  const key = discountUsedKey(version, wallet);
+  cleanupDiscountUsedKeys(scopePrefix, wallet, key);
   try {
     if (used) {
       window.localStorage?.setItem(key, '1');
@@ -207,14 +219,6 @@ const BOX_FRAME_COUNT = 21;
 const BOX_FRAME_CLICK_MAX = 8;
 const BOX_FRAME_AUTOPLAY_START = 9;
 const BOX_FRAME_MEDIA_START = 10;
-// Set true to skip mint stats fetches and force sold-out UI.
-const MINTED_OUT_OVERRIDE = true;
-const MINTED_OUT_STATS = {
-  minted: FRONTEND_DEPLOYMENT.maxSupply,
-  total: FRONTEND_DEPLOYMENT.maxSupply,
-  remaining: 0,
-  maxPerTx: FRONTEND_DEPLOYMENT.maxPerTx,
-};
 const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 const ADMIN_WALLETS = new Set<string>([
@@ -232,24 +236,34 @@ type RevealOverlayPhase = 'preparing' | 'ready' | 'revealed';
 type LocalPendingReveal = {
   id: string;
   createdAt: number;
+  dropId?: string;
   name?: string;
   image?: string;
 };
 
 type LocalMintedBox = {
   id: string;
+  dropId: string;
   createdAt: number;
+  expectedChainCount?: number;
 };
 
 type FigureMetadata = {
   id: number;
+  dropId: string;
   name?: string;
   image?: string;
   attributes?: { trait_type: string; value: string }[];
 };
 
+type FigureMetadataTarget = {
+  dropId: string;
+  figureId: number;
+};
+
 type RevealOverlayState = {
   id: string;
+  dropId: string;
   name: string;
   image: string;
   originRect: OverlayRect;
@@ -290,6 +304,22 @@ function normalizeFigureImage(imageRaw?: string): string | undefined {
   if (!imageRaw) return imageRaw;
   if (imageRaw.includes('/figures/clean/')) return imageRaw;
   return imageRaw.replace('/figures/', '/figures/clean/');
+}
+
+function figureMetadataCacheKey(dropId: string, figureId: number): string {
+  const normalizedDropId = String(dropId || '').trim().toLowerCase();
+  const normalizedFigureId = Math.floor(Number(figureId));
+  return `${normalizedDropId}:${normalizedFigureId}`;
+}
+
+function parseFigureMetadataCacheKey(key: string): FigureMetadataTarget | null {
+  const raw = String(key || '');
+  const sepIdx = raw.lastIndexOf(':');
+  if (sepIdx <= 0 || sepIdx >= raw.length - 1) return null;
+  const dropId = raw.slice(0, sepIdx).trim().toLowerCase();
+  const figureId = Number(raw.slice(sepIdx + 1));
+  if (!dropId || !Number.isFinite(figureId) || figureId <= 0) return null;
+  return { dropId, figureId: Math.floor(figureId) };
 }
 
 function errorMessage(err: unknown): string {
@@ -335,19 +365,62 @@ function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingR
     if (!a || !b) return false;
     if (a.id !== b.id) return false;
     if (a.createdAt !== b.createdAt) return false;
+    if ((a.dropId || '') !== (b.dropId || '')) return false;
     if ((a.name || '') !== (b.name || '')) return false;
     if ((a.image || '') !== (b.image || '')) return false;
   }
   return true;
 }
 
-function App() {
-  const { connection } = useConnection();
+type AppProps = {
+  currentPath?: string;
+};
+
+function App({ currentPath }: AppProps) {
   const wallet = useWallet();
   const { setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
-  const shouldFetchMintStats = !MINTED_OUT_OVERRIDE;
-  const { data: mintStats, refetch: refetchStats } = useMintProgress(shouldFetchMintStats);
+  const normalizedCurrentPath = useMemo(
+    () => (currentPath ? currentPath : getNormalizedPathname()),
+    [currentPath],
+  );
+  const activeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
+  const allDrops = useMemo(() => listFrontendDrops(), []);
+  const dropById = useMemo(() => new Map(allDrops.map((drop) => [drop.dropId, drop])), [allDrops]);
+  const dropConnectionCacheRef = useRef<Map<string, Connection>>(new Map());
+  const getDropConfig = useCallback(
+    (dropId?: string): FrontendDeploymentConfig => {
+      if (!dropId) return activeDrop;
+      return getFrontendDrop(dropId) || activeDrop;
+    },
+    [activeDrop],
+  );
+  const requireKnownDropConfig = useCallback(
+    (dropId: string | undefined, context: string): FrontendDeploymentConfig => {
+      if (!dropId) return activeDrop;
+      const found = getFrontendDrop(dropId);
+      if (found) return found;
+      throw new Error(`Unknown dropId "${dropId}" from ${context}`);
+    },
+    [activeDrop],
+  );
+  const getDropConnection = useCallback(
+    (dropId?: string): Connection => {
+      const drop = getDropConfig(dropId);
+      const cacheKey = `${drop.solanaCluster}:${drop.dropId}`;
+      const cached = dropConnectionCacheRef.current.get(cacheKey);
+      if (cached) return cached;
+      const created = new Connection(rpcEndpointForCluster(drop.solanaCluster), { commitment: 'confirmed' });
+      dropConnectionCacheRef.current.set(cacheKey, created);
+      return created;
+    },
+    [getDropConfig],
+  );
+  const activeConnection = useMemo(() => getDropConnection(activeDrop.dropId), [activeDrop.dropId, getDropConnection]);
+  const activeDiscountVersion = useMemo(() => discountUsedVersion(activeDrop), [activeDrop]);
+  const activeDiscountScope = useMemo(() => discountUsedScope(activeDrop), [activeDrop]);
+  const shouldFetchMintStats = !activeDrop.forceSoldOut;
+  const { data: mintStats, refetch: refetchStats } = useMintProgress(activeConnection, activeDrop, shouldFetchMintStats);
   const {
     profile,
     token,
@@ -425,7 +498,25 @@ function App() {
   }, [owner, profile, viewedProfileData?.profile]);
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
-  const effectiveMintStats = MINTED_OUT_OVERRIDE ? MINTED_OUT_STATS : mintStats;
+  const forcedSoldOutStats = useMemo(
+    () => ({
+      minted: activeDrop.maxSupply,
+      total: activeDrop.maxSupply,
+      remaining: 0,
+      maxPerTx: activeDrop.maxPerTx,
+    }),
+    [activeDrop.maxPerTx, activeDrop.maxSupply],
+  );
+  const activeMintStatsFallback = useMemo(
+    () => ({
+      minted: 0,
+      total: activeDrop.maxSupply,
+      remaining: activeDrop.maxSupply,
+      maxPerTx: activeDrop.maxPerTx,
+    }),
+    [activeDrop.maxPerTx, activeDrop.maxSupply],
+  );
+  const effectiveMintStats = activeDrop.forceSoldOut ? forcedSoldOutStats : mintStats || activeMintStatsFallback;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
@@ -451,7 +542,9 @@ function App() {
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
-  const [discountUsed, setDiscountUsed] = useState<boolean>(() => loadDiscountUsed(connectedWallet));
+  const [discountUsed, setDiscountUsed] = useState<boolean>(() =>
+    loadDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet),
+  );
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
@@ -463,11 +556,11 @@ function App() {
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
-  const [localRevealedDudeIds, setLocalRevealedDudeIds] = useState<number[]>([]);
-  const [figureMetadataById, setFigureMetadataById] = useState<Record<number, FigureMetadata>>({});
-  const figureMetadataRef = useRef<Record<number, FigureMetadata>>({});
-  const figureMetadataLoadingRef = useRef<Set<number>>(new Set());
-  const figureMetadataRetryAtRef = useRef<Map<number, number>>(new Map());
+  const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
+  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadata>>({});
+  const figureMetadataRef = useRef<Record<string, FigureMetadata>>({});
+  const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
+  const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const authTokenRef = useRef<string | null>(null);
   const authTokenWalletRef = useRef<string | null>(null);
   const signInPromiseRef = useRef<Promise<boolean> | null>(null);
@@ -476,9 +569,9 @@ function App() {
   const openSelectedLockRef = useRef(false);
   const openSelectedBoxIdRef = useRef<string | null>(null);
   const localMintCounterRef = useRef(0);
-  const knownBoxIdsRef = useRef<Set<string>>(new Set());
-  const preloadedBoxFramesRef = useRef<Set<number>>(new Set());
-  const boxFramePreloadImagesRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const knownBoxIdsByDropRef = useRef<Map<string, Set<string>>>(new Map());
+  const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
+  const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const autoplayFramePreloadScheduledRef = useRef(false);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
@@ -489,9 +582,37 @@ function App() {
   const revealOverlayActiveRef = useRef(false);
   const revealOverlayClosingRef = useRef(false);
 
-  const defaultBoxImage = `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
-  const boxFrameBase = `${FRONTEND_DEPLOYMENT.paths.base}/box/`;
-  const revealMediaBase = `${FRONTEND_DEPLOYMENT.paths.base}/figures/small-rotating/`;
+  const boxImageForDropId = useCallback(
+    (dropId?: string): string => {
+      const drop = getDropConfig(dropId);
+      return `${drop.paths.base}/box/tight.webp`;
+    },
+    [getDropConfig],
+  );
+  const boxFrameBaseForDropId = useCallback(
+    (dropId?: string): string => {
+      const drop = getDropConfig(dropId);
+      return `${drop.paths.base}/box/`;
+    },
+    [getDropConfig],
+  );
+  const revealMediaBaseForDropId = useCallback(
+    (dropId?: string): string => {
+      const drop = getDropConfig(dropId);
+      return `${drop.paths.base}/figures/small-rotating/`;
+    },
+    [getDropConfig],
+  );
+  const figureJsonBaseForDropId = useCallback(
+    (dropId?: string): string => {
+      const drop = getDropConfig(dropId);
+      return drop.paths.figuresJsonBase;
+    },
+    [getDropConfig],
+  );
+  const defaultBoxImage = boxImageForDropId(activeDrop.dropId);
+  const revealBoxFrameBase = boxFrameBaseForDropId(revealOverlay?.dropId || activeDrop.dropId);
+  const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || activeDrop.dropId);
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -659,28 +780,29 @@ function App() {
   }, []);
 
   const preloadBoxFrames = useCallback(
-    (fromFrame = 1, toFrame = BOX_FRAME_COUNT) => {
+    (fromFrame = 1, toFrame = BOX_FRAME_COUNT, dropId?: string) => {
       if (typeof window === 'undefined') return;
       const safeFrom = Math.max(1, Math.floor(fromFrame));
       const safeTo = Math.min(BOX_FRAME_COUNT, Math.floor(toFrame));
+      const boxFrameBase = boxFrameBaseForDropId(dropId);
       for (let i = safeFrom; i <= safeTo; i += 1) {
-        if (preloadedBoxFramesRef.current.has(i)) continue;
-        const frame = i;
+        const frameSrc = `${boxFrameBase}${i}.webp`;
+        if (preloadedBoxFramesRef.current.has(frameSrc)) continue;
         const img = new Image();
         img.decoding = 'async';
         img.onload = () => {
-          boxFramePreloadImagesRef.current.delete(frame);
+          boxFramePreloadImagesRef.current.delete(frameSrc);
         };
         img.onerror = () => {
-          boxFramePreloadImagesRef.current.delete(frame);
-          preloadedBoxFramesRef.current.delete(frame);
+          boxFramePreloadImagesRef.current.delete(frameSrc);
+          preloadedBoxFramesRef.current.delete(frameSrc);
         };
-        img.src = `${boxFrameBase}${frame}.webp`;
-        boxFramePreloadImagesRef.current.set(frame, img);
-        preloadedBoxFramesRef.current.add(frame);
+        img.src = frameSrc;
+        boxFramePreloadImagesRef.current.set(frameSrc, img);
+        preloadedBoxFramesRef.current.add(frameSrc);
       }
     },
-    [boxFrameBase],
+    [boxFrameBaseForDropId],
   );
 
   const ensureVideoPreloadRoot = useCallback(() => {
@@ -700,13 +822,14 @@ function App() {
   }, []);
 
   const preloadRevealVideos = useCallback(
-    (mediaIds: number[]) => {
+    (mediaIds: number[], dropId?: string) => {
       if (typeof document === 'undefined') return;
       const root = ensureVideoPreloadRoot();
       if (!root) return;
       const ids = Array.from(new Set(mediaIds.filter((mediaId) => Number.isFinite(mediaId) && mediaId > 0)));
-      const key = ids.join(',');
-      if (!key) return;
+      if (!ids.length) return;
+      const revealMediaBase = revealMediaBaseForDropId(dropId);
+      const key = `${revealMediaBase}|${ids.join(',')}`;
       if (videoPreloadKeyRef.current === key) return;
       videoPreloadKeyRef.current = key;
       while (root.firstChild) {
@@ -732,7 +855,7 @@ function App() {
         video.load();
       });
     },
-    [ensureVideoPreloadRoot, revealMediaBase],
+    [ensureVideoPreloadRoot, revealMediaBaseForDropId],
   );
 
   const ensureSoundReady = useCallback(() => {
@@ -763,8 +886,9 @@ function App() {
       const nextEntry: LocalPendingReveal = {
         id: item.id,
         createdAt: now,
+        dropId: item.dropId,
         name: item.name,
-        image: item.image || defaultBoxImage,
+        image: item.image || boxImageForDropId(item.dropId),
       };
       const existingIndex = prev.findIndex((entry) => entry.id === item.id);
       if (existingIndex !== -1) {
@@ -776,20 +900,29 @@ function App() {
     });
   };
 
-  const addLocalMintedBoxes = (quantity: number) => {
+  const addLocalMintedBoxes = (quantity: number, dropId: string) => {
     if (isViewerMode) return;
     if (!Number.isFinite(quantity) || quantity <= 0) return;
+    const normalizedDropId = String(dropId || '').trim().toLowerCase();
+    if (!normalizedDropId) return;
     const now = Date.now();
-    const entries: LocalMintedBox[] = [];
-    for (let i = 0; i < Math.floor(quantity); i += 1) {
-      localMintCounterRef.current += 1;
-      entries.push({
-        id: `local-minted-${now}-${localMintCounterRef.current}`,
-        createdAt: now + i,
-      });
-    }
-    if (!entries.length) return;
-    setLocalMintedBoxes((prev) => [...entries, ...prev]);
+    setLocalMintedBoxes((prev) => {
+      const entries: LocalMintedBox[] = [];
+      const knownChainCount = inventoryFetched
+        ? inventoryView.filter((item) => item.kind === 'box' && item.dropId === normalizedDropId).length
+        : undefined;
+      const pendingForDrop = prev.filter((entry) => entry.dropId === normalizedDropId).length;
+      for (let i = 0; i < Math.floor(quantity); i += 1) {
+        localMintCounterRef.current += 1;
+        entries.push({
+          id: `local-minted-${now}-${localMintCounterRef.current}`,
+          dropId: normalizedDropId,
+          createdAt: now + i,
+          ...(knownChainCount != null ? { expectedChainCount: knownChainCount + pendingForDrop + i + 1 } : {}),
+        });
+      }
+      return entries.length ? [...entries, ...prev] : prev;
+    });
   };
 
   const removeLocalPendingReveal = (id: string) => {
@@ -808,18 +941,24 @@ function App() {
     });
   };
 
-  const queueFigureMetadataFetch = useCallback((ids: number[]) => {
+  const queueFigureMetadataFetch = useCallback((targets: FigureMetadataTarget[]) => {
     if (typeof window === 'undefined') return;
     const now = Date.now();
-    ids.forEach((id) => {
+    const seen = new Set<string>();
+    targets.forEach((target) => {
+      const id = Number(target.figureId);
       if (!Number.isFinite(id) || id <= 0) return;
-      const cached = figureMetadataRef.current[id];
+      const drop = getDropConfig(target.dropId);
+      const cacheKey = figureMetadataCacheKey(drop.dropId, id);
+      if (seen.has(cacheKey)) return;
+      seen.add(cacheKey);
+      const cached = figureMetadataRef.current[cacheKey];
       if (cached?.image) return;
-      if (figureMetadataLoadingRef.current.has(id)) return;
-      const retryAt = figureMetadataRetryAtRef.current.get(id);
+      if (figureMetadataLoadingRef.current.has(cacheKey)) return;
+      const retryAt = figureMetadataRetryAtRef.current.get(cacheKey);
       if (retryAt && retryAt > now) return;
-      figureMetadataLoadingRef.current.add(id);
-      const metadataUrl = `${FRONTEND_DEPLOYMENT.paths.figuresJsonBase}${id}.json`;
+      figureMetadataLoadingRef.current.add(cacheKey);
+      const metadataUrl = `${figureJsonBaseForDropId(drop.dropId)}${id}.json`;
       void (async () => {
         try {
           const resp = await fetch(metadataUrl);
@@ -834,33 +973,51 @@ function App() {
           if (!image) throw new Error('metadata missing image');
           const name = typeof data.name === 'string' ? data.name : undefined;
           const attributes = Array.isArray(data.attributes) ? data.attributes : undefined;
-          setFigureMetadataById((prev) => {
-            const existing = prev[id];
+          setFigureMetadataByKey((prev) => {
+            const existing = prev[cacheKey];
             if (existing && existing.image === image && existing.name === name) {
               return prev;
             }
-            return { ...prev, [id]: { id, name, image, attributes } };
+            return {
+              ...prev,
+              [cacheKey]: {
+                id,
+                dropId: drop.dropId,
+                name,
+                image,
+                attributes,
+              },
+            };
           });
-          figureMetadataRetryAtRef.current.delete(id);
+          figureMetadataRetryAtRef.current.delete(cacheKey);
         } catch (err) {
-          console.warn('[mons] failed to load figure metadata', { id, error: err });
-          figureMetadataRetryAtRef.current.set(id, Date.now() + FIGURE_METADATA_RETRY_MS);
+          console.warn('[mons] failed to load figure metadata', {
+            dropId: drop.dropId,
+            id,
+            cacheKey,
+            error: err,
+          });
+          figureMetadataRetryAtRef.current.set(cacheKey, Date.now() + FIGURE_METADATA_RETRY_MS);
         } finally {
-          figureMetadataLoadingRef.current.delete(id);
+          figureMetadataLoadingRef.current.delete(cacheKey);
         }
       })();
     });
-  }, []);
+  }, [figureJsonBaseForDropId, getDropConfig]);
 
-  const addLocalRevealedDudes = (ids: number[]) => {
+  const addLocalRevealedDudes = (ids: number[], dropId: string) => {
     const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
     if (!uniqueIds.length) return;
-    setLocalRevealedDudeIds((prev) => {
+    const canonicalDropId = getDropConfig(dropId).dropId;
+    const targets = uniqueIds.map((id) => ({ dropId: canonicalDropId, figureId: id }));
+    setLocalRevealedDudeKeys((prev) => {
       const next = new Set(prev);
-      uniqueIds.forEach((id) => next.add(id));
+      targets.forEach((target) => {
+        next.add(figureMetadataCacheKey(target.dropId, target.figureId));
+      });
       return Array.from(next);
     });
-    queueFigureMetadataFetch(uniqueIds);
+    queueFigureMetadataFetch(targets);
   };
 
   const finalizeRevealOverlayDismissal = useCallback(() => {
@@ -932,18 +1089,20 @@ function App() {
 	    if (typeof window === 'undefined') return;
 	    const item = itemOverride || inventoryIndex.get(id);
 	    if (!item) return;
+	    const overlayDropId = item.dropId || activeDrop.dropId;
 	    revealDismissLockedUntilRef.current = 0;
     preloadRevealSounds();
-    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
-    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX, overlayDropId);
+    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT, overlayDropId);
     const originRect = toOverlayRect(rect);
     const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
     setInventorySnapshot(inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     const nextOverlay: RevealOverlayState = {
       id,
+      dropId: overlayDropId,
       name: item.name,
-      image: item.image || defaultBoxImage,
+      image: item.image || boxImageForDropId(overlayDropId),
       originRect,
       targetRect,
       phase,
@@ -990,10 +1149,10 @@ function App() {
   }, [connectedWallet]);
 
   useEffect(() => {
-    setDiscountUsed(loadDiscountUsed(connectedWallet));
+    setDiscountUsed(loadDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet));
     setDiscountEligible(false);
     setDiscountChecking(false);
-  }, [connectedWallet]);
+  }, [activeDiscountScope, activeDiscountVersion, connectedWallet]);
 
   useEffect(() => {
     setLocalPendingReveals(loadPendingReveals(connectedWallet));
@@ -1001,13 +1160,13 @@ function App() {
     setLocalMintedBoxes([]);
     setInventorySnapshot([]);
     setPendingOpenSnapshot([]);
-    setLocalRevealedDudeIds([]);
-    setFigureMetadataById({});
+    setLocalRevealedDudeKeys([]);
+    setFigureMetadataByKey({});
     figureMetadataRef.current = {};
     figureMetadataLoadingRef.current.clear();
     figureMetadataRetryAtRef.current.clear();
     localMintCounterRef.current = 0;
-    knownBoxIdsRef.current = new Set();
+    knownBoxIdsByDropRef.current = new Map();
     preloadedBoxFramesRef.current.clear();
     boxFramePreloadImagesRef.current.clear();
     autoplayFramePreloadScheduledRef.current = false;
@@ -1052,8 +1211,8 @@ function App() {
   }, [connectedWallet, recentRevealedBoxes, isViewerMode]);
 
   useEffect(() => {
-    figureMetadataRef.current = figureMetadataById;
-  }, [figureMetadataById]);
+    figureMetadataRef.current = figureMetadataByKey;
+  }, [figureMetadataByKey]);
 
   useEffect(() => {
     if (!owner || isViewerMode) return;
@@ -1078,6 +1237,7 @@ function App() {
       nextMap.set(id, {
         id,
         createdAt: existing?.createdAt || now,
+        dropId: existing?.dropId || entry.dropId || match?.dropId,
         name: existing?.name || match?.name,
         image: existing?.image || match?.image,
       });
@@ -1107,75 +1267,150 @@ function App() {
     if (isViewerMode) return;
     if (revealOverlay) return;
     if (!inventoryFetched) return;
-    const currentIds = new Set(inventoryView.filter((item) => item.kind === 'box').map((item) => item.id));
-    const prevIds = knownBoxIdsRef.current;
+    const currentBoxIdsByDrop = new Map<string, Set<string>>();
+    inventoryView.forEach((item) => {
+      if (item.kind !== 'box') return;
+      const dropId = String(item.dropId || '').trim().toLowerCase();
+      if (!dropId) return;
+      const existing = currentBoxIdsByDrop.get(dropId) || new Set<string>();
+      existing.add(item.id);
+      currentBoxIdsByDrop.set(dropId, existing);
+    });
+    const prevBoxIdsByDrop = knownBoxIdsByDropRef.current;
     if (localMintedBoxes.length) {
-      if (!prevIds.size) {
-        if (currentIds.size > 0) {
-          const removeCount = Math.min(currentIds.size, localMintedBoxes.length);
-          setLocalMintedBoxes((prev) => prev.slice(removeCount));
-        }
-      } else {
+      const currentBoxCountByDrop = new Map<string, number>();
+      currentBoxIdsByDrop.forEach((ids, dropId) => {
+        currentBoxCountByDrop.set(dropId, ids.size);
+      });
+      const newBoxCountByDrop = new Map<string, number>();
+      currentBoxIdsByDrop.forEach((ids, dropId) => {
+        const prevIds = prevBoxIdsByDrop.get(dropId);
+        if (!prevIds) return;
         let newCount = 0;
-        currentIds.forEach((id) => {
+        ids.forEach((id) => {
           if (!prevIds.has(id)) newCount += 1;
         });
         if (newCount > 0) {
-          setLocalMintedBoxes((prev) => prev.slice(Math.min(newCount, prev.length)));
+          newBoxCountByDrop.set(dropId, newCount);
         }
-      }
+      });
+      setLocalMintedBoxes((prev) => {
+        if (!prev.length) return prev;
+        const removeIndexes = new Set<number>();
+        const remainingIndexesByDrop = new Map<string, number[]>();
+        prev.forEach((entry, index) => {
+          const currentCount = currentBoxCountByDrop.get(entry.dropId) || 0;
+          if (entry.expectedChainCount != null && currentCount >= entry.expectedChainCount) {
+            removeIndexes.add(index);
+            return;
+          }
+          const existing = remainingIndexesByDrop.get(entry.dropId) || [];
+          existing.push(index);
+          remainingIndexesByDrop.set(entry.dropId, existing);
+        });
+        remainingIndexesByDrop.forEach((indexes, dropId) => {
+          let remainingToRemove = newBoxCountByDrop.get(dropId) || 0;
+          if (!remainingToRemove) return;
+          indexes
+            .sort((leftIdx, rightIdx) => prev[leftIdx].createdAt - prev[rightIdx].createdAt)
+            .forEach((index) => {
+              if (remainingToRemove <= 0) return;
+              removeIndexes.add(index);
+              remainingToRemove -= 1;
+            });
+        });
+        if (!removeIndexes.size) return prev;
+        const next = prev.filter((_, index) => !removeIndexes.has(index));
+        if (next.length === prev.length) return prev;
+        return next;
+      });
     }
-    knownBoxIdsRef.current = currentIds;
+    knownBoxIdsByDropRef.current = currentBoxIdsByDrop;
   }, [inventoryView, inventoryFetched, localMintedBoxes.length, revealOverlay, isViewerMode]);
 
   useEffect(() => {
     if (isViewerMode) return;
+    if (!inventoryFetched) return;
+    setLocalMintedBoxes((prev) => {
+      let changed = false;
+      const next = [...prev];
+      const indexesByDrop = new Map<string, number[]>();
+      prev.forEach((entry, index) => {
+        const existing = indexesByDrop.get(entry.dropId) || [];
+        existing.push(index);
+        indexesByDrop.set(entry.dropId, existing);
+      });
+      indexesByDrop.forEach((indexes, dropId) => {
+        const knownCount = knownBoxIdsByDropRef.current.get(dropId)?.size || 0;
+        indexes
+          .sort((leftIdx, rightIdx) => prev[leftIdx].createdAt - prev[rightIdx].createdAt)
+          .forEach((index, offset) => {
+            const expectedChainCount = knownCount + offset + 1;
+            if (prev[index].expectedChainCount === expectedChainCount) return;
+            next[index] = {
+              ...prev[index],
+              expectedChainCount,
+            };
+            changed = true;
+          });
+      });
+      return changed ? next : prev;
+    });
+  }, [inventoryFetched, isViewerMode]);
+
+  useEffect(() => {
+    if (isViewerMode) return;
     if (revealOverlay) return;
-    if (!localRevealedDudeIds.length) return;
-    const chainDudes = new Map<number, InventoryItem>();
+    if (!localRevealedDudeKeys.length) return;
+    const chainDudes = new Map<string, InventoryItem>();
     inventoryView.forEach((item) => {
       if (item.kind !== 'dude') return;
       if (!item.dudeId) return;
-      chainDudes.set(item.dudeId, item);
+      chainDudes.set(figureMetadataCacheKey(item.dropId, item.dudeId), item);
     });
-    setLocalRevealedDudeIds((prev) => {
-      const next = prev.filter((id) => {
-        const item = chainDudes.get(id);
+    setLocalRevealedDudeKeys((prev) => {
+      const next = prev.filter((cacheKey) => {
+        const item = chainDudes.get(cacheKey);
         if (!item) return true;
         if (item.image && String(item.image).trim()) return false;
-        const meta = figureMetadataById[id];
+        const meta = figureMetadataByKey[cacheKey];
         return !meta?.image;
       });
       return next.length === prev.length ? prev : next;
     });
-  }, [inventoryView, localRevealedDudeIds, figureMetadataById, revealOverlay, isViewerMode]);
+  }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey, revealOverlay, isViewerMode]);
 
-  const figureIdsNeedingMetadata = useMemo(() => {
-    const ids = new Set<number>();
-    localRevealedDudeIds.forEach((id) => {
-      if (!figureMetadataById[id]?.image) ids.add(id);
+  const figureTargetsNeedingMetadata = useMemo(() => {
+    const targetsByKey = new Map<string, FigureMetadataTarget>();
+    localRevealedDudeKeys.forEach((cacheKey) => {
+      const parsed = parseFigureMetadataCacheKey(cacheKey);
+      if (!parsed) return;
+      if (!figureMetadataByKey[cacheKey]?.image) targetsByKey.set(cacheKey, parsed);
     });
     inventoryView.forEach((item) => {
       if (item.kind !== 'dude') return;
       if (!item.dudeId) return;
       if (item.image && String(item.image).trim()) return;
-      if (!figureMetadataById[item.dudeId]?.image) ids.add(item.dudeId);
+      const cacheKey = figureMetadataCacheKey(item.dropId, item.dudeId);
+      if (!figureMetadataByKey[cacheKey]?.image) {
+        targetsByKey.set(cacheKey, { dropId: item.dropId, figureId: item.dudeId });
+      }
     });
-    return Array.from(ids);
-  }, [inventoryView, localRevealedDudeIds, figureMetadataById]);
+    return Array.from(targetsByKey.values());
+  }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey]);
 
   useEffect(() => {
-    if (!figureIdsNeedingMetadata.length) return;
+    if (!figureTargetsNeedingMetadata.length) return;
     if (typeof window === 'undefined') return;
-    queueFigureMetadataFetch(figureIdsNeedingMetadata);
+    queueFigureMetadataFetch(figureTargetsNeedingMetadata);
     const interval = window.setInterval(() => {
-      queueFigureMetadataFetch(figureIdsNeedingMetadata);
+      queueFigureMetadataFetch(figureTargetsNeedingMetadata);
     }, FIGURE_METADATA_RETRY_MS);
     return () => window.clearInterval(interval);
-  }, [figureIdsNeedingMetadata, queueFigureMetadataFetch]);
+  }, [figureTargetsNeedingMetadata, queueFigureMetadataFetch]);
 
   const shouldPollInventory =
-    !isViewerMode && !revealOverlay && (localRevealedDudeIds.length > 0 || localMintedBoxes.length > 0);
+    !isViewerMode && !revealOverlay && (localRevealedDudeKeys.length > 0 || localMintedBoxes.length > 0);
 
   useEffect(() => {
     if (!shouldPollInventory) return;
@@ -1332,27 +1567,33 @@ function App() {
 
   const localRevealedDudes = useMemo(() => {
     if (isViewerMode) return [] as InventoryItem[];
-    if (!localRevealedDudeIds.length) return [] as InventoryItem[];
-    const chainDudeIds = new Set(
-      inventoryView.map((item) => item.dudeId).filter((id): id is number => typeof id === 'number'),
+    if (!localRevealedDudeKeys.length) return [] as InventoryItem[];
+    const chainDudeKeys = new Set(
+      inventoryView
+        .filter((item) => item.kind === 'dude' && typeof item.dudeId === 'number')
+        .map((item) => figureMetadataCacheKey(item.dropId, item.dudeId as number)),
     );
     const out: InventoryItem[] = [];
-    localRevealedDudeIds.forEach((id) => {
-      if (chainDudeIds.has(id)) return;
-      const meta = figureMetadataById[id];
+    localRevealedDudeKeys.forEach((cacheKey) => {
+      if (chainDudeKeys.has(cacheKey)) return;
+      const parsed = parseFigureMetadataCacheKey(cacheKey);
+      if (!parsed) return;
+      const { dropId, figureId } = parsed;
+      const meta = figureMetadataByKey[cacheKey];
       if (!meta?.image) return;
       out.push({
-        id: `local-dude-${id}`,
-        name: meta.name || `Figure ${id}`,
+        id: `local-dude-${dropId}-${figureId}`,
+        dropId,
+        name: meta.name || `Figure ${figureId}`,
         kind: 'dude',
         image: meta.image,
         attributes: meta.attributes || [],
-        dudeId: id,
+        dudeId: figureId,
         status: 'pending',
       });
     });
     return out;
-  }, [inventoryView, localRevealedDudeIds, figureMetadataById, isViewerMode]);
+  }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey, isViewerMode]);
 
   const visibleInventory = useMemo(() => {
     const base =
@@ -1360,11 +1601,12 @@ function App() {
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
         if (item.image && String(item.image).trim()) return item;
-        return { ...item, image: defaultBoxImage };
+        return { ...item, image: boxImageForDropId(item.dropId) };
       }
       if (item.kind !== 'dude' || !item.dudeId) return item;
       if (item.image && String(item.image).trim()) return item;
-      const meta = figureMetadataById[item.dudeId];
+      const cacheKey = figureMetadataCacheKey(item.dropId, item.dudeId);
+      const meta = figureMetadataByKey[cacheKey];
       if (!meta?.image) return item;
       return {
         ...item,
@@ -1375,19 +1617,20 @@ function App() {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataById, defaultBoxImage, isViewerMode]);
+  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataByKey, boxImageForDropId, isViewerMode]);
 
   const localMintedItems = useMemo<InventoryItem[]>(() => {
     if (isViewerMode) return [] as InventoryItem[];
     if (!localMintedBoxes.length) return [] as InventoryItem[];
     return localMintedBoxes.map((entry) => ({
       id: entry.id,
+      dropId: entry.dropId,
       name: 'Pending box',
       kind: 'box' as const,
-      image: defaultBoxImage,
+      image: boxImageForDropId(entry.dropId),
       status: 'pending' as const,
     }));
-  }, [localMintedBoxes, defaultBoxImage, isViewerMode]);
+  }, [localMintedBoxes, boxImageForDropId, isViewerMode]);
 
   const recentRevealedSet = useMemo(
     () => (isViewerMode ? new Set<string>() : new Set(recentRevealedBoxes)),
@@ -1438,7 +1681,7 @@ function App() {
   }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
   useEffect(() => {
     if (!revealOverlay) return;
-    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT, revealOverlay.dropId);
   }, [revealOverlay, preloadBoxFrames]);
   const pendingRevealItems = useMemo(() => {
     if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
@@ -1452,11 +1695,13 @@ function App() {
       seen.add(id);
       const match = inventoryById.get(id);
       const localMatch = localById.get(id);
+      const itemDropId = localMatch?.dropId || entry.dropId || match?.dropId || activeDrop.dropId;
       pendingItems.push({
         id,
+        dropId: itemDropId,
         name: localMatch?.name || match?.name || `Box ${shortAddress(id)}`,
         kind: 'box',
-        image: defaultBoxImage,
+        image: localMatch?.image || match?.image || boxImageForDropId(itemDropId),
       });
     });
     const localSorted = [...localPendingFiltered].sort((a, b) => b.createdAt - a.createdAt);
@@ -1465,15 +1710,17 @@ function App() {
       if (!id || seen.has(id)) return;
       seen.add(id);
       const match = inventoryById.get(id);
+      const itemDropId = entry.dropId || match?.dropId || activeDrop.dropId;
       pendingItems.push({
         id,
+        dropId: itemDropId,
         name: entry.name || match?.name || `Box ${shortAddress(id)}`,
         kind: 'box',
-        image: defaultBoxImage,
+        image: entry.image || match?.image || boxImageForDropId(itemDropId),
       });
     });
     return pendingItems;
-  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, defaultBoxImage]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, activeDrop.dropId, boxImageForDropId]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
@@ -1508,6 +1755,11 @@ function App() {
     () => selectedItems.filter((item) => item.kind !== 'certificate' && !pendingRevealIds.has(item.id)),
     [selectedItems, pendingRevealIds],
   );
+  const selectedDropId = deliverableItems[0]?.dropId || '';
+  const selectedDropConfig = useMemo(
+    () => (selectedDropId ? getDropConfig(selectedDropId) : activeDrop),
+    [activeDrop, getDropConfig, selectedDropId],
+  );
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
@@ -1517,8 +1769,8 @@ function App() {
     return parts.length ? parts.join(', ') : `${selectedCount} selected`;
   }, [deliverableItems, selectedCount]);
   const deliveryEstimateLamports = useMemo(
-    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode),
-    [deliverableItems, deliveryCountryCode],
+    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox),
+    [deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox],
   );
   const deliveryCtaLabel = useMemo(() => {
     if (deliveryEstimateLamports <= 0) return 'Send';
@@ -1530,7 +1782,7 @@ function App() {
     const limit = compactPanel ? 3 : 5;
     const entries = selectedItems.map((item) => ({
       item,
-      previewImage: item.image || (item.kind === 'box' ? defaultBoxImage : undefined),
+      previewImage: item.image || (item.kind === 'box' ? boxImageForDropId(item.dropId) : undefined),
     }));
     const preview: typeof entries = [];
     const counts = new Map<string, number>();
@@ -1565,7 +1817,7 @@ function App() {
       addEntry(entry);
     });
     return preview;
-  }, [selectedItems, defaultBoxImage, compactPanel]);
+  }, [selectedItems, boxImageForDropId, compactPanel]);
   const selectedOverflow = Math.max(0, selectedCount - selectedPreview.length);
   const canOpenSelected = selectedCount === 1 && selectedItems[0]?.kind === 'box';
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
@@ -1602,24 +1854,25 @@ function App() {
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
-  const signAndSendViaConnection = async (tx: VersionedTransaction) => {
-    if (wallet.signTransaction) {
-      const signed = await wallet.signTransaction(tx);
-      const raw = signed.serialize();
-      return connection.sendRawTransaction(raw, {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      });
-    }
-    return sendTransaction(tx, connection, { skipPreflight: false });
-  };
+  const signAndSendViaConnection = useCallback(
+    async (tx: VersionedTransaction, targetConnection: Connection) => {
+      if (wallet.signTransaction) {
+        const signed = await wallet.signTransaction(tx);
+        const raw = signed.serialize();
+        return targetConnection.sendRawTransaction(raw, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+      }
+      return sendTransaction(tx, targetConnection, { skipPreflight: false });
+    },
+    [sendTransaction, wallet],
+  );
 
   const mintedOut = useMemo(() => {
-    if (MINTED_OUT_OVERRIDE) return true;
-    if (!mintStats) return false;
-    return mintStats.remaining <= 0;
-  }, [mintStats]);
+    return effectiveMintStats.remaining <= 0;
+  }, [effectiveMintStats.remaining]);
 
   useEffect(() => {
     if (publicKey || mintedOut || walletBusy) {
@@ -1633,9 +1886,9 @@ function App() {
   const discountCtaState = useMemo(() => {
     if (mintedOut) return { visible: false, label: '' };
     if (walletBusy) return { visible: false, label: '' };
-    if (!publicKey) return { visible: guestDiscountReady, label: 'lsw discount' };
+    if (!publicKey) return { visible: guestDiscountReady, label: 'Connect for discount' };
     if (discountChecking) return { visible: false, label: '' };
-    return { visible: discountEligible, label: 'Mint one for 0.55 SOL' };
+    return { visible: discountEligible, label: '' };
   }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
 
   useEffect(() => {
@@ -1649,19 +1902,19 @@ function App() {
     (async () => {
       const address = publicKey.toBase58();
       try {
-        const listed = await isDiscountListed(FRONTEND_DEPLOYMENT.dropId, address);
+        const listed = await isDiscountListed(activeDrop.dropId, address);
         if (cancelled) return;
         if (!listed) {
           setDiscountEligible(false);
           return;
         }
-        const [discountPda] = discountMintRecordPda(publicKey);
-        const info = await connection.getAccountInfo(discountPda, 'confirmed');
+        const [discountPda] = discountMintRecordPda(publicKey, new PublicKey(activeDrop.boxMinterProgramId));
+        const info = await activeConnection.getAccountInfo(discountPda, 'confirmed');
         if (cancelled) return;
         if (info) {
           setDiscountEligible(false);
           setDiscountUsed(true);
-          persistDiscountUsed(address, true);
+          persistDiscountUsed(activeDiscountScope, activeDiscountVersion, address, true);
           return;
         }
         setDiscountEligible(true);
@@ -1677,7 +1930,16 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [connection, discountUsed, mintedOut, publicKey]);
+  }, [
+    activeConnection,
+    activeDiscountScope,
+    activeDiscountVersion,
+    activeDrop.boxMinterProgramId,
+    activeDrop.dropId,
+    discountUsed,
+    mintedOut,
+    publicKey,
+  ]);
 
   const toggleSelected = (id: string) => {
     setSelected((prev) => {
@@ -1687,6 +1949,19 @@ function App() {
         return copy;
       }
       if (prev.size >= MAX_SHIPMENT_ITEMS) return prev;
+      const nextItem = inventoryIndex.get(id);
+      if (!nextItem || nextItem.kind === 'certificate') return prev;
+      const firstSelectedId = prev.values().next().value as string | undefined;
+      const firstSelectedItem = firstSelectedId ? inventoryIndex.get(firstSelectedId) : undefined;
+      if (
+        firstSelectedItem &&
+        firstSelectedItem.dropId &&
+        nextItem.dropId &&
+        firstSelectedItem.dropId !== nextItem.dropId
+      ) {
+        showToast('Shipments can only include items from one drop.');
+        return prev;
+      }
       const copy = new Set(prev);
       copy.add(id);
       return copy;
@@ -1701,11 +1976,11 @@ function App() {
     }
     setMinting(true);
     try {
-      const cfg = await fetchBoxMinterConfig(connection);
+      const cfg = await fetchBoxMinterConfig(activeConnection, activeDrop);
       const sendOnce = async () => {
-        const tx = await buildMintBoxesTx(connection, cfg, publicKey, quantity);
-        const sig = await signAndSendViaConnection(tx);
-        await connection.confirmTransaction(sig, 'confirmed');
+        const tx = await buildMintBoxesTx(activeConnection, cfg, publicKey, quantity, activeDrop);
+        const sig = await signAndSendViaConnection(tx, activeConnection);
+        await activeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
       try {
@@ -1715,7 +1990,7 @@ function App() {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(quantity);
+      addLocalMintedBoxes(quantity, activeDrop.dropId);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -1735,18 +2010,18 @@ function App() {
 
     setDiscountMinting(true);
     try {
-      const proof = await getDiscountProof(FRONTEND_DEPLOYMENT.dropId, publicKey.toBase58());
+      const proof = await getDiscountProof(activeDrop.dropId, publicKey.toBase58());
       if (!proof) {
         setDiscountEligible(false);
         showToast('Wallet is not eligible for the discount');
         return;
       }
 
-      const cfg = await fetchBoxMinterConfig(connection);
+      const cfg = await fetchBoxMinterConfig(activeConnection, activeDrop);
       const sendOnce = async () => {
-        const tx = await buildMintDiscountedBoxTx(connection, cfg, publicKey, proof);
-        const sig = await signAndSendViaConnection(tx);
-        await connection.confirmTransaction(sig, 'confirmed');
+        const tx = await buildMintDiscountedBoxTx(activeConnection, cfg, publicKey, proof, activeDrop);
+        const sig = await signAndSendViaConnection(tx, activeConnection);
+        await activeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
       try {
@@ -1756,10 +2031,10 @@ function App() {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(1);
+      addLocalMintedBoxes(1, activeDrop.dropId);
       setDiscountUsed(true);
       setDiscountEligible(false);
-      if (connectedWallet) persistDiscountUsed(connectedWallet, true);
+      if (connectedWallet) persistDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet, true);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -1774,11 +2049,13 @@ function App() {
     if (!publicKey) throw new Error('Connect wallet to open a box');
     setStartOpenLoading(item.id);
     try {
-      const cfg = await fetchBoxMinterConfig(connection);
+      const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
+      const targetConnection = getDropConnection(targetDrop.dropId);
+      const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop);
       const sendOnce = async () => {
-        const tx = await buildStartOpenBoxTx(connection, cfg, publicKey, new PublicKey(item.id));
-        const sig = await signAndSendViaConnection(tx);
-        await connection.confirmTransaction(sig, 'confirmed');
+        const tx = await buildStartOpenBoxTx(targetConnection, cfg, publicKey, new PublicKey(item.id), targetDrop);
+        const sig = await signAndSendViaConnection(tx, targetConnection);
+        await targetConnection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
       try {
@@ -1818,14 +2095,15 @@ function App() {
     }
   };
 
-  const handleRevealDudes = async (boxAssetId: string) => {
+  const handleRevealDudes = async (boxAssetId: string, dropId: string) => {
     if (blockViewerModeAction()) return;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
     if (!publicKey) return;
     setRevealLoading(boxAssetId);
     try {
-      const resp = await revealDudes(publicKey.toBase58(), boxAssetId, FRONTEND_DEPLOYMENT.dropId);
+      const revealDrop = requireKnownDropConfig(dropId, `reveal request for ${boxAssetId}`);
+      const resp = await revealDudes(publicKey.toBase58(), boxAssetId, revealDrop.dropId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
@@ -1834,12 +2112,12 @@ function App() {
         const mediaIds = Array.from(
           new Set(
             revealed
-              .map((figureId) => getMediaIdForFigureId(figureId))
+              .map((figureId) => getMediaIdForFigureId(figureId, revealDrop.figureMedia))
               .filter((mediaId): mediaId is number => Boolean(mediaId)),
           ),
         );
         if (mediaIds.length) {
-          preloadRevealVideos(mediaIds);
+          preloadRevealVideos(mediaIds, revealDrop.dropId);
         }
       }
       setRevealOverlay((prev) => {
@@ -1854,7 +2132,7 @@ function App() {
       });
       queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
       queueOverlayAction(() => rememberRecentReveal(boxAssetId));
-      queueOverlayAction(() => addLocalRevealedDudes(revealed));
+      queueOverlayAction(() => addLocalRevealedDudes(revealed, revealDrop.dropId));
       queueOverlayAction(() => {
         void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
       });
@@ -1910,7 +2188,7 @@ function App() {
     });
 
     if (shouldSendReveal) {
-      void handleRevealDudes(revealOverlay.id);
+      void handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
     }
   };
 
@@ -1944,10 +2222,10 @@ function App() {
 	        fallbackTarget.width,
 	        fallbackTarget.height,
 	      );
-	      const overlayItem: InventoryItem = { ...box, image: defaultBoxImage };
+	      const overlayItem: InventoryItem = { ...box, image: boxImageForDropId(box.dropId) };
 	      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
 	    },
-	    [defaultBoxImage, openRevealOverlay, preloadBoxFrames, preloadRevealSounds],
+	    [boxImageForDropId, openRevealOverlay, preloadBoxFrames, preloadRevealSounds],
 	  );
 
 	  const handleOpenSelectedBox = async () => {
@@ -2033,6 +2311,15 @@ function App() {
       showToast('Select boxes or figures to ship');
       return;
     }
+    const deliveryDropId = deliverableItems[0]?.dropId || '';
+    if (!deliveryDropId) {
+      showToast('Unable to determine drop for selected items');
+      return;
+    }
+    if (deliverableItems.some((item) => item.dropId !== deliveryDropId)) {
+      showToast('Shipments can only include items from one drop');
+      return;
+    }
     if (deliverableIds.length !== selected.size) {
       setSelected(new Set(deliverableIds));
     }
@@ -2044,6 +2331,8 @@ function App() {
     }
 
     try {
+      const deliveryDrop = requireKnownDropConfig(deliveryDropId, 'delivery selection');
+      const deliveryConnection = getDropConnection(deliveryDrop.dropId);
       const session = isSignedInWallet ? { profile } : await signIn();
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
@@ -2056,16 +2345,20 @@ function App() {
       }
 
       const requestTx = () =>
-        requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id }, FRONTEND_DEPLOYMENT.dropId);
+        requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id }, deliveryDrop.dropId);
       let resp = await requestTx();
       let sig: string;
       try {
-        sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+        sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
+          signAndSendViaConnection(tx, deliveryConnection),
+        );
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
         showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         resp = await requestTx();
-        sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+        sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
+          signAndSendViaConnection(tx, deliveryConnection),
+        );
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
       showToast(`Shipment submitted${idSuffix} · ${sig}`);
@@ -2076,7 +2369,7 @@ function App() {
       if (resp.deliveryId) {
         try {
           showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
-          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, FRONTEND_DEPLOYMENT.dropId);
+          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, deliveryDrop.dropId);
           const minted = Number(issued?.receiptsMinted || 0);
           showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           await refetchInventory();
@@ -2116,23 +2409,27 @@ function App() {
     }
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
+    let claimDrop = requireKnownDropConfig(resp.dropId || activeDrop.dropId, 'claim transaction response');
+    let claimConnection = getDropConnection(claimDrop.dropId);
     let sig: string;
     try {
-      sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+      sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
+        signAndSendViaConnection(tx, claimConnection),
+      );
     } catch (err) {
       if (!isBlockhashExpiredError(err)) throw err;
       showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
       resp = await requestTx();
-      sig = await sendPreparedTransaction(resp.encodedTx, connection, signAndSendViaConnection);
+      claimDrop = requireKnownDropConfig(resp.dropId || activeDrop.dropId, 'claim transaction retry response');
+      claimConnection = getDropConnection(claimDrop.dropId);
+      sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
+        signAndSendViaConnection(tx, claimConnection),
+      );
     }
     showToast(`Claimed certificates · ${sig}`);
     await refetchInventory();
+    return { itemsPerBox: claimDrop.itemsPerBox };
   };
-
-  const secondaryLinks = [
-    { label: 'Tensor', href: 'https://www.tensor.trade/trade/little_swag_boxes' },
-    { label: 'Magic Eden', href: 'https://magiceden.io/' },
-  ];
 
   const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
   const deliveryOrders = viewedProfile?.orders || [];
@@ -2205,15 +2502,16 @@ function App() {
     : 'ready';
   const revealMediaItems = useMemo(() => {
     if (!revealOverlay?.revealedIds?.length) return [] as Array<{ figureId: number; mediaId: number; index: number }>;
+    const revealDrop = getDropConfig(revealOverlay.dropId);
     const resolved = revealOverlay.revealedIds
       .map((figureId) => {
-        const mediaId = getMediaIdForFigureId(figureId);
+        const mediaId = getMediaIdForFigureId(figureId, revealDrop.figureMedia);
         if (!mediaId) return null;
         return { figureId, mediaId };
       })
       .filter((entry): entry is { figureId: number; mediaId: number } => Boolean(entry));
     return resolved.map((entry, index) => ({ ...entry, index }));
-  }, [revealOverlay?.revealedIds]);
+  }, [getDropConfig, revealOverlay?.dropId, revealOverlay?.revealedIds]);
   const revealMediaIds = useMemo(
     () => Array.from(new Set(revealMediaItems.map((entry) => entry.mediaId))),
     [revealMediaItems],
@@ -2263,11 +2561,11 @@ function App() {
 	  }, [revealOverlay, revealMediaItems.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
-    preloadRevealVideos(revealMediaIds);
-  }, [revealMediaIds, preloadRevealVideos]);
+    preloadRevealVideos(revealMediaIds, revealOverlay?.dropId || activeDrop.dropId);
+  }, [activeDrop.dropId, preloadRevealVideos, revealMediaIds, revealOverlay?.dropId]);
   const revealBoxFrameSrc =
     revealOverlay && revealOverlay.frame
-      ? `${boxFrameBase}${Math.min(Math.max(revealOverlay.frame, 1), BOX_FRAME_COUNT)}.webp`
+      ? `${revealBoxFrameBase}${Math.min(Math.max(revealOverlay.frame, 1), BOX_FRAME_COUNT)}.webp`
       : '';
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
@@ -2394,9 +2692,7 @@ function App() {
             draggable={false}
             onClick={(evt) => {
               evt.preventDefault();
-              if (getNormalizedPathname() === LITTLE_SWAG_BOXES_PATH) {
-                navigate('/');
-              }
+              navigate('/');
             }}
             onDragStart={(evt) => {
               evt.preventDefault();
@@ -2489,11 +2785,23 @@ function App() {
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    navigate('/little_swag_boxes');
+                    navigate('/');
                   }}
                 >
-                  /little_swag_boxes
+                  /
                 </button>
+                {allDrops.map((drop) => (
+                  <button
+                    key={drop.dropId}
+                    type="button"
+                    className="link small top__submenu-nav"
+                    onClick={() => {
+                      navigate(dropPath(drop.dropId));
+                    }}
+                  >
+                    {dropPath(drop.dropId)}
+                  </button>
+                ))}
                 {canLoadMoreOwners ? (
                   <button
                     type="button"
@@ -2519,7 +2827,11 @@ function App() {
         onMint={handleMint}
         busy={minting}
         onError={showToast}
-        secondaryHref={secondaryLinks[0]?.href}
+        title={activeDrop.collectionName}
+        boxImageSrc={defaultBoxImage}
+        priceSol={activeDrop.priceSol}
+        discountPriceSol={activeDrop.discountPriceSol}
+        secondaryHref={activeDrop.secondaryMarketHref}
         discountVisible={discountCtaState.visible}
         discountLabel={discountCtaState.label}
         onDiscountClick={handleDiscountMint}
@@ -2577,6 +2889,7 @@ function App() {
             mode="modal"
             onSubmit={handleShip}
             defaultEmail={viewedProfile?.email || ''}
+            itemsPerBox={selectedDropConfig.itemsPerBox}
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
@@ -2586,7 +2899,7 @@ function App() {
       </Modal>
 
       <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
-        <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} />
+        <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} itemsPerBox={activeDrop.itemsPerBox} />
       </Modal>
 
       {activeError ? <div className="error">{activeError}</div> : null}
@@ -2606,6 +2919,7 @@ function App() {
                     <div>
                       <div className="card__title">{order.deliveryId}</div>
                       <div className="muted small">{formatOrderDate(order)}</div>
+                      <div className="muted small">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                     </div>
                     <div className="delivery-status">{fulfillmentStatus || 'Preparing'}</div>
                   </div>

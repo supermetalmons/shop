@@ -11,9 +11,10 @@
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
-export type FunctionsDeploymentConfig = {
+export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
@@ -36,30 +37,10 @@ export type FunctionsDeploymentConfig = {
   deliveryLookupTable: string;
 };
 
-export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
-  solanaCluster: 'mainnet-beta',
-  dropId: 'little_swag_boxes',
+// Backward-compatible type alias.
+export type FunctionsDeploymentConfig = FunctionsDropConfig;
 
-  // Drop metadata base (collection.json + json/* + images/*)
-  metadataBase: 'https://assets.mons.link/drops/lsb',
-
-  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-  treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-  priceSol: 1,
-  discountPriceSol: 0.55,
-  discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
-  maxSupply: 333,
-  itemsPerBox: 3,
-  maxPerTx: 15,
-  namePrefix: 'box',
-  symbol: 'box',
-
-  // On-chain ids
-  boxMinterProgramId: '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep',
-  collectionMint: '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr',
-  receiptsMerkleTree: 'Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV',
-  deliveryLookupTable: 'F51Mj4JFGdVKJfdbYc4aT4de8Dbst7BmWr2P2Bwxa8Wz',
-};
+export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
 
 export type DropPaths = {
   /** Normalized drop base (no trailing slash). */
@@ -76,6 +57,10 @@ export function normalizeDropBase(base: string): string {
   return String(base || '').replace(/\/+$/, '');
 }
 
+export function normalizeDropId(dropId: string): string {
+  return String(dropId || '').trim().toLowerCase();
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -88,8 +73,69 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
   };
 }
 
+function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
+  const normalizedDropId = normalizeDropId(config.dropId);
+  return {
+    ...config,
+    dropId: normalizedDropId,
+    metadataBase: normalizeDropBase(config.metadataBase),
+  };
+}
+
+export const FUNCTIONS_DEFAULT_DROP_ID = 'little_swag_boxes';
+
+export const FUNCTIONS_DROPS: FunctionsDropsMap = {
+  little_swag_boxes: createFunctionsDrop({
+    solanaCluster: 'mainnet-beta',
+    dropId: 'little_swag_boxes',
+    collectionName: 'Little Swag Boxes',
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: 'https://assets.mons.link/drops/lsb',
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    priceSol: 1,
+    discountPriceSol: 0.55,
+    discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
+    maxSupply: 333,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: 'box',
+    symbol: 'box',
+
+    // On-chain ids
+    boxMinterProgramId: '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep',
+    collectionMint: '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr',
+    receiptsMerkleTree: 'Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV',
+    deliveryLookupTable: 'F51Mj4JFGdVKJfdbYc4aT4de8Dbst7BmWr2P2Bwxa8Wz',
+  }),
+};
+
+export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return FUNCTIONS_DROPS[normalizedDropId];
+}
+
+export function requireFunctionsDrop(dropId: string): FunctionsDropConfig {
+  const found = getFunctionsDrop(dropId);
+  if (!found) {
+    throw new Error(`Unknown functions dropId: ${dropId}`);
+  }
+  return found;
+}
+
+export function listFunctionsDrops(): FunctionsDropConfig[] {
+  return Object.keys(FUNCTIONS_DROPS)
+    .sort((a, b) => a.localeCompare(b))
+    .map((dropId) => FUNCTIONS_DROPS[dropId]);
+}
+
+// Backward-compatible aliases: always point to the default drop.
+export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = requireFunctionsDrop(FUNCTIONS_DEFAULT_DROP_ID);
+
 /**
- * Canonical derived paths for the current drop.
+ * Canonical derived paths for the default drop.
  *
  * Keep all path building in one place to avoid duplicating URL strings.
  */

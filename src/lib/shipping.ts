@@ -4,20 +4,29 @@ import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
-const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
+const DEFAULT_DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
-export function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>): number {
-  return items.reduce((total, item) => total + (item.kind === 'box' ? DELIVERY_FIGURES_PER_BOX : 1), 0);
+function normalizeItemsPerBox(itemsPerBox?: number): number {
+  const parsed = Number(itemsPerBox);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_DELIVERY_FIGURES_PER_BOX;
+  return Math.floor(parsed);
+}
+
+export function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>, itemsPerBox?: number): number {
+  const figuresPerBox = normalizeItemsPerBox(itemsPerBox);
+  return items.reduce((total, item) => total + (item.kind === 'box' ? figuresPerBox : 1), 0);
 }
 
 export function calculateDeliveryLamports(
   items: Array<Pick<InventoryItem, 'kind'>>,
   countryCode?: string,
+  itemsPerBox?: number,
 ): number {
+  const figuresPerBox = normalizeItemsPerBox(itemsPerBox);
   const normalized = normalizeCountryCode(countryCode);
   if (normalized === 'US') return 0;
-  const figureCount = countDeliveryFigures(items);
+  const figureCount = countDeliveryFigures(items, figuresPerBox);
   if (figureCount <= 0) return 0;
-  const extraFigures = Math.max(0, figureCount - DELIVERY_FIGURES_PER_BOX);
+  const extraFigures = Math.max(0, figureCount - figuresPerBox);
   return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
 }

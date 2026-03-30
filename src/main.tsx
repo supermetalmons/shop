@@ -6,6 +6,7 @@ import App from './App';
 import FulfillmentApp from './FulfillmentApp';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { WalletContextProvider } from './wallet/WalletContext';
+import { getFrontendDropPathAliasForDefault } from './lib/dropConfig';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -16,6 +17,7 @@ const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fullfillment';
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
+const defaultDropPathAlias = getFrontendDropPathAliasForDefault();
 
 type RouteAlias = {
   targetPath: string;
@@ -24,7 +26,7 @@ type RouteAlias = {
 
 const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
-  '/little_swag_boxes': { targetPath: '/', replaceUrl: false },
+  [defaultDropPathAlias]: { targetPath: '/', replaceUrl: false },
 };
 
 const resolveCurrentPath = (): string => {
@@ -60,6 +62,18 @@ function RoutedApp() {
     document.body.classList.remove('drif-body');
   }, [path]);
 
+  return (
+    <WalletContextProvider currentPath={path}>
+      <RoutedContent path={path} />
+    </WalletContextProvider>
+  );
+}
+
+type RoutedContentProps = {
+  path: string;
+};
+
+function RoutedContent({ path }: RoutedContentProps) {
   const isDrifRoute = path === '/Poncho_Drifella';
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
@@ -78,7 +92,7 @@ function RoutedApp() {
 
   return (
     <>
-      <App />
+      <App currentPath={path} />
       {isWipRoute ? (
         <React.Suspense fallback={null}>
           <WipApp />
@@ -91,9 +105,7 @@ function RoutedApp() {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <WalletContextProvider>
-        <RoutedApp />
-      </WalletContextProvider>
+      <RoutedApp />
     </QueryClientProvider>
   </React.StrictMode>,
 );

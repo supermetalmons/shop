@@ -1,35 +1,22 @@
-const FIGURE_MEDIA_COUNT = 333;
+import type { FigureMediaConfig } from '../config/deployment';
 
-export const FIGURE_MEDIA_OVERRIDES: Record<number, number> = {
-  344: 1,
-  353: 90,
-  360: 3,
-  505: 163,
-  650: 285,
-  660: 13,
-  661: 206,
-  662: 82,
-  663: 175,
-  664: 19,
-  665: 92,
-  666: 86,
-  677: 1,
-  686: 90,
-  693: 3,
-  838: 163,
-  983: 285,
-  993: 49,
-  994: 206,
-  995: 21,
-  996: 175,
-  997: 19,
-  998: 92,
-  999: 86,
-};
+function normalizePositiveInteger(value: unknown): number | null {
+  const normalized = Math.floor(Number(value));
+  if (!Number.isFinite(normalized) || normalized <= 0) return null;
+  return normalized;
+}
 
-export function getMediaIdForFigureId(figureId: number): number | null {
-  if (!Number.isFinite(figureId) || figureId <= 0) return null;
-  const override = FIGURE_MEDIA_OVERRIDES[figureId];
-  if (Number.isFinite(override) && override > 0) return override;
-  return ((figureId - 1) % FIGURE_MEDIA_COUNT) + 1;
+export function getMediaIdForFigureId(figureId: number, figureMedia?: FigureMediaConfig): number | null {
+  const normalizedFigureId = normalizePositiveInteger(figureId);
+  if (!normalizedFigureId) return null;
+
+  const override = normalizePositiveInteger(figureMedia?.overrides?.[normalizedFigureId]);
+  if (override) return override;
+
+  if (figureMedia?.strategy === 'cyclic') {
+    const count = normalizePositiveInteger(figureMedia.count);
+    if (count) return ((normalizedFigureId - 1) % count) + 1;
+  }
+
+  return normalizedFigureId;
 }

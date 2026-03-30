@@ -2,20 +2,36 @@ import { FormEvent, useState } from 'react';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const ITEMS_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
-const FIGURE_LABEL = ITEMS_PER_BOX === 1 ? 'figure receipt' : 'figure receipts';
-const FIGURE_VERB = ITEMS_PER_BOX === 1 ? 'is' : 'are';
+
+type ClaimFormResult = {
+  itemsPerBox?: number;
+};
 
 interface ClaimFormProps {
-  onClaim: (payload: { code: string }) => Promise<void>;
+  onClaim: (payload: { code: string }) => Promise<ClaimFormResult | void>;
   mode?: 'card' | 'modal';
   showTitle?: boolean;
+  itemsPerBox?: number;
 }
 
-export function ClaimForm({ onClaim, mode = 'card', showTitle = true }: ClaimFormProps) {
+export function ClaimForm({ onClaim, mode = 'card', showTitle = true, itemsPerBox }: ClaimFormProps) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
+    ? Math.floor(Number(itemsPerBox))
+    : ITEMS_PER_BOX;
+
+  const buildSuccessMessage = (resolvedItemsPerBox: number) => {
+    const normalizedCount =
+      Number.isFinite(resolvedItemsPerBox) && Number(resolvedItemsPerBox) > 0
+        ? Math.floor(Number(resolvedItemsPerBox))
+        : figuresPerBox;
+    const figureLabel = normalizedCount === 1 ? 'figure receipt' : 'figure receipts';
+    const figureVerb = normalizedCount === 1 ? 'is' : 'are';
+    return `Claim submitted successfully! Your box receipt was transferred and your ${normalizedCount} ${figureLabel} ${figureVerb} being minted.`;
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -23,10 +39,8 @@ export function ClaimForm({ onClaim, mode = 'card', showTitle = true }: ClaimFor
     setError(null);
     setSuccess(null);
     try {
-      await onClaim({ code: code.trim() });
-      setSuccess(
-        `Claim submitted successfully! Your box receipt was transferred and your ${ITEMS_PER_BOX} ${FIGURE_LABEL} ${FIGURE_VERB} being minted.`,
-      );
+      const result = await onClaim({ code: code.trim() });
+      setSuccess(buildSuccessMessage(Number(result?.itemsPerBox)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

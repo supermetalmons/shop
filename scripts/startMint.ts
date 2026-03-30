@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
 import { clusterApiUrl, Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { NEW_DROP } from './newDrop.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -132,37 +131,78 @@ async function readDeploymentConfigObject(filePath: string): Promise<Record<stri
       }
     }
   } catch {
-    // Fall back to text parsing below.
+    // Allow the caller to handle parse failure.
   }
 
   deploymentConfigObjectCache.set(filePath, null);
   return undefined;
 }
 
-function readExistingTsObjectStringFieldByRegexFallback(filePath: string, field: string): string | undefined {
-  if (!existsSync(filePath)) return undefined;
-  try {
-    const content = readFileSync(filePath, 'utf8');
-    const re = new RegExp(`${field}\\s*:\\s*(?:'([^']*)'|"([^"]*)"|\\\`([^\\\`]*)\\\`)`, 'm');
-    const match = content.match(re);
-    const value = match?.[1] ?? match?.[2] ?? match?.[3];
-    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function readExistingTsObjectStringField(filePath: string, field: string): Promise<string | undefined> {
-  const cfg = await readDeploymentConfigObject(filePath);
-  if (cfg && typeof cfg[field] === 'string') {
-    const value = String(cfg[field]).trim();
-    return value || undefined;
-  }
-  return readExistingTsObjectStringFieldByRegexFallback(filePath, field);
-}
-
 function normalizeDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
+}
+
+function formatKnownDrops(knownDropIds: string[]): string {
+  return knownDropIds.length ? knownDropIds.join(', ') : '(none)';
+}
+
+function startMintUsage(): string {
+  return `Run:\n  npm run start-mint -- <dropId>\n`;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function resolveFrontendDropConfig(args: {
+  filePath: string;
+  requestedDropId: string;
+}): Promise<{
+  dropConfig: Record<string, unknown>;
+  knownDropIds: string[];
+}> {
+  if (!existsSync(args.filePath)) {
+    throw new Error(`Missing frontend deployment config: ${args.filePath}`);
+  }
+
+  let mod: Record<string, unknown>;
+  try {
+    mod = (await import(pathToFileURL(args.filePath).href)) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`Could not load frontend deployment config from ${args.filePath}: ${String(err)}`);
+  }
+
+  const dropsCandidate = mod.FRONTEND_DROPS;
+  if (isObjectRecord(dropsCandidate)) {
+    const dropsMap = dropsCandidate as Record<string, unknown>;
+    const knownDropIds = Object.keys(dropsMap).sort((a, b) => a.localeCompare(b));
+    const entry = dropsMap[args.requestedDropId];
+    if (!isObjectRecord(entry)) {
+      throw new Error(
+        `Drop ${args.requestedDropId} is not present in ${args.filePath}.\n` +
+          `Known deployed drops: ${formatKnownDrops(knownDropIds)}\n` +
+          `Run npm run deploy-all-onchain for this drop before start-mint.`,
+      );
+    }
+    return { dropConfig: entry, knownDropIds };
+  }
+
+  const legacyConfig = await readDeploymentConfigObject(args.filePath);
+  if (!legacyConfig) {
+    throw new Error(
+      `Could not parse frontend deployment config from ${args.filePath}.\n` +
+        `Run npm run deploy-all-onchain and retry.`,
+    );
+  }
+  const legacyDropId = normalizeDropId(typeof legacyConfig.dropId === 'string' ? legacyConfig.dropId : undefined);
+  if (legacyDropId && legacyDropId !== args.requestedDropId) {
+    throw new Error(
+      `Drop ${args.requestedDropId} does not match the deployed config in ${args.filePath}.\n` +
+        `Configured deployed drop: ${legacyDropId}\n` +
+        `Pass the deployed dropId explicitly, or rerun deploy-all-onchain first.`,
+    );
+  }
+  return { dropConfig: legacyConfig, knownDropIds: legacyDropId ? [legacyDropId] : [] };
 }
 
 async function promptYConfirmation(prompt: string): Promise<boolean> {
@@ -184,8 +224,18 @@ function boxMinterConfigPda(programId: PublicKey): PublicKey {
 
 async function main() {
   const extraArgs = process.argv.slice(2);
-  if (extraArgs.length) {
-    throw new Error(`This script accepts no CLI args.\nRun:\n  npm run start-mint\n`);
+  if (extraArgs.length !== 1) {
+    throw new Error(
+      `This script requires exactly one dropId argument. No default drop is selected implicitly.\n` +
+        `${startMintUsage()}`,
+    );
+  }
+  const requestedDropId = normalizeDropId(extraArgs[0]);
+  if (!requestedDropId) {
+    throw new Error(
+      `Missing dropId.\n` +
+        `${startMintUsage()}`,
+    );
   }
 
   const __filename = fileURLToPath(import.meta.url);
@@ -208,21 +258,18 @@ async function main() {
     );
   }
 
-  const clusterStr = (await readExistingTsObjectStringField(frontendCfgPath, 'solanaCluster')) as SolanaCluster | undefined;
-  const programIdStr = await readExistingTsObjectStringField(frontendCfgPath, 'boxMinterProgramId');
-  const deployedDropId = await readExistingTsObjectStringField(frontendCfgPath, 'dropId');
-  const configuredDropId = String(NEW_DROP?.onchain?.dropId || '').trim() || undefined;
-  const normalizedConfiguredDropId = normalizeDropId(configuredDropId);
-  const normalizedDeployedDropId = normalizeDropId(deployedDropId);
-  if (normalizedDeployedDropId && normalizedConfiguredDropId && normalizedDeployedDropId !== normalizedConfiguredDropId) {
-    console.warn(
-      `⚠️  Drop mismatch between deployment config and scripts/newDrop.ts.\n` +
-        `   deployment.ts dropId   : ${deployedDropId}\n` +
-        `   newDrop.ts dropId      : ${configuredDropId}\n` +
-        `   Continuing with deployed program/config from ${frontendCfgPath}.`,
-    );
-  }
-  const activeDropId = deployedDropId || configuredDropId || '(unknown)';
+  const { dropConfig, knownDropIds } = await resolveFrontendDropConfig({
+    filePath: frontendCfgPath,
+    requestedDropId,
+  });
+
+  const clusterStr = (typeof dropConfig.solanaCluster === 'string' ? dropConfig.solanaCluster : undefined) as
+    | SolanaCluster
+    | undefined;
+  const programIdStr =
+    typeof dropConfig.boxMinterProgramId === 'string' ? String(dropConfig.boxMinterProgramId).trim() : undefined;
+  const deployedDropId = typeof dropConfig.dropId === 'string' ? String(dropConfig.dropId).trim() : undefined;
+  const activeDropId = deployedDropId || requestedDropId || '(unknown)';
 
   if (!clusterStr || !['devnet', 'testnet', 'mainnet-beta'].includes(clusterStr)) {
     throw new Error(
@@ -249,6 +296,7 @@ async function main() {
   console.log('cluster:', clusterStr);
   console.log('rpc    :', rpcUrl);
   console.log('drop   :', activeDropId);
+  if (knownDropIds.length) console.log('known  :', formatKnownDrops(knownDropIds));
   console.log('program:', programId.toBase58());
   console.log('config :', configPda.toBase58());
   console.log('');

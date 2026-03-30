@@ -7,6 +7,7 @@ const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
   defaultEmail?: string;
+  itemsPerBox?: number;
   mode?: 'card' | 'modal';
   onCancel?: () => void;
   submitDisabled?: boolean;
@@ -18,6 +19,7 @@ interface DeliveryFormProps {
 export function DeliveryForm({
   onSubmit,
   defaultEmail,
+  itemsPerBox,
   mode = 'card',
   onCancel,
   submitDisabled,
@@ -37,6 +39,9 @@ export function DeliveryForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedCountryCode = countryCode ?? localCountryCode;
+  const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
+    ? Math.floor(Number(itemsPerBox))
+    : DELIVERY_FIGURES_PER_BOX;
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
@@ -45,8 +50,8 @@ export function DeliveryForm({
   const shippingNote =
     selectedCountryCode === 'US'
       ? 'Free US shipping'
-      : `International delivery: 0.19 SOL up to ${DELIVERY_FIGURES_PER_BOX} ${
-          DELIVERY_FIGURES_PER_BOX === 1 ? 'figure' : 'figures'
+      : `International delivery: 0.19 SOL up to ${figuresPerBox} ${
+          figuresPerBox === 1 ? 'figure' : 'figures'
         }. 0.04 SOL each additional figure.`;
 
   useEffect(() => {

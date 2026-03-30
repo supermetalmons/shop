@@ -342,17 +342,6 @@ function formatReceiptsTreeConfig(tree: PreparedReceiptsTreeConfig): string {
   return `maxDepth=${tree.maxDepth}, maxBufferSize=${tree.maxBufferSize}, canopyDepth=${tree.canopyDepth}`;
 }
 
-function parseOptionalPublicKey(value: string | undefined, label: string): PublicKey | undefined {
-  const trimmed = trimToUndefined(value);
-  if (!trimmed) return undefined;
-  try {
-    return new PublicKey(trimmed);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`Invalid ${label}: ${trimmed}\n${detail}`);
-  }
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -624,129 +613,6 @@ function prepareInitDropInputs(args: {
   };
 }
 
-function resolveDropIdForExistingConfig(args: {
-  configuredDropId: string;
-  frontendDropId: string | undefined;
-  functionsDropId: string | undefined;
-  frontendConfigPath: string;
-  functionsConfigPath: string;
-}): string {
-  const configuredDropId = requireNonEmptyString(args.configuredDropId, 'NEW_DROP.onchain.dropId');
-  const frontendDropId = trimToUndefined(args.frontendDropId);
-  const functionsDropId = trimToUndefined(args.functionsDropId);
-
-  const normalizedConfiguredDropId = normalizeDropId(configuredDropId);
-  const normalizedFrontendDropId = normalizeDropId(frontendDropId);
-  const normalizedFunctionsDropId = normalizeDropId(functionsDropId);
-
-  if (normalizedFrontendDropId && normalizedFunctionsDropId && normalizedFrontendDropId !== normalizedFunctionsDropId) {
-    throw new Error(
-      `Conflicting dropId values in deployment config files.\n` +
-        `- ${args.frontendConfigPath}: ${frontendDropId}\n` +
-        `- ${args.functionsConfigPath}: ${functionsDropId}\n` +
-        `Fix this mismatch before re-running deploy-all-onchain.`,
-    );
-  }
-
-  const persistedDropId = frontendDropId || functionsDropId;
-  const normalizedPersistedDropId = normalizeDropId(persistedDropId);
-  if (!normalizedPersistedDropId) {
-    console.warn(
-      `⚠️  Existing on-chain config detected, but no persisted dropId was found in deployment config files.\n` +
-        `   Using NEW_DROP.onchain.dropId: ${configuredDropId}`,
-    );
-    return configuredDropId;
-  }
-
-  if (normalizedPersistedDropId !== normalizedConfiguredDropId) {
-    throw new Error(
-      `Refusing to mutate existing on-chain config because dropId does not match scripts/newDrop.ts.\n` +
-        `- existing deployment dropId : ${persistedDropId}\n` +
-        `- NEW_DROP.onchain.dropId    : ${configuredDropId}\n` +
-        `\n` +
-        `Fix: set NEW_DROP.onchain.dropId to the existing drop before rerunning this script.`,
-    );
-  }
-
-  return persistedDropId!;
-}
-
-function normalizeDropBaseForComparison(base: string | undefined): string {
-  const normalized = normalizeDropBase(String(base || ''));
-  // Legacy configs may store `${base}/json/boxes/` directly in `uriBase`.
-  return normalized.replace(/\/json\/boxes$/i, '');
-}
-
-function assertMetadataBaseMatchesExistingConfig(args: {
-  configuredMetadataBase: string;
-  onchainMetadataBase: string;
-}) {
-  const configuredMetadataBase = trimToUndefined(args.configuredMetadataBase);
-  const onchainMetadataBase = trimToUndefined(args.onchainMetadataBase);
-  if (!configuredMetadataBase || !onchainMetadataBase) return;
-
-  const normalizedConfigured = normalizeDropBaseForComparison(configuredMetadataBase);
-  const normalizedOnchain = normalizeDropBaseForComparison(onchainMetadataBase);
-  if (normalizedConfigured !== normalizedOnchain) {
-    throw new Error(
-      `Refusing to mutate existing on-chain config because metadata base does not match scripts/newDrop.ts.\n` +
-        `- on-chain cfg.uriBase         : ${onchainMetadataBase}\n` +
-        `- NEW_DROP.onchain.metadataBase: ${configuredMetadataBase}\n` +
-        `\n` +
-        `Fix: point NEW_DROP.onchain.metadataBase to the existing drop before rerunning this script.`,
-    );
-  }
-}
-
-const deploymentConfigObjectCache = new Map<string, Record<string, unknown> | null>();
-
-async function readDeploymentConfigObject(filePath: string): Promise<Record<string, unknown> | undefined> {
-  if (!existsSync(filePath)) return undefined;
-
-  if (deploymentConfigObjectCache.has(filePath)) {
-    return deploymentConfigObjectCache.get(filePath) || undefined;
-  }
-
-  try {
-    const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
-    const candidates = ['FRONTEND_DEPLOYMENT', 'FUNCTIONS_DEPLOYMENT', 'DEPLOYMENT', 'default'];
-    for (const key of candidates) {
-      const candidate = mod[key];
-      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-        const value = candidate as Record<string, unknown>;
-        deploymentConfigObjectCache.set(filePath, value);
-        return value;
-      }
-    }
-  } catch {
-    // Fall back to text parsing below.
-  }
-
-  deploymentConfigObjectCache.set(filePath, null);
-  return undefined;
-}
-
-function readExistingTsObjectStringFieldByRegexFallback(filePath: string, field: string): string | undefined {
-  if (!existsSync(filePath)) return undefined;
-  try {
-    const content = readFileSync(filePath, 'utf8');
-    const re = new RegExp(`${field}\\s*:\\s*(?:'([^']*)'|"([^"]*)"|\\\`([^\\\`]*)\\\`)`, 'm');
-    const match = content.match(re);
-    const value = match?.[1] ?? match?.[2] ?? match?.[3];
-    return trimToUndefined(value);
-  } catch {
-    return undefined;
-  }
-}
-
-async function readExistingTsObjectStringField(filePath: string, field: string): Promise<string | undefined> {
-  const cfg = await readDeploymentConfigObject(filePath);
-  if (cfg && typeof cfg[field] === 'string') {
-    return trimToUndefined(cfg[field] as string);
-  }
-  return readExistingTsObjectStringFieldByRegexFallback(filePath, field);
-}
-
 function writeTextFileIfChanged(filePath: string, content: string) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const next = content.endsWith('\n') ? content : `${content}\n`;
@@ -834,49 +700,20 @@ function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, st
   writeTextFileIfChanged(args.filePath, JSON.stringify(payload, null, 2));
 }
 
-function syncDiscountMerkleJsonFromCsvIfMatchingOnchain(args: {
-  root: string;
-  dropId: string;
-  csvRelativePath: string | undefined;
-  onchainRoot: Buffer;
-}) {
-  const csvRelativePath = trimToUndefined(args.csvRelativePath);
-  if (!csvRelativePath) return;
+type FigureMediaConfigSerialized = {
+  strategy?: 'direct' | 'cyclic';
+  count?: number;
+  overrides?: Record<number, number>;
+};
 
-  const csvPath = path.join(args.root, csvRelativePath);
-  if (!existsSync(csvPath)) {
-    console.warn(`⚠️  Discount whitelist CSV not found (skipping merkle JSON sync): ${csvPath}`);
-    return;
-  }
-
-  try {
-    const discountAddresses = readDiscountList(csvPath);
-    const discountMerkle = buildDiscountMerkleData(discountAddresses);
-    if (!discountMerkle.root.equals(args.onchainRoot)) {
-      console.warn(
-        `⚠️  Discount CSV merkle root does not match on-chain config (skipping merkle JSON sync).\n` +
-          `   csv root    : ${discountMerkle.root.toString('hex')}\n` +
-          `   on-chain root: ${args.onchainRoot.toString('hex')}`,
-      );
-      return;
-    }
-
-    const discountMerkleJsonPath = path.join(args.root, 'src', 'drops', 'discountMerkles', `${args.dropId}.json`);
-    writeDiscountMerkleJson({
-      root: discountMerkle.root,
-      proofs: discountMerkle.proofs,
-      filePath: discountMerkleJsonPath,
-    });
-  } catch (err) {
-    console.warn('⚠️  Failed to sync discount merkle JSON from CSV:', err instanceof Error ? err.message : String(err));
-  }
-}
-
-function writeFrontendDeploymentConfig(args: {
-  root: string;
+type FrontendDropConfigSerialized = {
   solanaCluster: string;
   dropId: string;
+  collectionName: string;
   metadataBase: string;
+  secondaryMarketHref?: string;
+  figureMedia?: FigureMediaConfigSerialized;
+  forceSoldOut?: boolean;
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
@@ -888,9 +725,309 @@ function writeFrontendDeploymentConfig(args: {
   symbol: string;
   boxMinterProgramId: string;
   collectionMint: string;
+};
+
+type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
+  receiptsMerkleTree: string;
+  deliveryLookupTable: string;
+};
+
+function asTrimmedString(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function asFiniteNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function defaultSecondaryMarketHref(dropId: string): string | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return normalizedDropId ? `https://www.tensor.trade/trade/${normalizedDropId}` : undefined;
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  const normalized = Math.floor(Number(value));
+  if (!Number.isFinite(normalized) || normalized <= 0) return undefined;
+  return normalized;
+}
+
+function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigSerialized | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const strategy = obj.strategy === 'cyclic' ? 'cyclic' : obj.strategy === 'direct' ? 'direct' : undefined;
+  const count = normalizePositiveInteger(obj.count);
+  const overrideEntries = Object.entries((obj.overrides as Record<string, unknown>) || {}).flatMap(([figureIdRaw, mediaIdRaw]) => {
+    const figureId = normalizePositiveInteger(figureIdRaw);
+    const mediaId = normalizePositiveInteger(mediaIdRaw);
+    if (!figureId || !mediaId) return [];
+    return [[figureId, mediaId] as const];
+  });
+  const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
+  if (!strategy && !count && !overrides) return undefined;
+  return {
+    ...(strategy ? { strategy } : {}),
+    ...(count ? { count } : {}),
+    ...(overrides ? { overrides } : {}),
+  };
+}
+
+function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSerialized | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const dropId = normalizeDropId(asTrimmedString(obj.dropId));
+  if (!dropId) return undefined;
+  const metadataBase = asTrimmedString(obj.metadataBase) || asTrimmedString((obj.paths as any)?.base);
+  return {
+    solanaCluster: asTrimmedString(obj.solanaCluster),
+    dropId,
+    collectionName: asTrimmedString(obj.collectionName) || dropId,
+    metadataBase: normalizeDropBase(metadataBase),
+    secondaryMarketHref: asTrimmedString(obj.secondaryMarketHref) || undefined,
+    figureMedia: normalizeFigureMediaConfigForRegistry(obj.figureMedia),
+    forceSoldOut: obj.forceSoldOut === true ? true : undefined,
+    treasury: asTrimmedString(obj.treasury),
+    priceSol: asFiniteNumber(obj.priceSol),
+    discountPriceSol: asFiniteNumber(obj.discountPriceSol),
+    discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
+    maxSupply: Math.floor(asFiniteNumber(obj.maxSupply)),
+    itemsPerBox: Math.floor(asFiniteNumber(obj.itemsPerBox)),
+    maxPerTx: Math.floor(asFiniteNumber(obj.maxPerTx)),
+    namePrefix: asTrimmedString(obj.namePrefix),
+    symbol: asTrimmedString(obj.symbol),
+    boxMinterProgramId: asTrimmedString(obj.boxMinterProgramId),
+    collectionMint: asTrimmedString(obj.collectionMint),
+  };
+}
+
+function normalizeFunctionsDropForRegistry(raw: unknown): FunctionsDropConfigSerialized | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const frontendShape = normalizeFrontendDropForRegistry(raw);
+  if (!frontendShape) return undefined;
+  return {
+    ...frontendShape,
+    receiptsMerkleTree: asTrimmedString(obj.receiptsMerkleTree),
+    deliveryLookupTable: asTrimmedString(obj.deliveryLookupTable),
+  };
+}
+
+async function readFrontendDropRegistry(
+  filePath: string,
+): Promise<{ defaultDropId: string | undefined; drops: Record<string, FrontendDropConfigSerialized> }> {
+  const drops: Record<string, FrontendDropConfigSerialized> = {};
+  if (!existsSync(filePath)) return { defaultDropId: undefined, drops };
+  let mod: Record<string, unknown> = {};
+  try {
+    mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load existing frontend deployment config at ${filePath}: ${reason}`);
+  }
+
+  const dropsCandidate = mod.FRONTEND_DROPS;
+  if (dropsCandidate && typeof dropsCandidate === 'object' && !Array.isArray(dropsCandidate)) {
+    Object.values(dropsCandidate as Record<string, unknown>).forEach((value) => {
+      const normalized = normalizeFrontendDropForRegistry(value);
+      if (!normalized) return;
+      drops[normalized.dropId] = normalized;
+    });
+  }
+
+  if (!Object.keys(drops).length) {
+    const legacy = mod.FRONTEND_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
+    const normalized = normalizeFrontendDropForRegistry(legacy);
+    if (normalized) {
+      drops[normalized.dropId] = normalized;
+    }
+  }
+
+  const defaultDropIdRaw = asTrimmedString(mod.FRONTEND_DEFAULT_DROP_ID);
+  const defaultDropId = normalizeDropId(defaultDropIdRaw || Object.keys(drops)[0] || '');
+  return { defaultDropId: defaultDropId || undefined, drops };
+}
+
+async function readFunctionsDropRegistry(
+  filePath: string,
+): Promise<{ defaultDropId: string | undefined; drops: Record<string, FunctionsDropConfigSerialized> }> {
+  const drops: Record<string, FunctionsDropConfigSerialized> = {};
+  if (!existsSync(filePath)) return { defaultDropId: undefined, drops };
+  let mod: Record<string, unknown> = {};
+  try {
+    mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load existing functions deployment config at ${filePath}: ${reason}`);
+  }
+
+  const dropsCandidate = mod.FUNCTIONS_DROPS;
+  if (dropsCandidate && typeof dropsCandidate === 'object' && !Array.isArray(dropsCandidate)) {
+    Object.values(dropsCandidate as Record<string, unknown>).forEach((value) => {
+      const normalized = normalizeFunctionsDropForRegistry(value);
+      if (!normalized) return;
+      drops[normalized.dropId] = normalized;
+    });
+  }
+
+  if (!Object.keys(drops).length) {
+    const legacy = mod.FUNCTIONS_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
+    const normalized = normalizeFunctionsDropForRegistry(legacy);
+    if (normalized) {
+      drops[normalized.dropId] = normalized;
+    }
+  }
+
+  const defaultDropIdRaw = asTrimmedString(mod.FUNCTIONS_DEFAULT_DROP_ID);
+  const defaultDropId = normalizeDropId(defaultDropIdRaw || Object.keys(drops)[0] || '');
+  return { defaultDropId: defaultDropId || undefined, drops };
+}
+
+async function assertDropIdNotConfiguredInDeploymentFiles(args: {
+  dropId: string;
+  frontendConfigPath: string;
+  functionsConfigPath: string;
 }) {
-  const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
-  const content = `/**
+  const normalizedDropId = normalizeDropId(args.dropId);
+  if (!normalizedDropId) {
+    throw new Error('Missing NEW_DROP.onchain.dropId');
+  }
+  const [frontendRegistry, functionsRegistry] = await Promise.all([
+    readFrontendDropRegistry(args.frontendConfigPath),
+    readFunctionsDropRegistry(args.functionsConfigPath),
+  ]);
+  const frontendHas = Boolean(frontendRegistry.drops[normalizedDropId]);
+  const functionsHas = Boolean(functionsRegistry.drops[normalizedDropId]);
+  if (!frontendHas && !functionsHas) return;
+  const presentIn: string[] = [];
+  if (frontendHas) presentIn.push(path.relative(process.cwd(), args.frontendConfigPath));
+  if (functionsHas) presentIn.push(path.relative(process.cwd(), args.functionsConfigPath));
+  throw new Error(
+    `Drop ${normalizedDropId} already exists in deployment registry (${presentIn.join(', ')}).\n` +
+      `This script only supports fresh deployments and will not update an existing drop.\n` +
+      `Choose a new NEW_DROP.onchain.dropId in scripts/newDrop.ts.`,
+  );
+}
+
+function throwFreshDeployOnlyForExistingConfig(args: {
+  stage: 'preflight' | 'post-deploy';
+  dropId: string;
+  programId: string;
+  configPda: PublicKey;
+  configData: Buffer;
+  reuseProgramId: boolean;
+}) {
+  let existingConfigDetails: string;
+  try {
+    const cfg = decodeBoxMinterConfig(args.configData);
+    existingConfigDetails =
+      `- existing admin   : ${cfg.admin.toBase58()}\n` +
+      `- existing minted  : ${cfg.minted}/${cfg.maxSupply}\n` +
+      `- existing uriBase : ${cfg.uriBase}`;
+  } catch (err) {
+    existingConfigDetails =
+      `- existing bytes   : ${args.configData.length}\n` +
+      `- existing decode  : ${errorMessage(err)}`;
+  }
+  const guidance = args.reuseProgramId
+    ? `Set NEW_DROP.deploy.reuseProgramId=false to generate a fresh program id, then choose a new NEW_DROP.onchain.dropId.`
+    : `Choose a new NEW_DROP.onchain.dropId and rerun this script with a fresh program id.`;
+  throw new Error(
+    `Fresh deploy only: found an existing box minter config during ${args.stage}.\n` +
+      `- requested dropId : ${args.dropId}\n` +
+      `- program id       : ${args.programId}\n` +
+      `- config PDA       : ${args.configPda.toBase58()}\n` +
+      `${existingConfigDetails}\n` +
+      `\n` +
+      `This script no longer updates existing deployments.\n` +
+      `Fix: ${guidance}`,
+  );
+}
+
+function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, indent = '    '): string {
+  const lines = [`${indent}figureMedia: {`];
+  if (config.strategy) {
+    lines.push(`${indent}  strategy: ${tsStringLiteral(config.strategy)},`);
+  }
+  if (typeof config.count === 'number' && Number.isFinite(config.count) && config.count > 0) {
+    lines.push(`${indent}  count: ${Math.floor(config.count)},`);
+  }
+  const overrideEntries = Object.entries(config.overrides || {})
+    .map(([figureId, mediaId]) => [Math.floor(Number(figureId)), Math.floor(Number(mediaId))] as const)
+    .filter(([figureId, mediaId]) => Number.isFinite(figureId) && figureId > 0 && Number.isFinite(mediaId) && mediaId > 0)
+    .sort((a, b) => a[0] - b[0]);
+  if (overrideEntries.length) {
+    lines.push(`${indent}  overrides: {`);
+    overrideEntries.forEach(([figureId, mediaId]) => {
+      lines.push(`${indent}    ${figureId}: ${mediaId},`);
+    });
+    lines.push(`${indent}  },`);
+  }
+  lines.push(`${indent}},`);
+  return lines.join('\n');
+}
+
+function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
+  return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
+    solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
+    dropId: ${tsStringLiteral(drop.dropId)},
+    collectionName: ${tsStringLiteral(drop.collectionName)},
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: ${tsStringLiteral(drop.metadataBase)},
+${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},\n` : ''}${drop.forceSoldOut ? `    forceSoldOut: true,\n` : ''}${drop.figureMedia ? `${renderFigureMediaConfigLiteral(drop.figureMedia)}\n` : ''}
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: ${tsStringLiteral(drop.treasury)},
+    priceSol: ${Number(drop.priceSol)},
+    discountPriceSol: ${Number(drop.discountPriceSol)},
+    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
+    maxSupply: ${Math.floor(Number(drop.maxSupply))},
+    itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
+    maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
+    namePrefix: ${tsStringLiteral(drop.namePrefix)},
+    symbol: ${tsStringLiteral(drop.symbol)},
+
+    // On-chain ids
+    boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
+    collectionMint: ${tsStringLiteral(drop.collectionMint)},
+  }),`;
+}
+
+function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
+  return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
+    solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
+    dropId: ${tsStringLiteral(drop.dropId)},
+    collectionName: ${tsStringLiteral(drop.collectionName)},
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: ${tsStringLiteral(drop.metadataBase)},
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: ${tsStringLiteral(drop.treasury)},
+    priceSol: ${Number(drop.priceSol)},
+    discountPriceSol: ${Number(drop.discountPriceSol)},
+    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
+    maxSupply: ${Math.floor(Number(drop.maxSupply))},
+    itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
+    maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
+    namePrefix: ${tsStringLiteral(drop.namePrefix)},
+    symbol: ${tsStringLiteral(drop.symbol)},
+
+    // On-chain ids
+    boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
+    collectionMint: ${tsStringLiteral(drop.collectionMint)},
+    receiptsMerkleTree: ${tsStringLiteral(drop.receiptsMerkleTree)},
+    deliveryLookupTable: ${tsStringLiteral(drop.deliveryLookupTable)},
+  }),`;
+}
+
+function renderFrontendDeploymentRegistryFile(args: {
+  defaultDropId: string;
+  drops: Record<string, FrontendDropConfigSerialized>;
+}): string {
+  const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
+  const entries = dropIds.map((dropId) => renderFrontendDropEntry(args.drops[dropId])).join('\n');
+  return `/**
  * Frontend deployment constants (COMMITTED).
  *
  * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
@@ -901,14 +1038,27 @@ function writeFrontendDeploymentConfig(args: {
  * - \`VITE_HELIUS_API_KEY\` and \`VITE_FIREBASE_API_KEY\` may be provided via env to
  *   override the bundled frontend defaults in \`src/lib/helius.ts\` and \`src/lib/firebase.ts\`.
  */
+
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
-export type FrontendDeploymentConfig = {
+export type FigureMediaStrategy = 'direct' | 'cyclic';
+
+export type FigureMediaConfig = {
+  strategy?: FigureMediaStrategy;
+  count?: number;
+  overrides?: Record<number, number>;
+};
+
+export type FrontendDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
+  secondaryMarketHref?: string;
+  figureMedia?: FigureMediaConfig;
+  forceSoldOut?: boolean;
 
   // Drop config (kept in sync with on-chain config; useful for UI defaults)
   treasury: string;
@@ -929,6 +1079,11 @@ export type FrontendDeploymentConfig = {
   paths: DropPaths;
 };
 
+// Backward-compatible type alias.
+export type FrontendDeploymentConfig = FrontendDropConfig;
+
+export type FrontendDropsMap = Record<string, FrontendDropConfig>;
+
 export type DropPaths = {
   /** Normalized drop base (no trailing slash). */
   base: string;
@@ -940,8 +1095,43 @@ export type DropPaths = {
 };
 
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/your-drop\` or \`https://.../drops/your-drop/\`.
+  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
   return String(base || '').replace(/\\/+$/, '');
+}
+
+export function normalizeDropId(dropId: string): string {
+  return String(dropId || '').trim().toLowerCase();
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  const trimmed = String(value ?? '').trim();
+  return trimmed || undefined;
+}
+
+function defaultSecondaryMarketHref(dropId: string): string | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return normalizedDropId ? \`https://www.tensor.trade/trade/\${normalizedDropId}\` : undefined;
+}
+
+function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
+  if (!raw) return undefined;
+  const strategy = raw.strategy === 'cyclic' ? 'cyclic' : raw.strategy === 'direct' ? 'direct' : undefined;
+  const countRaw = Number(raw.count);
+  const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : undefined;
+  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([figureIdRaw, mediaIdRaw]) => {
+    const figureId = Math.floor(Number(figureIdRaw));
+    const mediaId = Math.floor(Number(mediaIdRaw));
+    if (!Number.isFinite(figureId) || figureId <= 0) return [];
+    if (!Number.isFinite(mediaId) || mediaId <= 0) return [];
+    return [[figureId, mediaId] as const];
+  });
+  const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
+  if (!strategy && !count && !overrides) return undefined;
+  return {
+    ...(strategy ? { strategy } : {}),
+    ...(count ? { count } : {}),
+    ...(overrides ? { overrides } : {}),
+  };
 }
 
 export function dropPathsFromBase(dropBase: string): DropPaths {
@@ -956,42 +1146,232 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
   };
 }
 
-const FRONTEND_METADATA_BASE = ${tsStringLiteral(args.metadataBase)};
+function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'> & { dropId: string }): FrontendDropConfig {
+  const normalizedDropId = normalizeDropId(config.dropId);
+  return {
+    ...config,
+    dropId: normalizedDropId,
+    metadataBase: normalizeDropBase(config.metadataBase),
+    secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
+    figureMedia: normalizeFigureMediaConfig(config.figureMedia),
+    ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
+    paths: dropPathsFromBase(config.metadataBase),
+  };
+}
 
-export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = {
-  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
-  dropId: ${tsStringLiteral(args.dropId)},
+export const FRONTEND_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
+
+export const FRONTEND_DROPS: FrontendDropsMap = {
+${entries}
+};
+
+export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return FRONTEND_DROPS[normalizedDropId];
+}
+
+export function requireFrontendDrop(dropId: string): FrontendDropConfig {
+  const found = getFrontendDrop(dropId);
+  if (!found) {
+    throw new Error(\`Unknown frontend dropId: \${dropId}\`);
+  }
+  return found;
+}
+
+export function listFrontendDrops(): FrontendDropConfig[] {
+  return Object.keys(FRONTEND_DROPS)
+    .sort((a, b) => a.localeCompare(b))
+    .map((dropId) => FRONTEND_DROPS[dropId]);
+}
+
+// Backward-compatible alias: always points to the default drop.
+export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = requireFrontendDrop(FRONTEND_DEFAULT_DROP_ID);
+`;
+}
+
+function renderFunctionsDeploymentRegistryFile(args: {
+  defaultDropId: string;
+  drops: Record<string, FunctionsDropConfigSerialized>;
+}): string {
+  const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
+  const entries = dropIds.map((dropId) => renderFunctionsDropEntry(args.drops[dropId])).join('\n');
+  return `/**
+ * Cloud Functions deployment constants (COMMITTED).
+ *
+ * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
+ * an on-chain deployment, so functions can run with minimal env usage.
+ *
+ * Secrets:
+ * - HELIUS_API_KEY (env/runtime config)
+ * - COSIGNER_SECRET (Firebase Functions secret / Google Secret Manager)
+ */
+
+export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+
+export type FunctionsDropConfig = {
+  solanaCluster: SolanaCluster;
+  dropId: string;
+  collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
-  metadataBase: FRONTEND_METADATA_BASE,
+  metadataBase: string;
 
-  // Drop config (kept in sync with on-chain config; useful for UI defaults)
-  treasury: ${tsStringLiteral(args.treasury)},
-  priceSol: ${Number(args.priceSol)},
-  discountPriceSol: ${Number(args.discountPriceSol)},
-  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
-  maxSupply: ${Number(args.maxSupply)},
-  itemsPerBox: ${Number(args.itemsPerBox)},
-  maxPerTx: ${Number(args.maxPerTx)},
-  namePrefix: ${tsStringLiteral(args.namePrefix)},
-  symbol: ${tsStringLiteral(args.symbol)},
+  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+  treasury: string;
+  priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
+  maxSupply: number;
+  itemsPerBox: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
 
   // On-chain ids
-  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
-  collectionMint: ${tsStringLiteral(args.collectionMint)},
-
-  // Canonical derived drop paths (avoid duplicating URL strings).
-  paths: dropPathsFromBase(FRONTEND_METADATA_BASE),
+  boxMinterProgramId: string;
+  collectionMint: string;
+  receiptsMerkleTree: string;
+  deliveryLookupTable: string;
 };
+
+// Backward-compatible type alias.
+export type FunctionsDeploymentConfig = FunctionsDropConfig;
+
+export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
+
+export type DropPaths = {
+  /** Normalized drop base (no trailing slash). */
+  base: string;
+  collectionJson: string;
+  boxesJsonBase: string;
+  figuresJsonBase: string;
+  receiptsBoxesJsonBase: string;
+  receiptsFiguresJsonBase: string;
+};
+
+export function normalizeDropBase(base: string): string {
+  // Allow callers to pass either \`https://.../drops/lsb\` or \`https://.../drops/lsb/\`.
+  return String(base || '').replace(/\\/+$/, '');
+}
+
+export function normalizeDropId(dropId: string): string {
+  return String(dropId || '').trim().toLowerCase();
+}
+
+export function dropPathsFromBase(dropBase: string): DropPaths {
+  const base = normalizeDropBase(dropBase);
+  return {
+    base,
+    collectionJson: \`\${base}/collection.json\`,
+    boxesJsonBase: \`\${base}/json/boxes/\`,
+    figuresJsonBase: \`\${base}/json/figures/\`,
+    receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
+    receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
+  };
+}
+
+function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
+  const normalizedDropId = normalizeDropId(config.dropId);
+  return {
+    ...config,
+    dropId: normalizedDropId,
+    metadataBase: normalizeDropBase(config.metadataBase),
+  };
+}
+
+export const FUNCTIONS_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
+
+export const FUNCTIONS_DROPS: FunctionsDropsMap = {
+${entries}
+};
+
+export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return FUNCTIONS_DROPS[normalizedDropId];
+}
+
+export function requireFunctionsDrop(dropId: string): FunctionsDropConfig {
+  const found = getFunctionsDrop(dropId);
+  if (!found) {
+    throw new Error(\`Unknown functions dropId: \${dropId}\`);
+  }
+  return found;
+}
+
+export function listFunctionsDrops(): FunctionsDropConfig[] {
+  return Object.keys(FUNCTIONS_DROPS)
+    .sort((a, b) => a.localeCompare(b))
+    .map((dropId) => FUNCTIONS_DROPS[dropId]);
+}
+
+// Backward-compatible aliases: always point to the default drop.
+export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = requireFunctionsDrop(FUNCTIONS_DEFAULT_DROP_ID);
+
+/**
+ * Canonical derived paths for the default drop.
+ *
+ * Keep all path building in one place to avoid duplicating URL strings.
+ */
+export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);
 `;
+}
+
+async function writeFrontendDeploymentConfig(args: {
+  root: string;
+  solanaCluster: string;
+  dropId: string;
+  collectionName: string;
+  metadataBase: string;
+  treasury: string;
+  priceSol: number;
+  discountPriceSol: number;
+  discountMerkleRoot: string;
+  maxSupply: number;
+  itemsPerBox: number;
+  maxPerTx: number;
+  namePrefix: string;
+  symbol: string;
+  boxMinterProgramId: string;
+  collectionMint: string;
+}) {
+  const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
+  const normalizedDropId = normalizeDropId(args.dropId);
+  if (!normalizedDropId) {
+    throw new Error('Missing dropId while writing src/config/deployment.ts');
+  }
+  const existing = await readFrontendDropRegistry(filePath);
+  if (existing.drops[normalizedDropId]) {
+    throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
+  }
+  const nextDrops = { ...existing.drops };
+  nextDrops[normalizedDropId] = {
+    solanaCluster: args.solanaCluster,
+    dropId: normalizedDropId,
+    collectionName: asTrimmedString(args.collectionName) || normalizedDropId,
+    metadataBase: normalizeDropBase(args.metadataBase),
+    treasury: args.treasury,
+    priceSol: Number(args.priceSol),
+    discountPriceSol: Number(args.discountPriceSol),
+    discountMerkleRoot: args.discountMerkleRoot,
+    maxSupply: Math.floor(Number(args.maxSupply)),
+    itemsPerBox: Math.floor(Number(args.itemsPerBox)),
+    maxPerTx: Math.floor(Number(args.maxPerTx)),
+    namePrefix: args.namePrefix,
+    symbol: args.symbol,
+    boxMinterProgramId: args.boxMinterProgramId,
+    collectionMint: args.collectionMint,
+  };
+  const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
+  const content = renderFrontendDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
   writeTextFileIfChanged(filePath, content);
   return filePath;
 }
 
-function writeFunctionsDeploymentConfig(args: {
+async function writeFunctionsDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
+  collectionName: string;
   metadataBase: string;
   treasury: string;
   priceSol: number;
@@ -1008,103 +1388,36 @@ function writeFunctionsDeploymentConfig(args: {
   deliveryLookupTable: string;
 }) {
   const filePath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
-  const content = `/**
- * Cloud Functions deployment constants (COMMITTED).
- *
- * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
- * an on-chain deployment, so functions can run with minimal env usage.
- *
- * Secrets:
- * - HELIUS_API_KEY (env/runtime config)
- * - COSIGNER_SECRET (Firebase Functions secret / Google Secret Manager)
- */
-
-export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-
-export type FunctionsDeploymentConfig = {
-  solanaCluster: SolanaCluster;
-  dropId: string;
-
-  // Drop metadata base (collection.json + json/* + images/*)
-  metadataBase: string;
-
-  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-  treasury: string;
-  priceSol: number;
-  discountPriceSol: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  symbol: string;
-
-  // On-chain ids
-  boxMinterProgramId: string;
-  collectionMint: string;
-  receiptsMerkleTree: string;
-  deliveryLookupTable: string;
-};
-
-export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = {
-  solanaCluster: ${tsStringLiteral(args.solanaCluster)},
-  dropId: ${tsStringLiteral(args.dropId)},
-
-  // Drop metadata base (collection.json + json/* + images/*)
-  metadataBase: ${tsStringLiteral(args.metadataBase)},
-
-  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-  treasury: ${tsStringLiteral(args.treasury)},
-  priceSol: ${Number(args.priceSol)},
-  discountPriceSol: ${Number(args.discountPriceSol)},
-  discountMerkleRoot: ${tsStringLiteral(args.discountMerkleRoot)},
-  maxSupply: ${Number(args.maxSupply)},
-  itemsPerBox: ${Number(args.itemsPerBox)},
-  maxPerTx: ${Number(args.maxPerTx)},
-  namePrefix: ${tsStringLiteral(args.namePrefix)},
-  symbol: ${tsStringLiteral(args.symbol)},
-
-  // On-chain ids
-  boxMinterProgramId: ${tsStringLiteral(args.boxMinterProgramId)},
-  collectionMint: ${tsStringLiteral(args.collectionMint)},
-  receiptsMerkleTree: ${tsStringLiteral(args.receiptsMerkleTree)},
-  deliveryLookupTable: ${tsStringLiteral(args.deliveryLookupTable)},
-};
-
-export type DropPaths = {
-  /** Normalized drop base (no trailing slash). */
-  base: string;
-  collectionJson: string;
-  boxesJsonBase: string;
-  figuresJsonBase: string;
-  receiptsBoxesJsonBase: string;
-  receiptsFiguresJsonBase: string;
-};
-
-export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either \`https://.../drops/your-drop\` or \`https://.../drops/your-drop/\`.
-  return String(base || '').replace(/\\/+$/, '');
-}
-
-export function dropPathsFromBase(dropBase: string): DropPaths {
-  const base = normalizeDropBase(dropBase);
-  return {
-    base,
-    collectionJson: \`\${base}/collection.json\`,
-    boxesJsonBase: \`\${base}/json/boxes/\`,
-    figuresJsonBase: \`\${base}/json/figures/\`,
-    receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
-    receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
+  const normalizedDropId = normalizeDropId(args.dropId);
+  if (!normalizedDropId) {
+    throw new Error('Missing dropId while writing functions/src/config/deployment.ts');
+  }
+  const existing = await readFunctionsDropRegistry(filePath);
+  if (existing.drops[normalizedDropId]) {
+    throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
+  }
+  const nextDrops = { ...existing.drops };
+  nextDrops[normalizedDropId] = {
+    solanaCluster: args.solanaCluster,
+    dropId: normalizedDropId,
+    collectionName: asTrimmedString(args.collectionName) || normalizedDropId,
+    metadataBase: normalizeDropBase(args.metadataBase),
+    treasury: args.treasury,
+    priceSol: Number(args.priceSol),
+    discountPriceSol: Number(args.discountPriceSol),
+    discountMerkleRoot: args.discountMerkleRoot,
+    maxSupply: Math.floor(Number(args.maxSupply)),
+    itemsPerBox: Math.floor(Number(args.itemsPerBox)),
+    maxPerTx: Math.floor(Number(args.maxPerTx)),
+    namePrefix: args.namePrefix,
+    symbol: args.symbol,
+    boxMinterProgramId: args.boxMinterProgramId,
+    collectionMint: args.collectionMint,
+    receiptsMerkleTree: args.receiptsMerkleTree,
+    deliveryLookupTable: args.deliveryLookupTable,
   };
-}
-
-/**
- * Canonical derived paths for the current drop.
- *
- * Keep all path building in one place to avoid duplicating URL strings.
- */
-export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);
-`;
+  const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
+  const content = renderFunctionsDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
   writeTextFileIfChanged(filePath, content);
   return filePath;
 }
@@ -1930,7 +2243,7 @@ async function createReceiptsMerkleTree(args: {
   return merkleTree.publicKey;
 }
 
-function generateFreshProgramKeypair(programKeypairPath: string): { programId: string; backupPath?: string } {
+function writeFreshProgramKeypair(programKeypairPath: string, kp: Keypair): { backupPath?: string } {
   mkdirSync(path.dirname(programKeypairPath), { recursive: true });
 
   let backupPath: string | undefined;
@@ -1947,10 +2260,9 @@ function generateFreshProgramKeypair(programKeypairPath: string): { programId: s
     }
   }
 
-  const kp = Keypair.generate();
   // solana-cli expects a JSON array of 64 u8 values.
   writeFileSync(programKeypairPath, JSON.stringify(Array.from(kp.secretKey)), { encoding: 'utf8', mode: 0o600 });
-  return { programId: kp.publicKey.toBase58(), backupPath };
+  return { backupPath };
 }
 
 function readProgramIdFromKeypair(programKeypairPath: string): string {
@@ -2034,6 +2346,11 @@ async function main() {
   const deployCfg = NEW_DROP.deploy;
   const dropCfg = NEW_DROP.onchain;
   const dropId = requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId');
+  await assertDropIdNotConfiguredInDeploymentFiles({
+    dropId,
+    frontendConfigPath: frontendDeploymentCfgPath,
+    functionsConfigPath: functionsDeploymentCfgPath,
+  });
   const dropMetadataBase = normalizeDropBase(requireNonEmptyString(dropCfg.metadataBase, 'NEW_DROP.onchain.metadataBase'));
   const collectionMetadata = prepareCollectionMetadata(dropCfg);
   const receiptsTreeConfig = prepareReceiptsTreeConfig(dropCfg);
@@ -2092,6 +2409,7 @@ async function main() {
 
   const reuseProgramId = deployCfg.reuseProgramId;
   let expectedProgramId: string | undefined;
+  let freshProgramKeypair: Keypair | null = null;
   if (reuseProgramId) {
     if (!existsSync(programKeypair)) {
       throw new Error(
@@ -2103,11 +2421,8 @@ async function main() {
     }
     console.log('Reusing existing program keypair:', programKeypair);
   } else {
-    const { programId, backupPath } = generateFreshProgramKeypair(programKeypair);
-    expectedProgramId = programId;
-    console.log('Generated fresh program id:', programId);
-    console.log('Program keypair:', programKeypair);
-    if (backupPath) console.log('Backed up previous program keypair to:', backupPath);
+    freshProgramKeypair = Keypair.generate();
+    expectedProgramId = freshProgramKeypair.publicKey.toBase58();
   }
 
   // Safety preflight: validate target drop/admin and required NEW_DROP init fields before any build/deploy side effects.
@@ -2115,50 +2430,33 @@ async function main() {
   const preflightProgramPk = new PublicKey(preflightProgramId);
   const preflightConfigPda = boxMinterConfigPda(preflightProgramPk);
   const preflightCfgInfo = await connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' });
-  let preparedInitDropInputs: PreparedInitDropInputs | null = null;
-
   if (preflightCfgInfo) {
-    const preflightCfg = decodeBoxMinterConfig(preflightCfgInfo.data);
-    assertReceiptsTreeCapacityForMaxSupply({
-      tree: receiptsTreeConfig,
-      maxSupply: preflightCfg.maxSupply,
-      maxSupplyLabel: 'on-chain cfg.maxSupply',
-      itemsPerBox: preflightCfg.itemsPerBox,
-      itemsPerBoxLabel: 'on-chain cfg.itemsPerBox',
+    throwFreshDeployOnlyForExistingConfig({
+      stage: 'preflight',
+      dropId,
+      programId: preflightProgramId,
+      configPda: preflightConfigPda,
+      configData: preflightCfgInfo.data,
+      reuseProgramId,
     });
-    if (!payer.publicKey.equals(preflightCfg.admin)) {
-      throw new Error(
-        `Config admin pubkey does not match the deployer key you entered.\n` +
-          `- deployer: ${payer.publicKey.toBase58()}\n` +
-          `- admin   : ${preflightCfg.admin.toBase58()}\n` +
-          `\n` +
-          `Fix: re-run with the admin keypair, or use a fresh program id (NEW_DROP.deploy.reuseProgramId=false).`,
-      );
-    }
-    resolveDropIdForExistingConfig({
-      configuredDropId: dropId,
-      frontendDropId: await readExistingTsObjectStringField(frontendDeploymentCfgPath, 'dropId'),
-      functionsDropId: await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'dropId'),
-      frontendConfigPath: frontendDeploymentCfgPath,
-      functionsConfigPath: functionsDeploymentCfgPath,
-    });
-    assertMetadataBaseMatchesExistingConfig({
-      configuredMetadataBase: dropMetadataBase,
-      onchainMetadataBase: preflightCfg.uriBase,
-    });
-  } else {
-    assertReceiptsTreeCapacityForMaxSupply({
-      tree: receiptsTreeConfig,
-      maxSupply: dropCfg.maxSupply,
-      maxSupplyLabel: 'NEW_DROP.onchain.maxSupply',
-      itemsPerBox: dropCfg.itemsPerBox,
-      itemsPerBoxLabel: 'NEW_DROP.onchain.itemsPerBox',
-    });
-    preparedInitDropInputs = prepareInitDropInputs({
-      root,
-      dropCfg,
-      dropMetadataBase,
-    });
+  }
+  assertReceiptsTreeCapacityForMaxSupply({
+    tree: receiptsTreeConfig,
+    maxSupply: dropCfg.maxSupply,
+    maxSupplyLabel: 'NEW_DROP.onchain.maxSupply',
+    itemsPerBox: dropCfg.itemsPerBox,
+    itemsPerBoxLabel: 'NEW_DROP.onchain.itemsPerBox',
+  });
+  const initDropInputs = prepareInitDropInputs({
+    root,
+    dropCfg,
+    dropMetadataBase,
+  });
+  if (freshProgramKeypair) {
+    const { backupPath } = writeFreshProgramKeypair(programKeypair, freshProgramKeypair);
+    console.log('Generated fresh program id:', expectedProgramId);
+    console.log('Program keypair:', programKeypair);
+    if (backupPath) console.log('Backed up previous program keypair to:', backupPath);
   }
 
   const hasSolanaCargo = canRunSolanaCargo();
@@ -2219,187 +2517,15 @@ async function main() {
 
   const existingCfg = await connection.getAccountInfo(configPda, { commitment: 'confirmed' });
   if (existingCfg) {
-    const cfg = decodeBoxMinterConfig(existingCfg.data);
-    console.log('\nConfig PDA already exists (skipping init):', configPda.toBase58());
-    console.log(
-      `Minted: ${cfg.minted}/${cfg.maxSupply} · price(lamports): ${cfg.priceLamports.toString()} · max/tx: ${cfg.maxPerTx}`,
-    );
-    // Require the deployer key to match the configured admin (custody vault + server cosigner).
-    if (!payer.publicKey.equals(cfg.admin)) {
-      throw new Error(
-        `Config admin pubkey does not match the deployer key you entered.\n` +
-          `- deployer: ${payer.publicKey.toBase58()}\n` +
-          `- admin   : ${cfg.admin.toBase58()}\n` +
-          `\n` +
-          `Fix: re-run with the admin keypair, or redeploy fresh without reusing this config PDA.`,
-      );
-    }
-    const activeDropId = resolveDropIdForExistingConfig({
-      configuredDropId: dropId,
-      frontendDropId: await readExistingTsObjectStringField(frontendDeploymentCfgPath, 'dropId'),
-      functionsDropId: await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'dropId'),
-      frontendConfigPath: frontendDeploymentCfgPath,
-      functionsConfigPath: functionsDeploymentCfgPath,
+    throwFreshDeployOnlyForExistingConfig({
+      stage: 'post-deploy',
+      dropId,
+      programId,
+      configPda,
+      configData: existingCfg.data,
+      reuseProgramId,
     });
-    assertMetadataBaseMatchesExistingConfig({
-      configuredMetadataBase: dropMetadataBase,
-      onchainMetadataBase: cfg.uriBase,
-    });
-    await assertMplCoreCollection(connection, cfg.coreCollection);
-
-    // Optional: update payment treasury if configured in NEW_DROP.
-    let paymentTreasury = cfg.treasury;
-    if (dropCfg.treasury) {
-      const desired = new PublicKey(dropCfg.treasury);
-      if (!desired.equals(cfg.treasury)) {
-        console.log('\nUpdating payment treasury…');
-        console.log('  from:', cfg.treasury.toBase58());
-        console.log('  to  :', desired.toBase58());
-        const setIx = buildSetTreasuryIx({ programId: programPk, admin: payer.publicKey, treasury: desired });
-        const tx = new Transaction().add(setIx);
-        tx.feePayer = payer.publicKey;
-        tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-        const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'set treasury', commitment: 'confirmed' });
-        console.log('✅ Payment treasury updated:', sig);
-        paymentTreasury = desired;
-      }
-    }
-
-    // Enforce/keep collection-level royalties in sync with the payment treasury.
-    // (If the collection was created by an older version of this script, this will try to add/update the plugin.)
-    await ensureMplCoreCollectionRoyalties({
-      connection,
-      payer,
-      collection: cfg.coreCollection,
-      treasury: paymentTreasury,
-      royaltiesBps: coreCollectionRoyaltiesBps,
-    });
-
-    const previousReceipts = await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'receiptsMerkleTree');
-    const previousLut = await readExistingTsObjectStringField(functionsDeploymentCfgPath, 'deliveryLookupTable');
-
-    console.log('');
-    let createdReceiptsTree: PublicKey | null = null;
-    let receiptsTreeCreateError: unknown = null;
-    try {
-      createdReceiptsTree = await createReceiptsMerkleTree({
-        connection,
-        payer,
-        tree: receiptsTreeConfig,
-      });
-      console.log(`RECEIPTS_MERKLE_TREE=${createdReceiptsTree.toBase58()}`);
-    } catch (err) {
-      receiptsTreeCreateError = err;
-      console.warn('⚠️  Failed to create receipts merkle tree:', errorMessage(err));
-    }
-
-    const fallbackReceiptsTree =
-      createdReceiptsTree ||
-      parseOptionalPublicKey(previousReceipts, `${path.relative(root, functionsDeploymentCfgPath)}#receiptsMerkleTree`);
-    const effectiveReceiptsTree = createdReceiptsTree || fallbackReceiptsTree;
-    if (!effectiveReceiptsTree) {
-      throw new Error(
-        `Failed to resolve receipts Merkle tree for this existing deployment.\n` +
-          `- attempted tree config : ${formatReceiptsTreeConfig(receiptsTreeConfig)}\n` +
-          `- create error          : ${receiptsTreeCreateError ? errorMessage(receiptsTreeCreateError) : '(none)'}\n` +
-          `- fallback from ${path.relative(root, functionsDeploymentCfgPath)}: receiptsMerkleTree is missing\n` +
-          `\n` +
-          `Fix: choose a valid NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts and rerun deploy-all-onchain.`,
-      );
-    }
-    if (!createdReceiptsTree && fallbackReceiptsTree) {
-      console.warn(
-        `⚠️  Reusing existing receipts tree from ${path.relative(root, functionsDeploymentCfgPath)}: ${fallbackReceiptsTree.toBase58()}\n` +
-          `   (new tree creation failed for config ${formatReceiptsTreeConfig(receiptsTreeConfig)}).`,
-      );
-    }
-
-    let deliveryLut: PublicKey | null = null;
-    try {
-      deliveryLut = await ensureDeliveryLookupTable({
-        connection,
-        payer,
-        programId: programPk,
-        configPda,
-        treasury: paymentTreasury,
-        coreCollection: cfg.coreCollection,
-        receiptsMerkleTree: effectiveReceiptsTree,
-      });
-      console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
-    } catch (err) {
-      console.warn('⚠️  Failed to create/reuse delivery ALT:', errorMessage(err));
-    }
-
-    const receiptsTreeStr = effectiveReceiptsTree.toBase58();
-    const deliveryLutStr = deliveryLut?.toBase58() || previousLut || '';
-
-    syncDiscountMerkleJsonFromCsvIfMatchingOnchain({
-      root,
-      dropId: activeDropId,
-      csvRelativePath: dropCfg.discountWhitelistCsvRelativePath,
-      onchainRoot: cfg.discountMerkleRoot,
-    });
-    const resolvedDropBase = normalizeDropBase(cfg.uriBase) || normalizeDropBase(dropMetadataBase);
-    if (!resolvedDropBase) {
-      throw new Error(
-        `Could not resolve metadata base for existing on-chain config.\n` +
-          `Set NEW_DROP.onchain.metadataBase in scripts/newDrop.ts, or ensure cfg.uriBase is set on-chain.`,
-      );
-    }
-
-    const frontendCfgPath = writeFrontendDeploymentConfig({
-      root,
-      solanaCluster: cluster,
-      dropId: activeDropId,
-      metadataBase: resolvedDropBase,
-      treasury: paymentTreasury.toBase58(),
-      priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
-      discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
-      discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
-      maxSupply: cfg.maxSupply,
-      itemsPerBox: cfg.itemsPerBox,
-      maxPerTx: cfg.maxPerTx,
-      namePrefix: cfg.namePrefix,
-      symbol: cfg.symbol,
-      boxMinterProgramId: programPk.toBase58(),
-      collectionMint: cfg.coreCollection.toBase58(),
-    });
-    const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
-      root,
-      solanaCluster: cluster,
-      dropId: activeDropId,
-      metadataBase: resolvedDropBase,
-      treasury: paymentTreasury.toBase58(),
-      priceSol: Number(cfg.priceLamports) / LAMPORTS_PER_SOL,
-      discountPriceSol: Number(cfg.discountPriceLamports) / LAMPORTS_PER_SOL,
-      discountMerkleRoot: cfg.discountMerkleRoot.toString('hex'),
-      maxSupply: cfg.maxSupply,
-      itemsPerBox: cfg.itemsPerBox,
-      maxPerTx: cfg.maxPerTx,
-      namePrefix: cfg.namePrefix,
-      symbol: cfg.symbol,
-      boxMinterProgramId: programPk.toBase58(),
-      collectionMint: cfg.coreCollection.toBase58(),
-      receiptsMerkleTree: receiptsTreeStr,
-      deliveryLookupTable: deliveryLutStr,
-    });
-
-    console.log('');
-    console.log('--- updated tracked config ---');
-    console.log(`- ${path.relative(root, frontendCfgPath)}`);
-    console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
-    console.log('');
-
-    return;
   }
-
-  const initDropInputs =
-    preparedInitDropInputs ||
-    prepareInitDropInputs({
-      root,
-      dropCfg,
-      dropMetadataBase,
-    });
   const requiredDropMetadataBase = initDropInputs.requiredDropMetadataBase;
   const discountMerkle = initDropInputs.discountMerkle;
   const discountMerkleJsonPath = path.join(root, 'src', 'drops', 'discountMerkles', `${dropId}.json`);
@@ -2589,10 +2715,11 @@ async function main() {
   // For fresh deployments, never reuse a previous drop's LUT: use the newly created LUT or leave empty.
   const deliveryLutStr = deliveryLut?.toBase58() || '';
 
-  const frontendCfgPath = writeFrontendDeploymentConfig({
+  const frontendCfgPath = await writeFrontendDeploymentConfig({
     root,
     solanaCluster: cluster,
     dropId,
+    collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
@@ -2606,10 +2733,11 @@ async function main() {
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
   });
-  const functionsCfgWrittenPath = writeFunctionsDeploymentConfig({
+  const functionsCfgWrittenPath = await writeFunctionsDeploymentConfig({
     root,
     solanaCluster: cluster,
     dropId,
+    collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),

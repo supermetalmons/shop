@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DEPLOYMENT, FUNCTIONS_PATHS } from './config/deployment.js';
+import { FUNCTIONS_DEPLOYMENT, FUNCTIONS_DROPS, type FunctionsDropConfig } from './config/deployment.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -94,7 +94,39 @@ function requireAuth(request: CallableReq<any>): string {
 
 const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const CONFIGURED_DROP_ID = normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId);
+const MIN_ITEMS_PER_BOX = 1;
+const MAX_ITEMS_PER_BOX = 5;
+// Hardcoded (no env / no deployment config) to avoid config sprawl.
+const RPC_TIMEOUT_MS = 8_000;
+// Issue-receipts tx retry/confirm tuning.
+// Hardcoded (no env) to keep deployments deterministic and avoid config sprawl.
+const TX_SEND_TIMEOUT_MS = 12_000;
+const TX_CONFIRM_TIMEOUT_MS = 25_000;
+const TX_CONFIRM_POLL_MS = 800;
+const TX_MAX_SEND_ATTEMPTS = 3;
+
+type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+
+type DropRuntime = {
+  dropId: string;
+  config: FunctionsDropConfig;
+  cluster: SolanaCluster;
+  heliusRpcBase: string;
+  metadataBase: string;
+  normalizedMetadataBase: string;
+  connectionRpcUrl: string;
+  boxMinterProgramId: PublicKey;
+  boxMinterConfigPda: PublicKey;
+  collectionMint: PublicKey;
+  collectionMintStr: string;
+  receiptsMerkleTree: PublicKey;
+  receiptsMerkleTreeStr: string;
+  deliveryLookupTable: PublicKey;
+  deliveryLookupTableStr: string;
+  itemsPerBox: number;
+  maxSupply: number;
+  maxDudeId: number;
+};
 
 function normalizeDropId(dropId: string): string {
   const value = String(dropId || '').trim().toLowerCase();
@@ -104,14 +136,136 @@ function normalizeDropId(dropId: string): string {
   return value;
 }
 
+function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
+  return cluster === 'mainnet-beta'
+    ? 'https://mainnet.helius-rpc.com'
+    : cluster === 'testnet'
+      ? 'https://testnet.helius-rpc.com'
+      : 'https://devnet.helius-rpc.com';
+}
+
+function requireConfiguredPubkey(label: string, value: string | undefined): PublicKey {
+  const v = (value || '').trim();
+  if (!v) return PublicKey.default;
+  try {
+    return new PublicKey(v);
+  } catch (err) {
+    throw new Error(`${label} is invalid in functions/src/config/deployment.ts: ${String(err)}`);
+  }
+}
+
+function normalizeMetadataBaseForMatching(metadataBase: string): string {
+  return String(metadataBase || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function metadataBaseMatchesAssetUri(normalizedMetadataBase: string, uri: string): boolean {
+  const normalizedUri = String(uri || '').trim().toLowerCase();
+  if (!normalizedMetadataBase || !normalizedUri) return false;
+  return normalizedUri === normalizedMetadataBase || normalizedUri.startsWith(`${normalizedMetadataBase}/`);
+}
+
+function assertUniqueFunctionsMetadataBases(runtimes: DropRuntime[]) {
+  const dropIdsByMetadataBase = new Map<string, string[]>();
+  runtimes.forEach((runtime) => {
+    if (!runtime.normalizedMetadataBase) return;
+    const existing = dropIdsByMetadataBase.get(runtime.normalizedMetadataBase) || [];
+    existing.push(runtime.dropId);
+    dropIdsByMetadataBase.set(runtime.normalizedMetadataBase, existing);
+  });
+  const duplicates = Array.from(dropIdsByMetadataBase.entries())
+    .filter(([, dropIds]) => dropIds.length > 1)
+    .map(([metadataBase, dropIds]) => `${metadataBase} => ${dropIds.join(', ')}`);
+  if (!duplicates.length) return;
+  throw new Error(
+    `Duplicate metadataBase configured in functions/src/config/deployment.ts.\n` +
+      duplicates.map((entry) => `- ${entry}`).join('\n') +
+      `\n` +
+      `Each drop must have a unique normalized metadataBase to keep asset validation unambiguous.`,
+  );
+}
+
+function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
+  const dropId = normalizeDropId(config.dropId);
+  const cluster = config.solanaCluster as SolanaCluster;
+  if (cluster !== 'devnet' && cluster !== 'testnet' && cluster !== 'mainnet-beta') {
+    throw new Error(`solanaCluster is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.solanaCluster}`);
+  }
+  const itemsPerBox = Number(config.itemsPerBox);
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new Error(
+      `itemsPerBox is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.itemsPerBox} (expected integer ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`,
+    );
+  }
+  const maxSupply = Number(config.maxSupply);
+  if (!Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff) {
+    throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.maxSupply}`);
+  }
+  const maxDudeId = maxSupply * itemsPerBox;
+  if (!Number.isFinite(maxDudeId) || maxDudeId < 1 || maxDudeId > 0xffff) {
+    throw new Error(
+      `Configured max figure id is invalid in functions/src/config/deployment.ts for drop ${dropId}: maxSupply=${maxSupply}, itemsPerBox=${itemsPerBox}`,
+    );
+  }
+  const boxMinterProgramId = requireConfiguredPubkey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId);
+  const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
+  const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', config.collectionMint);
+  const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree);
+  const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable);
+  const metadataBase = String(config.metadataBase || '').trim().replace(/\/+$/, '');
+  const normalizedMetadataBase = normalizeMetadataBaseForMatching(metadataBase);
+  const heliusRpcBase = heliusRpcBaseForCluster(cluster);
+  const apiKey = (process.env.HELIUS_API_KEY || '').trim();
+  const connectionRpcUrl = apiKey ? `${heliusRpcBase}/?api-key=${apiKey}` : '';
+  return {
+    dropId,
+    config,
+    cluster,
+    heliusRpcBase,
+    metadataBase,
+    normalizedMetadataBase,
+    connectionRpcUrl,
+    boxMinterProgramId,
+    boxMinterConfigPda,
+    collectionMint,
+    collectionMintStr: collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58(),
+    receiptsMerkleTree,
+    receiptsMerkleTreeStr: receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58(),
+    deliveryLookupTable,
+    deliveryLookupTableStr: deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58(),
+    itemsPerBox,
+    maxSupply,
+    maxDudeId,
+  };
+}
+
+const DROP_RUNTIMES: Record<string, DropRuntime> = {};
+Object.entries(FUNCTIONS_DROPS).forEach(([dropIdKey, dropConfig]) => {
+  const runtime = buildDropRuntime(dropConfig);
+  DROP_RUNTIMES[normalizeDropId(dropIdKey)] = runtime;
+});
+assertUniqueFunctionsMetadataBases(Object.values(DROP_RUNTIMES));
+if (!Object.keys(DROP_RUNTIMES).length) {
+  throw new Error('functions/src/config/deployment.ts has no configured drops');
+}
+const DEFAULT_DROP_RUNTIME =
+  DROP_RUNTIMES[normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId)] || DROP_RUNTIMES[Object.keys(DROP_RUNTIMES)[0]];
+const CONFIGURED_DROP_ID = DEFAULT_DROP_RUNTIME.dropId;
+
+function getDropRuntime(dropId: string): DropRuntime {
+  const normalizedDropId = normalizeDropId(dropId);
+  const runtime = DROP_RUNTIMES[normalizedDropId];
+  if (!runtime) {
+    throw new HttpsError('invalid-argument', `Unsupported dropId: ${normalizedDropId}`);
+  }
+  return runtime;
+}
+
 function requireDropId(rawDropId: unknown): string {
   if (typeof rawDropId !== 'string' || !rawDropId.trim()) {
     throw new HttpsError('invalid-argument', 'dropId is required');
   }
   const dropId = normalizeDropId(rawDropId);
-  if (dropId !== CONFIGURED_DROP_ID) {
-    throw new HttpsError('invalid-argument', `Unsupported dropId: ${dropId}`);
-  }
+  if (!DROP_RUNTIMES[dropId]) throw new HttpsError('invalid-argument', `Unsupported dropId: ${dropId}`);
   return dropId;
 }
 
@@ -224,50 +378,6 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
   return { uid, wallet };
 }
 
-const MIN_ITEMS_PER_BOX = 1;
-const MAX_ITEMS_PER_BOX = 5;
-const ITEMS_PER_BOX = (() => {
-  const value = Number(FUNCTIONS_DEPLOYMENT.itemsPerBox);
-  if (!Number.isInteger(value) || value < MIN_ITEMS_PER_BOX || value > MAX_ITEMS_PER_BOX) {
-    throw new Error(
-      `itemsPerBox is invalid in functions/src/config/deployment.ts: ${FUNCTIONS_DEPLOYMENT.itemsPerBox} (expected integer ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`,
-    );
-  }
-  return value;
-})();
-const MAX_SUPPLY = (() => {
-  const value = Number(FUNCTIONS_DEPLOYMENT.maxSupply);
-  if (!Number.isInteger(value) || value < 1 || value > 0xffff_ffff) {
-    throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts: ${FUNCTIONS_DEPLOYMENT.maxSupply}`);
-  }
-  return value;
-})();
-const MAX_DUDE_ID = (() => {
-  const value = MAX_SUPPLY * ITEMS_PER_BOX;
-  if (!Number.isFinite(value) || value < 1 || value > 0xffff) {
-    throw new Error(
-      `Configured max figure id is invalid in functions/src/config/deployment.ts: maxSupply=${MAX_SUPPLY}, itemsPerBox=${ITEMS_PER_BOX}`,
-    );
-  }
-  return value;
-})();
-// Hardcoded (no env / no deployment config) to avoid config sprawl.
-const RPC_TIMEOUT_MS = 8_000;
-// Issue-receipts tx retry/confirm tuning.
-// Hardcoded (no env) to keep deployments deterministic and avoid config sprawl.
-const TX_SEND_TIMEOUT_MS = 12_000;
-const TX_CONFIRM_TIMEOUT_MS = 25_000;
-const TX_CONFIRM_POLL_MS = 800;
-const TX_MAX_SEND_ATTEMPTS = 3;
-
-const cluster: 'devnet' | 'testnet' | 'mainnet-beta' = FUNCTIONS_DEPLOYMENT.solanaCluster;
-const HELIUS_RPC_BASE =
-  cluster === 'mainnet-beta'
-    ? 'https://mainnet.helius-rpc.com'
-    : cluster === 'testnet'
-      ? 'https://testnet.helius-rpc.com'
-      : 'https://devnet.helius-rpc.com';
-
 // MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 // Solana SPL Noop program (commonly used as Metaplex "log wrapper").
@@ -284,33 +394,8 @@ const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQ
 function heliusRpcUrl() {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
-  return `${HELIUS_RPC_BASE}/?api-key=${apiKey}`;
+  return `${DEFAULT_DROP_RUNTIME.heliusRpcBase}/?api-key=${apiKey}`;
 }
-
-const rpcUrl = heliusRpcUrl();
-
-function requireConfiguredPubkey(label: string, value: string | undefined): PublicKey {
-  const v = (value || '').trim();
-  if (!v) return PublicKey.default;
-  try {
-    return new PublicKey(v);
-  } catch (err) {
-    throw new Error(`${label} is invalid in functions/src/config/deployment.ts: ${String(err)}`);
-  }
-}
-
-// Required: MPL-Core collection address (uncompressed collection).
-const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', FUNCTIONS_DEPLOYMENT.collectionMint);
-const collectionMintStr = collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58();
-// Drop metadata base (collection.json + json/* + images/*)
-const metadataBase = FUNCTIONS_PATHS.base;
-
-// Bubblegum receipts tree (required to mint receipt cNFTs).
-const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', FUNCTIONS_DEPLOYMENT.receiptsMerkleTree);
-const receiptsMerkleTreeStr = receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58();
-
-const boxMinterProgramId = requireConfiguredPubkey('BOX_MINTER_PROGRAM_ID', FUNCTIONS_DEPLOYMENT.boxMinterProgramId);
-const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
 const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 // Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
@@ -327,20 +412,20 @@ const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
-const DELIVERY_FIGURES_PER_BOX = ITEMS_PER_BOX;
 const MAX_DELIVERY_ITEMS = 32;
-const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * DELIVERY_FIGURES_PER_BOX;
+const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
+  MIN_ITEMS_PER_BOX,
+  ...Object.values(DROP_RUNTIMES).map((runtime) => runtime.itemsPerBox),
+);
+const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * MAX_CONFIGURED_ITEMS_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
 const MAX_DELIVERY_LAMPORTS =
-  DELIVERY_BASE_LAMPORTS + Math.max(0, MAX_DELIVERY_FIGURES - DELIVERY_FIGURES_PER_BOX) * DELIVERY_EXTRA_LAMPORTS;
+  DELIVERY_BASE_LAMPORTS + Math.max(0, MAX_DELIVERY_FIGURES - MAX_CONFIGURED_ITEMS_PER_BOX) * DELIVERY_EXTRA_LAMPORTS;
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
-const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', FUNCTIONS_DEPLOYMENT.deliveryLookupTable);
-const deliveryLookupTableStr = deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58();
 const DELIVERY_LUT_CACHE_TTL_MS = 10 * 60 * 1000;
-let cachedDeliveryLut: AddressLookupTableAccount | null = null;
-let cachedDeliveryLutAtMs = 0;
+const cachedDeliveryLutByDrop = new Map<string, { lut: AddressLookupTableAccount; cachedAtMs: number }>();
 
 function assertConfiguredProgramId(key: PublicKey, label: string) {
   if (key.equals(PublicKey.default)) {
@@ -691,12 +776,15 @@ function onCallAuthed<TReq, TRes>(
   }, options);
 }
 
-function heliusRpcEndpoint() {
-  return heliusRpcUrl();
+function heliusRpcEndpoint(runtime: DropRuntime) {
+  const apiKey = (process.env.HELIUS_API_KEY || '').trim();
+  if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
+  return `${runtime.heliusRpcBase}/?api-key=${apiKey}`;
 }
 
-function connection() {
-  return new Connection(rpcUrl, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+function connection(runtime: DropRuntime) {
+  const endpoint = runtime.connectionRpcUrl || heliusRpcEndpoint(runtime);
+  return new Connection(endpoint, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 }
 
 function sleep(ms: number) {
@@ -866,21 +954,21 @@ function assertConfiguredPublicKey(key: PublicKey, label: string) {
 }
 
 const ONCHAIN_CONFIG_CHECK_TTL_MS = 5 * 60 * 1000;
-let lastOnchainConfigCheckMs = 0;
-let onchainConfigOk = false;
+const onchainConfigCheckByDrop = new Map<string, { lastCheckedMs: number; ok: boolean }>();
 
-async function ensureOnchainCoreConfig(force = false) {
+async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) {
   const now = Date.now();
-  if (!force && onchainConfigOk && now - lastOnchainConfigCheckMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return;
-  lastOnchainConfigCheckMs = now;
+  const cached = onchainConfigCheckByDrop.get(dropRuntime.dropId);
+  if (!force && cached?.ok && now - cached.lastCheckedMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return;
+  onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: false });
 
   ensureAuthorityKeys();
-  assertConfiguredProgramId(boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
+  assertConfiguredProgramId(dropRuntime.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+  assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
 
-  const pubkeys = [collectionMint, boxMinterConfigPda];
+  const pubkeys = [dropRuntime.collectionMint, dropRuntime.boxMinterConfigPda];
   const infos = await withTimeout(
-    connection().getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed' }),
+    connection(dropRuntime).getMultipleAccountsInfo(pubkeys, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getMultipleAccountsInfo',
   );
@@ -889,19 +977,19 @@ async function ensureOnchainCoreConfig(force = false) {
   for (let i = 0; i < pubkeys.length; i += 1) {
     if (infos[i]) continue;
     const key = pubkeys[i];
-    const label = key.equals(collectionMint) ? 'COLLECTION_MINT' : 'BOX_MINTER_CONFIG_PDA';
+    const label = key.equals(dropRuntime.collectionMint) ? 'COLLECTION_MINT' : 'BOX_MINTER_CONFIG_PDA';
     missing[label] = key.toBase58();
   }
 
   if (Object.keys(missing).length) {
-    onchainConfigOk = false;
     throw new HttpsError(
       'failed-precondition',
       'On-chain mint config is missing or mismatched. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
       {
         missing,
-        collection: collectionMint.toBase58(),
-        configPda: boxMinterConfigPda.toBase58(),
+        collection: dropRuntime.collectionMint.toBase58(),
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        dropId: dropRuntime.dropId,
       },
     );
   }
@@ -909,53 +997,52 @@ async function ensureOnchainCoreConfig(force = false) {
   const collectionInfo = infos[0];
   const configInfo = infos[1];
   if (collectionInfo && !collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
-    onchainConfigOk = false;
     throw new HttpsError(
       'failed-precondition',
       'COLLECTION_MINT is not an MPL Core collection account for this cluster.',
       {
-        collection: collectionMint.toBase58(),
+        collection: dropRuntime.collectionMint.toBase58(),
         expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
         actualOwner: collectionInfo.owner.toBase58(),
+        dropId: dropRuntime.dropId,
       },
     );
   }
 
   if (!configInfo?.data) {
-    onchainConfigOk = false;
     throw new HttpsError(
       'failed-precondition',
       'On-chain mint config is missing or unreadable. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
-      { configPda: boxMinterConfigPda.toBase58() },
+      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
     );
   }
   const decoded = decodeBoxMinterConfigData(Buffer.from(configInfo.data));
-  if (decoded.itemsPerBox !== ITEMS_PER_BOX) {
-    onchainConfigOk = false;
+  if (decoded.itemsPerBox !== dropRuntime.itemsPerBox) {
     throw new HttpsError(
       'failed-precondition',
       'functions/src/config/deployment.ts is out of sync with the on-chain itemsPerBox value.',
       {
-        configuredItemsPerBox: ITEMS_PER_BOX,
+        configuredItemsPerBox: dropRuntime.itemsPerBox,
         onchainItemsPerBox: decoded.itemsPerBox,
-        configPda: boxMinterConfigPda.toBase58(),
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        dropId: dropRuntime.dropId,
       },
     );
   }
-  if (decoded.maxSupply !== MAX_SUPPLY) {
-    onchainConfigOk = false;
+  if (decoded.maxSupply !== dropRuntime.maxSupply) {
     throw new HttpsError(
       'failed-precondition',
       'functions/src/config/deployment.ts is out of sync with the on-chain maxSupply value.',
       {
-        configuredMaxSupply: MAX_SUPPLY,
+        configuredMaxSupply: dropRuntime.maxSupply,
         onchainMaxSupply: decoded.maxSupply,
-        configPda: boxMinterConfigPda.toBase58(),
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        dropId: dropRuntime.dropId,
       },
     );
   }
 
-  onchainConfigOk = true;
+  onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true });
 }
 
 function parseSignature(sig: number[] | string) {
@@ -1019,8 +1106,8 @@ async function heliusJson(url: string, label: string, retries = 3, backoffMs = 4
   throw new HttpsError('unavailable', `${label}: request failed`);
 }
 
-async function heliusRpc<T>(method: string, params: any, label: string): Promise<T> {
-  const url = heliusRpcEndpoint();
+async function heliusRpc<T>(dropRuntime: DropRuntime, method: string, params: any, label: string): Promise<T> {
+  const url = heliusRpcEndpoint(dropRuntime);
   const res = await withTimeout(
     fetch(url, {
       method: 'POST',
@@ -1050,7 +1137,7 @@ async function heliusRpc<T>(method: string, params: any, label: string): Promise
   return json.result as T;
 }
 
-async function fetchAssetsOwned(owner: string) {
+async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
   // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
   // (assets returned by the API use objects like { group_key, group_value }).
   //
@@ -1067,18 +1154,19 @@ async function fetchAssetsOwned(owner: string) {
     },
   };
 
-  if (collectionMintStr) {
-    const grouping = ['collection', collectionMintStr] as const;
-    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping }, 'Helius assets error');
+  if (dropRuntime.collectionMintStr) {
+    const grouping = ['collection', dropRuntime.collectionMintStr] as const;
+    const grouped = await heliusRpc<any>(dropRuntime, 'searchAssets', { ...baseParams, grouping }, 'Helius assets error');
     const items = Array.isArray(grouped?.items) ? grouped.items : [];
     if (items.length) return items;
     logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
       owner,
-      collection: collectionMintStr,
+      collection: dropRuntime.collectionMintStr,
+      dropId: dropRuntime.dropId,
     });
   }
 
-  const result = await heliusRpc<any>('searchAssets', baseParams, 'Helius assets error');
+  const result = await heliusRpc<any>(dropRuntime, 'searchAssets', baseParams, 'Helius assets error');
   return Array.isArray(result?.items) ? result.items : [];
 }
 
@@ -1104,11 +1192,11 @@ function looksBurntOrClosedInHelius(asset: any): boolean {
   return false;
 }
 
-async function fetchAsset(assetId: string) {
+async function fetchAsset(assetId: string, dropRuntime: DropRuntime) {
   // Use DAS RPC to keep behavior consistent with `searchAssets` (inventory).
   let asset: any;
   try {
-    asset = await heliusRpc<any>('getAsset', { id: assetId }, 'Helius asset error');
+    asset = await heliusRpc<any>(dropRuntime, 'getAsset', { id: assetId }, 'Helius asset error');
   } catch (err) {
     const anyErr = err as any;
     const upstreamCode = anyErr?.details?.upstreamCode;
@@ -1118,7 +1206,7 @@ async function fetchAsset(assetId: string) {
     if (!looksLikeRpcMethodMismatch) throw err;
     // Fallback to legacy REST endpoint if RPC method signature isn't supported.
     const helius = process.env.HELIUS_API_KEY;
-    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+    const clusterParam = dropRuntime.cluster === 'mainnet-beta' ? '' : `&cluster=${dropRuntime.cluster}`;
     const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${helius}${clusterParam}`;
     const json = await heliusJson(url, 'Helius asset error');
     asset = Array.isArray(json) ? json[0] : (json as any)?.[0];
@@ -1133,10 +1221,10 @@ async function fetchAsset(assetId: string) {
   return asset;
 }
 
-async function fetchAssetProof(assetId: string) {
+async function fetchAssetProof(assetId: string, dropRuntime: DropRuntime) {
   let proof: any;
   try {
-    proof = await heliusRpc<any>('getAssetProof', { id: assetId }, 'Helius asset proof error');
+    proof = await heliusRpc<any>(dropRuntime, 'getAssetProof', { id: assetId }, 'Helius asset proof error');
   } catch (err) {
     const anyErr = err as any;
     const upstreamCode = anyErr?.details?.upstreamCode;
@@ -1146,7 +1234,7 @@ async function fetchAssetProof(assetId: string) {
     if (!looksLikeRpcMethodMismatch) throw err;
     // Fallback to REST endpoint if RPC method signature isn't supported.
     const helius = process.env.HELIUS_API_KEY;
-    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
+    const clusterParam = dropRuntime.cluster === 'mainnet-beta' ? '' : `&cluster=${dropRuntime.cluster}`;
     const url = `https://api.helius.xyz/v0/assets/${assetId}/proof?api-key=${helius}${clusterParam}`;
     proof = await heliusJson(url, 'Helius asset proof error');
   }
@@ -1231,26 +1319,26 @@ function getDudeIdFromAsset(asset: any): number | undefined {
   return undefined;
 }
 
-function isMonsAsset(asset: any): boolean {
+function isMonsAsset(asset: any, dropRuntime: DropRuntime): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
   // Primary: collection grouping match (if configured).
-  if (collectionMintStr) {
+  if (dropRuntime.collectionMintStr) {
     const groupingMatch = (asset?.grouping || []).some(
-      (g: any) => g?.group_key === 'collection' && g?.group_value === collectionMintStr,
+      (g: any) => g?.group_key === 'collection' && g?.group_value === dropRuntime.collectionMintStr,
     );
     if (groupingMatch) return true;
   }
 
   // Fallbacks: allow inventory to work during collection-indexing delays.
   const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
-  if (typeof uri === 'string' && uri && uri.startsWith(metadataBase)) return true;
+  if (metadataBaseMatchesAssetUri(dropRuntime.normalizedMetadataBase, uri)) return true;
 
   return false;
 }
 
-async function fetchAssetRetry(assetId: string) {
+async function fetchAssetRetry(assetId: string, dropRuntime: DropRuntime) {
   // DAS can be briefly inconsistent right after mint/transfer. Retry a few times so a newly minted
   // box that already shows in inventory can still be opened immediately.
   const startedAt = Date.now();
@@ -1259,7 +1347,7 @@ async function fetchAssetRetry(assetId: string) {
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts && Date.now() - startedAt < maxWaitMs; attempt++) {
     try {
-      return await fetchAsset(assetId);
+      return await fetchAsset(assetId, dropRuntime);
     } catch (err) {
       lastErr = err;
       const anyErr = err as any;
@@ -1554,13 +1642,13 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   };
 }
 
-function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
-  if (!Array.isArray(dudeIds) || dudeIds.length !== ITEMS_PER_BOX) {
-    throw new HttpsError('invalid-argument', `dudeIds must have length ${ITEMS_PER_BOX}`);
+function encodeFinalizeOpenBoxArgs(dudeIds: number[], dropRuntime: DropRuntime): Buffer {
+  if (!Array.isArray(dudeIds) || dudeIds.length !== dropRuntime.itemsPerBox) {
+    throw new HttpsError('invalid-argument', `dudeIds must have length ${dropRuntime.itemsPerBox}`);
   }
   const ids = dudeIds.map((n) => Number(n));
   ids.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+    if (!Number.isFinite(id) || id < 1 || id > dropRuntime.maxDudeId) {
       throw new HttpsError('invalid-argument', `Invalid dude id: ${id}`);
     }
   });
@@ -1570,7 +1658,7 @@ function encodeFinalizeOpenBoxArgs(dudeIds: number[]): Buffer {
   return Buffer.concat([IX_FINALIZE_OPEN_BOX, u32LE(ids.length), ...ids.map(u16LE)]);
 }
 
-function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }): Buffer {
+function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }, dropRuntime: DropRuntime): Buffer {
   const boxIds = Array.isArray(args.boxIds) ? args.boxIds.map((n) => Number(n)) : [];
   const dudeIds = Array.isArray(args.dudeIds) ? args.dudeIds.map((n) => Number(n)) : [];
 
@@ -1580,7 +1668,7 @@ function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }): 
     }
   });
   dudeIds.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+    if (!Number.isFinite(id) || id < 1 || id > dropRuntime.maxDudeId) {
       throw new HttpsError('invalid-argument', `Invalid dude id: ${id}`);
     }
   });
@@ -1632,6 +1720,9 @@ function decodePendingOpenBox(data: Buffer): {
 }
 
 async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
+  const dropRuntime = getDropRuntime(dropId);
+  const itemsPerBox = dropRuntime.itemsPerBox;
+  const maxDudeId = dropRuntime.maxDudeId;
   const ref = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
   const poolRef = db.doc(dropDudePoolPath(dropId));
 
@@ -1668,14 +1759,14 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
         if (existing.exists) {
           const dudeIdsRaw = (existing.data() as any)?.dudeIds;
           const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
-          if (dudeIds.length !== ITEMS_PER_BOX) {
-            throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${ITEMS_PER_BOX})`, {
+          if (dudeIds.length !== itemsPerBox) {
+            throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${itemsPerBox})`, {
               boxAssetId,
               dudeIds,
             });
           }
           dudeIds.forEach((id) => {
-            if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+            if (!Number.isFinite(id) || id < 1 || id > maxDudeId) {
               throw new HttpsError('failed-precondition', 'Invalid stored dude id', { boxAssetId, dudeId: id });
             }
           });
@@ -1691,22 +1782,22 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
         const usedDefaultPool = !Array.isArray(rawPool);
         const rawPoolLen = Array.isArray(rawPool) ? rawPool.length : null;
 
-        let pool: number[] = Array.isArray(rawPool) ? rawPool.map((n) => Math.floor(Number(n))) : Array.from({ length: MAX_DUDE_ID }, (_, i) => i + 1);
+        let pool: number[] = Array.isArray(rawPool) ? rawPool.map((n) => Math.floor(Number(n))) : Array.from({ length: maxDudeId }, (_, i) => i + 1);
         const poolInitLen = pool.length;
 
         // Sanitize + de-dupe (in case the pool doc was manually edited/corrupted).
-        const sanitized = pool.filter((id) => Number.isFinite(id) && id >= 1 && id <= MAX_DUDE_ID);
+        const sanitized = pool.filter((id) => Number.isFinite(id) && id >= 1 && id <= maxDudeId);
         const invalidRemoved = poolInitLen - sanitized.length;
         pool = Array.from(new Set(sanitized));
         const dupRemoved = sanitized.length - pool.length;
         const poolLenAfterSanitize = pool.length;
 
-        if (pool.length < ITEMS_PER_BOX) {
+        if (pool.length < itemsPerBox) {
           throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
             boxAssetId,
             poolDocExists: poolSnap.exists,
             poolLen: pool.length,
-            required: ITEMS_PER_BOX,
+            required: itemsPerBox,
           });
         }
 
@@ -1717,7 +1808,7 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
 
         // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
         // across boxes *within the same drop* by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
-        while (chosen.length < ITEMS_PER_BOX) {
+        while (chosen.length < itemsPerBox) {
           if (!pool.length) {
             throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
               boxAssetId,
@@ -1732,7 +1823,7 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
           pool.splice(pick, 1);
           candidatesChecked += 1;
 
-          if (!Number.isFinite(candidate) || candidate < 1 || candidate > MAX_DUDE_ID) continue;
+          if (!Number.isFinite(candidate) || candidate < 1 || candidate > maxDudeId) continue;
           if (chosenSet.has(candidate)) continue;
 
           const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
@@ -1939,6 +2030,7 @@ async function ensureIrlClaimCodeForBox(params: {
   dudeIds: number[];
 }): Promise<string> {
   const dropId = normalizeDropId(params.dropId);
+  const dropRuntime = getDropRuntime(dropId);
   const ownerWallet = normalizeWallet(params.ownerWallet);
   const deliveryId = Number(params.deliveryId);
   const boxAssetId = String(params.boxAssetId || '');
@@ -1952,11 +2044,11 @@ async function ensureIrlClaimCodeForBox(params: {
   if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) {
     throw new HttpsError('failed-precondition', 'Invalid box id for IRL claim code');
   }
-  if (dudeIds.length !== ITEMS_PER_BOX) {
-    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${ITEMS_PER_BOX})`);
+  if (dudeIds.length !== dropRuntime.itemsPerBox) {
+    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${dropRuntime.itemsPerBox})`);
   }
   dudeIds.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+    if (!Number.isFinite(id) || id < 1 || id > dropRuntime.maxDudeId) {
       throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
     }
   });
@@ -2037,21 +2129,26 @@ function buildTx(
   return tx;
 }
 
-async function getDeliveryLookupTable(conn: Connection): Promise<AddressLookupTableAccount[] | []> {
-  if (!deliveryLookupTableStr) return [];
+async function getDeliveryLookupTable(conn: Connection, dropRuntime: DropRuntime): Promise<AddressLookupTableAccount[] | []> {
+  if (!dropRuntime.deliveryLookupTableStr) return [];
   const now = Date.now();
-  if (cachedDeliveryLut && now - cachedDeliveryLutAtMs < DELIVERY_LUT_CACHE_TTL_MS) return [cachedDeliveryLut];
+  const cached = cachedDeliveryLutByDrop.get(dropRuntime.dropId);
+  if (cached && now - cached.cachedAtMs < DELIVERY_LUT_CACHE_TTL_MS) return [cached.lut];
 
-  const res = await withTimeout(conn.getAddressLookupTable(deliveryLookupTable), RPC_TIMEOUT_MS, 'getAddressLookupTable:delivery');
+  const res = await withTimeout(
+    conn.getAddressLookupTable(dropRuntime.deliveryLookupTable),
+    RPC_TIMEOUT_MS,
+    'getAddressLookupTable:delivery',
+  );
   const lut = res?.value || null;
   if (!lut) {
     throw new HttpsError('failed-precondition', 'DELIVERY_LOOKUP_TABLE not found on-chain', {
-      deliveryLookupTable: deliveryLookupTableStr,
-      cluster,
+      deliveryLookupTable: dropRuntime.deliveryLookupTableStr,
+      cluster: dropRuntime.cluster,
+      dropId: dropRuntime.dropId,
     });
   }
-  cachedDeliveryLut = lut;
-  cachedDeliveryLutAtMs = now;
+  cachedDeliveryLutByDrop.set(dropRuntime.dropId, { lut, cachedAtMs: now });
   return [lut];
 }
 
@@ -2066,16 +2163,16 @@ function normalizeCountryCode(country?: string) {
   return '';
 }
 
-function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>): number {
-  return items.reduce((total, item) => total + (item.kind === 'box' ? DELIVERY_FIGURES_PER_BOX : 1), 0);
+function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBox: number): number {
+  return items.reduce((total, item) => total + (item.kind === 'box' ? itemsPerBox : 1), 0);
 }
 
-function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, countryCode?: string): number {
+function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, countryCode: string | undefined, itemsPerBox: number): number {
   const normalized = normalizeCountryCode(countryCode);
   if (normalized === 'US') return 0;
-  const figureCount = countDeliveryFigures(items);
+  const figureCount = countDeliveryFigures(items, itemsPerBox);
   if (figureCount <= 0) return 0;
-  const extraFigures = Math.max(0, figureCount - DELIVERY_FIGURES_PER_BOX);
+  const extraFigures = Math.max(0, figureCount - itemsPerBox);
   return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
 }
 
@@ -2669,11 +2766,12 @@ export const revealDudes = onCallLogged(
   const schema = z.object({ owner: z.string(), boxAssetId: z.string(), dropId: z.string().min(1).max(64) });
   const { owner, boxAssetId, dropId: requestDropId } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
+  const dropRuntime = getDropRuntime(dropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
 
-  await ensureOnchainCoreConfig();
+  await ensureOnchainCoreConfig(dropRuntime);
 
   let boxAssetPk: PublicKey;
   try {
@@ -2682,11 +2780,11 @@ export const revealDudes = onCallLogged(
     throw new HttpsError('invalid-argument', 'Invalid boxAssetId');
   }
 
-  const conn = connection();
+  const conn = connection(dropRuntime);
 
   // Load on-chain config and enforce server cosigner matches on-chain admin.
   const cfgInfo = await withTimeout(
-    conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getAccountInfo:boxMinterConfig:reveal',
   );
@@ -2694,7 +2792,7 @@ export const revealDudes = onCallLogged(
     throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
-      { configPda: boxMinterConfigPda.toBase58() },
+      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId },
     );
   }
   const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
@@ -2708,16 +2806,17 @@ export const revealDudes = onCallLogged(
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
   }
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
-  if (!collectionMint.equals(cfgCoreCollection)) {
+  assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
+  if (!dropRuntime.collectionMint.equals(cfgCoreCollection)) {
     throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
-      configured: collectionMint.toBase58(),
+      configured: dropRuntime.collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
+      dropId,
     });
   }
 
   // Read pending open record from chain.
-  const programId = boxMinterProgramId;
+  const programId = dropRuntime.boxMinterProgramId;
   const pendingPda = PublicKey.findProgramAddressSync([Buffer.from('open'), boxAssetPk.toBuffer()], programId)[0];
   const pendingInfo = await withTimeout(
     conn.getAccountInfo(pendingPda, { commitment: 'confirmed' }),
@@ -2740,15 +2839,16 @@ export const revealDudes = onCallLogged(
       pending: pendingPda.toBase58(),
     });
   }
-  if (pending.dudeAssets.length !== ITEMS_PER_BOX) {
+  if (pending.dudeAssets.length !== dropRuntime.itemsPerBox) {
     throw new HttpsError(
       'failed-precondition',
-      `Pending open has invalid figure placeholder count (expected ${ITEMS_PER_BOX})`,
+      `Pending open has invalid figure placeholder count (expected ${dropRuntime.itemsPerBox})`,
       {
         pending: pendingPda.toBase58(),
         boxAssetId,
-        expected: ITEMS_PER_BOX,
+        expected: dropRuntime.itemsPerBox,
         actual: pending.dudeAssets.length,
+        dropId,
       },
     );
   }
@@ -2759,7 +2859,7 @@ export const revealDudes = onCallLogged(
   const finalizeIx = new TransactionInstruction({
     programId,
     keys: [
-      { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+      { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
       { pubkey: signer.publicKey, isSigner: true, isWritable: true },
       { pubkey: boxAssetPk, isSigner: false, isWritable: true },
       { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
@@ -2770,7 +2870,7 @@ export const revealDudes = onCallLogged(
       { pubkey: ownerPk, isSigner: false, isWritable: false },
       ...pending.dudeAssets.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
-    data: encodeFinalizeOpenBoxArgs(dudeIds),
+    data: encodeFinalizeOpenBoxArgs(dudeIds, dropRuntime),
   });
 
   const instructions: TransactionInstruction[] = [
@@ -2800,10 +2900,11 @@ export const prepareDeliveryTx = onCallLogged(
   });
   const { owner, itemIds, addressId, dropId: requestDropId } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
+  const dropRuntime = getDropRuntime(dropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
-  await ensureOnchainCoreConfig();
+  await ensureOnchainCoreConfig(dropRuntime);
 
   const uniqueItemIds = Array.from(new Set(itemIds));
   if (uniqueItemIds.length !== itemIds.length) {
@@ -2835,13 +2936,13 @@ export const prepareDeliveryTx = onCallLogged(
     }
     assetPks.push(pk);
 
-    const asset = await fetchAssetRetry(assetId);
+    const asset = await fetchAssetRetry(assetId, dropRuntime);
     const kind = getAssetKind(asset);
     if (!kind) throw new HttpsError('failed-precondition', 'Unsupported asset type');
     if (kind === 'certificate') {
       throw new HttpsError('failed-precondition', 'Certificates cannot be delivered');
     }
-    if (!isMonsAsset(asset)) {
+    if (!isMonsAsset(asset, dropRuntime)) {
       throw new HttpsError('failed-precondition', 'Item is not part of the Mons collection');
     }
     const assetOwner = asset?.ownership?.owner;
@@ -2863,7 +2964,7 @@ export const prepareDeliveryTx = onCallLogged(
     } else {
       const dudeId = getDudeIdFromAsset(asset);
       const refId = Number(dudeId);
-      if (!Number.isFinite(refId) || refId <= 0 || refId > MAX_DUDE_ID) {
+      if (!Number.isFinite(refId) || refId <= 0 || refId > dropRuntime.maxDudeId) {
         throw new HttpsError('failed-precondition', 'Dude id missing from metadata');
       }
       orderItems.push({
@@ -2874,11 +2975,12 @@ export const prepareDeliveryTx = onCallLogged(
     }
   }
 
-  const deliveryLamports = calculateDeliveryLamports(orderItems, addressCountry);
+  const deliveryLamports = calculateDeliveryLamports(orderItems, addressCountry, dropRuntime.itemsPerBox);
+  const conn = connection(dropRuntime);
 
   // Ensure COSIGNER_SECRET matches on-chain admin, and COLLECTION_MINT matches configured core collection.
   const cfgInfo = await withTimeout(
-    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getAccountInfo:boxMinterConfig',
   );
@@ -2886,7 +2988,7 @@ export const prepareDeliveryTx = onCallLogged(
     throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
-      { configPda: boxMinterConfigPda.toBase58() },
+      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId },
     );
   }
   const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
@@ -2901,18 +3003,18 @@ export const prepareDeliveryTx = onCallLogged(
       { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
     );
   }
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
-  if (!collectionMint.equals(cfgCoreCollection)) {
+  assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
+  if (!dropRuntime.collectionMint.equals(cfgCoreCollection)) {
     throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
-      configured: collectionMint.toBase58(),
+      configured: dropRuntime.collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
+      dropId,
     });
   }
 
-  const programId = boxMinterProgramId;
+  const programId = dropRuntime.boxMinterProgramId;
   const ownerPk = new PublicKey(ownerWallet);
-  const conn = connection();
-  const addressLookupTables = await getDeliveryLookupTable(conn);
+  const addressLookupTables = await getDeliveryLookupTable(conn, dropRuntime);
 
   // Allocate a unique, compact delivery id and its on-chain PDA.
   // IMPORTANT: we atomically reserve the Firestore doc via `create()` to avoid TOCTOU collisions under concurrency.
@@ -2934,7 +3036,7 @@ export const prepareDeliveryTx = onCallLogged(
     const deliverIx = new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+        { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
         { pubkey: signer.publicKey, isSigner: true, isWritable: false },
         { pubkey: ownerPk, isSigner: true, isWritable: true },
         { pubkey: cfgTreasury, isSigner: false, isWritable: true },
@@ -2963,7 +3065,7 @@ export const prepareDeliveryTx = onCallLogged(
         const candidateIx = new TransactionInstruction({
           programId,
           keys: [
-            { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+            { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
             { pubkey: signer.publicKey, isSigner: true, isWritable: false },
             { pubkey: ownerPk, isSigner: true, isWritable: true },
             { pubkey: cfgTreasury, isSigner: false, isWritable: true },
@@ -3013,7 +3115,7 @@ export const prepareDeliveryTx = onCallLogged(
           items: orderItems,
           deliveryId: candidate,
           deliveryPda: deliveryPda.toBase58(),
-          ...(deliveryLookupTableStr ? { lookupTable: deliveryLookupTableStr } : {}),
+          ...(dropRuntime.deliveryLookupTableStr ? { lookupTable: dropRuntime.deliveryLookupTableStr } : {}),
           deliveryLamports,
           createdAt: FieldValue.serverTimestamp(),
         });
@@ -3061,14 +3163,16 @@ export const issueReceipts = onCallLogged(
   });
   const { owner, deliveryId, signature, dropId: requestDropId } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
+  const dropRuntime = getDropRuntime(dropId);
   const ownerWallet = normalizeWallet(owner);
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
-  await ensureOnchainCoreConfig();
-  if (!receiptsMerkleTreeStr) {
+  await ensureOnchainCoreConfig(dropRuntime);
+  if (!dropRuntime.receiptsMerkleTreeStr) {
     throw new HttpsError(
       'failed-precondition',
       'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
+      { dropId },
     );
   }
 
@@ -3082,10 +3186,11 @@ export const issueReceipts = onCallLogged(
     throw new HttpsError('permission-denied', 'Order belongs to a different wallet');
   }
 
+  const conn = connection(dropRuntime);
+
   // Fast-path idempotency (already finalized).
   if (order.status === 'ready_to_ship') {
-    const conn = connection();
-    const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
+    const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
     let closeDeliveryTx: string | null = order.closeDeliveryTx || null;
     if (!closeDeliveryTx) {
       // Best-effort late cleanup: if the delivery PDA still exists, close it now.
@@ -3097,7 +3202,7 @@ export const issueReceipts = onCallLogged(
       if (deliveryInfo) {
         try {
           const cfgInfo = await withTimeout(
-            conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+            conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
             RPC_TIMEOUT_MS,
             'getAccountInfo:boxMinterConfig:lateClose',
           );
@@ -3112,9 +3217,9 @@ export const issueReceipts = onCallLogged(
           }
 
           const closeIx = new TransactionInstruction({
-            programId: boxMinterProgramId,
+            programId: dropRuntime.boxMinterProgramId,
             keys: [
-              { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+              { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
               { pubkey: signer.publicKey, isSigner: true, isWritable: true },
               { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
               { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -3153,7 +3258,6 @@ export const issueReceipts = onCallLogged(
     };
   }
 
-  const conn = connection();
   const tx = await withTimeout(
     conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
     RPC_TIMEOUT_MS,
@@ -3172,7 +3276,7 @@ export const issueReceipts = onCallLogged(
   const keys = resolveInstructionAccounts(tx);
   const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
     const program = keys[ix.programIdIndex];
-    if (!program || !program.equals(boxMinterProgramId)) return false;
+    if (!program || !program.equals(dropRuntime.boxMinterProgramId)) return false;
     const dataField = (ix as any).data;
     const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
     return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
@@ -3201,7 +3305,7 @@ export const issueReceipts = onCallLogged(
     throw new HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
   }
 
-  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(boxMinterProgramId, deliveryId);
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
   const deliveryPdaFromIx = ixAccounts[8];
   if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
     throw new HttpsError('failed-precondition', 'Delivery PDA mismatch', {
@@ -3233,7 +3337,7 @@ export const issueReceipts = onCallLogged(
 
   // Ensure the cosigner key matches the on-chain admin (custody vault).
   const cfgInfo = await withTimeout(
-    conn.getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getAccountInfo:boxMinterConfig',
   );
@@ -3298,7 +3402,7 @@ export const issueReceipts = onCallLogged(
         refId,
       });
     }
-    if (kind === 'dude' && refId > MAX_DUDE_ID) {
+    if (kind === 'dude' && refId > dropRuntime.maxDudeId) {
       throw new HttpsError('failed-precondition', 'Invalid dude id for receipt minting', { assetId, refId });
     }
     pending.push({ assetId, assetPk: pk, kind, refId });
@@ -3326,14 +3430,14 @@ export const issueReceipts = onCallLogged(
       );
       const boxIds = batch.filter((it) => it.kind === 'box').map((it) => Math.floor(it.refId));
       const dudeIds = batch.filter((it) => it.kind === 'dude').map((it) => Math.floor(it.refId));
-      const treeConfig = deriveTreeConfigPda(receiptsMerkleTree);
+      const treeConfig = deriveTreeConfigPda(dropRuntime.receiptsMerkleTree);
       const mintReceiptsIx = new TransactionInstruction({
-        programId: boxMinterProgramId,
+        programId: dropRuntime.boxMinterProgramId,
         keys: [
-          { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false }, // config
+          { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false }, // config
           { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
           { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
-          { pubkey: receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
+          { pubkey: dropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
           { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
           { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
           { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
@@ -3343,7 +3447,7 @@ export const issueReceipts = onCallLogged(
           { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
         ],
-        data: encodeMintReceiptsArgs({ boxIds, dudeIds }),
+        data: encodeMintReceiptsArgs({ boxIds, dudeIds }, dropRuntime),
       });
       const instructions: TransactionInstruction[] = [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -3533,9 +3637,9 @@ export const issueReceipts = onCallLogged(
   );
   if (deliveryInfo) {
     const closeIx = new TransactionInstruction({
-      programId: boxMinterProgramId,
+      programId: dropRuntime.boxMinterProgramId,
       keys: [
-        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false },
+        { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
         { pubkey: signer.publicKey, isSigner: true, isWritable: true },
         { pubkey: expectedDeliveryPda, isSigner: false, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -3573,8 +3677,6 @@ export const prepareIrlClaimTx = onCallLogged(
   if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
   const ownerPk = new PublicKey(ownerWallet);
 
-  await ensureOnchainCoreConfig();
-
   const normalizedCode = normalizeIrlClaimCode(code);
   if (!normalizedCode || normalizedCode.length !== IRL_CLAIM_CODE_DIGITS) {
     throw new HttpsError('invalid-argument', `Invalid claim code (must be ${IRL_CLAIM_CODE_DIGITS} digits)`);
@@ -3595,6 +3697,8 @@ export const prepareIrlClaimTx = onCallLogged(
       configuredDropId: CONFIGURED_DROP_ID,
     });
   }
+  const claimDropRuntime = getDropRuntime(claimDropId);
+  await ensureOnchainCoreConfig(claimDropRuntime);
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
   if (!Number.isFinite(boxIdNum) || boxIdNum <= 0 || boxIdNum > 0xffff_ffff || !boxIdStr) {
@@ -3603,11 +3707,11 @@ export const prepareIrlClaimTx = onCallLogged(
 
   const dudeIdsRaw = claim?.dudeIds ?? claim?.dude_ids ?? claim?.dudes ?? [];
   const dudeIds: number[] = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n: any) => Number(n)) : [];
-  if (dudeIds.length !== ITEMS_PER_BOX) {
-    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${ITEMS_PER_BOX})`);
+  if (dudeIds.length !== claimDropRuntime.itemsPerBox) {
+    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${claimDropRuntime.itemsPerBox})`);
   }
   dudeIds.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > MAX_DUDE_ID) {
+    if (!Number.isFinite(id) || id < 1 || id > claimDropRuntime.maxDudeId) {
       throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
     }
   });
@@ -3618,7 +3722,7 @@ export const prepareIrlClaimTx = onCallLogged(
   // Load wallet assets once and use it for both:
   // - detecting an already-claimed code (dude receipts already present)
   // - finding the matching box certificate in the wallet
-  const ownedAssets = await fetchAssetsOwned(ownerWallet);
+  const ownedAssets = await fetchAssetsOwned(ownerWallet, claimDropRuntime);
 
   // If any of the expected dude receipts are already in the wallet, the claim is already done.
   // (The claim tx is atomic; once any of these exist, the box certificate must already be burned.)
@@ -3656,14 +3760,16 @@ export const prepareIrlClaimTx = onCallLogged(
   if (String(certificateBoxId) !== boxIdStr) {
     throw new HttpsError('failed-precondition', 'Certificate does not match claim box');
   }
-  if (!isMonsAsset(certificate)) {
+  if (!isMonsAsset(certificate, claimDropRuntime)) {
     throw new HttpsError('failed-precondition', 'Certificate is outside the Mons collection');
   }
   const certificateId = String(certificate.id || '');
 
+  const conn = connection(claimDropRuntime);
+
   // Load on-chain config so we can build correct burn + mint instructions.
   const cfgInfo = await withTimeout(
-    connection().getAccountInfo(boxMinterConfigPda, { commitment: 'confirmed' }),
+    conn.getAccountInfo(claimDropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getAccountInfo:boxMinterConfig:claimIrl',
   );
@@ -3671,7 +3777,7 @@ export const prepareIrlClaimTx = onCallLogged(
     throw new HttpsError(
       'failed-precondition',
       'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
-      { configPda: boxMinterConfigPda.toBase58() },
+      { configPda: claimDropRuntime.boxMinterConfigPda.toBase58(), dropId: claimDropId },
     );
   }
   const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
@@ -3684,19 +3790,20 @@ export const prepareIrlClaimTx = onCallLogged(
       cosigner: signer.publicKey.toBase58(),
     });
   }
-  assertConfiguredPublicKey(collectionMint, 'COLLECTION_MINT');
-  if (!collectionMint.equals(cfgCoreCollection)) {
+  assertConfiguredPublicKey(claimDropRuntime.collectionMint, 'COLLECTION_MINT');
+  if (!claimDropRuntime.collectionMint.equals(cfgCoreCollection)) {
     throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
-      configured: collectionMint.toBase58(),
+      configured: claimDropRuntime.collectionMint.toBase58(),
       onchain: cfgCoreCollection.toBase58(),
+      dropId: claimDropId,
     });
   }
 
-  const conn = connection();
-  if (!receiptsMerkleTreeStr) {
+  if (!claimDropRuntime.receiptsMerkleTreeStr) {
     throw new HttpsError(
       'failed-precondition',
       'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
+      { dropId: claimDropId },
     );
   }
 
@@ -3705,7 +3812,7 @@ export const prepareIrlClaimTx = onCallLogged(
   // All receipts/certificates in this repo are Bubblegum v2 compressed cNFTs.
   // (We intentionally do NOT support uncompressed receipt assets anymore.)
   const compression = (certificate as any)?.compression || {};
-  const proof = await fetchAssetProof(certificateId);
+  const proof = await fetchAssetProof(certificateId, claimDropRuntime);
   const proofPath: string[] = Array.isArray(proof?.proof) ? proof.proof : [];
   const treeId = String(proof?.tree_id ?? proof?.treeId ?? '');
   const rootStr = String(proof?.root || '');
@@ -3713,10 +3820,11 @@ export const prepareIrlClaimTx = onCallLogged(
     throw new HttpsError('failed-precondition', 'Unable to fetch certificate proof for burn');
   }
   const merkleTree = new PublicKey(treeId);
-  if (!merkleTree.equals(receiptsMerkleTree)) {
+  if (!merkleTree.equals(claimDropRuntime.receiptsMerkleTree)) {
     throw new HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
       certificateTree: merkleTree.toBase58(),
-      receiptsTree: receiptsMerkleTree.toBase58(),
+      receiptsTree: claimDropRuntime.receiptsMerkleTree.toBase58(),
+      dropId: claimDropId,
     });
   }
   const root = bs58Bytes32(rootStr, 'assetProof.root');
@@ -3759,15 +3867,15 @@ export const prepareIrlClaimTx = onCallLogged(
   );
 
   // 2) Mint the configured figure receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
-  const treeConfig = deriveTreeConfigPda(receiptsMerkleTree);
+  const treeConfig = deriveTreeConfigPda(claimDropRuntime.receiptsMerkleTree);
   instructions.push(
     new TransactionInstruction({
-      programId: boxMinterProgramId,
+      programId: claimDropRuntime.boxMinterProgramId,
       keys: [
-        { pubkey: boxMinterConfigPda, isSigner: false, isWritable: false }, // config
+        { pubkey: claimDropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false }, // config
         { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
         { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
-        { pubkey: receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
+        { pubkey: claimDropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
         { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
         { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
         { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
@@ -3777,7 +3885,7 @@ export const prepareIrlClaimTx = onCallLogged(
         { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
       ],
-      data: encodeMintReceiptsArgs({ boxIds: [], dudeIds }),
+      data: encodeMintReceiptsArgs({ boxIds: [], dudeIds }, claimDropRuntime),
     }),
   );
 
@@ -3785,7 +3893,7 @@ export const prepareIrlClaimTx = onCallLogged(
   // but fall back to the delivery ALT if needed to fit under Solana's packet limit.
   let addressLookupTables: AddressLookupTableAccount[] = [];
   try {
-    addressLookupTables = await getDeliveryLookupTable(conn);
+    addressLookupTables = await getDeliveryLookupTable(conn, claimDropRuntime);
   } catch {
     addressLookupTables = [];
   }
@@ -3806,7 +3914,7 @@ export const prepareIrlClaimTx = onCallLogged(
         throw new HttpsError(
           'failed-precondition',
           'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
-          { receiptsMerkleTree: receiptsMerkleTreeStr },
+          { receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr, dropId: claimDropId },
         );
       }
       tx = buildClaimTx(addressLookupTables);
@@ -3828,8 +3936,9 @@ export const prepareIrlClaimTx = onCallLogged(
       {
         rawBytes: raw.length,
         maxRawBytes: MAX_RAW_TX_BYTES,
-        deliveryLookupTable: deliveryLookupTableStr,
-        receiptsMerkleTree: receiptsMerkleTreeStr,
+        deliveryLookupTable: claimDropRuntime.deliveryLookupTableStr,
+        receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr,
+        dropId: claimDropId,
       },
     );
   }

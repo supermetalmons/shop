@@ -2,6 +2,7 @@ export type AssetKind = 'box' | 'dude' | 'certificate';
 
 export interface InventoryItem {
   id: string;
+  dropId: string;
   name: string;
   kind: AssetKind;
   image?: string;
@@ -13,6 +14,7 @@ export interface InventoryItem {
 }
 
 export interface PendingOpenBox {
+  dropId: string;
   pendingPda: string;
   boxAssetId: string;
   dudeAssetIds: string[];

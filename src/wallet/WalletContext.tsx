@@ -10,41 +10,32 @@ import {
 } from '@solana/wallet-adapter-wallets';
 import { GlowWalletAdapter } from '@solana/wallet-adapter-glow';
 import { LedgerWalletAdapter } from '@solana/wallet-adapter-ledger';
-import { clusterApiUrl } from '@solana/web3.js';
 import '@solana/wallet-adapter-react-ui/styles.css';
-import { getHeliusApiKey } from '../lib/helius';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
-
-function resolveNetwork(): WalletAdapterNetwork {
-  const raw = FRONTEND_DEPLOYMENT.solanaCluster;
-  if (raw === 'mainnet-beta') return WalletAdapterNetwork.Mainnet;
-  if (raw === 'testnet') return WalletAdapterNetwork.Testnet;
-  return WalletAdapterNetwork.Devnet;
-}
-
-function heliusRpcUrl(): string | null {
-  const apiKey = getHeliusApiKey();
-  if (!apiKey) return null;
-  const cluster = FRONTEND_DEPLOYMENT.solanaCluster;
-  const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;
-  return `https://${subdomain}.helius-rpc.com/?api-key=${apiKey}`;
-}
-
-const network = resolveNetwork();
-const rpcEndpoint = heliusRpcUrl() || clusterApiUrl(network);
+import { normalizePathname, resolveFrontendDropByPath, rpcEndpointForCluster } from '../lib/dropConfig';
 
 interface Props {
+  currentPath?: string;
   children: ReactNode;
 }
 
-export const WalletContextProvider: FC<Props> = ({ children }) => {
+function resolveNetworkFromCluster(cluster: string): WalletAdapterNetwork {
+  if (cluster === 'mainnet-beta') return WalletAdapterNetwork.Mainnet;
+  if (cluster === 'testnet') return WalletAdapterNetwork.Testnet;
+  return WalletAdapterNetwork.Devnet;
+}
+
+export const WalletContextProvider: FC<Props> = ({ currentPath, children }) => {
+  const normalizedPath = useMemo(() => normalizePathname(currentPath || '/'), [currentPath]);
+  const activeDrop = useMemo(() => resolveFrontendDropByPath(normalizedPath), [normalizedPath]);
+  const network = useMemo(() => resolveNetworkFromCluster(activeDrop.solanaCluster), [activeDrop.solanaCluster]);
+  const rpcEndpoint = useMemo(() => rpcEndpointForCluster(activeDrop.solanaCluster), [activeDrop.solanaCluster]);
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
       new GlowWalletAdapter({ network }),
       new LedgerWalletAdapter(),
     ],
-    [],
+    [network],
   );
 
   return (

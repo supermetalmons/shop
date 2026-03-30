@@ -13,9 +13,12 @@ import {
   Profile,
   ProfileAddress,
 } from '../types';
-import { boxMinterProgramId } from './boxMinter';
 import { getHeliusApiKey } from './helius';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+import {
+  FRONTEND_DROPS,
+  type FrontendDeploymentConfig,
+  type SolanaCluster,
+} from '../config/deployment';
 
 const region = FIREBASE_FUNCTIONS_REGION;
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -139,11 +142,56 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 }
 
 const heliusApiKey = getHeliusApiKey();
-const heliusCluster = FRONTEND_DEPLOYMENT.solanaCluster;
-const heliusSubdomain = heliusCluster === 'mainnet-beta' ? 'mainnet' : heliusCluster;
-const heliusCollection = FRONTEND_DEPLOYMENT.collectionMint;
+
+type FrontendDropRuntime = Pick<
+  FrontendDeploymentConfig,
+  'dropId' | 'solanaCluster' | 'collectionMint' | 'metadataBase' | 'boxMinterProgramId'
+> & {
+  normalizedMetadataBase: string;
+};
+
+function assertUniqueFrontendMetadataBases(drops: FrontendDropRuntime[]) {
+  const dropIdsByMetadataBase = new Map<string, string[]>();
+  drops.forEach((drop) => {
+    if (!drop.normalizedMetadataBase) return;
+    const existing = dropIdsByMetadataBase.get(drop.normalizedMetadataBase) || [];
+    existing.push(drop.dropId);
+    dropIdsByMetadataBase.set(drop.normalizedMetadataBase, existing);
+  });
+  const duplicates = Array.from(dropIdsByMetadataBase.entries())
+    .filter(([, dropIds]) => dropIds.length > 1)
+    .map(([metadataBase, dropIds]) => `${metadataBase} => ${dropIds.join(', ')}`);
+  if (!duplicates.length) return;
+  throw new Error(
+    `Duplicate metadataBase configured in src/config/deployment.ts.\n` +
+      duplicates.map((entry) => `- ${entry}`).join('\n') +
+      `\n` +
+      `Each drop must have a unique normalized metadataBase to keep asset resolution unambiguous.`,
+  );
+}
+
+const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
+  .sort((a, b) => a.localeCompare(b))
+  .map((dropId) => {
+    const drop = FRONTEND_DROPS[dropId];
+    const normalizedMetadataBase = String(drop.metadataBase || '').trim().replace(/\/+$/, '').toLowerCase();
+    return {
+      dropId: drop.dropId,
+      solanaCluster: drop.solanaCluster,
+      collectionMint: drop.collectionMint,
+      metadataBase: drop.metadataBase,
+      boxMinterProgramId: drop.boxMinterProgramId,
+      normalizedMetadataBase,
+    };
+  });
+assertUniqueFrontendMetadataBases(FRONTEND_DROP_RUNTIMES);
+
+const FRONTEND_DROP_BY_ID = new Map<string, FrontendDropRuntime>(
+  FRONTEND_DROP_RUNTIMES.map((drop) => [drop.dropId, drop]),
+);
 
 type DasAsset = Record<string, any>;
+const ASSET_DROP_ID_FIELD = '__monsDropId';
 
 function readU32(buf: Uint8Array, offset: number): number {
   return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset, true);
@@ -162,17 +210,18 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-function heliusRpcUrl() {
+function heliusRpcUrl(cluster: SolanaCluster) {
   if (!heliusApiKey) throw new Error('Missing VITE_HELIUS_API_KEY');
+  const heliusSubdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;
   return `https://${heliusSubdomain}.helius-rpc.com/?api-key=${heliusApiKey}`;
 }
 
-async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
+async function heliusRpc<T>(cluster: SolanaCluster, method: string, params: unknown): Promise<T> {
   const startedAt = Date.now();
-  const url = heliusRpcUrl();
+  const url = heliusRpcUrl(cluster);
   const body = { jsonrpc: '2.0', id: method, method, params };
   if (DEBUG_FUNCTIONS) {
-    console.info('[mons/helius] →', method, summarizePayload(params));
+    console.info('[mons/helius] →', method, { cluster, params: summarizePayload(params) });
   }
   const res = await fetch(url, {
     method: 'POST',
@@ -182,6 +231,7 @@ async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
   const json = await res.json().catch(() => ({}));
   if (DEBUG_FUNCTIONS) {
     console.info('[mons/helius] ←', method, {
+      cluster,
       ms: Date.now() - startedAt,
       ok: res.ok,
       status: res.status,
@@ -305,23 +355,59 @@ function isBurntAsset(asset: DasAsset): boolean {
   return false;
 }
 
+function assetMetadataUriLower(asset: DasAsset): string {
+  const uri: string =
+    asset?.content?.json_uri ||
+    asset?.content?.jsonUri ||
+    asset?.content?.metadata?.uri ||
+    asset?.content?.metadata?.json_uri ||
+    asset?.content?.metadata?.jsonUri ||
+    '';
+  return typeof uri === 'string' ? uri.trim().toLowerCase() : '';
+}
+
+function metadataBaseMatchesAssetUri(normalizedMetadataBase: string, uriLower: string): boolean {
+  if (!normalizedMetadataBase || !uriLower) return false;
+  return uriLower === normalizedMetadataBase || uriLower.startsWith(`${normalizedMetadataBase}/`);
+}
+
+function resolveAssetDropId(asset: DasAsset): string | null {
+  const cached = (asset as any)?.[ASSET_DROP_ID_FIELD];
+  if (typeof cached === 'string' && FRONTEND_DROP_BY_ID.has(cached)) return cached;
+
+  for (const drop of FRONTEND_DROP_RUNTIMES) {
+    if (assetMatchesCollection(asset, drop.collectionMint)) {
+      (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
+      return drop.dropId;
+    }
+  }
+
+  const uriLower = assetMetadataUriLower(asset);
+  if (!uriLower) return null;
+  for (const drop of FRONTEND_DROP_RUNTIMES) {
+    if (metadataBaseMatchesAssetUri(drop.normalizedMetadataBase, uriLower)) {
+      (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
+      return drop.dropId;
+    }
+  }
+
+  return null;
+}
+
 function isMonsAsset(asset: DasAsset): boolean {
   // Never show burned assets in inventory.
   if (isBurntAsset(asset)) return false;
-
   const kind = getAssetKind(asset);
   if (!kind) return false;
-
-  // Prefer collection grouping when configured.
-  if (heliusCollection && assetMatchesCollection(asset, heliusCollection)) return true;
-
-  return false;
+  return Boolean(resolveAssetDropId(asset));
 }
 
 function transformInventoryItem(asset: DasAsset): InventoryItem | null {
   if (isBurntAsset(asset)) return null;
   const kind = getAssetKind(asset);
   if (!kind) return null;
+  const dropId = resolveAssetDropId(asset);
+  if (!dropId) return null;
   const boxId = getBoxIdFromAsset(asset);
   const dudeId = getDudeIdFromAsset(asset);
   const imageRaw =
@@ -338,6 +424,7 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
       : imageRaw;
   return {
     id: asset.id,
+    dropId,
     name: asset.content?.metadata?.name || asset.id,
     kind,
     boxId,
@@ -358,15 +445,64 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
     },
   };
 
-  if (heliusCollection) {
-    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', heliusCollection] });
-    const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
-    if (groupedItems.length) return groupedItems.filter(isMonsAsset);
+  const mergedByAssetId = new Map<string, DasAsset>();
+  const ungroupedByCluster = new Map<SolanaCluster, DasAsset[]>();
+
+  for (const drop of FRONTEND_DROP_RUNTIMES) {
+    let items: DasAsset[] = [];
+    let usedFallback = false;
+
+    try {
+      const grouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', {
+        ...baseParams,
+        grouping: ['collection', drop.collectionMint],
+      });
+      items = Array.isArray(grouped?.items) ? grouped.items : [];
+    } catch (err) {
+      console.warn('[mons/helius] grouped search failed, will try fallback', {
+        dropId: drop.dropId,
+        cluster: drop.solanaCluster,
+        error: err,
+      });
+    }
+
+    if (!items.length) {
+      usedFallback = true;
+      if (!ungroupedByCluster.has(drop.solanaCluster)) {
+        try {
+          const ungrouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', baseParams);
+          const ungroupedItems = Array.isArray(ungrouped?.items) ? ungrouped.items : [];
+          ungroupedByCluster.set(drop.solanaCluster, ungroupedItems);
+        } catch (err) {
+          console.warn('[mons/helius] ungrouped search failed', {
+            dropId: drop.dropId,
+            cluster: drop.solanaCluster,
+            error: err,
+          });
+          ungroupedByCluster.set(drop.solanaCluster, []);
+        }
+      }
+      items = ungroupedByCluster.get(drop.solanaCluster) || [];
+    }
+
+    items.forEach((asset) => {
+      const dropId = resolveAssetDropId(asset);
+      if (dropId !== drop.dropId) return;
+      if (!isMonsAsset(asset)) return;
+      const assetId = typeof asset?.id === 'string' ? asset.id : '';
+      if (!assetId) return;
+      mergedByAssetId.set(assetId, asset);
+    });
+
+    if (DEBUG_FUNCTIONS && usedFallback) {
+      console.info('[mons/helius] drop inventory used fallback search', {
+        dropId: drop.dropId,
+        cluster: drop.solanaCluster,
+      });
+    }
   }
 
-  const ungrouped = await heliusRpc<any>('searchAssets', baseParams);
-  const items = Array.isArray(ungrouped?.items) ? ungrouped.items : [];
-  return items.filter(isMonsAsset);
+  return Array.from(mergedByAssetId.values());
 }
 
 export async function fetchInventory(owner: string): Promise<InventoryItem[]> {
@@ -375,52 +511,71 @@ export async function fetchInventory(owner: string): Promise<InventoryItem[]> {
 }
 
 export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenBox[]> {
-  const programId = boxMinterProgramId().toBase58();
-  const result = await heliusRpc<any>('getProgramAccounts', [
-    programId,
-    {
-      encoding: 'base64',
-      filters: [
-        { memcmp: { offset: 0, bytes: ACCOUNT_PENDING_OPEN_BOX_B58 } },
-        { memcmp: { offset: 8, bytes: owner } },
-      ],
-    },
-  ]);
-
   const out: PendingOpenBox[] = [];
-  const accounts = Array.isArray(result) ? result : [];
-  for (const entry of accounts) {
-    const pendingPda = typeof entry?.pubkey === 'string' ? entry.pubkey : null;
-    const dataField = entry?.account?.data;
-    const dataB64 =
-      Array.isArray(dataField) && typeof dataField[0] === 'string'
-        ? dataField[0]
-        : typeof dataField === 'string'
-          ? dataField
-          : null;
-    if (!pendingPda || !dataB64) continue;
-    const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
-    if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) continue;
-    if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) continue;
-    const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
-    if (ownerFromChain !== owner) continue;
-    const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
-    const dudeAssetIds: string[] = [];
-    let o = 8 + 32 + 32;
-    const dudeCount = readU32(buf, o);
-    o += 4;
-    if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) continue;
-    for (let i = 0; i < dudeCount; i += 1) {
-      dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
-      o += 32;
+  for (const drop of FRONTEND_DROP_RUNTIMES) {
+    const result = await heliusRpc<any>(drop.solanaCluster, 'getProgramAccounts', [
+      drop.boxMinterProgramId,
+      {
+        encoding: 'base64',
+        filters: [
+          { memcmp: { offset: 0, bytes: ACCOUNT_PENDING_OPEN_BOX_B58 } },
+          { memcmp: { offset: 8, bytes: owner } },
+        ],
+      },
+    ]).catch((err) => {
+      console.warn('[mons/helius] getProgramAccounts failed for pending opens', {
+        dropId: drop.dropId,
+        cluster: drop.solanaCluster,
+        error: err,
+      });
+      return [];
+    });
+
+    const accounts = Array.isArray(result) ? result : [];
+    for (const entry of accounts) {
+      const pendingPda = typeof entry?.pubkey === 'string' ? entry.pubkey : null;
+      const dataField = entry?.account?.data;
+      const dataB64 =
+        Array.isArray(dataField) && typeof dataField[0] === 'string'
+          ? dataField[0]
+          : typeof dataField === 'string'
+            ? dataField
+            : null;
+      if (!pendingPda || !dataB64) continue;
+      const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
+      if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) continue;
+      if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) continue;
+      const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
+      if (ownerFromChain !== owner) continue;
+      const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
+      const dudeAssetIds: string[] = [];
+      let o = 8 + 32 + 32;
+      const dudeCount = readU32(buf, o);
+      o += 4;
+      if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) continue;
+      for (let i = 0; i < dudeCount; i += 1) {
+        dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
+        o += 32;
+      }
+      const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const createdSlotBig = view.getBigUint64(o, true);
+      const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
+      out.push({
+        dropId: drop.dropId,
+        pendingPda,
+        boxAssetId,
+        dudeAssetIds,
+        ...(createdSlot != null ? { createdSlot } : {}),
+      });
     }
-    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-    const createdSlotBig = view.getBigUint64(o, true);
-    const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
-    out.push({ pendingPda, boxAssetId, dudeAssetIds, ...(createdSlot != null ? { createdSlot } : {}) });
   }
-  out.sort((a, b) => (Number(b.createdSlot || 0) - Number(a.createdSlot || 0)));
-  return out;
+  const deduped = new Map<string, PendingOpenBox>();
+  out.forEach((entry) => {
+    deduped.set(`${entry.dropId}:${entry.pendingPda}`, entry);
+  });
+  const dedupedRows = Array.from(deduped.values());
+  dedupedRows.sort((a, b) => (Number(b.createdSlot || 0) - Number(a.createdSlot || 0)));
+  return dedupedRows;
 }
 
 export async function revealDudes(

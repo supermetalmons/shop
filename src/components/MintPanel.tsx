@@ -8,6 +8,10 @@ interface MintPanelProps {
   onMint: (quantity: number) => Promise<void>;
   busy: boolean;
   onError?: (message: string) => void;
+  title?: string;
+  boxImageSrc?: string;
+  priceSol?: number;
+  discountPriceSol?: number;
   secondaryHref?: string;
   discountVisible?: boolean;
   discountLabel?: string;
@@ -25,9 +29,30 @@ const REMAINING_OVERRIDE: number | null = null;
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+const LAMPORTS_PER_SOL_UI = 1_000_000_000;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeSolAmount(value: number | undefined, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return numeric;
+}
+
+function solAmountToLamports(value: number | undefined, fallback: number): number {
+  return Math.round(normalizeSolAmount(value, fallback) * LAMPORTS_PER_SOL_UI);
+}
+
+function formatSolAmount(value: number): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return '0';
+  return numeric.toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 9,
+    useGrouping: false,
+  });
 }
 
 function calcBoxPreviewLayout(count: number, width: number, height: number): BoxPreviewLayout {
@@ -105,6 +130,10 @@ export function MintPanel({
   onMint,
   busy,
   onError,
+  title,
+  boxImageSrc,
+  priceSol,
+  discountPriceSol,
   secondaryHref,
   discountVisible,
   discountLabel,
@@ -163,10 +192,15 @@ export function MintPanel({
     [quantity, previewBounds.height, previewBounds.width],
   );
   const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
-  const totalPriceLabel = String(quantity);
+  const unitPriceLamports = solAmountToLamports(priceSol, FRONTEND_DEPLOYMENT.priceSol);
+  const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, FRONTEND_DEPLOYMENT.discountPriceSol);
+  const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const formId = 'mint-form';
   const showDiscountButton = Boolean(discountVisible) && !soldOut;
-  const discountText = discountLabel || 'mint one for 0.55 SOL';
+  const discountText =
+    discountLabel || `Mint one for ${formatSolAmount(unitDiscountPriceLamports / LAMPORTS_PER_SOL_UI)} SOL`;
+  const mintTitle = title || 'Little Swag Boxes';
+  const mintBoxImageSrc = boxImageSrc || `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
 
   return (
     <section className="card mint-panel">
@@ -187,7 +221,7 @@ export function MintPanel({
             <img
               key={idx}
               className="mint-panel__box"
-              src={`${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`}
+              src={mintBoxImageSrc}
               alt=""
               aria-hidden="true"
             />
@@ -197,7 +231,7 @@ export function MintPanel({
       {soldOut ? (
         <div className="mint-panel__footer mint-panel__footer--soldout">
           <div className="mint-panel__info">
-          <div className="mint-panel__price">Little Swag Boxes</div>
+          <div className="mint-panel__price">{mintTitle}</div>
             <div
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
               aria-hidden={!remainingReady}
@@ -217,7 +251,7 @@ export function MintPanel({
       ) : (
         <div className={showQuantitySlider ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
-            <div className="mint-panel__price">Little Swag Boxes</div>
+            <div className="mint-panel__price">{mintTitle}</div>
             <div
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
               aria-hidden={!remainingReady}

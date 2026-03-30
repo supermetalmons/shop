@@ -7,7 +7,7 @@ import { FulfillmentOrder, FulfillmentOrdersCursor, FulfillmentStatus } from './
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { Modal } from './components/Modal';
-import { FRONTEND_DEPLOYMENT } from './config/deployment';
+import { FRONTEND_DEPLOYMENT, listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
 const FULFILLMENT_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -16,7 +16,6 @@ const FULFILLMENT_WALLETS = new Set<string>([
 ]);
 
 const PAGE_SIZE = 20;
-const FIGURE_MEDIA_BASE = 'https://assets.mons.link/drops/lsb/figures/clean';
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
@@ -34,13 +33,18 @@ function formatOrderStatus(status: string) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function renderFigureMediaTiles(figureIds: number[], keyPrefix: string) {
+function renderFigureMediaTiles(
+  figureIds: number[],
+  keyPrefix: string,
+  figureMediaBase: string,
+  figureMedia?: FigureMediaConfig,
+) {
   return (
     <div className="figure-grid">
       {figureIds.map((figureId, index) => {
-        const mediaId = getMediaIdForFigureId(figureId);
+        const mediaId = getMediaIdForFigureId(figureId, figureMedia);
         if (!mediaId) return null;
-        const src = `${FIGURE_MEDIA_BASE}/${mediaId}.webp`;
+        const src = `${figureMediaBase}/${mediaId}.webp`;
         return (
           <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
             <img src={src} alt={`Media ${mediaId}`} loading="lazy" className="figure-image" />
@@ -53,6 +57,13 @@ function renderFigureMediaTiles(figureIds: number[], keyPrefix: string) {
 }
 
 export default function FulfillmentApp() {
+  const drops = useMemo(() => listFrontendDrops(), []);
+  const [selectedDropId, setSelectedDropId] = useState(FRONTEND_DEPLOYMENT.dropId);
+  const selectedDrop = useMemo(
+    () => drops.find((drop) => drop.dropId === selectedDropId) || FRONTEND_DEPLOYMENT,
+    [drops, selectedDropId],
+  );
+  const figureMediaBase = `${selectedDrop.paths.base}/figures/clean`;
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
@@ -82,6 +93,7 @@ export default function FulfillmentApp() {
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(() => !walletAddress);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const orderRequestEpochRef = useRef(0);
 
   useEffect(() => {
     walletConnectingSeenRef.current = false;
@@ -133,32 +145,44 @@ export default function FulfillmentApp() {
 
   const loadInitial = useCallback(async () => {
     if (!allowed || !signedIn) return;
+    const requestEpoch = orderRequestEpochRef.current + 1;
+    orderRequestEpochRef.current = requestEpoch;
     setLoading(true);
+    setLoadingMore(false);
     setOrdersError(null);
     setHasMore(true);
     setCursor(null);
     setOrders([]);
+    setStatusEdits({});
+    setStatusSaving({});
+    setActiveUpdateOrderId(null);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor: null, dropId: FRONTEND_DEPLOYMENT.dropId });
+      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor: null, dropId: selectedDrop.dropId });
+      if (orderRequestEpochRef.current !== requestEpoch) return;
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
       setOrders(nextOrders);
       mergeStatusEdits(nextOrders);
       setCursor(resp.nextCursor || null);
       setHasMore(Boolean(resp.nextCursor));
     } catch (err) {
+      if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
       setOrdersError(err instanceof Error ? err.message : 'Failed to load orders');
     } finally {
-      setLoading(false);
+      if (orderRequestEpochRef.current === requestEpoch) {
+        setLoading(false);
+      }
     }
-  }, [allowed, signedIn, mergeStatusEdits]);
+  }, [allowed, signedIn, mergeStatusEdits, selectedDrop.dropId]);
 
   const loadMore = useCallback(async () => {
     if (!allowed || !signedIn || loadingMore || loading || !hasMore) return;
+    const requestEpoch = orderRequestEpochRef.current;
     setLoadingMore(true);
     setOrdersError(null);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor, dropId: FRONTEND_DEPLOYMENT.dropId });
+      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor, dropId: selectedDrop.dropId });
+      if (orderRequestEpochRef.current !== requestEpoch) return;
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
       setOrders((prev) => {
         if (!nextOrders.length) return prev;
@@ -170,12 +194,15 @@ export default function FulfillmentApp() {
       setCursor(resp.nextCursor || null);
       setHasMore(Boolean(resp.nextCursor));
     } catch (err) {
+      if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
       setOrdersError(err instanceof Error ? err.message : 'Failed to load more orders');
     } finally {
-      setLoadingMore(false);
+      if (orderRequestEpochRef.current === requestEpoch) {
+        setLoadingMore(false);
+      }
     }
-  }, [allowed, signedIn, loadingMore, loading, hasMore, cursor, mergeStatusEdits]);
+  }, [allowed, signedIn, loadingMore, loading, hasMore, cursor, mergeStatusEdits, selectedDrop.dropId]);
 
   useEffect(() => {
     void loadInitial();
@@ -199,11 +226,13 @@ export default function FulfillmentApp() {
   const handleSaveStatus = useCallback(
     async (deliveryId: number) => {
       if (!allowed || !signedIn) return false;
+      const requestEpoch = orderRequestEpochRef.current;
       setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
       try {
         const nextStatus = normalizeFulfillmentStatus(statusEdits[deliveryId]);
-        const resp = await updateFulfillmentStatus(deliveryId, nextStatus, FRONTEND_DEPLOYMENT.dropId);
+        const resp = await updateFulfillmentStatus(deliveryId, nextStatus, selectedDrop.dropId);
+        if (orderRequestEpochRef.current !== requestEpoch) return false;
         const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
         setOrders((prev) =>
           prev.map((order) =>
@@ -213,14 +242,17 @@ export default function FulfillmentApp() {
         setStatusEdits((prev) => ({ ...prev, [deliveryId]: normalized }));
         return true;
       } catch (err) {
+        if (orderRequestEpochRef.current !== requestEpoch) return false;
         console.error(err);
         setOrdersError(err instanceof Error ? err.message : 'Failed to update status');
         return false;
       } finally {
-        setStatusSaving((prev) => ({ ...prev, [deliveryId]: false }));
+        if (orderRequestEpochRef.current === requestEpoch) {
+          setStatusSaving((prev) => ({ ...prev, [deliveryId]: false }));
+        }
       }
     },
-    [allowed, signedIn, statusEdits],
+    [allowed, signedIn, statusEdits, selectedDrop.dropId],
   );
 
   const statusDirty = useMemo(() => {
@@ -337,12 +369,30 @@ export default function FulfillmentApp() {
           </section>
         ) : (
           <section className="orders">
+            <div className="row">
+              <label className="muted small" htmlFor="fulfillment-drop-picker">
+                Drop
+              </label>
+              <select
+                id="fulfillment-drop-picker"
+                value={selectedDrop.dropId}
+                onChange={(evt) => {
+                  setSelectedDropId(evt.target.value);
+                }}
+              >
+                {drops.map((drop) => (
+                  <option key={drop.dropId} value={drop.dropId}>
+                    {drop.collectionName} ({drop.dropId})
+                  </option>
+                ))}
+              </select>
+            </div>
             {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
             {ordersError ? <div className="error">{ordersError}</div> : null}
             {orders.length ? (
               <div className="order-list">
                 {orders.map((order) => (
-                  <div key={order.deliveryId} className="card subtle">
+                  <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="card subtle">
                     <div className="card__head">
                       <div>
                         <div className="card__title">Order {order.deliveryId}</div>
@@ -394,7 +444,12 @@ export default function FulfillmentApp() {
                             <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
                               <div className="card__title">Box Secret {box.claimCode}</div>
                               {box.dudeIds.length ? (
-                                renderFigureMediaTiles(box.dudeIds, `${order.deliveryId}:${box.boxId}`)
+                                renderFigureMediaTiles(
+                                  box.dudeIds,
+                                  `${order.deliveryId}:${box.boxId}`,
+                                  figureMediaBase,
+                                  selectedDrop.figureMedia,
+                                )
                               ) : (
                                 <div className="muted small">Assigned figures pending</div>
                               )}
@@ -404,7 +459,12 @@ export default function FulfillmentApp() {
                       ) : null}
 
                       {order.looseDudes.length
-                        ? renderFigureMediaTiles(order.looseDudes, `${order.deliveryId}:dude`)
+                        ? renderFigureMediaTiles(
+                            order.looseDudes,
+                            `${order.deliveryId}:dude`,
+                            figureMediaBase,
+                            selectedDrop.figureMedia,
+                          )
                         : null}
                     </div>
                   </div>
