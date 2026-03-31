@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WipInteractiveCard from './components/WipInteractiveCard';
-import { DRIF_CARDS } from './drifCards';
+import { DRIF_CARD_COUNT, DRIF_CARDS } from './drifCards';
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
@@ -68,7 +68,7 @@ function getInitialTargetRect(): OverlayRect {
 export default function WipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [frame, setFrame] = useState(1);
-  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARDS.length));
+  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
   const frameRef = useRef(1);
   const constrainedNetwork = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
@@ -153,6 +153,17 @@ export default function WipApp() {
     preloadedCardsRef.current.add(imageSrc);
     card.src = imageSrc;
   }, []);
+
+  const preloadCardAssets = useCallback(
+    (nextCardIndex: number) => {
+      const nextCard = DRIF_CARDS[nextCardIndex];
+      if (!nextCard) return;
+      preloadCard(nextCard.imageSrc);
+      preloadCard(nextCard.textureSrc);
+      preloadCard(nextCard.foilSrc);
+    },
+    [preloadCard],
+  );
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -285,15 +296,6 @@ export default function WipApp() {
   }, [currentCard.foilSrc, currentCard.imageSrc, currentCard.textureSrc, preloadCard]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || constrainedNetwork) return;
-    DRIF_CARDS.forEach(({ imageSrc, textureSrc, foilSrc }) => {
-      preloadCard(imageSrc);
-      preloadCard(textureSrc);
-      preloadCard(foilSrc);
-    });
-  }, [constrainedNetwork, preloadCard]);
-
-  useEffect(() => {
     if (typeof window === 'undefined') return;
     preloadRevealSounds();
   }, [preloadRevealSounds]);
@@ -369,15 +371,14 @@ export default function WipApp() {
     revealSoundPlayedRef.current = false;
     frameRef.current = 1;
     setFrame(1);
-    setCardIndex((prev) => {
-      if (DRIF_CARDS.length < 2) return prev;
-      let next = prev;
-      while (next === prev) {
-        next = Math.floor(Math.random() * DRIF_CARDS.length);
-      }
-      return next;
-    });
-  }, []);
+    if (DRIF_CARD_COUNT < 2) return;
+    let nextIndex = cardIndex;
+    while (nextIndex === cardIndex) {
+      nextIndex = Math.floor(Math.random() * DRIF_CARD_COUNT);
+    }
+    preloadCardAssets(nextIndex);
+    setCardIndex(nextIndex);
+  }, [cardIndex, preloadCardAssets]);
 
   return (
     <div className="wip-page">
