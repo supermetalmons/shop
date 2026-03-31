@@ -14,6 +14,7 @@ import {
   ProfileAddress,
 } from '../types';
 import { getHeliusApiKey } from './helius';
+import { normalizeFigureDisplayImage } from './dropContent';
 import {
   FRONTEND_DROPS,
   type FrontendDeploymentConfig,
@@ -382,12 +383,9 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     asset?.content?.files?.[0]?.uri ||
     asset?.content?.files?.[0]?.cdn_uri;
 
-  const image =
-    kind === 'dude' && typeof imageRaw === 'string' && imageRaw
-      ? imageRaw.includes('/figures/clean/')
-        ? imageRaw
-        : imageRaw.replace('/figures/', '/figures/clean/')
-      : imageRaw;
+  const image = kind === 'dude' && typeof imageRaw === 'string' && imageRaw
+    ? normalizeFigureDisplayImage(dropId, imageRaw)
+    : imageRaw;
   return {
     id: asset.id,
     dropId,

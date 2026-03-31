@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { FaChevronRight } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 
 interface MintPanelProps {
   stats?: MintStats;
@@ -10,6 +11,7 @@ interface MintPanelProps {
   onError?: (message: string) => void;
   title?: string;
   boxImageSrc?: string;
+  boxAspectRatio?: number;
   priceSol?: number;
   discountPriceSol?: number;
   secondaryHref?: string;
@@ -56,10 +58,11 @@ function formatSolAmount(value: number): string {
   });
 }
 
-function calcBoxPreviewLayout(count: number, width: number, height: number): BoxPreviewLayout {
+function calcBoxPreviewLayout(count: number, width: number, height: number, boxAspectRatio: number): BoxPreviewLayout {
   const safeCount = Math.max(1, Math.min(15, Math.floor(count)));
   const safeWidth = Math.max(0, Math.floor(width));
   const safeHeight = Math.max(0, Math.floor(height));
+  const aspectRatio = clampNumber(boxAspectRatio || BOX_ASPECT_RATIO, 0.25, 4);
   const gapScaleX = safeCount > 1 ? 1.8 : 1;
   const gapScaleY = safeCount > 1 ? 2 : 1;
 
@@ -68,7 +71,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
     const fallbackHeight = 120;
     return {
       height: fallbackHeight,
-      width: Math.max(1, Math.floor(fallbackHeight * BOX_ASPECT_RATIO)),
+      width: Math.max(1, Math.floor(fallbackHeight * aspectRatio)),
       gapX: 12 * gapScaleX,
       gapY: 12 * gapScaleY,
       cols: Math.min(safeCount, 4),
@@ -87,7 +90,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
     let gapX = 12 * gapScaleX;
     let gapY = 12 * gapScaleY;
     let boxHeight = Math.min(
-      (safeWidth - (cols - 1) * gapX) / (cols * BOX_ASPECT_RATIO),
+      (safeWidth - (cols - 1) * gapX) / (cols * aspectRatio),
       (safeHeight - (rows - 1) * gapY) / rows,
     );
     boxHeight = Math.min(boxHeight, maxHeight);
@@ -95,7 +98,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
     gapX = baseGap * gapScaleX;
     gapY = baseGap * gapScaleY;
     boxHeight = Math.min(
-      (safeWidth - (cols - 1) * gapX) / (cols * BOX_ASPECT_RATIO),
+      (safeWidth - (cols - 1) * gapX) / (cols * aspectRatio),
       (safeHeight - (rows - 1) * gapY) / rows,
     );
     boxHeight = Math.min(boxHeight, maxHeight);
@@ -107,7 +110,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number): Box
 
     if (boxHeight < 1) continue;
 
-    const boxWidth = Math.max(1, Math.floor(boxHeight * BOX_ASPECT_RATIO));
+    const boxWidth = Math.max(1, Math.floor(boxHeight * aspectRatio));
 
     if (boxHeight > best.height) {
       best = { width: boxWidth, height: boxHeight, gapX, gapY, cols };
@@ -133,6 +136,7 @@ export function MintPanel({
   onError,
   title,
   boxImageSrc,
+  boxAspectRatio,
   priceSol,
   discountPriceSol,
   secondaryHref,
@@ -190,8 +194,8 @@ export function MintPanel({
 
   const soldOut = remaining <= 0;
   const layout = useMemo(
-    () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height),
-    [quantity, previewBounds.height, previewBounds.width],
+    () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxAspectRatio || BOX_ASPECT_RATIO),
+    [boxAspectRatio, quantity, previewBounds.height, previewBounds.width],
   );
   const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
   const unitPriceLamports = solAmountToLamports(priceSol, FRONTEND_DEPLOYMENT.priceSol);
@@ -210,7 +214,7 @@ export function MintPanel({
       ? `Discount available for up to ${normalizedDiscountMaxQuantity} box${normalizedDiscountMaxQuantity === 1 ? '' : 'es'}`
       : `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`);
   const mintTitle = title || 'Little Swag Boxes';
-  const mintBoxImageSrc = boxImageSrc || `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
+  const mintBoxImageSrc = boxImageSrc;
 
   return (
     <section className="card mint-panel">
@@ -228,13 +232,25 @@ export function MintPanel({
           aria-label={`Mint preview: ${quantityLabel}`}
         >
           {Array.from({ length: quantity }, (_, idx) => (
-            <img
-              key={idx}
-              className="mint-panel__box"
-              src={mintBoxImageSrc}
-              alt=""
-              aria-hidden="true"
-            />
+            mintBoxImageSrc ? (
+              <Fragment key={idx}>
+                <img
+                  className="mint-panel__box"
+                  src={mintBoxImageSrc}
+                  alt=""
+                  aria-hidden="true"
+                  onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                  onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                />
+                <div
+                  className="mint-panel__box mint-panel__box--placeholder"
+                  aria-hidden="true"
+                  hidden
+                />
+              </Fragment>
+            ) : (
+              <div key={idx} className="mint-panel__box mint-panel__box--placeholder" aria-hidden="true" />
+            )
           ))}
         </div>
       </div>

@@ -1,5 +1,7 @@
-import type { MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { InventoryItem } from '../types';
+import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
+import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 
 interface InventoryGridProps {
   items: InventoryItem[];
@@ -14,6 +16,67 @@ interface InventoryGridProps {
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
 }
 
+function InventoryMedia({ item }: { item: InventoryItem }) {
+  const isReceipt = item.kind === 'certificate';
+  const isFigure = item.kind === 'dude';
+  const [figureImageFailed, setFigureImageFailed] = useState(false);
+
+  useEffect(() => {
+    setFigureImageFailed(false);
+  }, [item.image]);
+
+  if (!item.image) {
+    return (
+      <div className="placeholder" aria-hidden>
+        <span> </span>
+      </div>
+    );
+  }
+
+  if (isFigure) {
+    return (
+      <>
+        <img
+          src={item.image}
+          alt=""
+          aria-hidden="true"
+          hidden
+          loading="lazy"
+          onError={() => setFigureImageFailed(true)}
+        />
+        {figureImageFailed ? (
+          <div className="placeholder" aria-hidden>
+            <span> </span>
+          </div>
+        ) : (
+          <div
+            className="inventory__image"
+            style={{ backgroundImage: `url(${item.image})` }}
+            role="img"
+            aria-label={item.name}
+          />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <img
+        className="inventory__image"
+        src={item.image}
+        alt={item.name}
+        loading="lazy"
+        onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+        onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+      />
+      <div className="placeholder" aria-hidden hidden>
+        <span> </span>
+      </div>
+    </>
+  );
+}
+
 export function InventoryGrid({
   items,
   selected,
@@ -26,10 +89,7 @@ export function InventoryGrid({
   revealDisabled,
   emptyStateVisibility = 'visible',
 }: InventoryGridProps) {
-  const getRevealRect = (target: HTMLElement) => {
-    const imageEl = target.querySelector<HTMLElement>('.inventory__image');
-    return (imageEl || target).getBoundingClientRect();
-  };
+  const getRevealRect = (target: HTMLElement) => getInventoryRevealRect(target);
 
   if (!items.length) {
     if (emptyStateVisibility === 'none') return null;
@@ -100,17 +160,7 @@ export function InventoryGrid({
             }
           >
             <div className="inventory__media">
-              {item.image ? (
-                isReceipt ? (
-                  <img className="inventory__image" src={item.image} alt={item.name} loading="lazy" />
-                ) : (
-                  <div className="inventory__image" style={{ backgroundImage: `url(${item.image})` }} role="img" aria-label={item.name} />
-                )
-              ) : (
-                <div className="placeholder" aria-hidden>
-                  <span> </span>
-                </div>
-              )}
+              <InventoryMedia item={item} />
             </div>
             {hasFooter ? (
               <div className="inventory__body">

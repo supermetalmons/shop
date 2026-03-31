@@ -6,6 +6,15 @@ import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
 import { FulfillmentOrder, FulfillmentOrdersCursor, FulfillmentStatus } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
+import {
+  figureMetadataCacheKey,
+  figureMetadataHasImage,
+  getCachedFigureMetadata,
+  loadFigureMetadata,
+  loadFigureMetadataBatch,
+  type FigureMetadataRecord,
+} from './lib/figureMetadata';
+import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { Modal } from './components/Modal';
 import { FRONTEND_DEPLOYMENT, listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
@@ -16,6 +25,7 @@ const FULFILLMENT_WALLETS = new Set<string>([
 ]);
 
 const PAGE_SIZE = 20;
+const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
@@ -33,22 +43,149 @@ function formatOrderStatus(status: string) {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function renderFigureMediaTiles(
-  figureIds: number[],
-  keyPrefix: string,
-  figureMediaBase: string,
-  figureMedia?: FigureMediaConfig,
-) {
+function mergeFigureMetadataRecords(
+  prev: Record<string, FigureMetadataRecord>,
+  records: FigureMetadataRecord[],
+): Record<string, FigureMetadataRecord> {
+  let changed = false;
+  const next = { ...prev };
+  records.forEach((record) => {
+    const key = figureMetadataCacheKey(record.dropId, record.id);
+    const existing = next[key];
+    if (
+      figureMetadataHasImage(existing) &&
+      existing.image === record.image &&
+      existing.name === record.name &&
+      existing.attributes === record.attributes
+    ) {
+      return;
+    }
+    next[key] = record;
+    changed = true;
+  });
+  return changed ? next : prev;
+}
+
+function FigureTileImage(props: {
+  dropId: string;
+  figureId: number;
+  alt: string;
+  primarySrc?: string;
+  fallbackSrc?: string;
+  onMetadataResolved?: (record: FigureMetadataRecord) => void;
+}) {
+  const { dropId, figureId, alt, primarySrc, fallbackSrc, onMetadataResolved } = props;
+  const [activeSrc, setActiveSrc] = useState<string | null>(() => primarySrc || fallbackSrc || null);
+  const [usingFallback, setUsingFallback] = useState(() => !primarySrc && Boolean(fallbackSrc));
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    if (primarySrc) {
+      setActiveSrc(primarySrc);
+      setUsingFallback(false);
+      return;
+    }
+    if (fallbackSrc) {
+      setActiveSrc(fallbackSrc);
+      setUsingFallback(true);
+      return;
+    }
+    setActiveSrc(null);
+    setUsingFallback(false);
+  }, [dropId, figureId, primarySrc]);
+
+  useEffect(() => {
+    if (!fallbackSrc) return;
+    setActiveSrc((current) => (current ? current : fallbackSrc));
+    setUsingFallback((current) => current || !primarySrc);
+  }, [fallbackSrc, primarySrc]);
+
+  useEffect(
+    () => () => {
+      requestIdRef.current += 1;
+    },
+    [],
+  );
+
+  const handleError = useCallback(() => {
+    if (usingFallback) {
+      setActiveSrc(null);
+      return;
+    }
+    if (fallbackSrc && fallbackSrc !== primarySrc) {
+      setActiveSrc(fallbackSrc);
+      setUsingFallback(true);
+      return;
+    }
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setActiveSrc(null);
+    void loadFigureMetadata(dropId, figureId)
+      .then((record) => {
+        if (requestIdRef.current !== requestId || !record?.image || record.image === primarySrc) return;
+        onMetadataResolved?.(record);
+        setActiveSrc(record.image);
+        setUsingFallback(true);
+      })
+      .catch(() => {
+        if (requestIdRef.current !== requestId) return;
+        setActiveSrc(null);
+      });
+  }, [dropId, fallbackSrc, figureId, onMetadataResolved, primarySrc, usingFallback]);
+
+  if (!activeSrc) {
+    return <div className="figure-image figure-image--placeholder" aria-hidden="true" />;
+  }
+
+  return <img src={activeSrc} alt={alt} loading="lazy" className="figure-image" onError={handleError} />;
+}
+
+function renderFigureTiles(args: {
+  dropId: string;
+  figureIds: number[];
+  keyPrefix: string;
+  previewMode: 'media_map_folder' | 'metadata_stills';
+  figureMedia?: FigureMediaConfig;
+  figureMediaBase?: string;
+  figureMetadataByKey: Record<string, FigureMetadataRecord>;
+  onMetadataResolved?: (record: FigureMetadataRecord) => void;
+}) {
+  const { dropId, figureIds, keyPrefix, previewMode, figureMedia, figureMediaBase, figureMetadataByKey, onMetadataResolved } =
+    args;
   return (
     <div className="figure-grid">
       {figureIds.map((figureId, index) => {
-        const mediaId = getMediaIdForFigureId(figureId, figureMedia);
-        if (!mediaId) return null;
-        const src = `${figureMediaBase}/${mediaId}.webp`;
+        const metadata = figureMetadataByKey[figureMetadataCacheKey(dropId, figureId)] || getCachedFigureMetadata(dropId, figureId);
+        const metadataImage = figureMetadataHasImage(metadata) ? metadata.image : undefined;
+        if (previewMode === 'media_map_folder') {
+          const mediaId = getMediaIdForFigureId(figureId, figureMedia);
+          const src = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
+          const label = mediaId ? String(mediaId) : metadata?.name || `Figure ${figureId}`;
+          return (
+            <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
+              <FigureTileImage
+                dropId={dropId}
+                figureId={figureId}
+                primarySrc={src}
+                fallbackSrc={metadataImage}
+                alt={mediaId ? `Media ${mediaId}` : metadata?.name || `Figure ${figureId}`}
+                onMetadataResolved={onMetadataResolved}
+              />
+              <div className="muted small">{label}</div>
+            </div>
+          );
+        }
         return (
           <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
-            <img src={src} alt={`Media ${mediaId}`} loading="lazy" className="figure-image" />
-            <div className="muted small">{mediaId}</div>
+            <FigureTileImage
+              dropId={dropId}
+              figureId={figureId}
+              fallbackSrc={metadataImage}
+              alt={metadata?.name || `Figure ${figureId}`}
+              onMetadataResolved={onMetadataResolved}
+            />
+            <div className="muted small">{metadata?.name || `Figure ${figureId}`}</div>
           </div>
         );
       })}
@@ -63,7 +200,8 @@ export default function FulfillmentApp() {
     () => drops.find((drop) => drop.dropId === selectedDropId) || FRONTEND_DEPLOYMENT,
     [drops, selectedDropId],
   );
-  const figureMediaBase = `${selectedDrop.paths.base}/figures/clean`;
+  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop), [selectedDrop]);
+  const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
@@ -86,6 +224,7 @@ export default function FulfillmentApp() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
   const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
+  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderId, setActiveUpdateOrderId] = useState<number | null>(null);
   const walletConnectingSeenRef = useRef(false);
@@ -207,6 +346,64 @@ export default function FulfillmentApp() {
   useEffect(() => {
     void loadInitial();
   }, [loadInitial]);
+
+  const mergeLoadedFigureMetadata = useCallback((records: FigureMetadataRecord[]) => {
+    if (!records.length) return;
+    setFigureMetadataByKey((prev) => mergeFigureMetadataRecords(prev, records));
+  }, []);
+
+  const fulfillmentFigureMetadataTargets = useMemo(() => {
+    const shouldUseMetadataFallback = selectedDropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
+    const targets = new Map<string, { dropId: string; figureId: number }>();
+    orders.forEach((order) => {
+      [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)].forEach((figureId) => {
+        const normalizedFigureId = Math.floor(Number(figureId));
+        if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
+        if (!shouldUseMetadataFallback) {
+          const hasMappedMedia = Boolean(
+            figureMediaBase && getMediaIdForFigureId(normalizedFigureId, selectedDrop.figureMedia),
+          );
+          if (hasMappedMedia) return;
+        }
+        const key = figureMetadataCacheKey(selectedDrop.dropId, normalizedFigureId);
+        const cached = figureMetadataByKey[key] || getCachedFigureMetadata(selectedDrop.dropId, normalizedFigureId);
+        if (figureMetadataHasImage(cached)) return;
+        targets.set(key, { dropId: selectedDrop.dropId, figureId: normalizedFigureId });
+      });
+    });
+    return Array.from(targets.values());
+  }, [
+    figureMediaBase,
+    figureMetadataByKey,
+    orders,
+    selectedDrop.dropId,
+    selectedDrop.figureMedia,
+    selectedDropContent.figures.fulfillmentPreviewMode,
+  ]);
+
+  useEffect(() => {
+    if (!fulfillmentFigureMetadataTargets.length) return;
+    let cancelled = false;
+    const fetchMetadata = async () => {
+      try {
+        const records = await loadFigureMetadataBatch(fulfillmentFigureMetadataTargets);
+        if (cancelled || !records.length) return;
+        mergeLoadedFigureMetadata(records);
+      } catch (err) {
+        console.warn('[mons] failed to load fulfillment figure metadata', { dropId: selectedDrop.dropId, error: err });
+      }
+    };
+
+    void fetchMetadata();
+    if (typeof window === 'undefined') return;
+    const interval = window.setInterval(() => {
+      void fetchMetadata();
+    }, FIGURE_METADATA_RETRY_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata, selectedDrop.dropId]);
 
   useEffect(() => {
     const node = sentinelRef.current;
@@ -443,12 +640,16 @@ export default function FulfillmentApp() {
                             <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
                               <div className="card__title">Box Secret {box.claimCode}</div>
                               {box.dudeIds.length ? (
-                                renderFigureMediaTiles(
-                                  box.dudeIds,
-                                  `${order.deliveryId}:${box.boxId}`,
+                                renderFigureTiles({
+                                  dropId: selectedDrop.dropId,
+                                  figureIds: box.dudeIds,
+                                  keyPrefix: `${order.deliveryId}:${box.boxId}`,
+                                  previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
                                   figureMediaBase,
-                                  selectedDrop.figureMedia,
-                                )
+                                  figureMedia: selectedDrop.figureMedia,
+                                  figureMetadataByKey,
+                                  onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                                })
                               ) : (
                                 <div className="muted small">Assigned figures pending</div>
                               )}
@@ -458,12 +659,16 @@ export default function FulfillmentApp() {
                       ) : null}
 
                       {order.looseDudes.length
-                        ? renderFigureMediaTiles(
-                            order.looseDudes,
-                            `${order.deliveryId}:dude`,
+                        ? renderFigureTiles({
+                            dropId: selectedDrop.dropId,
+                            figureIds: order.looseDudes,
+                            keyPrefix: `${order.deliveryId}:dude`,
+                            previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
                             figureMediaBase,
-                            selectedDrop.figureMedia,
-                          )
+                            figureMedia: selectedDrop.figureMedia,
+                            figureMetadataByKey,
+                            onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                          })
                         : null}
                     </div>
                   </div>

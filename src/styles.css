@@ -34,6 +34,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -299,6 +303,13 @@ header.top {
   height: var(--box-height);
   object-fit: contain;
   display: block;
+  box-sizing: border-box;
+}
+
+.mint-panel__box--placeholder {
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.08));
 }
 
 .mint-panel__footer {
@@ -1055,6 +1066,20 @@ button.link:hover:not(:disabled) {
   object-fit: contain;
 }
 
+.reveal-overlay__still {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  box-sizing: border-box;
+}
+
+.reveal-overlay__still--placeholder {
+  border-radius: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.12);
+}
+
 @keyframes reveal-media-pop {
   0% {
     opacity: 0;
@@ -1152,10 +1177,17 @@ button.link:hover:not(:disabled) {
   height: 100%;
   object-fit: contain;
   display: block;
+  box-sizing: border-box;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
+}
+
+.reveal-overlay__image--placeholder {
+  border-radius: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .wip-page {
@@ -1432,11 +1464,25 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   height: 100%;
   display: block;
   object-fit: contain;
+  object-position: center;
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
   background-origin: content-box;
   background-clip: content-box;
+}
+
+.inventory__media > .placeholder {
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.08));
+  box-sizing: border-box;
+}
+
+.inventory__item--receipt .inventory__media > .placeholder {
+  width: 82%;
+  height: 82%;
+  border-radius: 0;
 }
 
 .inventory__body h3 {
@@ -1683,9 +1729,16 @@ button.order-status-option:hover:not(:disabled) {
   width: 100%;
   aspect-ratio: 1 / 1;
   object-fit: contain;
+  display: block;
   background: var(--surface);
   border-radius: var(--radius-sm);
   padding: 6px;
+  box-sizing: border-box;
+}
+
+.figure-image--placeholder {
+  border: 1px dashed var(--border);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.08));
 }
 
 .card.subtle.box-contents {

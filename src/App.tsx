@@ -25,6 +25,17 @@ import {
 import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount } from './lib/boxMinter';
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
+import {
+  figureMetadataCacheKey,
+  figureMetadataHasImage,
+  getCachedFigureMetadata,
+  loadFigureMetadata,
+  parseFigureMetadataCacheKey,
+  type FigureMetadataRecord,
+  type FigureMetadataTarget,
+} from './lib/figureMetadata';
+import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
+import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
 import {
@@ -43,6 +54,7 @@ import {
   resolveFrontendDropByPath,
   rpcEndpointForCluster,
 } from './lib/dropConfig';
+import { getInventoryRevealRect } from './lib/inventoryMediaRect';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
@@ -217,16 +229,11 @@ function formatOrderDate(order: DeliveryOrderSummary): string {
 const MAX_SHIPMENT_ITEMS = 24;
 const EMPTY_INVENTORY: InventoryItem[] = [];
 const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
-const REVEAL_BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const REVEAL_NOTE_OFFSET = 28;
 // Keep locally-inserted pending reveals visible for a short grace window while on-chain indexing catches up.
 const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
-const BOX_FRAME_COUNT = 21;
-const BOX_FRAME_CLICK_MAX = 8;
-const BOX_FRAME_AUTOPLAY_START = 9;
-const BOX_FRAME_MEDIA_START = 10;
 const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 const ADMIN_WALLETS = new Set<string>([
@@ -256,24 +263,11 @@ type LocalMintedBox = {
   expectedChainCount?: number;
 };
 
-type FigureMetadata = {
-  id: number;
-  dropId: string;
-  name?: string;
-  image?: string;
-  attributes?: { trait_type: string; value: string }[];
-};
-
-type FigureMetadataTarget = {
-  dropId: string;
-  figureId: number;
-};
-
 type RevealOverlayState = {
   id: string;
   dropId: string;
   name: string;
-  image: string;
+  image?: string;
   originRect: OverlayRect;
   targetRect: OverlayRect;
   phase: RevealOverlayPhase;
@@ -289,11 +283,12 @@ function toOverlayRect(rect: DOMRect): OverlayRect {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
 }
 
-function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
+function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, aspectRatio: number): OverlayRect {
   const maxWidth = viewportWidth * 0.65;
   const maxHeight = viewportHeight * 0.43;
-  const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * REVEAL_BOX_ASPECT_RATIO)));
-  const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
+  const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * safeAspectRatio)));
+  const height = Math.max(1, Math.floor(width / safeAspectRatio));
   const lift = Math.round(height * 0.42);
   return {
     left: Math.round((viewportWidth - width) / 2),
@@ -306,28 +301,6 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): Ov
 function formatRevealIds(ids?: number[]) {
   if (!ids || !ids.length) return 'Figures: none';
   return '';
-}
-
-function normalizeFigureImage(imageRaw?: string): string | undefined {
-  if (!imageRaw) return imageRaw;
-  if (imageRaw.includes('/figures/clean/')) return imageRaw;
-  return imageRaw.replace('/figures/', '/figures/clean/');
-}
-
-function figureMetadataCacheKey(dropId: string, figureId: number): string {
-  const normalizedDropId = String(dropId || '').trim().toLowerCase();
-  const normalizedFigureId = Math.floor(Number(figureId));
-  return `${normalizedDropId}:${normalizedFigureId}`;
-}
-
-function parseFigureMetadataCacheKey(key: string): FigureMetadataTarget | null {
-  const raw = String(key || '');
-  const sepIdx = raw.lastIndexOf(':');
-  if (sepIdx <= 0 || sepIdx >= raw.length - 1) return null;
-  const dropId = raw.slice(0, sepIdx).trim().toLowerCase();
-  const figureId = Number(raw.slice(sepIdx + 1));
-  if (!dropId || !Number.isFinite(figureId) || figureId <= 0) return null;
-  return { dropId, figureId: Math.floor(figureId) };
 }
 
 function errorMessage(err: unknown): string {
@@ -423,6 +396,30 @@ function App({ currentPath }: AppProps) {
       return created;
     },
     [getDropConfig],
+  );
+  const getDropContent = useCallback((dropId?: string) => resolveDropContent(getDropConfig(dropId)), [getDropConfig]);
+  const dropRevealIsAnimated = useCallback(
+    (dropId?: string) => {
+      const content = getDropContent(dropId);
+      return content.reveal.mode === 'animated' && Boolean(content.reveal.frameSequence);
+    },
+    [getDropContent],
+  );
+  const revealFrameCountForDropId = useCallback(
+    (dropId?: string) => getDropContent(dropId).reveal.frameSequence?.frameCount || 1,
+    [getDropContent],
+  );
+  const revealClickMaxForDropId = useCallback(
+    (dropId?: string) => getDropContent(dropId).reveal.frameSequence?.clickMax || 1,
+    [getDropContent],
+  );
+  const revealAutoplayStartForDropId = useCallback(
+    (dropId?: string) => getDropContent(dropId).reveal.frameSequence?.autoplayStart || 1,
+    [getDropContent],
+  );
+  const revealMediaStartForDropId = useCallback(
+    (dropId?: string) => getDropContent(dropId).reveal.frameSequence?.mediaStart || 1,
+    [getDropContent],
   );
   const activeConnection = useMemo(() => getDropConnection(activeDrop.dropId), [activeDrop.dropId, getDropConnection]);
   const activeDiscountVersion = useMemo(() => discountUsedVersion(activeDrop), [activeDrop]);
@@ -567,8 +564,8 @@ function App({ currentPath }: AppProps) {
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
-  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadata>>({});
-  const figureMetadataRef = useRef<Record<string, FigureMetadata>>({});
+  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
+  const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
   const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const authTokenRef = useRef<string | null>(null);
@@ -582,7 +579,7 @@ function App({ currentPath }: AppProps) {
   const knownBoxIdsByDropRef = useRef<Map<string, Set<string>>>(new Map());
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const autoplayFramePreloadScheduledRef = useRef(false);
+  const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
@@ -593,35 +590,35 @@ function App({ currentPath }: AppProps) {
   const revealOverlayClosingRef = useRef(false);
 
   const boxImageForDropId = useCallback(
-    (dropId?: string): string => {
-      const drop = getDropConfig(dropId);
-      return `${drop.paths.base}/box/tight.webp`;
+    (dropId?: string): string | undefined => {
+      const content = getDropContent(dropId);
+      return content.box.previewImageUrl;
     },
-    [getDropConfig],
+    [getDropContent],
   );
-  const boxFrameBaseForDropId = useCallback(
-    (dropId?: string): string => {
-      const drop = getDropConfig(dropId);
-      return `${drop.paths.base}/box/`;
+  const boxAspectRatioForDropId = useCallback(
+    (dropId?: string): number => {
+      const content = getDropContent(dropId);
+      return content.box.aspectRatio;
     },
-    [getDropConfig],
+    [getDropContent],
+  );
+  const revealFrameSequenceForDropId = useCallback(
+    (dropId?: string) => {
+      const content = getDropContent(dropId);
+      return content.reveal.frameSequence;
+    },
+    [getDropContent],
   );
   const revealMediaBaseForDropId = useCallback(
-    (dropId?: string): string => {
-      const drop = getDropConfig(dropId);
-      return `${drop.paths.base}/figures/small-rotating/`;
+    (dropId?: string): string | undefined => {
+      const content = getDropContent(dropId);
+      return content.figures.revealVideoBaseUrl;
     },
-    [getDropConfig],
-  );
-  const figureJsonBaseForDropId = useCallback(
-    (dropId?: string): string => {
-      const drop = getDropConfig(dropId);
-      return drop.paths.figuresJsonBase;
-    },
-    [getDropConfig],
+    [getDropContent],
   );
   const defaultBoxImage = boxImageForDropId(activeDrop.dropId);
-  const revealBoxFrameBase = boxFrameBaseForDropId(revealOverlay?.dropId || activeDrop.dropId);
+  const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || activeDrop.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || activeDrop.dropId);
 
   const TOAST_VISIBLE_MS = 1800;
@@ -790,13 +787,15 @@ function App({ currentPath }: AppProps) {
   }, []);
 
   const preloadBoxFrames = useCallback(
-    (fromFrame = 1, toFrame = BOX_FRAME_COUNT, dropId?: string) => {
+    (fromFrame = 1, toFrame?: number, dropId?: string) => {
       if (typeof window === 'undefined') return;
+      const frameSequence = revealFrameSequenceForDropId(dropId);
+      if (!frameSequence) return;
       const safeFrom = Math.max(1, Math.floor(fromFrame));
-      const safeTo = Math.min(BOX_FRAME_COUNT, Math.floor(toFrame));
-      const boxFrameBase = boxFrameBaseForDropId(dropId);
+      const safeTo = Math.min(frameSequence.frameCount, Math.floor(toFrame ?? frameSequence.frameCount));
       for (let i = safeFrom; i <= safeTo; i += 1) {
-        const frameSrc = `${boxFrameBase}${i}.webp`;
+        const frameSrc = joinDropAssetUrl(frameSequence.baseUrl, `${i}.${frameSequence.ext}`);
+        if (!frameSrc) continue;
         if (preloadedBoxFramesRef.current.has(frameSrc)) continue;
         const img = new Image();
         img.decoding = 'async';
@@ -812,7 +811,7 @@ function App({ currentPath }: AppProps) {
         preloadedBoxFramesRef.current.add(frameSrc);
       }
     },
-    [boxFrameBaseForDropId],
+    [revealFrameCountForDropId, revealFrameSequenceForDropId],
   );
 
   const ensureVideoPreloadRoot = useCallback(() => {
@@ -834,11 +833,12 @@ function App({ currentPath }: AppProps) {
   const preloadRevealVideos = useCallback(
     (mediaIds: number[], dropId?: string) => {
       if (typeof document === 'undefined') return;
+      const revealMediaBase = revealMediaBaseForDropId(dropId);
+      if (!revealMediaBase) return;
       const root = ensureVideoPreloadRoot();
       if (!root) return;
       const ids = Array.from(new Set(mediaIds.filter((mediaId) => Number.isFinite(mediaId) && mediaId > 0)));
       if (!ids.length) return;
-      const revealMediaBase = revealMediaBaseForDropId(dropId);
       const key = `${revealMediaBase}|${ids.join(',')}`;
       if (videoPreloadKeyRef.current === key) return;
       videoPreloadKeyRef.current = key;
@@ -846,8 +846,9 @@ function App({ currentPath }: AppProps) {
         root.removeChild(root.firstChild);
       }
       ids.forEach((mediaId) => {
-        const movSrc = `${revealMediaBase}${mediaId}.mov`;
-        const webmSrc = `${revealMediaBase}${mediaId}.webm`;
+        const movSrc = joinDropAssetUrl(revealMediaBase, `${mediaId}.mov`);
+        const webmSrc = joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`);
+        if (!movSrc || !webmSrc) return;
         const video = document.createElement('video');
         video.muted = true;
         video.playsInline = true;
@@ -962,41 +963,34 @@ function App({ currentPath }: AppProps) {
       const cacheKey = figureMetadataCacheKey(drop.dropId, id);
       if (seen.has(cacheKey)) return;
       seen.add(cacheKey);
-      const cached = figureMetadataRef.current[cacheKey];
-      if (cached?.image) return;
+      const cached = figureMetadataRef.current[cacheKey] || getCachedFigureMetadata(drop.dropId, id);
+      if (figureMetadataHasImage(cached)) {
+        setFigureMetadataByKey((prev) =>
+          figureMetadataHasImage(prev[cacheKey]) ? prev : { ...prev, [cacheKey]: cached },
+        );
+        return;
+      }
       if (figureMetadataLoadingRef.current.has(cacheKey)) return;
       const retryAt = figureMetadataRetryAtRef.current.get(cacheKey);
       if (retryAt && retryAt > now) return;
       figureMetadataLoadingRef.current.add(cacheKey);
-      const metadataUrl = `${figureJsonBaseForDropId(drop.dropId)}${id}.json`;
       void (async () => {
         try {
-          const resp = await fetch(metadataUrl);
-          if (!resp.ok) throw new Error('metadata fetch failed');
-          const data = (await resp.json()) as {
-            name?: string;
-            image?: string;
-            attributes?: { trait_type: string; value: string }[];
-          };
-          const rawImage = typeof data.image === 'string' ? data.image : '';
-          const image = normalizeFigureImage(rawImage) || '';
-          if (!image) throw new Error('metadata missing image');
-          const name = typeof data.name === 'string' ? data.name : undefined;
-          const attributes = Array.isArray(data.attributes) ? data.attributes : undefined;
+          const metadata = await loadFigureMetadata(drop.dropId, id);
+          if (!metadata) throw new Error('metadata fetch failed');
           setFigureMetadataByKey((prev) => {
             const existing = prev[cacheKey];
-            if (existing && existing.image === image && existing.name === name) {
+            if (
+              existing &&
+              existing.image === metadata.image &&
+              existing.name === metadata.name &&
+              existing.attributes === metadata.attributes
+            ) {
               return prev;
             }
             return {
               ...prev,
-              [cacheKey]: {
-                id,
-                dropId: drop.dropId,
-                name,
-                image,
-                attributes,
-              },
+              [cacheKey]: metadata,
             };
           });
           figureMetadataRetryAtRef.current.delete(cacheKey);
@@ -1013,7 +1007,7 @@ function App({ currentPath }: AppProps) {
         }
       })();
     });
-  }, [figureJsonBaseForDropId, getDropConfig]);
+  }, [getDropConfig]);
 
   const addLocalRevealedDudes = (ids: number[], dropId: string) => {
     const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
@@ -1077,7 +1071,8 @@ function App({ currentPath }: AppProps) {
 	      if (prev.phase !== 'ready') return prev;
 	      if (prev.autoOpening) return prev;
       if (!prev.revealedIds || !prev.revealedIds.length) return prev;
-      if (prev.frame >= BOX_FRAME_COUNT) return prev;
+      if (!dropRevealIsAnimated(prev.dropId)) return prev;
+      if (prev.frame >= revealFrameCountForDropId(prev.dropId)) return prev;
       return {
         ...prev,
         autoOpening: true,
@@ -1086,7 +1081,7 @@ function App({ currentPath }: AppProps) {
         hasRevealAttempted: prev.hasRevealAttempted || mode === 'fast',
       };
     });
-  }, []);
+  }, [dropRevealIsAnimated, revealFrameCountForDropId]);
 
 	  const openRevealOverlay = (
 	    id: string,
@@ -1102,10 +1097,10 @@ function App({ currentPath }: AppProps) {
 	    const overlayDropId = item.dropId || activeDrop.dropId;
 	    revealDismissLockedUntilRef.current = 0;
     preloadRevealSounds();
-    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX, overlayDropId);
-    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT, overlayDropId);
+    preloadBoxFrames(1, revealClickMaxForDropId(overlayDropId), overlayDropId);
+    preloadBoxFrames(revealAutoplayStartForDropId(overlayDropId), revealFrameCountForDropId(overlayDropId), overlayDropId);
     const originRect = toOverlayRect(rect);
-    const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+    const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight, boxAspectRatioForDropId(overlayDropId));
     setInventorySnapshot(inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     const nextOverlay: RevealOverlayState = {
@@ -1143,8 +1138,7 @@ function App({ currentPath }: AppProps) {
     const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/"/g, '\\"');
     const el = document.querySelector<HTMLElement>(`[data-inventory-id="${safeId}"]`);
     if (!el) return null;
-    const imageEl = el.querySelector<HTMLElement>('.inventory__image');
-    return (imageEl || el).getBoundingClientRect();
+    return getInventoryRevealRect(el);
   };
 
   useEffect(() => {
@@ -1181,7 +1175,7 @@ function App({ currentPath }: AppProps) {
     knownBoxIdsByDropRef.current = new Map();
     preloadedBoxFramesRef.current.clear();
     boxFramePreloadImagesRef.current.clear();
-    autoplayFramePreloadScheduledRef.current = false;
+    autoplayFramePreloadScheduledDropIdRef.current = null;
     videoPreloadKeyRef.current = '';
     if (videoPreloadRootRef.current) {
       videoPreloadRootRef.current.remove();
@@ -1384,9 +1378,9 @@ function App({ currentPath }: AppProps) {
       const next = prev.filter((cacheKey) => {
         const item = chainDudes.get(cacheKey);
         if (!item) return true;
-        if (item.image && String(item.image).trim()) return false;
         const meta = figureMetadataByKey[cacheKey];
-        return !meta?.image;
+        if (item.image && String(item.image).trim()) return false;
+        return !figureMetadataHasImage(meta);
       });
       return next.length === prev.length ? prev : next;
     });
@@ -1397,14 +1391,14 @@ function App({ currentPath }: AppProps) {
     localRevealedDudeKeys.forEach((cacheKey) => {
       const parsed = parseFigureMetadataCacheKey(cacheKey);
       if (!parsed) return;
-      if (!figureMetadataByKey[cacheKey]?.image) targetsByKey.set(cacheKey, parsed);
+      if (!figureMetadataHasImage(figureMetadataByKey[cacheKey])) targetsByKey.set(cacheKey, parsed);
     });
     inventoryView.forEach((item) => {
       if (item.kind !== 'dude') return;
       if (!item.dudeId) return;
       if (item.image && String(item.image).trim()) return;
       const cacheKey = figureMetadataCacheKey(item.dropId, item.dudeId);
-      if (!figureMetadataByKey[cacheKey]?.image) {
+      if (!figureMetadataHasImage(figureMetadataByKey[cacheKey])) {
         targetsByKey.set(cacheKey, { dropId: item.dropId, figureId: item.dudeId });
       }
     });
@@ -1443,7 +1437,8 @@ function App({ currentPath }: AppProps) {
   useEffect(() => {
     if (!revealOverlay || !revealOverlay.autoOpening) return;
     if (revealOverlayClosing) return;
-    if (revealOverlay.frame >= BOX_FRAME_COUNT) {
+    const frameCount = revealFrameCountForDropId(revealOverlay.dropId);
+    if (revealOverlay.frame >= frameCount) {
       setRevealOverlay((prev) => {
         if (!prev) return prev;
         if (!prev.autoOpening) return prev;
@@ -1456,18 +1451,18 @@ function App({ currentPath }: AppProps) {
     const timeout = window.setTimeout(() => {
       setRevealOverlay((prev) => {
         if (!prev || !prev.autoOpening) return prev;
-        const nextFrame = Math.min(prev.frame + 1, BOX_FRAME_COUNT);
+        const nextFrame = Math.min(prev.frame + 1, revealFrameCountForDropId(prev.dropId));
         const nextPhase =
           prev.phase === 'revealed'
             ? prev.phase
-            : prev.revealedIds && prev.revealedIds.length && nextFrame >= BOX_FRAME_MEDIA_START
+            : prev.revealedIds && prev.revealedIds.length && nextFrame >= revealMediaStartForDropId(prev.dropId)
               ? 'revealed'
               : prev.phase;
         return { ...prev, frame: nextFrame, phase: nextPhase };
       });
     }, delay);
     return () => window.clearTimeout(timeout);
-  }, [revealOverlay, revealOverlayClosing]);
+  }, [revealFrameCountForDropId, revealMediaStartForDropId, revealOverlay, revealOverlayClosing]);
 
   useEffect(() => {
     if (!revealOverlay) return;
@@ -1492,7 +1487,11 @@ function App({ currentPath }: AppProps) {
         revealOverlayResizeRafRef.current = null;
         setRevealOverlay((prev) => {
           if (!prev) return prev;
-          const nextTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+          const nextTarget = calcRevealTargetRect(
+            window.innerWidth,
+            window.innerHeight,
+            boxAspectRatioForDropId(prev.dropId),
+          );
           if (
             prev.targetRect.left === nextTarget.left &&
             prev.targetRect.top === nextTarget.top &&
@@ -1515,7 +1514,7 @@ function App({ currentPath }: AppProps) {
         revealOverlayResizeRafRef.current = null;
       }
     };
-  }, [revealOverlay]);
+  }, [boxAspectRatioForDropId, revealOverlay]);
 
   useEffect(() => {
     authLoadingSeenRef.current = false;
@@ -1592,14 +1591,13 @@ function App({ currentPath }: AppProps) {
       if (!parsed) return;
       const { dropId, figureId } = parsed;
       const meta = figureMetadataByKey[cacheKey];
-      if (!meta?.image) return;
       out.push({
         id: `local-dude-${dropId}-${figureId}`,
         dropId,
-        name: meta.name || `Figure ${figureId}`,
+        name: meta?.name || `Figure ${figureId}`,
         kind: 'dude',
-        image: meta.image,
-        attributes: meta.attributes || [],
+        image: meta?.image,
+        attributes: meta?.attributes || [],
         dudeId: figureId,
         status: 'pending',
       });
@@ -1619,7 +1617,7 @@ function App({ currentPath }: AppProps) {
       if (item.image && String(item.image).trim()) return item;
       const cacheKey = figureMetadataCacheKey(item.dropId, item.dudeId);
       const meta = figureMetadataByKey[cacheKey];
-      if (!meta?.image) return item;
+      if (!meta) return item;
       return {
         ...item,
         image: meta.image,
@@ -1670,14 +1668,17 @@ function App({ currentPath }: AppProps) {
     pendingRevealIds.size > 0 || localMintedItems.length > 0 || inventoryView.some((item) => item.kind === 'box');
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
-    preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
-  }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
+    if (!dropRevealIsAnimated(activeDrop.dropId)) return;
+    preloadBoxFrames(1, revealClickMaxForDropId(activeDrop.dropId), activeDrop.dropId);
+  }, [activeDrop.dropId, dropRevealIsAnimated, preloadBoxFrames, revealClickMaxForDropId, shouldPreloadBoxFramesInitial]);
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
+    if (!dropRevealIsAnimated(activeDrop.dropId)) return;
     if (typeof window === 'undefined') return;
-    if (autoplayFramePreloadScheduledRef.current) return;
-    autoplayFramePreloadScheduledRef.current = true;
-    const run = () => preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+    if (autoplayFramePreloadScheduledDropIdRef.current === activeDrop.dropId) return;
+    autoplayFramePreloadScheduledDropIdRef.current = activeDrop.dropId;
+    const run = () =>
+      preloadBoxFrames(revealAutoplayStartForDropId(activeDrop.dropId), revealFrameCountForDropId(activeDrop.dropId), activeDrop.dropId);
     const win = window as unknown as {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
       cancelIdleCallback?: (handle: number) => void;
@@ -1690,11 +1691,23 @@ function App({ currentPath }: AppProps) {
     }
     const timeout = window.setTimeout(run, 750);
     return () => window.clearTimeout(timeout);
-  }, [shouldPreloadBoxFramesInitial, preloadBoxFrames]);
+  }, [
+    activeDrop.dropId,
+    dropRevealIsAnimated,
+    preloadBoxFrames,
+    revealAutoplayStartForDropId,
+    revealFrameCountForDropId,
+    shouldPreloadBoxFramesInitial,
+  ]);
   useEffect(() => {
     if (!revealOverlay) return;
-    preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT, revealOverlay.dropId);
-  }, [revealOverlay, preloadBoxFrames]);
+    if (!dropRevealIsAnimated(revealOverlay.dropId)) return;
+    preloadBoxFrames(
+      revealAutoplayStartForDropId(revealOverlay.dropId),
+      revealFrameCountForDropId(revealOverlay.dropId),
+      revealOverlay.dropId,
+    );
+  }, [dropRevealIsAnimated, preloadBoxFrames, revealAutoplayStartForDropId, revealFrameCountForDropId, revealOverlay]);
   const pendingRevealItems = useMemo(() => {
     if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
     const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
@@ -2144,12 +2157,13 @@ function App({ currentPath }: AppProps) {
     setRevealLoading(boxAssetId);
     try {
       const revealDrop = requireKnownDropConfig(dropId, `reveal request for ${boxAssetId}`);
+      const revealContent = getDropContent(revealDrop.dropId);
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId, revealDrop.dropId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
       }
-      if (revealed.length) {
+      if (revealed.length && revealContent.figures.revealPresentation === 'videos') {
         const mediaIds = Array.from(
           new Set(
             revealed
@@ -2163,12 +2177,19 @@ function App({ currentPath }: AppProps) {
       }
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== boxAssetId) return prev;
+        const hasResults = revealed.length > 0;
         const nextPhase =
-          prev.phase === 'preparing'
-            ? prev.phase
-            : prev.frame >= BOX_FRAME_MEDIA_START && revealed.length
+          revealContent.reveal.mode === 'static'
+            ? hasResults
               ? 'revealed'
-              : 'ready';
+              : prev.phase === 'preparing'
+                ? prev.phase
+                : 'ready'
+            : prev.phase === 'preparing'
+              ? prev.phase
+              : prev.frame >= revealMediaStartForDropId(prev.dropId) && hasResults
+                ? 'revealed'
+                : 'ready';
         return { ...prev, phase: nextPhase, revealedIds: revealed };
       });
       queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
@@ -2193,7 +2214,10 @@ function App({ currentPath }: AppProps) {
     if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.phase !== 'ready') return;
     if (revealOverlay.autoOpening) return;
-    if (revealOverlay.frame >= BOX_FRAME_COUNT) return;
+    const revealContent = getDropContent(revealOverlay.dropId);
+    if (revealContent.reveal.mode === 'animated' && revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId)) {
+      return;
+    }
     if (!publicKey) {
       showToast('Connect wallet first');
       return;
@@ -2205,19 +2229,28 @@ function App({ currentPath }: AppProps) {
       if (!prev || prev.id !== revealOverlay.id) return prev;
       if (prev.phase !== 'ready') return prev;
       if (prev.autoOpening) return prev;
+      if (revealContent.reveal.mode !== 'animated') {
+        return {
+          ...prev,
+          hasRevealAttempted: true,
+          advanceClicks: 0,
+        };
+      }
 
       const hasResults = Boolean(prev.revealedIds?.length);
       const canAdvance =
-        prev.frame < BOX_FRAME_CLICK_MAX || (prev.frame === BOX_FRAME_CLICK_MAX && hasResults);
+        prev.frame < revealClickMaxForDropId(prev.dropId) ||
+        (prev.frame === revealClickMaxForDropId(prev.dropId) && hasResults);
       const shouldAdvanceNow = canAdvance;
       const nextFrame = shouldAdvanceNow
-        ? prev.frame < BOX_FRAME_CLICK_MAX
+        ? prev.frame < revealClickMaxForDropId(prev.dropId)
           ? prev.frame + 1
-          : prev.frame === BOX_FRAME_CLICK_MAX && hasResults
-            ? BOX_FRAME_AUTOPLAY_START
+          : prev.frame === revealClickMaxForDropId(prev.dropId) && hasResults
+            ? revealAutoplayStartForDropId(prev.dropId)
             : prev.frame
         : prev.frame;
-      const shouldAuto = hasResults && nextFrame === BOX_FRAME_AUTOPLAY_START && prev.frame !== nextFrame;
+      const shouldAuto =
+        hasResults && nextFrame === revealAutoplayStartForDropId(prev.dropId) && prev.frame !== nextFrame;
       return {
         ...prev,
         frame: nextFrame,
@@ -2236,7 +2269,7 @@ function App({ currentPath }: AppProps) {
 	  const handleRevealOverlayBackdropClick = () => {
 	    if (!revealOverlay || revealOverlayClosing) return;
 	    const hasResults = Boolean(revealOverlay.revealedIds?.length);
-    if (hasResults && revealOverlay.frame < BOX_FRAME_COUNT) {
+    if (hasResults && dropRevealIsAnimated(revealOverlay.dropId) && revealOverlay.frame < revealFrameCountForDropId(revealOverlay.dropId)) {
       startAutoOpening('fast');
       return;
     }
@@ -2252,21 +2285,34 @@ function App({ currentPath }: AppProps) {
 	  const openPreparingOverlayForBox = useCallback(
 	    (box: InventoryItem) => {
 	      preloadRevealSounds();
-	      preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
-	      preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+	      preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
+	      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
 	      if (typeof window === 'undefined') return;
 	      const originRect = findInventoryRect(box.id);
-	      const fallbackTarget = calcRevealTargetRect(window.innerWidth, window.innerHeight);
+	      const fallbackTarget = calcRevealTargetRect(
+        window.innerWidth,
+        window.innerHeight,
+        boxAspectRatioForDropId(box.dropId),
+      );
 	      const fallbackRect = new DOMRect(
 	        fallbackTarget.left,
 	        fallbackTarget.top,
 	        fallbackTarget.width,
 	        fallbackTarget.height,
 	      );
-	      const overlayItem: InventoryItem = { ...box, image: boxImageForDropId(box.dropId) };
+	      const overlayItem: InventoryItem = { ...box, image: box.image || boxImageForDropId(box.dropId) };
 	      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
 	    },
-	    [boxImageForDropId, openRevealOverlay, preloadBoxFrames, preloadRevealSounds],
+	    [
+      boxAspectRatioForDropId,
+      boxImageForDropId,
+      openRevealOverlay,
+      preloadBoxFrames,
+      preloadRevealSounds,
+      revealAutoplayStartForDropId,
+      revealClickMaxForDropId,
+      revealFrameCountForDropId,
+    ],
 	  );
 
 	  const handleOpenSelectedBox = async () => {
@@ -2535,8 +2581,15 @@ function App({ currentPath }: AppProps) {
         };
       })()
     : undefined;
+  const revealOverlayContent = useMemo(
+    () => getDropContent(revealOverlay?.dropId || activeDrop.dropId),
+    [activeDrop.dropId, getDropContent, revealOverlay?.dropId],
+  );
   const showRevealOutcome = Boolean(
-    revealOverlay && revealOverlay.revealedIds?.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START,
+    revealOverlay &&
+      revealOverlay.revealedIds?.length &&
+      (revealOverlayContent.reveal.mode === 'static' ||
+        revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
   );
   const revealOverlayStage = revealOverlay
     ? revealOverlay.phase === 'preparing'
@@ -2545,23 +2598,52 @@ function App({ currentPath }: AppProps) {
         ? 'revealed'
         : 'ready'
     : 'ready';
-  const revealMediaItems = useMemo(() => {
-    if (!revealOverlay?.revealedIds?.length) return [] as Array<{ figureId: number; mediaId: number; index: number }>;
+  const revealMediaItems = useMemo<Array<{ figureId: number; index: number; mediaId?: number; image?: string; name: string }>>(() => {
+    if (!revealOverlay?.revealedIds?.length) {
+      return [];
+    }
     const revealDrop = getDropConfig(revealOverlay.dropId);
-    const resolved = revealOverlay.revealedIds
-      .map((figureId) => {
-        const mediaId = getMediaIdForFigureId(figureId, revealDrop.figureMedia);
-        if (!mediaId) return null;
-        return { figureId, mediaId };
-      })
-      .filter((entry): entry is { figureId: number; mediaId: number } => Boolean(entry));
-    return resolved.map((entry, index) => ({ ...entry, index }));
-  }, [getDropConfig, revealOverlay?.dropId, revealOverlay?.revealedIds]);
+    if (revealOverlayContent.figures.revealPresentation === 'videos') {
+      return revealOverlay.revealedIds.map((figureId, index) => {
+        const cacheKey = figureMetadataCacheKey(revealOverlay.dropId, figureId);
+        const meta = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(revealOverlay.dropId, figureId);
+        return {
+          figureId,
+          index,
+          mediaId: getMediaIdForFigureId(figureId, revealDrop.figureMedia),
+          image: meta?.image,
+          name: meta?.name || `Figure ${figureId}`,
+        };
+      });
+    }
+    return revealOverlay.revealedIds.map((figureId, index) => {
+      const cacheKey = figureMetadataCacheKey(revealOverlay.dropId, figureId);
+      const meta = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(revealOverlay.dropId, figureId);
+      return {
+        figureId,
+        index,
+        image: meta?.image,
+        name: meta?.name || `Figure ${figureId}`,
+      };
+    });
+  }, [figureMetadataByKey, getDropConfig, revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayContent.figures.revealPresentation]);
   const revealMediaIds = useMemo(
-    () => Array.from(new Set(revealMediaItems.map((entry) => entry.mediaId))),
+    () =>
+      Array.from(
+        new Set(
+          revealMediaItems
+            .map((entry) => entry.mediaId)
+            .filter((mediaId): mediaId is number => Boolean(mediaId)),
+        ),
+      ),
     [revealMediaItems],
   );
-  const revealMediaVisible = Boolean(revealOverlay && revealMediaItems.length && revealOverlay.frame >= BOX_FRAME_MEDIA_START);
+  const revealMediaVisible = Boolean(
+    revealOverlay &&
+      revealMediaItems.length &&
+      (revealOverlayContent.reveal.mode === 'static' ||
+        revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
+  );
 
   const revealSoundPlayedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2585,6 +2667,11 @@ function App({ currentPath }: AppProps) {
     }
   }, [revealOverlay?.id, revealMediaVisible]);
 
+  useEffect(() => {
+    if (!revealOverlay?.revealedIds?.length) return;
+    queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
+  }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds]);
+
 	  const revealMediaStyle = useMemo(() => {
 	    if (!revealOverlay || !revealMediaItems.length) return undefined;
 	    const width = revealOverlay.targetRect.width;
@@ -2606,12 +2693,20 @@ function App({ currentPath }: AppProps) {
 	  }, [revealOverlay, revealMediaItems.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
+    if (revealOverlayContent.figures.revealPresentation !== 'videos') return;
     preloadRevealVideos(revealMediaIds, revealOverlay?.dropId || activeDrop.dropId);
-  }, [activeDrop.dropId, preloadRevealVideos, revealMediaIds, revealOverlay?.dropId]);
+  }, [activeDrop.dropId, preloadRevealVideos, revealMediaIds, revealOverlay?.dropId, revealOverlayContent.figures.revealPresentation]);
+  const animatedRevealFrameSrc =
+    revealOverlay && revealOverlay.frame && revealOverlayContent.reveal.mode === 'animated' && revealFrameSequence
+      ? joinDropAssetUrl(
+          revealFrameSequence.baseUrl,
+          `${Math.min(Math.max(revealOverlay.frame, 1), revealFrameSequence.frameCount)}.${revealFrameSequence.ext}`,
+        )
+      : undefined;
   const revealBoxFrameSrc =
     revealOverlay && revealOverlay.frame
-      ? `${revealBoxFrameBase}${Math.min(Math.max(revealOverlay.frame, 1), BOX_FRAME_COUNT)}.webp`
-      : '';
+      ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
+      : undefined;
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
       ? 'preparing to unbox...'
@@ -2619,7 +2714,11 @@ function App({ currentPath }: AppProps) {
         ? ''
         : revealOverlay
           ? revealOverlay.hasRevealAttempted
-            ? 'keep clicking the box'
+            ? revealOverlayContent.reveal.mode === 'animated'
+              ? 'keep clicking the box'
+              : revealLoading === revealOverlay.id
+                ? 'opening...'
+                : ''
             : 'click the box to open'
           : '';
   const ownerPickerValue = owner || '';
@@ -2663,7 +2762,7 @@ function App({ currentPath }: AppProps) {
                 style={revealMediaStyle}
                 aria-hidden="true"
               >
-                {revealMediaItems.map(({ figureId, mediaId, index }) => {
+                {revealMediaItems.map(({ figureId, mediaId, image, index, name }) => {
                   const count = revealMediaItems.length;
                   const angle = -Math.PI / 2 + (index * (Math.PI * 2)) / Math.max(count, 1);
                   const ring = count <= 1 ? 0 : count <= 3 ? 28 : count <= 5 ? 32 : count <= 8 ? 36 : 40;
@@ -2680,21 +2779,38 @@ function App({ currentPath }: AppProps) {
                     }}
                   >
                     <div className="reveal-overlay__media-float">
-	                      <video
-	                        className="reveal-overlay__video"
-	                        autoPlay
-	                        muted
-	                        loop
-	                        playsInline
-	                        preload="metadata"
-	                        draggable={false}
-	                      >
-                        <source
-                          src={`${revealMediaBase}${mediaId}.mov`}
-                          type='video/quicktime; codecs="hvc1"'
-                        />
-                        <source src={`${revealMediaBase}${mediaId}.webm`} type="video/webm" />
-                      </video>
+                      {revealOverlayContent.figures.revealPresentation === 'videos' && revealMediaBase && mediaId ? (
+                        <video
+                          className="reveal-overlay__video"
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                          preload="metadata"
+                          poster={image}
+                          draggable={false}
+                        >
+                          <source
+                            src={joinDropAssetUrl(revealMediaBase, `${mediaId}.mov`)}
+                            type='video/quicktime; codecs="hvc1"'
+                          />
+                          <source src={joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`)} type="video/webm" />
+                        </video>
+                      ) : image ? (
+                        <>
+                          <img
+                            src={image}
+                            alt={name}
+                            className="reveal-overlay__still"
+                            draggable={false}
+                            onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                            onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                          />
+                          <div className="reveal-overlay__still reveal-overlay__still--placeholder" hidden />
+                        </>
+                      ) : (
+                        <div className="reveal-overlay__still reveal-overlay__still--placeholder" />
+                      )}
                     </div>
                   </div>
                   );
@@ -2710,19 +2826,29 @@ function App({ currentPath }: AppProps) {
                 revealOverlayClosing ||
                 revealOverlay.phase !== 'ready' ||
                 revealOverlay.autoOpening ||
-                revealOverlay.frame >= BOX_FRAME_COUNT
+                (revealOverlayContent.reveal.mode === 'animated' &&
+                  revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId))
               }
               onClick={(evt) => {
                 evt.stopPropagation();
                 handleRevealOverlayClick();
               }}
 	            >
-	              <img
-	                src={revealBoxFrameSrc}
-	                alt={revealOverlay.name}
-	                className="reveal-overlay__image"
-	                draggable={false}
-	              />
+                {revealBoxFrameSrc ? (
+                  <>
+	                  <img
+	                    src={revealBoxFrameSrc}
+	                    alt={revealOverlay.name}
+	                    className="reveal-overlay__image"
+	                    draggable={false}
+                      onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                      onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+	                  />
+                    <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden aria-hidden="true" />
+                  </>
+                ) : (
+                  <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
+                )}
 	            </button>
 	          </div>
 	          <div className="reveal-overlay__note">{revealOverlayNote}</div>
@@ -2865,6 +2991,7 @@ function App({ currentPath }: AppProps) {
         onError={showToast}
         title={activeDrop.collectionName}
         boxImageSrc={defaultBoxImage}
+        boxAspectRatio={boxAspectRatioForDropId(activeDrop.dropId)}
         priceSol={activeDrop.priceSol}
         discountPriceSol={activeDrop.discountPriceSol}
         secondaryHref={activeDrop.secondaryMarketHref}
@@ -2888,9 +3015,11 @@ function App({ currentPath }: AppProps) {
 		              setVisible(true);
 		              return;
 		            }
+                const revealItem = inventoryIndex.get(id);
+                const revealDropId = revealItem?.dropId || activeDrop.dropId;
 		            preloadRevealSounds();
-		            preloadBoxFrames(1, BOX_FRAME_CLICK_MAX);
-		            preloadBoxFrames(BOX_FRAME_AUTOPLAY_START, BOX_FRAME_COUNT);
+		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
+		            preloadBoxFrames(revealAutoplayStartForDropId(revealDropId), revealFrameCountForDropId(revealDropId), revealDropId);
 		            const refreshedRect = findInventoryRect(id);
 		            openRevealOverlay(id, refreshedRect || rect);
 		            const signedIn = await ensureSignedIn();
