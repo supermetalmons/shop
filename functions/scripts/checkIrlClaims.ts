@@ -54,7 +54,6 @@ const FIREBASE_CLI_CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.ap
 const FIREBASE_CLI_CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi';
 const cluster = FUNCTIONS_DEPLOYMENT.solanaCluster;
 const collectionMint = FUNCTIONS_DEPLOYMENT.collectionMint;
-const metadataBase = FUNCTIONS_DEPLOYMENT.metadataBase;
 const HELIUS_RPC_BASE =
   cluster === 'mainnet-beta'
     ? 'https://mainnet.helius-rpc.com'
@@ -366,10 +365,8 @@ function assetMatchesCollection(asset: DasAsset, expectedCollectionMint: string)
 function isMonsAsset(asset: DasAsset): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
-  if (collectionMint && assetMatchesCollection(asset, collectionMint)) return true;
-
-  const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
-  return typeof uri === 'string' && uri.startsWith(metadataBase);
+  if (!collectionMint) return false;
+  return assetMatchesCollection(asset, collectionMint);
 }
 
 async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {

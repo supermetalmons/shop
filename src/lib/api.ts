@@ -145,50 +145,30 @@ const heliusApiKey = getHeliusApiKey();
 
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
-  'dropId' | 'solanaCluster' | 'collectionMint' | 'metadataBase' | 'boxMinterProgramId'
-> & {
-  normalizedMetadataBase: string;
-};
-
-function assertUniqueFrontendMetadataBases(drops: FrontendDropRuntime[]) {
-  const dropIdsByMetadataBase = new Map<string, string[]>();
-  drops.forEach((drop) => {
-    if (!drop.normalizedMetadataBase) return;
-    const existing = dropIdsByMetadataBase.get(drop.normalizedMetadataBase) || [];
-    existing.push(drop.dropId);
-    dropIdsByMetadataBase.set(drop.normalizedMetadataBase, existing);
-  });
-  const duplicates = Array.from(dropIdsByMetadataBase.entries())
-    .filter(([, dropIds]) => dropIds.length > 1)
-    .map(([metadataBase, dropIds]) => `${metadataBase} => ${dropIds.join(', ')}`);
-  if (!duplicates.length) return;
-  throw new Error(
-    `Duplicate metadataBase configured in src/config/deployment.ts.\n` +
-      duplicates.map((entry) => `- ${entry}`).join('\n') +
-      `\n` +
-      `Each drop must have a unique normalized metadataBase to keep asset resolution unambiguous.`,
-  );
-}
+  'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId'
+>;
 
 const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
   .sort((a, b) => a.localeCompare(b))
   .map((dropId) => {
     const drop = FRONTEND_DROPS[dropId];
-    const normalizedMetadataBase = String(drop.metadataBase || '').trim().replace(/\/+$/, '').toLowerCase();
     return {
       dropId: drop.dropId,
       solanaCluster: drop.solanaCluster,
       collectionMint: drop.collectionMint,
-      metadataBase: drop.metadataBase,
       boxMinterProgramId: drop.boxMinterProgramId,
-      normalizedMetadataBase,
     };
   });
-assertUniqueFrontendMetadataBases(FRONTEND_DROP_RUNTIMES);
 
 const FRONTEND_DROP_BY_ID = new Map<string, FrontendDropRuntime>(
   FRONTEND_DROP_RUNTIMES.map((drop) => [drop.dropId, drop]),
 );
+const FRONTEND_DROPS_BY_COLLECTION_MINT = new Map<string, FrontendDropRuntime[]>();
+FRONTEND_DROP_RUNTIMES.forEach((drop) => {
+  const existing = FRONTEND_DROPS_BY_COLLECTION_MINT.get(drop.collectionMint) || [];
+  existing.push(drop);
+  FRONTEND_DROPS_BY_COLLECTION_MINT.set(drop.collectionMint, existing);
+});
 
 type DasAsset = Record<string, any>;
 const ASSET_DROP_ID_FIELD = '__monsDropId';
@@ -326,17 +306,19 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   return undefined;
 }
 
-function assetMatchesCollection(asset: DasAsset, collectionMint: string): boolean {
+function assetCollectionMints(asset: DasAsset): string[] {
+  const out = new Set<string>();
   const grouped = asset?.grouping;
   if (Array.isArray(grouped)) {
     for (const g of grouped) {
-      if (g?.group_key === 'collection' && g?.group_value === collectionMint) return true;
+      if (g?.group_key === 'collection' && typeof g?.group_value === 'string' && g.group_value) {
+        out.add(g.group_value);
+      }
     }
   }
-  // Fallback for alternate DAS shapes.
   const contentCollectionKey = asset?.content?.metadata?.collection?.key;
-  if (typeof contentCollectionKey === 'string' && contentCollectionKey === collectionMint) return true;
-  return false;
+  if (typeof contentCollectionKey === 'string' && contentCollectionKey) out.add(contentCollectionKey);
+  return Array.from(out);
 }
 
 function isBurntAsset(asset: DasAsset): boolean {
@@ -355,40 +337,24 @@ function isBurntAsset(asset: DasAsset): boolean {
   return false;
 }
 
-function assetMetadataUriLower(asset: DasAsset): string {
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  return typeof uri === 'string' ? uri.trim().toLowerCase() : '';
+function resolveSingleDropRuntime(
+  candidates: FrontendDropRuntime[],
+  solanaCluster?: SolanaCluster,
+): FrontendDropRuntime | null {
+  const scoped = solanaCluster ? candidates.filter((drop) => drop.solanaCluster === solanaCluster) : candidates;
+  if (scoped.length !== 1) return null;
+  return scoped[0];
 }
 
-function metadataBaseMatchesAssetUri(normalizedMetadataBase: string, uriLower: string): boolean {
-  if (!normalizedMetadataBase || !uriLower) return false;
-  return uriLower === normalizedMetadataBase || uriLower.startsWith(`${normalizedMetadataBase}/`);
-}
-
-function resolveAssetDropId(asset: DasAsset): string | null {
+function resolveAssetDropId(asset: DasAsset, solanaCluster?: SolanaCluster): string | null {
   const cached = (asset as any)?.[ASSET_DROP_ID_FIELD];
   if (typeof cached === 'string' && FRONTEND_DROP_BY_ID.has(cached)) return cached;
 
-  for (const drop of FRONTEND_DROP_RUNTIMES) {
-    if (assetMatchesCollection(asset, drop.collectionMint)) {
-      (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
-      return drop.dropId;
-    }
-  }
-
-  const uriLower = assetMetadataUriLower(asset);
-  if (!uriLower) return null;
-  for (const drop of FRONTEND_DROP_RUNTIMES) {
-    if (metadataBaseMatchesAssetUri(drop.normalizedMetadataBase, uriLower)) {
-      (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
-      return drop.dropId;
-    }
+  for (const collectionMint of assetCollectionMints(asset)) {
+    const drop = resolveSingleDropRuntime(FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [], solanaCluster);
+    if (!drop) continue;
+    (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
+    return drop.dropId;
   }
 
   return null;
@@ -486,7 +452,7 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
     }
 
     items.forEach((asset) => {
-      const dropId = resolveAssetDropId(asset);
+      const dropId = resolveAssetDropId(asset, drop.solanaCluster);
       if (dropId !== drop.dropId) return;
       if (!isMonsAsset(asset)) return;
       const assetId = typeof asset?.id === 'string' ? asset.id : '';

@@ -114,8 +114,6 @@ type DropRuntime = {
   config: FunctionsDropConfig;
   cluster: SolanaCluster;
   heliusRpcBase: string;
-  metadataBase: string;
-  normalizedMetadataBase: string;
   connectionRpcUrl: string;
   boxMinterProgramId: PublicKey;
   boxMinterConfigPda: PublicKey;
@@ -157,36 +155,6 @@ function requireConfiguredPubkey(label: string, value: string | undefined): Publ
   }
 }
 
-function normalizeMetadataBaseForMatching(metadataBase: string): string {
-  return String(metadataBase || '').trim().replace(/\/+$/, '').toLowerCase();
-}
-
-function metadataBaseMatchesAssetUri(normalizedMetadataBase: string, uri: string): boolean {
-  const normalizedUri = String(uri || '').trim().toLowerCase();
-  if (!normalizedMetadataBase || !normalizedUri) return false;
-  return normalizedUri === normalizedMetadataBase || normalizedUri.startsWith(`${normalizedMetadataBase}/`);
-}
-
-function assertUniqueFunctionsMetadataBases(runtimes: DropRuntime[]) {
-  const dropIdsByMetadataBase = new Map<string, string[]>();
-  runtimes.forEach((runtime) => {
-    if (!runtime.normalizedMetadataBase) return;
-    const existing = dropIdsByMetadataBase.get(runtime.normalizedMetadataBase) || [];
-    existing.push(runtime.dropId);
-    dropIdsByMetadataBase.set(runtime.normalizedMetadataBase, existing);
-  });
-  const duplicates = Array.from(dropIdsByMetadataBase.entries())
-    .filter(([, dropIds]) => dropIds.length > 1)
-    .map(([metadataBase, dropIds]) => `${metadataBase} => ${dropIds.join(', ')}`);
-  if (!duplicates.length) return;
-  throw new Error(
-    `Duplicate metadataBase configured in functions/src/config/deployment.ts.\n` +
-      duplicates.map((entry) => `- ${entry}`).join('\n') +
-      `\n` +
-      `Each drop must have a unique normalized metadataBase to keep asset validation unambiguous.`,
-  );
-}
-
 function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   const dropId = normalizeDropId(config.dropId);
   const cluster = config.solanaCluster as SolanaCluster;
@@ -224,8 +192,6 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', config.collectionMint);
   const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree);
   const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable);
-  const metadataBase = String(config.metadataBase || '').trim().replace(/\/+$/, '');
-  const normalizedMetadataBase = normalizeMetadataBaseForMatching(metadataBase);
   const heliusRpcBase = heliusRpcBaseForCluster(cluster);
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   const connectionRpcUrl = apiKey ? `${heliusRpcBase}/?api-key=${apiKey}` : '';
@@ -234,8 +200,6 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     config,
     cluster,
     heliusRpcBase,
-    metadataBase,
-    normalizedMetadataBase,
     connectionRpcUrl,
     boxMinterProgramId,
     boxMinterConfigPda,
@@ -257,7 +221,6 @@ Object.entries(FUNCTIONS_DROPS).forEach(([dropIdKey, dropConfig]) => {
   const runtime = buildDropRuntime(dropConfig);
   DROP_RUNTIMES[normalizeDropId(dropIdKey)] = runtime;
 });
-assertUniqueFunctionsMetadataBases(Object.values(DROP_RUNTIMES));
 if (!Object.keys(DROP_RUNTIMES).length) {
   throw new Error('functions/src/config/deployment.ts has no configured drops');
 }
@@ -1169,7 +1132,7 @@ async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
   //
   // NOTE: Newly minted assets can briefly miss collection-group indexing on devnet.
   // We first try the collection-group query (fast/small), then fall back to an ungrouped query
-  // and filter locally by merkle tree + metadata patterns.
+  // and filter locally by explicit collection identity from the asset payload.
   const baseParams = {
     ownerAddress: owner,
     page: 1,
@@ -1345,23 +1308,23 @@ function getDudeIdFromAsset(asset: any): number | undefined {
   return undefined;
 }
 
+function assetMatchesCollection(asset: any, expectedCollectionMint: string): boolean {
+  const grouped = asset?.grouping;
+  if (Array.isArray(grouped)) {
+    for (const group of grouped) {
+      if (group?.group_key === 'collection' && group?.group_value === expectedCollectionMint) return true;
+    }
+  }
+  const collectionKey = asset?.content?.metadata?.collection?.key;
+  return typeof collectionKey === 'string' && collectionKey === expectedCollectionMint;
+}
+
 function isMonsAsset(asset: any, dropRuntime: DropRuntime): boolean {
   const kind = getAssetKind(asset);
   if (!kind) return false;
 
-  // Primary: collection grouping match (if configured).
-  if (dropRuntime.collectionMintStr) {
-    const groupingMatch = (asset?.grouping || []).some(
-      (g: any) => g?.group_key === 'collection' && g?.group_value === dropRuntime.collectionMintStr,
-    );
-    if (groupingMatch) return true;
-  }
-
-  // Fallbacks: allow inventory to work during collection-indexing delays.
-  const uri: string = asset?.content?.json_uri || asset?.content?.jsonUri || '';
-  if (metadataBaseMatchesAssetUri(dropRuntime.normalizedMetadataBase, uri)) return true;
-
-  return false;
+  if (!dropRuntime.collectionMintStr) return false;
+  return assetMatchesCollection(asset, dropRuntime.collectionMintStr);
 }
 
 async function fetchAssetRetry(assetId: string, dropRuntime: DropRuntime) {
