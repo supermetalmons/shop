@@ -63,12 +63,12 @@ export const NEW_DROP: NewDropConfig = {
     dropId: 'green_boxes_devnet',
     metadataBase: 'https://assets.mons.link/drops/test/green',
     collectionMetadata: {
-      name: 'Green Boxes',
+      name: 'green test',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'a collection of green boxes, figures and receipts',
+      description: 'green test mons.shop drop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/lsb/box/default.webp',
+      image: 'https://assets.mons.link/drops/test/green/box/default.png',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
     receiptsTree: {
