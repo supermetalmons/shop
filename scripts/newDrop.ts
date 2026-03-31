@@ -28,6 +28,7 @@ export type NewDropOnchainConfig = {
   treasury?: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   maxSupply: number;
   itemsPerBox: number;
   maxPerTx: number;
@@ -78,6 +79,7 @@ export const NEW_DROP: NewDropConfig = {
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 1,
     discountPriceSol: 0.55,
+    discountMintsPerWallet: 1,
     maxSupply: 333,
     itemsPerBox: 3,
     maxPerTx: 15,

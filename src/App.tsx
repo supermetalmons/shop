@@ -22,7 +22,7 @@ import {
   saveEncryptedAddress,
   issueReceipts,
 } from './lib/api';
-import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, discountMintRecordPda, fetchBoxMinterConfig } from './lib/boxMinter';
+import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount } from './lib/boxMinter';
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { soundPlayer } from './lib/SoundPlayer';
@@ -137,8 +137,10 @@ function persistRecentReveals(wallet: string, ids: string[]) {
 }
 
 const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
-function discountUsedVersion(drop: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'discountMerkleRoot'>): string {
-  return `${String(drop.dropId || '').trim().toLowerCase()}:${drop.boxMinterProgramId}:${drop.discountMerkleRoot}`;
+function discountUsedVersion(
+  drop: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'discountMerkleRoot' | 'discountMintsPerWallet'>,
+): string {
+  return `${String(drop.dropId || '').trim().toLowerCase()}:${drop.boxMinterProgramId}:${drop.discountMerkleRoot}:${drop.discountMintsPerWallet}`;
 }
 
 function discountUsedScope(drop: Pick<FrontendDeploymentConfig, 'dropId'>): string {
@@ -168,24 +170,30 @@ function cleanupDiscountUsedKeys(scopePrefix: string, wallet: string, keepKey: s
   }
 }
 
-function loadDiscountUsed(scopePrefix: string, version: string, wallet?: string): boolean {
-  if (typeof window === 'undefined' || !wallet) return false;
+function parseDiscountUsedCount(raw: string | null | undefined): number {
+  const parsed = Math.floor(Number(raw));
+  if (!Number.isFinite(parsed) || parsed < 1) return 0;
+  return parsed;
+}
+
+function loadDiscountUsedCount(scopePrefix: string, version: string, wallet?: string): number {
+  if (typeof window === 'undefined' || !wallet) return 0;
   const key = discountUsedKey(version, wallet);
   cleanupDiscountUsedKeys(scopePrefix, wallet, key);
   try {
-    return window.localStorage?.getItem(key) === '1';
+    return parseDiscountUsedCount(window.localStorage?.getItem(key));
   } catch {
-    return false;
+    return 0;
   }
 }
 
-function persistDiscountUsed(scopePrefix: string, version: string, wallet: string, used: boolean) {
+function persistDiscountUsedCount(scopePrefix: string, version: string, wallet: string, usedCount: number) {
   if (typeof window === 'undefined') return;
   const key = discountUsedKey(version, wallet);
   cleanupDiscountUsedKeys(scopePrefix, wallet, key);
   try {
-    if (used) {
-      window.localStorage?.setItem(key, '1');
+    if (usedCount > 0) {
+      window.localStorage?.setItem(key, String(usedCount));
     } else {
       window.localStorage?.removeItem(key);
     }
@@ -517,11 +525,13 @@ function App({ currentPath }: AppProps) {
     [activeDrop.maxPerTx, activeDrop.maxSupply],
   );
   const effectiveMintStats = activeDrop.forceSoldOut ? forcedSoldOutStats : mintStats || activeMintStatsFallback;
+  const activeDiscountAllowance = mintStats?.discountMintsPerWallet ?? activeDrop.discountMintsPerWallet;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
   const [discountEligible, setDiscountEligible] = useState(false);
+  const [discountRemainingCount, setDiscountRemainingCount] = useState(0);
   const [discountChecking, setDiscountChecking] = useState(false);
   const [guestDiscountReady, setGuestDiscountReady] = useState(false);
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
@@ -542,8 +552,8 @@ function App({ currentPath }: AppProps) {
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
-  const [discountUsed, setDiscountUsed] = useState<boolean>(() =>
-    loadDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet),
+  const [discountUsedCount, setDiscountUsedCount] = useState<number>(() =>
+    loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet),
   );
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
@@ -1149,10 +1159,12 @@ function App({ currentPath }: AppProps) {
   }, [connectedWallet]);
 
   useEffect(() => {
-    setDiscountUsed(loadDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet));
+    const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
+    setDiscountUsedCount(usedCount);
+    setDiscountRemainingCount(Math.max(0, activeDiscountAllowance - usedCount));
     setDiscountEligible(false);
     setDiscountChecking(false);
-  }, [activeDiscountScope, activeDiscountVersion, connectedWallet]);
+  }, [activeDiscountAllowance, activeDiscountScope, activeDiscountVersion, connectedWallet]);
 
   useEffect(() => {
     setLocalPendingReveals(loadPendingReveals(connectedWallet));
@@ -1892,8 +1904,9 @@ function App({ currentPath }: AppProps) {
   }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
 
   useEffect(() => {
-    if (!publicKey || mintedOut || discountUsed) {
+    if (!publicKey || mintedOut) {
       setDiscountEligible(false);
+      setDiscountRemainingCount(0);
       setDiscountChecking(false);
       return;
     }
@@ -1906,22 +1919,23 @@ function App({ currentPath }: AppProps) {
         if (cancelled) return;
         if (!listed) {
           setDiscountEligible(false);
+          setDiscountRemainingCount(0);
+          setDiscountUsedCount(0);
+          persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, 0);
           return;
         }
-        const [discountPda] = discountMintRecordPda(publicKey, new PublicKey(activeDrop.boxMinterProgramId));
-        const info = await activeConnection.getAccountInfo(discountPda, 'confirmed');
+        const usedCount = await fetchDiscountMintRecordUsedCount(activeConnection, publicKey, activeDrop);
         if (cancelled) return;
-        if (info) {
-          setDiscountEligible(false);
-          setDiscountUsed(true);
-          persistDiscountUsed(activeDiscountScope, activeDiscountVersion, address, true);
-          return;
-        }
-        setDiscountEligible(true);
+        const remainingCount = Math.max(0, activeDiscountAllowance - usedCount);
+        setDiscountUsedCount(usedCount);
+        setDiscountRemainingCount(remainingCount);
+        setDiscountEligible(remainingCount > 0);
+        persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, usedCount);
       } catch (err) {
         if (cancelled) return;
         console.warn('[mons] failed to check discount eligibility', err);
         setDiscountEligible(false);
+        setDiscountRemainingCount(0);
       } finally {
         if (!cancelled) setDiscountChecking(false);
       }
@@ -1932,11 +1946,10 @@ function App({ currentPath }: AppProps) {
     };
   }, [
     activeConnection,
+    activeDiscountAllowance,
     activeDiscountScope,
     activeDiscountVersion,
-    activeDrop.boxMinterProgramId,
     activeDrop.dropId,
-    discountUsed,
     mintedOut,
     publicKey,
   ]);
@@ -2000,26 +2013,51 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleDiscountMint = async () => {
+  const handleDiscountMint = async (quantity: number) => {
     if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
       return;
     }
     if (mintedOut || discountMinting || minting) return;
+    const maxDiscountQuantity = Math.max(0, discountRemainingCount);
+    if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountQuantity) {
+      if (maxDiscountQuantity > 0) {
+        showToast(`Discount available for up to ${maxDiscountQuantity} box${maxDiscountQuantity === 1 ? '' : 'es'}`);
+      } else {
+        showToast('Wallet is not eligible for the discount');
+      }
+      return;
+    }
 
     setDiscountMinting(true);
     try {
       const proof = await getDiscountProof(activeDrop.dropId, publicKey.toBase58());
       if (!proof) {
         setDiscountEligible(false);
+        setDiscountRemainingCount(0);
         showToast('Wallet is not eligible for the discount');
         return;
       }
 
       const cfg = await fetchBoxMinterConfig(activeConnection, activeDrop);
+      const onchainDiscountAllowance = cfg.discountMintsPerWallet;
+      const onchainUsedCount = await fetchDiscountMintRecordUsedCount(activeConnection, publicKey, activeDrop);
+      const onchainRemainingCount = Math.max(0, onchainDiscountAllowance - onchainUsedCount);
+      if (quantity > onchainRemainingCount) {
+        setDiscountUsedCount(onchainUsedCount);
+        setDiscountRemainingCount(onchainRemainingCount);
+        setDiscountEligible(onchainRemainingCount > 0);
+        if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, onchainUsedCount);
+        if (onchainRemainingCount > 0) {
+          showToast(`Discount available for up to ${onchainRemainingCount} box${onchainRemainingCount === 1 ? '' : 'es'}`);
+        } else {
+          showToast('Wallet is not eligible for the discount');
+        }
+        return;
+      }
       const sendOnce = async () => {
-        const tx = await buildMintDiscountedBoxTx(activeConnection, cfg, publicKey, proof, activeDrop);
+        const tx = await buildMintDiscountedBoxTx(activeConnection, cfg, publicKey, quantity, proof, activeDrop);
         const sig = await signAndSendViaConnection(tx, activeConnection);
         await activeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
@@ -2031,10 +2069,13 @@ function App({ currentPath }: AppProps) {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(1, activeDrop.dropId);
-      setDiscountUsed(true);
-      setDiscountEligible(false);
-      if (connectedWallet) persistDiscountUsed(activeDiscountScope, activeDiscountVersion, connectedWallet, true);
+      addLocalMintedBoxes(quantity, activeDrop.dropId);
+      const nextUsedCount = onchainUsedCount + quantity;
+      const nextRemainingCount = Math.max(0, onchainDiscountAllowance - nextUsedCount);
+      setDiscountUsedCount(nextUsedCount);
+      setDiscountRemainingCount(nextRemainingCount);
+      setDiscountEligible(nextRemainingCount > 0);
+      if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, nextUsedCount);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -2834,6 +2875,7 @@ function App({ currentPath }: AppProps) {
         secondaryHref={activeDrop.secondaryMarketHref}
         discountVisible={discountCtaState.visible}
         discountLabel={discountCtaState.label}
+        discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
         onDiscountClick={handleDiscountMint}
         discountBusy={discountMinting || discountChecking || minting || walletBusy}
       />

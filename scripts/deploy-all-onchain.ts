@@ -348,6 +348,8 @@ function errorMessage(err: unknown): string {
 
 const MIN_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
+const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
+const MAX_DISCOUNT_MINTS_PER_WALLET = 3;
 
 function requireItemsPerBox(value: number, label: string): number {
   return requireIntegerInRange({
@@ -356,6 +358,23 @@ function requireItemsPerBox(value: number, label: string): number {
     min: MIN_ITEMS_PER_BOX,
     max: MAX_ITEMS_PER_BOX,
   });
+}
+
+function requireDiscountMintsPerWallet(value: number, label: string): number {
+  return requireIntegerInRange({
+    value,
+    label,
+    min: MIN_DISCOUNT_MINTS_PER_WALLET,
+    max: MAX_DISCOUNT_MINTS_PER_WALLET,
+  });
+}
+
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < MIN_DISCOUNT_MINTS_PER_WALLET || parsed > MAX_DISCOUNT_MINTS_PER_WALLET) {
+    return 1;
+  }
+  return parsed;
 }
 
 function requireMaxFigureIdWithinU16(args: {
@@ -717,6 +736,7 @@ type FrontendDropConfigSerialized = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -789,6 +809,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     treasury: asTrimmedString(obj.treasury),
     priceSol: asFiniteNumber(obj.priceSol),
     discountPriceSol: asFiniteNumber(obj.discountPriceSol),
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(obj.discountMintsPerWallet),
     discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
     maxSupply: Math.floor(asFiniteNumber(obj.maxSupply)),
     itemsPerBox: Math.floor(asFiniteNumber(obj.itemsPerBox)),
@@ -980,6 +1001,7 @@ ${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.se
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
+    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -1006,6 +1028,7 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
+    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -1064,6 +1087,7 @@ export type FrontendDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -1220,6 +1244,7 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -1325,6 +1350,7 @@ async function writeFrontendDeploymentConfig(args: {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -1352,6 +1378,7 @@ async function writeFrontendDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
+    discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
     discountMerkleRoot: args.discountMerkleRoot,
     maxSupply: Math.floor(Number(args.maxSupply)),
     itemsPerBox: Math.floor(Number(args.itemsPerBox)),
@@ -1376,6 +1403,7 @@ async function writeFunctionsDeploymentConfig(args: {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -1405,6 +1433,7 @@ async function writeFunctionsDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
+    discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
     discountMerkleRoot: args.discountMerkleRoot,
     maxSupply: Math.floor(Number(args.maxSupply)),
     itemsPerBox: Math.floor(Number(args.itemsPerBox)),
@@ -1927,6 +1956,8 @@ function decodeBoxMinterConfig(data: Buffer) {
   const started = Boolean(data[o]);
   o += 1;
   const bump = data[o];
+  o += 1;
+  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o]);
 
   return {
     admin,
@@ -1944,6 +1975,7 @@ function decodeBoxMinterConfig(data: Buffer) {
     symbol: symbol.value,
     uriBase: uriBase.value,
     bump,
+    discountMintsPerWallet,
   };
 }
 
@@ -1963,6 +1995,7 @@ function buildInitializeIx(args: {
   coreCollection: PublicKey;
   priceLamports: bigint;
   discountPriceLamports: bigint;
+  discountMintsPerWallet: number;
   discountMerkleRoot: Buffer;
   maxSupply: number;
   itemsPerBox: number;
@@ -1988,6 +2021,7 @@ function buildInitializeIx(args: {
     borshString(args.namePrefix),
     borshString(args.symbol),
     borshString(args.metadataBase),
+    Buffer.from([requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'initialize discountMintsPerWallet') & 0xff]),
   ]);
 
   return new TransactionInstruction({
@@ -2543,6 +2577,10 @@ async function main() {
     treasury: dropCfg.treasury,
     priceSol: dropCfg.priceSol,
     discountPriceSol: dropCfg.discountPriceSol,
+    discountMintsPerWallet: requireDiscountMintsPerWallet(
+      dropCfg.discountMintsPerWallet,
+      'NEW_DROP.onchain.discountMintsPerWallet',
+    ),
     discountMerkleRoot: discountMerkle.root,
     maxSupply: dropCfg.maxSupply,
     itemsPerBox: requireItemsPerBox(dropCfg.itemsPerBox, 'NEW_DROP.onchain.itemsPerBox'),
@@ -2656,6 +2694,7 @@ async function main() {
     coreCollection: resolvedCoreCollection,
     priceLamports,
     discountPriceLamports,
+    discountMintsPerWallet: boxMinterConfig.discountMintsPerWallet,
     discountMerkleRoot,
     maxSupply,
     itemsPerBox,
@@ -2674,6 +2713,7 @@ async function main() {
   console.log('  Payment treasury:', treasury.toBase58());
   console.log('  Price (lamports):', priceLamports.toString());
   console.log('  Discount price (lamports):', discountPriceLamports.toString());
+  console.log('  Discount mints per wallet:', boxMinterConfig.discountMintsPerWallet);
   console.log('');
 
   let receiptsTree: PublicKey;
@@ -2724,6 +2764,7 @@ async function main() {
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+    discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),
     itemsPerBox: Number(boxMinterConfig.itemsPerBox),
@@ -2742,6 +2783,7 @@ async function main() {
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+    discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),
     itemsPerBox: Number(boxMinterConfig.itemsPerBox),

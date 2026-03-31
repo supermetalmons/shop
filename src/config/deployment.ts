@@ -35,6 +35,7 @@ export type FrontendDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -77,6 +78,12 @@ export function normalizeDropId(dropId: string): string {
 function normalizeOptionalString(value: unknown): string | undefined {
   const trimmed = String(value ?? '').trim();
   return trimmed || undefined;
+}
+
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
+  return parsed;
 }
 
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
@@ -125,6 +132,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     figureMedia: normalizeFigureMediaConfig(config.figureMedia),
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase),
   };
@@ -177,6 +185,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 1,
     discountPriceSol: 0.55,
+    discountMintsPerWallet: 1,
     discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
     maxSupply: 333,
     itemsPerBox: 3,

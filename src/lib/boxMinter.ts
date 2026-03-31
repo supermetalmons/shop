@@ -50,6 +50,7 @@ const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55,
 const IX_MINT_DISCOUNTED_BOX = Uint8Array.from([0x1d, 0xe3, 0xc9, 0x63, 0xa4, 0x40, 0x25, 0x8b]);
 const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0x28, 0x8f]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
+const ACCOUNT_DISCOUNT_MINT_RECORD = Uint8Array.from([0x63, 0xca, 0x74, 0x83, 0xde, 0x9f, 0x0f, 0x70]);
 
 export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
@@ -62,6 +63,7 @@ export interface BoxMinterConfigAccount {
   priceLamports: bigint;
   discountPriceLamports: bigint;
   discountMerkleRoot: Uint8Array;
+  discountMintsPerWallet: number;
   maxSupply: number;
   maxPerTx: number;
   itemsPerBox: number;
@@ -73,12 +75,18 @@ export interface BoxMinterConfigAccount {
   bump: number;
 }
 
-type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId'>;
+type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx'>;
 type DropMintLimitsConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx'>;
 
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
   const parsed = Number(config?.maxPerTx);
   if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_MAX_MINTS_PER_TX;
+  return parsed;
+}
+
+function normalizeDiscountMintsPerWallet(value: number | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3) return 1;
   return parsed;
 }
 
@@ -200,6 +208,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   const started = Boolean(data[o]);
   o += 1;
   const bump = data[o] ?? 0;
+  o += 1;
+  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
 
   return {
     pubkey,
@@ -209,6 +219,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     priceLamports,
     discountPriceLamports,
     discountMerkleRoot,
+    discountMintsPerWallet,
     maxSupply,
     maxPerTx,
     itemsPerBox,
@@ -219,6 +230,47 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     uriBase: uriBase.value,
     bump,
   };
+}
+
+export function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
+  if (data.length < 8 + 32 + 1) {
+    throw new Error('Invalid discount record account');
+  }
+  for (let i = 0; i < 8; i += 1) {
+    if (data[i] !== ACCOUNT_DISCOUNT_MINT_RECORD[i]) {
+      throw new Error('Invalid discount record discriminator');
+    }
+  }
+  if (data.length >= 8 + 32 + 2) {
+    const minted = Number(data[8 + 32] ?? 0);
+    if (!Number.isInteger(minted) || minted < 0) return 0;
+    return minted;
+  }
+  return 1;
+}
+
+export async function fetchDiscountMintRecordUsedCount(
+  connection: Connection,
+  payer: PublicKey,
+  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+): Promise<number> {
+  const programId = boxMinterProgramId(dropConfig);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const info = await retryRpc(() => connection.getAccountInfo(discountRecordPda, 'confirmed'), {
+    retries: 3,
+    baseDelayMs: 300,
+    maxDelayMs: 2_000,
+  });
+  if (!info?.data) return 0;
+  if (info.owner.equals(SystemProgram.programId)) {
+    // The on-chain program can reclaim a pre-funded PDA stub, so treat it as unused here too.
+    if (info.data.length === 0) return 0;
+    throw new Error('Invalid discount record account owner');
+  }
+  if (!info.owner.equals(programId)) {
+    throw new Error('Invalid discount record account owner');
+  }
+  return decodeDiscountMintRecordUsedCount(info.data);
 }
 
 export async function fetchBoxMinterConfig(
@@ -246,7 +298,14 @@ export async function fetchMintStatsFromProgram(
   const remaining = Math.max(0, total - minted);
   // Keep in sync with on-chain config; clamp to our deployment-config defaults for safety.
   const maxPerTx = Math.min(cfg.maxPerTx || 0, normalizeMaxMintsPerTx(dropConfig));
-  return { minted, total, remaining, maxPerTx, priceLamports: Number(cfg.priceLamports || 0n) };
+  return {
+    minted,
+    total,
+    remaining,
+    maxPerTx,
+    priceLamports: Number(cfg.priceLamports || 0n),
+    discountMintsPerWallet: cfg.discountMintsPerWallet,
+  };
 }
 
 function u32LE(value: number) {
@@ -311,8 +370,8 @@ function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[
 }
 
 function encodeMintDiscountedBoxData(mintId: bigint, boxBumps: number[], proof: Uint8Array[]): Buffer {
-  if (!Array.isArray(boxBumps) || boxBumps.length !== 1) {
-    throw new Error('Discount mint requires exactly one box bump');
+  if (!Array.isArray(boxBumps) || boxBumps.length < 1) {
+    throw new Error('Discount mint requires at least one box bump');
   }
   if (!Array.isArray(proof)) {
     throw new Error('Missing discount proof');
@@ -361,13 +420,17 @@ export function buildMintBoxesIx(
 export function buildMintDiscountedBoxIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
+  quantity: number,
   proof: Uint8Array[],
   dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
 ): TransactionInstruction {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const [discountRecordPda] = discountMintRecordPda(payer, programId);
-  const quantity = 1;
+  const maxDiscountMints = Math.min(normalizeMaxMintsPerTx(dropConfig), cfg.discountMintsPerWallet);
+  if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountMints) {
+    throw new Error(`Discount mint quantity must be between 1 and ${maxDiscountMints}`);
+  }
   const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
 
   return new TransactionInstruction({
@@ -417,10 +480,11 @@ export async function buildMintDiscountedBoxTx(
   connection: Connection,
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
+  quantity: number,
   proof: Uint8Array[],
   dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
 ): Promise<VersionedTransaction> {
-  const mintIx = buildMintDiscountedBoxIx(cfg, payer, proof, dropConfig);
+  const mintIx = buildMintDiscountedBoxIx(cfg, payer, quantity, proof, dropConfig);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const msg = new TransactionMessage({
     payerKey: payer,

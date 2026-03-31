@@ -27,6 +27,7 @@ export interface MintStats {
   remaining: number;
   maxPerTx?: number;
   priceLamports?: number;
+  discountMintsPerWallet?: number;
 }
 
 export interface ProfileAddress {

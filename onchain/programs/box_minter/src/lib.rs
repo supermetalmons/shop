@@ -18,6 +18,8 @@ const EXPECTED_INITIALIZER: Pubkey = pubkey!("kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7
 const MAX_SAFE_MINTS_PER_TX: u8 = 15;
 // Delivery is mostly limited by tx size; keep this high enough to not be the limiting factor.
 const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
+const MIN_DISCOUNT_MINTS_PER_WALLET: u8 = 1;
+const MAX_DISCOUNT_MINTS_PER_WALLET: u8 = 3;
 
 const MIN_ITEMS_PER_BOX: u8 = 1;
 // Keep this conservative: start_open_box + finalize_open_box do multiple MPL-Core CPIs per figure.
@@ -415,6 +417,11 @@ pub mod box_minter {
             BoxMinterError::DiscountNotConfigured
         );
         require!(
+            args.discount_mints_per_wallet >= MIN_DISCOUNT_MINTS_PER_WALLET
+                && args.discount_mints_per_wallet <= MAX_DISCOUNT_MINTS_PER_WALLET,
+            BoxMinterError::InvalidDiscountMintsPerWallet
+        );
+        require!(
             args.name_prefix.len() <= BoxMinterConfig::MAX_NAME_PREFIX,
             BoxMinterError::NameTooLong
         );
@@ -456,6 +463,7 @@ pub mod box_minter {
         cfg.max_supply = args.max_supply;
         cfg.max_per_tx = args.max_per_tx;
         cfg.items_per_box = args.items_per_box;
+        cfg.discount_mints_per_wallet = args.discount_mints_per_wallet;
         // Minting is paused by default until the admin explicitly starts it.
         cfg.started = false;
         cfg.minted = 0;
@@ -528,9 +536,95 @@ pub mod box_minter {
             verify_merkle_proof(payer_key.as_ref(), &proof, discount_root),
             BoxMinterError::InvalidDiscountProof
         );
+        let quantity = u8::try_from(box_bumps.len()).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
+        let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
+        let discount_ai = ctx.accounts.discount_record.to_account_info();
+        let (_, discount_bump) =
+            Pubkey::find_program_address(&[SEED_DISCOUNT_MINT, payer_key.as_ref()], ctx.program_id);
+        let discount_seeds: &[&[u8]] = &[SEED_DISCOUNT_MINT, payer_key.as_ref(), &[discount_bump]];
 
-        ctx.accounts.discount_record.payer = payer_key;
-        ctx.accounts.discount_record.bump = ctx.bumps.discount_record;
+        let mut discount_record = if discount_ai.lamports() == 0 {
+            let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
+            let create_discount_ix = anchor_lang::solana_program::system_instruction::create_account(
+                &ctx.accounts.payer.key(),
+                &ctx.accounts.discount_record.key(),
+                rent_lamports,
+                DiscountMintRecord::SPACE as u64,
+                ctx.program_id,
+            );
+            invoke_signed(
+                &create_discount_ix,
+                &[
+                    ctx.accounts.payer.to_account_info(),
+                    discount_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
+                &[discount_seeds],
+            )?;
+            DiscountMintRecord {
+                payer: payer_key,
+                minted: 0,
+                bump: discount_bump,
+            }
+        } else if *discount_ai.owner == anchor_lang::solana_program::system_program::ID {
+            require!(discount_ai.data_len() == 0, BoxMinterError::InvalidDiscountRecord);
+            let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
+            if discount_ai.lamports() < rent_lamports {
+                let diff = rent_lamports - discount_ai.lamports();
+                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
+                    &ctx.accounts.payer.key(),
+                    &ctx.accounts.discount_record.key(),
+                    diff,
+                );
+                invoke(
+                    &topup_ix,
+                    &[
+                        ctx.accounts.payer.to_account_info(),
+                        discount_ai.clone(),
+                        ctx.accounts.system_program.to_account_info(),
+                    ],
+                )?;
+            }
+
+            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
+                &ctx.accounts.discount_record.key(),
+                DiscountMintRecord::SPACE as u64,
+            );
+            invoke_signed(
+                &allocate_ix,
+                &[discount_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[discount_seeds],
+            )?;
+
+            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
+                &ctx.accounts.discount_record.key(),
+                ctx.program_id,
+            );
+            invoke_signed(
+                &assign_ix,
+                &[discount_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[discount_seeds],
+            )?;
+
+            DiscountMintRecord {
+                payer: payer_key,
+                minted: 0,
+                bump: discount_bump,
+            }
+        } else {
+            require_keys_eq!(*discount_ai.owner, *ctx.program_id, BoxMinterError::InvalidDiscountRecord);
+            let data = discount_ai.try_borrow_data()?;
+            let mut data: &[u8] = &data;
+            let existing = DiscountMintRecord::try_deserialize(&mut data)
+                .map_err(|_| error!(BoxMinterError::InvalidDiscountRecord))?;
+            require_keys_eq!(existing.payer, payer_key, BoxMinterError::InvalidDiscountRecord);
+            existing
+        };
+        let new_discount_total = discount_record
+            .minted
+            .checked_add(quantity)
+            .ok_or(BoxMinterError::MathOverflow)?;
+        require!(new_discount_total <= discount_limit, BoxMinterError::DiscountAllowanceExceeded);
 
         let accounts = MintBoxesInnerAccounts::new(
             ctx.accounts.payer.to_account_info(),
@@ -539,7 +633,6 @@ pub mod box_minter {
             ctx.accounts.mpl_core_program.to_account_info(),
             ctx.accounts.system_program.to_account_info(),
         );
-        let quantity = 1;
         mint_boxes_inner(
             &mut ctx.accounts.config,
             &accounts,
@@ -549,7 +642,11 @@ pub mod box_minter {
             box_bumps,
             ctx.program_id,
             discount_price,
-        )
+        )?;
+        discount_record.minted = new_discount_total;
+        discount_record.bump = discount_bump;
+        discount_record.try_serialize(&mut &mut discount_ai.data.borrow_mut()[..])?;
+        Ok(())
     }
 
     /// Starts a two-step box open flow.
@@ -1523,6 +1620,7 @@ pub struct InitializeArgs {
     pub name_prefix: String,
     pub symbol: String,
     pub uri_base: String,
+    pub discount_mints_per_wallet: u8,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1568,17 +1666,20 @@ pub struct BoxMinterConfig {
     /// If false, `mint_boxes` is paused.
     pub started: bool,
     pub bump: u8,
+    pub discount_mints_per_wallet: u8,
 }
 
 #[account]
 pub struct DiscountMintRecord {
     pub payer: Pubkey,
+    pub minted: u8,
     pub bump: u8,
 }
 
 impl DiscountMintRecord {
     pub const SPACE: usize = 8 // anchor account discriminator
         + 32 // payer
+        + 1 // minted
         + 1; // bump
 }
 
@@ -1617,7 +1718,8 @@ impl BoxMinterConfig {
         + 4 + Self::MAX_SYMBOL // symbol
         + 4 + Self::MAX_URI_BASE // uri_base
         + 1 // started (bool)
-        + 1; // bump
+        + 1 // bump
+        + 1; // discount_mints_per_wallet
 
     pub fn items_per_box_len(&self) -> usize {
         self.items_per_box as usize
@@ -1733,13 +1835,11 @@ pub struct MintDiscountedBox<'info> {
     pub payer: Signer<'info>,
 
     #[account(
-        init,
-        payer = payer,
-        space = DiscountMintRecord::SPACE,
+        mut,
         seeds = [SEED_DISCOUNT_MINT, payer.key().as_ref()],
         bump,
     )]
-    pub discount_record: Account<'info, DiscountMintRecord>,
+    pub discount_record: UncheckedAccount<'info>,
 
     /// CHECK: Must match config.treasury
     #[account(mut, address = config.treasury)]
@@ -2109,10 +2209,14 @@ pub enum BoxMinterError {
     InvalidPrice,
     #[msg("Invalid discount price")]
     InvalidDiscountPrice,
+    #[msg("Invalid discount allowance per wallet")]
+    InvalidDiscountMintsPerWallet,
     #[msg("Discount config missing")]
     DiscountNotConfigured,
     #[msg("Invalid discount proof")]
     InvalidDiscountProof,
+    #[msg("Discount allowance exceeded")]
+    DiscountAllowanceExceeded,
     #[msg("Name prefix too long")]
     NameTooLong,
     #[msg("Symbol too long")]
@@ -2155,6 +2259,8 @@ pub enum BoxMinterError {
     InvalidTransferInstruction,
     #[msg("Invalid pending open record")]
     InvalidPendingRecord,
+    #[msg("Invalid discount record")]
+    InvalidDiscountRecord,
     #[msg("Invalid delivery PDA")]
     InvalidDeliveryPda,
     #[msg("Delivery record already exists")]

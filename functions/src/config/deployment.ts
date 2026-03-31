@@ -23,6 +23,7 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
   itemsPerBox: number;
@@ -73,12 +74,19 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
   };
 }
 
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
+  return parsed;
+}
+
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
   return {
     ...config,
     dropId: normalizedDropId,
     metadataBase: normalizeDropBase(config.metadataBase),
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
 }
 
@@ -97,6 +105,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 1,
     discountPriceSol: 0.55,
+    discountMintsPerWallet: 1,
     discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
     maxSupply: 333,
     itemsPerBox: 3,

@@ -15,7 +15,8 @@ interface MintPanelProps {
   secondaryHref?: string;
   discountVisible?: boolean;
   discountLabel?: string;
-  onDiscountClick?: () => void;
+  discountMaxQuantity?: number;
+  onDiscountClick?: (quantity: number) => void | Promise<void>;
   discountBusy?: boolean;
 }
 
@@ -137,6 +138,7 @@ export function MintPanel({
   secondaryHref,
   discountVisible,
   discountLabel,
+  discountMaxQuantity,
   onDiscountClick,
   discountBusy,
 }: MintPanelProps) {
@@ -197,8 +199,16 @@ export function MintPanel({
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const formId = 'mint-form';
   const showDiscountButton = Boolean(discountVisible) && !soldOut;
+  const normalizedDiscountMaxQuantity =
+    Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) > 0
+      ? Math.floor(Number(discountMaxQuantity))
+      : undefined;
+  const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
   const discountText =
-    discountLabel || `Mint one for ${formatSolAmount(unitDiscountPriceLamports / LAMPORTS_PER_SOL_UI)} SOL`;
+    discountLabel ||
+    (exceedsDiscountAllowance && normalizedDiscountMaxQuantity
+      ? `Discount available for up to ${normalizedDiscountMaxQuantity} box${normalizedDiscountMaxQuantity === 1 ? '' : 'es'}`
+      : `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`);
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc || `${FRONTEND_DEPLOYMENT.paths.base}/box/tight.webp`;
 
@@ -296,7 +306,15 @@ export function MintPanel({
                 )}
               </button>
               {showDiscountButton ? (
-                <button type="button" className="mint-panel__discount ghost" onClick={onDiscountClick} disabled={discountBusy}>
+                <button
+                  type="button"
+                  className="mint-panel__discount ghost"
+                  onClick={() => {
+                    if (!onDiscountClick) return;
+                    void onDiscountClick(quantity);
+                  }}
+                  disabled={discountBusy || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance}
+                >
                   <span className="mint-panel__discount-text">{discountText}</span>
                 </button>
               ) : null}

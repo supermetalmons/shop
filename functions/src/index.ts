@@ -96,6 +96,8 @@ const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MIN_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
+const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
+const MAX_DISCOUNT_MINTS_PER_WALLET = 3;
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
 // Issue-receipts tx retry/confirm tuning.
@@ -124,6 +126,7 @@ type DropRuntime = {
   deliveryLookupTable: PublicKey;
   deliveryLookupTableStr: string;
   itemsPerBox: number;
+  discountMintsPerWallet: number;
   maxSupply: number;
   maxDudeId: number;
 };
@@ -200,6 +203,16 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   if (!Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff) {
     throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.maxSupply}`);
   }
+  const discountMintsPerWallet = Number(config.discountMintsPerWallet);
+  if (
+    !Number.isInteger(discountMintsPerWallet) ||
+    discountMintsPerWallet < MIN_DISCOUNT_MINTS_PER_WALLET ||
+    discountMintsPerWallet > MAX_DISCOUNT_MINTS_PER_WALLET
+  ) {
+    throw new Error(
+      `discountMintsPerWallet is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.discountMintsPerWallet} (expected integer ${MIN_DISCOUNT_MINTS_PER_WALLET}..${MAX_DISCOUNT_MINTS_PER_WALLET})`,
+    );
+  }
   const maxDudeId = maxSupply * itemsPerBox;
   if (!Number.isFinite(maxDudeId) || maxDudeId < 1 || maxDudeId > 0xffff) {
     throw new Error(
@@ -233,6 +246,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     deliveryLookupTable,
     deliveryLookupTableStr: deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58(),
     itemsPerBox,
+    discountMintsPerWallet,
     maxSupply,
     maxDudeId,
   };
@@ -1041,6 +1055,18 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) 
       },
     );
   }
+  if (decoded.discountMintsPerWallet !== dropRuntime.discountMintsPerWallet) {
+    throw new HttpsError(
+      'failed-precondition',
+      'functions/src/config/deployment.ts is out of sync with the on-chain discountMintsPerWallet value.',
+      {
+        configuredDiscountMintsPerWallet: dropRuntime.discountMintsPerWallet,
+        onchainDiscountMintsPerWallet: decoded.discountMintsPerWallet,
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        dropId: dropRuntime.dropId,
+      },
+    );
+  }
 
   onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true });
 }
@@ -1588,7 +1614,20 @@ type DecodedBoxMinterConfig = {
   maxSupply: number;
   maxPerTx: number;
   itemsPerBox: number;
+  discountMintsPerWallet: number;
 };
+
+function normalizeDiscountMintsPerWallet(value: number | undefined): number {
+  const parsed = Number(value);
+  if (
+    !Number.isInteger(parsed) ||
+    parsed < MIN_DISCOUNT_MINTS_PER_WALLET ||
+    parsed > MAX_DISCOUNT_MINTS_PER_WALLET
+  ) {
+    return 1;
+  }
+  return parsed;
+}
 
 function readBorshString(data: Buffer, offset: number): { value: string; next: number } {
   const len = data.readUInt32LE(offset);
@@ -1627,6 +1666,9 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   o = readBorshString(buf, o).next;
   o = readBorshString(buf, o).next;
   o = readBorshString(buf, o).next;
+  o += 1; // started
+  o += 1; // bump
+  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(buf[o]);
 
   if (!Number.isFinite(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
     throw new HttpsError('failed-precondition', 'On-chain config has invalid itemsPerBox', { itemsPerBox });
@@ -1639,6 +1681,7 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     maxSupply,
     maxPerTx,
     itemsPerBox,
+    discountMintsPerWallet,
   };
 }
 
