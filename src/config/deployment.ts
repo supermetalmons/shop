@@ -41,6 +41,7 @@ export type FrontendDropConfig = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
 
   // On-chain ids
@@ -132,6 +133,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     figureMedia: normalizeFigureMediaConfig(config.figureMedia),
+    figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase),
@@ -191,6 +193,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'box',
+    figureNamePrefix: 'figure',
     symbol: 'box',
 
     // On-chain ids

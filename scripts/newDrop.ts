@@ -33,6 +33,7 @@ export type NewDropOnchainConfig = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
 };
 
@@ -84,6 +85,7 @@ export const NEW_DROP: NewDropConfig = {
     itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'box',
+    figureNamePrefix: 'figure',
     symbol: dropSymbol,
   },
 };

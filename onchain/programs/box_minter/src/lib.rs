@@ -78,6 +78,7 @@ const URI_SUFFIX_BOXES: &str = "/json/boxes/";
 const URI_SUFFIX_FIGURES: &str = "/json/figures/";
 const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
 const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
+const RECEIPT_NAME_PREFIX: &str = "receipt · ";
 
 fn hash_leaf(data: &[u8]) -> [u8; 32] {
     hashv(&[data]).to_bytes()
@@ -327,11 +328,7 @@ fn mint_boxes_inner<'info>(
 
         // Build metadata without allocating fresh Strings each loop.
         name_buf.clear();
-        name_buf.push_str(&cfg.name_prefix);
-        if !cfg.name_prefix.is_empty() && !cfg.name_prefix.ends_with(' ') {
-            name_buf.push(' ');
-        }
-        write!(&mut name_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+        append_label_and_id(&mut name_buf, &cfg.name_prefix, idx)?;
 
         uri_buf.clear();
         // Per-box JSON URI: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
@@ -426,6 +423,10 @@ pub mod box_minter {
             BoxMinterError::NameTooLong
         );
         require!(
+            args.figure_name_prefix.len() <= BoxMinterConfig::MAX_FIGURE_NAME_PREFIX,
+            BoxMinterError::FigureNameTooLong
+        );
+        require!(
             args.symbol.len() <= BoxMinterConfig::MAX_SYMBOL,
             BoxMinterError::SymbolTooLong
         );
@@ -472,6 +473,7 @@ pub mod box_minter {
         // Store normalized drop base (no trailing slash).
         cfg.uri_base = drop_base.to_string();
         cfg.bump = ctx.bumps.config;
+        cfg.figure_name_prefix = args.figure_name_prefix;
         Ok(())
     }
 
@@ -1114,8 +1116,7 @@ pub mod box_minter {
         for (i, asset_ai) in ctx.remaining_accounts.iter().enumerate() {
             let dude_id = dude_ids[i];
             name_buf.clear();
-            name_buf.push_str("figure ");
-            write!(&mut name_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            append_label_and_id(&mut name_buf, &cfg.figure_name_prefix, dude_id)?;
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
@@ -1581,8 +1582,8 @@ pub mod box_minter {
 
         for box_id in box_ids.iter() {
             name_buf.clear();
-            name_buf.push_str("receipt · box ");
-            write!(&mut name_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            name_buf.push_str(RECEIPT_NAME_PREFIX);
+            append_label_and_id(&mut name_buf, &cfg.name_prefix, *box_id)?;
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
@@ -1594,8 +1595,8 @@ pub mod box_minter {
 
         for dude_id in dude_ids.iter() {
             name_buf.clear();
-            name_buf.push_str("receipt · figure ");
-            write!(&mut name_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            name_buf.push_str(RECEIPT_NAME_PREFIX);
+            append_label_and_id(&mut name_buf, &cfg.figure_name_prefix, *dude_id)?;
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
@@ -1621,6 +1622,7 @@ pub struct InitializeArgs {
     pub symbol: String,
     pub uri_base: String,
     pub discount_mints_per_wallet: u8,
+    pub figure_name_prefix: String,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1667,6 +1669,7 @@ pub struct BoxMinterConfig {
     pub started: bool,
     pub bump: u8,
     pub discount_mints_per_wallet: u8,
+    pub figure_name_prefix: String,
 }
 
 #[account]
@@ -1702,6 +1705,7 @@ impl BoxMinterConfig {
 
     // Keep these tiny by design; uncompressed Core mints are compute heavy.
     pub const MAX_NAME_PREFIX: usize = 8;
+    pub const MAX_FIGURE_NAME_PREFIX: usize = 12;
     pub const MAX_SYMBOL: usize = 10;
     pub const MAX_URI_BASE: usize = 96;
 
@@ -1719,7 +1723,8 @@ impl BoxMinterConfig {
         + 4 + Self::MAX_URI_BASE // uri_base
         + 1 // started (bool)
         + 1 // bump
-        + 1; // discount_mints_per_wallet
+        + 1 // discount_mints_per_wallet
+        + 4 + Self::MAX_FIGURE_NAME_PREFIX; // figure_name_prefix
 
     pub fn items_per_box_len(&self) -> usize {
         self.items_per_box as usize
@@ -2191,6 +2196,19 @@ fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn append_label_and_id(
+    name_buf: &mut String,
+    label: &str,
+    id: impl core::fmt::Display,
+) -> Result<()> {
+    name_buf.push_str(label);
+    if !label.is_empty() && !label.ends_with(' ') {
+        name_buf.push(' ');
+    }
+    write!(name_buf, "{}", id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+    Ok(())
+}
+
 #[error_code]
 pub enum BoxMinterError {
     #[msg("Invalid quantity")]
@@ -2219,6 +2237,8 @@ pub enum BoxMinterError {
     DiscountAllowanceExceeded,
     #[msg("Name prefix too long")]
     NameTooLong,
+    #[msg("Figure name prefix too long")]
+    FigureNameTooLong,
     #[msg("Symbol too long")]
     SymbolTooLong,
     #[msg("URI base too long")]

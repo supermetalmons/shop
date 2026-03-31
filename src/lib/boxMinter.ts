@@ -70,6 +70,7 @@ export interface BoxMinterConfigAccount {
   started: boolean;
   minted: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
   uriBase: string;
   bump: number;
@@ -210,6 +211,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   const bump = data[o] ?? 0;
   o += 1;
   const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
+  o += 1;
+  const figureNamePrefix = o + 4 <= data.length ? readBorshString(data, o).value : 'figure';
 
   return {
     pubkey,
@@ -226,6 +229,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     started,
     minted,
     namePrefix: namePrefix.value,
+    figureNamePrefix,
     symbol: symbol.value,
     uriBase: uriBase.value,
     bump,

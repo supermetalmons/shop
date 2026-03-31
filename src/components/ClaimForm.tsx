@@ -5,6 +5,8 @@ const ITEMS_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 type ClaimFormResult = {
   itemsPerBox?: number;
+  boxNamePrefix?: string;
+  figureNamePrefix?: string;
 };
 
 interface ClaimFormProps {
@@ -12,9 +14,28 @@ interface ClaimFormProps {
   mode?: 'card' | 'modal';
   showTitle?: boolean;
   itemsPerBox?: number;
+  boxNamePrefix?: string;
+  figureNamePrefix?: string;
 }
 
-export function ClaimForm({ onClaim, mode = 'card', showTitle = true, itemsPerBox }: ClaimFormProps) {
+function resolveReceiptWord(value: string | undefined, fallback: string): string {
+  if (value === undefined) return String(fallback ?? '').trim();
+  return String(value).trim();
+}
+
+function receiptLabel(word: string, count: number): string {
+  if (!word) return count === 1 ? 'receipt' : 'receipts';
+  return count === 1 ? `${word} receipt` : `${word} receipts`;
+}
+
+export function ClaimForm({
+  onClaim,
+  mode = 'card',
+  showTitle = true,
+  itemsPerBox,
+  boxNamePrefix,
+  figureNamePrefix,
+}: ClaimFormProps) {
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,15 +43,20 @@ export function ClaimForm({ onClaim, mode = 'card', showTitle = true, itemsPerBo
   const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
     ? Math.floor(Number(itemsPerBox))
     : ITEMS_PER_BOX;
+  const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, FRONTEND_DEPLOYMENT.namePrefix);
+  const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, FRONTEND_DEPLOYMENT.figureNamePrefix);
 
-  const buildSuccessMessage = (resolvedItemsPerBox: number) => {
+  const buildSuccessMessage = (args: ClaimFormResult) => {
+    const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);
+    const normalizedFigureReceiptWord = resolveReceiptWord(args.figureNamePrefix, defaultFigureReceiptWord);
     const normalizedCount =
-      Number.isFinite(resolvedItemsPerBox) && Number(resolvedItemsPerBox) > 0
-        ? Math.floor(Number(resolvedItemsPerBox))
+      Number.isFinite(args.itemsPerBox) && Number(args.itemsPerBox) > 0
+        ? Math.floor(Number(args.itemsPerBox))
         : figuresPerBox;
-    const figureLabel = normalizedCount === 1 ? 'figure receipt' : 'figure receipts';
+    const boxReceiptLabel = receiptLabel(normalizedBoxReceiptWord, 1);
+    const figureLabel = receiptLabel(normalizedFigureReceiptWord, normalizedCount);
     const figureVerb = normalizedCount === 1 ? 'is' : 'are';
-    return `Claim submitted successfully! Your box receipt was transferred and your ${normalizedCount} ${figureLabel} ${figureVerb} being minted.`;
+    return `Claim submitted successfully! Your ${boxReceiptLabel} was transferred and your ${normalizedCount} ${figureLabel} ${figureVerb} being minted.`;
   };
 
   const submit = async (event: FormEvent) => {
@@ -40,7 +66,7 @@ export function ClaimForm({ onClaim, mode = 'card', showTitle = true, itemsPerBo
     setSuccess(null);
     try {
       const result = await onClaim({ code: code.trim() });
-      setSuccess(buildSuccessMessage(Number(result?.itemsPerBox)));
+      setSuccess(buildSuccessMessage(result || {}));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

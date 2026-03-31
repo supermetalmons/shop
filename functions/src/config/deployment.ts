@@ -29,6 +29,7 @@ export type FunctionsDropConfig = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
 
   // On-chain ids
@@ -86,6 +87,7 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
     ...config,
     dropId: normalizedDropId,
     metadataBase: normalizeDropBase(config.metadataBase),
+    figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
 }
@@ -111,6 +113,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'box',
+    figureNamePrefix: 'figure',
     symbol: 'box',
 
     // On-chain ids

@@ -742,6 +742,7 @@ type FrontendDropConfigSerialized = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
   collectionMint: string;
@@ -815,6 +816,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     itemsPerBox: Math.floor(asFiniteNumber(obj.itemsPerBox)),
     maxPerTx: Math.floor(asFiniteNumber(obj.maxPerTx)),
     namePrefix: asTrimmedString(obj.namePrefix),
+    figureNamePrefix: asTrimmedString(obj.figureNamePrefix) || 'figure',
     symbol: asTrimmedString(obj.symbol),
     boxMinterProgramId: asTrimmedString(obj.boxMinterProgramId),
     collectionMint: asTrimmedString(obj.collectionMint),
@@ -1007,6 +1009,7 @@ ${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.se
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
     maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
     namePrefix: ${tsStringLiteral(drop.namePrefix)},
+    figureNamePrefix: ${tsStringLiteral(drop.figureNamePrefix)},
     symbol: ${tsStringLiteral(drop.symbol)},
 
     // On-chain ids
@@ -1034,6 +1037,7 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
     maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
     namePrefix: ${tsStringLiteral(drop.namePrefix)},
+    figureNamePrefix: ${tsStringLiteral(drop.figureNamePrefix)},
     symbol: ${tsStringLiteral(drop.symbol)},
 
     // On-chain ids
@@ -1093,6 +1097,7 @@ export type FrontendDropConfig = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
 
   // On-chain ids
@@ -1178,6 +1183,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     figureMedia: normalizeFigureMediaConfig(config.figureMedia),
+    figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase),
   };
@@ -1250,6 +1256,7 @@ export type FunctionsDropConfig = {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
 
   // On-chain ids
@@ -1301,6 +1308,7 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
     ...config,
     dropId: normalizedDropId,
     metadataBase: normalizeDropBase(config.metadataBase),
+    figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
   };
 }
 
@@ -1356,6 +1364,7 @@ async function writeFrontendDeploymentConfig(args: {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
   collectionMint: string;
@@ -1384,6 +1393,7 @@ async function writeFrontendDeploymentConfig(args: {
     itemsPerBox: Math.floor(Number(args.itemsPerBox)),
     maxPerTx: Math.floor(Number(args.maxPerTx)),
     namePrefix: args.namePrefix,
+    figureNamePrefix: args.figureNamePrefix,
     symbol: args.symbol,
     boxMinterProgramId: args.boxMinterProgramId,
     collectionMint: args.collectionMint,
@@ -1409,6 +1419,7 @@ async function writeFunctionsDeploymentConfig(args: {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
   collectionMint: string;
@@ -1439,6 +1450,7 @@ async function writeFunctionsDeploymentConfig(args: {
     itemsPerBox: Math.floor(Number(args.itemsPerBox)),
     maxPerTx: Math.floor(Number(args.maxPerTx)),
     namePrefix: args.namePrefix,
+    figureNamePrefix: args.figureNamePrefix,
     symbol: args.symbol,
     boxMinterProgramId: args.boxMinterProgramId,
     collectionMint: args.collectionMint,
@@ -2001,6 +2013,7 @@ function buildInitializeIx(args: {
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
+  figureNamePrefix: string;
   symbol: string;
   /**
    * Drop base URL (canonical), e.g. `https://assets.example.com/drops/your-drop`.
@@ -2022,6 +2035,7 @@ function buildInitializeIx(args: {
     borshString(args.symbol),
     borshString(args.metadataBase),
     Buffer.from([requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'initialize discountMintsPerWallet') & 0xff]),
+    borshString(args.figureNamePrefix),
   ]);
 
   return new TransactionInstruction({
@@ -2588,6 +2602,7 @@ async function main() {
 
     // Box metadata (stored on-chain)
     namePrefix: dropCfg.namePrefix,
+    figureNamePrefix: dropCfg.figureNamePrefix,
     symbol: dropCfg.symbol,
     // Canonical drop base. The on-chain program derives:
     // - boxes   : `${metadataBase}/json/boxes/{id}.json`
@@ -2700,6 +2715,7 @@ async function main() {
     itemsPerBox,
     maxPerTx,
     namePrefix: boxMinterConfig.namePrefix,
+    figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
   });
@@ -2770,6 +2786,7 @@ async function main() {
     itemsPerBox: Number(boxMinterConfig.itemsPerBox),
     maxPerTx: Number(boxMinterConfig.maxPerTx),
     namePrefix: boxMinterConfig.namePrefix,
+    figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
@@ -2789,6 +2806,7 @@ async function main() {
     itemsPerBox: Number(boxMinterConfig.itemsPerBox),
     maxPerTx: Number(boxMinterConfig.maxPerTx),
     namePrefix: boxMinterConfig.namePrefix,
+    figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),

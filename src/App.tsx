@@ -2469,7 +2469,11 @@ function App({ currentPath }: AppProps) {
     }
     showToast(`Claimed certificates · ${sig}`);
     await refetchInventory();
-    return { itemsPerBox: claimDrop.itemsPerBox };
+    return {
+      itemsPerBox: claimDrop.itemsPerBox,
+      boxNamePrefix: claimDrop.namePrefix,
+      figureNamePrefix: claimDrop.figureNamePrefix,
+    };
   };
 
   const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
@@ -2941,7 +2945,14 @@ function App({ currentPath }: AppProps) {
       </Modal>
 
       <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
-        <ClaimForm onClaim={handleClaim} mode="modal" showTitle={false} itemsPerBox={activeDrop.itemsPerBox} />
+        <ClaimForm
+          onClaim={handleClaim}
+          mode="modal"
+          showTitle={false}
+          itemsPerBox={activeDrop.itemsPerBox}
+          boxNamePrefix={activeDrop.namePrefix}
+          figureNamePrefix={activeDrop.figureNamePrefix}
+        />
       </Modal>
 
       {activeError ? <div className="error">{activeError}</div> : null}
