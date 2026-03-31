@@ -37,6 +37,13 @@ function dropBase(dropId: string): string {
 }
 
 const GREEN_BASE = dropBase('green_boxes_devnet');
+const PONCHO_DRIFELLA_DROP_ID_PREFIX = normalizeDropId('Poncho_Drifella');
+const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  box: {
+    previewImageUrl: '/Poncho_Drifella/pack/1_0001.webp',
+    aspectRatio: 1,
+  },
+};
 
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
   green_boxes_devnet: {
@@ -54,3 +61,16 @@ export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
     },
   },
 };
+
+export function isPonchoDrifellaFamilyDropId(dropId?: string): boolean {
+  const normalizedDropId = normalizeDropId(dropId || '');
+  return normalizedDropId.startsWith(PONCHO_DRIFELLA_DROP_ID_PREFIX);
+}
+
+export function getDropExtraContentOverride(dropId?: string): DropExtraContentOverride | undefined {
+  const normalizedDropId = normalizeDropId(dropId || '');
+  if (!normalizedDropId) return undefined;
+  return DROPS_EXTRA_CONTENT[normalizedDropId] || (
+    isPonchoDrifellaFamilyDropId(normalizedDropId) ? PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT : undefined
+  );
+}

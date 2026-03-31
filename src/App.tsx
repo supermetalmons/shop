@@ -35,7 +35,7 @@ import {
   type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
-import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
+import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
 import {
@@ -397,7 +397,10 @@ function App({ currentPath }: AppProps) {
     },
     [getDropConfig],
   );
-  const getDropContent = useCallback((dropId?: string) => resolveDropContent(getDropConfig(dropId)), [getDropConfig]);
+  const getDropContent = useCallback(
+    (dropId?: string) => resolveDropContent(dropId ? getFrontendDrop(dropId) || dropId : activeDrop),
+    [activeDrop],
+  );
   const dropRevealIsAnimated = useCallback(
     (dropId?: string) => {
       const content = getDropContent(dropId);
@@ -899,7 +902,7 @@ function App({ currentPath }: AppProps) {
         createdAt: now,
         dropId: item.dropId,
         name: item.name,
-        image: item.image || boxImageForDropId(item.dropId),
+        image: normalizeBoxDisplayImage(item.dropId, item.image),
       };
       const existingIndex = prev.findIndex((entry) => entry.id === item.id);
       if (existingIndex !== -1) {
@@ -1107,7 +1110,7 @@ function App({ currentPath }: AppProps) {
       id,
       dropId: overlayDropId,
       name: item.name,
-      image: item.image || boxImageForDropId(overlayDropId),
+      image: normalizeBoxDisplayImage(overlayDropId, item.image),
       originRect,
       targetRect,
       phase,
@@ -1610,8 +1613,8 @@ function App({ currentPath }: AppProps) {
       isViewerMode || !hiddenAssets.size ? inventoryView : inventoryView.filter((item) => !hiddenAssets.has(item.id));
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
-        if (item.image && String(item.image).trim()) return item;
-        return { ...item, image: boxImageForDropId(item.dropId) };
+        const image = normalizeBoxDisplayImage(item.dropId, item.image);
+        return image === item.image ? item : { ...item, image };
       }
       if (item.kind !== 'dude' || !item.dudeId) return item;
       if (item.image && String(item.image).trim()) return item;
@@ -1726,7 +1729,7 @@ function App({ currentPath }: AppProps) {
         dropId: itemDropId,
         name: localMatch?.name || match?.name || `Box ${shortAddress(id)}`,
         kind: 'box',
-        image: localMatch?.image || match?.image || boxImageForDropId(itemDropId),
+        image: normalizeBoxDisplayImage(itemDropId, localMatch?.image || match?.image),
       });
     });
     const localSorted = [...localPendingFiltered].sort((a, b) => b.createdAt - a.createdAt);
@@ -1741,7 +1744,7 @@ function App({ currentPath }: AppProps) {
         dropId: itemDropId,
         name: entry.name || match?.name || `Box ${shortAddress(id)}`,
         kind: 'box',
-        image: entry.image || match?.image || boxImageForDropId(itemDropId),
+        image: normalizeBoxDisplayImage(itemDropId, entry.image || match?.image),
       });
     });
     return pendingItems;
@@ -1807,7 +1810,7 @@ function App({ currentPath }: AppProps) {
     const limit = compactPanel ? 3 : 5;
     const entries = selectedItems.map((item) => ({
       item,
-      previewImage: item.image || (item.kind === 'box' ? boxImageForDropId(item.dropId) : undefined),
+      previewImage: item.kind === 'box' ? normalizeBoxDisplayImage(item.dropId, item.image) : item.image,
     }));
     const preview: typeof entries = [];
     const counts = new Map<string, number>();
@@ -2300,7 +2303,7 @@ function App({ currentPath }: AppProps) {
 	        fallbackTarget.width,
 	        fallbackTarget.height,
 	      );
-	      const overlayItem: InventoryItem = { ...box, image: box.image || boxImageForDropId(box.dropId) };
+	      const overlayItem: InventoryItem = { ...box, image: normalizeBoxDisplayImage(box.dropId, box.image) };
 	      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
 	    },
 	    [

@@ -1,6 +1,6 @@
 import { type FrontendDropConfig, getFrontendDrop, normalizeDropId } from '../config/deployment';
 import {
-  DROPS_EXTRA_CONTENT,
+  getDropExtraContentOverride,
   type DropExtraContentOverride,
   type DropFigureFulfillmentPreviewMode,
   type DropFigureInventoryImageMode,
@@ -190,11 +190,16 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
       : defaultStaticDropContent()
     : defaultStaticDropContent();
 
-  const resolved = applyDropExtraContentOverride(base, DROPS_EXTRA_CONTENT[normalizedDropId]);
+  const resolved = applyDropExtraContentOverride(base, getDropExtraContentOverride(normalizedDropId));
   if (normalizedDropId) {
     resolvedContentByDropId.set(normalizedDropId, resolved);
   }
   return resolved;
+}
+
+export function normalizeBoxDisplayImage(dropId: string, imageRaw?: string): string | undefined {
+  const content = resolveDropContent(dropId);
+  return content.box.previewImageUrl || imageRaw;
 }
 
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string): string | undefined {
