@@ -84,8 +84,8 @@ export const NEW_DROP: NewDropConfig = {
     maxSupply: 33,
     itemsPerBox: 1,
     maxPerTx: 15,
-    namePrefix: 'box',
-    figureNamePrefix: 'figure',
+    namePrefix: 'chest',
+    figureNamePrefix: 'item',
     symbol: dropSymbol,
   },
 };
