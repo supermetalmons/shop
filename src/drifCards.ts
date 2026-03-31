@@ -95,7 +95,7 @@ export const DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS = Object.freeze({
   '/assets/drifs/4.webp': 'swshp-SWSH179',
   '/assets/drifs/5.webp': 'swsh4-9',
   '/assets/drifs/6.webp': 'pgo-24',
-  '/assets/drifs/0.webp': 'swsh6-196',
+  '/assets/drifs/207.webp': 'swsh6-196',
   '/assets/drifs/7.webp': 'swsh6-196',
   '/assets/drifs/9.webp': 'pgo-24',
   '/assets/drifs/10.webp': 'swsh4-9',
@@ -296,42 +296,47 @@ export const DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS = Object.freeze({
   '/assets/drifs/206.webp': 'pgo-24',
 } satisfies Record<string, keyof typeof EFFECTS>);
 
-const DRIF_GLOW_TYPES = [
-  'fire',
-  'metal',
-  'dragon',
-  'metal',
-  'fairy',
-  'metal',
-  'lightning',
-  'water',
-  'psychic',
-  'dragon',
-  'darkness',
-  'fairy',
-] as const satisfies readonly GlowType[];
+const DRIF_GLOW_TYPES_BY_ASSET_ID: Readonly<Partial<Record<number, GlowType>>> = Object.freeze({
+  1: 'metal',
+  2: 'dragon',
+  3: 'metal',
+  4: 'fairy',
+  5: 'metal',
+  6: 'lightning',
+  7: 'water',
+  8: 'psychic',
+  9: 'dragon',
+  10: 'darkness',
+  11: 'fairy',
+  207: 'fire',
+});
 
-function getDrifEffectPreferenceKey(index: number): keyof typeof DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS {
-  return `/assets/drifs/${index}.webp` as keyof typeof DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS;
+function getDrifAssetId(index: number) {
+  return index + 1;
 }
 
-function getDrifAssetSrc(assetType: 'drifs' | 'foils' | 'textures', index: number) {
-  return `/Poncho_Drifella/${assetType}/${index}.webp`;
+function getDrifEffectPreferenceKey(assetId: number): keyof typeof DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS {
+  return `/assets/drifs/${assetId}.webp` as keyof typeof DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS;
+}
+
+function getDrifAssetSrc(assetType: 'drifs' | 'foils' | 'textures', assetId: number) {
+  return `/Poncho_Drifella/${assetType}/${assetId}.webp`;
 }
 
 export const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {
-  const effectId = DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS[getDrifEffectPreferenceKey(index)];
+  const assetId = getDrifAssetId(index);
+  const effectId = DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS[getDrifEffectPreferenceKey(assetId)];
 
   if (!effectId) {
-    throw new Error(`Missing default effect preference assignment for drif card ${index}`);
+    throw new Error(`Missing default effect preference assignment for drif asset ${assetId}`);
   }
 
   return {
-    imageSrc: getDrifAssetSrc('drifs', index),
-    foilSrc: getDrifAssetSrc('foils', index),
-    textureSrc: getDrifAssetSrc('textures', index),
+    imageSrc: getDrifAssetSrc('drifs', assetId),
+    foilSrc: getDrifAssetSrc('foils', assetId),
+    textureSrc: getDrifAssetSrc('textures', assetId),
     effect: EFFECTS[effectId],
-    glowType: DRIF_GLOW_TYPES[index] ?? DEFAULT_DRIF_GLOW_TYPE,
+    glowType: DRIF_GLOW_TYPES_BY_ASSET_ID[assetId] ?? DEFAULT_DRIF_GLOW_TYPE,
   };
 });
 
