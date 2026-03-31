@@ -188,7 +188,7 @@
   --card-aspect: 0.7142857143;
   --card-radius: 4.55% / 3.5%;
   --card-edge: hsl(47, 100%, 78%);
-  --card-back: hsl(205, 100%, 25%);
+  --card-back: #000;
   --card-glow: hsl(175, 100%, 90%);
   --sunpillar-1: hsl(2, 100%, 73%);
   --sunpillar-2: hsl(53, 100%, 69%);
