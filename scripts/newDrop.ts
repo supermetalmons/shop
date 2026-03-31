@@ -45,7 +45,7 @@ export type NewDropConfig = {
 // Toggle this to pick deployment network from one place.
 const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'green';
+const dropSymbol = 'poncho';
 const sellerFeeBasisPoints = 500;
 
 /**
@@ -60,32 +60,32 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'green_boxes_devnet',
-    metadataBase: 'https://assets.mons.link/drops/test/green',
+    dropId: 'Poncho_Drifella_Draft',
+    metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {
-      name: 'green test',
+      name: 'Poncho Drifella',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'green test mons.shop drop',
+      description: 'poncho drifella cards · redeem physical on mons.shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/test/green/box/default.png',
+      image: 'https://assets.mons.link/drops/poncho/pack.webp',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/poncho_drifella.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
       canopyDepth: 0,
     },
     coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
-    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
     priceSol: 0.05,
     discountPriceSol: 0.023,
     discountMintsPerWallet: 3,
-    maxSupply: 33,
+    maxSupply: 207,
     itemsPerBox: 1,
     maxPerTx: 15,
-    namePrefix: 'chest',
-    figureNamePrefix: 'item',
+    namePrefix: 'pack',
+    figureNamePrefix: 'card',
     symbol: dropSymbol,
   },
 };
