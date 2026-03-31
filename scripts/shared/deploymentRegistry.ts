@@ -89,6 +89,39 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
   return parsed;
 }
 
+// Keep family variants such as little_swag_boxes_devnet aligned with the canonical media ids.
+const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
+const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfigSerialized = {
+  strategy: 'cyclic',
+  count: 333,
+  overrides: {
+    344: 1,
+    353: 90,
+    360: 3,
+    505: 163,
+    650: 285,
+    660: 13,
+    661: 206,
+    662: 82,
+    663: 175,
+    664: 19,
+    665: 92,
+    666: 86,
+    677: 1,
+    686: 90,
+    693: 3,
+    838: 163,
+    983: 285,
+    993: 49,
+    994: 206,
+    995: 21,
+    996: 175,
+    997: 19,
+    998: 92,
+    999: 86,
+  },
+};
+
 function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
@@ -109,6 +142,16 @@ function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigS
   };
 }
 
+function isLittleSwagBoxesFamilyDropId(dropId: string): boolean {
+  const normalizedDropId = normalizeDropId(dropId);
+  return normalizedDropId === LITTLE_SWAG_BOXES_DROP_ID_PREFIX || normalizedDropId.startsWith(`${LITTLE_SWAG_BOXES_DROP_ID_PREFIX}_`);
+}
+
+export function defaultFrontendFigureMediaForDropId(dropId: string): FigureMediaConfigSerialized | undefined {
+  if (!isLittleSwagBoxesFamilyDropId(dropId)) return undefined;
+  return normalizeFigureMediaConfigForRegistry(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
+}
+
 function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
@@ -117,7 +160,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const metadataBase = asTrimmedString(obj.metadataBase) || asTrimmedString((obj.paths as any)?.base);
   const secondaryMarketHref = asTrimmedString(obj.secondaryMarketHref);
   const defaultMarketHref = defaultSecondaryMarketHref(dropId);
-  const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia);
+  const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropId(dropId);
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
@@ -442,6 +485,47 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
   };
 }
 
+// Keep family variants such as little_swag_boxes_devnet aligned with the canonical media ids.
+const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
+const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
+  strategy: 'cyclic',
+  count: 333,
+  overrides: {
+    344: 1,
+    353: 90,
+    360: 3,
+    505: 163,
+    650: 285,
+    660: 13,
+    661: 206,
+    662: 82,
+    663: 175,
+    664: 19,
+    665: 92,
+    666: 86,
+    677: 1,
+    686: 90,
+    693: 3,
+    838: 163,
+    983: 285,
+    993: 49,
+    994: 206,
+    995: 21,
+    996: 175,
+    997: 19,
+    998: 92,
+    999: 86,
+  },
+};
+
+function defaultFigureMediaConfigForDropId(dropId: string): FigureMediaConfig | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  if (normalizedDropId !== LITTLE_SWAG_BOXES_DROP_ID_PREFIX && !normalizedDropId.startsWith(LITTLE_SWAG_BOXES_DROP_ID_PREFIX + '_')) {
+    return undefined;
+  }
+  return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -456,12 +540,13 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 
 function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'> & { dropId: string }): FrontendDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
+  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropId(normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
-    figureMedia: normalizeFigureMediaConfig(config.figureMedia),
+    ...(figureMedia ? { figureMedia } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),

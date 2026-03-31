@@ -8,6 +8,7 @@ import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
 import { NEW_DROP, type SolanaCluster } from './newDrop.ts';
 import {
+  defaultFrontendFigureMediaForDropId,
   readFrontendDropRegistry,
   readFunctionsDropRegistry,
   writeFrontendDeploymentRegistryFile,
@@ -815,11 +816,13 @@ async function writeFrontendDeploymentConfig(args: {
   }
   const nextDrops = { ...existing.drops };
   const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
+  const figureMedia = defaultFrontendFigureMediaForDropId(normalizedDropId);
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
+    ...(figureMedia ? { figureMedia } : {}),
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
