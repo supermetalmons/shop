@@ -2826,15 +2826,6 @@ function App({ currentPath }: AppProps) {
                 >
                   /Poncho_Drifella
                 </button>
-                <button
-                  type="button"
-                  className="link small top__submenu-nav"
-                  onClick={() => {
-                    navigate('/');
-                  }}
-                >
-                  /
-                </button>
                 {allDrops.map((drop) => (
                   <button
                     key={drop.dropId}
