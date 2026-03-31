@@ -60,7 +60,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'little_swag_boxes',
+    dropId: 'little_swag_boxes_devnet',
     metadataBase: 'https://assets.mons.link/drops/lsb',
     collectionMetadata: {
       name: 'Little Swag Boxes',
@@ -78,8 +78,8 @@ export const NEW_DROP: NewDropConfig = {
     },
     coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    priceSol: 1,
-    discountPriceSol: 0.55,
+    priceSol: 0.1,
+    discountPriceSol: 0.055,
     discountMintsPerWallet: 1,
     maxSupply: 333,
     itemsPerBox: 3,

@@ -63,6 +63,12 @@ export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
 
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
+  return parsed;
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -73,12 +79,6 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
     receiptsBoxesJsonBase: `${base}/json/receipts/boxes/`,
     receiptsFiguresJsonBase: `${base}/json/receipts/figures/`,
   };
-}
-
-function normalizeDiscountMintsPerWallet(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
-  return parsed;
 }
 
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
@@ -92,10 +92,11 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
   };
 }
 
+// BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY
 export const FUNCTIONS_DEFAULT_DROP_ID = 'little_swag_boxes';
 
 export const FUNCTIONS_DROPS: FunctionsDropsMap = {
-  little_swag_boxes: createFunctionsDrop({
+  'little_swag_boxes': createFunctionsDrop({
     solanaCluster: 'mainnet-beta',
     dropId: 'little_swag_boxes',
     collectionName: 'Little Swag Boxes',
@@ -122,7 +123,35 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: 'Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV',
     deliveryLookupTable: 'F51Mj4JFGdVKJfdbYc4aT4de8Dbst7BmWr2P2Bwxa8Wz',
   }),
+  'little_swag_boxes_devnet': createFunctionsDrop({
+    solanaCluster: 'devnet',
+    dropId: 'little_swag_boxes_devnet',
+    collectionName: 'Little Swag Boxes',
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: 'https://assets.mons.link/drops/lsb',
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    priceSol: 0.1,
+    discountPriceSol: 0.055,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
+    maxSupply: 333,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: 'box',
+    figureNamePrefix: 'figure',
+    symbol: 'lsb',
+
+    // On-chain ids
+    boxMinterProgramId: 'CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA',
+    collectionMint: '4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6',
+    receiptsMerkleTree: '2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT',
+    deliveryLookupTable: '8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A',
+  }),
 };
+// END AUTO-GENERATED FUNCTIONS DROP REGISTRY
 
 export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);

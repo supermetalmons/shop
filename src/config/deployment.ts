@@ -140,10 +140,11 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
   };
 }
 
+// BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY
 export const FRONTEND_DEFAULT_DROP_ID = 'little_swag_boxes';
 
 export const FRONTEND_DROPS: FrontendDropsMap = {
-  little_swag_boxes: createFrontendDrop({
+  'little_swag_boxes': createFrontendDrop({
     solanaCluster: 'mainnet-beta',
     dropId: 'little_swag_boxes',
     collectionName: 'Little Swag Boxes',
@@ -183,6 +184,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
       },
     },
 
+
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 1,
@@ -200,7 +202,34 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep',
     collectionMint: '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr',
   }),
+  'little_swag_boxes_devnet': createFrontendDrop({
+    solanaCluster: 'devnet',
+    dropId: 'little_swag_boxes_devnet',
+    collectionName: 'Little Swag Boxes',
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: 'https://assets.mons.link/drops/lsb',
+
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    priceSol: 0.1,
+    discountPriceSol: 0.055,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: '6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c',
+    maxSupply: 333,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: 'box',
+    figureNamePrefix: 'figure',
+    symbol: 'lsb',
+
+    // On-chain ids
+    boxMinterProgramId: 'CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA',
+    collectionMint: '4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6',
+  }),
 };
+// END AUTO-GENERATED FRONTEND DROP REGISTRY
 
 export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);

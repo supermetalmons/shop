@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -1048,17 +1048,37 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
   }),`;
 }
 
-function renderFrontendDeploymentRegistryFile(args: {
+const FRONTEND_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY';
+const FRONTEND_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FRONTEND DROP REGISTRY';
+const FUNCTIONS_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY';
+const FUNCTIONS_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FUNCTIONS DROP REGISTRY';
+
+function renderFrontendDeploymentRegistrySection(args: {
   defaultDropId: string;
   drops: Record<string, FrontendDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
   const entries = dropIds.map((dropId) => renderFrontendDropEntry(args.drops[dropId])).join('\n');
+  return `${FRONTEND_DEPLOYMENT_REGISTRY_START}
+export const FRONTEND_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
+
+export const FRONTEND_DROPS: FrontendDropsMap = {
+${entries}
+};
+${FRONTEND_DEPLOYMENT_REGISTRY_END}`;
+}
+
+function renderFrontendDeploymentRegistryFile(args: {
+  defaultDropId: string;
+  drops: Record<string, FrontendDropConfigSerialized>;
+}): string {
+  const registrySection = renderFrontendDeploymentRegistrySection(args);
   return `/**
  * Frontend deployment constants (COMMITTED).
  *
  * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
  * an on-chain deployment.
+ * Manual edits outside the auto-generated registry section are preserved.
  *
  * Secrets:
  * - Do NOT put secrets here.
@@ -1137,6 +1157,12 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
+  return parsed;
+}
+
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
   const normalizedDropId = normalizeDropId(dropId);
   return normalizedDropId ? \`https://www.tensor.trade/trade/\${normalizedDropId}\` : undefined;
@@ -1184,16 +1210,13 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     figureMedia: normalizeFigureMediaConfig(config.figureMedia),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase),
   };
 }
 
-export const FRONTEND_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
-
-export const FRONTEND_DROPS: FrontendDropsMap = {
-${entries}
-};
+${registrySection}
 
 export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);
@@ -1219,17 +1242,32 @@ export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = requireFrontendDrop
 `;
 }
 
-function renderFunctionsDeploymentRegistryFile(args: {
+function renderFunctionsDeploymentRegistrySection(args: {
   defaultDropId: string;
   drops: Record<string, FunctionsDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
   const entries = dropIds.map((dropId) => renderFunctionsDropEntry(args.drops[dropId])).join('\n');
+  return `${FUNCTIONS_DEPLOYMENT_REGISTRY_START}
+export const FUNCTIONS_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
+
+export const FUNCTIONS_DROPS: FunctionsDropsMap = {
+${entries}
+};
+${FUNCTIONS_DEPLOYMENT_REGISTRY_END}`;
+}
+
+function renderFunctionsDeploymentRegistryFile(args: {
+  defaultDropId: string;
+  drops: Record<string, FunctionsDropConfigSerialized>;
+}): string {
+  const registrySection = renderFunctionsDeploymentRegistrySection(args);
   return `/**
  * Cloud Functions deployment constants (COMMITTED).
  *
  * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
  * an on-chain deployment, so functions can run with minimal env usage.
+ * Manual edits outside the auto-generated registry section are preserved.
  *
  * Secrets:
  * - HELIUS_API_KEY (env/runtime config)
@@ -1290,6 +1328,12 @@ export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
 
+function normalizeDiscountMintsPerWallet(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
+  return parsed;
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -1309,14 +1353,11 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
     dropId: normalizedDropId,
     metadataBase: normalizeDropBase(config.metadataBase),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
 }
 
-export const FUNCTIONS_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
-
-export const FUNCTIONS_DROPS: FunctionsDropsMap = {
-${entries}
-};
+${registrySection}
 
 export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);
@@ -1347,6 +1388,28 @@ export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = requireFunctionsD
  */
 export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);
 `;
+}
+
+function replaceMarkedSection(args: {
+  filePath: string;
+  existingContent: string;
+  startMarker: string;
+  endMarker: string;
+  nextSection: string;
+}): string | undefined {
+  const start = args.existingContent.indexOf(args.startMarker);
+  const end = args.existingContent.indexOf(args.endMarker);
+  if (start === -1 && end === -1) return undefined;
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`Malformed auto-generated section markers in ${args.filePath}`);
+  }
+
+  const sectionStart = args.existingContent.lastIndexOf('\n', start);
+  const prefixEnd = sectionStart === -1 ? 0 : sectionStart + 1;
+  const sectionEndLine = args.existingContent.indexOf('\n', end);
+  const suffixStart = sectionEndLine === -1 ? args.existingContent.length : sectionEndLine + 1;
+  const nextSection = args.nextSection.endsWith('\n') ? args.nextSection : `${args.nextSection}\n`;
+  return `${args.existingContent.slice(0, prefixEnd)}${nextSection}${args.existingContent.slice(suffixStart)}`;
 }
 
 async function writeFrontendDeploymentConfig(args: {
@@ -1399,7 +1462,16 @@ async function writeFrontendDeploymentConfig(args: {
     collectionMint: args.collectionMint,
   };
   const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
-  const content = renderFrontendDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
+  const prevContent = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+  const section = renderFrontendDeploymentRegistrySection({ defaultDropId, drops: nextDrops });
+  const content =
+    replaceMarkedSection({
+      filePath,
+      existingContent: prevContent,
+      startMarker: FRONTEND_DEPLOYMENT_REGISTRY_START,
+      endMarker: FRONTEND_DEPLOYMENT_REGISTRY_END,
+      nextSection: section,
+    }) || renderFrontendDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
   writeTextFileIfChanged(filePath, content);
   return filePath;
 }
@@ -1458,7 +1530,16 @@ async function writeFunctionsDeploymentConfig(args: {
     deliveryLookupTable: args.deliveryLookupTable,
   };
   const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
-  const content = renderFunctionsDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
+  const prevContent = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+  const section = renderFunctionsDeploymentRegistrySection({ defaultDropId, drops: nextDrops });
+  const content =
+    replaceMarkedSection({
+      filePath,
+      existingContent: prevContent,
+      startMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_START,
+      endMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_END,
+      nextSection: section,
+    }) || renderFunctionsDeploymentRegistryFile({ defaultDropId, drops: nextDrops });
   writeTextFileIfChanged(filePath, content);
   return filePath;
 }
@@ -2116,6 +2197,17 @@ function ensureAnchorCompatibleCargoLock(onchainDir: string) {
   return false;
 }
 
+function removeStaleAnchorGeneratedArtifacts(onchainDir: string) {
+  // Anchor 0.32.x fails to parse legacy target/idl + target/types artifacts emitted by
+  // older Anchor versions during `anchor keys sync`. They are regenerated by the later build.
+  for (const relPath of ['target/idl', 'target/types']) {
+    const artifactPath = path.join(onchainDir, relPath);
+    if (!existsSync(artifactPath)) continue;
+    rmSync(artifactPath, { recursive: true, force: true });
+    console.log(`Removed stale Anchor generated artifacts: ${artifactPath}`);
+  }
+}
+
 function run(cmd: string, args: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {
   const env = opts.env ? { ...process.env, ...opts.env } : process.env;
   const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: opts.cwd, env });
@@ -2515,6 +2607,7 @@ async function main() {
   }
 
   // 1) Build + deploy program via Anchor.
+  removeStaleAnchorGeneratedArtifacts(onchainDir);
   run('anchor', ['keys', 'sync'], { cwd: onchainDir, env: toolEnv });
   if (expectedProgramId) {
     const synced = readProgramId(onchainDir);
@@ -2546,7 +2639,12 @@ async function main() {
   }
 
   // Build with Anchor "lean" features to reduce binary size (no on-chain IDL + no auto instruction-name logs).
-  run('anchor', ['build', '--arch', 'sbf', '--', '--features', 'no-idl,no-log-ix-name'], { cwd: onchainDir, env: toolEnv });
+  // `--no-idl` skips Anchor's separate IDL generation step, which otherwise requires an
+  // `idl-build` feature on Anchor 0.32.x even when the Rust `no-idl` feature is enabled.
+  run('anchor', ['build', '--no-idl', '--arch', 'sbf', '--', '--features', 'no-idl,no-log-ix-name'], {
+    cwd: onchainDir,
+    env: toolEnv,
+  });
   if (!existsSync(programBinary)) {
     throw new Error(`Missing program binary after build: ${programBinary}`);
   }
