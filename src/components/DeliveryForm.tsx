@@ -140,6 +140,7 @@ export function DeliveryForm({
           <span className="muted">Country</span>
           <select
             required
+            className="country-picker"
             value={selectedCountryCode}
             onChange={(e) => {
               const next = e.target.value;

@@ -370,11 +370,10 @@ export default function FulfillmentApp() {
         ) : (
           <section className="orders">
             <div className="row">
-              <label className="muted small" htmlFor="fulfillment-drop-picker">
-                Drop
-              </label>
               <select
                 id="fulfillment-drop-picker"
+                className="fulfillment-drop-picker"
+                aria-label="Drop"
                 value={selectedDrop.dropId}
                 onChange={(evt) => {
                   setSelectedDropId(evt.target.value);
@@ -382,7 +381,7 @@ export default function FulfillmentApp() {
               >
                 {drops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
-                    {drop.collectionName} ({drop.dropId})
+                    {drop.dropId}
                   </option>
                 ))}
               </select>
