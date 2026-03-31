@@ -45,7 +45,7 @@ export type NewDropConfig = {
 // Toggle this to pick deployment network from one place.
 const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'lsb';
+const dropSymbol = 'green';
 const sellerFeeBasisPoints = 500;
 
 /**
@@ -60,13 +60,13 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'little_swag_boxes_devnet',
-    metadataBase: 'https://assets.mons.link/drops/lsb',
+    dropId: 'green_boxes_devnet',
+    metadataBase: 'https://assets.mons.link/drops/test/green',
     collectionMetadata: {
-      name: 'Little Swag Boxes',
+      name: 'Green Boxes',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'a collection of little swag boxes, figures and receipts',
+      description: 'a collection of green boxes, figures and receipts',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/lsb/box/default.webp',
     },
@@ -78,11 +78,11 @@ export const NEW_DROP: NewDropConfig = {
     },
     coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    priceSol: 0.1,
-    discountPriceSol: 0.055,
-    discountMintsPerWallet: 1,
-    maxSupply: 333,
-    itemsPerBox: 3,
+    priceSol: 0.05,
+    discountPriceSol: 0.023,
+    discountMintsPerWallet: 3,
+    maxSupply: 33,
+    itemsPerBox: 1,
     maxPerTx: 15,
     namePrefix: 'box',
     figureNamePrefix: 'figure',
