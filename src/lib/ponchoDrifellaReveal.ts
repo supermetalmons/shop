@@ -10,8 +10,9 @@ const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/recoverab
 const PONCHO_DRIFELLA_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/final_sequences';
 export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.webp';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
-export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 42;
-export const PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS = 777;
+export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 48;
+export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_HOLD_MS = 600;
+export const PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS = 555;
 const PONCHO_DRIFELLA_CARD_INTERACTION_UNLOCK_DELAY_MS = Math.round(PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS / 2);
 const PONCHO_DRIFELLA_ASSET_RETRY_DELAY_MS = 180;
 const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
@@ -95,6 +96,7 @@ type PonchoDrifellaRevealStage =
   | 'segment_1_2'
   | 'segment_1_2_hold'
   | 'autoplay'
+  | 'autoplay_hold'
   | 'revealed';
 
 type UsePonchoDrifellaRevealControllerOptions = {
@@ -567,7 +569,7 @@ export function usePonchoDrifellaRevealController({
     if (!active || phase !== 'ready' || stage !== 'autoplay' || typeof window === 'undefined') return undefined;
     const timeoutId = window.setTimeout(() => {
       if (stageFrameIndex >= PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS.length - 1) {
-        setStage('revealed');
+        setStage('autoplay_hold');
         return;
       }
       setStageFrameIndex((prevFrameIndex) => prevFrameIndex + 1);
@@ -576,6 +578,16 @@ export function usePonchoDrifellaRevealController({
       window.clearTimeout(timeoutId);
     };
   }, [active, autoplayDelayMs, phase, stage, stageFrameIndex]);
+
+  useEffect(() => {
+    if (!active || phase !== 'ready' || stage !== 'autoplay_hold' || typeof window === 'undefined') return undefined;
+    const timeoutId = window.setTimeout(() => {
+      setStage('revealed');
+    }, PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_HOLD_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [active, phase, stage]);
 
   useEffect(() => {
     if (!active || stage !== 'revealed' || typeof window === 'undefined') {
@@ -603,12 +615,12 @@ export function usePonchoDrifellaRevealController({
     onPlayReveal?.();
   }, [onPlayReveal, revealPhase]);
 
-  const animating = stage === 'punch' || stage === 'segment_1_1' || stage === 'segment_1_2' || stage === 'autoplay';
-  const autoOpening = stage === 'autoplay';
+  const animating = stage === 'punch' || stage === 'segment_1_1' || stage === 'segment_1_2' || stage === 'autoplay' || stage === 'autoplay_hold';
+  const autoOpening = stage === 'autoplay' || stage === 'autoplay_hold';
   const revealResolved = cardReady;
   const cardAssetsReady = cardDisplayReady;
   const fixedSequenceReady = revealResolved && cardAssetsReady && sequenceAssetsReady;
-  const autoplayVisualsVisible = fixedSequenceReady && (stage === 'autoplay' || stage === 'revealed');
+  const autoplayVisualsVisible = fixedSequenceReady && (stage === 'autoplay' || stage === 'autoplay_hold' || stage === 'revealed');
 
   const boxFrameSrc = useMemo(() => {
     if (stage === 'punch') {
@@ -620,7 +632,7 @@ export function usePonchoDrifellaRevealController({
     if (stage === 'segment_1_2' || stage === 'segment_1_2_hold') {
       return PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS[Math.min(stageFrameIndex, PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS.length - 1)];
     }
-    if (stage === 'autoplay' || stage === 'revealed') {
+    if (stage === 'autoplay' || stage === 'autoplay_hold' || stage === 'revealed') {
       return PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS[
         Math.min(stageFrameIndex, PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS.length - 1)
       ];
@@ -630,7 +642,7 @@ export function usePonchoDrifellaRevealController({
 
   const foregroundFrameSrc = useMemo(() => {
     if (!sequenceAssetsReady) return undefined;
-    if (stage !== 'autoplay' && stage !== 'revealed') {
+    if (stage !== 'autoplay' && stage !== 'autoplay_hold' && stage !== 'revealed') {
       return PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS[0];
     }
     return PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS[
@@ -645,7 +657,7 @@ export function usePonchoDrifellaRevealController({
     if (stage === 'segment_1_2' || stage === 'segment_1_2_hold') {
       return PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS.length + stageFrameIndex + 1;
     }
-    if (stage === 'autoplay' || stage === 'revealed') {
+    if (stage === 'autoplay' || stage === 'autoplay_hold' || stage === 'revealed') {
       return PONCHO_DRIFELLA_MANUAL_SEQUENCE_FRAME_URLS.length + stageFrameIndex + 1;
     }
     return 1;
