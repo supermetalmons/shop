@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent, type TransitionEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type AnimationEvent,
+  type CSSProperties,
+  type SyntheticEvent,
+  type TransitionEvent,
+} from 'react';
 import type { DrifCardConfig } from '../drifCards';
 import {
   getPonchoDrifellaCardByFigureId,
@@ -24,6 +33,7 @@ export type PonchoInventoryRevealOverlayProps = {
   onAdvance: () => void;
   onDismiss: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
+  onPackDiscardEnd?: () => void;
 };
 
 type PonchoRevealOverlayProps = {
@@ -43,6 +53,7 @@ type PonchoRevealOverlayProps = {
   onAdvance: () => void;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
+  onPackDiscardEnd?: () => void;
 };
 
 export function PonchoRevealOverlay({
@@ -62,8 +73,10 @@ export function PonchoRevealOverlay({
   onAdvance,
   onDismiss,
   onTransitionEnd,
+  onPackDiscardEnd,
 }: PonchoRevealOverlayProps) {
   const foregroundImageRef = useRef<HTMLImageElement | null>(null);
+  const discardAnimationReportedRef = useRef(false);
   const [foregroundPrepared, setForegroundPrepared] = useState(false);
   const desiredForegroundVisible = Boolean(foregroundFrameSrc) && cardVisible;
   const foregroundCoverReady = Boolean(foregroundFrameSrc) && foregroundPrepared;
@@ -87,6 +100,19 @@ export function PonchoRevealOverlay({
       setForegroundPrepared(true);
     }
   }, [active, foregroundFrameSrc, foregroundPrepared]);
+
+  useEffect(() => {
+    if (active && packDiscarded) return;
+    discardAnimationReportedRef.current = false;
+  }, [active, packDiscarded]);
+
+  const handlePackDiscardAnimationEnd = (evt: AnimationEvent<HTMLElement>) => {
+    if (evt.animationName !== 'wip-pack-discard') return;
+    if (!packDiscarded) return;
+    if (discardAnimationReportedRef.current) return;
+    discardAnimationReportedRef.current = true;
+    onPackDiscardEnd?.();
+  };
 
   return (
     <div
@@ -112,6 +138,7 @@ export function PonchoRevealOverlay({
             if (boxDisabled) return;
             onAdvance();
           }}
+          onAnimationEnd={handlePackDiscardAnimationEnd}
         >
           {boxFrameSrc ? (
             <img src={boxFrameSrc} alt={boxName} className="reveal-overlay__image" draggable={false} />
@@ -138,6 +165,7 @@ export function PonchoRevealOverlay({
           <div
             className={`wip-reveal__foreground${desiredForegroundVisible ? ' wip-reveal__foreground--visible' : ' wip-reveal__foreground--hidden'}${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
             aria-hidden="true"
+            onAnimationEnd={handlePackDiscardAnimationEnd}
           >
             <img
               ref={foregroundImageRef}
@@ -174,6 +202,7 @@ export default function PonchoInventoryRevealOverlay({
   onAdvance,
   onDismiss,
   onTransitionEnd,
+  onPackDiscardEnd,
 }: PonchoInventoryRevealOverlayProps) {
   const revealedCard = useMemo(() => {
     if (!revealedIds?.length || revealedIds.length !== 1) return undefined;
@@ -199,6 +228,7 @@ export default function PonchoInventoryRevealOverlay({
       onAdvance={onAdvance}
       onDismiss={onDismiss}
       onTransitionEnd={onTransitionEnd}
+      onPackDiscardEnd={onPackDiscardEnd}
     />
   );
 }

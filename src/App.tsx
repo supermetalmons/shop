@@ -85,6 +85,7 @@ import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from '
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
+const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 
 function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string }>(items: readonly T[]): T[] {
   const leading: T[] = [];
@@ -708,9 +709,11 @@ function App({ currentPath }: AppProps) {
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
   const revealDismissLockedUntilRef = useRef<number>(0);
+  const ponchoPackDiscardDismissReadyRef = useRef(false);
   const revealOverlayActiveRef = useRef(false);
   const revealOverlayClosingRef = useRef(false);
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
+  const ponchoPackDiscardDismissTimeoutRef = useRef<number | null>(null);
 
   const boxImageForDropId = useCallback(
     (dropId?: string): string | undefined => {
@@ -1167,10 +1170,25 @@ function App({ currentPath }: AppProps) {
     revealOverlayCloseTimeoutRef.current = null;
   }, []);
 
+  const clearPonchoPackDiscardDismissTimeout = useCallback(() => {
+    if (ponchoPackDiscardDismissTimeoutRef.current === null) return;
+    if (typeof window === 'undefined') return;
+    window.clearTimeout(ponchoPackDiscardDismissTimeoutRef.current);
+    ponchoPackDiscardDismissTimeoutRef.current = null;
+  }, []);
+
+  const markPonchoPackDiscardDismissReady = useCallback(() => {
+    ponchoPackDiscardDismissReadyRef.current = true;
+    revealDismissLockedUntilRef.current = Date.now() + PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS;
+    clearPonchoPackDiscardDismissTimeout();
+  }, [clearPonchoPackDiscardDismissTimeout]);
+
   const finalizeRevealOverlayDismissal = useCallback(() => {
     clearRevealOverlayCloseTimeout();
+    clearPonchoPackDiscardDismissTimeout();
     revealOverlayRef.current = null;
     revealDismissLockedUntilRef.current = 0;
+    ponchoPackDiscardDismissReadyRef.current = false;
     setRevealOverlay(null);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
@@ -1181,7 +1199,7 @@ function App({ currentPath }: AppProps) {
       }
     }
     flushOverlayActions();
-  }, [clearRevealOverlayCloseTimeout, flushOverlayActions]);
+  }, [clearPonchoPackDiscardDismissTimeout, clearRevealOverlayCloseTimeout, flushOverlayActions]);
 
   const closeRevealOverlay = useCallback(() => {
     const overlay = revealOverlayRef.current;
@@ -1246,6 +1264,8 @@ function App({ currentPath }: AppProps) {
 		    if (!item) return;
 		    const overlayDropId = item.dropId || activeDrop.dropId;
     revealDismissLockedUntilRef.current = 0;
+    ponchoPackDiscardDismissReadyRef.current = false;
+    clearPonchoPackDiscardDismissTimeout();
     clearRevealOverlayCloseTimeout();
     preloadRevealSounds(overlayDropId);
     preloadPonchoRevealPackAssetsForDropId(overlayDropId);
@@ -2501,6 +2521,9 @@ function App({ currentPath }: AppProps) {
       if (!ponchoRevealController.revealComplete) {
         return;
       }
+      if (hasResults && !ponchoPackDiscardDismissReadyRef.current) {
+        return;
+      }
       if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
         return;
       }
@@ -2883,6 +2906,32 @@ function App({ currentPath }: AppProps) {
           ? 'revealed'
           : 'ready'
     : 'ready';
+  useEffect(() => {
+    if (!revealOverlayUsesPonchoRenderer || !revealOverlay?.revealedIds?.length || ponchoRevealController.phase !== 'revealed') {
+      ponchoPackDiscardDismissReadyRef.current = false;
+      clearPonchoPackDiscardDismissTimeout();
+      return undefined;
+    }
+    if (ponchoPackDiscardDismissReadyRef.current || typeof window === 'undefined') {
+      return undefined;
+    }
+    const overlayId = revealOverlay.id;
+    clearPonchoPackDiscardDismissTimeout();
+    ponchoPackDiscardDismissTimeoutRef.current = window.setTimeout(() => {
+      if (revealOverlayRef.current?.id !== overlayId) return;
+      markPonchoPackDiscardDismissReady();
+    }, PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS);
+    return () => {
+      clearPonchoPackDiscardDismissTimeout();
+    };
+  }, [
+    clearPonchoPackDiscardDismissTimeout,
+    markPonchoPackDiscardDismissReady,
+    ponchoRevealController.phase,
+    revealOverlay?.id,
+    revealOverlay?.revealedIds?.length,
+    revealOverlayUsesPonchoRenderer,
+  ]);
   const revealMediaItems = useMemo<Array<{ figureId: number; index: number; mediaId?: number; image?: string; name: string }>>(() => {
     if (!revealOverlay?.revealedIds?.length) {
       return [];
@@ -3177,6 +3226,7 @@ function App({ currentPath }: AppProps) {
           if (!revealOverlayClosing) return;
           finalizeRevealOverlayDismissal();
         }}
+        onPackDiscardEnd={markPonchoPackDiscardDismissReady}
       />
     ) : (
       defaultRevealOverlayNode
