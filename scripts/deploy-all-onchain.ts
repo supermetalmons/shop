@@ -1604,6 +1604,44 @@ function run(cmd: string, args: string[], opts: { cwd?: string; env?: Record<str
   }
 }
 
+function sha256File(filePath: string): string {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function deployedProgramMatchesBinary(args: {
+  programId: string;
+  programBinary: string;
+  solanaUrl: string;
+  cwd: string;
+  env?: Record<string, string | undefined>;
+}): boolean {
+  const env = args.env ? { ...process.env, ...args.env } : process.env;
+  const dumpPath = path.join(tmpdir(), `mons-shop-program-dump-${process.pid}-${Date.now()}.so`);
+  try {
+    const res = spawnSync('solana', ['program', 'dump', args.programId, dumpPath, '--url', args.solanaUrl], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: args.cwd,
+      env,
+      encoding: 'utf8',
+    });
+    if (res.status !== 0 || !existsSync(dumpPath)) {
+      const stderr = String(res.stderr || '').trim();
+      console.warn(`⚠️  Could not dump deployed program ${args.programId} for hash comparison.${stderr ? ` ${stderr}` : ''}`);
+      return false;
+    }
+
+    const localHash = sha256File(args.programBinary);
+    const deployedHash = sha256File(dumpPath);
+    return localHash === deployedHash;
+  } finally {
+    try {
+      if (existsSync(dumpPath)) unlinkSync(dumpPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function readProgramId(onchainDir: string): string {
   const libPath = path.join(onchainDir, 'programs', 'box_minter', 'src', 'lib.rs');
   const content = readFileSync(libPath, 'utf8');
@@ -2045,12 +2083,26 @@ async function main() {
     throw new Error(`Missing program binary after build: ${programBinary}`);
   }
 
-  // Deploy program via Solana CLI (Agave). This avoids `anchor deploy` rebuilding with the wrong arch/tooling.
-  const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypair, '--url', solanaUrl, '--keypair', tempKeypairPath];
-  run('solana', deployArgs, { cwd: onchainDir, env: toolEnv });
-
   const programId = readProgramId(onchainDir);
-  console.log('\nProgram deployed:', programId);
+  const canSkipRedeploy =
+    reuseProgramId &&
+    deployedProgramMatchesBinary({
+      programId,
+      programBinary,
+      solanaUrl,
+      cwd: onchainDir,
+      env: toolEnv,
+    });
+
+  if (canSkipRedeploy) {
+    console.log('\nProgram already deployed with matching binary; skipping upgrade.');
+    console.log('Program deployed:', programId);
+  } else {
+    // Deploy program via Solana CLI (Agave). This avoids `anchor deploy` rebuilding with the wrong arch/tooling.
+    const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypair, '--url', solanaUrl, '--keypair', tempKeypairPath];
+    run('solana', deployArgs, { cwd: onchainDir, env: toolEnv });
+    console.log('\nProgram deployed:', programId);
+  }
 
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
