@@ -43,7 +43,7 @@ export type NewDropConfig = {
 };
 
 // Toggle this to pick deployment network from one place.
-const isMainnet = false;
+const isMainnet = true;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
 const dropSymbol = 'poncho';
 const sellerFeeBasisPoints = 500;
@@ -60,7 +60,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'Poncho_Drifella_Devnet',
+    dropId: 'Poncho_Drifella',
     metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {
       name: 'Poncho Drifella',
