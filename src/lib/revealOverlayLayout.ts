@@ -10,10 +10,10 @@ const PONCHO_DRIFELLA_SOURCE_FRAME_SIZE = 1440;
 // Seeded from the previous desktop-only layout at a 738px square reveal target,
 // then reduced by 10% while keeping the card centered for pack-relative tuning.
 export const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
-  left: 455,
-  top: 348,
-  width: 530,
-  height: 743,
+  left: 460,
+  top: 372,
+  width: 520,
+  height: 728,
 });
 
 export function calcPonchoDrifellaRevealTargetRect(viewportWidth: number, viewportHeight: number) {

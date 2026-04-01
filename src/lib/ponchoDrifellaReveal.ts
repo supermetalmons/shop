@@ -479,7 +479,7 @@ export function usePonchoDrifellaRevealController({
     return hasRevealAttempted ? `keep clicking the ${boxLabel}` : `click the ${boxLabel} to open`;
   }, [autoOpening, boxLabel, hasRevealAttempted, revealPhase]);
 
-  const cardVisible = stage === 'autoplay' || stage === 'revealed';
+  const cardVisible = stage === 'revealed' || (stage === 'autoplay' && stageFrameIndex > 0);
   const cardInteractive = stage === 'revealed' && cardInteractionUnlocked;
 
   const startPunch = useCallback(() => {

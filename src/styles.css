@@ -1255,9 +1255,11 @@ body.wip-scroll-lock #root {
 
 .wip-reveal__media {
   z-index: 4;
+  transition: none;
 }
 
 .wip-reveal__media.reveal-overlay__media--visible {
+  opacity: 1;
   transform: translate3d(0, 0, 0);
 }
 
