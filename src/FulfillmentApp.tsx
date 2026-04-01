@@ -15,6 +15,7 @@ import {
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
 import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
+import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
 import { FRONTEND_DEPLOYMENT, listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
@@ -145,23 +146,35 @@ function renderFigureTiles(args: {
   dropId: string;
   figureIds: number[];
   keyPrefix: string;
+  figureNamePrefix?: string;
   previewMode: 'media_map_folder' | 'metadata_stills';
   figureMedia?: FigureMediaConfig;
   figureMediaBase?: string;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
 }) {
-  const { dropId, figureIds, keyPrefix, previewMode, figureMedia, figureMediaBase, figureMetadataByKey, onMetadataResolved } =
-    args;
+  const {
+    dropId,
+    figureIds,
+    keyPrefix,
+    figureNamePrefix,
+    previewMode,
+    figureMedia,
+    figureMediaBase,
+    figureMetadataByKey,
+    onMetadataResolved,
+  } = args;
+  const labelSource = { namePrefix: undefined, figureNamePrefix };
   return (
     <div className="figure-grid">
       {figureIds.map((figureId, index) => {
         const metadata = figureMetadataByKey[figureMetadataCacheKey(dropId, figureId)] || getCachedFigureMetadata(dropId, figureId);
         const metadataImage = figureMetadataHasImage(metadata) ? metadata.image : undefined;
+        const fallbackName = metadata?.name || dropAssetReference(labelSource, 'figure', figureId);
         if (previewMode === 'media_map_folder') {
           const mediaId = getMediaIdForFigureId(figureId, figureMedia);
           const src = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
-          const label = mediaId ? String(mediaId) : metadata?.name || `Figure ${figureId}`;
+          const label = mediaId ? String(mediaId) : fallbackName;
           return (
             <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
               <FigureTileImage
@@ -169,7 +182,7 @@ function renderFigureTiles(args: {
                 figureId={figureId}
                 primarySrc={src}
                 fallbackSrc={metadataImage}
-                alt={mediaId ? `Media ${mediaId}` : metadata?.name || `Figure ${figureId}`}
+                alt={mediaId ? `Media ${mediaId}` : fallbackName}
                 onMetadataResolved={onMetadataResolved}
               />
               <div className="muted small">{label}</div>
@@ -182,10 +195,10 @@ function renderFigureTiles(args: {
               dropId={dropId}
               figureId={figureId}
               fallbackSrc={metadataImage}
-              alt={metadata?.name || `Figure ${figureId}`}
+              alt={fallbackName}
               onMetadataResolved={onMetadataResolved}
             />
-            <div className="muted small">{metadata?.name || `Figure ${figureId}`}</div>
+            <div className="muted small">{fallbackName}</div>
           </div>
         );
       })}
@@ -638,12 +651,15 @@ export default function FulfillmentApp() {
                         <div className="grid">
                           {order.boxes.map((box) => (
                             <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                              <div className="card__title">Box Secret {box.claimCode}</div>
+                              <div className="card__title">
+                                {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret {box.claimCode}
+                              </div>
                               {box.dudeIds.length ? (
                                 renderFigureTiles({
                                   dropId: selectedDrop.dropId,
                                   figureIds: box.dudeIds,
                                   keyPrefix: `${order.deliveryId}:${box.boxId}`,
+                                  figureNamePrefix: selectedDrop.figureNamePrefix,
                                   previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
                                   figureMediaBase,
                                   figureMedia: selectedDrop.figureMedia,
@@ -651,7 +667,9 @@ export default function FulfillmentApp() {
                                   onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
                                 })
                               ) : (
-                                <div className="muted small">Assigned figures pending</div>
+                                <div className="muted small">
+                                  Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending
+                                </div>
                               )}
                             </div>
                           ))}
@@ -663,6 +681,7 @@ export default function FulfillmentApp() {
                             dropId: selectedDrop.dropId,
                             figureIds: order.looseDudes,
                             keyPrefix: `${order.deliveryId}:dude`,
+                            figureNamePrefix: selectedDrop.figureNamePrefix,
                             previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
                             figureMediaBase,
                             figureMedia: selectedDrop.figureMedia,

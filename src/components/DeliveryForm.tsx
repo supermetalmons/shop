@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+import { dropAssetLabel } from '../lib/dropLabels';
 
 const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
@@ -8,6 +9,8 @@ interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
   defaultEmail?: string;
   itemsPerBox?: number;
+  boxNamePrefix?: string;
+  figureNamePrefix?: string;
   mode?: 'card' | 'modal';
   onCancel?: () => void;
   submitDisabled?: boolean;
@@ -20,6 +23,8 @@ export function DeliveryForm({
   onSubmit,
   defaultEmail,
   itemsPerBox,
+  boxNamePrefix,
+  figureNamePrefix,
   mode = 'card',
   onCancel,
   submitDisabled,
@@ -47,12 +52,13 @@ export function DeliveryForm({
     [selectedCountryCode],
   );
   const countryName = countryOption?.name || selectedCountryCode;
+  const labelSource = { namePrefix: boxNamePrefix, figureNamePrefix };
+  const figureLabel = dropAssetLabel(labelSource, 'figure', figuresPerBox);
+  const singleFigureLabel = dropAssetLabel(labelSource, 'figure', 1);
   const shippingNote =
     selectedCountryCode === 'US'
       ? 'Free US shipping'
-      : `International delivery: 0.19 SOL up to ${figuresPerBox} ${
-          figuresPerBox === 1 ? 'figure' : 'figures'
-        }. 0.04 SOL each additional figure.`;
+      : `International delivery: 0.19 SOL up to ${figuresPerBox} ${figureLabel}. 0.04 SOL each additional ${singleFigureLabel}.`;
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);

@@ -10,6 +10,8 @@ import {
   PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
   preloadPonchoDrifellaCardAssets,
 } from './lib/ponchoDrifellaReveal';
+import { getFrontendDrop } from './config/deployment';
+import { dropAssetLabel } from './lib/dropLabels';
 import { calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 import { listRevealFrameSrcs, preloadRevealFrameSrc, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import { soundPlayer } from './lib/SoundPlayer';
@@ -25,6 +27,7 @@ const PACK_PRELOAD_DELAY_MS_FAST = 70;
 const PACK_PRELOAD_DELAY_MS_SLOW = 180;
 const PACK_PRELOAD_LOOKAHEAD_FAST = 10;
 const PACK_PRELOAD_LOOKAHEAD_SLOW = 6;
+const WIP_DROP = getFrontendDrop('poncho_drifella_draft');
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -75,13 +78,15 @@ function LocalPlayWipApp() {
   const revealComplete = frame >= BOX_FRAME_COUNT;
   const autoOpening = frame >= PACK_AUTOPLAY_TRIGGER_FRAME && frame < BOX_FRAME_COUNT;
   const stage = revealComplete ? 'revealed' : 'ready';
+  const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
+  const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const revealNote = revealComplete
     ? ''
     : autoOpening
       ? 'opening...'
       : frame > 1
-        ? 'keep clicking the pack'
-        : 'click the pack to open';
+        ? `keep clicking the ${revealContainerLabel}`
+        : `click the ${revealContainerLabel} to open`;
   const revealBoxFrameSrc = resolveRevealFrameSrc(PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE, frame);
   const currentCard = DRIF_CARDS[cardIndex];
 
@@ -315,7 +320,7 @@ function LocalPlayWipApp() {
         closing={false}
         stage={stage}
         note={revealNote}
-        boxName="Mystery pack"
+        boxName={mysteryContainerName}
         boxFrameSrc={revealBoxFrameSrc}
         card={currentCard}
         boxDisabled={revealComplete}
@@ -331,7 +336,7 @@ function LocalPlayWipApp() {
       >
         Close
       </button>
-      <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset unboxing">
+      <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">
         Reset
       </button>
     </div>

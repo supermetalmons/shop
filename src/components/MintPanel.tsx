@@ -2,6 +2,7 @@ import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react
 import { FaChevronRight } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { FRONTEND_DEPLOYMENT } from '../config/deployment';
+import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 
 interface MintPanelProps {
@@ -12,6 +13,7 @@ interface MintPanelProps {
   title?: string;
   boxImageSrc?: string;
   boxAspectRatio?: number;
+  boxNamePrefix?: string;
   priceSol?: number;
   discountPriceSol?: number;
   secondaryHref?: string;
@@ -137,6 +139,7 @@ export function MintPanel({
   title,
   boxImageSrc,
   boxAspectRatio,
+  boxNamePrefix,
   priceSol,
   discountPriceSol,
   secondaryHref,
@@ -197,7 +200,7 @@ export function MintPanel({
     () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxAspectRatio || BOX_ASPECT_RATIO),
     [boxAspectRatio, quantity, previewBounds.height, previewBounds.width],
   );
-  const quantityLabel = `${quantity} box${quantity === 1 ? '' : 'es'}`;
+  const quantityLabel = dropAssetCount({ namePrefix: boxNamePrefix, figureNamePrefix: undefined }, 'box', quantity);
   const unitPriceLamports = solAmountToLamports(priceSol, FRONTEND_DEPLOYMENT.priceSol);
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, FRONTEND_DEPLOYMENT.discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
@@ -211,7 +214,11 @@ export function MintPanel({
   const discountText =
     discountLabel ||
     (exceedsDiscountAllowance && normalizedDiscountMaxQuantity
-      ? `Discount available for up to ${normalizedDiscountMaxQuantity} box${normalizedDiscountMaxQuantity === 1 ? '' : 'es'}`
+      ? `Discount available for up to ${dropAssetCount(
+          { namePrefix: boxNamePrefix, figureNamePrefix: undefined },
+          'box',
+          normalizedDiscountMaxQuantity,
+        )}`
       : `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`);
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc;

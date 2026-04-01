@@ -36,6 +36,15 @@ import {
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
 import { isLittleSwagBoxesFamilyDropId, joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
+import {
+  dropAssetCount,
+  dropAssetLabel,
+  dropAssetReference,
+  dropOpenActionLabel,
+  dropOpenActionProgress,
+  dropOpenGerund,
+  dropOpenVerb,
+} from './lib/dropLabels';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
 import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
@@ -434,6 +443,33 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => resolveDropContent(dropId ? getFrontendDrop(dropId) || dropId : activeDrop),
     [activeDrop],
   );
+  const boxLabelForDropId = useCallback(
+    (dropId?: string, count = 1, options?: { capitalize?: boolean }) =>
+      dropAssetLabel(getDropConfig(dropId), 'box', count, options),
+    [getDropConfig],
+  );
+  const figureLabelForDropId = useCallback(
+    (dropId?: string, count = 1, options?: { capitalize?: boolean }) =>
+      dropAssetLabel(getDropConfig(dropId), 'figure', count, options),
+    [getDropConfig],
+  );
+  const boxReferenceForDropId = useCallback(
+    (dropId: string | undefined, reference: string | number) =>
+      dropAssetReference(getDropConfig(dropId), 'box', reference),
+    [getDropConfig],
+  );
+  const figureReferenceForDropId = useCallback(
+    (dropId: string | undefined, reference: string | number) =>
+      dropAssetReference(getDropConfig(dropId), 'figure', reference),
+    [getDropConfig],
+  );
+  const openActionLabelForDropId = useCallback((dropId?: string) => dropOpenActionLabel(getDropConfig(dropId)), [getDropConfig]);
+  const openActionProgressForDropId = useCallback(
+    (dropId?: string) => dropOpenActionProgress(getDropConfig(dropId)),
+    [getDropConfig],
+  );
+  const openVerbForDropId = useCallback((dropId?: string) => dropOpenVerb(getDropConfig(dropId)), [getDropConfig]);
+  const openGerundForDropId = useCallback((dropId?: string) => dropOpenGerund(getDropConfig(dropId)), [getDropConfig]);
   const dropRevealIsAnimated = useCallback(
     (dropId?: string) => {
       const content = getDropContent(dropId);
@@ -1677,7 +1713,7 @@ function App({ currentPath }: AppProps) {
       out.push({
         id: `local-dude-${dropId}-${figureId}`,
         dropId,
-        name: meta?.name || `Figure ${figureId}`,
+        name: meta?.name || figureReferenceForDropId(dropId, figureId),
         kind: 'dude',
         image: meta?.image,
         attributes: meta?.attributes || [],
@@ -1686,7 +1722,7 @@ function App({ currentPath }: AppProps) {
       });
     });
     return out;
-  }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey, isViewerMode]);
+  }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey, figureReferenceForDropId, isViewerMode]);
 
   const visibleInventory = useMemo(() => {
     const base =
@@ -1719,13 +1755,13 @@ function App({ currentPath }: AppProps) {
       localMintedBoxes.map((entry) => ({
         id: entry.id,
         dropId: entry.dropId,
-        name: 'Pending box',
+        name: `Pending ${boxLabelForDropId(entry.dropId)}`,
         kind: 'box' as const,
         image: boxImageForDropId(entry.dropId),
         status: 'pending' as const,
       })),
     );
-  }, [localMintedBoxes, boxImageForDropId, isViewerMode]);
+  }, [localMintedBoxes, boxImageForDropId, boxLabelForDropId, isViewerMode]);
 
   const recentRevealedSet = useMemo(
     () => (isViewerMode ? new Set<string>() : new Set(recentRevealedBoxes)),
@@ -1809,7 +1845,7 @@ function App({ currentPath }: AppProps) {
       pendingItems.push({
         id,
         dropId: itemDropId,
-        name: localMatch?.name || match?.name || `Box ${shortAddress(id)}`,
+        name: localMatch?.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
         kind: 'box',
         image: normalizeBoxDisplayImage(itemDropId, localMatch?.image || match?.image),
       });
@@ -1824,13 +1860,13 @@ function App({ currentPath }: AppProps) {
       pendingItems.push({
         id,
         dropId: itemDropId,
-        name: entry.name || match?.name || `Box ${shortAddress(id)}`,
+        name: entry.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
         kind: 'box',
         image: normalizeBoxDisplayImage(itemDropId, entry.image || match?.image),
       });
     });
     return moveLittleSwagBoxesFamilyToEnd(pendingItems);
-  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, activeDrop.dropId, boxImageForDropId]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, activeDrop.dropId, boxReferenceForDropId]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
@@ -1873,7 +1909,12 @@ function App({ currentPath }: AppProps) {
     () => selectedItems.filter((item) => item.kind !== 'certificate' && !pendingRevealIds.has(item.id)),
     [selectedItems, pendingRevealIds],
   );
-  const selectedDropId = deliverableItems[0]?.dropId || '';
+  const selectedDropIds = useMemo(
+    () => Array.from(new Set(deliverableItems.map((item) => item.dropId).filter(Boolean))),
+    [deliverableItems],
+  );
+  const selectionHasSingleDrop = selectedDropIds.length === 1;
+  const selectedDropId = selectionHasSingleDrop ? selectedDropIds[0] : '';
   const selectedDropConfig = useMemo(
     () => (selectedDropId ? getDropConfig(selectedDropId) : activeDrop),
     [activeDrop, getDropConfig, selectedDropId],
@@ -1881,11 +1922,12 @@ function App({ currentPath }: AppProps) {
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
+    if (!selectionHasSingleDrop) return `${selectedCount} selected`;
     const parts: string[] = [];
-    if (boxCount) parts.push(`${boxCount} ${boxCount === 1 ? 'box' : 'boxes'}`);
-    if (figureCount) parts.push(`${figureCount} ${figureCount === 1 ? 'figure' : 'figures'}`);
+    if (boxCount) parts.push(dropAssetCount(selectedDropConfig, 'box', boxCount));
+    if (figureCount) parts.push(dropAssetCount(selectedDropConfig, 'figure', figureCount));
     return parts.length ? parts.join(', ') : `${selectedCount} selected`;
-  }, [deliverableItems, selectedCount]);
+  }, [deliverableItems, selectedCount, selectedDropConfig, selectionHasSingleDrop]);
   const deliveryEstimateLamports = useMemo(
     () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox),
     [deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox],
@@ -2129,7 +2171,7 @@ function App({ currentPath }: AppProps) {
     const maxDiscountQuantity = Math.max(0, discountRemainingCount);
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountQuantity) {
       if (maxDiscountQuantity > 0) {
-        showToast(`Discount available for up to ${maxDiscountQuantity} box${maxDiscountQuantity === 1 ? '' : 'es'}`);
+        showToast(`Discount available for up to ${dropAssetCount(activeDrop, 'box', maxDiscountQuantity)}`);
       } else {
         showToast('Wallet is not eligible for the discount');
       }
@@ -2156,7 +2198,7 @@ function App({ currentPath }: AppProps) {
         setDiscountEligible(onchainRemainingCount > 0);
         if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, onchainUsedCount);
         if (onchainRemainingCount > 0) {
-          showToast(`Discount available for up to ${onchainRemainingCount} box${onchainRemainingCount === 1 ? '' : 'es'}`);
+          showToast(`Discount available for up to ${dropAssetCount(activeDrop, 'box', onchainRemainingCount)}`);
         } else {
           showToast('Wallet is not eligible for the discount');
         }
@@ -2185,7 +2227,7 @@ function App({ currentPath }: AppProps) {
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
-      showToast(err instanceof Error ? err.message : 'Failed to mint discounted box');
+      showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(activeDrop.dropId)}`);
     } finally {
       setDiscountMinting(false);
     }
@@ -2193,7 +2235,7 @@ function App({ currentPath }: AppProps) {
 
   const handleStartOpenBox = async (item: InventoryItem) => {
     if (blockViewerModeAction()) return;
-    if (!publicKey) throw new Error('Connect wallet to open a box');
+    if (!publicKey) throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
     setStartOpenLoading(item.id);
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
@@ -2234,7 +2276,7 @@ function App({ currentPath }: AppProps) {
     } catch (err) {
       console.error(err);
       if (!isUserRejectedError(err)) {
-        showToast(err instanceof Error ? err.message : 'Failed to open box');
+        showToast(err instanceof Error ? err.message : `Failed to open ${boxLabelForDropId(item.dropId)}`);
       }
       dismissRevealOverlay();
     } finally {
@@ -2296,7 +2338,7 @@ function App({ currentPath }: AppProps) {
       console.error(err);
       const code = (err as { code?: string })?.code;
       if (code !== 'not-found' && !isUserRejectedError(err)) {
-        showToast(err instanceof Error ? err.message : 'Failed to reveal figures');
+        showToast(err instanceof Error ? err.message : `Failed to reveal ${figureLabelForDropId(dropId, 2)}`);
       }
     } finally {
       setRevealLoading(null);
@@ -2421,7 +2463,7 @@ function App({ currentPath }: AppProps) {
 	    if (openSelectedLockRef.current) {
 	      const activeId = openSelectedBoxIdRef.current;
 	      if (activeId && activeId !== selectedBox.id) {
-	        showToast('Check your wallet to finish the current unboxing');
+	        showToast(`Check your wallet to finish the current ${openGerundForDropId(selectedBox.dropId)}`);
 	        return;
 	      }
 	      openSelectedBoxIdRef.current = selectedBox.id;
@@ -2463,6 +2505,10 @@ function App({ currentPath }: AppProps) {
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
+    if (selectedDropIds.length > 1) {
+      showToast('Shipments can only include items from one drop');
+      return;
+    }
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
     setDeliveryOpen(true);
@@ -2491,7 +2537,7 @@ function App({ currentPath }: AppProps) {
     }
     const deliverableIds = deliverableItems.map((item) => item.id);
     if (!deliverableIds.length) {
-      showToast('Select boxes or figures to ship');
+      showToast(`Select ${boxLabelForDropId(activeDrop.dropId, 2)} or ${figureLabelForDropId(activeDrop.dropId, 2)} to ship`);
       return;
     }
     const deliveryDropId = deliverableItems[0]?.dropId || '';
@@ -2708,7 +2754,7 @@ function App({ currentPath }: AppProps) {
           index,
           mediaId: getMediaIdForFigureId(figureId, revealDrop.figureMedia),
           image: meta?.image,
-          name: meta?.name || `Figure ${figureId}`,
+          name: meta?.name || figureReferenceForDropId(revealOverlay.dropId, figureId),
         };
       });
     }
@@ -2719,10 +2765,17 @@ function App({ currentPath }: AppProps) {
         figureId,
         index,
         image: meta?.image,
-        name: meta?.name || `Figure ${figureId}`,
+        name: meta?.name || figureReferenceForDropId(revealOverlay.dropId, figureId),
       };
     });
-  }, [figureMetadataByKey, getDropConfig, revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayContent.figures.revealPresentation]);
+  }, [
+    figureMetadataByKey,
+    figureReferenceForDropId,
+    getDropConfig,
+    revealOverlay?.dropId,
+    revealOverlay?.revealedIds,
+    revealOverlayContent.figures.revealPresentation,
+  ]);
   const revealMediaIds = useMemo(
     () =>
       Array.from(
@@ -2807,11 +2860,10 @@ function App({ currentPath }: AppProps) {
     revealOverlay && revealOverlay.frame
       ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
       : undefined;
-  const revealOverlayContainerLabel =
-    revealOverlayContent.reveal.renderer === 'poncho_drifella' ? 'pack' : 'box';
+  const revealOverlayContainerLabel = revealOverlay ? boxLabelForDropId(revealOverlay.dropId) : boxLabelForDropId(activeDrop.dropId);
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
-      ? 'preparing to unbox...'
+      ? `preparing to ${openVerbForDropId(revealOverlay?.dropId)}...`
       : revealOverlayStage === 'revealed'
         ? ''
         : revealOverlay
@@ -3122,6 +3174,7 @@ function App({ currentPath }: AppProps) {
         title={activeDrop.collectionName}
         boxImageSrc={defaultBoxImage}
         boxAspectRatio={boxAspectRatioForDropId(activeDrop.dropId)}
+        boxNamePrefix={activeDrop.namePrefix}
         priceSol={activeDrop.priceSol}
         discountPriceSol={activeDrop.discountPriceSol}
         secondaryHref={activeDrop.secondaryMarketHref}
@@ -3186,6 +3239,8 @@ function App({ currentPath }: AppProps) {
             onSubmit={handleShip}
             defaultEmail={viewedProfile?.email || ''}
             itemsPerBox={selectedDropConfig.itemsPerBox}
+            boxNamePrefix={selectedDropConfig.namePrefix}
+            figureNamePrefix={selectedDropConfig.figureNamePrefix}
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
@@ -3229,7 +3284,13 @@ function App({ currentPath }: AppProps) {
                   {order.items.length ? (
                     <div className="muted small">
                       {order.items
-                        .map((item) => `${item.kind === 'box' ? 'Box' : 'Figure'} ${item.refId}`)
+                        .map((item) =>
+                          dropAssetReference(
+                            getDropConfig(order.dropId),
+                            item.kind === 'box' ? 'box' : 'figure',
+                            item.refId,
+                          ),
+                        )
                         .join(', ')}
                     </div>
                   ) : (
@@ -3317,7 +3378,7 @@ function App({ currentPath }: AppProps) {
 	                disabled={Boolean(startOpenLoading)}
 	              >
                 <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
-                <span>{startOpenLoading === selectedBox?.id ? 'Unboxing…' : 'Unbox'}</span>
+                <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
               </button>
             ) : null}
             <button
