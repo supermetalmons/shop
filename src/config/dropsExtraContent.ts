@@ -29,6 +29,7 @@ export type DropExtraContentOverride = {
   };
   figures?: {
     inventoryImageMode?: DropFigureInventoryImageMode;
+    inventoryImageBaseUrl?: string;
     revealPresentation?: DropFigureRevealPresentation;
     fulfillmentPreviewMode?: DropFigureFulfillmentPreviewMode;
     revealVideoBaseUrl?: string;
@@ -42,6 +43,7 @@ function dropBase(dropId: string): string {
 
 const GREEN_BASE = dropBase('green_boxes_devnet');
 const PONCHO_DRIFELLA_DROP_ID_PREFIX = normalizeDropId('Poncho_Drifella');
+const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     previewImageUrl: '/Poncho_Drifella/pack/1_0001.webp',
@@ -51,6 +53,12 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     mode: 'animated',
     renderer: 'poncho_drifella',
     frameSequence: PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
+  },
+  figures: {
+    inventoryImageMode: 'clean_variant',
+    inventoryImageBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
+    fulfillmentPreviewMode: 'media_map_folder',
+    fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
   },
 };
 

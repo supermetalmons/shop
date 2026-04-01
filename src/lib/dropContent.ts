@@ -22,6 +22,7 @@ export type ResolvedDropContent = {
   };
   figures: {
     inventoryImageMode: DropFigureInventoryImageMode;
+    inventoryImageBaseUrl?: string;
     revealPresentation: DropFigureRevealPresentation;
     fulfillmentPreviewMode: DropFigureFulfillmentPreviewMode;
     revealVideoBaseUrl?: string;
@@ -36,6 +37,11 @@ const resolvedContentByDropId = new Map<string, ResolvedDropContent>();
 function asPositiveNumber(value: unknown, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  const numeric = Math.floor(Number(value));
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
 }
 
 function asOptionalString(value: unknown): string | undefined {
@@ -128,6 +134,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
     },
     figures: {
       inventoryImageMode: 'clean_variant',
+      inventoryImageBaseUrl: undefined,
       revealPresentation: 'videos',
       fulfillmentPreviewMode: 'media_map_folder',
       revealVideoBaseUrl: `${base}/figures/small-rotating/`,
@@ -149,6 +156,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
     },
     figures: {
       inventoryImageMode: 'metadata_raw',
+      inventoryImageBaseUrl: undefined,
       revealPresentation: 'metadata_stills',
       fulfillmentPreviewMode: 'metadata_stills',
       revealVideoBaseUrl: undefined,
@@ -176,6 +184,7 @@ function applyDropExtraContentOverride(
     },
     figures: {
       inventoryImageMode: override.figures?.inventoryImageMode || base.figures.inventoryImageMode,
+      inventoryImageBaseUrl: asOptionalString(override.figures?.inventoryImageBaseUrl) ?? base.figures.inventoryImageBaseUrl,
       revealPresentation: override.figures?.revealPresentation || base.figures.revealPresentation,
       fulfillmentPreviewMode: override.figures?.fulfillmentPreviewMode || base.figures.fulfillmentPreviewMode,
       revealVideoBaseUrl: asOptionalString(override.figures?.revealVideoBaseUrl) ?? base.figures.revealVideoBaseUrl,
@@ -214,9 +223,13 @@ export function normalizeBoxDisplayImage(dropId: string, imageRaw?: string): str
   return content.box.previewImageUrl || imageRaw;
 }
 
-export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string): string | undefined {
-  if (!imageRaw) return imageRaw;
+export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   const content = resolveDropContent(dropId);
+  const normalizedFigureId = asPositiveInteger(figureId);
+  if (content.figures.inventoryImageBaseUrl && normalizedFigureId) {
+    return joinDropAssetUrl(content.figures.inventoryImageBaseUrl, `${normalizedFigureId}.webp`) || imageRaw;
+  }
+  if (!imageRaw) return imageRaw;
   if (content.figures.inventoryImageMode !== 'clean_variant') return imageRaw;
   if (imageRaw.includes('/figures/clean/')) return imageRaw;
   return imageRaw.includes('/figures/') ? imageRaw.replace('/figures/', '/figures/clean/') : imageRaw;

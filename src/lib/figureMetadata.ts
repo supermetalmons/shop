@@ -87,7 +87,7 @@ export async function loadFigureMetadata(dropId: string, figureId: number): Prom
       (typeof data.image === 'string' ? data.image : undefined) ||
       (typeof data.properties?.files?.[0]?.uri === 'string' ? data.properties?.files?.[0]?.uri : undefined) ||
       (typeof data.properties?.files?.[0]?.cdn_uri === 'string' ? data.properties?.files?.[0]?.cdn_uri : undefined);
-    const image = normalizeFigureDisplayImage(normalizedDropId, rawImage);
+    const image = normalizeFigureDisplayImage(normalizedDropId, rawImage, normalizedFigureId);
     if (!image) {
       throw new Error(`metadata missing image for ${normalizedDropId}:${normalizedFigureId}`);
     }

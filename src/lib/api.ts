@@ -383,9 +383,7 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     asset?.content?.files?.[0]?.uri ||
     asset?.content?.files?.[0]?.cdn_uri;
 
-  const image = kind === 'dude' && typeof imageRaw === 'string' && imageRaw
-    ? normalizeFigureDisplayImage(dropId, imageRaw)
-    : imageRaw;
+  const image = kind === 'dude' ? normalizeFigureDisplayImage(dropId, imageRaw, dudeId) : imageRaw;
   return {
     id: asset.id,
     dropId,
