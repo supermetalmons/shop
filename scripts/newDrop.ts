@@ -60,7 +60,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'Poncho_Drifella_Draft',
+    dropId: 'Poncho_Drifella_Devnet',
     metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {
       name: 'Poncho Drifella',
@@ -78,8 +78,8 @@ export const NEW_DROP: NewDropConfig = {
     },
     coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
     treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    priceSol: 0.05,
-    discountPriceSol: 0.023,
+    priceSol: 0.69,
+    discountPriceSol: 0.42,
     discountMintsPerWallet: 3,
     maxSupply: 207,
     itemsPerBox: 1,
