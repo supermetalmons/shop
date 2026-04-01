@@ -19,8 +19,8 @@ import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
 const REVEAL_NOTE_OFFSET = 28;
-const WIP_CARD_READY_MIN_DELAY_MS = 2_000;
-const WIP_CARD_READY_MAX_DELAY_MS = 3_000;
+const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
+const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
 const WIP_DROP = getFrontendDrop('poncho_drifella_draft');
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
