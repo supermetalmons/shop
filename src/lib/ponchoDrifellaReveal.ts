@@ -22,8 +22,8 @@ export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_IDS.
 export const PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE = Object.freeze({
   frames: [...PONCHO_DRIFELLA_PACK_FRAME_URLS],
   frameCount: PONCHO_DRIFELLA_PACK_FRAME_URLS.length,
-  clickMax: 8,
-  autoplayStart: 9,
+  clickMax: 5,
+  autoplayStart: 6,
   mediaStart: PONCHO_DRIFELLA_PACK_FRAME_URLS.length,
 });
 
