@@ -12,6 +12,7 @@ export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
 export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 42;
 export const PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS = 777;
+const PONCHO_DRIFELLA_CARD_INTERACTION_UNLOCK_DELAY_MS = Math.round(PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS / 2);
 const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
@@ -412,7 +413,7 @@ export function usePonchoDrifellaRevealController({
     setCardInteractionUnlocked(false);
     const timeoutId = window.setTimeout(() => {
       setCardInteractionUnlocked(true);
-    }, PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS);
+    }, PONCHO_DRIFELLA_CARD_INTERACTION_UNLOCK_DELAY_MS);
     return () => {
       window.clearTimeout(timeoutId);
     };
