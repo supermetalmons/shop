@@ -258,33 +258,6 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "7H3FAZRmbsfwt9U1w2TduQ6cicdkjqgj4TDfkfhr7vkd",
     deliveryLookupTable: "HRUJM7HmE1WRXwYz1JyxbN9CbANXHWSMgz7RcusUEbyC",
   }),
-  "red_boxes_devnet": createFunctionsDrop({
-    solanaCluster: "devnet",
-    dropId: "red_boxes_devnet",
-    collectionName: "red test",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/test/red",
-
-    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 3,
-    discountMerkleRoot: "57a899219adfcf52baa508f4093ab40338326957ea322d51efc60b678292727d",
-    maxSupply: 33,
-    itemsPerBox: 1,
-    maxPerTx: 15,
-    namePrefix: "box",
-    figureNamePrefix: "item",
-    symbol: "red",
-
-    // On-chain ids
-    boxMinterProgramId: "FCp4go7TnZF6MycCaDyKfyZSaeqw8qz8JunW4ewTbXZh",
-    collectionMint: "FvpygUusLM6nXfc86z7w75whoP9ZpkYEdJQHT7NCTs49",
-    receiptsMerkleTree: "xsN8cCC2UVuvbrp2dYioW99ePV4xb1NkwJKaWU9w7aV",
-    deliveryLookupTable: "BPgQ6k1aWBpwKTL7fLipFZ35opzYjEbDaiz2M6yp2Lb1",
-  }),
 };
 // END AUTO-GENERATED FUNCTIONS DROP REGISTRY
 

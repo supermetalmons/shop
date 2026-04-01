@@ -403,32 +403,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: "J8xFh938U6kZ6HeFR4uTWMePKakWftvnBZ55QWofe69A",
     collectionMint: "9xnYJQydRNynk2dGaNcuMbqH7pGMmAM9wv5uuYBdXxxw",
   }),
-  "red_boxes_devnet": createFrontendDrop({
-    solanaCluster: "devnet",
-    dropId: "red_boxes_devnet",
-    collectionName: "red test",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/test/red",
-
-
-    // Drop config (kept in sync with on-chain config; useful for UI defaults)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 3,
-    discountMerkleRoot: "57a899219adfcf52baa508f4093ab40338326957ea322d51efc60b678292727d",
-    maxSupply: 33,
-    itemsPerBox: 1,
-    maxPerTx: 15,
-    namePrefix: "box",
-    figureNamePrefix: "item",
-    symbol: "red",
-
-    // On-chain ids
-    boxMinterProgramId: "FCp4go7TnZF6MycCaDyKfyZSaeqw8qz8JunW4ewTbXZh",
-    collectionMint: "FvpygUusLM6nXfc86z7w75whoP9ZpkYEdJQHT7NCTs49",
-  }),
 };
 // END AUTO-GENERATED FRONTEND DROP REGISTRY
 
