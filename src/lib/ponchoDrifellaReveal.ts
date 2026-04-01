@@ -14,32 +14,28 @@ export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 30;
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
 export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
 
-function buildPonchoDrifellaFrameUrls(baseUrl: string, framePrefix: string, frameIds: readonly number[]) {
-  return frameIds.map((frameId) => `${baseUrl}/${framePrefix}_${String(frameId).padStart(4, '0')}.webp`);
+function buildPonchoDrifellaNumberedFrameUrls(baseUrl: string, frameCount: number) {
+  return Array.from({ length: frameCount }, (_, index) => `${baseUrl}/${index + 1}.webp`);
 }
 
 export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS.map(
   (frameNumber) => `${PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL}/${frameNumber}.webp`,
 );
-export const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS = buildPonchoDrifellaFrameUrls(
+export const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS = buildPonchoDrifellaNumberedFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/1`,
-  '2',
-  PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_IDS,
+  PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_IDS.length,
 );
-export const PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS = buildPonchoDrifellaFrameUrls(
+export const PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS = buildPonchoDrifellaNumberedFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/2`,
-  '2',
-  PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_IDS,
+  PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_IDS.length,
 );
-export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS = buildPonchoDrifellaFrameUrls(
+export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS = buildPonchoDrifellaNumberedFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/autoplay`,
-  '2',
-  PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS,
+  PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS.length,
 );
-export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS = buildPonchoDrifellaFrameUrls(
+export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS = buildPonchoDrifellaNumberedFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/autoplay/overtop`,
-  '2',
-  PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS,
+  PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS.length,
 );
 
 const PONCHO_DRIFELLA_MANUAL_SEQUENCE_FRAME_URLS = [
