@@ -77,7 +77,7 @@ import {
   rpcEndpointForCluster,
 } from './lib/dropConfig';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
-import { calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
+import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
@@ -2792,6 +2792,12 @@ function App({ currentPath }: AppProps) {
         const safeTargetHeight = Math.max(1, targetRect.height);
         const scaleX = Math.max(0.01, originRect.width / safeTargetWidth);
         const scaleY = Math.max(0.01, originRect.height / safeTargetHeight);
+        const ponchoCardRect = isPonchoDrifellaFamilyDropId(revealOverlay.dropId)
+          ? calcPonchoDrifellaCardRect({
+              width: safeTargetWidth,
+              height: safeTargetHeight,
+            })
+          : undefined;
         return {
           ['--reveal-target-left' as never]: `${targetRect.left}px`,
           ['--reveal-target-top' as never]: `${targetRect.top}px`,
@@ -2802,6 +2808,14 @@ function App({ currentPath }: AppProps) {
           ['--reveal-start-scale-x' as never]: String(scaleX),
           ['--reveal-start-scale-y' as never]: String(scaleY),
           ['--reveal-note-offset' as never]: `${REVEAL_NOTE_OFFSET}px`,
+          ...(ponchoCardRect
+            ? {
+                ['--poncho-card-left' as never]: `${ponchoCardRect.left}px`,
+                ['--poncho-card-top' as never]: `${ponchoCardRect.top}px`,
+                ['--poncho-card-width' as never]: `${ponchoCardRect.width}px`,
+                ['--poncho-card-height' as never]: `${ponchoCardRect.height}px`,
+              }
+            : {}),
         };
       })()
     : undefined;

@@ -855,6 +855,10 @@ button.link:hover:not(:disabled) {
   --reveal-start-scale-x: 1;
   --reveal-start-scale-y: 1;
   --reveal-note-offset: 14px;
+  --poncho-card-left: 0px;
+  --poncho-card-top: 0px;
+  --poncho-card-width: 0px;
+  --poncho-card-height: 0px;
 }
 
 .reveal-overlay__backdrop {
@@ -1270,23 +1274,22 @@ body.wip-scroll-lock #root {
 }
 
 .wip-reveal__card-item {
-  --wip-card-max-height: calc(100vh - 196px);
-  --wip-card-max-height: calc(100svh - 196px);
-  left: 50%;
-  top: 50%;
-  width: min(54vw, calc(var(--wip-card-max-height) * (5 / 7)), 360px);
-  max-width: 86%;
-  max-height: var(--wip-card-max-height);
-  aspect-ratio: 5 / 7;
+  left: var(--poncho-card-left);
+  top: var(--poncho-card-top);
+  width: var(--poncho-card-width);
+  height: var(--poncho-card-height);
+  max-width: none;
+  max-height: none;
+  aspect-ratio: auto;
   filter: none;
-  transform: translate(-50%, -50%);
+  transform: translate3d(0, 0, 0);
   pointer-events: none;
 }
 
 .wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  left: var(--poncho-card-left);
+  top: var(--poncho-card-top);
+  transform: translate3d(0, 0, 0);
 }
 
 .wip-reveal__media.wip-reveal__media--interactive.reveal-overlay__media--visible .wip-reveal__card-item--interactive {
@@ -1426,18 +1429,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (max-width: 720px) {
-  .wip-reveal__card-item {
-    --wip-card-max-height: calc(100vh - 160px);
-    --wip-card-max-height: calc(100svh - 160px);
-    width: min(70vw, calc(var(--wip-card-max-height) * (5 / 7)), 300px);
-    max-height: var(--wip-card-max-height);
-    top: 50%;
-  }
-
-  .wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
-    top: 50%;
-  }
-
   button.wip-close-btn {
     left: 12px;
     bottom: 12px;

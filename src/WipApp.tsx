@@ -14,7 +14,7 @@ import {
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
 import { dropAssetLabel } from './lib/dropLabels';
-import { calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
+import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
@@ -113,6 +113,10 @@ function LocalPlayWipApp() {
   const revealOverlayStyle = useMemo<React.CSSProperties>(() => {
     const safeTargetWidth = Math.max(1, targetRect.width);
     const safeTargetHeight = Math.max(1, targetRect.height);
+    const cardRect = calcPonchoDrifellaCardRect({
+      width: safeTargetWidth,
+      height: safeTargetHeight,
+    });
     return {
       ['--reveal-target-left' as never]: `${targetRect.left}px`,
       ['--reveal-target-top' as never]: `${targetRect.top}px`,
@@ -123,6 +127,10 @@ function LocalPlayWipApp() {
       ['--reveal-start-scale-x' as never]: '1',
       ['--reveal-start-scale-y' as never]: '1',
       ['--reveal-note-offset' as never]: `${REVEAL_NOTE_OFFSET}px`,
+      ['--poncho-card-left' as never]: `${cardRect.left}px`,
+      ['--poncho-card-top' as never]: `${cardRect.top}px`,
+      ['--poncho-card-width' as never]: `${cardRect.width}px`,
+      ['--poncho-card-height' as never]: `${cardRect.height}px`,
     };
   }, [targetRect]);
 
