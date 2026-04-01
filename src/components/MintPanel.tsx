@@ -205,21 +205,14 @@ export function MintPanel({
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, FRONTEND_DEPLOYMENT.discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const formId = 'mint-form';
-  const showDiscountButton = Boolean(discountVisible) && !soldOut;
   const normalizedDiscountMaxQuantity =
     Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) > 0
       ? Math.floor(Number(discountMaxQuantity))
       : undefined;
   const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
+  const showDiscountButton = Boolean(discountVisible) && !soldOut && !exceedsDiscountAllowance;
   const discountText =
-    discountLabel ||
-    (exceedsDiscountAllowance && normalizedDiscountMaxQuantity
-      ? `Discount available for up to ${dropAssetCount(
-          { namePrefix: boxNamePrefix, figureNamePrefix: undefined },
-          'box',
-          normalizedDiscountMaxQuantity,
-        )}`
-      : `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`);
+    discountLabel || `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`;
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc;
 

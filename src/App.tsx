@@ -2123,7 +2123,7 @@ function App({ currentPath }: AppProps) {
   const discountCtaState = useMemo(() => {
     if (mintedOut) return { visible: false, label: '' };
     if (walletBusy) return { visible: false, label: '' };
-    if (!publicKey) return { visible: guestDiscountReady, label: 'Connect for discount' };
+    if (!publicKey) return { visible: guestDiscountReady, label: 'Connect wallet' };
     if (discountChecking) return { visible: false, label: '' };
     return { visible: discountEligible, label: '' };
   }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
