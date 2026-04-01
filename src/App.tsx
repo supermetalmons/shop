@@ -56,6 +56,7 @@ import {
   preloadPonchoDrifellaPackAssets,
   type PonchoDrifellaRevealRequestStatus,
   usePonchoDrifellaRevealController,
+  waitForPonchoDrifellaCardAssets,
 } from './lib/ponchoDrifellaReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
@@ -696,6 +697,7 @@ function App({ currentPath }: AppProps) {
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const preloadedPonchoCardAssetsRef = useRef<Set<string>>(new Set());
   const ponchoCardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const [ponchoRevealCardDisplayReady, setPonchoRevealCardDisplayReady] = useState(false);
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
@@ -2822,6 +2824,7 @@ function App({ currentPath }: AppProps) {
     phase: revealOverlay?.phase || 'ready',
     boxLabel: revealOverlayContainerLabel,
     cardReady: Boolean(revealOverlay?.revealedIds?.length),
+    cardDisplayReady: ponchoRevealCardDisplayReady,
     resetKey: revealOverlay ? `${revealOverlay.id}:${revealOverlay.phase}` : 'closed',
     onRequestReveal: revealOverlay ? () => handleRevealDudes(revealOverlay.id, revealOverlay.dropId) : undefined,
     onPlayClick: revealOverlay ? () => playClickSoundForDropId(revealOverlay.dropId) : undefined,
@@ -2910,8 +2913,24 @@ function App({ currentPath }: AppProps) {
     queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
   }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds]);
   useEffect(() => {
-    preloadPonchoRevealCardAssetsForDropId(revealOverlay?.dropId, revealOverlay?.revealedIds);
-  }, [preloadPonchoRevealCardAssetsForDropId, revealOverlay?.dropId, revealOverlay?.revealedIds]);
+    let cancelled = false;
+    if (!ponchoRevealCard) {
+      setPonchoRevealCardDisplayReady(false);
+      return undefined;
+    }
+    setPonchoRevealCardDisplayReady(false);
+    void waitForPonchoDrifellaCardAssets(
+      ponchoRevealCard,
+      preloadedPonchoCardAssetsRef.current,
+      ponchoCardPreloadImagesRef.current,
+    ).finally(() => {
+      if (cancelled) return;
+      setPonchoRevealCardDisplayReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ponchoRevealCard]);
 
   const revealMediaStyle = useMemo(() => {
     if (!revealOverlay || !revealMediaItems.length) return undefined;
@@ -3096,6 +3115,9 @@ function App({ currentPath }: AppProps) {
         note={revealOverlayNote}
         boxName={revealOverlay.name}
         boxFrameSrc={revealBoxFrameSrc}
+        foregroundFrameSrc={ponchoRevealController.foregroundFrameSrc}
+        cardVisible={ponchoRevealController.cardVisible}
+        cardInteractive={ponchoRevealController.cardInteractive}
         boxDisabled={
           revealOverlayClosing ||
           ponchoRevealController.phase !== 'ready' ||

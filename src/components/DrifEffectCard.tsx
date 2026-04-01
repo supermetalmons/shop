@@ -38,6 +38,7 @@ type DrifEffectCardProps = {
   ariaLabel: string;
   imageAlt?: string;
   onClick?: () => void;
+  interactive?: boolean;
   disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
   preloadCards?: readonly DrifCardConfig[];
@@ -172,6 +173,7 @@ export default function DrifEffectCard({
   ariaLabel,
   imageAlt = '',
   onClick,
+  interactive = true,
   disableGlow = false,
   preserveTransformOnCardChange = false,
   preloadCards,
@@ -510,14 +512,15 @@ export default function DrifEffectCard({
       <div className="drif-effect-card__translater">
         <button
           className="drif-effect-card__rotator"
-          onPointerEnter={interact}
-          onPointerMove={interact}
-          onPointerLeave={() => interactEnd()}
-          onPointerCancel={() => interactEnd()}
-          onBlur={() => interactEnd(0)}
-          onClick={onClick}
+          onPointerEnter={interactive ? interact : undefined}
+          onPointerMove={interactive ? interact : undefined}
+          onPointerLeave={interactive ? () => interactEnd() : undefined}
+          onPointerCancel={interactive ? () => interactEnd() : undefined}
+          onBlur={interactive ? () => interactEnd(0) : undefined}
+          onClick={interactive ? onClick : undefined}
           aria-label={ariaLabel}
-          tabIndex={0}
+          tabIndex={interactive ? 0 : -1}
+          disabled={!interactive}
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">

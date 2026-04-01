@@ -10,6 +10,7 @@ import {
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   usePonchoDrifellaRevealController,
+  waitForPonchoDrifellaCardAssets,
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -51,6 +52,7 @@ function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
   const [cardReady, setCardReady] = useState(false);
+  const [cardDisplayReady, setCardDisplayReady] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
@@ -100,6 +102,7 @@ function LocalPlayWipApp() {
     phase: 'ready',
     boxLabel: revealContainerLabel,
     cardReady,
+    cardDisplayReady,
     resetKey,
     onPlayClick: playClickSound,
     onPlayReveal: playRevealSound,
@@ -152,8 +155,15 @@ function LocalPlayWipApp() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    preloadPonchoDrifellaCardAssets(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current);
+    let cancelled = false;
+    setCardDisplayReady(false);
+    void waitForPonchoDrifellaCardAssets(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current).finally(() => {
+      if (cancelled) return;
+      setCardDisplayReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [currentCard]);
 
   useEffect(() => {
@@ -195,7 +205,10 @@ function LocalPlayWipApp() {
         note={ponchoRevealController.note}
         boxName={mysteryContainerName}
         boxFrameSrc={ponchoRevealController.boxFrameSrc}
+        foregroundFrameSrc={ponchoRevealController.foregroundFrameSrc}
         card={currentCard}
+        cardVisible={ponchoRevealController.cardVisible}
+        cardInteractive={ponchoRevealController.cardInteractive}
         boxDisabled={ponchoRevealController.revealComplete}
         onAdvance={ponchoRevealController.handleAdvance}
       />

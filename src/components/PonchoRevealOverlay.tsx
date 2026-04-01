@@ -17,6 +17,9 @@ export type PonchoInventoryRevealOverlayProps = {
   note: string;
   boxName: string;
   boxFrameSrc?: string;
+  foregroundFrameSrc?: string;
+  cardVisible: boolean;
+  cardInteractive: boolean;
   boxDisabled: boolean;
   onAdvance: () => void;
   onDismiss: () => void;
@@ -31,7 +34,10 @@ type PonchoRevealOverlayProps = {
   note: string;
   boxName: string;
   boxFrameSrc?: string;
+  foregroundFrameSrc?: string;
   card?: DrifCardConfig;
+  cardVisible?: boolean;
+  cardInteractive?: boolean;
   boxBusy?: boolean;
   boxDisabled?: boolean;
   onAdvance: () => void;
@@ -47,14 +53,18 @@ export function PonchoRevealOverlay({
   note,
   boxName,
   boxFrameSrc,
+  foregroundFrameSrc,
   card,
+  cardVisible = false,
+  cardInteractive = false,
   boxBusy = false,
   boxDisabled = false,
   onAdvance,
   onDismiss,
   onTransitionEnd,
 }: PonchoRevealOverlayProps) {
-  const cardVisible = stage === 'revealed' && Boolean(card);
+  const resolvedCardVisible = Boolean(card) && cardVisible;
+  const packDiscarded = stage === 'revealed';
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
   };
@@ -70,19 +80,10 @@ export function PonchoRevealOverlay({
     >
       <div className="reveal-overlay__backdrop" />
       <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
-        <div className={`reveal-overlay__shine${cardVisible ? ' reveal-overlay__shine--visible' : ''}`} aria-hidden="true" />
-        {card ? (
-          <div className={`reveal-overlay__media wip-reveal__media${cardVisible ? ' reveal-overlay__media--visible' : ''}`} aria-hidden={!cardVisible}>
-            <div className="reveal-overlay__media-item wip-reveal__card-item" onClick={stopOverlayDismiss}>
-              <div className="reveal-overlay__media-float">
-                <WipInteractiveCard card={card} />
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <div className={`reveal-overlay__shine${resolvedCardVisible ? ' reveal-overlay__shine--visible' : ''}`} aria-hidden="true" />
         <button
           type="button"
-          className={`reveal-overlay__box${cardVisible ? ' wip-reveal__box--discarded' : ''}`}
+          className={`reveal-overlay__box${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
           aria-label={`Reveal ${boxName}`}
           aria-busy={boxBusy}
           aria-disabled={boxDisabled}
@@ -99,6 +100,23 @@ export function PonchoRevealOverlay({
             <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
           )}
         </button>
+        {card ? (
+          <div
+            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${cardInteractive ? ' wip-reveal__media--interactive' : ''}`}
+            aria-hidden={!resolvedCardVisible || !cardInteractive}
+          >
+            <div className="reveal-overlay__media-item wip-reveal__card-item" onClick={stopOverlayDismiss}>
+              <div className="reveal-overlay__media-float">
+                <WipInteractiveCard card={card} interactive={cardInteractive} />
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {foregroundFrameSrc ? (
+          <div className={`wip-reveal__foreground${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`} aria-hidden="true">
+            <img src={foregroundFrameSrc} alt="" className="reveal-overlay__image wip-reveal__foreground-image" draggable={false} />
+          </div>
+        ) : null}
       </div>
       <div className="reveal-overlay__note">{note}</div>
     </div>
@@ -115,6 +133,9 @@ export default function PonchoInventoryRevealOverlay({
   note,
   boxName,
   boxFrameSrc,
+  foregroundFrameSrc,
+  cardVisible,
+  cardInteractive,
   boxDisabled,
   onAdvance,
   onDismiss,
@@ -135,7 +156,10 @@ export default function PonchoInventoryRevealOverlay({
       note={note}
       boxName={boxName}
       boxFrameSrc={boxFrameSrc}
+      foregroundFrameSrc={foregroundFrameSrc}
       card={revealedCard}
+      cardVisible={cardVisible}
+      cardInteractive={cardInteractive}
       boxBusy={loading}
       boxDisabled={boxDisabled}
       onAdvance={onAdvance}
