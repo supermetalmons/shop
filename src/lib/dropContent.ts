@@ -7,6 +7,7 @@ import {
   type DropFigureRevealPresentation,
   type DropRevealFrameSequence,
   type DropRevealMode,
+  type DropRevealRenderer,
 } from '../config/dropsExtraContent';
 
 export type ResolvedDropContent = {
@@ -16,6 +17,7 @@ export type ResolvedDropContent = {
   };
   reveal: {
     mode: DropRevealMode;
+    renderer: DropRevealRenderer;
     frameSequence?: DropRevealFrameSequence;
   };
   figures: {
@@ -66,10 +68,18 @@ function mergeFrameSequence(
     ...(base || {}),
     ...(override || {}),
   } as Partial<DropRevealFrameSequence>;
+  const frames = Array.isArray(merged.frames)
+    ? merged.frames.map((frame) => asOptionalString(frame)).filter((frame): frame is string => Boolean(frame))
+    : undefined;
   const baseUrl = asOptionalString(merged.baseUrl);
   const ext = asOptionalString(merged.ext);
-  if (!baseUrl || !ext) return undefined;
-  const frameCount = Math.max(1, Math.floor(asPositiveNumber(merged.frameCount, 1)));
+  const hasExplicitFrames = Boolean(frames?.length);
+  const hasSequentialFrames = Boolean(baseUrl && ext);
+  if (!hasExplicitFrames && !hasSequentialFrames) return undefined;
+  const frameCountFallback = frames?.length || 1;
+  const frameCount = hasExplicitFrames
+    ? frames!.length
+    : Math.max(1, Math.floor(asPositiveNumber(merged.frameCount, frameCountFallback)));
   const clickMax = Math.min(frameCount, Math.max(1, Math.floor(asPositiveNumber(merged.clickMax, 1))));
   const autoplayStartMin = Math.min(frameCount, clickMax + 1);
   const autoplayStart = Math.min(
@@ -81,12 +91,11 @@ function mergeFrameSequence(
     Math.max(autoplayStart, Math.floor(asPositiveNumber(merged.mediaStart, autoplayStart))),
   );
   return {
-    baseUrl,
-    ext,
     frameCount,
     clickMax,
     autoplayStart,
     mediaStart,
+    ...(hasExplicitFrames ? { frames } : { baseUrl, ext }),
   };
 }
 
@@ -107,6 +116,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
     },
     reveal: {
       mode: 'animated',
+      renderer: 'default',
       frameSequence: {
         baseUrl: `${base}/box/`,
         ext: 'webp',
@@ -134,6 +144,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
     },
     reveal: {
       mode: 'static',
+      renderer: 'default',
       frameSequence: undefined,
     },
     figures: {
@@ -160,6 +171,7 @@ function applyDropExtraContentOverride(
     },
     reveal: {
       mode: nextMode,
+      renderer: override.reveal?.renderer || base.reveal.renderer,
       ...(nextMode === 'animated' && nextFrameSequence ? { frameSequence: nextFrameSequence } : {}),
     },
     figures: {

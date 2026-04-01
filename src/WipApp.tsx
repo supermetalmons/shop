@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import WipInteractiveCard from './components/WipInteractiveCard';
+import PonchoInventoryRevealOverlay, {
+  PonchoRevealOverlay,
+  type PonchoInventoryRevealOverlayProps,
+} from './components/PonchoRevealOverlay';
 import { DRIF_CARD_COUNT, DRIF_CARDS } from './drifCards';
+import {
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
+  preloadPonchoDrifellaCardAssets,
+} from './lib/ponchoDrifellaReveal';
+import { listRevealFrameSrcs, preloadRevealFrameSrc, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
-const PACK_FRAME_IDS = [
-  1, 48, 59, 69, 80, 86, 89, 90, 92, 95, 96, 99, 102,
-] as const;
-const PACK_FRAME_BASE = '/Poncho_Drifella/pack/';
-const BOX_FRAME_COUNT = PACK_FRAME_IDS.length;
 const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
-const BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
-const BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
-const PACK_AUTOPLAY_TRIGGER_ID = 89;
-const PACK_AUTOPLAY_TRIGGER_INDEX = PACK_FRAME_IDS.findIndex((frameId) => frameId === PACK_AUTOPLAY_TRIGGER_ID);
-const PACK_AUTOPLAY_TRIGGER_FRAME = PACK_AUTOPLAY_TRIGGER_INDEX >= 0 ? PACK_AUTOPLAY_TRIGGER_INDEX + 1 : BOX_FRAME_COUNT;
+const BOX_FRAME_COUNT = PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE.frameCount;
+const PACK_AUTOPLAY_TRIGGER_FRAME = PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE.autoplayStart;
 const PACK_AUTOPLAY_DELAY_MS = 35;
 const PACK_PRELOAD_IMMEDIATE_COUNT_FAST = 4;
 const PACK_PRELOAD_IMMEDIATE_COUNT_SLOW = 2;
@@ -26,14 +28,11 @@ const PACK_PRELOAD_LOOKAHEAD_SLOW = 6;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
-function getPackFrameSrc(frameIndex: number) {
-  const frameId = PACK_FRAME_IDS[Math.min(Math.max(frameIndex, 1), BOX_FRAME_COUNT) - 1];
-  return `${PACK_FRAME_BASE}1_${String(frameId).padStart(4, '0')}.webp`;
-}
+type WipLocalPlayProps = {
+  mode?: 'local-play';
+};
 
-function getAllPackFrameSrcs() {
-  return PACK_FRAME_IDS.map((_, index) => getPackFrameSrc(index + 1));
-}
+export type WipAppProps = WipLocalPlayProps | PonchoInventoryRevealOverlayProps;
 
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
   const portrait = viewportHeight >= viewportWidth;
@@ -65,7 +64,7 @@ function getInitialTargetRect(): OverlayRect {
   return calcRevealTargetRect(window.innerWidth, window.innerHeight);
 }
 
-export default function WipApp() {
+function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [frame, setFrame] = useState(1);
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
@@ -92,38 +91,20 @@ export default function WipApp() {
 
   const revealComplete = frame >= BOX_FRAME_COUNT;
   const autoOpening = frame >= PACK_AUTOPLAY_TRIGGER_FRAME && frame < BOX_FRAME_COUNT;
-  const cardVisible = revealComplete;
-  const stage = cardVisible ? 'revealed' : 'ready';
-  const revealNote = cardVisible ? '' : autoOpening ? 'opening...' : frame > 1 ? 'keep clicking the pack' : 'click the pack to open';
-  const revealBoxFrameSrc = getPackFrameSrc(frame);
+  const stage = revealComplete ? 'revealed' : 'ready';
+  const revealNote = revealComplete
+    ? ''
+    : autoOpening
+      ? 'opening...'
+      : frame > 1
+        ? 'keep clicking the pack'
+        : 'click the pack to open';
+  const revealBoxFrameSrc = resolveRevealFrameSrc(PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE, frame);
   const currentCard = DRIF_CARDS[cardIndex];
 
   useEffect(() => {
     frameRef.current = frame;
   }, [frame]);
-
-  const preloadBoxFrame = useCallback((frameSrc: string, fetchPriority: 'high' | 'low' | 'auto' = 'low') => {
-    if (preloadedBoxFramesRef.current.has(frameSrc)) {
-      const pendingImage = boxFramePreloadImagesRef.current.get(frameSrc);
-      if (pendingImage && fetchPriority === 'high') {
-        pendingImage.fetchPriority = 'high';
-      }
-      return;
-    }
-    const img = new Image();
-    img.decoding = 'async';
-    img.fetchPriority = fetchPriority;
-    img.onload = () => {
-      boxFramePreloadImagesRef.current.delete(frameSrc);
-    };
-    img.onerror = () => {
-      boxFramePreloadImagesRef.current.delete(frameSrc);
-      preloadedBoxFramesRef.current.delete(frameSrc);
-    };
-    boxFramePreloadImagesRef.current.set(frameSrc, img);
-    preloadedBoxFramesRef.current.add(frameSrc);
-    img.src = frameSrc;
-  }, []);
 
   const preloadUpcomingPackFrames = useCallback(
     (fromFrame: number, lookaheadCount: number, fetchPriority: 'high' | 'low' | 'auto' = 'auto') => {
@@ -132,37 +113,15 @@ export default function WipApp() {
       if (startFrame > BOX_FRAME_COUNT) return;
       const endFrame = Math.min(BOX_FRAME_COUNT, fromFrame + lookaheadCount);
       for (let frameIndex = startFrame; frameIndex <= endFrame; frameIndex += 1) {
-        preloadBoxFrame(getPackFrameSrc(frameIndex), fetchPriority);
+        preloadRevealFrameSrc(
+          resolveRevealFrameSrc(PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE, frameIndex),
+          preloadedBoxFramesRef.current,
+          boxFramePreloadImagesRef.current,
+          fetchPriority,
+        );
       }
     },
-    [preloadBoxFrame],
-  );
-
-  const preloadCard = useCallback((imageSrc: string) => {
-    if (!imageSrc || preloadedCardsRef.current.has(imageSrc)) return;
-    const card = new Image();
-    card.decoding = 'async';
-    card.onload = () => {
-      cardPreloadImagesRef.current.delete(imageSrc);
-    };
-    card.onerror = () => {
-      cardPreloadImagesRef.current.delete(imageSrc);
-      preloadedCardsRef.current.delete(imageSrc);
-    };
-    cardPreloadImagesRef.current.set(imageSrc, card);
-    preloadedCardsRef.current.add(imageSrc);
-    card.src = imageSrc;
-  }, []);
-
-  const preloadCardAssets = useCallback(
-    (nextCardIndex: number) => {
-      const nextCard = DRIF_CARDS[nextCardIndex];
-      if (!nextCard) return;
-      preloadCard(nextCard.imageSrc);
-      preloadCard(nextCard.textureSrc);
-      preloadCard(nextCard.foilSrc);
-    },
-    [preloadCard],
+    [],
   );
 
   const ensureSoundReady = useCallback(() => {
@@ -178,8 +137,8 @@ export default function WipApp() {
   }, []);
 
   const preloadRevealSounds = useCallback(() => {
-    void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
-    void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
+    void soundPlayer.preloadSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL);
+    void soundPlayer.preloadSound(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL);
   }, []);
 
   const revealOverlayStyle = useMemo<React.CSSProperties>(() => {
@@ -229,7 +188,7 @@ export default function WipApp() {
       requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
       cancelIdleCallback?: (handle: number) => void;
     };
-    const queue = getAllPackFrameSrcs();
+    const queue = listRevealFrameSrcs(PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE);
     const immediateCount = constrainedNetwork ? PACK_PRELOAD_IMMEDIATE_COUNT_SLOW : PACK_PRELOAD_IMMEDIATE_COUNT_FAST;
     const preloadDelayMs = constrainedNetwork ? PACK_PRELOAD_DELAY_MS_SLOW : PACK_PRELOAD_DELAY_MS_FAST;
     const immediateQueue = queue.slice(0, immediateCount);
@@ -240,7 +199,7 @@ export default function WipApp() {
     let isActive = true;
 
     immediateQueue.forEach((frameSrc) => {
-      preloadBoxFrame(frameSrc, 'auto');
+      preloadRevealFrameSrc(frameSrc, preloadedBoxFramesRef.current, boxFramePreloadImagesRef.current, 'auto');
     });
 
     const scheduleNextFrame = () => {
@@ -263,7 +222,12 @@ export default function WipApp() {
     const preloadNextFrame = () => {
       if (!isActive) return;
       if (nextIndex >= backgroundQueue.length) return;
-      preloadBoxFrame(backgroundQueue[nextIndex], 'auto');
+      preloadRevealFrameSrc(
+        backgroundQueue[nextIndex],
+        preloadedBoxFramesRef.current,
+        boxFramePreloadImagesRef.current,
+        'auto',
+      );
       nextIndex += 1;
       scheduleNextFrame();
     };
@@ -279,7 +243,7 @@ export default function WipApp() {
         idleWindow.cancelIdleCallback(idleId);
       }
     };
-  }, [constrainedNetwork, preloadBoxFrame]);
+  }, [constrainedNetwork]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -290,10 +254,8 @@ export default function WipApp() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    preloadCard(currentCard.imageSrc);
-    preloadCard(currentCard.textureSrc);
-    preloadCard(currentCard.foilSrc);
-  }, [currentCard.foilSrc, currentCard.imageSrc, currentCard.textureSrc, preloadCard]);
+    preloadPonchoDrifellaCardAssets(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current);
+  }, [currentCard]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -318,13 +280,13 @@ export default function WipApp() {
     if (!revealComplete || revealSoundPlayedRef.current) return;
     revealSoundPlayedRef.current = true;
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(BOX_SOUND_REVEAL_URL, 0.42);
+      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, 0.42);
     });
   }, [ensureSoundReady, revealComplete]);
 
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(BOX_SOUND_CLICK_URL, 0.42);
+      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL, 0.42);
     });
   }, [ensureSoundReady]);
 
@@ -349,24 +311,6 @@ export default function WipApp() {
     advanceRevealFrame();
   }, [advanceRevealFrame, ensureSoundReady, playClickSound, preloadRevealSounds]);
 
-  const handleRevealBoxPointerDown = useCallback(
-    (evt: React.PointerEvent<HTMLDivElement>) => {
-      if (evt.pointerType === 'mouse' && evt.button !== 0) return;
-      evt.stopPropagation();
-      handleRevealBoxPress();
-    },
-    [handleRevealBoxPress],
-  );
-
-  const handleRevealBoxKeyDown = useCallback(
-    (evt: React.KeyboardEvent<HTMLDivElement>) => {
-      if (evt.key !== 'Enter' && evt.key !== ' ') return;
-      evt.preventDefault();
-      handleRevealBoxPress();
-    },
-    [handleRevealBoxPress],
-  );
-
   const handleReset = useCallback(() => {
     revealSoundPlayedRef.current = false;
     frameRef.current = 1;
@@ -376,44 +320,24 @@ export default function WipApp() {
     while (nextIndex === cardIndex) {
       nextIndex = Math.floor(Math.random() * DRIF_CARD_COUNT);
     }
-    preloadCardAssets(nextIndex);
+    preloadPonchoDrifellaCardAssets(DRIF_CARDS[nextIndex], preloadedCardsRef.current, cardPreloadImagesRef.current);
     setCardIndex(nextIndex);
-  }, [cardIndex, preloadCardAssets]);
+  }, [cardIndex]);
 
   return (
     <div className="wip-page">
-      <div
-        className={`reveal-overlay wip-overlay reveal-overlay--${stage} reveal-overlay--active`}
-        role="presentation"
-        style={revealOverlayStyle}
-      >
-        <div className="reveal-overlay__backdrop" />
-        <div className="reveal-overlay__frame">
-          <div className={`reveal-overlay__shine${cardVisible ? ' reveal-overlay__shine--visible' : ''}`} aria-hidden="true" />
-          <div
-            className={`reveal-overlay__media wip-reveal__media${cardVisible ? ' reveal-overlay__media--visible' : ''}`}
-            aria-hidden={!cardVisible}
-          >
-            <div className="reveal-overlay__media-item wip-reveal__card-item">
-              <div className="reveal-overlay__media-float">
-                <WipInteractiveCard card={currentCard} />
-              </div>
-            </div>
-          </div>
-          <div
-            className={`reveal-overlay__box${cardVisible ? ' wip-reveal__box--discarded' : ''}`}
-            role="button"
-            tabIndex={revealComplete ? -1 : 0}
-            aria-label="Open pack"
-            aria-disabled={revealComplete}
-            onPointerDown={handleRevealBoxPointerDown}
-            onKeyDown={handleRevealBoxKeyDown}
-          >
-            <img src={revealBoxFrameSrc} alt="Mystery pack" className="reveal-overlay__image" draggable={false} />
-          </div>
-        </div>
-        <div className="reveal-overlay__note">{revealNote}</div>
-      </div>
+      <PonchoRevealOverlay
+        overlayStyle={revealOverlayStyle}
+        active
+        closing={false}
+        stage={stage}
+        note={revealNote}
+        boxName="Mystery pack"
+        boxFrameSrc={revealBoxFrameSrc}
+        card={currentCard}
+        boxDisabled={revealComplete}
+        onAdvance={handleRevealBoxPress}
+      />
       <button
         type="button"
         className="wip-close-btn"
@@ -429,4 +353,11 @@ export default function WipApp() {
       </button>
     </div>
   );
+}
+
+export default function WipApp(props: WipAppProps) {
+  if (props.mode === 'inventory-unbox') {
+    return <PonchoInventoryRevealOverlay {...props} />;
+  }
+  return <LocalPlayWipApp />;
 }

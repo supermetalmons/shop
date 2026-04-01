@@ -38,6 +38,14 @@ import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallbac
 import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
+import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
+import {
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  getPonchoDrifellaCardByFigureId,
+  preloadPonchoDrifellaCardAssets,
+} from './lib/ponchoDrifellaReveal';
+import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
@@ -58,6 +66,7 @@ import { getInventoryRevealRect } from './lib/inventoryMediaRect';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
+const REVEAL_CLOSE_FALLBACK_MS = 380;
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -234,8 +243,8 @@ const REVEAL_NOTE_OFFSET = 28;
 const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
-const BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
-const BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
+const DEFAULT_BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
+const DEFAULT_BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
 const ADMIN_WALLETS = new Set<string>([
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -424,6 +433,39 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => getDropContent(dropId).reveal.frameSequence?.mediaStart || 1,
     [getDropContent],
   );
+  const revealRendererForDropId = useCallback(
+    (dropId?: string) => getDropContent(dropId).reveal.renderer,
+    [getDropContent],
+  );
+  const revealSoundUrlsForDropId = useCallback(
+    (dropId?: string) => {
+      if (revealRendererForDropId(dropId) === 'poncho_drifella') {
+        return {
+          click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+          reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+        };
+      }
+      return {
+        click: DEFAULT_BOX_SOUND_CLICK_URL,
+        reveal: DEFAULT_BOX_SOUND_REVEAL_URL,
+      };
+    },
+    [revealRendererForDropId],
+  );
+  const preloadPonchoRevealCardAssetsForDropId = useCallback(
+    (dropId?: string, figureIds?: readonly number[]) => {
+      if (revealRendererForDropId(dropId) !== 'poncho_drifella') return;
+      if (!figureIds?.length) return;
+      figureIds.forEach((figureId) => {
+        preloadPonchoDrifellaCardAssets(
+          getPonchoDrifellaCardByFigureId(figureId),
+          preloadedPonchoCardAssetsRef.current,
+          ponchoCardPreloadImagesRef.current,
+        );
+      });
+    },
+    [revealRendererForDropId],
+  );
   const activeConnection = useMemo(() => getDropConnection(activeDrop.dropId), [activeDrop.dropId, getDropConnection]);
   const activeDiscountVersion = useMemo(() => discountUsedVersion(activeDrop), [activeDrop]);
   const activeDiscountScope = useMemo(() => discountUsedScope(activeDrop), [activeDrop]);
@@ -582,6 +624,8 @@ function App({ currentPath }: AppProps) {
   const knownBoxIdsByDropRef = useRef<Map<string, Set<string>>>(new Map());
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const preloadedPonchoCardAssetsRef = useRef<Set<string>>(new Set());
+  const ponchoCardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
@@ -591,6 +635,7 @@ function App({ currentPath }: AppProps) {
   const revealDismissLockedUntilRef = useRef<number>(0);
   const revealOverlayActiveRef = useRef(false);
   const revealOverlayClosingRef = useRef(false);
+  const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
 
   const boxImageForDropId = useCallback(
     (dropId?: string): string | undefined => {
@@ -792,29 +837,15 @@ function App({ currentPath }: AppProps) {
   const preloadBoxFrames = useCallback(
     (fromFrame = 1, toFrame?: number, dropId?: string) => {
       if (typeof window === 'undefined') return;
-      const frameSequence = revealFrameSequenceForDropId(dropId);
-      if (!frameSequence) return;
-      const safeFrom = Math.max(1, Math.floor(fromFrame));
-      const safeTo = Math.min(frameSequence.frameCount, Math.floor(toFrame ?? frameSequence.frameCount));
-      for (let i = safeFrom; i <= safeTo; i += 1) {
-        const frameSrc = joinDropAssetUrl(frameSequence.baseUrl, `${i}.${frameSequence.ext}`);
-        if (!frameSrc) continue;
-        if (preloadedBoxFramesRef.current.has(frameSrc)) continue;
-        const img = new Image();
-        img.decoding = 'async';
-        img.onload = () => {
-          boxFramePreloadImagesRef.current.delete(frameSrc);
-        };
-        img.onerror = () => {
-          boxFramePreloadImagesRef.current.delete(frameSrc);
-          preloadedBoxFramesRef.current.delete(frameSrc);
-        };
-        img.src = frameSrc;
-        boxFramePreloadImagesRef.current.set(frameSrc, img);
-        preloadedBoxFramesRef.current.add(frameSrc);
-      }
+      preloadRevealFrames(
+        revealFrameSequenceForDropId(dropId),
+        preloadedBoxFramesRef.current,
+        boxFramePreloadImagesRef.current,
+        fromFrame,
+        toFrame,
+      );
     },
-    [revealFrameCountForDropId, revealFrameSequenceForDropId],
+    [revealFrameSequenceForDropId],
   );
 
   const ensureVideoPreloadRoot = useCallback(() => {
@@ -884,14 +915,15 @@ function App({ currentPath }: AppProps) {
     return soundInitPromiseRef.current;
   }, []);
 
-  const preloadRevealSounds = useCallback(() => {
-    void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
-    void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
+  const preloadRevealSounds = useCallback((dropId?: string) => {
+    const { click, reveal } = revealSoundUrlsForDropId(dropId);
+    void soundPlayer.preloadSound(reveal);
+    void soundPlayer.preloadSound(click);
     void ensureSoundReady().then(() => {
-      void soundPlayer.preloadSound(BOX_SOUND_REVEAL_URL);
-      void soundPlayer.preloadSound(BOX_SOUND_CLICK_URL);
+      void soundPlayer.preloadSound(reveal);
+      void soundPlayer.preloadSound(click);
     });
-  }, [ensureSoundReady]);
+  }, [ensureSoundReady, revealSoundUrlsForDropId]);
 
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!connectedWallet || isViewerMode) return;
@@ -1027,7 +1059,15 @@ function App({ currentPath }: AppProps) {
     queueFigureMetadataFetch(targets);
   };
 
+  const clearRevealOverlayCloseTimeout = useCallback(() => {
+    if (revealOverlayCloseTimeoutRef.current === null) return;
+    if (typeof window === 'undefined') return;
+    window.clearTimeout(revealOverlayCloseTimeoutRef.current);
+    revealOverlayCloseTimeoutRef.current = null;
+  }, []);
+
   const finalizeRevealOverlayDismissal = useCallback(() => {
+    clearRevealOverlayCloseTimeout();
     revealOverlayRef.current = null;
     revealDismissLockedUntilRef.current = 0;
     setRevealOverlay(null);
@@ -1040,7 +1080,7 @@ function App({ currentPath }: AppProps) {
       }
     }
     flushOverlayActions();
-  }, [flushOverlayActions]);
+  }, [clearRevealOverlayCloseTimeout, flushOverlayActions]);
 
   const closeRevealOverlay = useCallback(() => {
     const overlay = revealOverlayRef.current;
@@ -1058,13 +1098,19 @@ function App({ currentPath }: AppProps) {
       return;
     }
     setRevealOverlayClosing(true);
-  }, [finalizeRevealOverlayDismissal]);
+    clearRevealOverlayCloseTimeout();
+    revealOverlayCloseTimeoutRef.current = window.setTimeout(() => {
+      revealOverlayCloseTimeoutRef.current = null;
+      finalizeRevealOverlayDismissal();
+    }, REVEAL_CLOSE_FALLBACK_MS);
+  }, [clearRevealOverlayCloseTimeout, finalizeRevealOverlayDismissal]);
 
   const dismissRevealOverlay = () => {
     if (revealOverlayRafRef.current) {
       cancelAnimationFrame(revealOverlayRafRef.current);
       revealOverlayRafRef.current = null;
     }
+    clearRevealOverlayCloseTimeout();
     finalizeRevealOverlayDismissal();
   };
 
@@ -1091,15 +1137,16 @@ function App({ currentPath }: AppProps) {
 	    rect: DOMRect,
 	    phase: RevealOverlayPhase = 'ready',
 	    itemOverride?: InventoryItem,
-	  ) => {
-	    if (revealOverlayRef.current || revealLoading) return;
-	    if (startOpenLoading && startOpenLoading !== id) return;
-	    if (typeof window === 'undefined') return;
-	    const item = itemOverride || inventoryIndex.get(id);
-	    if (!item) return;
-	    const overlayDropId = item.dropId || activeDrop.dropId;
-	    revealDismissLockedUntilRef.current = 0;
-    preloadRevealSounds();
+		  ) => {
+		    if (revealOverlayRef.current || revealLoading) return;
+		    if (startOpenLoading && startOpenLoading !== id) return;
+		    if (typeof window === 'undefined') return;
+		    const item = itemOverride || inventoryIndex.get(id);
+		    if (!item) return;
+		    const overlayDropId = item.dropId || activeDrop.dropId;
+		    revealDismissLockedUntilRef.current = 0;
+    clearRevealOverlayCloseTimeout();
+    preloadRevealSounds(overlayDropId);
     preloadBoxFrames(1, revealClickMaxForDropId(overlayDropId), overlayDropId);
     preloadBoxFrames(revealAutoplayStartForDropId(overlayDropId), revealFrameCountForDropId(overlayDropId), overlayDropId);
     const originRect = toOverlayRect(rect);
@@ -1561,6 +1608,9 @@ function App({ currentPath }: AppProps) {
       }
       if (revealOverlayResizeRafRef.current) {
         cancelAnimationFrame(revealOverlayResizeRafRef.current);
+      }
+      if (revealOverlayCloseTimeoutRef.current !== null) {
+        clearTimeout(revealOverlayCloseTimeoutRef.current);
       }
     };
   }, []);
@@ -2163,6 +2213,7 @@ function App({ currentPath }: AppProps) {
       const revealContent = getDropContent(revealDrop.dropId);
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId, revealDrop.dropId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
+      preloadPonchoRevealCardAssetsForDropId(revealDrop.dropId, revealed);
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
       }
@@ -2226,7 +2277,8 @@ function App({ currentPath }: AppProps) {
       return;
     }
 
-    void ensureSoundReady().then(() => soundPlayer.playSound(BOX_SOUND_CLICK_URL, 0.42));
+    const { click } = revealSoundUrlsForDropId(revealOverlay.dropId);
+    void ensureSoundReady().then(() => soundPlayer.playSound(click, 0.42));
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;
@@ -2287,7 +2339,7 @@ function App({ currentPath }: AppProps) {
 
 	  const openPreparingOverlayForBox = useCallback(
 	    (box: InventoryItem) => {
-	      preloadRevealSounds();
+	      preloadRevealSounds(box.dropId);
 	      preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
 	      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
 	      if (typeof window === 'undefined') return;
@@ -2641,11 +2693,14 @@ function App({ currentPath }: AppProps) {
       ),
     [revealMediaItems],
   );
-  const revealMediaVisible = Boolean(
+  const ponchoRevealCard = useMemo(() => {
+    if (!revealOverlay?.revealedIds?.length || revealOverlay.revealedIds.length !== 1) return undefined;
+    return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
+  }, [revealOverlay?.revealedIds]);
+  const revealOverlayUsesPonchoRenderer = Boolean(
     revealOverlay &&
-      revealMediaItems.length &&
-      (revealOverlayContent.reveal.mode === 'static' ||
-        revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
+      revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
+      (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
   );
 
   const revealSoundPlayedRef = useRef<string | null>(null);
@@ -2654,11 +2709,12 @@ function App({ currentPath }: AppProps) {
       revealSoundPlayedRef.current = null;
       return;
     }
-    if (!revealMediaVisible) return;
+    if (!showRevealOutcome) return;
     if (revealSoundPlayedRef.current === revealOverlay.id) return;
     revealSoundPlayedRef.current = revealOverlay.id;
+    const { reveal } = revealSoundUrlsForDropId(revealOverlay.dropId);
     const play = () => {
-      void soundPlayer.playSound(BOX_SOUND_REVEAL_URL, 0.42);
+      void soundPlayer.playSound(reveal, 0.42);
     };
     if (soundPlayer.isInitialized) {
       play();
@@ -2668,32 +2724,35 @@ function App({ currentPath }: AppProps) {
     if (pending) {
       void pending.then(play);
     }
-  }, [revealOverlay?.id, revealMediaVisible]);
+  }, [revealOverlay, revealSoundUrlsForDropId, showRevealOutcome]);
 
   useEffect(() => {
     if (!revealOverlay?.revealedIds?.length) return;
     queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
   }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds]);
+  useEffect(() => {
+    preloadPonchoRevealCardAssetsForDropId(revealOverlay?.dropId, revealOverlay?.revealedIds);
+  }, [preloadPonchoRevealCardAssetsForDropId, revealOverlay?.dropId, revealOverlay?.revealedIds]);
 
-	  const revealMediaStyle = useMemo(() => {
-	    if (!revealOverlay || !revealMediaItems.length) return undefined;
-	    const width = revealOverlay.targetRect.width;
-	    const height = revealOverlay.targetRect.height;
-	    const base = Math.min(width, height);
-	    const baseSize = Math.floor(Math.min(base * 0.7, 220));
-	    const widthCap = width < 240 ? 0.42 : width < 320 ? 0.48 : width < 420 ? 0.52 : 0.6;
-	    const maxByWidth = Math.floor(width * widthCap);
-	    const maxByHeight = Math.floor(height * 0.9);
-	    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
-	    const count = revealMediaItems.length;
-	    const densityScale = count <= 3 ? 0.8 : count <= 5 ? 0.68 : count <= 8 ? 0.56 : 0.48;
-	    const size = Math.max(48, Math.floor(maxSize * densityScale));
-	    const shiftY = Math.floor(size * 0.1);
-	    return {
-	      ['--reveal-media-size' as never]: `${size}px`,
-	      ['--reveal-media-shift-y' as never]: `${shiftY}px`,
-	    };
-	  }, [revealOverlay, revealMediaItems.length]);
+  const revealMediaStyle = useMemo(() => {
+    if (!revealOverlay || !revealMediaItems.length) return undefined;
+    const width = revealOverlay.targetRect.width;
+    const height = revealOverlay.targetRect.height;
+    const base = Math.min(width, height);
+    const baseSize = Math.floor(Math.min(base * 0.7, 220));
+    const widthCap = width < 240 ? 0.42 : width < 320 ? 0.48 : width < 420 ? 0.52 : 0.6;
+    const maxByWidth = Math.floor(width * widthCap);
+    const maxByHeight = Math.floor(height * 0.9);
+    const maxSize = Math.floor(Math.min(baseSize * 1.4, maxByWidth, maxByHeight));
+    const count = revealMediaItems.length;
+    const densityScale = count <= 3 ? 0.8 : count <= 5 ? 0.68 : count <= 8 ? 0.56 : 0.48;
+    const size = Math.max(48, Math.floor(maxSize * densityScale));
+    const shiftY = Math.floor(size * 0.1);
+    return {
+      ['--reveal-media-size' as never]: `${size}px`,
+      ['--reveal-media-shift-y' as never]: `${shiftY}px`,
+    };
+  }, [revealOverlay, revealMediaItems.length]);
   useEffect(() => {
     if (!revealMediaIds.length) return;
     if (revealOverlayContent.figures.revealPresentation !== 'videos') return;
@@ -2701,15 +2760,14 @@ function App({ currentPath }: AppProps) {
   }, [activeDrop.dropId, preloadRevealVideos, revealMediaIds, revealOverlay?.dropId, revealOverlayContent.figures.revealPresentation]);
   const animatedRevealFrameSrc =
     revealOverlay && revealOverlay.frame && revealOverlayContent.reveal.mode === 'animated' && revealFrameSequence
-      ? joinDropAssetUrl(
-          revealFrameSequence.baseUrl,
-          `${Math.min(Math.max(revealOverlay.frame, 1), revealFrameSequence.frameCount)}.${revealFrameSequence.ext}`,
-        )
+      ? resolveRevealFrameSrc(revealFrameSequence, revealOverlay.frame)
       : undefined;
   const revealBoxFrameSrc =
     revealOverlay && revealOverlay.frame
       ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
       : undefined;
+  const revealOverlayContainerLabel =
+    revealOverlayContent.reveal.renderer === 'poncho_drifella' ? 'pack' : 'box';
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
       ? 'preparing to unbox...'
@@ -2718,12 +2776,159 @@ function App({ currentPath }: AppProps) {
         : revealOverlay
           ? revealOverlay.hasRevealAttempted
             ? revealOverlayContent.reveal.mode === 'animated'
-              ? 'keep clicking the box'
+              ? `keep clicking the ${revealOverlayContainerLabel}`
               : revealLoading === revealOverlay.id
                 ? 'opening...'
                 : ''
-            : 'click the box to open'
+            : `click the ${revealOverlayContainerLabel} to open`
           : '';
+  const defaultRevealOverlayNode = revealOverlay ? (
+    <div
+      className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
+      role="presentation"
+      style={revealOverlayStyle}
+      onClick={handleRevealOverlayBackdropClick}
+      onContextMenu={(evt) => evt.preventDefault()}
+      onDragStart={(evt) => evt.preventDefault()}
+    >
+      <div className="reveal-overlay__backdrop" />
+      <div
+        className="reveal-overlay__frame"
+        onTransitionEnd={(evt) => {
+          if (evt.propertyName !== 'opacity') return;
+          if (!revealOverlayClosing) return;
+          finalizeRevealOverlayDismissal();
+        }}
+      >
+        <div
+          className={`reveal-overlay__shine${showRevealOutcome ? ' reveal-overlay__shine--visible' : ''}`}
+          aria-hidden="true"
+        />
+        {revealMediaItems.length ? (
+          <div
+            className={`reveal-overlay__media${showRevealOutcome ? ' reveal-overlay__media--visible' : ''}`}
+            style={revealMediaStyle}
+            aria-hidden="true"
+          >
+            {revealMediaItems.map(({ figureId, mediaId, image, index, name }) => {
+              const count = revealMediaItems.length;
+              const angle = -Math.PI / 2 + (index * (Math.PI * 2)) / Math.max(count, 1);
+              const ring = count <= 1 ? 0 : count <= 3 ? 28 : count <= 5 ? 32 : count <= 8 ? 36 : 40;
+              const left = 50 + Math.cos(angle) * ring;
+              const top = 50 + Math.sin(angle) * ring;
+              return (
+                <div
+                  key={`${revealOverlay.id}-${figureId}-${index}`}
+                  className="reveal-overlay__media-item"
+                  style={{
+                    left: showRevealOutcome ? `${left}%` : '50%',
+                    top: showRevealOutcome ? `${top}%` : '50%',
+                    ['--reveal-media-delay' as never]: `${index * 70}ms`,
+                  }}
+                >
+                  <div className="reveal-overlay__media-float">
+                    {revealOverlayContent.figures.revealPresentation === 'videos' && revealMediaBase && mediaId ? (
+                      <video
+                        className="reveal-overlay__video"
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        preload="metadata"
+                        poster={image}
+                        draggable={false}
+                      >
+                        <source
+                          src={joinDropAssetUrl(revealMediaBase, `${mediaId}.mov`)}
+                          type='video/quicktime; codecs="hvc1"'
+                        />
+                        <source src={joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`)} type="video/webm" />
+                      </video>
+                    ) : image ? (
+                      <>
+                        <img
+                          src={image}
+                          alt={name}
+                          className="reveal-overlay__still"
+                          draggable={false}
+                          onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                          onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                        />
+                        <div className="reveal-overlay__still reveal-overlay__still--placeholder" hidden />
+                      </>
+                    ) : (
+                      <div className="reveal-overlay__still reveal-overlay__still--placeholder" />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className="reveal-overlay__box"
+          aria-label={`Reveal ${revealOverlay.name}`}
+          aria-busy={revealLoading === revealOverlay.id}
+          aria-disabled={
+            revealOverlayClosing ||
+            revealOverlay.phase !== 'ready' ||
+            revealOverlay.autoOpening ||
+            (revealOverlayContent.reveal.mode === 'animated' &&
+              revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId))
+          }
+          onClick={(evt) => {
+            evt.stopPropagation();
+            handleRevealOverlayClick();
+          }}
+        >
+          {revealBoxFrameSrc ? (
+            <>
+              <img
+                src={revealBoxFrameSrc}
+                alt={revealOverlay.name}
+                className="reveal-overlay__image"
+                draggable={false}
+                onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+              />
+              <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden aria-hidden="true" />
+            </>
+          ) : (
+            <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      <div className="reveal-overlay__note">{revealOverlayNote}</div>
+    </div>
+  ) : null;
+  const revealOverlayNode = revealOverlay ? (
+    revealOverlayUsesPonchoRenderer ? (
+      <PonchoInventoryRevealOverlay
+        mode="inventory-unbox"
+        overlayStyle={revealOverlayStyle}
+        active={revealOverlayActive}
+        closing={revealOverlayClosing}
+        phase={revealOverlay.phase}
+        frame={revealOverlay.frame}
+        autoOpening={Boolean(revealOverlay.autoOpening)}
+        revealedIds={revealOverlay.revealedIds}
+        loading={revealLoading === revealOverlay.id}
+        note={revealOverlayNote}
+        boxName={revealOverlay.name}
+        boxFrameSrc={revealBoxFrameSrc}
+        onAdvance={handleRevealOverlayClick}
+        onDismiss={handleRevealOverlayBackdropClick}
+        onTransitionEnd={(evt) => {
+          if (evt.propertyName !== 'opacity') return;
+          if (!revealOverlayClosing) return;
+          finalizeRevealOverlayDismissal();
+        }}
+      />
+    ) : (
+      defaultRevealOverlayNode
+    )
+  ) : null;
   const ownerPickerValue = owner || '';
   const viewedProfileErrorMessage = viewedProfileError instanceof Error ? viewedProfileError.message : '';
   const deliveryOrderOwnersErrorMessage = deliveryOrderOwnersError instanceof Error ? deliveryOrderOwnersError.message : '';
@@ -2737,126 +2942,7 @@ function App({ currentPath }: AppProps) {
           {toast}
         </div>
       ) : null}
-      {revealOverlay ? (
-	        <div
-	          className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
-	          role="presentation"
-	          style={revealOverlayStyle}
-	          onClick={handleRevealOverlayBackdropClick}
-	          onContextMenu={(evt) => evt.preventDefault()}
-	          onDragStart={(evt) => evt.preventDefault()}
-	        >
-          <div className="reveal-overlay__backdrop" />
-          <div
-            className="reveal-overlay__frame"
-            onTransitionEnd={(evt) => {
-              if (evt.propertyName !== 'opacity') return;
-              if (!revealOverlayClosing) return;
-              finalizeRevealOverlayDismissal();
-            }}
-          >
-            <div
-              className={`reveal-overlay__shine${revealMediaVisible ? ' reveal-overlay__shine--visible' : ''}`}
-              aria-hidden="true"
-            />
-            {revealMediaItems.length ? (
-              <div
-                className={`reveal-overlay__media${revealMediaVisible ? ' reveal-overlay__media--visible' : ''}`}
-                style={revealMediaStyle}
-                aria-hidden="true"
-              >
-                {revealMediaItems.map(({ figureId, mediaId, image, index, name }) => {
-                  const count = revealMediaItems.length;
-                  const angle = -Math.PI / 2 + (index * (Math.PI * 2)) / Math.max(count, 1);
-                  const ring = count <= 1 ? 0 : count <= 3 ? 28 : count <= 5 ? 32 : count <= 8 ? 36 : 40;
-                  const left = 50 + Math.cos(angle) * ring;
-                  const top = 50 + Math.sin(angle) * ring;
-                  return (
-                  <div
-                    key={`${revealOverlay.id}-${figureId}-${index}`}
-                    className="reveal-overlay__media-item"
-                    style={{
-                      left: revealMediaVisible ? `${left}%` : '50%',
-                      top: revealMediaVisible ? `${top}%` : '50%',
-                      ['--reveal-media-delay' as never]: `${index * 70}ms`,
-                    }}
-                  >
-                    <div className="reveal-overlay__media-float">
-                      {revealOverlayContent.figures.revealPresentation === 'videos' && revealMediaBase && mediaId ? (
-                        <video
-                          className="reveal-overlay__video"
-                          autoPlay
-                          muted
-                          loop
-                          playsInline
-                          preload="metadata"
-                          poster={image}
-                          draggable={false}
-                        >
-                          <source
-                            src={joinDropAssetUrl(revealMediaBase, `${mediaId}.mov`)}
-                            type='video/quicktime; codecs="hvc1"'
-                          />
-                          <source src={joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`)} type="video/webm" />
-                        </video>
-                      ) : image ? (
-                        <>
-                          <img
-                            src={image}
-                            alt={name}
-                            className="reveal-overlay__still"
-                            draggable={false}
-                            onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                            onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-                          />
-                          <div className="reveal-overlay__still reveal-overlay__still--placeholder" hidden />
-                        </>
-                      ) : (
-                        <div className="reveal-overlay__still reveal-overlay__still--placeholder" />
-                      )}
-                    </div>
-                  </div>
-                  );
-                })}
-              </div>
-            ) : null}
-            <button
-              type="button"
-              className="reveal-overlay__box"
-              aria-label={`Reveal ${revealOverlay.name}`}
-              aria-busy={revealLoading === revealOverlay.id}
-              aria-disabled={
-                revealOverlayClosing ||
-                revealOverlay.phase !== 'ready' ||
-                revealOverlay.autoOpening ||
-                (revealOverlayContent.reveal.mode === 'animated' &&
-                  revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId))
-              }
-              onClick={(evt) => {
-                evt.stopPropagation();
-                handleRevealOverlayClick();
-              }}
-	            >
-                {revealBoxFrameSrc ? (
-                  <>
-	                  <img
-	                    src={revealBoxFrameSrc}
-	                    alt={revealOverlay.name}
-	                    className="reveal-overlay__image"
-	                    draggable={false}
-                      onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                      onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-	                  />
-                    <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden aria-hidden="true" />
-                  </>
-                ) : (
-                  <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
-                )}
-	            </button>
-	          </div>
-	          <div className="reveal-overlay__note">{revealOverlayNote}</div>
-	        </div>
-      ) : null}
+      {revealOverlayNode}
       <header className={`top${canUseAdminViewer ? ' top--with-admin' : ''}`}>
         <div className="brand">
           <a
@@ -3020,7 +3106,7 @@ function App({ currentPath }: AppProps) {
 		            }
                 const revealItem = inventoryIndex.get(id);
                 const revealDropId = revealItem?.dropId || activeDrop.dropId;
-		            preloadRevealSounds();
+		            preloadRevealSounds(revealDropId);
 		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
 		            preloadBoxFrames(revealAutoplayStartForDropId(revealDropId), revealFrameCountForDropId(revealDropId), revealDropId);
 		            const refreshedRect = findInventoryRect(id);

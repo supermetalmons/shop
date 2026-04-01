@@ -341,3 +341,11 @@ export const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT
 });
 
 export const DRIF_SHOWCASE_CARDS: DrifCardConfig[] = DRIF_CARDS.slice(0, DRIF_SHOWCASE_CARD_COUNT);
+
+export function getDrifCardByFigureId(figureId: number): DrifCardConfig | undefined {
+  const normalizedFigureId = Math.floor(Number(figureId));
+  if (!Number.isFinite(normalizedFigureId) || normalizedFigureId < 1 || normalizedFigureId > DRIF_CARDS.length) {
+    return undefined;
+  }
+  return DRIF_CARDS[normalizedFigureId - 1];
+}
