@@ -10,11 +10,11 @@ import {
   PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
   preloadPonchoDrifellaCardAssets,
 } from './lib/ponchoDrifellaReveal';
+import { calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 import { listRevealFrameSrcs, preloadRevealFrameSrc, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
-const REVEAL_BOX_ASPECT_RATIO = 1;
 const REVEAL_NOTE_OFFSET = 28;
 const BOX_FRAME_COUNT = PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE.frameCount;
 const PACK_AUTOPLAY_TRIGGER_FRAME = PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE.autoplayStart;
@@ -34,23 +34,6 @@ type WipLocalPlayProps = {
 
 export type WipAppProps = WipLocalPlayProps | PonchoInventoryRevealOverlayProps;
 
-function calcRevealTargetRect(viewportWidth: number, viewportHeight: number): OverlayRect {
-  const portrait = viewportHeight >= viewportWidth;
-  const gutter = portrait ? 8 : 16;
-  const width = portrait
-    ? Math.max(1, Math.floor(Math.min(viewportWidth * 1.4, viewportHeight - gutter * 2)))
-    : Math.max(1, Math.floor(viewportHeight * 0.82 * REVEAL_BOX_ASPECT_RATIO));
-  const height = Math.max(1, Math.floor(width / REVEAL_BOX_ASPECT_RATIO));
-  const visualLift = portrait ? Math.min(44, Math.round(height * 0.08)) : Math.min(32, Math.round(height * 0.06));
-  const maxTop = Math.max(gutter, viewportHeight - height - gutter);
-  return {
-    left: Math.round((viewportWidth - width) / 2),
-    top: Math.min(maxTop, Math.max(gutter, Math.round((viewportHeight - height) / 2) - visualLift)),
-    width,
-    height,
-  };
-}
-
 function getInitialTargetRect(): OverlayRect {
   if (typeof window === 'undefined') {
     const width = 320;
@@ -58,10 +41,10 @@ function getInitialTargetRect(): OverlayRect {
       left: 0,
       top: 16,
       width,
-      height: Math.round(width / REVEAL_BOX_ASPECT_RATIO),
+      height: width,
     };
   }
-  return calcRevealTargetRect(window.innerWidth, window.innerHeight);
+  return calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight);
 }
 
 function LocalPlayWipApp() {
@@ -160,7 +143,7 @@ function LocalPlayWipApp() {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const updateTarget = () => {
-      setTargetRect(calcRevealTargetRect(window.innerWidth, window.innerHeight));
+      setTargetRect(calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight));
     };
     window.addEventListener('resize', updateTarget);
     window.addEventListener('orientationchange', updateTarget);

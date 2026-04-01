@@ -35,7 +35,7 @@ import {
   type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
-import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
+import { isLittleSwagBoxesFamilyDropId, joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
 import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
@@ -55,6 +55,7 @@ import {
 import { calculateDeliveryLamports } from './lib/shipping';
 import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
 import { type FrontendDeploymentConfig, getFrontendDrop } from './config/deployment';
+import { isPonchoDrifellaFamilyDropId } from './config/dropsExtraContent';
 import { getNormalizedPathname, navigate } from './navigation';
 import {
   dropPath,
@@ -63,10 +64,21 @@ import {
   rpcEndpointForCluster,
 } from './lib/dropConfig';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
+import { calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
+
+function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string }>(items: readonly T[]): T[] {
+  const leading: T[] = [];
+  const trailing: T[] = [];
+  items.forEach((item) => {
+    if (isLittleSwagBoxesFamilyDropId(item.dropId)) trailing.push(item);
+    else leading.push(item);
+  });
+  return trailing.length ? [...leading, ...trailing] : [...leading];
+}
 
 function hiddenInventoryKey(wallet?: string) {
   return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
@@ -305,6 +317,18 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, asp
     width,
     height,
   };
+}
+
+function calcRevealTargetRectForDrop(
+  viewportWidth: number,
+  viewportHeight: number,
+  dropId: string | undefined,
+  aspectRatio: number,
+): OverlayRect {
+  if (isPonchoDrifellaFamilyDropId(dropId)) {
+    return calcPonchoDrifellaRevealTargetRect(viewportWidth, viewportHeight);
+  }
+  return calcRevealTargetRect(viewportWidth, viewportHeight, aspectRatio);
 }
 
 function formatRevealIds(ids?: number[]) {
@@ -1150,7 +1174,12 @@ function App({ currentPath }: AppProps) {
     preloadBoxFrames(1, revealClickMaxForDropId(overlayDropId), overlayDropId);
     preloadBoxFrames(revealAutoplayStartForDropId(overlayDropId), revealFrameCountForDropId(overlayDropId), overlayDropId);
     const originRect = toOverlayRect(rect);
-    const targetRect = calcRevealTargetRect(window.innerWidth, window.innerHeight, boxAspectRatioForDropId(overlayDropId));
+    const targetRect = calcRevealTargetRectForDrop(
+      window.innerWidth,
+      window.innerHeight,
+      overlayDropId,
+      boxAspectRatioForDropId(overlayDropId),
+    );
     setInventorySnapshot(inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     const nextOverlay: RevealOverlayState = {
@@ -1537,9 +1566,10 @@ function App({ currentPath }: AppProps) {
         revealOverlayResizeRafRef.current = null;
         setRevealOverlay((prev) => {
           if (!prev) return prev;
-          const nextTarget = calcRevealTargetRect(
+          const nextTarget = calcRevealTargetRectForDrop(
             window.innerWidth,
             window.innerHeight,
+            prev.dropId,
             boxAspectRatioForDropId(prev.dropId),
           );
           if (
@@ -1685,14 +1715,16 @@ function App({ currentPath }: AppProps) {
   const localMintedItems = useMemo<InventoryItem[]>(() => {
     if (isViewerMode) return [] as InventoryItem[];
     if (!localMintedBoxes.length) return [] as InventoryItem[];
-    return localMintedBoxes.map((entry) => ({
-      id: entry.id,
-      dropId: entry.dropId,
-      name: 'Pending box',
-      kind: 'box' as const,
-      image: boxImageForDropId(entry.dropId),
-      status: 'pending' as const,
-    }));
+    return moveLittleSwagBoxesFamilyToEnd(
+      localMintedBoxes.map((entry) => ({
+        id: entry.id,
+        dropId: entry.dropId,
+        name: 'Pending box',
+        kind: 'box' as const,
+        image: boxImageForDropId(entry.dropId),
+        status: 'pending' as const,
+      })),
+    );
   }, [localMintedBoxes, boxImageForDropId, isViewerMode]);
 
   const recentRevealedSet = useMemo(
@@ -1797,7 +1829,7 @@ function App({ currentPath }: AppProps) {
         image: normalizeBoxDisplayImage(itemDropId, entry.image || match?.image),
       });
     });
-    return pendingItems;
+    return moveLittleSwagBoxesFamilyToEnd(pendingItems);
   }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, activeDrop.dropId, boxImageForDropId]);
 
   const inventoryItems = useMemo(() => {
@@ -1808,10 +1840,18 @@ function App({ currentPath }: AppProps) {
       if (item.kind === 'box') boxes.push(item);
       else if (item.kind === 'dude') dudes.push(item);
     });
-    return [...pendingRevealItems, ...localMintedItems, ...boxes, ...dudes];
+    return [
+      ...pendingRevealItems,
+      ...localMintedItems,
+      ...moveLittleSwagBoxesFamilyToEnd(boxes),
+      ...moveLittleSwagBoxesFamilyToEnd(dudes),
+    ];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems, localMintedItems]);
   const inventoryIndex = useMemo(() => new Map(inventoryItems.map((item) => [item.id, item])), [inventoryItems]);
-  const receiptItems = useMemo(() => visibleInventory.filter((item) => item.kind === 'certificate'), [visibleInventory]);
+  const receiptItems = useMemo(
+    () => moveLittleSwagBoxesFamilyToEnd(visibleInventory.filter((item) => item.kind === 'certificate')),
+    [visibleInventory],
+  );
   const inventoryEmptyStateVisibility = connectedWallet
     ? inventoryFetched
       ? 'visible'
@@ -2344,9 +2384,10 @@ function App({ currentPath }: AppProps) {
 	      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
 	      if (typeof window === 'undefined') return;
 	      const originRect = findInventoryRect(box.id);
-	      const fallbackTarget = calcRevealTargetRect(
+	      const fallbackTarget = calcRevealTargetRectForDrop(
         window.innerWidth,
         window.innerHeight,
+        box.dropId,
         boxAspectRatioForDropId(box.dropId),
       );
 	      const fallbackRect = new DOMRect(
