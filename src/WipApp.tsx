@@ -8,10 +8,11 @@ import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
+  arePonchoDrifellaCardAssetsReady,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   usePonchoDrifellaRevealController,
-  waitForPonchoDrifellaCardAssets,
+  waitForPonchoDrifellaCardAssetsUntilReady,
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -167,14 +168,23 @@ function LocalPlayWipApp() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    setCardDisplayReady(false);
-    void waitForPonchoDrifellaCardAssets(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current).finally(() => {
-      if (cancelled) return;
+    if (arePonchoDrifellaCardAssetsReady(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current)) {
       setCardDisplayReady(true);
+      return undefined;
+    }
+    const abortController = new AbortController();
+    setCardDisplayReady(false);
+    void waitForPonchoDrifellaCardAssetsUntilReady(
+      currentCard,
+      preloadedCardsRef.current,
+      cardPreloadImagesRef.current,
+      abortController.signal,
+    ).then((ready) => {
+      if (abortController.signal.aborted) return;
+      setCardDisplayReady(ready);
     });
     return () => {
-      cancelled = true;
+      abortController.abort();
     };
   }, [currentCard]);
 

@@ -1331,6 +1331,16 @@ body.wip-scroll-lock #root {
   pointer-events: none;
 }
 
+.wip-reveal__foreground--hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.wip-reveal__foreground--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
 .wip-reveal__foreground-image {
   width: 100%;
   height: 100%;

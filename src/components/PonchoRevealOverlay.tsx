@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type SyntheticEvent, type TransitionEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type SyntheticEvent, type TransitionEvent } from 'react';
 import type { DrifCardConfig } from '../drifCards';
 import {
   getPonchoDrifellaCardByFigureId,
@@ -63,12 +63,30 @@ export function PonchoRevealOverlay({
   onDismiss,
   onTransitionEnd,
 }: PonchoRevealOverlayProps) {
-  const resolvedCardVisible = Boolean(card) && cardVisible;
+  const foregroundImageRef = useRef<HTMLImageElement | null>(null);
+  const [foregroundPrepared, setForegroundPrepared] = useState(false);
+  const desiredForegroundVisible = Boolean(foregroundFrameSrc) && cardVisible;
+  const foregroundCoverReady = Boolean(foregroundFrameSrc) && foregroundPrepared;
+  const resolvedCardVisible = Boolean(card) && cardVisible && foregroundCoverReady;
   const packDiscarded = stage === 'revealed';
   const cardLocked = packDiscarded && resolvedCardVisible && !cardInteractive;
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
   };
+
+  useEffect(() => {
+    if (!active || !foregroundFrameSrc) {
+      setForegroundPrepared(false);
+      return;
+    }
+    if (foregroundPrepared) {
+      return;
+    }
+    const foregroundImage = foregroundImageRef.current;
+    if (foregroundImage?.complete && foregroundImage.naturalWidth > 0) {
+      setForegroundPrepared(true);
+    }
+  }, [active, foregroundFrameSrc, foregroundPrepared]);
 
   return (
     <div
@@ -117,8 +135,20 @@ export function PonchoRevealOverlay({
           </div>
         ) : null}
         {foregroundFrameSrc ? (
-          <div className={`wip-reveal__foreground${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`} aria-hidden="true">
-            <img src={foregroundFrameSrc} alt="" className="reveal-overlay__image wip-reveal__foreground-image" draggable={false} />
+          <div
+            className={`wip-reveal__foreground${desiredForegroundVisible ? ' wip-reveal__foreground--visible' : ' wip-reveal__foreground--hidden'}${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
+            aria-hidden="true"
+          >
+            <img
+              ref={foregroundImageRef}
+              src={foregroundFrameSrc}
+              alt=""
+              className="reveal-overlay__image wip-reveal__foreground-image"
+              draggable={false}
+              onLoad={() => {
+                setForegroundPrepared(true);
+              }}
+            />
           </div>
         ) : null}
       </div>

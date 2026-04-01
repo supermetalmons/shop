@@ -52,12 +52,13 @@ import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
+  arePonchoDrifellaCardAssetsReady,
   getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   type PonchoDrifellaRevealRequestStatus,
   usePonchoDrifellaRevealController,
-  waitForPonchoDrifellaCardAssets,
+  waitForPonchoDrifellaCardAssetsUntilReady,
 } from './lib/ponchoDrifellaReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
@@ -2931,22 +2932,33 @@ function App({ currentPath }: AppProps) {
     queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
   }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds]);
   useEffect(() => {
-    let cancelled = false;
     if (!ponchoRevealCard) {
       setPonchoRevealCardDisplayReady(false);
       return undefined;
     }
+    if (
+      arePonchoDrifellaCardAssetsReady(
+        ponchoRevealCard,
+        preloadedPonchoCardAssetsRef.current,
+        ponchoCardPreloadImagesRef.current,
+      )
+    ) {
+      setPonchoRevealCardDisplayReady(true);
+      return undefined;
+    }
+    const abortController = new AbortController();
     setPonchoRevealCardDisplayReady(false);
-    void waitForPonchoDrifellaCardAssets(
+    void waitForPonchoDrifellaCardAssetsUntilReady(
       ponchoRevealCard,
       preloadedPonchoCardAssetsRef.current,
       ponchoCardPreloadImagesRef.current,
-    ).finally(() => {
-      if (cancelled) return;
-      setPonchoRevealCardDisplayReady(true);
+      abortController.signal,
+    ).then((ready) => {
+      if (abortController.signal.aborted) return;
+      setPonchoRevealCardDisplayReady(ready);
     });
     return () => {
-      cancelled = true;
+      abortController.abort();
     };
   }, [ponchoRevealCard]);
 
