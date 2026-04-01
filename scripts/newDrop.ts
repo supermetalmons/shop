@@ -43,9 +43,9 @@ export type NewDropConfig = {
 };
 
 // Toggle this to pick deployment network from one place.
-const isMainnet = true;
+const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'poncho';
+const dropSymbol = 'red';
 const sellerFeeBasisPoints = 500;
 
 /**
@@ -57,18 +57,18 @@ export const NEW_DROP: NewDropConfig = {
     solanaCluster,
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
-    reuseProgramId: true,
+    reuseProgramId: false,
   },
   onchain: {
-    dropId: 'Poncho_Drifella',
-    metadataBase: 'https://assets.mons.link/drops/poncho',
+    dropId: 'red_boxes_devnet',
+    metadataBase: 'https://assets.mons.link/drops/test/red',
     collectionMetadata: {
-      name: 'Poncho Drifella',
+      name: 'red test',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'poncho drifella cards · redeem physical on mons.shop',
+      description: 'red test mons.shop drop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/poncho/pack.webp',
+      image: 'https://assets.mons.link/drops/test/red/box/default.png',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/poncho_drifella.csv',
     receiptsTree: {
@@ -77,15 +77,15 @@ export const NEW_DROP: NewDropConfig = {
       canopyDepth: 0,
     },
     coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
-    treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    priceSol: 0.69,
-    discountPriceSol: 0.42,
+    treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
     discountMintsPerWallet: 3,
-    maxSupply: 207,
+    maxSupply: 33,
     itemsPerBox: 1,
     maxPerTx: 15,
-    namePrefix: 'pack',
-    figureNamePrefix: 'card',
+    namePrefix: 'box',
+    figureNamePrefix: 'item',
     symbol: dropSymbol,
   },
 };
