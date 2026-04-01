@@ -85,6 +85,10 @@ const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
   poncho_drifella: 'https://www.tensor.trade/trade/9aa9b85e-4e43-4900-be61-199e7cce1943',
 };
 
+const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
+  poncho_drifella: true,
+};
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -96,6 +100,11 @@ function defaultSecondaryMarketHref(dropId: string): string | undefined {
   const overrideHref = SECONDARY_MARKET_HREF_OVERRIDES[normalizedDropId];
   if (overrideHref) return overrideHref;
   return normalizedDropId ? `https://www.tensor.trade/trade/${normalizedDropId}` : undefined;
+}
+
+function defaultForceSoldOutForDropId(dropId: string): boolean {
+  const normalizedDropId = normalizeDropId(dropId);
+  return FORCE_SOLD_OUT_DROP_OVERRIDES[normalizedDropId] === true;
 }
 
 function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
@@ -175,6 +184,7 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'> & { dropId: string }): FrontendDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
   const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropId(normalizedDropId);
+  const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
@@ -183,7 +193,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     ...(figureMedia ? { figureMedia } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
-    ...(config.forceSoldOut === true ? { forceSoldOut: true } : {}),
+    ...(forceSoldOut ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase),
   };
 }
