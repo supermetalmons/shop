@@ -1,12 +1,13 @@
 import { DRIF_CARDS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 
 const PONCHO_DRIFELLA_PACK_FRAME_IDS = [1, 48, 59, 69, 80, 86, 89, 90, 92, 95, 96, 99, 102] as const;
+const PONCHO_DRIFELLA_PACK_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/sequence_0';
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
 export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
 
 export const PONCHO_DRIFELLA_PACK_FRAME_URLS = PONCHO_DRIFELLA_PACK_FRAME_IDS.map(
-  (frameId) => `/Poncho_Drifella/pack/1_${String(frameId).padStart(4, '0')}.webp`,
+  (frameId) => `${PONCHO_DRIFELLA_PACK_SEQUENCE_BASE_URL}/1_${String(frameId).padStart(4, '0')}.webp`,
 );
 
 export const PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE = Object.freeze({
