@@ -72,8 +72,14 @@ export function normalizeDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
+  poncho_drifella: 'https://www.tensor.trade/trade/9aa9b85e-4e43-4900-be61-199e7cce1943',
+};
+
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
   const normalizedDropId = normalizeDropId(dropId);
+  const overrideHref = SECONDARY_MARKET_HREF_OVERRIDES[normalizedDropId];
+  if (overrideHref) return overrideHref;
   return normalizedDropId ? `https://www.tensor.trade/trade/${normalizedDropId}` : undefined;
 }
 
@@ -453,6 +459,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
+  poncho_drifella: 'https://www.tensor.trade/trade/9aa9b85e-4e43-4900-be61-199e7cce1943',
+};
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -461,6 +471,8 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
 
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
   const normalizedDropId = normalizeDropId(dropId);
+  const overrideHref = SECONDARY_MARKET_HREF_OVERRIDES[normalizedDropId];
+  if (overrideHref) return overrideHref;
   return normalizedDropId ? \`https://www.tensor.trade/trade/\${normalizedDropId}\` : undefined;
 }
 
