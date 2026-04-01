@@ -46,7 +46,7 @@ const PONCHO_DRIFELLA_DROP_ID_PREFIX = normalizeDropId('Poncho_Drifella');
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
-    previewImageUrl: '/Poncho_Drifella/pack/1_0001.webp',
+    previewImageUrl: '/Poncho_Drifella/pack/initial.webp',
     aspectRatio: 1,
   },
   reveal: {
