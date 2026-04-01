@@ -325,6 +325,32 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: "CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA",
     collectionMint: "4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6",
   }),
+  "poncho_drifella_devnet": createFrontendDrop({
+    solanaCluster: "devnet",
+    dropId: "poncho_drifella_devnet",
+    collectionName: "Poncho Drifella",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/poncho",
+
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
+    priceSol: 0.69,
+    discountPriceSol: 0.42,
+    discountMintsPerWallet: 3,
+    discountMerkleRoot: "57a899219adfcf52baa508f4093ab40338326957ea322d51efc60b678292727d",
+    maxSupply: 207,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: "pack",
+    figureNamePrefix: "card",
+    symbol: "poncho",
+
+    // On-chain ids
+    boxMinterProgramId: "13Sfp7GpB8C6kAaD2LteQKaT61rKJzAXLmMkNMjtwKpe",
+    collectionMint: "DAXELNLchXACowx3edwZV6Qfw7ZXzAWyQHPcbY9NbBBW",
+  }),
   "poncho_drifella_draft": createFrontendDrop({
     solanaCluster: "devnet",
     dropId: "poncho_drifella_draft",
