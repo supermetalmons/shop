@@ -2825,6 +2825,8 @@ function App({ currentPath }: AppProps) {
     boxLabel: revealOverlayContainerLabel,
     cardReady: Boolean(revealOverlay?.revealedIds?.length),
     cardDisplayReady: ponchoRevealCardDisplayReady,
+    loadedImages: preloadedBoxFramesRef.current,
+    pendingImages: boxFramePreloadImagesRef.current,
     resetKey: revealOverlay ? `${revealOverlay.id}:${revealOverlay.phase}` : 'closed',
     onRequestReveal: revealOverlay ? () => handleRevealDudes(revealOverlay.id, revealOverlay.dropId) : undefined,
     onPlayClick: revealOverlay ? () => playClickSoundForDropId(revealOverlay.dropId) : undefined,

@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 
+const PONCHO_DRIFELLA_PUNCH_VARIANT_NUMBERS = [1, 2] as const;
 const PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS = [1, 2, 3] as const;
 const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_IDS = [13, 16, 19] as const;
 const PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_IDS = [30, 33, 38] as const;
 const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS = [56, 60, 64, 65, 66, 68, 70, 71, 72, 77] as const;
-const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/recoverable_punches/1';
+const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/recoverable_punches';
 const PONCHO_DRIFELLA_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/final_sequences';
 export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.webp';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
 export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 30;
+const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
 export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
@@ -18,8 +20,11 @@ function buildPonchoDrifellaNumberedFrameUrls(baseUrl: string, frameCount: numbe
   return Array.from({ length: frameCount }, (_, index) => `${baseUrl}/${index + 1}.webp`);
 }
 
-export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS.map(
-  (frameNumber) => `${PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL}/${frameNumber}.webp`,
+export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT = PONCHO_DRIFELLA_PUNCH_VARIANT_NUMBERS.map((variantNumber) =>
+  buildPonchoDrifellaNumberedFrameUrls(
+    `${PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL}/${variantNumber}`,
+    PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS.length,
+  ),
 );
 export const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS = buildPonchoDrifellaNumberedFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/1`,
@@ -77,6 +82,8 @@ type UsePonchoDrifellaRevealControllerOptions = {
   boxLabel: string;
   cardReady: boolean;
   cardDisplayReady?: boolean;
+  loadedImages?: ReadonlySet<string>;
+  pendingImages?: ReadonlyMap<string, HTMLImageElement>;
   resetKey: string | number;
   onRequestReveal?: () => PonchoDrifellaRevealRequestStatus | void | Promise<PonchoDrifellaRevealRequestStatus | void>;
   onPlayClick?: () => void;
@@ -201,8 +208,10 @@ export function preloadPonchoDrifellaPunchAssets(
   pendingImages: Map<string, HTMLImageElement>,
 ) {
   preloadPonchoDrifellaImage(PONCHO_DRIFELLA_INITIAL_FRAME_URL, loadedImages, pendingImages);
-  PONCHO_DRIFELLA_PUNCH_FRAME_URLS.forEach((frameSrc) => {
-    preloadPonchoDrifellaImage(frameSrc, loadedImages, pendingImages);
+  PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT.forEach((frameUrls) => {
+    frameUrls.forEach((frameSrc) => {
+      preloadPonchoDrifellaImage(frameSrc, loadedImages, pendingImages);
+    });
   });
 }
 
@@ -232,6 +241,8 @@ export function usePonchoDrifellaRevealController({
   boxLabel,
   cardReady,
   cardDisplayReady = true,
+  loadedImages,
+  pendingImages,
   resetKey,
   onRequestReveal,
   onPlayClick,
@@ -240,6 +251,9 @@ export function usePonchoDrifellaRevealController({
 }: UsePonchoDrifellaRevealControllerOptions): PonchoDrifellaRevealControllerState {
   const [stage, setStage] = useState<PonchoDrifellaRevealStage>('idle');
   const [stageFrameIndex, setStageFrameIndex] = useState(0);
+  const [activePunchFrameUrls, setActivePunchFrameUrls] = useState<readonly string[]>(
+    PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT[0],
+  );
   const [hasRevealAttempted, setHasRevealAttempted] = useState(false);
   const [requestPending, setRequestPending] = useState(false);
   const [autoplayQueued, setAutoplayQueued] = useState(false);
@@ -247,6 +261,35 @@ export function usePonchoDrifellaRevealController({
   const requestStateRef = useRef<'idle' | 'pending' | 'sent'>('idle');
   const requestGenerationRef = useRef(0);
   const stageRef = useRef<PonchoDrifellaRevealStage>('idle');
+
+  const selectPunchFrameUrls = useCallback(() => {
+    const readinessByVariant = PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT.map((frameUrls) => {
+      let readyFrameCount = frameUrls.length;
+      if (loadedImages && pendingImages) {
+        readyFrameCount = 0;
+        for (const frameSrc of frameUrls) {
+          if (!loadedImages.has(frameSrc) || pendingImages.has(frameSrc)) break;
+          readyFrameCount += 1;
+        }
+      }
+      return {
+        frameUrls,
+        readyFrameCount,
+      };
+    });
+    const fullReadyVariants = readinessByVariant.filter(({ frameUrls, readyFrameCount }) => readyFrameCount >= frameUrls.length);
+    if (fullReadyVariants.length) {
+      return fullReadyVariants[Math.floor(Math.random() * fullReadyVariants.length)]!.frameUrls;
+    }
+    const partiallyReadyVariants = readinessByVariant.filter(({ readyFrameCount }) => readyFrameCount > 0);
+    if (partiallyReadyVariants.length) {
+      const maxReadyFrameCount = Math.max(...partiallyReadyVariants.map(({ readyFrameCount }) => readyFrameCount));
+      const bestReadyVariants = partiallyReadyVariants.filter(({ readyFrameCount }) => readyFrameCount === maxReadyFrameCount);
+      const selectedVariant = bestReadyVariants[Math.floor(Math.random() * bestReadyVariants.length)]!;
+      return selectedVariant.frameUrls.slice(0, selectedVariant.readyFrameCount);
+    }
+    return PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS;
+  }, [loadedImages, pendingImages]);
 
   const resetRequestState = useCallback(() => {
     requestGenerationRef.current += 1;
@@ -282,6 +325,7 @@ export function usePonchoDrifellaRevealController({
   useEffect(() => {
     setStage('idle');
     setStageFrameIndex(0);
+    setActivePunchFrameUrls(PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT[0]);
     setHasRevealAttempted(false);
     setAutoplayQueued(false);
     revealSoundPlayedRef.current = false;
@@ -292,6 +336,7 @@ export function usePonchoDrifellaRevealController({
     if (active) return;
     setStage('idle');
     setStageFrameIndex(0);
+    setActivePunchFrameUrls(PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT[0]);
     setHasRevealAttempted(false);
     setAutoplayQueued(false);
     revealSoundPlayedRef.current = false;
@@ -301,7 +346,7 @@ export function usePonchoDrifellaRevealController({
   useEffect(() => {
     if (!active || phase !== 'ready' || stage !== 'punch' || typeof window === 'undefined') return undefined;
     const timeoutId = window.setTimeout(() => {
-      if (stageFrameIndex >= PONCHO_DRIFELLA_PUNCH_FRAME_URLS.length - 1) {
+      if (stageFrameIndex >= activePunchFrameUrls.length - 1) {
         setStage('idle');
         setStageFrameIndex(0);
         return;
@@ -311,7 +356,7 @@ export function usePonchoDrifellaRevealController({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [active, phase, stage, stageFrameIndex]);
+  }, [active, activePunchFrameUrls.length, phase, stage, stageFrameIndex]);
 
   useEffect(() => {
     if (!active || phase !== 'ready' || stage !== 'segment_1_1' || typeof window === 'undefined') return undefined;
@@ -372,7 +417,7 @@ export function usePonchoDrifellaRevealController({
 
   const boxFrameSrc = useMemo(() => {
     if (stage === 'punch') {
-      return PONCHO_DRIFELLA_PUNCH_FRAME_URLS[Math.min(stageFrameIndex, PONCHO_DRIFELLA_PUNCH_FRAME_URLS.length - 1)];
+      return activePunchFrameUrls[Math.min(stageFrameIndex, activePunchFrameUrls.length - 1)] || PONCHO_DRIFELLA_INITIAL_FRAME_URL;
     }
     if (stage === 'segment_1_1' || stage === 'segment_1_1_hold') {
       return PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS[Math.min(stageFrameIndex, PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS.length - 1)];
@@ -386,7 +431,7 @@ export function usePonchoDrifellaRevealController({
       ];
     }
     return PONCHO_DRIFELLA_INITIAL_FRAME_URL;
-  }, [stage, stageFrameIndex]);
+  }, [activePunchFrameUrls, stage, stageFrameIndex]);
 
   const foregroundFrameSrc = useMemo(() => {
     if (stage !== 'autoplay' && stage !== 'revealed') return undefined;
@@ -419,9 +464,10 @@ export function usePonchoDrifellaRevealController({
   const cardInteractive = stage === 'revealed';
 
   const startPunch = useCallback(() => {
+    setActivePunchFrameUrls(selectPunchFrameUrls());
     setStage('punch');
     setStageFrameIndex(0);
-  }, []);
+  }, [selectPunchFrameUrls]);
 
   const startSegment_1_1 = useCallback(() => {
     setStage('segment_1_1');

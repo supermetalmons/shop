@@ -103,6 +103,8 @@ function LocalPlayWipApp() {
     boxLabel: revealContainerLabel,
     cardReady,
     cardDisplayReady,
+    loadedImages: preloadedBoxFramesRef.current,
+    pendingImages: boxFramePreloadImagesRef.current,
     resetKey,
     onPlayClick: playClickSound,
     onPlayReveal: playRevealSound,
