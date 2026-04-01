@@ -10,7 +10,7 @@ const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/recoverab
 const PONCHO_DRIFELLA_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/final_sequences';
 export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.webp';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
-export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 30;
+export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 42;
 const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
