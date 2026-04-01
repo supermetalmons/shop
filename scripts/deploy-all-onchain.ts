@@ -177,7 +177,7 @@ async function assertExecutableProgram(args: {
   name: string;
 }) {
   const { connection, cluster, programId, name } = args;
-  const info = await connection.getAccountInfo(programId, { commitment: 'confirmed' });
+  const info = await retryRpcRead(`getAccountInfo(${name})`, () => connection.getAccountInfo(programId, { commitment: 'confirmed' }));
   if (!info) {
     const hint =
       cluster === 'testnet'
@@ -349,6 +349,35 @@ function formatReceiptsTreeConfig(tree: PreparedReceiptsTreeConfig): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryRpcRead<T>(
+  label: string,
+  fn: () => Promise<T>,
+  opts: { retries?: number; baseDelayMs?: number; maxDelayMs?: number } = {},
+): Promise<T> {
+  const retries = Math.max(0, opts.retries ?? 4);
+  const baseDelayMs = Math.max(1, opts.baseDelayMs ?? 500);
+  const maxDelayMs = Math.max(baseDelayMs, opts.maxDelayMs ?? 4_000);
+
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries) break;
+      const delayMs = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+      console.warn(`⚠️  ${label} failed (${errorMessage(err)}). Retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(`${label} failed after ${retries + 1} attempts: ${errorMessage(lastErr)}`);
 }
 
 const MIN_ITEMS_PER_BOX = 1;
@@ -1144,7 +1173,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
     });
     const tx = new Transaction().add(updateIx);
     tx.feePayer = payer.publicKey;
-    tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+    tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(update core collection royalties)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
     const sig = await sendAndConfirmTx({
       connection,
       tx,
@@ -1168,7 +1197,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
   });
   const tx = new Transaction().add(addIx);
   tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(add core collection royalties)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
   const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'add core collection royalties', commitment: 'confirmed' });
   console.log('✅ Collection royalties added:', sig);
 }
@@ -1278,7 +1307,9 @@ async function assertMplCoreCollectionRoyalties(args: {
   royaltiesBps: number;
 }) {
   const { connection, coreCollection, treasury, royaltiesBps } = args;
-  const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
+  const info = await retryRpcRead(`getAccountInfo(core collection royalties ${coreCollection.toBase58()})`, () =>
+    connection.getAccountInfo(coreCollection, { commitment: 'confirmed' }),
+  );
   if (!info?.data) throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
 
   const royalties = decodeMplCoreCollectionRoyalties(info.data);
@@ -1629,7 +1660,7 @@ async function ensureDeliveryLookupTable(args: {
   // IMPORTANT: Address Lookup Tables require a *recent rooted slot* (present in the SlotHashes sysvar).
   // Using `confirmed` can return a slot that's not yet rooted, which fails with:
   //   "<slot> is not a recent slot" (InvalidInstructionData)
-  const recentSlot = await connection.getSlot('finalized');
+  const recentSlot = await retryRpcRead('getSlot(create delivery ALT)', () => connection.getSlot('finalized'));
   const [createIx, lutAddress] = AddressLookupTableProgram.createLookupTable({
     payer: payer.publicKey,
     authority: payer.publicKey,
@@ -1644,7 +1675,7 @@ async function ensureDeliveryLookupTable(args: {
 
   const tx = new Transaction().add(createIx, extendIx);
   tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('finalized')).blockhash;
+  tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(create delivery ALT)', () => connection.getLatestBlockhash('finalized'))).blockhash;
   const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'create delivery ALT', commitment: 'confirmed' });
   console.log('✅ Delivery ALT created:', sig);
   console.log('  ALT:', lutAddress.toBase58());
@@ -1707,7 +1738,9 @@ async function createReceiptsMerkleTree(args: {
   const { connection, payer, tree } = args;
   const merkleTree = Keypair.generate();
   const space = getConcurrentMerkleTreeAccountSize(tree.maxDepth, tree.maxBufferSize, tree.canopyDepth);
-  const lamports = await connection.getMinimumBalanceForRentExemption(space, 'confirmed');
+  const lamports = await retryRpcRead('getMinimumBalanceForRentExemption(create receipts Merkle tree)', () =>
+    connection.getMinimumBalanceForRentExemption(space, 'confirmed'),
+  );
 
   const createTreeAccountIx = SystemProgram.createAccount({
     fromPubkey: payer.publicKey,
@@ -1727,7 +1760,7 @@ async function createReceiptsMerkleTree(args: {
 
   const tx = new Transaction().add(createTreeAccountIx).add(createTreeConfigIx);
   tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(create receipts Merkle tree)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
   const sig = await sendAndConfirmTx({
     connection,
     tx,
@@ -1787,7 +1820,9 @@ function cargoLockHasPackage(onchainDir: string, name: string, version: string):
 }
 
 async function assertMplCoreCollection(connection: Connection, coreCollection: PublicKey) {
-  const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
+  const info = await retryRpcRead(`getAccountInfo(core collection ${coreCollection.toBase58()})`, () =>
+    connection.getAccountInfo(coreCollection, { commitment: 'confirmed' }),
+  );
   if (!info) {
     throw new Error(
       `Missing core collection account: ${coreCollection.toBase58()}\n` +
@@ -1815,7 +1850,9 @@ function decodeMplCoreCollectionUpdateAuthority(data: Buffer): PublicKey {
 }
 
 async function getMplCoreCollectionUpdateAuthority(connection: Connection, coreCollection: PublicKey): Promise<PublicKey> {
-  const info = await connection.getAccountInfo(coreCollection, { commitment: 'confirmed' });
+  const info = await retryRpcRead(`getAccountInfo(core collection update authority ${coreCollection.toBase58()})`, () =>
+    connection.getAccountInfo(coreCollection, { commitment: 'confirmed' }),
+  );
   if (!info?.data) {
     throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
   }
@@ -1926,7 +1963,9 @@ async function main() {
   const preflightProgramId = reuseProgramId ? readProgramIdFromKeypair(programKeypair) : expectedProgramId!;
   const preflightProgramPk = new PublicKey(preflightProgramId);
   const preflightConfigPda = boxMinterConfigPda(preflightProgramPk);
-  const preflightCfgInfo = await connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' });
+  const preflightCfgInfo = await retryRpcRead(`getAccountInfo(preflight config ${preflightConfigPda.toBase58()})`, () =>
+    connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' }),
+  );
   if (preflightCfgInfo) {
     throwFreshDeployOnlyForExistingConfig({
       stage: 'preflight',
@@ -2018,7 +2057,9 @@ async function main() {
   const programPk = new PublicKey(programId);
   const configPda = boxMinterConfigPda(programPk);
 
-  const existingCfg = await connection.getAccountInfo(configPda, { commitment: 'confirmed' });
+  const existingCfg = await retryRpcRead(`getAccountInfo(post-deploy config ${configPda.toBase58()})`, () =>
+    connection.getAccountInfo(configPda, { commitment: 'confirmed' }),
+  );
   if (existingCfg) {
     throwFreshDeployOnlyForExistingConfig({
       stage: 'post-deploy',
@@ -2118,7 +2159,9 @@ async function main() {
     });
     const createCollectionTx = new Transaction().add(createCollectionIx);
     createCollectionTx.feePayer = payer.publicKey;
-    createCollectionTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+    createCollectionTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(create MPL-Core collection)', () =>
+      connection.getLatestBlockhash('confirmed'),
+    )).blockhash;
     createCollectionTx.partialSign(collection);
     const sig = await sendAndConfirmTx({
       connection,
@@ -2177,7 +2220,7 @@ async function main() {
 
   const setupTx = new Transaction().add(initIx);
   setupTx.feePayer = payer.publicKey;
-  setupTx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  setupTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(initialize box minter)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
   const setupSig = await sendAndConfirmTx({ connection, tx: setupTx, signers: [payer], label: 'initialize box minter', commitment: 'confirmed' });
   console.log('✅ Box minter configured:', setupSig);
   console.log('  Config PDA:', configPda.toBase58());

@@ -57,7 +57,7 @@ export const NEW_DROP: NewDropConfig = {
     solanaCluster,
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
-    reuseProgramId: false,
+    reuseProgramId: true,
   },
   onchain: {
     dropId: 'Poncho_Drifella',
