@@ -15,6 +15,8 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fullfillment';
+const canonicalDrifPath = '/notify_me';
+const drifPaths = new Set([canonicalDrifPath, '/Poncho_Drifella']);
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
 const defaultDropPathAlias = getFrontendDropPathAliasForDefault();
@@ -58,7 +60,7 @@ function RoutedApp() {
   }, []);
 
   React.useEffect(() => {
-    if (path === '/Poncho_Drifella') return;
+    if (drifPaths.has(path)) return;
     document.body.classList.remove('drif-body');
   }, [path]);
 
@@ -74,7 +76,7 @@ type RoutedContentProps = {
 };
 
 function RoutedContent({ path }: RoutedContentProps) {
-  const isDrifRoute = path === '/Poncho_Drifella';
+  const isDrifRoute = drifPaths.has(path);
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
 
