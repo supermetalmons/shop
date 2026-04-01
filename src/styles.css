@@ -954,7 +954,8 @@ button.link:hover:not(:disabled) {
   --poncho-card-top: 0px;
   --poncho-card-width: 0px;
   --poncho-card-height: 0px;
-  --poncho-pack-discard-duration: 777ms;
+  --poncho-pack-discard-delay: 0ms;
+  --poncho-pack-discard-duration: 380ms;
 }
 
 .reveal-overlay__backdrop {
@@ -1332,7 +1333,7 @@ body.wip-scroll-lock #root {
 
 .wip-overlay .wip-reveal__pack-layer--discarded {
   pointer-events: none;
-  animation: wip-pack-discard var(--poncho-pack-discard-duration) cubic-bezier(0.22, 0.9, 0.34, 1) forwards;
+  animation: wip-pack-discard var(--poncho-pack-discard-duration) cubic-bezier(0.55, 0, 1, 0.45) var(--poncho-pack-discard-delay) forwards;
 }
 
 @keyframes wip-pack-discard {

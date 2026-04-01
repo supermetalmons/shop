@@ -52,6 +52,7 @@ import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   arePonchoDrifellaCardAssetsReady,
   getPonchoDrifellaCardByFigureId,
@@ -2870,6 +2871,7 @@ function App({ currentPath }: AppProps) {
                 ['--poncho-card-top' as never]: `${ponchoCardRect.top}px`,
                 ['--poncho-card-width' as never]: `${ponchoCardRect.width}px`,
                 ['--poncho-card-height' as never]: `${ponchoCardRect.height}px`,
+                ['--poncho-pack-discard-delay' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS}ms`,
                 ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
               }
             : {}),
@@ -2934,7 +2936,7 @@ function App({ currentPath }: AppProps) {
     ponchoPackDiscardDismissTimeoutRef.current = window.setTimeout(() => {
       if (revealOverlayRef.current?.id !== overlayId) return;
       markPonchoPackDiscardDismissReady();
-    }, PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS);
+    }, PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS + PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS);
     return () => {
       clearPonchoPackDiscardDismissTimeout();
     };
