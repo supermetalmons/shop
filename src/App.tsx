@@ -53,6 +53,9 @@ import {
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
+  preloadPonchoDrifellaPackAssets,
+  type PonchoDrifellaRevealRequestStatus,
+  usePonchoDrifellaRevealController,
 } from './lib/ponchoDrifellaReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
@@ -526,6 +529,13 @@ function App({ currentPath }: AppProps) {
     },
     [revealRendererForDropId],
   );
+  const preloadPonchoRevealPackAssetsForDropId = useCallback(
+    (dropId?: string) => {
+      if (revealRendererForDropId(dropId) !== 'poncho_drifella') return;
+      preloadPonchoDrifellaPackAssets(preloadedBoxFramesRef.current, boxFramePreloadImagesRef.current);
+    },
+    [revealRendererForDropId],
+  );
   const activeConnection = useMemo(() => getDropConnection(activeDrop.dropId), [activeDrop.dropId, getDropConnection]);
   const activeDiscountVersion = useMemo(() => discountUsedVersion(activeDrop), [activeDrop]);
   const activeDiscountScope = useMemo(() => discountUsedScope(activeDrop), [activeDrop]);
@@ -984,6 +994,32 @@ function App({ currentPath }: AppProps) {
       void soundPlayer.preloadSound(click);
     });
   }, [ensureSoundReady, revealSoundUrlsForDropId]);
+  const playRevealSoundForDropId = useCallback(
+    (dropId?: string) => {
+      const { reveal } = revealSoundUrlsForDropId(dropId);
+      const play = () => {
+        void soundPlayer.playSound(reveal, 0.42);
+      };
+      if (soundPlayer.isInitialized) {
+        play();
+        return;
+      }
+      const pending = soundInitPromiseRef.current;
+      if (pending) {
+        void pending.then(play);
+      }
+    },
+    [revealSoundUrlsForDropId],
+  );
+  const playClickSoundForDropId = useCallback(
+    (dropId?: string) => {
+      const { click } = revealSoundUrlsForDropId(dropId);
+      void ensureSoundReady().then(() => {
+        void soundPlayer.playSound(click, 0.42);
+      });
+    },
+    [ensureSoundReady, revealSoundUrlsForDropId],
+  );
 
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!connectedWallet || isViewerMode) return;
@@ -1204,9 +1240,10 @@ function App({ currentPath }: AppProps) {
 		    const item = itemOverride || inventoryIndex.get(id);
 		    if (!item) return;
 		    const overlayDropId = item.dropId || activeDrop.dropId;
-		    revealDismissLockedUntilRef.current = 0;
+    revealDismissLockedUntilRef.current = 0;
     clearRevealOverlayCloseTimeout();
     preloadRevealSounds(overlayDropId);
+    preloadPonchoRevealPackAssetsForDropId(overlayDropId);
     preloadBoxFrames(1, revealClickMaxForDropId(overlayDropId), overlayDropId);
     preloadBoxFrames(revealAutoplayStartForDropId(overlayDropId), revealFrameCountForDropId(overlayDropId), overlayDropId);
     const originRect = toOverlayRect(rect);
@@ -1789,9 +1826,17 @@ function App({ currentPath }: AppProps) {
     pendingRevealIds.size > 0 || localMintedItems.length > 0 || inventoryView.some((item) => item.kind === 'box');
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
+    preloadPonchoRevealPackAssetsForDropId(activeDrop.dropId);
     if (!dropRevealIsAnimated(activeDrop.dropId)) return;
     preloadBoxFrames(1, revealClickMaxForDropId(activeDrop.dropId), activeDrop.dropId);
-  }, [activeDrop.dropId, dropRevealIsAnimated, preloadBoxFrames, revealClickMaxForDropId, shouldPreloadBoxFramesInitial]);
+  }, [
+    activeDrop.dropId,
+    dropRevealIsAnimated,
+    preloadBoxFrames,
+    preloadPonchoRevealPackAssetsForDropId,
+    revealClickMaxForDropId,
+    shouldPreloadBoxFramesInitial,
+  ]);
   useEffect(() => {
     if (!shouldPreloadBoxFramesInitial) return;
     if (!dropRevealIsAnimated(activeDrop.dropId)) return;
@@ -1822,13 +1867,21 @@ function App({ currentPath }: AppProps) {
   ]);
   useEffect(() => {
     if (!revealOverlay) return;
+    preloadPonchoRevealPackAssetsForDropId(revealOverlay.dropId);
     if (!dropRevealIsAnimated(revealOverlay.dropId)) return;
     preloadBoxFrames(
       revealAutoplayStartForDropId(revealOverlay.dropId),
       revealFrameCountForDropId(revealOverlay.dropId),
       revealOverlay.dropId,
     );
-  }, [dropRevealIsAnimated, preloadBoxFrames, revealAutoplayStartForDropId, revealFrameCountForDropId, revealOverlay]);
+  }, [
+    dropRevealIsAnimated,
+    preloadBoxFrames,
+    preloadPonchoRevealPackAssetsForDropId,
+    revealAutoplayStartForDropId,
+    revealFrameCountForDropId,
+    revealOverlay,
+  ]);
   const pendingRevealItems = useMemo(() => {
     if (!pendingOpenBoxesFiltered.length && !localPendingFiltered.length) return [];
     const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
@@ -2284,11 +2337,11 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleRevealDudes = async (boxAssetId: string, dropId: string) => {
-    if (blockViewerModeAction()) return;
+  const handleRevealDudes = async (boxAssetId: string, dropId: string): Promise<PonchoDrifellaRevealRequestStatus> => {
+    if (blockViewerModeAction()) return 'retry';
     const signedIn = await ensureSignedIn();
-    if (!signedIn) return;
-    if (!publicKey) return;
+    if (!signedIn) return 'retry';
+    if (!publicKey) return 'retry';
     setRevealLoading(boxAssetId);
     try {
       const revealDrop = requireKnownDropConfig(dropId, `reveal request for ${boxAssetId}`);
@@ -2314,6 +2367,7 @@ function App({ currentPath }: AppProps) {
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== boxAssetId) return prev;
         const hasResults = revealed.length > 0;
+        const usesPonchoRenderer = revealContent.reveal.renderer === 'poncho_drifella';
         const nextPhase =
           revealContent.reveal.mode === 'static'
             ? hasResults
@@ -2321,11 +2375,15 @@ function App({ currentPath }: AppProps) {
               : prev.phase === 'preparing'
                 ? prev.phase
                 : 'ready'
-            : prev.phase === 'preparing'
-              ? prev.phase
-              : prev.frame >= revealMediaStartForDropId(prev.dropId) && hasResults
-                ? 'revealed'
-                : 'ready';
+            : usesPonchoRenderer
+              ? prev.phase === 'preparing'
+                ? prev.phase
+                : 'ready'
+              : prev.phase === 'preparing'
+                ? prev.phase
+                : prev.frame >= revealMediaStartForDropId(prev.dropId) && hasResults
+                  ? 'revealed'
+                  : 'ready';
         return { ...prev, phase: nextPhase, revealedIds: revealed };
       });
       queueOverlayAction(() => removeLocalPendingReveal(boxAssetId));
@@ -2334,12 +2392,14 @@ function App({ currentPath }: AppProps) {
       queueOverlayAction(() => {
         void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
       });
+      return 'resolved';
     } catch (err) {
       console.error(err);
       const code = (err as { code?: string })?.code;
       if (code !== 'not-found' && !isUserRejectedError(err)) {
         showToast(err instanceof Error ? err.message : `Failed to reveal ${figureLabelForDropId(dropId, 2)}`);
       }
+      return 'retry';
     } finally {
       setRevealLoading(null);
     }
@@ -2349,6 +2409,14 @@ function App({ currentPath }: AppProps) {
     if (blockViewerModeAction()) return;
     if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.phase !== 'ready') return;
+    if (revealOverlayUsesPonchoRenderer) {
+      if (!publicKey) {
+        showToast('Connect wallet first');
+        return;
+      }
+      ponchoRevealController.handleAdvance();
+      return;
+    }
     if (revealOverlay.autoOpening) return;
     const revealContent = getDropContent(revealOverlay.dropId);
     if (revealContent.reveal.mode === 'animated' && revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId)) {
@@ -2406,6 +2474,23 @@ function App({ currentPath }: AppProps) {
 	  const handleRevealOverlayBackdropClick = () => {
 	    if (!revealOverlay || revealOverlayClosing) return;
 	    const hasResults = Boolean(revealOverlay.revealedIds?.length);
+    if (revealOverlayUsesPonchoRenderer) {
+      if (hasResults && !ponchoRevealController.revealComplete) {
+        ponchoRevealController.startAutoOpening();
+        return;
+      }
+      if ((ponchoRevealController.requestPending || ponchoRevealController.hasRevealAttempted) && revealLoading === revealOverlay.id) {
+        return;
+      }
+      if (ponchoRevealController.requestPending) {
+        return;
+      }
+      if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
+        return;
+      }
+      closeRevealOverlay();
+      return;
+    }
     if (hasResults && dropRevealIsAnimated(revealOverlay.dropId) && revealOverlay.frame < revealFrameCountForDropId(revealOverlay.dropId)) {
       startAutoOpening('fast');
       return;
@@ -2422,6 +2507,7 @@ function App({ currentPath }: AppProps) {
 	  const openPreparingOverlayForBox = useCallback(
 	    (box: InventoryItem) => {
 	      preloadRevealSounds(box.dropId);
+	      preloadPonchoRevealPackAssetsForDropId(box.dropId);
 	      preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
 	      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
 	      if (typeof window === 'undefined') return;
@@ -2446,6 +2532,7 @@ function App({ currentPath }: AppProps) {
       boxImageForDropId,
       openRevealOverlay,
       preloadBoxFrames,
+      preloadPonchoRevealPackAssetsForDropId,
       preloadRevealSounds,
       revealAutoplayStartForDropId,
       revealClickMaxForDropId,
@@ -2727,18 +2814,42 @@ function App({ currentPath }: AppProps) {
     () => getDropContent(revealOverlay?.dropId || activeDrop.dropId),
     [activeDrop.dropId, getDropContent, revealOverlay?.dropId],
   );
+  const revealOverlayContainerLabel = revealOverlay ? boxLabelForDropId(revealOverlay.dropId) : boxLabelForDropId(activeDrop.dropId);
+  const ponchoRevealCard = useMemo(() => {
+    if (!revealOverlay?.revealedIds?.length || revealOverlay.revealedIds.length !== 1) return undefined;
+    return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
+  }, [revealOverlay?.revealedIds]);
+  const revealOverlayUsesPonchoRenderer = Boolean(
+    revealOverlay &&
+      revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
+      (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
+  );
+  const ponchoRevealController = usePonchoDrifellaRevealController({
+    active: Boolean(revealOverlay && revealOverlayUsesPonchoRenderer),
+    phase: revealOverlay?.phase || 'ready',
+    boxLabel: revealOverlayContainerLabel,
+    cardReady: Boolean(revealOverlay?.revealedIds?.length),
+    resetKey: revealOverlay ? `${revealOverlay.id}:${revealOverlay.phase}` : 'closed',
+    onRequestReveal: revealOverlay ? () => handleRevealDudes(revealOverlay.id, revealOverlay.dropId) : undefined,
+    onPlayClick: revealOverlay ? () => playClickSoundForDropId(revealOverlay.dropId) : undefined,
+    onPlayReveal: revealOverlay ? () => playRevealSoundForDropId(revealOverlay.dropId) : undefined,
+  });
   const showRevealOutcome = Boolean(
     revealOverlay &&
       revealOverlay.revealedIds?.length &&
-      (revealOverlayContent.reveal.mode === 'static' ||
-        revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
+      (revealOverlayUsesPonchoRenderer
+        ? ponchoRevealController.phase === 'revealed'
+        : revealOverlayContent.reveal.mode === 'static' ||
+          revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
   );
   const revealOverlayStage = revealOverlay
-    ? revealOverlay.phase === 'preparing'
-      ? 'preparing'
-      : showRevealOutcome
-        ? 'revealed'
-        : 'ready'
+    ? revealOverlayUsesPonchoRenderer
+      ? ponchoRevealController.phase
+      : revealOverlay.phase === 'preparing'
+        ? 'preparing'
+        : showRevealOutcome
+          ? 'revealed'
+          : 'ready'
     : 'ready';
   const revealMediaItems = useMemo<Array<{ figureId: number; index: number; mediaId?: number; image?: string; name: string }>>(() => {
     if (!revealOverlay?.revealedIds?.length) {
@@ -2787,15 +2898,6 @@ function App({ currentPath }: AppProps) {
       ),
     [revealMediaItems],
   );
-  const ponchoRevealCard = useMemo(() => {
-    if (!revealOverlay?.revealedIds?.length || revealOverlay.revealedIds.length !== 1) return undefined;
-    return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
-  }, [revealOverlay?.revealedIds]);
-  const revealOverlayUsesPonchoRenderer = Boolean(
-    revealOverlay &&
-      revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
-      (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
-  );
 
   const revealSoundPlayedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2803,22 +2905,12 @@ function App({ currentPath }: AppProps) {
       revealSoundPlayedRef.current = null;
       return;
     }
+    if (revealOverlayUsesPonchoRenderer) return;
     if (!showRevealOutcome) return;
     if (revealSoundPlayedRef.current === revealOverlay.id) return;
     revealSoundPlayedRef.current = revealOverlay.id;
-    const { reveal } = revealSoundUrlsForDropId(revealOverlay.dropId);
-    const play = () => {
-      void soundPlayer.playSound(reveal, 0.42);
-    };
-    if (soundPlayer.isInitialized) {
-      play();
-      return;
-    }
-    const pending = soundInitPromiseRef.current;
-    if (pending) {
-      void pending.then(play);
-    }
-  }, [revealOverlay, revealSoundUrlsForDropId, showRevealOutcome]);
+    playRevealSoundForDropId(revealOverlay.dropId);
+  }, [playRevealSoundForDropId, revealOverlay, revealOverlayUsesPonchoRenderer, showRevealOutcome]);
 
   useEffect(() => {
     if (!revealOverlay?.revealedIds?.length) return;
@@ -2857,23 +2949,26 @@ function App({ currentPath }: AppProps) {
       ? resolveRevealFrameSrc(revealFrameSequence, revealOverlay.frame)
       : undefined;
   const revealBoxFrameSrc =
-    revealOverlay && revealOverlay.frame
-      ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
-      : undefined;
-  const revealOverlayContainerLabel = revealOverlay ? boxLabelForDropId(revealOverlay.dropId) : boxLabelForDropId(activeDrop.dropId);
+    revealOverlay && revealOverlayUsesPonchoRenderer
+      ? ponchoRevealController.boxFrameSrc
+      : revealOverlay && revealOverlay.frame
+        ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
+        : undefined;
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
       ? `preparing to ${openVerbForDropId(revealOverlay?.dropId)}...`
       : revealOverlayStage === 'revealed'
         ? ''
         : revealOverlay
-          ? revealOverlay.hasRevealAttempted
-            ? revealOverlayContent.reveal.mode === 'animated'
-              ? `keep clicking the ${revealOverlayContainerLabel}`
-              : revealLoading === revealOverlay.id
-                ? 'opening...'
-                : ''
-            : `click the ${revealOverlayContainerLabel} to open`
+          ? revealOverlayUsesPonchoRenderer
+            ? ponchoRevealController.note
+            : revealOverlay.hasRevealAttempted
+              ? revealOverlayContent.reveal.mode === 'animated'
+                ? `keep clicking the ${revealOverlayContainerLabel}`
+                : revealLoading === revealOverlay.id
+                  ? 'opening...'
+                  : ''
+              : `click the ${revealOverlayContainerLabel} to open`
           : '';
   const defaultRevealOverlayNode = revealOverlay ? (
     <div
@@ -3002,9 +3097,9 @@ function App({ currentPath }: AppProps) {
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
-        phase={revealOverlay.phase}
-        frame={revealOverlay.frame}
-        autoOpening={Boolean(revealOverlay.autoOpening)}
+        phase={ponchoRevealController.phase}
+        frame={ponchoRevealController.frame}
+        autoOpening={ponchoRevealController.autoOpening}
         revealedIds={revealOverlay.revealedIds}
         loading={revealLoading === revealOverlay.id}
         note={revealOverlayNote}
@@ -3201,6 +3296,7 @@ function App({ currentPath }: AppProps) {
                 const revealItem = inventoryIndex.get(id);
                 const revealDropId = revealItem?.dropId || activeDrop.dropId;
 		            preloadRevealSounds(revealDropId);
+		            preloadPonchoRevealPackAssetsForDropId(revealDropId);
 		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
 		            preloadBoxFrames(revealAutoplayStartForDropId(revealDropId), revealFrameCountForDropId(revealDropId), revealDropId);
 		            const refreshedRect = findInventoryRect(id);

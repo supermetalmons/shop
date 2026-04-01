@@ -3,18 +3,16 @@ import type { DrifCardConfig } from '../drifCards';
 import {
   PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
   getPonchoDrifellaCardByFigureId,
+  type PonchoDrifellaRevealPhase,
 } from '../lib/ponchoDrifellaReveal';
-import { resolveRevealFrameSrc } from '../lib/revealFrameSequence';
 import WipInteractiveCard from './WipInteractiveCard';
-
-type PonchoRevealPhase = 'preparing' | 'ready' | 'revealed';
 
 export type PonchoInventoryRevealOverlayProps = {
   mode: 'inventory-unbox';
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
-  phase: PonchoRevealPhase;
+  phase: PonchoDrifellaRevealPhase;
   frame: number;
   autoOpening: boolean;
   revealedIds?: number[];
@@ -31,7 +29,7 @@ type PonchoRevealOverlayProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
-  stage: PonchoRevealPhase;
+  stage: PonchoDrifellaRevealPhase;
   note: string;
   boxName: string;
   boxFrameSrc?: string;
@@ -132,7 +130,6 @@ export default function PonchoInventoryRevealOverlay({
     return getPonchoDrifellaCardByFigureId(revealedIds[0]);
   }, [revealedIds]);
   const stage = phase === 'preparing' ? 'preparing' : phase === 'revealed' && revealedCard ? 'revealed' : 'ready';
-  const resolvedBoxFrameSrc = boxFrameSrc || resolveRevealFrameSrc(PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE, frame);
   const boxDisabled = closing || phase !== 'ready' || autoOpening || frame >= BOX_FRAME_COUNT;
 
   return (
@@ -143,7 +140,7 @@ export default function PonchoInventoryRevealOverlay({
       stage={stage}
       note={note}
       boxName={boxName}
-      boxFrameSrc={resolvedBoxFrameSrc}
+      boxFrameSrc={boxFrameSrc}
       card={revealedCard}
       boxBusy={loading}
       boxDisabled={boxDisabled}
