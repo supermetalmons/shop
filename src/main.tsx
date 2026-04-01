@@ -6,7 +6,6 @@ import App from './App';
 import FulfillmentApp from './FulfillmentApp';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { WalletContextProvider } from './wallet/WalletContext';
-import { getFrontendDropPathAliasForDefault } from './lib/dropConfig';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -19,7 +18,6 @@ const canonicalDrifPath = '/notify_me';
 const drifPaths = new Set([canonicalDrifPath, '/Poncho_Drifella']);
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
-const defaultDropPathAlias = getFrontendDropPathAliasForDefault();
 
 type RouteAlias = {
   targetPath: string;
@@ -28,7 +26,6 @@ type RouteAlias = {
 
 const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
-  [defaultDropPathAlias]: { targetPath: '/', replaceUrl: false },
 };
 
 const resolveCurrentPath = (): string => {

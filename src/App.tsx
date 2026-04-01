@@ -5,6 +5,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
+import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
@@ -3309,24 +3310,28 @@ function App({ currentPath }: AppProps) {
         ) : null}
       </header>
 
-      <MintPanel
-        stats={effectiveMintStats}
-        onMint={handleMint}
-        busy={minting}
-        onError={showToast}
-        title={activeDrop.collectionName}
-        boxImageSrc={defaultBoxImage}
-        boxAspectRatio={boxAspectRatioForDropId(activeDrop.dropId)}
-        boxNamePrefix={activeDrop.namePrefix}
-        priceSol={activeDrop.priceSol}
-        discountPriceSol={activeDrop.discountPriceSol}
-        secondaryHref={activeDrop.secondaryMarketHref}
-        discountVisible={discountCtaState.visible}
-        discountLabel={discountCtaState.label}
-        discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
-        onDiscountClick={handleDiscountMint}
-        discountBusy={discountMinting || discountChecking || minting || walletBusy}
-      />
+      {normalizedCurrentPath === '/' ? (
+        <DropsPanel />
+      ) : (
+        <MintPanel
+          stats={effectiveMintStats}
+          onMint={handleMint}
+          busy={minting}
+          onError={showToast}
+          title={activeDrop.collectionName}
+          boxImageSrc={defaultBoxImage}
+          boxAspectRatio={boxAspectRatioForDropId(activeDrop.dropId)}
+          boxNamePrefix={activeDrop.namePrefix}
+          priceSol={activeDrop.priceSol}
+          discountPriceSol={activeDrop.discountPriceSol}
+          secondaryHref={activeDrop.secondaryMarketHref}
+          discountVisible={discountCtaState.visible}
+          discountLabel={discountCtaState.label}
+          discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
+          onDiscountClick={handleDiscountMint}
+          discountBusy={discountMinting || discountChecking || minting || walletBusy}
+        />
+      )}
 
 	      <section className="card">
 	        <div className="card__title">Inventory</div>
