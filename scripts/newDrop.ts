@@ -45,7 +45,7 @@ export type NewDropConfig = {
 // Toggle this to pick deployment network from one place.
 const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'red';
+const dropSymbol = 'green';
 const sellerFeeBasisPoints = 500;
 
 /**

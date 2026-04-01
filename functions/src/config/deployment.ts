@@ -123,6 +123,33 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "6MLqPJktCbMUhFcBMrbnXR3xQ7RwCKBM4oTTsfXSde4h",
     deliveryLookupTable: "3ejwFVseYBxdz4sNQFBxxAkG7TuJvtjwaa4J69H4vCLY",
   }),
+  "green_boxes_devnet_extra": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "green_boxes_devnet_extra",
+    collectionName: "green test",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/test/green",
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 3,
+    discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
+    maxSupply: 33,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: "box",
+    figureNamePrefix: "item",
+    symbol: "green",
+
+    // On-chain ids
+    boxMinterProgramId: "HupEboPSDvn8BDf7YccTWEEod6sLbUrCLWrhPiqCK5mf",
+    collectionMint: "GxvnWoDYwYDdysnoEM5zBnYEatVT5US8bHSz26ShsDmJ",
+    receiptsMerkleTree: "6wQSTNVFWPWKBVFXZd3Gem76uFbKpryTA8HFXgvgKCQE",
+    deliveryLookupTable: "7cejVjYu7PuzmLKQGkcc83NcDEwaxbgaYmZnGafr85in",
+  }),
   "little_swag_boxes": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
