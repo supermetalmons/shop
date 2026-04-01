@@ -2053,6 +2053,25 @@ function App({ currentPath }: AppProps) {
   }, [pendingRevealIds]);
 
   useEffect(() => {
+    if (!selected.size) return;
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+
+      prev.forEach((id) => {
+        const item = inventoryIndex.get(id);
+        if (!item || item.kind === 'certificate' || pendingRevealIds.has(id)) {
+          changed = true;
+          return;
+        }
+        next.add(id);
+      });
+
+      return changed ? next : prev;
+    });
+  }, [selected, inventoryIndex, pendingRevealIds]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const media = window.matchMedia('(max-width: 720px)');
     const sync = () => setCompactPanel(media.matches);
@@ -2178,8 +2197,7 @@ function App({ currentPath }: AppProps) {
         nextItem.dropId &&
         firstSelectedItem.dropId !== nextItem.dropId
       ) {
-        showToast('Shipments can only include items from one drop.');
-        return prev;
+        return new Set([id]);
       }
       const copy = new Set(prev);
       copy.add(id);
@@ -2591,7 +2609,6 @@ function App({ currentPath }: AppProps) {
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
     if (selectedDropIds.length > 1) {
-      showToast('Shipments can only include items from one drop');
       return;
     }
     const signedIn = await ensureSignedIn();
@@ -2631,7 +2648,6 @@ function App({ currentPath }: AppProps) {
       return;
     }
     if (deliverableItems.some((item) => item.dropId !== deliveryDropId)) {
-      showToast('Shipments can only include items from one drop');
       return;
     }
     if (deliverableIds.length !== selected.size) {
