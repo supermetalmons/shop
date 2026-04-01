@@ -50,7 +50,7 @@ import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
 import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
 import {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   arePonchoDrifellaCardAssetsReady,
@@ -86,6 +86,10 @@ const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQ
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
+
+function pickRandomSoundUrl(soundUrls: readonly string[]) {
+  return soundUrls[Math.floor(Math.random() * soundUrls.length)] || soundUrls[0]!;
+}
 
 function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string }>(items: readonly T[]): T[] {
   const leading: T[] = [];
@@ -509,12 +513,12 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => {
       if (revealRendererForDropId(dropId) === 'poncho_drifella') {
         return {
-          click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+          click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
           reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
         };
       }
       return {
-        click: DEFAULT_BOX_SOUND_CLICK_URL,
+        click: [DEFAULT_BOX_SOUND_CLICK_URL],
         reveal: DEFAULT_BOX_SOUND_REVEAL_URL,
       };
     },
@@ -996,10 +1000,14 @@ function App({ currentPath }: AppProps) {
   const preloadRevealSounds = useCallback((dropId?: string) => {
     const { click, reveal } = revealSoundUrlsForDropId(dropId);
     void soundPlayer.preloadSound(reveal);
-    void soundPlayer.preloadSound(click);
+    click.forEach((clickUrl) => {
+      void soundPlayer.preloadSound(clickUrl);
+    });
     void ensureSoundReady().then(() => {
       void soundPlayer.preloadSound(reveal);
-      void soundPlayer.preloadSound(click);
+      click.forEach((clickUrl) => {
+        void soundPlayer.preloadSound(clickUrl);
+      });
     });
   }, [ensureSoundReady, revealSoundUrlsForDropId]);
   const playRevealSoundForDropId = useCallback(
@@ -1022,8 +1030,9 @@ function App({ currentPath }: AppProps) {
   const playClickSoundForDropId = useCallback(
     (dropId?: string) => {
       const { click } = revealSoundUrlsForDropId(dropId);
+      const clickUrl = pickRandomSoundUrl(click);
       void ensureSoundReady().then(() => {
-        void soundPlayer.playSound(click, 0.42);
+        void soundPlayer.playSound(clickUrl, 0.42);
       });
     },
     [ensureSoundReady, revealSoundUrlsForDropId],
@@ -2471,7 +2480,7 @@ function App({ currentPath }: AppProps) {
     }
 
     const { click } = revealSoundUrlsForDropId(revealOverlay.dropId);
-    void ensureSoundReady().then(() => soundPlayer.playSound(click, 0.42));
+    void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), 0.42));
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;

@@ -5,10 +5,11 @@ import PonchoInventoryRevealOverlay, {
 } from './components/PonchoRevealOverlay';
 import { DRIF_CARD_COUNT, DRIF_CARDS } from './drifCards';
 import {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   arePonchoDrifellaCardAssetsReady,
+  getRandomPonchoDrifellaBoxClickSoundUrl,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   usePonchoDrifellaRevealController,
@@ -79,11 +80,13 @@ function LocalPlayWipApp() {
 
   const preloadRevealSounds = useCallback(() => {
     void soundPlayer.preloadSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL);
-    void soundPlayer.preloadSound(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL);
+    PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS.forEach((clickUrl) => {
+      void soundPlayer.preloadSound(clickUrl);
+    });
   }, []);
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL, 0.42);
+      void soundPlayer.playSound(getRandomPonchoDrifellaBoxClickSoundUrl(), 0.42);
     });
   }, [ensureSoundReady]);
   const playRevealSound = useCallback(() => {

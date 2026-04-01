@@ -17,7 +17,19 @@ const PONCHO_DRIFELLA_ASSET_RETRY_DELAY_MS = 180;
 const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
-export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL = '/Poncho_Drifella/sounds/hit.mp3';
+export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS = [
+  '/Poncho_Drifella/sounds/hit1.mp3',
+  '/Poncho_Drifella/sounds/hit2.mp3',
+  '/Poncho_Drifella/sounds/hit3.mp3',
+] as const;
+
+export function getRandomPonchoDrifellaBoxClickSoundUrl() {
+  return (
+    PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS[
+      Math.floor(Math.random() * PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS.length)
+    ] || PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS[0]
+  );
+}
 
 function buildPonchoDrifellaNumberedFrameUrls(baseUrl: string, frameCount: number) {
   return Array.from({ length: frameCount }, (_, index) => `${baseUrl}/${index + 1}.webp`);
