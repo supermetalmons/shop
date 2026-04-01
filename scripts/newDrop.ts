@@ -60,17 +60,17 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'red_boxes_devnet',
-    metadataBase: 'https://assets.mons.link/drops/test/red',
+    dropId: 'green_boxes_devnet_extra',
+    metadataBase: 'https://assets.mons.link/drops/test/green',
     collectionMetadata: {
-      name: 'red test',
+      name: 'green test',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'red test mons.shop drop',
+      description: 'green test mons.shop drop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/test/red/box/default.png',
+      image: 'https://assets.mons.link/drops/test/green/box/default.png',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/poncho_drifella.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
