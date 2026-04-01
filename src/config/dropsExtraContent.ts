@@ -17,6 +17,11 @@ export type DropRevealFrameSequence = {
   frames?: string[];
 };
 
+export type DropRevealSoundProfile = {
+  clickVolume: number;
+  revealVolume: number;
+};
+
 export type DropExtraContentOverride = {
   box?: {
     previewImageUrl?: string;
@@ -26,6 +31,7 @@ export type DropExtraContentOverride = {
     mode?: DropRevealMode;
     renderer?: DropRevealRenderer;
     frameSequence?: Partial<DropRevealFrameSequence>;
+    sound?: Partial<DropRevealSoundProfile>;
   };
   figures?: {
     inventoryImageMode?: DropFigureInventoryImageMode;
@@ -53,6 +59,9 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     mode: 'animated',
     renderer: 'poncho_drifella',
     frameSequence: PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
+    sound: {
+      revealVolume: 0.3,
+    },
   },
   figures: {
     inventoryImageMode: 'clean_variant',

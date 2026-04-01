@@ -511,18 +511,23 @@ function App({ currentPath }: AppProps) {
   );
   const revealSoundUrlsForDropId = useCallback(
     (dropId?: string) => {
+      const { sound } = getDropContent(dropId).reveal;
       if (revealRendererForDropId(dropId) === 'poncho_drifella') {
         return {
           click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
           reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+          clickVolume: sound.clickVolume,
+          revealVolume: sound.revealVolume,
         };
       }
       return {
         click: [DEFAULT_BOX_SOUND_CLICK_URL],
         reveal: DEFAULT_BOX_SOUND_REVEAL_URL,
+        clickVolume: sound.clickVolume,
+        revealVolume: sound.revealVolume,
       };
     },
-    [revealRendererForDropId],
+    [getDropContent, revealRendererForDropId],
   );
   const preloadPonchoRevealCardAssetsForDropId = useCallback(
     (dropId?: string, figureIds?: readonly number[]) => {
@@ -1012,9 +1017,9 @@ function App({ currentPath }: AppProps) {
   }, [ensureSoundReady, revealSoundUrlsForDropId]);
   const playRevealSoundForDropId = useCallback(
     (dropId?: string) => {
-      const { reveal } = revealSoundUrlsForDropId(dropId);
+      const { reveal, revealVolume } = revealSoundUrlsForDropId(dropId);
       const play = () => {
-        void soundPlayer.playSound(reveal, 0.42);
+        void soundPlayer.playSound(reveal, revealVolume);
       };
       if (soundPlayer.isInitialized) {
         play();
@@ -1029,10 +1034,10 @@ function App({ currentPath }: AppProps) {
   );
   const playClickSoundForDropId = useCallback(
     (dropId?: string) => {
-      const { click } = revealSoundUrlsForDropId(dropId);
+      const { click, clickVolume } = revealSoundUrlsForDropId(dropId);
       const clickUrl = pickRandomSoundUrl(click);
       void ensureSoundReady().then(() => {
-        void soundPlayer.playSound(clickUrl, 0.42);
+        void soundPlayer.playSound(clickUrl, clickVolume);
       });
     },
     [ensureSoundReady, revealSoundUrlsForDropId],
@@ -2479,8 +2484,8 @@ function App({ currentPath }: AppProps) {
       return;
     }
 
-    const { click } = revealSoundUrlsForDropId(revealOverlay.dropId);
-    void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), 0.42));
+    const { click, clickVolume } = revealSoundUrlsForDropId(revealOverlay.dropId);
+    void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), clickVolume));
     const shouldSendReveal = !revealOverlay.hasRevealAttempted && !revealOverlay.revealedIds?.length;
     setRevealOverlay((prev) => {
       if (!prev || prev.id !== revealOverlay.id) return prev;

@@ -8,6 +8,7 @@ import {
   type DropRevealFrameSequence,
   type DropRevealMode,
   type DropRevealRenderer,
+  type DropRevealSoundProfile,
 } from '../config/dropsExtraContent';
 
 export type ResolvedDropContent = {
@@ -19,6 +20,7 @@ export type ResolvedDropContent = {
     mode: DropRevealMode;
     renderer: DropRevealRenderer;
     frameSequence?: DropRevealFrameSequence;
+    sound: DropRevealSoundProfile;
   };
   figures: {
     inventoryImageMode: DropFigureInventoryImageMode;
@@ -32,6 +34,10 @@ export type ResolvedDropContent = {
 
 const LEGACY_BOX_ASPECT_RATIO = 1440 / 1030;
 const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
+const DEFAULT_DROP_REVEAL_SOUND_PROFILE: DropRevealSoundProfile = {
+  clickVolume: 0.42,
+  revealVolume: 0.42,
+};
 const resolvedContentByDropId = new Map<string, ResolvedDropContent>();
 
 function asPositiveNumber(value: unknown, fallback: number): number {
@@ -42,6 +48,11 @@ function asPositiveNumber(value: unknown, fallback: number): number {
 function asPositiveInteger(value: unknown): number | undefined {
   const numeric = Math.floor(Number(value));
   return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function asNonNegativeNumber(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback;
 }
 
 function asOptionalString(value: unknown): string | undefined {
@@ -131,6 +142,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
         autoplayStart: 9,
         mediaStart: 10,
       },
+      sound: DEFAULT_DROP_REVEAL_SOUND_PROFILE,
     },
     figures: {
       inventoryImageMode: 'clean_variant',
@@ -153,6 +165,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
       mode: 'static',
       renderer: 'default',
       frameSequence: undefined,
+      sound: DEFAULT_DROP_REVEAL_SOUND_PROFILE,
     },
     figures: {
       inventoryImageMode: 'metadata_raw',
@@ -180,6 +193,10 @@ function applyDropExtraContentOverride(
     reveal: {
       mode: nextMode,
       renderer: override.reveal?.renderer || base.reveal.renderer,
+      sound: {
+        clickVolume: asNonNegativeNumber(override.reveal?.sound?.clickVolume, base.reveal.sound.clickVolume),
+        revealVolume: asNonNegativeNumber(override.reveal?.sound?.revealVolume, base.reveal.sound.revealVolume),
+      },
       ...(nextMode === 'animated' && nextFrameSequence ? { frameSequence: nextFrameSequence } : {}),
     },
     figures: {

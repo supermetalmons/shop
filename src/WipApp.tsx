@@ -16,6 +16,7 @@ import {
   waitForPonchoDrifellaCardAssetsUntilReady,
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
+import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
 import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
@@ -25,6 +26,7 @@ const REVEAL_NOTE_OFFSET = 28;
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
 const WIP_DROP = getFrontendDrop('poncho_drifella_draft');
+const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -86,12 +88,12 @@ function LocalPlayWipApp() {
   }, []);
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(getRandomPonchoDrifellaBoxClickSoundUrl(), 0.42);
+      void soundPlayer.playSound(getRandomPonchoDrifellaBoxClickSoundUrl(), WIP_REVEAL_SOUND_PROFILE.clickVolume);
     });
   }, [ensureSoundReady]);
   const playRevealSound = useCallback(() => {
     const play = () => {
-      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, 0.3);
+      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, WIP_REVEAL_SOUND_PROFILE.revealVolume);
     };
     if (soundPlayer.isInitialized) {
       play();
