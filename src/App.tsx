@@ -2475,14 +2475,7 @@ function App({ currentPath }: AppProps) {
 	    if (!revealOverlay || revealOverlayClosing) return;
 	    const hasResults = Boolean(revealOverlay.revealedIds?.length);
     if (revealOverlayUsesPonchoRenderer) {
-      if (hasResults && !ponchoRevealController.revealComplete) {
-        ponchoRevealController.startAutoOpening();
-        return;
-      }
-      if ((ponchoRevealController.requestPending || ponchoRevealController.hasRevealAttempted) && revealLoading === revealOverlay.id) {
-        return;
-      }
-      if (ponchoRevealController.requestPending) {
+      if (!ponchoRevealController.revealComplete) {
         return;
       }
       if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
@@ -3098,13 +3091,16 @@ function App({ currentPath }: AppProps) {
         active={revealOverlayActive}
         closing={revealOverlayClosing}
         phase={ponchoRevealController.phase}
-        frame={ponchoRevealController.frame}
-        autoOpening={ponchoRevealController.autoOpening}
         revealedIds={revealOverlay.revealedIds}
         loading={revealLoading === revealOverlay.id}
         note={revealOverlayNote}
         boxName={revealOverlay.name}
         boxFrameSrc={revealBoxFrameSrc}
+        boxDisabled={
+          revealOverlayClosing ||
+          ponchoRevealController.phase !== 'ready' ||
+          ponchoRevealController.revealComplete
+        }
         onAdvance={handleRevealOverlayClick}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={(evt) => {

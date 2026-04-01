@@ -1,7 +1,6 @@
 import { useMemo, type CSSProperties, type SyntheticEvent, type TransitionEvent } from 'react';
 import type { DrifCardConfig } from '../drifCards';
 import {
-  PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
   getPonchoDrifellaCardByFigureId,
   type PonchoDrifellaRevealPhase,
 } from '../lib/ponchoDrifellaReveal';
@@ -13,13 +12,12 @@ export type PonchoInventoryRevealOverlayProps = {
   active: boolean;
   closing: boolean;
   phase: PonchoDrifellaRevealPhase;
-  frame: number;
-  autoOpening: boolean;
   revealedIds?: number[];
   loading: boolean;
   note: string;
   boxName: string;
   boxFrameSrc?: string;
+  boxDisabled: boolean;
   onAdvance: () => void;
   onDismiss: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
@@ -40,8 +38,6 @@ type PonchoRevealOverlayProps = {
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
-
-const BOX_FRAME_COUNT = PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE.frameCount;
 
 export function PonchoRevealOverlay({
   overlayStyle,
@@ -114,13 +110,12 @@ export default function PonchoInventoryRevealOverlay({
   active,
   closing,
   phase,
-  frame,
-  autoOpening,
   revealedIds,
   loading,
   note,
   boxName,
   boxFrameSrc,
+  boxDisabled,
   onAdvance,
   onDismiss,
   onTransitionEnd,
@@ -130,7 +125,6 @@ export default function PonchoInventoryRevealOverlay({
     return getPonchoDrifellaCardByFigureId(revealedIds[0]);
   }, [revealedIds]);
   const stage = phase === 'preparing' ? 'preparing' : phase === 'revealed' && revealedCard ? 'revealed' : 'ready';
-  const boxDisabled = closing || phase !== 'ready' || autoOpening || frame >= BOX_FRAME_COUNT;
 
   return (
     <PonchoRevealOverlay

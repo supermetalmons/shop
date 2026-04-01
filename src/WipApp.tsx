@@ -196,7 +196,7 @@ function LocalPlayWipApp() {
         boxName={mysteryContainerName}
         boxFrameSrc={ponchoRevealController.boxFrameSrc}
         card={currentCard}
-        boxDisabled={ponchoRevealController.autoOpening || ponchoRevealController.revealComplete}
+        boxDisabled={ponchoRevealController.revealComplete}
         onAdvance={ponchoRevealController.handleAdvance}
       />
       <button
