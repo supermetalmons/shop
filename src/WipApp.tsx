@@ -7,6 +7,7 @@ import { DRIF_CARD_COUNT, DRIF_CARDS } from './drifCards';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   usePonchoDrifellaRevealController,
@@ -131,6 +132,7 @@ function LocalPlayWipApp() {
       ['--poncho-card-top' as never]: `${cardRect.top}px`,
       ['--poncho-card-width' as never]: `${cardRect.width}px`,
       ['--poncho-card-height' as never]: `${cardRect.height}px`,
+      ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
     };
   }, [targetRect]);
 

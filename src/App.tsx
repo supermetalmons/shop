@@ -51,6 +51,7 @@ import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URL,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
@@ -2814,6 +2815,7 @@ function App({ currentPath }: AppProps) {
                 ['--poncho-card-top' as never]: `${ponchoCardRect.top}px`,
                 ['--poncho-card-width' as never]: `${ponchoCardRect.width}px`,
                 ['--poncho-card-height' as never]: `${ponchoCardRect.height}px`,
+                ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
               }
             : {}),
         };

@@ -65,6 +65,7 @@ export function PonchoRevealOverlay({
 }: PonchoRevealOverlayProps) {
   const resolvedCardVisible = Boolean(card) && cardVisible;
   const packDiscarded = stage === 'revealed';
+  const cardLocked = packDiscarded && resolvedCardVisible && !cardInteractive;
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
   };
@@ -102,12 +103,12 @@ export function PonchoRevealOverlay({
         </button>
         {card ? (
           <div
-            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${cardInteractive ? ' wip-reveal__media--interactive' : ''}`}
+            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
             aria-hidden={!resolvedCardVisible || !cardInteractive}
           >
             <div
-              className={`reveal-overlay__media-item wip-reveal__card-item${cardInteractive ? ' wip-reveal__card-item--interactive' : ''}`}
-              onClick={cardInteractive ? stopOverlayDismiss : undefined}
+              className={`reveal-overlay__media-item wip-reveal__card-item${cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
+              onClick={cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
             >
               <div className="reveal-overlay__media-float">
                 <WipInteractiveCard card={card} interactive={cardInteractive} />
