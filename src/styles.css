@@ -1246,11 +1246,6 @@ body.wip-scroll-lock #root {
     transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
     filter: blur(0);
   }
-  12% {
-    opacity: 1;
-    transform: translate3d(0, -3%, 0) scale(1.02) rotate(0deg);
-    filter: blur(0);
-  }
   100% {
     opacity: 0;
     transform: translate3d(0, 142%, 0) scale(0.9) rotate(8deg);
