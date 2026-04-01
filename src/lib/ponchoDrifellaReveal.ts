@@ -6,7 +6,7 @@ const PONCHO_DRIFELLA_PUNCH_FRAME_IDS = [71, 72, 75, 77, 79] as const;
 const PONCHO_DRIFELLA_PACK_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/sequence_0';
 const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/punch_0';
 export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.webp';
-export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 150;
+export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
 export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 30;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
@@ -345,6 +345,10 @@ export function usePonchoDrifellaRevealController({
 
     if (!sequenceStarted) {
       if (!cardReady) {
+        if (punchFrameIndexRef.current > 0) {
+          startRevealRequest();
+          return;
+        }
         setPunchFrameIndex(1);
         setQueuedPostPunchAction('none');
         setPunchRunId((prev) => prev + 1);
