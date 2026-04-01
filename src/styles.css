@@ -1265,6 +1265,13 @@ body.wip-scroll-lock #root {
   transform: translate3d(0, 0, 0);
 }
 
+.wip-reveal__media .reveal-overlay__media-float,
+.wip-reveal__media.reveal-overlay__media--visible .reveal-overlay__media-float {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+
 .wip-reveal__media.wip-reveal__media--interactive.reveal-overlay__media--visible {
   pointer-events: auto;
 }
