@@ -91,7 +91,7 @@ function LocalPlayWipApp() {
   }, [ensureSoundReady]);
   const playRevealSound = useCallback(() => {
     const play = () => {
-      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, 0.42);
+      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, 0.3);
     };
     if (soundPlayer.isInitialized) {
       play();
