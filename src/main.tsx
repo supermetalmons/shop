@@ -14,8 +14,8 @@ if (!window.Buffer) {
 
 const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fullfillment';
-const canonicalDrifPath = '/notify_me';
-const drifPaths = new Set([canonicalDrifPath, '/Poncho_Drifella']);
+const canonicalDrifPath = '/notify-me';
+const drifPaths = new Set([canonicalDrifPath]);
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
 
@@ -26,6 +26,7 @@ type RouteAlias = {
 
 const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
+  '/notify_me': { targetPath: canonicalDrifPath, replaceUrl: true },
 };
 
 const resolveCurrentPath = (): string => {

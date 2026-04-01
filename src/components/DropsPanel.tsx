@@ -40,7 +40,7 @@ export function DropsPanel() {
             <button
               type="button"
               className="drops-panel__link"
-              onClick={() => navigate('/Poncho_Drifella')}
+              onClick={() => navigate('/notify-me')}
             >
               <span className="drops-panel__link-text">Poncho Drifella</span>
             </button>

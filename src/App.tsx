@@ -3273,10 +3273,10 @@ function App({ currentPath }: AppProps) {
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    navigate('/notify_me');
+                    navigate('/notify-me');
                   }}
                 >
-                  /notify_me
+                  /notify-me
                 </button>
                 {allDrops.map((drop) => (
                   <button
