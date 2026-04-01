@@ -105,7 +105,10 @@ export function PonchoRevealOverlay({
             className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${cardInteractive ? ' wip-reveal__media--interactive' : ''}`}
             aria-hidden={!resolvedCardVisible || !cardInteractive}
           >
-            <div className="reveal-overlay__media-item wip-reveal__card-item" onClick={stopOverlayDismiss}>
+            <div
+              className={`reveal-overlay__media-item wip-reveal__card-item${cardInteractive ? ' wip-reveal__card-item--interactive' : ''}`}
+              onClick={cardInteractive ? stopOverlayDismiss : undefined}
+            >
               <div className="reveal-overlay__media-float">
                 <WipInteractiveCard card={card} interactive={cardInteractive} />
               </div>

@@ -457,6 +457,24 @@ export default function DrifEffectCard({
   }, [applyStylesFromSprings]);
 
   useEffect(() => {
+    if (interactive) return;
+    clearInteractTimer();
+    interactingRef.current = false;
+    setInteracting(false);
+    if (springUpdateRafRef.current !== null) {
+      cancelAnimationFrame(springUpdateRafRef.current);
+      springUpdateRafRef.current = null;
+    }
+    pendingSpringUpdateRef.current = null;
+
+    const springs = springsRef.current;
+    setSpringTarget(springs.rotate, { x: 0, y: 0 }, { hard: true });
+    setSpringTarget(springs.glare, { x: 50, y: 50, o: 0 }, { hard: true });
+    setSpringTarget(springs.background, { x: 50, y: 50 }, { hard: true });
+    applyStylesFromSprings();
+  }, [applyStylesFromSprings, clearInteractTimer, interactive]);
+
+  useEffect(() => {
     const handleVisibilityChange = () => {
       visibleRef.current = document.visibilityState === 'visible';
       reset();
@@ -484,7 +502,7 @@ export default function DrifEffectCard({
   const cardClassName = [
     'drif-effect-card',
     glowType,
-    'interactive',
+    interactive ? 'interactive' : 'non-interactive',
     'masked',
     disableGlow ? 'no-glow' : 'glowing',
     interacting ? 'interacting' : '',
@@ -511,6 +529,7 @@ export default function DrifEffectCard({
     >
       <div className="drif-effect-card__translater">
         <button
+          type="button"
           className="drif-effect-card__rotator"
           onPointerEnter={interactive ? interact : undefined}
           onPointerMove={interactive ? interact : undefined}
@@ -519,8 +538,8 @@ export default function DrifEffectCard({
           onBlur={interactive ? () => interactEnd(0) : undefined}
           onClick={interactive ? onClick : undefined}
           aria-label={ariaLabel}
+          aria-disabled={interactive ? undefined : true}
           tabIndex={interactive ? 0 : -1}
-          disabled={!interactive}
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">

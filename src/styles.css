@@ -1280,12 +1280,17 @@ body.wip-scroll-lock #root {
   aspect-ratio: 5 / 7;
   filter: none;
   transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+}
+
+.wip-reveal__media.wip-reveal__media--interactive.reveal-overlay__media--visible .wip-reveal__card-item--interactive {
+  pointer-events: auto;
 }
 
 .wip-reveal__card-item .drif-effect-card {

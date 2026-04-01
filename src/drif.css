@@ -323,6 +323,11 @@
   pointer-events: auto;
 }
 
+.drif-effect-card.non-interactive .drif-effect-card__rotator {
+  pointer-events: none;
+  cursor: default;
+}
+
 button.drif-effect-card__rotator {
   border: none;
   background: transparent;
