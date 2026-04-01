@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 
-const PONCHO_DRIFELLA_PUNCH_FRAME_IDS = [71, 72, 75, 77, 79] as const;
+const PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS = [1, 2, 3, 4, 5] as const;
 const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_IDS = [13, 16, 19] as const;
 const PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_IDS = [30, 33, 38] as const;
 const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS = [56, 60, 64, 65, 66, 68, 70, 71, 72, 77] as const;
-const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/punch_0';
+const PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/recoverable_punches/1';
 const PONCHO_DRIFELLA_SEQUENCE_BASE_URL = '/Poncho_Drifella/pack/sequence';
 export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = '/Poncho_Drifella/pack/initial.webp';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
@@ -18,8 +18,8 @@ function buildPonchoDrifellaFrameUrls(baseUrl: string, framePrefix: string, fram
   return frameIds.map((frameId) => `${baseUrl}/${framePrefix}_${String(frameId).padStart(4, '0')}.webp`);
 }
 
-export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_IDS.map(
-  (frameId) => `${PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL}/4_${String(frameId).padStart(4, '0')}.webp`,
+export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_NUMBERS.map(
+  (frameNumber) => `${PONCHO_DRIFELLA_PUNCH_SEQUENCE_BASE_URL}/${frameNumber}.webp`,
 );
 export const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS = buildPonchoDrifellaFrameUrls(
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1_1`,
