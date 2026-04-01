@@ -1,5 +1,6 @@
 import { navigate } from '../navigation';
 import { resolveDropContent } from '../lib/dropContent';
+import { dropPath } from '../lib/dropConfig';
 
 const lsbContent = resolveDropContent('little_swag_boxes');
 const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
@@ -40,7 +41,7 @@ export function DropsPanel() {
             <button
               type="button"
               className="drops-panel__link"
-              onClick={() => navigate('/notify-me')}
+              onClick={() => navigate(dropPath('poncho_drifella'))}
             >
               <span className="drops-panel__link-text">Poncho Drifella</span>
             </button>
