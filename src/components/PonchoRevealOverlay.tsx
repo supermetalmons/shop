@@ -67,10 +67,37 @@ type SessionReadyState = {
   sessionKey: string;
 };
 
+type SessionForegroundPaintState = {
+  frameSrc: string | null;
+  sessionKey: string;
+};
+
+type SessionVisibleLatchState = {
+  sessionKey: string;
+  visible: boolean;
+};
+
 function createSessionReadyState(sessionKey: string, ready = false): SessionReadyState {
   return {
     ready,
     sessionKey,
+  };
+}
+
+function createSessionForegroundPaintState(
+  sessionKey: string,
+  frameSrc: string | null = null,
+): SessionForegroundPaintState {
+  return {
+    frameSrc,
+    sessionKey,
+  };
+}
+
+function createSessionVisibleLatchState(sessionKey: string, visible = false): SessionVisibleLatchState {
+  return {
+    sessionKey,
+    visible,
   };
 }
 
@@ -237,11 +264,8 @@ export function PonchoRevealOverlay({
     ],
   );
   const [cardPaintReadyState, setCardPaintReadyState] = useState(() => createSessionReadyState(cardSessionKey));
-  const [cardVisibleLatchState, setCardVisibleLatchState] = useState(() => ({
-    sessionKey: cardSessionKey,
-    visible: false,
-  }));
-  const [foregroundPaintReadyState, setForegroundPaintReadyState] = useState(() => createSessionReadyState(cardSessionKey));
+  const [cardVisibleLatchState, setCardVisibleLatchState] = useState(() => createSessionVisibleLatchState(cardSessionKey));
+  const [foregroundPaintState, setForegroundPaintState] = useState(() => createSessionForegroundPaintState(cardSessionKey));
   const discardAnimationReportedRef = useRef(false);
   const retainedForegroundStateRef = useRef<{
     image: HTMLImageElement | null;
@@ -260,10 +284,10 @@ export function PonchoRevealOverlay({
       currentState.sessionKey === cardSessionKey ? currentState : createSessionReadyState(cardSessionKey),
     );
     setCardVisibleLatchState((currentState) =>
-      currentState.sessionKey === cardSessionKey ? currentState : { sessionKey: cardSessionKey, visible: false },
+      currentState.sessionKey === cardSessionKey ? currentState : createSessionVisibleLatchState(cardSessionKey),
     );
-    setForegroundPaintReadyState((currentState) =>
-      currentState.sessionKey === cardSessionKey ? currentState : createSessionReadyState(cardSessionKey),
+    setForegroundPaintState((currentState) =>
+      currentState.sessionKey === cardSessionKey ? currentState : createSessionForegroundPaintState(cardSessionKey),
     );
   }, [cardSessionKey]);
 
@@ -290,8 +314,9 @@ export function PonchoRevealOverlay({
     !boxFrameImage && controller.stage !== 'autoplay' && controller.stage !== 'revealed'
       ? controller.boxFrameSrc
       : undefined;
-  const foregroundFrameImage = controller.foregroundFrameSrc
-    ? imageCache.resident.get(controller.foregroundFrameSrc)
+  const currentForegroundFrameSrc = controller.foregroundFrameSrc ?? null;
+  const foregroundFrameImage = currentForegroundFrameSrc
+    ? imageCache.resident.get(currentForegroundFrameSrc)
     : undefined;
   const retainedForegroundImage =
     retainedForegroundStateRef.current.sessionKey === cardSessionKey
@@ -299,50 +324,45 @@ export function PonchoRevealOverlay({
       : null;
   const displayedForegroundImage = foregroundFrameImage || retainedForegroundImage || undefined;
   const foregroundPaintReady =
-    foregroundPaintReadyState.sessionKey === cardSessionKey && foregroundPaintReadyState.ready;
+    foregroundPaintState.sessionKey === cardSessionKey &&
+    currentForegroundFrameSrc !== null &&
+    foregroundPaintState.frameSrc === currentForegroundFrameSrc;
 
-  useEffect(() => {
-    if (retainedForegroundStateRef.current.sessionKey !== cardSessionKey) {
+  const handleForegroundDrawComplete = useCallback(() => {
+    if (!currentForegroundFrameSrc) return;
+    if (retainedForegroundStateRef.current.sessionKey !== cardSessionKey || retainedForegroundStateRef.current.image !== foregroundFrameImage) {
       retainedForegroundStateRef.current = {
         image: foregroundFrameImage || null,
         sessionKey: cardSessionKey,
       };
-      return;
     }
-    if (foregroundFrameImage) {
-      retainedForegroundStateRef.current.image = foregroundFrameImage;
-    }
-  }, [cardSessionKey, foregroundFrameImage]);
+    setForegroundPaintState((currentState) => {
+      if (currentState.sessionKey === cardSessionKey && currentState.frameSrc === currentForegroundFrameSrc) {
+        return currentState;
+      }
+      return createSessionForegroundPaintState(cardSessionKey, currentForegroundFrameSrc);
+    });
+  }, [cardSessionKey, currentForegroundFrameSrc, foregroundFrameImage]);
 
-  const handleForegroundDrawComplete = useCallback(
-    () => {
-      setForegroundPaintReadyState((currentState) => {
-        if (currentState.sessionKey === cardSessionKey && currentState.ready) {
-          return currentState;
-        }
-        return createSessionReadyState(cardSessionKey, true);
-      });
-    },
-    [cardSessionKey],
-  );
+  const revealReadyForCard =
+    Boolean(displayedForegroundImage) &&
+    controller.cardVisible &&
+    foregroundPaintReady;
 
-  useEffect(() => {
-    if (cardVisibleLatched || !controller.cardVisible || !displayedForegroundImage || !foregroundPaintReady) return;
+  useLayoutEffect(() => {
+    if (cardVisibleLatched || !revealReadyForCard) return;
     setCardVisibleLatchState((currentState) => {
       if (currentState.sessionKey === cardSessionKey && currentState.visible) {
         return currentState;
       }
-      return {
-        sessionKey: cardSessionKey,
-        visible: true,
-      };
+      return createSessionVisibleLatchState(cardSessionKey, true);
     });
-  }, [cardSessionKey, cardVisibleLatched, controller.cardVisible, displayedForegroundImage, foregroundPaintReady]);
+  }, [cardSessionKey, cardVisibleLatched, revealReadyForCard]);
 
   const resolvedRevealVisible =
     Boolean(displayedForegroundImage) &&
-    (cardVisibleLatched || (controller.cardVisible && foregroundPaintReady));
-  const resolvedCardVisible = Boolean(card) && resolvedRevealVisible;
+    cardVisibleLatched;
+  const resolvedCardVisible = Boolean(card) && cardVisibleLatched;
   const packDiscarded = controller.phase === 'revealed' && resolvedRevealVisible;
   const cardLocked = packDiscarded && resolvedCardVisible && !controller.cardInteractive;
   const revealComplete = controller.revealComplete && (resolvedRevealVisible || controller.revealFailedOpen);
@@ -457,7 +477,7 @@ export function PonchoRevealOverlay({
               className="reveal-overlay__image wip-reveal__foreground-image"
               drawMode="immediate"
               onDrawComplete={handleForegroundDrawComplete}
-              redrawToken={cardSessionKey}
+              redrawToken={`${cardSessionKey}:${currentForegroundFrameSrc ?? 'none'}`}
             />
           </div>
         ) : null}
