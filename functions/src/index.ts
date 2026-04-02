@@ -381,6 +381,8 @@ function heliusRpcUrl() {
 const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 // Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
 const ACCOUNT_PENDING_OPEN_BOX = Buffer.from('4507451af00c43a1', 'hex');
+// Anchor discriminator = sha256("account:DeliveryRecord")[0..8]
+const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 // Anchor discriminator = sha256("global:close_delivery")[0..8]
@@ -394,6 +396,11 @@ const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
 const MAX_DELIVERY_ITEMS = 32;
+const DELIVERY_RECOVERY_LEASE_MS = 90_000;
+const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
+const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
+const DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS = [30_000, 2 * 60 * 1000, 10 * 60 * 1000] as const;
+const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
   MIN_ITEMS_PER_BOX,
   ...Object.values(DROP_RUNTIMES).map((runtime) => runtime.itemsPerBox),
@@ -1729,6 +1736,33 @@ function decodePendingOpenBox(data: Buffer): {
   return { owner, boxAsset, dudeAssets, createdSlot, bump };
 }
 
+function decodeDeliveryRecord(data: Buffer): {
+  payer: PublicKey;
+  deliveryFeeLamports: number;
+  itemCount: number;
+} {
+  if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
+  const expectedLen = 8 + 32 + 8 + 2;
+  if (data.length < expectedLen) {
+    throw new HttpsError('failed-precondition', 'Invalid DeliveryRecord account data (too short)');
+  }
+  const disc = data.subarray(0, 8);
+  if (!disc.equals(ACCOUNT_DELIVERY_RECORD)) {
+    throw new HttpsError('failed-precondition', 'Invalid DeliveryRecord account discriminator');
+  }
+  let o = 8;
+  const payer = new PublicKey(data.subarray(o, o + 32));
+  o += 32;
+  const feeLamportsBig = data.readBigUInt64LE(o);
+  if (feeLamportsBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new HttpsError('failed-precondition', 'delivery_fee_lamports is too large');
+  }
+  const deliveryFeeLamports = Number(feeLamportsBig);
+  o += 8;
+  const itemCount = data.readUInt16LE(o);
+  return { payer, deliveryFeeLamports, itemCount };
+}
+
 async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
   const dropRuntime = getDropRuntime(dropId);
   const itemsPerBox = dropRuntime.itemsPerBox;
@@ -2199,6 +2233,7 @@ type DeliveryOrderSummary = {
   deliveryId: number;
   status: string;
   createdAt?: number;
+  processingAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
   fulfillmentStatus?: FulfillmentStatus;
@@ -2249,6 +2284,7 @@ function toDeliveryOrderSummary(docId: string, order: any, docPath: string): Del
     deliveryId,
     status: typeof order?.status === 'string' ? order.status : 'unknown',
     createdAt: toMillisMaybe(order?.createdAt),
+    processingAt: toMillisMaybe(order?.processingAt),
     processedAt: toMillisMaybe(order?.processedAt),
     items,
     fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
@@ -2261,6 +2297,7 @@ const DELIVERY_ORDER_SUMMARY_FIELDS = [
   'deliveryId',
   'status',
   'createdAt',
+  'processingAt',
   'processedAt',
   'items',
   'fulfillmentStatus',
@@ -2274,15 +2311,25 @@ function toDeliveryOrderSummaries(docs: Array<{ id: string; data(): any; ref: { 
 }
 
 async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
-  const snap = await db
-    .collectionGroup('deliveryOrders')
-    .where('owner', '==', ownerWallet)
-    .where('status', '==', 'ready_to_ship')
-    .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
-    .get();
+  const [readySnap, processingSnap] = await Promise.all([
+    db
+      .collectionGroup('deliveryOrders')
+      .where('owner', '==', ownerWallet)
+      .where('status', '==', 'ready_to_ship')
+      .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
+      .get(),
+    db
+      .collectionGroup('deliveryOrders')
+      .where('owner', '==', ownerWallet)
+      .where('status', '==', 'processing')
+      .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
+      .get(),
+  ]);
 
-  const summaries = toDeliveryOrderSummaries(snap.docs);
-  summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
+  const summaries = toDeliveryOrderSummaries([...readySnap.docs, ...processingSnap.docs]);
+  summaries.sort(
+    (a, b) => (b.processedAt ?? b.processingAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.processingAt ?? a.createdAt ?? 0),
+  );
   return summaries;
 }
 
@@ -2442,6 +2489,419 @@ function getPayerFromTx(tx: any): PublicKey | null {
   return accounts.length ? accounts[0] : null;
 }
 
+type DeliveryRecoveryOutcome =
+  | 'recovered'
+  | 'failed'
+  | 'lease_active'
+  | 'attempt_capped'
+  | 'not_eligible'
+  | 'missing_delivery'
+  | 'not_found'
+  | 'skipped_status';
+
+type RecoverMyDeliveryOrdersItemResult = {
+  dropId: string;
+  deliveryId: number;
+  statusBefore: string;
+  outcome: DeliveryRecoveryOutcome;
+  verification: 'delivery_pda';
+  message?: string;
+  errorCode?: string;
+};
+
+type RecoverMyDeliveryOrdersResult = {
+  attempted: number;
+  recovered: number;
+  remainingProcessing: number;
+  nextCheckAt?: number;
+  results: RecoverMyDeliveryOrdersItemResult[];
+};
+
+type DeliveryRecoveryState = {
+  nextCheckAt?: number;
+};
+
+type DeliveryOrderDoc = {
+  id: string;
+  ref: FirebaseFirestore.DocumentReference;
+  data(): any;
+};
+
+function normalizeRecoveryErrorCode(err: unknown): string | undefined {
+  const code = typeof (err as any)?.code === 'string' ? String((err as any).code) : '';
+  const normalized = code.startsWith('functions/') ? code.slice('functions/'.length) : code;
+  return normalized || undefined;
+}
+
+function normalizeRecoveryMessage(message: unknown): string | undefined {
+  const value = String(message || '').trim();
+  if (!value) return undefined;
+  return value.slice(0, 300);
+}
+
+function processingDeliveryRecoveryReferenceMs(order: any): number {
+  const createdAt = toMillisMaybe(order?.createdAt) ?? 0;
+  const processingAt = toMillisMaybe(order?.processingAt) ?? 0;
+  const lastAttemptAt = toMillisMaybe(order?.receiptRecovery?.lastAttemptAt) ?? 0;
+  return Math.max(lastAttemptAt, processingAt, createdAt);
+}
+
+function preparedDeliveryRecoveryCheckCount(order: any): number {
+  const raw = Number(order?.receiptRecovery?.preparedProbeCount || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.floor(raw);
+}
+
+function nextPreparedDeliveryRecoveryDelayMs(probeCount: number): number | null {
+  return DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS[probeCount] ?? null;
+}
+
+function preparedDeliveryRecoveryNextCheckMs(order: any): number | null {
+  const probeCount = preparedDeliveryRecoveryCheckCount(order);
+  if (probeCount >= MAX_PREPARED_DELIVERY_RECOVERY_CHECKS) return null;
+  const scheduledAt = toMillisMaybe(order?.receiptRecovery?.nextPreparedProbeAt);
+  if (scheduledAt && scheduledAt > 0) return scheduledAt;
+  const createdAt = toMillisMaybe(order?.createdAt) ?? 0;
+  if (createdAt <= 0) return Date.now();
+  const initialDelayMs = nextPreparedDeliveryRecoveryDelayMs(probeCount) ?? 0;
+  return createdAt + initialDelayMs;
+}
+
+function processingDeliveryRecoveryNextCheckMs(order: any, nowMs: number): number | null {
+  const status = typeof order?.status === 'string' ? order.status : '';
+  if (status !== 'processing') return null;
+  const leaseExpiresAt = toMillisMaybe(order?.receiptRecovery?.leaseExpiresAt) ?? 0;
+  const lastAttemptAt = toMillisMaybe(order?.receiptRecovery?.lastAttemptAt) ?? 0;
+  const retryAt = lastAttemptAt > 0 ? lastAttemptAt + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS : nowMs;
+  const nextCheckAt = Math.max(retryAt, leaseExpiresAt);
+  return Math.max(nowMs, nextCheckAt);
+}
+
+function nextDeliveryRecoveryCheckMs(current: number | undefined, candidate: number | null): number | undefined {
+  if (candidate == null || !Number.isFinite(candidate)) return current;
+  if (current == null || candidate < current) return candidate;
+  return current;
+}
+
+function deliveryRecoveryPriorityMs(order: any): number {
+  const status = typeof order?.status === 'string' ? order.status : '';
+  const createdAt = toMillisMaybe(order?.createdAt) ?? 0;
+  if (status === 'processing') return processingDeliveryRecoveryReferenceMs(order);
+  if (status === 'prepared') return preparedDeliveryRecoveryNextCheckMs(order) ?? createdAt;
+  return createdAt;
+}
+
+function compareDeliveryRecoveryCandidates(left: DeliveryOrderDoc, right: DeliveryOrderDoc): number {
+  const leftOrder = left.data() || {};
+  const rightOrder = right.data() || {};
+  const leftStatus = typeof leftOrder?.status === 'string' ? leftOrder.status : '';
+  const rightStatus = typeof rightOrder?.status === 'string' ? rightOrder.status : '';
+  if (leftStatus !== rightStatus) {
+    if (leftStatus === 'processing') return -1;
+    if (rightStatus === 'processing') return 1;
+  }
+  const leftPriority = deliveryRecoveryPriorityMs(leftOrder);
+  const rightPriority = deliveryRecoveryPriorityMs(rightOrder);
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+  return left.ref.path.localeCompare(right.ref.path);
+}
+
+function deliveryRecoveryEligibility(order: any, nowMs: number, force: boolean): {
+  eligible: boolean;
+  outcome?: DeliveryRecoveryOutcome;
+  message?: string;
+} {
+  const status = typeof order?.status === 'string' ? order.status : 'unknown';
+  if (status === 'processing') {
+    if (force) return { eligible: true };
+    const lastAttemptAt = toMillisMaybe(order?.receiptRecovery?.lastAttemptAt) ?? 0;
+    if (lastAttemptAt > 0 && nowMs - lastAttemptAt < DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS) {
+      return { eligible: false, outcome: 'not_eligible', message: 'processing order retry backoff is active' };
+    }
+    return { eligible: true };
+  }
+  if (status === 'prepared') {
+    if (force) return { eligible: true };
+    const nextCheckAt = preparedDeliveryRecoveryNextCheckMs(order);
+    if (nextCheckAt == null) {
+      return { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
+    }
+    if (nextCheckAt > nowMs) {
+      return { eligible: false, outcome: 'not_eligible', message: 'prepared order is not due for recovery yet' };
+    }
+    return { eligible: true };
+  }
+  if (status === 'prepared_abandoned') {
+    if (force) return { eligible: true };
+    return { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
+  }
+  return { eligible: false, outcome: 'skipped_status', message: `order status \`${status}\` is not recoverable` };
+}
+
+function orderResultBase(doc: DeliveryOrderDoc): {
+  dropId: string;
+  deliveryId: number;
+  statusBefore: string;
+} | null {
+  const order = doc.data() || {};
+  const deliveryId = Number(order?.deliveryId ?? doc.id);
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0) return null;
+  const dropId = resolveDeliveryOrderDropId(order, doc.ref.path);
+  if (!dropId) return null;
+  return {
+    dropId,
+    deliveryId,
+    statusBefore: typeof order?.status === 'string' ? order.status : 'unknown',
+  };
+}
+
+async function listOwnedDeliveryOrdersByStatus(
+  ownerWallet: string,
+  status: 'prepared' | 'processing',
+  filterDropId?: string,
+): Promise<DeliveryOrderDoc[]> {
+  const snap = await db
+    .collectionGroup('deliveryOrders')
+    .where('owner', '==', ownerWallet)
+    .where('status', '==', status)
+    .get();
+  if (!filterDropId) return snap.docs;
+  return snap.docs.filter((doc) => {
+    const dropId = resolveDeliveryOrderDropId(doc.data(), doc.ref.path);
+    return dropId === filterDropId;
+  });
+}
+
+async function fetchConfirmedDeliveryRecordAccount(params: {
+  dropRuntime: DropRuntime;
+  conn: Connection;
+  deliveryId: number;
+  context: string;
+  includeData?: boolean;
+}) {
+  const { dropRuntime, conn, deliveryId, context, includeData = true } = params;
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  const deliveryInfo = await withTimeout(
+    conn.getAccountInfo(
+      expectedDeliveryPda,
+      includeData ? { commitment: 'confirmed' } : { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+    ),
+    RPC_TIMEOUT_MS,
+    context,
+  );
+  if (!deliveryInfo) return null;
+  if (!deliveryInfo.owner.equals(dropRuntime.boxMinterProgramId)) {
+    throw new HttpsError('failed-precondition', 'Delivery record PDA is owned by the wrong program');
+  }
+  return { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo };
+}
+
+async function hasConfirmedDeliveryRecord(dropId: string, deliveryId: number): Promise<boolean> {
+  const dropRuntime = getDropRuntime(dropId);
+  const conn = connection(dropRuntime);
+  const deliveryRecord = await fetchConfirmedDeliveryRecordAccount({
+    dropRuntime,
+    conn,
+    deliveryId,
+    context: 'getAccountInfo:deliveryPda:recoveryEligibility',
+    includeData: false,
+  });
+  return Boolean(deliveryRecord);
+}
+
+async function recordPreparedDeliveryRecoveryMiss(
+  orderRef: FirebaseFirestore.DocumentReference,
+  order: any,
+  nowMs: number,
+): Promise<number | null> {
+  const probeCount = preparedDeliveryRecoveryCheckCount(order);
+  const nextProbeCount = probeCount + 1;
+  const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
+  await orderRef.update({
+    'receiptRecovery.preparedProbeCount': nextProbeCount,
+    'receiptRecovery.lastPreparedProbeAt': Timestamp.fromMillis(nowMs),
+    'receiptRecovery.nextPreparedProbeAt':
+      nextDelayMs != null ? Timestamp.fromMillis(nowMs + nextDelayMs) : FieldValue.delete(),
+    ...(nextDelayMs == null ? { status: 'prepared_abandoned', preparedRecoveryAbandonedAt: Timestamp.fromMillis(nowMs) } : {}),
+  });
+  return nextDelayMs != null ? nowMs + nextDelayMs : null;
+}
+
+async function stopPreparedDeliveryRecoveryChecks(
+  orderRef: FirebaseFirestore.DocumentReference,
+  order: any,
+  nowMs: number,
+) {
+  const probeCount = Math.max(preparedDeliveryRecoveryCheckCount(order), MAX_PREPARED_DELIVERY_RECOVERY_CHECKS);
+  await orderRef.update({
+    status: 'prepared_abandoned',
+    preparedRecoveryAbandonedAt: Timestamp.fromMillis(nowMs),
+    'receiptRecovery.preparedProbeCount': probeCount,
+    'receiptRecovery.lastPreparedProbeAt': Timestamp.fromMillis(nowMs),
+    'receiptRecovery.nextPreparedProbeAt': FieldValue.delete(),
+  });
+}
+
+async function fetchDeliveryRecoveryState(
+  ownerWallet: string,
+  filterDropId?: string,
+): Promise<DeliveryRecoveryState & { remainingProcessing: number }> {
+  const nowMs = Date.now();
+  const [processingDocs, preparedDocs] = await Promise.all([
+    listOwnedDeliveryOrdersByStatus(ownerWallet, 'processing', filterDropId),
+    listOwnedDeliveryOrdersByStatus(ownerWallet, 'prepared', filterDropId),
+  ]);
+
+  let nextCheckAt: number | undefined;
+  for (const doc of processingDocs) {
+    nextCheckAt = nextDeliveryRecoveryCheckMs(nextCheckAt, processingDeliveryRecoveryNextCheckMs(doc.data(), nowMs));
+  }
+  for (const doc of preparedDocs) {
+    nextCheckAt = nextDeliveryRecoveryCheckMs(nextCheckAt, preparedDeliveryRecoveryNextCheckMs(doc.data()));
+  }
+
+  return {
+    remainingProcessing: processingDocs.length,
+    ...(nextCheckAt != null ? { nextCheckAt } : {}),
+  };
+}
+
+async function acquireDeliveryRecoveryLease(
+  orderRef: FirebaseFirestore.DocumentReference,
+  ownerWallet: string,
+  nowMs: number,
+  force: boolean,
+): Promise<
+  | { acquired: true }
+  | {
+      acquired: false;
+      result: RecoverMyDeliveryOrdersItemResult;
+    }
+> {
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists) {
+      const deliveryId = Number(orderRef.id);
+      const dropId = dropIdFromDeliveryOrderPath(orderRef.path) || '';
+      return {
+        acquired: false as const,
+        result: {
+          dropId,
+          deliveryId,
+          statusBefore: 'missing',
+          outcome: 'not_found' as const,
+          verification: 'delivery_pda' as const,
+          message: 'delivery order not found',
+        },
+      };
+    }
+
+    const order = snap.data() as any;
+    const base = orderResultBase({
+      id: snap.id,
+      ref: snap.ref,
+      data: () => order,
+    });
+    if (!base) {
+      return {
+        acquired: false as const,
+        result: {
+          dropId: '',
+          deliveryId: Number(snap.id) || 0,
+          statusBefore: typeof order?.status === 'string' ? order.status : 'unknown',
+          outcome: 'failed' as const,
+          verification: 'delivery_pda' as const,
+          message: 'delivery order is missing recovery identifiers',
+        },
+      };
+    }
+
+    if (order?.owner && order.owner !== ownerWallet) {
+      return {
+        acquired: false as const,
+        result: {
+          ...base,
+          outcome: 'failed' as const,
+          verification: 'delivery_pda' as const,
+          message: 'order belongs to a different wallet',
+          errorCode: 'permission-denied',
+        },
+      };
+    }
+
+    const eligibility = deliveryRecoveryEligibility(order, nowMs, force);
+    if (!eligibility.eligible) {
+      return {
+        acquired: false as const,
+        result: {
+          ...base,
+          outcome: eligibility.outcome || 'not_eligible',
+          verification: 'delivery_pda' as const,
+          ...(eligibility.message ? { message: eligibility.message } : {}),
+        },
+      };
+    }
+
+    const leaseExpiresAt = toMillisMaybe(order?.receiptRecovery?.leaseExpiresAt) ?? 0;
+    if (leaseExpiresAt > nowMs) {
+      return {
+        acquired: false as const,
+        result: {
+          ...base,
+          outcome: 'lease_active' as const,
+          verification: 'delivery_pda' as const,
+          message: 'another client is already retrying this order',
+        },
+      };
+    }
+
+    const attemptCountRaw = Number(order?.receiptRecovery?.attemptCount || 0);
+    const attemptCount = Number.isFinite(attemptCountRaw) && attemptCountRaw > 0 ? Math.floor(attemptCountRaw) + 1 : 1;
+    tx.set(
+      orderRef,
+      {
+        receiptRecovery: {
+          leaseExpiresAt: Timestamp.fromMillis(nowMs + DELIVERY_RECOVERY_LEASE_MS),
+          lastAttemptAt: Timestamp.fromMillis(nowMs),
+          attemptCount,
+        },
+      },
+      { merge: true },
+    );
+    return { acquired: true as const };
+  });
+}
+
+async function finalizeDeliveryRecoveryAttempt(
+  orderRef: FirebaseFirestore.DocumentReference,
+  result: { errorCode?: string; message?: string },
+) {
+  await orderRef.update({
+    'receiptRecovery.leaseExpiresAt': FieldValue.delete(),
+    'receiptRecovery.lastErrorCode': result.errorCode ? result.errorCode : FieldValue.delete(),
+    'receiptRecovery.lastErrorMessage': result.message ? result.message : FieldValue.delete(),
+  });
+}
+
+async function buildProfileResponse(profileWallet: string, profileData: any, includeRecoveryState: boolean) {
+  const [orders, deliveryRecoveryState] = await Promise.all([
+    fetchDeliveryOrderHistory(profileWallet),
+    includeRecoveryState ? fetchDeliveryRecoveryState(profileWallet) : Promise.resolve<DeliveryRecoveryState | null>(null),
+  ]);
+  const deliveryRecovery =
+    deliveryRecoveryState?.nextCheckAt != null ? ({ nextCheckAt: deliveryRecoveryState.nextCheckAt } satisfies DeliveryRecoveryState) : null;
+
+  return {
+    profile: {
+      ...profileData,
+      wallet: profileWallet,
+      email: profileData.email,
+      orders,
+      ...(deliveryRecovery ? { deliveryRecovery } : {}),
+    },
+  };
+}
+
 export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   const schema = z.object({
     wallet: z.string().min(32).max(64),
@@ -2486,17 +2946,10 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(wallet)]);
+  const snap = await profileRef.get();
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
-  return {
-    profile: {
-      ...profileData,
-      wallet,
-      email: profileData.email,
-      orders,
-    },
-  };
+  return buildProfileResponse(wallet, profileData, true);
 });
 
 export const getProfile = onCallLogged('getProfile', async (request) => {
@@ -2516,19 +2969,12 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
   }
 
   const profileRef = db.doc(`profiles/${profileWallet}`);
-  const [snap, orders] = await Promise.all([profileRef.get(), fetchDeliveryOrderHistory(profileWallet)]);
+  const snap = await profileRef.get();
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists && profileWallet === wallet) {
     await profileRef.set({ wallet: profileWallet }, { merge: true });
   }
-  return {
-    profile: {
-      ...profileData,
-      wallet: profileWallet,
-      email: profileData.email,
-      orders,
-    },
-  };
+  return buildProfileResponse(profileWallet, profileData, profileWallet === wallet);
 });
 
 export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {
@@ -3129,6 +3575,7 @@ export const prepareDeliveryTx = onCallLogged(
     }
 
     const orderRef = db.doc(dropDeliveryOrderPath(dropId, candidate));
+    const nowMs = Date.now();
     try {
       await db.runTransaction(async (t) => {
         t.create(orderRef, {
@@ -3148,6 +3595,10 @@ export const prepareDeliveryTx = onCallLogged(
           ...(dropRuntime.deliveryLookupTableStr ? { lookupTable: dropRuntime.deliveryLookupTableStr } : {}),
           deliveryLamports,
           createdAt: FieldValue.serverTimestamp(),
+          receiptRecovery: {
+            preparedProbeCount: 0,
+            nextPreparedProbeAt: Timestamp.fromMillis(nowMs + DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS[0]),
+          },
         });
       });
     } catch (err) {
@@ -3184,9 +3635,8 @@ export const prepareDeliveryTx = onCallLogged(
 export type RetryIssueReceiptsArgs = {
   ownerWallet: string;
   deliveryId: number;
-  signature: string;
   dropId: string;
-};
+} & ({ verification: 'signature'; signature: string } | { verification: 'delivery_pda' });
 
 export type RetryIssueReceiptsResult = {
   processed: true;
@@ -3196,6 +3646,209 @@ export type RetryIssueReceiptsResult = {
   closeDeliveryTx: string | null;
 };
 
+type VerifiedReceiptIssuanceTarget = {
+  verification: 'signature' | 'delivery_pda';
+  signature: string | null;
+  expectedDeliveryPda: PublicKey;
+  expectedDeliveryBump: number;
+  targetAssetIds: string[];
+};
+
+function storedDeliverySignature(order: any): string | null {
+  const signature = typeof order?.deliverySignature === 'string' ? order.deliverySignature.trim() : '';
+  return signature || null;
+}
+
+async function verifyReceiptIssuanceBySignature(params: {
+  order: any;
+  ownerWallet: string;
+  deliveryId: number;
+  signature: string;
+  dropRuntime: DropRuntime;
+  conn: Connection;
+}): Promise<VerifiedReceiptIssuanceTarget> {
+  const { order, ownerWallet, deliveryId, signature, dropRuntime, conn } = params;
+  const tx = await withTimeout(
+    conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    'getTransaction:delivery',
+  );
+  if (!tx || tx.meta?.err) {
+    throw new HttpsError('failed-precondition', 'Delivery transaction not found or failed');
+  }
+
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== ownerWallet) {
+    throw new HttpsError('failed-precondition', 'Signature payer does not match owner');
+  }
+
+  const keys = resolveInstructionAccounts(tx);
+  const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
+    const program = keys[ix.programIdIndex];
+    if (!program || !program.equals(dropRuntime.boxMinterProgramId)) return false;
+    const dataField = (ix as any).data;
+    const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
+    return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
+  });
+  if (!deliverIx) {
+    throw new HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
+  }
+
+  const deliverDataField = (deliverIx as any).data;
+  const deliverData =
+    typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
+  const decoded = decodeDeliverArgs(deliverData);
+  if (decoded.deliveryId !== deliveryId) {
+    throw new HttpsError('failed-precondition', 'Delivery id mismatch', {
+      expectedId: deliveryId,
+      got: decoded.deliveryId,
+    });
+  }
+
+  const accountKeyIndexesRaw: any = (deliverIx as any).accountKeyIndexes;
+  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
+    ? (accountKeyIndexesRaw as number[])
+    : Array.from(accountKeyIndexesRaw || []);
+  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
+  const FIXED_DELIVER_ACCOUNTS = 9;
+  if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) {
+    throw new HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
+  }
+
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  const deliveryPdaFromIx = ixAccounts[8];
+  if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
+    throw new HttpsError('failed-precondition', 'Delivery PDA mismatch', {
+      expected: expectedDeliveryPda.toBase58(),
+      got: deliveryPdaFromIx?.toBase58(),
+    });
+  }
+
+  const itemIds: string[] = Array.isArray(order?.itemIds) ? order.itemIds : [];
+  const deliveredAssetsFromIx = ixAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
+  if (itemIds.length && deliveredAssetsFromIx.length && itemIds.length !== deliveredAssetsFromIx.length) {
+    throw new HttpsError('failed-precondition', 'Delivery item count mismatch', {
+      expected: itemIds.length,
+      got: deliveredAssetsFromIx.length,
+    });
+  }
+  if (itemIds.length) {
+    for (let i = 0; i < itemIds.length; i += 1) {
+      if (deliveredAssetsFromIx[i] && deliveredAssetsFromIx[i] !== itemIds[i]) {
+        throw new HttpsError('failed-precondition', 'Delivered asset list mismatch', {
+          index: i,
+          expected: itemIds[i],
+          got: deliveredAssetsFromIx[i],
+        });
+      }
+    }
+  }
+
+  const targetAssetIds = itemIds.length ? itemIds : deliveredAssetsFromIx;
+  if (!targetAssetIds.length) {
+    throw new HttpsError('failed-precondition', 'Delivery order is missing delivered item ids');
+  }
+
+  return {
+    verification: 'signature',
+    signature,
+    expectedDeliveryPda,
+    expectedDeliveryBump,
+    targetAssetIds,
+  };
+}
+
+async function verifyReceiptIssuanceByDeliveryRecord(params: {
+  order: any;
+  ownerWallet: string;
+  deliveryId: number;
+  dropRuntime: DropRuntime;
+  conn: Connection;
+}): Promise<VerifiedReceiptIssuanceTarget> {
+  const { order, ownerWallet, deliveryId, dropRuntime, conn } = params;
+  const itemIds: string[] = Array.isArray(order?.itemIds) ? order.itemIds.filter((id: any) => typeof id === 'string' && id) : [];
+  if (!itemIds.length) {
+    throw new HttpsError('failed-precondition', 'Delivery order is missing itemIds for recovery');
+  }
+
+  const deliveryRecordAccount = await fetchConfirmedDeliveryRecordAccount({
+    dropRuntime,
+    conn,
+    deliveryId,
+    context: 'getAccountInfo:deliveryPda:recovery',
+  });
+  if (!deliveryRecordAccount) {
+    throw new HttpsError('failed-precondition', 'Delivery record PDA not found');
+  }
+  const { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo } = deliveryRecordAccount;
+  const storedDeliveryPda = typeof order?.deliveryPda === 'string' ? order.deliveryPda.trim() : '';
+  if (storedDeliveryPda && storedDeliveryPda !== expectedDeliveryPda.toBase58()) {
+    throw new HttpsError('failed-precondition', 'Stored delivery PDA does not match the expected delivery PDA', {
+      expected: expectedDeliveryPda.toBase58(),
+      got: storedDeliveryPda,
+    });
+  }
+
+  const deliveryRecord = decodeDeliveryRecord(Buffer.from(deliveryInfo.data));
+  if (deliveryRecord.payer.toBase58() !== ownerWallet) {
+    throw new HttpsError('failed-precondition', 'Delivery record payer does not match owner');
+  }
+  if (deliveryRecord.itemCount !== itemIds.length) {
+    throw new HttpsError('failed-precondition', 'Delivery record item count mismatch', {
+      expected: itemIds.length,
+      got: deliveryRecord.itemCount,
+    });
+  }
+
+  const expectedLamports = Number(order?.deliveryLamports);
+  if (Number.isFinite(expectedLamports) && expectedLamports >= 0 && deliveryRecord.deliveryFeeLamports !== expectedLamports) {
+    throw new HttpsError('failed-precondition', 'Delivery record fee mismatch', {
+      expected: expectedLamports,
+      got: deliveryRecord.deliveryFeeLamports,
+    });
+  }
+
+  return {
+    verification: 'delivery_pda',
+    signature: storedDeliverySignature(order),
+    expectedDeliveryPda,
+    expectedDeliveryBump,
+    targetAssetIds: itemIds,
+  };
+}
+
+async function verifyReceiptIssuanceTarget(params: {
+  args: RetryIssueReceiptsArgs;
+  order: any;
+  ownerWallet: string;
+  deliveryId: number;
+  dropRuntime: DropRuntime;
+  conn: Connection;
+}): Promise<VerifiedReceiptIssuanceTarget> {
+  const { args, order, ownerWallet, deliveryId, dropRuntime, conn } = params;
+  if (args.verification === 'signature') {
+    const signature = String(args.signature || '').trim();
+    if (!signature) {
+      throw new HttpsError('invalid-argument', 'signature is required');
+    }
+    return verifyReceiptIssuanceBySignature({
+      order,
+      ownerWallet,
+      deliveryId,
+      signature,
+      dropRuntime,
+      conn,
+    });
+  }
+  return verifyReceiptIssuanceByDeliveryRecord({
+    order,
+    ownerWallet,
+    deliveryId,
+    dropRuntime,
+    conn,
+  });
+}
+
 export async function retryIssueReceiptsForDeliveryOrder(
   args: RetryIssueReceiptsArgs,
 ): Promise<RetryIssueReceiptsResult> {
@@ -3203,10 +3856,6 @@ export async function retryIssueReceiptsForDeliveryOrder(
   const deliveryId = Math.floor(Number(args.deliveryId));
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
     throw new HttpsError('invalid-argument', 'deliveryId must be a positive integer');
-  }
-  const signature = String(args.signature || '').trim();
-  if (!signature) {
-    throw new HttpsError('invalid-argument', 'signature is required');
   }
   const dropId = requireDropId(args.dropId);
   const dropRuntime = getDropRuntime(dropId);
@@ -3302,82 +3951,18 @@ export async function retryIssueReceiptsForDeliveryOrder(
     };
   }
 
-  const tx = await withTimeout(
-    conn.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
-    RPC_TIMEOUT_MS,
-    'getTransaction:delivery',
-  );
-  if (!tx || tx.meta?.err) {
-    throw new HttpsError('failed-precondition', 'Delivery transaction not found or failed');
-  }
-
-  const payer = getPayerFromTx(tx);
-  if (!payer || payer.toBase58() !== ownerWallet) {
-    throw new HttpsError('failed-precondition', 'Signature payer does not match owner');
-  }
-
-  // Find the deliver instruction and decode delivery id + bump.
-  const keys = resolveInstructionAccounts(tx);
-  const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
-    const program = keys[ix.programIdIndex];
-    if (!program || !program.equals(dropRuntime.boxMinterProgramId)) return false;
-    const dataField = (ix as any).data;
-    const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
-    return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
+  const verified = await verifyReceiptIssuanceTarget({
+    args,
+    order,
+    ownerWallet,
+    deliveryId,
+    dropRuntime,
+    conn,
   });
-  if (!deliverIx) {
-    throw new HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
-  }
-  const deliverDataField = (deliverIx as any).data;
-  const deliverData =
-    typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
-  const decoded = decodeDeliverArgs(deliverData);
-  if (decoded.deliveryId !== deliveryId) {
-    throw new HttpsError('failed-precondition', 'Delivery id mismatch', {
-      expectedId: deliveryId,
-      got: decoded.deliveryId,
-    });
-  }
-
-  const accountKeyIndexesRaw: any = (deliverIx as any).accountKeyIndexes;
-  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
-    ? (accountKeyIndexesRaw as number[])
-    : Array.from(accountKeyIndexesRaw || []);
-  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
-  const FIXED_DELIVER_ACCOUNTS = 9;
-  if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) {
-    throw new HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
-  }
-
-  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
-  const deliveryPdaFromIx = ixAccounts[8];
-  if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
-    throw new HttpsError('failed-precondition', 'Delivery PDA mismatch', {
-      expected: expectedDeliveryPda.toBase58(),
-      got: deliveryPdaFromIx?.toBase58(),
-    });
-  }
-
-  // Determine expected delivered assets (prefer order.itemIds; fall back to tx accounts).
-  const itemIds: string[] = Array.isArray(order.itemIds) ? order.itemIds : [];
-  const deliveredAssetsFromIx = ixAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
-  if (itemIds.length && deliveredAssetsFromIx.length && itemIds.length !== deliveredAssetsFromIx.length) {
-    throw new HttpsError('failed-precondition', 'Delivery item count mismatch', {
-      expected: itemIds.length,
-      got: deliveredAssetsFromIx.length,
-    });
-  }
-  if (itemIds.length) {
-    for (let i = 0; i < itemIds.length; i += 1) {
-      if (deliveredAssetsFromIx[i] && deliveredAssetsFromIx[i] !== itemIds[i]) {
-        throw new HttpsError('failed-precondition', 'Delivered asset list mismatch', {
-          index: i,
-          expected: itemIds[i],
-          got: deliveredAssetsFromIx[i],
-        });
-      }
-    }
-  }
+  const signature = verified.signature;
+  const expectedDeliveryPda = verified.expectedDeliveryPda;
+  const expectedDeliveryBump = verified.expectedDeliveryBump;
+  const targetAssetIds = verified.targetAssetIds;
 
   // Ensure the cosigner key matches the on-chain admin (custody vault).
   const cfgInfo = await withTimeout(
@@ -3405,9 +3990,23 @@ export async function retryIssueReceiptsForDeliveryOrder(
 
   // Best-effort processing lock (avoid concurrent minting).
   await orderRef.set(
-    { dropId, status: 'processing', deliverySignature: signature, processingAt: FieldValue.serverTimestamp() },
+    {
+      dropId,
+      status: 'processing',
+      ...(signature ? { deliverySignature: signature } : {}),
+      ...(order?.processingAt ? {} : { processingAt: FieldValue.serverTimestamp() }),
+    },
     { merge: true },
   );
+  await orderRef
+    .update({
+      'receiptRecovery.lastPreparedProbeAt': FieldValue.delete(),
+      'receiptRecovery.preparedProbeCount': FieldValue.delete(),
+      'receiptRecovery.nextPreparedProbeAt': FieldValue.delete(),
+    })
+    .catch(() => {
+      // Ignore cleanup races; prepared-order probing is operational only.
+    });
 
   const expectedOrderItems: any[] = Array.isArray(order.items) ? order.items : [];
   const byAssetId = new Map<string, any>();
@@ -3415,7 +4014,6 @@ export async function retryIssueReceiptsForDeliveryOrder(
     if (it && typeof it.assetId === 'string') byAssetId.set(it.assetId, it);
   });
 
-  const targetAssetIds = itemIds.length ? itemIds : deliveredAssetsFromIx;
   const targetAssetPks = targetAssetIds.map((id) => new PublicKey(id));
   const infos = await withTimeout(
     conn.getMultipleAccountsInfo(targetAssetPks, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
@@ -3676,7 +4274,7 @@ export async function retryIssueReceiptsForDeliveryOrder(
     {
       dropId,
       status: 'ready_to_ship',
-      deliverySignature: signature,
+      ...(signature ? { deliverySignature: signature } : {}),
       receiptsMinted,
       receiptTxs,
       ...(irlClaims.length ? { irlClaims, irlClaimsUpdatedAt: FieldValue.serverTimestamp() } : {}),
@@ -3684,6 +4282,16 @@ export async function retryIssueReceiptsForDeliveryOrder(
     },
     { merge: true },
   );
+  await orderRef.update({
+    'receiptRecovery.leaseExpiresAt': FieldValue.delete(),
+    'receiptRecovery.lastErrorCode': FieldValue.delete(),
+    'receiptRecovery.lastErrorMessage': FieldValue.delete(),
+    'receiptRecovery.lastPreparedProbeAt': FieldValue.delete(),
+    'receiptRecovery.preparedProbeCount': FieldValue.delete(),
+    'receiptRecovery.nextPreparedProbeAt': FieldValue.delete(),
+  }).catch(() => {
+    // Ignore cleanup races; recovery metadata is operational only.
+  });
 
   // Close delivery PDA (reclaim rent) after burning + minting + Firestore marking.
   let closeDeliveryTx: string | null = null;
@@ -3744,16 +4352,270 @@ export const issueReceipts = onCallLogged(
     const { owner, deliveryId, signature, dropId: requestDropId } = parseRequest(schema, request.data);
     const ownerWallet = normalizeWallet(owner);
     if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
+    const dropId = requireDropId(requestDropId);
+    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+    const orderSnap = await orderRef.get();
+    const order = orderSnap.exists ? orderSnap.data() as any : null;
+    let leaseAcquired = false;
 
-    return retryIssueReceiptsForDeliveryOrder({
-      ownerWallet,
-      deliveryId,
-      signature,
-      dropId: requestDropId,
-    });
+    if (order?.status !== 'ready_to_ship') {
+      const lease = await acquireDeliveryRecoveryLease(orderRef, ownerWallet, Date.now(), true);
+      if ('result' in lease) {
+        if (lease.result.outcome === 'lease_active') {
+          throw new HttpsError('aborted', lease.result.message || 'another client is already retrying this order');
+        }
+        if (lease.result.outcome === 'not_found') {
+          throw new HttpsError('not-found', lease.result.message || 'Delivery order not found');
+        }
+        if (lease.result.errorCode === 'permission-denied') {
+          throw new HttpsError('permission-denied', lease.result.message || 'Order belongs to a different wallet');
+        }
+        if (lease.result.outcome !== 'skipped_status') {
+          throw new HttpsError('failed-precondition', lease.result.message || 'Unable to start receipt issuance');
+        }
+      } else {
+        leaseAcquired = true;
+      }
+    }
+
+    try {
+      const result = await retryIssueReceiptsForDeliveryOrder({
+        ownerWallet,
+        deliveryId,
+        dropId,
+        verification: 'signature',
+        signature,
+      });
+      if (leaseAcquired) {
+        await finalizeDeliveryRecoveryAttempt(orderRef, {}).catch(() => {
+          // Ignore cleanup races; recovery metadata is operational only.
+        });
+      }
+      return result;
+    } catch (err) {
+      if (leaseAcquired) {
+        await finalizeDeliveryRecoveryAttempt(orderRef, {
+          errorCode: normalizeRecoveryErrorCode(err),
+          message: normalizeRecoveryMessage(err instanceof Error ? err.message : String(err)),
+        }).catch(() => {
+          // Ignore cleanup races; recovery metadata is operational only.
+        });
+      }
+      throw err;
+    }
   },
   { secrets: [COSIGNER_SECRET] },
 );
+
+export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', async (request) => {
+  const { wallet } = await requireWalletSession(request);
+  const schema = z.object({
+    dropId: z.string().min(1).max(64).optional(),
+    deliveryId: z.number().int().positive().optional(),
+    force: z.boolean().optional(),
+  });
+  const { dropId: rawDropId, deliveryId, force = false } = parseRequest(schema, request.data || {});
+  if (deliveryId != null && !rawDropId) {
+    throw new HttpsError('invalid-argument', 'deliveryId requires dropId');
+  }
+  const filterDropId = rawDropId ? requireDropId(rawDropId) : undefined;
+  const nowMs = Date.now();
+  const results: RecoverMyDeliveryOrdersItemResult[] = [];
+  let attempted = 0;
+  let recovered = 0;
+
+  let candidateDocs: DeliveryOrderDoc[] = [];
+  if (filterDropId && deliveryId != null) {
+    const doc = await db.doc(dropDeliveryOrderPath(filterDropId, deliveryId)).get();
+    if (!doc.exists) {
+      const recoveryState = await fetchDeliveryRecoveryState(wallet, filterDropId);
+      return {
+        attempted,
+        recovered,
+        remainingProcessing: recoveryState.remainingProcessing,
+        ...(recoveryState.nextCheckAt != null ? { nextCheckAt: recoveryState.nextCheckAt } : {}),
+        results: [
+          {
+            dropId: filterDropId,
+            deliveryId,
+            statusBefore: 'missing',
+            outcome: 'not_found',
+            verification: 'delivery_pda',
+            message: 'delivery order not found',
+          },
+        ],
+      } satisfies RecoverMyDeliveryOrdersResult;
+    }
+    candidateDocs = [doc];
+  } else {
+    const [processingDocs, preparedDocs] = await Promise.all([
+      listOwnedDeliveryOrdersByStatus(wallet, 'processing', filterDropId),
+      listOwnedDeliveryOrdersByStatus(wallet, 'prepared', filterDropId),
+    ]);
+    candidateDocs = [...processingDocs, ...preparedDocs];
+  }
+
+  candidateDocs.sort(compareDeliveryRecoveryCandidates);
+
+  for (const doc of candidateDocs) {
+    const order = doc.data() || {};
+    const base = orderResultBase(doc);
+    if (!base) continue;
+
+    if (order?.owner && order.owner !== wallet) {
+      results.push({
+        ...base,
+        outcome: 'failed',
+        verification: 'delivery_pda',
+        errorCode: 'permission-denied',
+        message: 'order belongs to a different wallet',
+      });
+      continue;
+    }
+
+    if (base.statusBefore === 'ready_to_ship') {
+      results.push({
+        ...base,
+        outcome: 'recovered',
+        verification: 'delivery_pda',
+        message: 'order is already ready to ship',
+      });
+      recovered += 1;
+      continue;
+    }
+
+    if (base.statusBefore === 'prepared' && !force) {
+      let hasDeliveryRecord: boolean | null = null;
+      try {
+        hasDeliveryRecord = await hasConfirmedDeliveryRecord(base.dropId, base.deliveryId);
+      } catch (err) {
+        logger.warn('recoverMyDeliveryOrders:eligibilityCheckFailed', {
+          wallet,
+          dropId: base.dropId,
+          deliveryId: base.deliveryId,
+          verification: 'delivery_pda',
+          error: summarizeError(err),
+        });
+      }
+      if (hasDeliveryRecord === false) {
+        const nextPreparedCheckAt = await recordPreparedDeliveryRecoveryMiss(doc.ref, order, nowMs).catch((err) => {
+          logger.warn('recoverMyDeliveryOrders:preparedProbeUpdateFailed', {
+            wallet,
+            dropId: base.dropId,
+            deliveryId: base.deliveryId,
+            verification: 'delivery_pda',
+            error: summarizeError(err),
+          });
+          return null;
+        });
+        results.push({
+          ...base,
+          outcome: 'not_eligible',
+          verification: 'delivery_pda',
+          message:
+            nextPreparedCheckAt != null
+              ? 'prepared order has no confirmed on-chain delivery record yet'
+              : 'prepared order never produced a confirmed on-chain delivery record',
+        });
+        continue;
+      }
+    }
+
+    if (attempted >= MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL) {
+      results.push({
+        ...base,
+        outcome: 'attempt_capped',
+        verification: 'delivery_pda',
+        message: 'recovery attempt cap reached for this pass',
+      });
+      continue;
+    }
+
+    const lease = await acquireDeliveryRecoveryLease(doc.ref, wallet, nowMs, force);
+    if ('result' in lease) {
+      results.push(lease.result);
+      continue;
+    }
+
+    attempted += 1;
+    try {
+      const retryResult = await retryIssueReceiptsForDeliveryOrder({
+        ownerWallet: wallet,
+        deliveryId: base.deliveryId,
+        dropId: base.dropId,
+        verification: 'delivery_pda',
+      });
+      recovered += 1;
+      results.push({
+        ...base,
+        outcome: 'recovered',
+        verification: 'delivery_pda',
+        message: retryResult.processed ? 'receipts issued' : 'order already processed',
+      });
+      await finalizeDeliveryRecoveryAttempt(doc.ref, {});
+      logger.info('recoverMyDeliveryOrders:recovered', {
+        wallet,
+        dropId: base.dropId,
+        deliveryId: base.deliveryId,
+        verification: 'delivery_pda',
+      });
+    } catch (err) {
+      const errorCode = normalizeRecoveryErrorCode(err);
+      const message = normalizeRecoveryMessage(err instanceof Error ? err.message : String(err));
+      const outcome =
+        errorCode === 'failed-precondition' && /delivery record pda not found/i.test(String(err instanceof Error ? err.message : err))
+          ? 'missing_delivery'
+          : 'failed';
+      if (base.statusBefore === 'prepared') {
+        if (outcome === 'missing_delivery') {
+          await recordPreparedDeliveryRecoveryMiss(doc.ref, order, nowMs).catch((probeErr) => {
+            logger.warn('recoverMyDeliveryOrders:preparedProbeUpdateFailed', {
+              wallet,
+              dropId: base.dropId,
+              deliveryId: base.deliveryId,
+              verification: 'delivery_pda',
+              error: summarizeError(probeErr),
+            });
+          });
+        } else {
+          await stopPreparedDeliveryRecoveryChecks(doc.ref, order, nowMs).catch((probeErr) => {
+            logger.warn('recoverMyDeliveryOrders:preparedProbeStopFailed', {
+              wallet,
+              dropId: base.dropId,
+              deliveryId: base.deliveryId,
+              verification: 'delivery_pda',
+              error: summarizeError(probeErr),
+            });
+          });
+        }
+      }
+      results.push({
+        ...base,
+        outcome,
+        verification: 'delivery_pda',
+        ...(errorCode ? { errorCode } : {}),
+        ...(message ? { message } : {}),
+      });
+      await finalizeDeliveryRecoveryAttempt(doc.ref, { errorCode, message });
+      logger.warn('recoverMyDeliveryOrders:failed', {
+        wallet,
+        dropId: base.dropId,
+        deliveryId: base.deliveryId,
+        verification: 'delivery_pda',
+        error: summarizeError(err),
+      });
+    }
+  }
+
+  const recoveryState = await fetchDeliveryRecoveryState(wallet, filterDropId);
+  return {
+    attempted,
+    recovered,
+    remainingProcessing: recoveryState.remainingProcessing,
+    ...(recoveryState.nextCheckAt != null ? { nextCheckAt: recoveryState.nextCheckAt } : {}),
+    results,
+  } satisfies RecoverMyDeliveryOrdersResult;
+});
 
 export const prepareIrlClaimTx = onCallLogged(
   'prepareIrlClaimTx',

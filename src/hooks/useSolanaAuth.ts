@@ -3,37 +3,9 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { ensureAuthenticated, getProfile, solanaAuth } from '../lib/api';
+import { isRetryableCallableError, retryWithBackoff } from '../lib/callableErrors';
 import { Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetryableSolanaAuthError(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = typeof anyErr?.code === 'string' ? anyErr.code : '';
-  const normalized = code.startsWith('functions/') ? code.slice('functions/'.length) : code;
-  // Firebase callable transient-ish errors:
-  // https://firebase.google.com/docs/functions/callable#handle_errors
-  if (
-    normalized === 'unavailable' ||
-    normalized === 'deadline-exceeded' ||
-    normalized === 'resource-exhausted' ||
-    normalized === 'internal' ||
-    normalized === 'unknown' ||
-    normalized === 'cancelled' ||
-    normalized === 'aborted'
-  ) {
-    return true;
-  }
-
-  // Generic network-ish failures (browser fetch / transport issues).
-  const message = typeof anyErr?.message === 'string' ? anyErr.message : '';
-  if (err instanceof TypeError && /fetch/i.test(message)) return true;
-  if (/network|timeout|temporarily unavailable|connection/i.test(message.toLowerCase())) return true;
-  return false;
-}
 
 function isInvalidSignatureError(err: unknown): boolean {
   const anyErr = err as any;
@@ -58,9 +30,34 @@ export function useSolanaAuth() {
   const connectedWalletRef = useRef<string | null>(publicKey?.toBase58() || null);
   const connectedRef = useRef<boolean>(connected);
   const authAttemptEpochRef = useRef(0);
+  const loadCurrentSessionProfile = useCallback(async (expectedWallet: string): Promise<{ profile: Profile; token: string | null } | null> => {
+    const { profile } = await getProfile();
+    if (!profile || profile.wallet !== expectedWallet) return null;
+    return {
+      profile,
+      token: (await auth?.currentUser?.getIdToken()) || null,
+    };
+  }, []);
+  const clearLocalAuthState = useCallback((options?: { clearSessionWalletChecked?: boolean }) => {
+    setState({ profile: null, token: null, loading: false });
+    setError(null);
+    if (options?.clearSessionWalletChecked !== false) {
+      setSessionWalletChecked(null);
+    }
+    lastSignedRef.current = null;
+  }, []);
   const updateProfile = useCallback((profile: Profile | null) => {
     setState((prev) => ({ ...prev, profile }));
   }, []);
+  const refreshProfile = useCallback(async (): Promise<Profile | null> => {
+    if (!auth || !connected || !publicKey) return null;
+    const wallet = publicKey.toBase58();
+    const session = await loadCurrentSessionProfile(wallet);
+    if (!session) return null;
+    setState((prev) => ({ ...prev, profile: session.profile, token: session.token || prev.token }));
+    setSessionWalletChecked(wallet);
+    return session.profile;
+  }, [connected, loadCurrentSessionProfile, publicKey]);
 
   useEffect(() => {
     connectedWalletRef.current = publicKey?.toBase58() || null;
@@ -82,16 +79,13 @@ export function useSolanaAuth() {
     // Wallet account changed while remaining connected. Clear local auth state and
     // force a fresh Firebase anonymous session to avoid carrying over prior wallet mapping.
     authAttemptEpochRef.current += 1;
-    setState({ profile: null, token: null, loading: false });
-    setError(null);
-    setSessionWalletChecked(null);
-    lastSignedRef.current = null;
+    clearLocalAuthState();
     if (auth) {
       void firebaseSignOut(auth).catch(() => {
         // Ignore sign-out races; next auth call will recover.
       });
     }
-  }, [connected, publicKey]);
+  }, [clearLocalAuthState, connected, publicKey]);
 
   // On reload, restore the saved profile if this device already has a wallet session
   // (set by a previous `solanaAuth` call). This avoids requiring another wallet signature.
@@ -109,11 +103,9 @@ export function useSolanaAuth() {
     setError(null);
     (async () => {
       try {
-        const { profile } = await getProfile();
-        if (!profile || profile.wallet !== wallet) return;
-        const token = await auth.currentUser?.getIdToken();
-        if (!token) return;
-        if (!cancelled) setState({ profile, token, loading: false });
+        const session = await loadCurrentSessionProfile(wallet);
+        if (!session?.token) return;
+        if (!cancelled) setState({ profile: session.profile, token: session.token, loading: false });
       } catch {
         // No session (or expired) is totally normal on first visit; don't surface as an error.
       } finally {
@@ -127,7 +119,7 @@ export function useSolanaAuth() {
     return () => {
       cancelled = true;
     };
-  }, [connected, publicKey, sessionWalletChecked, state.profile?.wallet]);
+  }, [connected, loadCurrentSessionProfile, publicKey, sessionWalletChecked, state.profile?.wallet]);
 
   const signIn = useCallback(async () => {
     if (!auth) throw new Error('Firebase client is not configured');
@@ -173,27 +165,23 @@ export function useSolanaAuth() {
       }
 
       // Retry only the callable (idempotent) step with exponential backoff.
-      const maxAttempts = 4;
-      let lastErr: unknown;
-      let profile: Profile | null = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        try {
-          ({ profile } = await solanaAuth(wallet, message, signature));
+      const { profile } = await retryWithBackoff(
+        async () => {
+          const session = await solanaAuth(wallet, message, signature);
           ensureAttemptCurrent();
-          break;
-        } catch (err) {
-          lastErr = err;
-          ensureAttemptCurrent();
-          const shouldRetry = attempt < maxAttempts && isRetryableSolanaAuthError(err);
-          if (!shouldRetry) throw err;
-          const baseDelayMs = 400;
-          const maxDelayMs = 4000;
-          const exp = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
-          const jitter = Math.round(exp * 0.2 * Math.random());
-          await sleep(exp + jitter);
-        }
-      }
-      if (!profile) throw (lastErr ?? new Error('Failed to sign in'));
+          return session;
+        },
+        {
+          maxAttempts: 4,
+          baseDelayMs: 400,
+          maxDelayMs: 4000,
+          jitterRatio: 0.2,
+          shouldRetry: (err) => {
+            ensureAttemptCurrent();
+            return isRetryableCallableError(err);
+          },
+        },
+      );
 
       const token = await auth.currentUser?.getIdToken();
       ensureAttemptCurrent();
@@ -217,21 +205,16 @@ export function useSolanaAuth() {
 
   const signOut = useCallback(async () => {
     authAttemptEpochRef.current += 1;
-    setState({ profile: null, token: null, loading: false });
-    setError(null);
-    lastSignedRef.current = null;
+    clearLocalAuthState({ clearSessionWalletChecked: false });
     if (auth) await firebaseSignOut(auth);
-  }, []);
+  }, [clearLocalAuthState]);
 
   useEffect(() => {
     if (!connected) {
       authAttemptEpochRef.current += 1;
-      setState({ profile: null, token: null, loading: false });
-      setError(null);
-      setSessionWalletChecked(null);
-      lastSignedRef.current = null;
+      clearLocalAuthState();
     }
-  }, [connected]);
+  }, [clearLocalAuthState, connected]);
 
-  return { ...state, error, signIn, signOut, updateProfile };
+  return { ...state, error, signIn, signOut, updateProfile, refreshProfile };
 }

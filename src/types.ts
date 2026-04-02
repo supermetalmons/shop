@@ -52,16 +52,64 @@ export interface DeliveryOrderSummary {
   deliveryId: number;
   status: string;
   createdAt?: number;
+  processingAt?: number;
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
   fulfillmentStatus?: FulfillmentStatus;
   fulfillmentUpdatedAt?: number;
 }
 
+export interface DeliveryRecoveryState {
+  nextCheckAt?: number;
+}
+
 export interface Profile {
   wallet: string;
   email?: string;
   orders?: DeliveryOrderSummary[];
+  deliveryRecovery?: DeliveryRecoveryState;
+}
+
+export interface IssueReceiptsResult {
+  processed: boolean;
+  deliveryId: number;
+  receiptsMinted?: number;
+  receiptTxs?: string[];
+  closeDeliveryTx?: string | null;
+}
+
+export type DeliveryRecoveryOutcome =
+  | 'recovered'
+  | 'failed'
+  | 'lease_active'
+  | 'attempt_capped'
+  | 'not_eligible'
+  | 'missing_delivery'
+  | 'not_found'
+  | 'skipped_status';
+
+export interface RecoverDeliveryOrdersArgs {
+  dropId?: string;
+  deliveryId?: number;
+  force?: boolean;
+}
+
+export interface RecoverDeliveryOrdersItemResult {
+  dropId: string;
+  deliveryId: number;
+  statusBefore: string;
+  outcome: DeliveryRecoveryOutcome;
+  verification: 'delivery_pda';
+  message?: string;
+  errorCode?: string;
+}
+
+export interface RecoverDeliveryOrdersResult {
+  attempted: number;
+  recovered: number;
+  remainingProcessing: number;
+  nextCheckAt?: number;
+  results: RecoverDeliveryOrdersItemResult[];
 }
 
 export interface FulfillmentOrderAddress {

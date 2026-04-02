@@ -17,12 +17,14 @@ import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
   getProfile,
   listDeliveryOrderOwners,
+  recoverMyDeliveryOrders,
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
   saveEncryptedAddress,
   issueReceipts,
 } from './lib/api';
+import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
 import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount } from './lib/boxMinter';
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
@@ -70,7 +72,13 @@ import {
   shortAddress,
 } from './lib/solana';
 import { calculateDeliveryLamports } from './lib/shipping';
-import { DeliveryOrderSummary, InventoryItem, PendingOpenBox } from './types';
+import {
+  DeliveryOrderSummary,
+  InventoryItem,
+  PendingOpenBox,
+  RecoverDeliveryOrdersArgs,
+  RecoverDeliveryOrdersResult,
+} from './types';
 import { type FrontendDeploymentConfig, getFrontendDrop } from './config/deployment';
 import { isPonchoDrifellaFamilyDropId } from './config/dropsExtraContent';
 import { getNormalizedPathname, navigate } from './navigation';
@@ -264,9 +272,15 @@ function formatOrderStatus(status: string): string {
 }
 
 function formatOrderDate(order: DeliveryOrderSummary): string {
-  const timestamp = order.processedAt ?? order.createdAt;
+  const timestamp = order.processedAt ?? order.processingAt ?? order.createdAt;
   if (!timestamp) return 'Date pending';
   return new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
+}
+
+function displayOrderStatus(order: DeliveryOrderSummary): string {
+  const fulfillmentStatus = typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
+  if (fulfillmentStatus) return fulfillmentStatus;
+  return formatOrderStatus(order.status === 'ready_to_ship' ? 'Preparing' : order.status);
 }
 
 const MAX_SHIPMENT_ITEMS = 24;
@@ -305,6 +319,30 @@ type LocalMintedBox = {
   createdAt: number;
   expectedChainCount?: number;
 };
+
+function mergeDeliveryRecoveryRequest(
+  current: RecoverDeliveryOrdersArgs | null,
+  next: RecoverDeliveryOrdersArgs,
+): RecoverDeliveryOrdersArgs {
+  const merged: RecoverDeliveryOrdersArgs = { ...(current ?? {}) };
+  if (next.dropId) merged.dropId = next.dropId;
+  if (next.deliveryId != null) merged.deliveryId = next.deliveryId;
+  if (current?.force || next.force) merged.force = true;
+  return merged;
+}
+
+function deliveryRecoveryNextCheckAtFromResult(result: RecoverDeliveryOrdersResult): number | null {
+  return typeof result.nextCheckAt === 'number' && Number.isFinite(result.nextCheckAt) ? result.nextCheckAt : null;
+}
+
+function earliestDeliveryRecoveryCheckAt(...values: Array<number | null | undefined>): number | null {
+  let earliest: number | null = null;
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    if (earliest == null || value < earliest) earliest = value;
+  }
+  return earliest;
+}
 
 type RevealOverlayState = {
   id: string;
@@ -563,6 +601,7 @@ function App({ currentPath }: AppProps) {
     error: authError,
     signIn,
     updateProfile,
+    refreshProfile,
   } = useSolanaAuth();
   const connectedWallet = publicKey?.toBase58();
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
@@ -633,6 +672,14 @@ function App({ currentPath }: AppProps) {
     if (profile && profile.wallet === owner) return profile;
     return viewedProfileData?.profile || null;
   }, [owner, profile, viewedProfileData?.profile]);
+  const currentOwnerDeliveryRecoveryNextCheckAt =
+    typeof profile?.deliveryRecovery?.nextCheckAt === 'number' &&
+    isSignedInWallet &&
+    !isViewerMode &&
+    profile?.wallet === connectedWallet
+      ? profile.deliveryRecovery.nextCheckAt
+      : null;
+
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
   const forcedSoldOutStats = useMemo(
@@ -702,7 +749,11 @@ function App({ currentPath }: AppProps) {
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const authTokenRef = useRef<string | null>(null);
   const authTokenWalletRef = useRef<string | null>(null);
+  const connectedWalletRef = useRef<string | null>(connectedWallet || null);
   const signInPromiseRef = useRef<Promise<boolean> | null>(null);
+  const deliveryRecoveryPromiseRef = useRef<Promise<void> | null>(null);
+  const deliveryRecoveryQueuedRef = useRef<RecoverDeliveryOrdersArgs | null>(null);
+  const lastScheduledDeliveryRecoveryAtRef = useRef<number | null>(null);
   const authReadyRef = useRef(false);
   const authLoadingRef = useRef(false);
   const openSelectedLockRef = useRef(false);
@@ -714,6 +765,7 @@ function App({ currentPath }: AppProps) {
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const [ponchoRevealComplete, setPonchoRevealComplete] = useState(false);
+  const [deliveryRecoveryOverrideNextCheckAt, setDeliveryRecoveryOverrideNextCheckAt] = useState<number | null>(null);
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
@@ -825,9 +877,16 @@ function App({ currentPath }: AppProps) {
   }, [settingsOpen]);
 
   useEffect(() => {
+    connectedWalletRef.current = connectedWallet || null;
+  }, [connectedWallet]);
+
+  useEffect(() => {
     authTokenRef.current = null;
     authTokenWalletRef.current = null;
     signInPromiseRef.current = null;
+    deliveryRecoveryQueuedRef.current = null;
+    lastScheduledDeliveryRecoveryAtRef.current = null;
+    setDeliveryRecoveryOverrideNextCheckAt(null);
   }, [connectedWallet]);
 
   useEffect(() => {
@@ -911,6 +970,102 @@ function App({ currentPath }: AppProps) {
     signInPromiseRef.current = promise;
     return promise;
   };
+
+  const runDeliveryRecovery = useCallback(
+    async (request: RecoverDeliveryOrdersArgs = {}) => {
+      const recoveryWallet = connectedWallet;
+      if (!recoveryWallet || !isSignedInWallet || isViewerMode) return;
+
+      if (deliveryRecoveryPromiseRef.current) {
+        deliveryRecoveryQueuedRef.current = mergeDeliveryRecoveryRequest(deliveryRecoveryQueuedRef.current, request);
+        return deliveryRecoveryPromiseRef.current;
+      }
+
+      let promise: Promise<void>;
+      promise = (async () => {
+        let nextRequest: RecoverDeliveryOrdersArgs | null = request;
+
+        while (nextRequest) {
+          const activeRequest = nextRequest;
+          deliveryRecoveryQueuedRef.current = null;
+
+          try {
+            const result = await recoverMyDeliveryOrders(activeRequest);
+            const stillCurrent =
+              connectedWalletRef.current === recoveryWallet &&
+              authTokenWalletRef.current === recoveryWallet;
+
+            if (stillCurrent) {
+              const nextCheckAt = deliveryRecoveryNextCheckAtFromResult(result);
+              let refreshedProfile = false;
+              await Promise.all([
+                refreshProfile()
+                  .then(() => {
+                    refreshedProfile = true;
+                  })
+                  .catch(() => null),
+                result.attempted > 0 || result.recovered > 0
+                  ? refetchInventory().catch(() => undefined)
+                  : Promise.resolve(undefined),
+              ]);
+              setDeliveryRecoveryOverrideNextCheckAt(refreshedProfile ? null : nextCheckAt);
+            }
+          } catch (err) {
+            console.warn('Delivery recovery failed', err);
+            if (connectedWalletRef.current === recoveryWallet && authTokenWalletRef.current === recoveryWallet) {
+              setDeliveryRecoveryOverrideNextCheckAt(Date.now() + 30_000);
+            }
+          }
+
+          nextRequest = deliveryRecoveryQueuedRef.current;
+        }
+      })().finally(() => {
+        if (deliveryRecoveryPromiseRef.current === promise) {
+          deliveryRecoveryPromiseRef.current = null;
+        }
+      });
+
+      deliveryRecoveryPromiseRef.current = promise;
+      return promise;
+    },
+    [connectedWallet, isSignedInWallet, isViewerMode, refreshProfile, refetchInventory],
+  );
+
+  const scheduledDeliveryRecoveryAt = useMemo(
+    () =>
+      earliestDeliveryRecoveryCheckAt(
+        currentOwnerDeliveryRecoveryNextCheckAt,
+        deliveryRecoveryOverrideNextCheckAt,
+      ),
+    [currentOwnerDeliveryRecoveryNextCheckAt, deliveryRecoveryOverrideNextCheckAt],
+  );
+
+  useEffect(() => {
+    if (!connectedWallet || !isSignedInWallet || isViewerMode) {
+      lastScheduledDeliveryRecoveryAtRef.current = null;
+      return;
+    }
+    if (scheduledDeliveryRecoveryAt == null) {
+      lastScheduledDeliveryRecoveryAtRef.current = null;
+      return;
+    }
+
+    if (scheduledDeliveryRecoveryAt <= Date.now()) {
+      if (lastScheduledDeliveryRecoveryAtRef.current === scheduledDeliveryRecoveryAt) return;
+      lastScheduledDeliveryRecoveryAtRef.current = scheduledDeliveryRecoveryAt;
+      void runDeliveryRecovery();
+      return;
+    }
+
+    lastScheduledDeliveryRecoveryAtRef.current = scheduledDeliveryRecoveryAt;
+    const timeoutMs = Math.min(Math.max(0, scheduledDeliveryRecoveryAt - Date.now()), 0x7fffffff);
+    const timeoutId = window.setTimeout(() => {
+      void runDeliveryRecovery();
+    }, timeoutMs);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [connectedWallet, isSignedInWallet, isViewerMode, runDeliveryRecovery, scheduledDeliveryRecoveryAt]);
 
   const queueOverlayAction = useCallback((action: () => void) => {
     if (revealOverlayRef.current) {
@@ -2789,16 +2944,30 @@ function App({ currentPath }: AppProps) {
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
       await refetchInventory();
-      if (resp.deliveryId) {
+      const deliveryId = resp.deliveryId;
+      if (deliveryId) {
         try {
           showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
-          const issued = await issueReceipts(publicKey.toBase58(), resp.deliveryId, sig, deliveryDrop.dropId);
+          const issued = await retryWithBackoff(
+            () => issueReceipts(publicKey.toBase58(), deliveryId, sig, deliveryDrop.dropId),
+            {
+              maxAttempts: 3,
+              baseDelayMs: 500,
+              maxDelayMs: 2_000,
+              shouldRetry: isRetryableCallableError,
+            },
+          );
           const minted = Number(issued?.receiptsMinted || 0);
           showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
-          await refetchInventory();
+          await Promise.all([refetchInventory(), refreshProfile().catch(() => null)]);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Failed to issue receipts';
-          showToast(`Shipment submitted${idSuffix} · ${sig} (receipt warning: ${msg})`);
+          console.warn('Direct issueReceipts failed, starting background recovery', err);
+          void runDeliveryRecovery({
+            dropId: deliveryDrop.dropId,
+            deliveryId,
+            force: true,
+          });
+          showToast(`Shipment submitted${idSuffix} · ${sig} · receipts recovering in background`);
         }
       }
     } catch (err) {
@@ -3498,8 +3667,6 @@ function App({ currentPath }: AppProps) {
           deliveryOrders.length ? (
           <div className="delivery-list">
             {deliveryOrders.map((order) => {
-              const fulfillmentStatus =
-                typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
               return (
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="card__head">
@@ -3508,7 +3675,7 @@ function App({ currentPath }: AppProps) {
                       <div className="muted small">{formatOrderDate(order)}</div>
                       <div className="muted small">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                     </div>
-                    <div className="delivery-status">{fulfillmentStatus || 'Preparing'}</div>
+                    <div className="delivery-status">{displayOrderStatus(order)}</div>
                   </div>
                   {order.items.length ? (
                     <div className="muted small">

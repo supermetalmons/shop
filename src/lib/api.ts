@@ -8,10 +8,13 @@ import {
   FulfillmentOrder,
   FulfillmentOrdersCursor,
   InventoryItem,
+  IssueReceiptsResult,
   PendingOpenBox,
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  RecoverDeliveryOrdersArgs,
+  RecoverDeliveryOrdersResult,
 } from '../types';
 import { getHeliusApiKey } from './helius';
 import { normalizeFigureDisplayImage } from './dropContent';
@@ -633,11 +636,25 @@ export async function issueReceipts(
   deliveryId: number,
   signature: string,
   dropId: string,
-): Promise<{ processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }> {
-  return callFunction<
-    { owner: string; deliveryId: number; signature: string; dropId: string },
-    { processed: boolean; deliveryId: number; receiptsMinted?: number; receiptTxs?: string[]; closeDeliveryTx?: string | null }
-  >('issueReceipts', { owner, deliveryId, signature, dropId });
+): Promise<IssueReceiptsResult> {
+  return callFunction<{ owner: string; deliveryId: number; signature: string; dropId: string }, IssueReceiptsResult>(
+    'issueReceipts',
+    { owner, deliveryId, signature, dropId },
+  );
+}
+
+export async function recoverMyDeliveryOrders(args?: RecoverDeliveryOrdersArgs): Promise<RecoverDeliveryOrdersResult> {
+  const payload: RecoverDeliveryOrdersArgs = {};
+  if (typeof args?.dropId === 'string' && args.dropId.trim()) {
+    payload.dropId = args.dropId.trim().toLowerCase();
+  }
+  if (typeof args?.deliveryId === 'number' && Number.isFinite(args.deliveryId)) {
+    payload.deliveryId = Math.floor(args.deliveryId);
+  }
+  if (args?.force === true) {
+    payload.force = true;
+  }
+  return callFunction<RecoverDeliveryOrdersArgs, RecoverDeliveryOrdersResult>('recoverMyDeliveryOrders', payload);
 }
 
 export async function requestClaimTx(
