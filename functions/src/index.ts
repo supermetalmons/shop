@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase-admin/app';
+import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldPath, FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
 import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
@@ -75,7 +75,7 @@ function loadLocalEnv() {
 
 loadLocalEnv();
 
-const app = initializeApp();
+const app = getApps()[0] || initializeApp();
 const db = getFirestore(app);
 
 type CallableReq<T = any> = CallableRequest<T>;
@@ -3181,21 +3181,35 @@ export const prepareDeliveryTx = onCallLogged(
   { secrets: [COSIGNER_SECRET] },
 );
 
-export const issueReceipts = onCallLogged(
-  'issueReceipts',
-  async (request) => {
-  const { wallet } = await requireWalletSession(request);
-  const schema = z.object({
-    owner: z.string(),
-    deliveryId: z.number().int().positive(),
-    signature: z.string(),
-    dropId: z.string().min(1).max(64),
-  });
-  const { owner, deliveryId, signature, dropId: requestDropId } = parseRequest(schema, request.data);
-  const dropId = requireDropId(requestDropId);
+export type RetryIssueReceiptsArgs = {
+  ownerWallet: string;
+  deliveryId: number;
+  signature: string;
+  dropId: string;
+};
+
+export type RetryIssueReceiptsResult = {
+  processed: true;
+  deliveryId: number;
+  receiptsMinted: number;
+  receiptTxs: string[];
+  closeDeliveryTx: string | null;
+};
+
+export async function retryIssueReceiptsForDeliveryOrder(
+  args: RetryIssueReceiptsArgs,
+): Promise<RetryIssueReceiptsResult> {
+  const ownerWallet = normalizeWallet(args.ownerWallet);
+  const deliveryId = Math.floor(Number(args.deliveryId));
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
+    throw new HttpsError('invalid-argument', 'deliveryId must be a positive integer');
+  }
+  const signature = String(args.signature || '').trim();
+  if (!signature) {
+    throw new HttpsError('invalid-argument', 'signature is required');
+  }
+  const dropId = requireDropId(args.dropId);
   const dropRuntime = getDropRuntime(dropId);
-  const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
   await ensureOnchainCoreConfig(dropRuntime);
   if (!dropRuntime.receiptsMerkleTreeStr) {
@@ -3421,10 +3435,10 @@ export const issueReceipts = onCallLogged(
     const refId = Number(stored?.refId);
     if (kind !== 'box' && kind !== 'dude') {
       throw new HttpsError('failed-precondition', 'Delivery order is missing item kind for receipt minting', {
-    assetId,
+        assetId,
         kind,
       });
-      }
+    }
     if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
       throw new HttpsError('failed-precondition', 'Delivery order is missing item refId for receipt minting', {
         assetId,
@@ -3456,7 +3470,12 @@ export const issueReceipts = onCallLogged(
     while (n >= 1) {
       const batch = pending.slice(0, n);
       const burnIxs = batch.map((it) =>
-        mplCoreBurnV1Ix({ asset: it.assetPk, coreCollection: cfgCoreCollection, authority: signer.publicKey, payer: signer.publicKey }),
+        mplCoreBurnV1Ix({
+          asset: it.assetPk,
+          coreCollection: cfgCoreCollection,
+          authority: signer.publicKey,
+          payer: signer.publicKey,
+        }),
       );
       const boxIds = batch.filter((it) => it.kind === 'box').map((it) => Math.floor(it.refId));
       const dudeIds = batch.filter((it) => it.kind === 'dude').map((it) => Math.floor(it.refId));
@@ -3489,7 +3508,11 @@ export const issueReceipts = onCallLogged(
 
       for (let attempt = 0; attempt < Math.max(1, TX_MAX_SEND_ATTEMPTS); attempt += 1) {
         // Fresh blockhash each send attempt.
-        const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:issueReceipts');
+        const { blockhash } = await withTimeout(
+          conn.getLatestBlockhash('confirmed'),
+          RPC_TIMEOUT_MS,
+          'getLatestBlockhash:issueReceipts',
+        );
 
         let txCandidate: VersionedTransaction;
         let rawLen = 0;
@@ -3499,16 +3522,16 @@ export const issueReceipts = onCallLogged(
           if (rawLen > 1232) {
             lastErr = new RangeError(`Receipt issuance transaction too large (${rawLen} bytes)`);
             break; // shrink `n`
-        }
-      } catch (err) {
+          }
+        } catch (err) {
           const msg = txErrMessage(err);
-        const anyErr = err as any;
-        const tooLarge =
-          err instanceof RangeError &&
-          (/encoding overruns Uint8Array/i.test(msg) ||
-            /offset.*out of range/i.test(msg) ||
-            String(anyErr?.code || '') === 'ERR_OUT_OF_RANGE');
-        if (!tooLarge) throw err;
+          const anyErr = err as any;
+          const tooLarge =
+            err instanceof RangeError &&
+            (/encoding overruns Uint8Array/i.test(msg) ||
+              /offset.*out of range/i.test(msg) ||
+              String(anyErr?.code || '') === 'ERR_OUT_OF_RANGE');
+          if (!tooLarge) throw err;
           lastErr = err;
           break; // shrink `n`
         }
@@ -3517,7 +3540,11 @@ export const issueReceipts = onCallLogged(
 
         let sendErr: unknown = null;
         try {
-          await withTimeout(conn.sendTransaction(txCandidate, { maxRetries: 2 }), TX_SEND_TIMEOUT_MS, 'sendTransaction:issueReceipts');
+          await withTimeout(
+            conn.sendTransaction(txCandidate, { maxRetries: 2 }),
+            TX_SEND_TIMEOUT_MS,
+            'sendTransaction:issueReceipts',
+          );
         } catch (err) {
           sendErr = err;
         }
@@ -3541,18 +3568,18 @@ export const issueReceipts = onCallLogged(
           // Unclear if it was submitted; wait briefly for it to land anyway.
           const maybe = await waitForSignature(conn, sig, { timeoutMs: 12_000, pollMs: TX_CONFIRM_POLL_MS });
           if (maybe.ok) {
-    receiptTxs.push(sig);
-    totalProcessed += n;
-    pending.splice(0, n);
+            receiptTxs.push(sig);
+            totalProcessed += n;
+            pending.splice(0, n);
             succeeded = true;
             break;
           }
           // If we can't confirm, but the burned assets are gone, treat as success.
           const postInfos = await withTimeout(
-            conn.getMultipleAccountsInfo(
-              batch.map((b) => b.assetPk),
-              { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-            ),
+            conn.getMultipleAccountsInfo(batch.map((b) => b.assetPk), {
+              commitment: 'confirmed',
+              dataSlice: { offset: 0, length: 0 },
+            }),
             RPC_TIMEOUT_MS,
             'getMultipleAccountsInfo:postSend',
           );
@@ -3581,10 +3608,10 @@ export const issueReceipts = onCallLogged(
 
         // If we can't confirm, but the burned assets are gone, treat as success.
         const postInfos = await withTimeout(
-          conn.getMultipleAccountsInfo(
-            batch.map((b) => b.assetPk),
-            { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-          ),
+          conn.getMultipleAccountsInfo(batch.map((b) => b.assetPk), {
+            commitment: 'confirmed',
+            dataSlice: { offset: 0, length: 0 },
+          }),
           RPC_TIMEOUT_MS,
           'getMultipleAccountsInfo:postConfirm',
         );
@@ -3654,9 +3681,9 @@ export const issueReceipts = onCallLogged(
       receiptTxs,
       ...(irlClaims.length ? { irlClaims, irlClaimsUpdatedAt: FieldValue.serverTimestamp() } : {}),
       processedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    },
+    { merge: true },
+  );
 
   // Close delivery PDA (reclaim rent) after burning + minting + Firestore marking.
   let closeDeliveryTx: string | null = null;
@@ -3676,8 +3703,17 @@ export const issueReceipts = onCallLogged(
       ],
       data: encodeCloseDeliveryArgs({ deliveryId, deliveryBump: expectedDeliveryBump }),
     });
-    const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:closeDelivery');
-    const closeTx = buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx], signer.publicKey, blockhash, [signer]);
+    const { blockhash } = await withTimeout(
+      conn.getLatestBlockhash('confirmed'),
+      RPC_TIMEOUT_MS,
+      'getLatestBlockhash:closeDelivery',
+    );
+    const closeTx = buildTx(
+      [ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }), closeIx],
+      signer.publicKey,
+      blockhash,
+      [signer],
+    );
     try {
       closeDeliveryTx = await sendAndConfirmSignedTx(conn, closeTx, 'closeDelivery', {
         sendTimeoutMs: TX_SEND_TIMEOUT_MS,
@@ -3693,6 +3729,28 @@ export const issueReceipts = onCallLogged(
   }
 
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
+}
+
+export const issueReceipts = onCallLogged(
+  'issueReceipts',
+  async (request) => {
+    const { wallet } = await requireWalletSession(request);
+    const schema = z.object({
+      owner: z.string(),
+      deliveryId: z.number().int().positive(),
+      signature: z.string(),
+      dropId: z.string().min(1).max(64),
+    });
+    const { owner, deliveryId, signature, dropId: requestDropId } = parseRequest(schema, request.data);
+    const ownerWallet = normalizeWallet(owner);
+    if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
+
+    return retryIssueReceiptsForDeliveryOrder({
+      ownerWallet,
+      deliveryId,
+      signature,
+      dropId: requestDropId,
+    });
   },
   { secrets: [COSIGNER_SECRET] },
 );
