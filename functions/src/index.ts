@@ -355,6 +355,10 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
   return { uid, wallet };
 }
 
+function shouldSkipRuntimeForWallet(wallet: string, dropRuntime: Pick<DropRuntime, 'cluster'>): boolean {
+  return dropRuntime.cluster === 'devnet' && !ADMIN_WALLETS.has(wallet);
+}
+
 // MPL Core program id (uncompressed Core assets).
 const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 // Solana SPL Noop program (commonly used as Metaplex "log wrapper").
@@ -2252,16 +2256,32 @@ function toDeliveryOrderSummary(docId: string, order: any, docPath: string): Del
   };
 }
 
+const DELIVERY_ORDER_SUMMARY_FIELDS = [
+  'dropId',
+  'deliveryId',
+  'status',
+  'createdAt',
+  'processedAt',
+  'items',
+  'fulfillmentStatus',
+  'fulfillmentUpdatedAt',
+] as const;
+
+function toDeliveryOrderSummaries(docs: Array<{ id: string; data(): any; ref: { path: string } }>): DeliveryOrderSummary[] {
+  return docs
+    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data(), doc.ref.path))
+    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
+}
+
 async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
   const snap = await db
     .collectionGroup('deliveryOrders')
     .where('owner', '==', ownerWallet)
     .where('status', '==', 'ready_to_ship')
-    .select('dropId', 'deliveryId', 'status', 'createdAt', 'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentUpdatedAt')
+    .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
     .get();
-  const summaries = snap.docs
-    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data(), doc.ref.path))
-    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
+
+  const summaries = toDeliveryOrderSummaries(snap.docs);
   summaries.sort((a, b) => (b.processedAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.createdAt ?? 0));
   return summaries;
 }
@@ -2672,6 +2692,10 @@ export const listFulfillmentOrders = onCallLogged(
     });
     const { dropId: requestDropId, limit = 20, cursor } = parseRequest(schema, request.data);
     const dropId = requireDropId(requestDropId);
+    const dropRuntime = getDropRuntime(dropId);
+    if (shouldSkipRuntimeForWallet(wallet, dropRuntime)) {
+      return { orders: [], nextCursor: null };
+    }
 
     let query = db
       .collection(dropDeliveryOrdersCollectionPath(dropId))

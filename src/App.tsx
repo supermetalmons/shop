@@ -574,12 +574,14 @@ function App({ currentPath }: AppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
-  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner);
+  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner, {
+    includeDevnet: isAdminWallet,
+  });
   const {
     data: pendingOpenBoxesData,
     refetch: refetchPendingOpenBoxes,
     isSuccess: pendingOpenBoxesSuccess,
-  } = usePendingOpenBoxes(owner);
+  } = usePendingOpenBoxes(owner, { includeDevnet: isAdminWallet });
 
   const {
     data: deliveryOrderOwnersData,

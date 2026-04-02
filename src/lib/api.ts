@@ -149,6 +149,10 @@ type FrontendDropRuntime = Pick<
   'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId'
 >;
 
+export type DropFetchOptions = {
+  includeDevnet?: boolean;
+};
+
 const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
   .sort((a, b) => a.localeCompare(b))
   .map((dropId) => {
@@ -170,6 +174,11 @@ FRONTEND_DROP_RUNTIMES.forEach((drop) => {
   existing.push(drop);
   FRONTEND_DROPS_BY_COLLECTION_MINT.set(drop.collectionMint, existing);
 });
+const MAINNET_FRONTEND_DROP_RUNTIMES = FRONTEND_DROP_RUNTIMES.filter((drop) => drop.solanaCluster !== 'devnet');
+
+function listFrontendDropRuntimes(options?: DropFetchOptions): FrontendDropRuntime[] {
+  return options?.includeDevnet === true ? FRONTEND_DROP_RUNTIMES : MAINNET_FRONTEND_DROP_RUNTIMES;
+}
 
 type DasAsset = Record<string, any>;
 const ASSET_DROP_ID_FIELD = '__monsDropId';
@@ -396,7 +405,7 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
   };
 }
 
-async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
+async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Promise<DasAsset[]> {
   const baseParams = {
     ownerAddress: owner,
     page: 1,
@@ -409,8 +418,9 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
 
   const mergedByAssetId = new Map<string, DasAsset>();
   const ungroupedByCluster = new Map<SolanaCluster, DasAsset[]>();
+  const runtimes = listFrontendDropRuntimes(options);
 
-  for (const drop of FRONTEND_DROP_RUNTIMES) {
+  for (const drop of runtimes) {
     let items: DasAsset[] = [];
     let usedFallback = false;
 
@@ -467,14 +477,14 @@ async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
   return Array.from(mergedByAssetId.values());
 }
 
-export async function fetchInventory(owner: string): Promise<InventoryItem[]> {
-  const assets = await fetchAssetsOwned(owner);
+export async function fetchInventory(owner: string, options?: DropFetchOptions): Promise<InventoryItem[]> {
+  const assets = await fetchAssetsOwned(owner, options);
   return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
 }
 
-export async function fetchPendingOpenBoxes(owner: string): Promise<PendingOpenBox[]> {
+export async function fetchPendingOpenBoxes(owner: string, options?: DropFetchOptions): Promise<PendingOpenBox[]> {
   const out: PendingOpenBox[] = [];
-  for (const drop of FRONTEND_DROP_RUNTIMES) {
+  for (const drop of listFrontendDropRuntimes(options)) {
     const result = await heliusRpc<any>(drop.solanaCluster, 'getProgramAccounts', [
       drop.boxMinterProgramId,
       {
