@@ -349,19 +349,33 @@ export function PonchoRevealOverlay({
     controller.cardVisible &&
     foregroundPaintReady;
 
-  useLayoutEffect(() => {
-    if (cardVisibleLatched || !revealReadyForCard) return;
-    setCardVisibleLatchState((currentState) => {
-      if (currentState.sessionKey === cardSessionKey && currentState.visible) {
-        return currentState;
-      }
-      return createSessionVisibleLatchState(cardSessionKey, true);
+  useEffect(() => {
+    if (cardVisibleLatched || !revealReadyForCard) return undefined;
+    if (typeof window === 'undefined') {
+      setCardVisibleLatchState((currentState) => {
+        if (currentState.sessionKey === cardSessionKey && currentState.visible) {
+          return currentState;
+        }
+        return createSessionVisibleLatchState(cardSessionKey, true);
+      });
+      return undefined;
+    }
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      setCardVisibleLatchState((currentState) => {
+        if (currentState.sessionKey === cardSessionKey && currentState.visible) {
+          return currentState;
+        }
+        return createSessionVisibleLatchState(cardSessionKey, true);
+      });
     });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+    };
   }, [cardSessionKey, cardVisibleLatched, revealReadyForCard]);
 
-  const resolvedRevealVisible =
-    Boolean(displayedForegroundImage) &&
-    cardVisibleLatched;
+  const resolvedRevealVisible = Boolean(displayedForegroundImage) && cardVisibleLatched;
   const resolvedCardVisible = Boolean(card) && cardVisibleLatched;
   const packDiscarded = controller.phase === 'revealed' && resolvedRevealVisible;
   const cardLocked = packDiscarded && resolvedCardVisible && !controller.cardInteractive;
@@ -447,40 +461,45 @@ export function PonchoRevealOverlay({
             <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
           )}
         </button>
-        {card ? (
-          <div
-            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${controller.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
-            aria-hidden={!resolvedCardVisible || !controller.cardInteractive}
-          >
+        <div
+          className={`wip-reveal__stage${resolvedRevealVisible ? ' wip-reveal__stage--visible' : ''}`}
+          aria-hidden={!resolvedRevealVisible}
+        >
+          {card ? (
             <div
-              className={`reveal-overlay__media-item wip-reveal__card-item${controller.cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
-              onClick={controller.cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
+              className={`reveal-overlay__media wip-reveal__media${controller.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
+              aria-hidden={!resolvedCardVisible || !controller.cardInteractive}
             >
-              <div className="reveal-overlay__media-float">
-                <WipInteractiveCard
-                  card={card}
-                  interactive={controller.cardInteractive}
-                  onImageReadyChange={handleCardImageReadyChange}
-                />
+              <div
+                className={`reveal-overlay__media-item wip-reveal__card-item${controller.cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
+                onClick={controller.cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
+              >
+                <div className="reveal-overlay__media-float">
+                  <WipInteractiveCard
+                    card={card}
+                    interactive={controller.cardInteractive}
+                    onImageReadyChange={handleCardImageReadyChange}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
-        {displayedForegroundImage ? (
-          <div
-            className={`wip-reveal__foreground${resolvedRevealVisible ? ' wip-reveal__foreground--visible' : ' wip-reveal__foreground--hidden'}${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
-            aria-hidden="true"
-            onAnimationEnd={handlePackDiscardAnimationEnd}
-          >
-            <PonchoFrameCanvas
-              image={displayedForegroundImage}
-              className="reveal-overlay__image wip-reveal__foreground-image"
-              drawMode="immediate"
-              onDrawComplete={handleForegroundDrawComplete}
-              redrawToken={`${cardSessionKey}:${currentForegroundFrameSrc ?? 'none'}`}
-            />
-          </div>
-        ) : null}
+          ) : null}
+          {displayedForegroundImage ? (
+            <div
+              className={`wip-reveal__foreground${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
+              aria-hidden="true"
+              onAnimationEnd={handlePackDiscardAnimationEnd}
+            >
+              <PonchoFrameCanvas
+                image={displayedForegroundImage}
+                className="reveal-overlay__image wip-reveal__foreground-image"
+                drawMode="immediate"
+                onDrawComplete={handleForegroundDrawComplete}
+                redrawToken={`${cardSessionKey}:${currentForegroundFrameSrc ?? 'none'}`}
+              />
+            </div>
+          ) : null}
+        </div>
       </div>
       <div className="reveal-overlay__note">{controller.note}</div>
     </div>

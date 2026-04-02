@@ -996,6 +996,7 @@ button.link:hover:not(:disabled) {
     scale(var(--reveal-start-scale-x), var(--reveal-start-scale-y));
   transition: transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 260ms ease;
   will-change: transform;
+  isolation: isolate;
   z-index: 1;
   opacity: 1;
 }
@@ -1349,28 +1350,40 @@ body.wip-scroll-lock #root {
   }
 }
 
-.wip-reveal__media {
+.wip-reveal__stage {
+  position: absolute;
+  inset: 0;
   z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+  isolation: isolate;
+  contain: paint;
+  transform: translateZ(0);
+  will-change: opacity;
+}
+
+.wip-reveal__stage--visible {
+  opacity: 1;
+}
+
+.wip-reveal__media {
+  z-index: 1;
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
   transition: none;
 }
 
-.wip-reveal__media.reveal-overlay__media--visible {
-  opacity: 1;
-  transform: translate3d(0, 0, 0);
-}
-
-.wip-reveal__media.wip-reveal__media--locked.reveal-overlay__media--visible {
+.wip-reveal__media.wip-reveal__media--locked {
   pointer-events: auto;
 }
 
-.wip-reveal__media .reveal-overlay__media-float,
-.wip-reveal__media.reveal-overlay__media--visible .reveal-overlay__media-float {
+.wip-reveal__media .reveal-overlay__media-float {
   animation: none;
   opacity: 1;
   transform: none;
 }
 
-.wip-reveal__media.wip-reveal__media--interactive.reveal-overlay__media--visible {
+.wip-reveal__media.wip-reveal__media--interactive {
   pointer-events: auto;
 }
 
@@ -1391,17 +1404,11 @@ body.wip-scroll-lock #root {
   pointer-events: none;
 }
 
-.wip-reveal__media.reveal-overlay__media--visible .wip-reveal__card-item {
-  left: var(--poncho-card-left);
-  top: var(--poncho-card-top);
-  transform: translate3d(0, 0, 0);
-}
-
-.wip-reveal__media.wip-reveal__media--locked.reveal-overlay__media--visible .wip-reveal__card-item--locked {
+.wip-reveal__media.wip-reveal__media--locked .wip-reveal__card-item--locked {
   pointer-events: auto;
 }
 
-.wip-reveal__media.wip-reveal__media--interactive.reveal-overlay__media--visible .wip-reveal__card-item--interactive {
+.wip-reveal__media.wip-reveal__media--interactive .wip-reveal__card-item--interactive {
   pointer-events: auto;
 }
 
@@ -1423,18 +1430,9 @@ body.wip-scroll-lock #root {
 .wip-reveal__foreground {
   position: absolute;
   inset: 0;
-  z-index: 5;
+  z-index: 2;
   pointer-events: none;
-}
-
-.wip-reveal__foreground--hidden {
-  opacity: 0;
-  visibility: hidden;
-}
-
-.wip-reveal__foreground--visible {
   opacity: 1;
-  visibility: visible;
 }
 
 .wip-reveal__foreground-image {
