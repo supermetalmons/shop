@@ -73,7 +73,7 @@ export function normalizeDropId(value: string | undefined): string {
 }
 
 const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
-  poncho_drifella: 'https://www.tensor.trade/trade/9aa9b85e-4e43-4900-be61-199e7cce1943',
+  poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
 const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
@@ -470,7 +470,7 @@ function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
-  poncho_drifella: 'https://www.tensor.trade/trade/9aa9b85e-4e43-4900-be61-199e7cce1943',
+  poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
 const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
