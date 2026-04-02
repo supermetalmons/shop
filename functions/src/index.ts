@@ -2697,16 +2697,10 @@ async function fetchConfirmedDeliveryRecordAccount(params: {
 }
 
 async function hasConfirmedDeliveryRecord(dropId: string, deliveryId: number): Promise<boolean> {
-  const dropRuntime = getDropRuntime(dropId);
-  const conn = connection(dropRuntime);
-  const deliveryRecord = await fetchConfirmedDeliveryRecordAccount({
-    dropRuntime,
-    conn,
+  return hasConfirmedDeliveryRecordForDeliveryOrder({
+    dropId,
     deliveryId,
-    context: 'getAccountInfo:deliveryPda:recoveryEligibility',
-    includeData: false,
   });
-  return Boolean(deliveryRecord);
 }
 
 async function recordPreparedDeliveryRecoveryMiss(
@@ -3654,9 +3648,152 @@ type VerifiedReceiptIssuanceTarget = {
   targetAssetIds: string[];
 };
 
+export type FindConfirmedDeliverySignatureArgs = {
+  ownerWallet: string;
+  deliveryId: number;
+  dropId: string;
+  deliveryPda?: string | null;
+  itemIds?: string[] | null;
+  limit?: number;
+};
+
+export type HasConfirmedDeliveryRecordForDeliveryOrderArgs = {
+  deliveryId: number;
+  dropId: string;
+  deliveryPda?: string | null;
+};
+
+type DeliverySignatureProbeFailureReason =
+  | 'transaction_not_found_or_failed'
+  | 'missing_target_deliver_instruction'
+  | 'payer_mismatch'
+  | 'delivery_id_mismatch'
+  | 'delivery_pda_mismatch'
+  | 'item_count_mismatch'
+  | 'asset_list_mismatch'
+  | 'missing_delivered_item_ids';
+
+const IGNORABLE_DELIVERY_SIGNATURE_PROBE_FAILURES = new Set<DeliverySignatureProbeFailureReason>([
+  'transaction_not_found_or_failed',
+  'missing_target_deliver_instruction',
+]);
+
 function storedDeliverySignature(order: any): string | null {
   const signature = typeof order?.deliverySignature === 'string' ? order.deliverySignature.trim() : '';
   return signature || null;
+}
+
+function requirePositiveDeliveryId(rawDeliveryId: unknown): number {
+  const deliveryId = Math.floor(Number(rawDeliveryId));
+  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
+    throw new HttpsError('invalid-argument', 'deliveryId must be a positive integer');
+  }
+  return deliveryId;
+}
+
+function assertStoredDeliveryPdaMatchesExpected(storedDeliveryPda: unknown, expectedDeliveryPda: PublicKey) {
+  const storedPda = typeof storedDeliveryPda === 'string' ? storedDeliveryPda.trim() : '';
+  if (!storedPda) return;
+
+  const expectedPda = expectedDeliveryPda.toBase58();
+  if (storedPda !== expectedPda) {
+    throw new HttpsError('failed-precondition', 'Stored delivery PDA does not match the expected delivery PDA', {
+      expected: expectedPda,
+      got: storedPda,
+    });
+  }
+}
+
+function deliverySignatureProbeFailedPrecondition(
+  reason: DeliverySignatureProbeFailureReason,
+  message: string,
+  details?: Record<string, unknown>,
+): HttpsError {
+  return new HttpsError('failed-precondition', message, { ...(details || {}), reason });
+}
+
+function isIgnorableDeliverySignatureProbeError(err: unknown): boolean {
+  const anyErr = err as any;
+  if (anyErr?.code !== 'failed-precondition') return false;
+  const reason = typeof anyErr?.details?.reason === 'string' ? anyErr.details.reason : '';
+  return IGNORABLE_DELIVERY_SIGNATURE_PROBE_FAILURES.has(reason as DeliverySignatureProbeFailureReason);
+}
+
+export async function findConfirmedDeliverySignatureForDeliveryOrder(
+  args: FindConfirmedDeliverySignatureArgs,
+): Promise<string | null> {
+  const ownerWallet = normalizeWallet(args.ownerWallet);
+  const deliveryId = requirePositiveDeliveryId(args.deliveryId);
+  const dropId = requireDropId(args.dropId);
+  const dropRuntime = getDropRuntime(dropId);
+  const conn = connection(dropRuntime);
+  const [expectedDeliveryPda] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  assertStoredDeliveryPdaMatchesExpected(args.deliveryPda, expectedDeliveryPda);
+
+  const itemIds = Array.isArray(args.itemIds) ? args.itemIds.filter((id): id is string => typeof id === 'string' && !!id) : [];
+  const rawLimit = Math.floor(Number(args.limit ?? 100));
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 500)) : 100;
+  let remaining = limit;
+  let before: string | undefined;
+
+  while (remaining > 0) {
+    const pageLimit = Math.min(remaining, 100);
+    const sigInfos = await withTimeout(
+      conn.getSignaturesForAddress(expectedDeliveryPda, before ? { before, limit: pageLimit } : { limit: pageLimit }),
+      RPC_TIMEOUT_MS,
+      'getSignaturesForAddress:deliveryPda',
+    );
+    if (!sigInfos.length) break;
+
+    for (const sigInfo of sigInfos) {
+      if (sigInfo?.err) continue;
+      const signature = typeof sigInfo?.signature === 'string' ? sigInfo.signature.trim() : '';
+      if (!signature) continue;
+
+      try {
+        await verifyReceiptIssuanceBySignature({
+          order: itemIds.length ? { itemIds } : {},
+          ownerWallet,
+          deliveryId,
+          signature,
+          dropRuntime,
+          conn,
+        });
+        return signature;
+      } catch (err) {
+        if (isIgnorableDeliverySignatureProbeError(err)) continue;
+        throw err;
+      }
+    }
+
+    remaining -= sigInfos.length;
+    if (sigInfos.length < pageLimit) break;
+    const lastSignature = typeof sigInfos[sigInfos.length - 1]?.signature === 'string' ? sigInfos[sigInfos.length - 1]?.signature.trim() : '';
+    if (!lastSignature) break;
+    before = lastSignature;
+  }
+
+  return null;
+}
+
+export async function hasConfirmedDeliveryRecordForDeliveryOrder(
+  args: HasConfirmedDeliveryRecordForDeliveryOrderArgs,
+): Promise<boolean> {
+  const deliveryId = requirePositiveDeliveryId(args.deliveryId);
+  const dropId = requireDropId(args.dropId);
+  const dropRuntime = getDropRuntime(dropId);
+  const [expectedDeliveryPda] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  assertStoredDeliveryPdaMatchesExpected(args.deliveryPda, expectedDeliveryPda);
+
+  const conn = connection(dropRuntime);
+  const deliveryRecord = await fetchConfirmedDeliveryRecordAccount({
+    dropRuntime,
+    conn,
+    deliveryId,
+    context: 'getAccountInfo:deliveryPda:scriptProbe',
+    includeData: false,
+  });
+  return Boolean(deliveryRecord);
 }
 
 async function verifyReceiptIssuanceBySignature(params: {
@@ -3674,24 +3811,44 @@ async function verifyReceiptIssuanceBySignature(params: {
     'getTransaction:delivery',
   );
   if (!tx || tx.meta?.err) {
-    throw new HttpsError('failed-precondition', 'Delivery transaction not found or failed');
+    throw deliverySignatureProbeFailedPrecondition('transaction_not_found_or_failed', 'Delivery transaction not found or failed');
   }
 
-  const payer = getPayerFromTx(tx);
-  if (!payer || payer.toBase58() !== ownerWallet) {
-    throw new HttpsError('failed-precondition', 'Signature payer does not match owner');
-  }
-
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
   const keys = resolveInstructionAccounts(tx);
-  const deliverIx = (tx?.transaction?.message?.compiledInstructions || []).find((ix: any) => {
+  const FIXED_DELIVER_ACCOUNTS = 9;
+  const deliverIxs = (tx?.transaction?.message?.compiledInstructions || []).filter((ix: any) => {
     const program = keys[ix.programIdIndex];
     if (!program || !program.equals(dropRuntime.boxMinterProgramId)) return false;
     const dataField = (ix as any).data;
     const dataBuffer = typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
     return dataBuffer.subarray(0, 8).equals(IX_DELIVER);
   });
+  let deliverIx: any = null;
+  let deliverIxAccounts: PublicKey[] = [];
+  for (const candidateIx of deliverIxs) {
+    const accountKeyIndexesRaw: any = (candidateIx as any).accountKeyIndexes;
+    const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
+      ? (accountKeyIndexesRaw as number[])
+      : Array.from(accountKeyIndexesRaw || []);
+    const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
+    if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) continue;
+    if (ixAccounts[8]?.equals(expectedDeliveryPda)) {
+      deliverIx = candidateIx;
+      deliverIxAccounts = ixAccounts;
+      break;
+    }
+  }
   if (!deliverIx) {
-    throw new HttpsError('failed-precondition', 'Delivery transaction is missing box_minter deliver instruction');
+    throw deliverySignatureProbeFailedPrecondition(
+      'missing_target_deliver_instruction',
+      'Delivery transaction is missing a deliver instruction for the expected delivery PDA',
+    );
+  }
+
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== ownerWallet) {
+    throw deliverySignatureProbeFailedPrecondition('payer_mismatch', 'Signature payer does not match owner');
   }
 
   const deliverDataField = (deliverIx as any).data;
@@ -3699,35 +3856,24 @@ async function verifyReceiptIssuanceBySignature(params: {
     typeof deliverDataField === 'string' ? Buffer.from(bs58.decode(deliverDataField)) : Buffer.from(deliverDataField || []);
   const decoded = decodeDeliverArgs(deliverData);
   if (decoded.deliveryId !== deliveryId) {
-    throw new HttpsError('failed-precondition', 'Delivery id mismatch', {
+    throw deliverySignatureProbeFailedPrecondition('delivery_id_mismatch', 'Delivery id mismatch', {
       expectedId: deliveryId,
       got: decoded.deliveryId,
     });
   }
 
-  const accountKeyIndexesRaw: any = (deliverIx as any).accountKeyIndexes;
-  const accountKeyIndexes: number[] = Array.isArray(accountKeyIndexesRaw)
-    ? (accountKeyIndexesRaw as number[])
-    : Array.from(accountKeyIndexesRaw || []);
-  const ixAccounts = accountKeyIndexes.map((idx: number) => keys[idx]);
-  const FIXED_DELIVER_ACCOUNTS = 9;
-  if (ixAccounts.length < FIXED_DELIVER_ACCOUNTS) {
-    throw new HttpsError('failed-precondition', 'Invalid deliver instruction accounts');
-  }
-
-  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
-  const deliveryPdaFromIx = ixAccounts[8];
+  const deliveryPdaFromIx = deliverIxAccounts[8];
   if (!deliveryPdaFromIx?.equals(expectedDeliveryPda)) {
-    throw new HttpsError('failed-precondition', 'Delivery PDA mismatch', {
+    throw deliverySignatureProbeFailedPrecondition('delivery_pda_mismatch', 'Delivery PDA mismatch', {
       expected: expectedDeliveryPda.toBase58(),
       got: deliveryPdaFromIx?.toBase58(),
     });
   }
 
   const itemIds: string[] = Array.isArray(order?.itemIds) ? order.itemIds : [];
-  const deliveredAssetsFromIx = ixAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
+  const deliveredAssetsFromIx = deliverIxAccounts.slice(FIXED_DELIVER_ACCOUNTS).map((k: PublicKey) => k.toBase58());
   if (itemIds.length && deliveredAssetsFromIx.length && itemIds.length !== deliveredAssetsFromIx.length) {
-    throw new HttpsError('failed-precondition', 'Delivery item count mismatch', {
+    throw deliverySignatureProbeFailedPrecondition('item_count_mismatch', 'Delivery item count mismatch', {
       expected: itemIds.length,
       got: deliveredAssetsFromIx.length,
     });
@@ -3735,7 +3881,7 @@ async function verifyReceiptIssuanceBySignature(params: {
   if (itemIds.length) {
     for (let i = 0; i < itemIds.length; i += 1) {
       if (deliveredAssetsFromIx[i] && deliveredAssetsFromIx[i] !== itemIds[i]) {
-        throw new HttpsError('failed-precondition', 'Delivered asset list mismatch', {
+        throw deliverySignatureProbeFailedPrecondition('asset_list_mismatch', 'Delivered asset list mismatch', {
           index: i,
           expected: itemIds[i],
           got: deliveredAssetsFromIx[i],
@@ -3746,7 +3892,10 @@ async function verifyReceiptIssuanceBySignature(params: {
 
   const targetAssetIds = itemIds.length ? itemIds : deliveredAssetsFromIx;
   if (!targetAssetIds.length) {
-    throw new HttpsError('failed-precondition', 'Delivery order is missing delivered item ids');
+    throw deliverySignatureProbeFailedPrecondition(
+      'missing_delivered_item_ids',
+      'Delivery order is missing delivered item ids',
+    );
   }
 
   return {
@@ -3781,13 +3930,7 @@ async function verifyReceiptIssuanceByDeliveryRecord(params: {
     throw new HttpsError('failed-precondition', 'Delivery record PDA not found');
   }
   const { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo } = deliveryRecordAccount;
-  const storedDeliveryPda = typeof order?.deliveryPda === 'string' ? order.deliveryPda.trim() : '';
-  if (storedDeliveryPda && storedDeliveryPda !== expectedDeliveryPda.toBase58()) {
-    throw new HttpsError('failed-precondition', 'Stored delivery PDA does not match the expected delivery PDA', {
-      expected: expectedDeliveryPda.toBase58(),
-      got: storedDeliveryPda,
-    });
-  }
+  assertStoredDeliveryPdaMatchesExpected(order?.deliveryPda, expectedDeliveryPda);
 
   const deliveryRecord = decodeDeliveryRecord(Buffer.from(deliveryInfo.data));
   if (deliveryRecord.payer.toBase58() !== ownerWallet) {
@@ -3853,10 +3996,7 @@ export async function retryIssueReceiptsForDeliveryOrder(
   args: RetryIssueReceiptsArgs,
 ): Promise<RetryIssueReceiptsResult> {
   const ownerWallet = normalizeWallet(args.ownerWallet);
-  const deliveryId = Math.floor(Number(args.deliveryId));
-  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
-    throw new HttpsError('invalid-argument', 'deliveryId must be a positive integer');
-  }
+  const deliveryId = requirePositiveDeliveryId(args.deliveryId);
   const dropId = requireDropId(args.dropId);
   const dropRuntime = getDropRuntime(dropId);
 

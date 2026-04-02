@@ -1,6 +1,10 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { Timestamp, getFirestore } from 'firebase-admin/firestore';
-import { retryIssueReceiptsForDeliveryOrder } from '../lib/index.js';
+import {
+  findConfirmedDeliverySignatureForDeliveryOrder,
+  hasConfirmedDeliveryRecordForDeliveryOrder,
+  retryIssueReceiptsForDeliveryOrder,
+} from '../lib/index.js';
 
 type Args = {
   dropId?: string;
@@ -8,20 +12,37 @@ type Args = {
   limit?: number;
 };
 
-type ProcessingOrderCandidate = {
+type DeliveryOrderCandidate = {
   docPath: string;
   dropId: string;
   deliveryId: number;
   ownerWallet: string;
   signature: string;
+  deliveryPda?: string;
+  itemIds: string[];
   status: string;
   createdAt?: string;
   processingAt?: string;
 };
 
+type RetryPlan =
+  | {
+      verification: 'signature';
+      signature: string;
+      signatureSource: 'stored' | 'discovered';
+    }
+  | {
+      verification: 'delivery_pda';
+      signatureSource: 'delivery_pda';
+    };
+
+const RECOVERABLE_STATUSES = ['processing', 'prepared'] as const;
+const RECOVERABLE_STATUS_SET = new Set<string>(RECOVERABLE_STATUSES);
+
 function usage(): string {
   return [
-    'Retry `issueReceipts` for Firestore delivery orders stuck in `processing`.',
+    'Retry `issueReceipts` for Firestore delivery orders that are stuck in `processing`,',
+    'or still `prepared` even though their delivery transaction already landed on-chain.',
     '',
     'Usage:',
     '  npm run unstuck-processing-orders',
@@ -39,6 +60,17 @@ function usage(): string {
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+function requireEnv(name: string, hint: string): string {
+  const value = String(process.env[name] || '').trim();
+  if (!value) fail(`${name} is not set. ${hint}`);
+  return value;
+}
+
+function requireRuntimeEnv() {
+  requireEnv('COSIGNER_SECRET', 'Set it in functions/.env.local or export it in your shell before running this script.');
+  requireEnv('HELIUS_API_KEY', 'Set it in functions/.env.local or export it in your shell before running this script.');
 }
 
 function parseArgs(argv: string[]): Args {
@@ -138,7 +170,7 @@ function dropIdFromDocPath(docPath: string): string {
   fail(`Unexpected delivery order path: ${docPath}`);
 }
 
-function buildCandidate(doc: { id: string; ref: { path: string }; data(): any }): ProcessingOrderCandidate {
+function buildCandidate(doc: { id: string; ref: { path: string }; data(): any }): DeliveryOrderCandidate {
   const data = doc.data() || {};
   const deliveryId = Number(data.deliveryId ?? doc.id);
   return {
@@ -147,17 +179,28 @@ function buildCandidate(doc: { id: string; ref: { path: string }; data(): any })
     deliveryId,
     ownerWallet: typeof data.owner === 'string' ? data.owner : '',
     signature: typeof data.deliverySignature === 'string' ? data.deliverySignature : '',
+    deliveryPda: typeof data.deliveryPda === 'string' && data.deliveryPda.trim() ? data.deliveryPda : undefined,
+    itemIds: Array.isArray(data.itemIds) ? data.itemIds.filter((id: unknown): id is string => typeof id === 'string' && !!id) : [],
     status: typeof data.status === 'string' ? data.status : '',
     createdAt: toIsoMaybe(data.createdAt),
     processingAt: toIsoMaybe(data.processingAt),
   };
 }
 
-function sortCandidates(a: ProcessingOrderCandidate, b: ProcessingOrderCandidate): number {
+function sortCandidates(a: DeliveryOrderCandidate, b: DeliveryOrderCandidate): number {
+  if (a.status !== b.status) {
+    if (a.status === 'processing') return -1;
+    if (b.status === 'processing') return 1;
+  }
   const aTime = Date.parse(a.processingAt || a.createdAt || '') || 0;
   const bTime = Date.parse(b.processingAt || b.createdAt || '') || 0;
   if (aTime !== bTime) return aTime - bTime;
   return a.docPath.localeCompare(b.docPath);
+}
+
+async function loadDocsForRecoverableStatuses(query: FirebaseFirestore.Query) {
+  const snaps = await Promise.all(RECOVERABLE_STATUSES.map((status) => query.where('status', '==', status).get()));
+  return snaps.flatMap((snap) => snap.docs);
 }
 
 async function loadMatchingDocs(args: Args) {
@@ -168,16 +211,54 @@ async function loadMatchingDocs(args: Args) {
     const doc = await db.doc(`drops/${args.dropId}/deliveryOrders/${args.deliveryId}`).get();
     if (!doc.exists) return [];
     const status = doc.get('status');
-    return status === 'processing' ? [doc] : [];
+    return RECOVERABLE_STATUS_SET.has(String(status || '')) ? [doc] : [];
   }
 
   if (args.dropId) {
-    const snap = await db.collection(`drops/${args.dropId}/deliveryOrders`).where('status', '==', 'processing').get();
-    return snap.docs;
+    return loadDocsForRecoverableStatuses(db.collection(`drops/${args.dropId}/deliveryOrders`));
   }
 
-  const snap = await db.collectionGroup('deliveryOrders').where('status', '==', 'processing').get();
-  return snap.docs;
+  return loadDocsForRecoverableStatuses(db.collectionGroup('deliveryOrders'));
+}
+
+async function buildRetryPlan(candidate: DeliveryOrderCandidate): Promise<RetryPlan | null> {
+  if (candidate.status === 'processing') {
+    // Preserve the historical processing-order recovery behavior and only add
+    // prepared-order probing in this script change.
+    return {
+      verification: 'delivery_pda',
+      signatureSource: 'delivery_pda',
+    };
+  }
+
+  if (candidate.status !== 'prepared') return null;
+
+  const hasDeliveryRecord = await hasConfirmedDeliveryRecordForDeliveryOrder({
+    dropId: candidate.dropId,
+    deliveryId: candidate.deliveryId,
+    deliveryPda: candidate.deliveryPda,
+  });
+  if (!hasDeliveryRecord) return null;
+
+  const discoveredSignature = await findConfirmedDeliverySignatureForDeliveryOrder({
+    ownerWallet: candidate.ownerWallet,
+    deliveryId: candidate.deliveryId,
+    dropId: candidate.dropId,
+    deliveryPda: candidate.deliveryPda,
+    itemIds: candidate.itemIds,
+  });
+  if (discoveredSignature) {
+    return {
+      verification: 'signature',
+      signature: discoveredSignature,
+      signatureSource: 'discovered',
+    };
+  }
+
+  return {
+    verification: 'delivery_pda',
+    signatureSource: 'delivery_pda',
+  };
 }
 
 async function main() {
@@ -187,21 +268,26 @@ async function main() {
   const limited = args.limit ? candidates.slice(0, args.limit) : candidates;
 
   if (!limited.length) {
-    console.log('No delivery orders in processing status matched the requested scope.');
+    console.log('No delivery orders in prepared/processing status matched the requested scope.');
     return;
   }
+
+  requireRuntimeEnv();
 
   const app = getApps()[0] || initializeApp();
   const db = getFirestore(app);
 
-  console.log(`Found ${limited.length} processing delivery order(s).`);
+  console.log(`Found ${limited.length} recoverable delivery order(s).`);
 
+  let attemptedCount = 0;
   let successCount = 0;
   let failureCount = 0;
+  let skippedCount = 0;
 
   for (let index = 0; index < limited.length; index += 1) {
     const candidate = limited[index];
     const startedAt = Date.now();
+    let retryPlan: RetryPlan | null = null;
 
     console.log('');
     console.log('='.repeat(80));
@@ -213,6 +299,8 @@ async function main() {
           deliveryId: candidate.deliveryId,
           ownerWallet: candidate.ownerWallet || null,
           signature: candidate.signature || null,
+          deliveryPda: candidate.deliveryPda || null,
+          itemIds: candidate.itemIds,
           statusBefore: candidate.status || null,
           createdAt: candidate.createdAt || null,
           processingAt: candidate.processingAt || null,
@@ -223,11 +311,37 @@ async function main() {
     );
 
     try {
+      retryPlan = await buildRetryPlan(candidate);
+      if (!retryPlan) {
+        console.log(
+          JSON.stringify(
+            {
+              outcome: 'skipped',
+              durationMs: Date.now() - startedAt,
+              statusAfter: candidate.status || null,
+              reason: 'no_confirmed_delivery_found',
+            },
+            null,
+            2,
+          ),
+        );
+        skippedCount += 1;
+        continue;
+      }
+
+      attemptedCount += 1;
       const result = await retryIssueReceiptsForDeliveryOrder({
         ownerWallet: candidate.ownerWallet,
         deliveryId: candidate.deliveryId,
-        signature: candidate.signature,
         dropId: candidate.dropId,
+        ...(retryPlan.verification === 'signature'
+          ? {
+              verification: 'signature' as const,
+              signature: retryPlan.signature,
+            }
+          : {
+              verification: 'delivery_pda' as const,
+            }),
       });
       const fresh = await db.doc(candidate.docPath).get();
       const freshData = fresh.data() || {};
@@ -236,6 +350,9 @@ async function main() {
           {
             outcome: 'success',
             durationMs: Date.now() - startedAt,
+            verification: retryPlan.verification,
+            signatureUsed: retryPlan.verification === 'signature' ? retryPlan.signature : null,
+            signatureSource: retryPlan.signatureSource,
             statusAfter: typeof freshData.status === 'string' ? freshData.status : null,
             processedAt: toIsoMaybe(freshData.processedAt) || null,
             receiptsMinted: result.receiptsMinted,
@@ -256,6 +373,13 @@ async function main() {
           {
             outcome: 'failure',
             durationMs: Date.now() - startedAt,
+            ...(retryPlan
+              ? {
+                  verification: retryPlan.verification,
+                  signatureUsed: retryPlan.verification === 'signature' ? retryPlan.signature : null,
+                  signatureSource: retryPlan.signatureSource,
+                }
+              : {}),
             statusAfter: typeof freshData.status === 'string' ? freshData.status : null,
             processedAt: toIsoMaybe(freshData.processedAt) || null,
             error: summarizeError(err),
@@ -274,8 +398,10 @@ async function main() {
     JSON.stringify(
       {
         matched: limited.length,
+        attempted: attemptedCount,
         succeeded: successCount,
         failed: failureCount,
+        skipped: skippedCount,
       },
       null,
       2,
