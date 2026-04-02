@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type TransitionEvent } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
@@ -54,13 +54,13 @@ import {
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
-  arePonchoDrifellaCardAssetsReady,
+  clearPonchoDrifellaImageCache,
+  createPonchoDrifellaImageCache,
   getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
+  usePonchoDrifellaCardAssetsReady,
   type PonchoDrifellaRevealRequestStatus,
-  usePonchoDrifellaRevealController,
-  waitForPonchoDrifellaCardAssetsUntilReady,
 } from './lib/ponchoDrifellaReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
@@ -537,8 +537,8 @@ function App({ currentPath }: AppProps) {
       figureIds.forEach((figureId) => {
         preloadPonchoDrifellaCardAssets(
           getPonchoDrifellaCardByFigureId(figureId),
-          preloadedPonchoCardAssetsRef.current,
-          ponchoCardPreloadImagesRef.current,
+          ponchoImageCacheRef.current,
+          { mode: 'resident', priority: 'high' },
         );
       });
     },
@@ -547,7 +547,7 @@ function App({ currentPath }: AppProps) {
   const preloadPonchoRevealPackAssetsForDropId = useCallback(
     (dropId?: string) => {
       if (revealRendererForDropId(dropId) !== 'poncho_drifella') return;
-      preloadPonchoDrifellaPackAssets(preloadedBoxFramesRef.current, boxFramePreloadImagesRef.current);
+      preloadPonchoDrifellaPackAssets(ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
     },
     [revealRendererForDropId],
   );
@@ -705,19 +705,22 @@ function App({ currentPath }: AppProps) {
   const authLoadingRef = useRef(false);
   const openSelectedLockRef = useRef(false);
   const openSelectedBoxIdRef = useRef<string | null>(null);
+  const previousConnectedWalletForOwnerRef = useRef(connectedWallet);
   const localMintCounterRef = useRef(0);
   const knownBoxIdsByDropRef = useRef<Map<string, Set<string>>>(new Map());
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const preloadedPonchoCardAssetsRef = useRef<Set<string>>(new Set());
-  const ponchoCardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const [ponchoRevealCardDisplayReady, setPonchoRevealCardDisplayReady] = useState(false);
+  const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
+  const [ponchoRevealComplete, setPonchoRevealComplete] = useState(false);
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
+  const revealOverlaySessionRef = useRef(0);
+  const revealLoadingRequestCounterRef = useRef(0);
+  const revealLoadingRequestIdRef = useRef<number | null>(null);
   const revealDismissLockedUntilRef = useRef<number>(0);
   const ponchoPackDiscardDismissReadyRef = useRef(false);
   const revealOverlayActiveRef = useRef(false);
@@ -925,6 +928,7 @@ function App({ currentPath }: AppProps) {
   const preloadBoxFrames = useCallback(
     (fromFrame = 1, toFrame?: number, dropId?: string) => {
       if (typeof window === 'undefined') return;
+      if (revealRendererForDropId(dropId) === 'poncho_drifella') return;
       preloadRevealFrames(
         revealFrameSequenceForDropId(dropId),
         preloadedBoxFramesRef.current,
@@ -933,7 +937,7 @@ function App({ currentPath }: AppProps) {
         toFrame,
       );
     },
-    [revealFrameSequenceForDropId],
+    [revealFrameSequenceForDropId, revealRendererForDropId],
   );
 
   const ensureVideoPreloadRoot = useCallback(() => {
@@ -1198,12 +1202,23 @@ function App({ currentPath }: AppProps) {
     clearPonchoPackDiscardDismissTimeout();
   }, [clearPonchoPackDiscardDismissTimeout]);
 
-  const finalizeRevealOverlayDismissal = useCallback(() => {
-    clearRevealOverlayCloseTimeout();
-    clearPonchoPackDiscardDismissTimeout();
-    revealOverlayRef.current = null;
+  const resetPonchoRevealDismissState = useCallback(() => {
     revealDismissLockedUntilRef.current = 0;
     ponchoPackDiscardDismissReadyRef.current = false;
+    setPonchoRevealComplete(false);
+    clearPonchoPackDiscardDismissTimeout();
+  }, [clearPonchoPackDiscardDismissTimeout]);
+
+  const resetRevealRequestState = useCallback(() => {
+    revealOverlaySessionRef.current += 1;
+    revealLoadingRequestIdRef.current = null;
+    setRevealLoading(null);
+  }, []);
+
+  const finalizeRevealOverlayDismissal = useCallback(({ flushActions = true }: { flushActions?: boolean } = {}) => {
+    clearRevealOverlayCloseTimeout();
+    revealOverlayRef.current = null;
+    resetPonchoRevealDismissState();
     setRevealOverlay(null);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
@@ -1213,8 +1228,18 @@ function App({ currentPath }: AppProps) {
         videoPreloadRootRef.current.removeChild(videoPreloadRootRef.current.firstChild);
       }
     }
-    flushOverlayActions();
-  }, [clearPonchoPackDiscardDismissTimeout, clearRevealOverlayCloseTimeout, flushOverlayActions]);
+    if (flushActions) {
+      flushOverlayActions();
+      return;
+    }
+    deferredOverlayActionsRef.current = [];
+  }, [clearRevealOverlayCloseTimeout, flushOverlayActions, resetPonchoRevealDismissState]);
+
+  const cancelRevealOverlayAnimationFrame = useCallback(() => {
+    if (revealOverlayRafRef.current === null) return;
+    cancelAnimationFrame(revealOverlayRafRef.current);
+    revealOverlayRafRef.current = null;
+  }, []);
 
   const closeRevealOverlay = useCallback(() => {
     const overlay = revealOverlayRef.current;
@@ -1223,10 +1248,7 @@ function App({ currentPath }: AppProps) {
     if (overlay.phase === 'preparing') {
       setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
     }
-    if (revealOverlayRafRef.current) {
-      cancelAnimationFrame(revealOverlayRafRef.current);
-      revealOverlayRafRef.current = null;
-    }
+    cancelRevealOverlayAnimationFrame();
     if (!revealOverlayActiveRef.current) {
       finalizeRevealOverlayDismissal();
       return;
@@ -1237,22 +1259,30 @@ function App({ currentPath }: AppProps) {
       revealOverlayCloseTimeoutRef.current = null;
       finalizeRevealOverlayDismissal();
     }, REVEAL_CLOSE_FALLBACK_MS);
-  }, [clearRevealOverlayCloseTimeout, finalizeRevealOverlayDismissal]);
+  }, [cancelRevealOverlayAnimationFrame, clearRevealOverlayCloseTimeout, finalizeRevealOverlayDismissal]);
 
   const dismissRevealOverlay = () => {
-    if (revealOverlayRafRef.current) {
-      cancelAnimationFrame(revealOverlayRafRef.current);
-      revealOverlayRafRef.current = null;
-    }
+    cancelRevealOverlayAnimationFrame();
     clearRevealOverlayCloseTimeout();
     finalizeRevealOverlayDismissal();
   };
 
-	  const startAutoOpening = useCallback((mode: 'normal' | 'fast') => {
-	    setRevealOverlay((prev) => {
-	      if (!prev) return prev;
-	      if (prev.phase !== 'ready') return prev;
-	      if (prev.autoOpening) return prev;
+  const discardRevealOverlay = useCallback(() => {
+    const overlay = revealOverlayRef.current;
+    if (overlay) {
+      setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
+    }
+    resetRevealRequestState();
+    cancelRevealOverlayAnimationFrame();
+    clearRevealOverlayCloseTimeout();
+    finalizeRevealOverlayDismissal({ flushActions: false });
+  }, [cancelRevealOverlayAnimationFrame, clearRevealOverlayCloseTimeout, finalizeRevealOverlayDismissal, resetRevealRequestState]);
+
+  const startAutoOpening = useCallback((mode: 'normal' | 'fast') => {
+    setRevealOverlay((prev) => {
+      if (!prev) return prev;
+      if (prev.phase !== 'ready') return prev;
+      if (prev.autoOpening) return prev;
       if (!prev.revealedIds || !prev.revealedIds.length) return prev;
       if (!dropRevealIsAnimated(prev.dropId)) return prev;
       if (prev.frame >= revealFrameCountForDropId(prev.dropId)) return prev;
@@ -1266,21 +1296,19 @@ function App({ currentPath }: AppProps) {
     });
   }, [dropRevealIsAnimated, revealFrameCountForDropId]);
 
-	  const openRevealOverlay = (
-	    id: string,
-	    rect: DOMRect,
-	    phase: RevealOverlayPhase = 'ready',
-	    itemOverride?: InventoryItem,
-		  ) => {
-		    if (revealOverlayRef.current || revealLoading) return;
-		    if (startOpenLoading && startOpenLoading !== id) return;
-		    if (typeof window === 'undefined') return;
-		    const item = itemOverride || inventoryIndex.get(id);
-		    if (!item) return;
-		    const overlayDropId = item.dropId || activeDrop.dropId;
-    revealDismissLockedUntilRef.current = 0;
-    ponchoPackDiscardDismissReadyRef.current = false;
-    clearPonchoPackDiscardDismissTimeout();
+  const openRevealOverlay = (
+    id: string,
+    rect: DOMRect,
+    phase: RevealOverlayPhase = 'ready',
+    itemOverride?: InventoryItem,
+  ) => {
+    if (revealOverlayRef.current || revealLoading) return;
+    if (startOpenLoading && startOpenLoading !== id) return;
+    if (typeof window === 'undefined') return;
+    const item = itemOverride || inventoryIndex.get(id);
+    if (!item) return;
+    const overlayDropId = item.dropId || activeDrop.dropId;
+    resetPonchoRevealDismissState();
     clearRevealOverlayCloseTimeout();
     preloadRevealSounds(overlayDropId);
     preloadPonchoRevealPackAssetsForDropId(overlayDropId);
@@ -1314,9 +1342,7 @@ function App({ currentPath }: AppProps) {
     setRevealOverlay(nextOverlay);
     setRevealOverlayClosing(false);
     setRevealOverlayActive(false);
-    if (revealOverlayRafRef.current) {
-      cancelAnimationFrame(revealOverlayRafRef.current);
-    }
+    cancelRevealOverlayAnimationFrame();
     revealOverlayRafRef.current = requestAnimationFrame(() => {
       revealOverlayRafRef.current = requestAnimationFrame(() => {
         setRevealOverlayActive(true);
@@ -1334,11 +1360,17 @@ function App({ currentPath }: AppProps) {
   };
 
   useEffect(() => {
-    closeRevealOverlay();
+    const walletChanged = previousConnectedWalletForOwnerRef.current !== connectedWallet;
+    previousConnectedWalletForOwnerRef.current = connectedWallet;
+    if (walletChanged) {
+      discardRevealOverlay();
+    } else {
+      closeRevealOverlay();
+    }
     setSelected(new Set());
     setDeliveryOpen(false);
     setClaimOpen(false);
-  }, [owner, closeRevealOverlay]);
+  }, [closeRevealOverlay, connectedWallet, discardRevealOverlay, owner]);
 
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(connectedWallet));
@@ -1353,6 +1385,7 @@ function App({ currentPath }: AppProps) {
   }, [activeDiscountAllowance, activeDiscountScope, activeDiscountVersion, connectedWallet]);
 
   useEffect(() => {
+    resetRevealRequestState();
     setLocalPendingReveals(loadPendingReveals(connectedWallet));
     setRecentRevealedBoxes(loadRecentReveals(connectedWallet).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
@@ -1367,6 +1400,7 @@ function App({ currentPath }: AppProps) {
     knownBoxIdsByDropRef.current = new Map();
     preloadedBoxFramesRef.current.clear();
     boxFramePreloadImagesRef.current.clear();
+    clearPonchoDrifellaImageCache(ponchoImageCacheRef.current);
     autoplayFramePreloadScheduledDropIdRef.current = null;
     videoPreloadKeyRef.current = '';
     if (videoPreloadRootRef.current) {
@@ -1374,7 +1408,7 @@ function App({ currentPath }: AppProps) {
       videoPreloadRootRef.current = null;
     }
     deferredOverlayActionsRef.current = [];
-  }, [connectedWallet]);
+  }, [connectedWallet, resetRevealRequestState]);
 
   useEffect(() => {
     if (revealOverlay) return;
@@ -1746,9 +1780,7 @@ function App({ currentPath }: AppProps) {
       if (toastClearTimeoutRef.current) {
         clearTimeout(toastClearTimeoutRef.current);
       }
-      if (revealOverlayRafRef.current) {
-        cancelAnimationFrame(revealOverlayRafRef.current);
-      }
+      cancelRevealOverlayAnimationFrame();
       if (revealOverlayResizeRafRef.current) {
         cancelAnimationFrame(revealOverlayResizeRafRef.current);
       }
@@ -1756,7 +1788,7 @@ function App({ currentPath }: AppProps) {
         clearTimeout(revealOverlayCloseTimeoutRef.current);
       }
     };
-  }, []);
+  }, [cancelRevealOverlayAnimationFrame]);
 
   const markAssetsHidden = useMemo(() => {
     if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
@@ -2397,15 +2429,25 @@ function App({ currentPath }: AppProps) {
 
   const handleRevealDudes = async (boxAssetId: string, dropId: string): Promise<PonchoDrifellaRevealRequestStatus> => {
     if (blockViewerModeAction()) return 'retry';
+    const requestSession = revealOverlaySessionRef.current;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return 'retry';
     if (!publicKey) return 'retry';
+    if (revealOverlaySessionRef.current !== requestSession) {
+      return 'resolved';
+    }
+    revealLoadingRequestCounterRef.current += 1;
+    const loadingRequestId = revealLoadingRequestCounterRef.current;
+    revealLoadingRequestIdRef.current = loadingRequestId;
     setRevealLoading(boxAssetId);
     try {
       const revealDrop = requireKnownDropConfig(dropId, `reveal request for ${boxAssetId}`);
       const revealContent = getDropContent(revealDrop.dropId);
       const resp = await revealDudes(publicKey.toBase58(), boxAssetId, revealDrop.dropId);
       const revealed = (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
+      if (revealOverlaySessionRef.current !== requestSession) {
+        return 'resolved';
+      }
       preloadPonchoRevealCardAssetsForDropId(revealDrop.dropId, revealed);
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
@@ -2452,6 +2494,9 @@ function App({ currentPath }: AppProps) {
       });
       return 'resolved';
     } catch (err) {
+      if (revealOverlaySessionRef.current !== requestSession) {
+        return 'resolved';
+      }
       console.error(err);
       const code = (err as { code?: string })?.code;
       if (code !== 'not-found' && !isUserRejectedError(err)) {
@@ -2459,31 +2504,31 @@ function App({ currentPath }: AppProps) {
       }
       return 'retry';
     } finally {
-      setRevealLoading(null);
+      if (revealLoadingRequestIdRef.current === loadingRequestId) {
+        revealLoadingRequestIdRef.current = null;
+        setRevealLoading((current) => (current === boxAssetId ? null : current));
+      }
     }
   };
 
+  const ensureRevealOverlayAdvanceAllowed = useCallback(() => {
+    if (blockViewerModeAction()) return false;
+    if (!publicKey) {
+      showToast('Connect wallet first');
+      return false;
+    }
+    return true;
+  }, [blockViewerModeAction, publicKey, showToast]);
+
   const handleRevealOverlayClick = () => {
-    if (blockViewerModeAction()) return;
     if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.phase !== 'ready') return;
-    if (revealOverlayUsesPonchoRenderer) {
-      if (!publicKey) {
-        showToast('Connect wallet first');
-        return;
-      }
-      ponchoRevealController.handleAdvance();
-      return;
-    }
     if (revealOverlay.autoOpening) return;
     const revealContent = getDropContent(revealOverlay.dropId);
     if (revealContent.reveal.mode === 'animated' && revealOverlay.frame >= revealFrameCountForDropId(revealOverlay.dropId)) {
       return;
     }
-    if (!publicKey) {
-      showToast('Connect wallet first');
-      return;
-    }
+    if (!ensureRevealOverlayAdvanceAllowed()) return;
 
     const { click, clickVolume } = revealSoundUrlsForDropId(revealOverlay.dropId);
     void ensureSoundReady().then(() => soundPlayer.playSound(pickRandomSoundUrl(click), clickVolume));
@@ -2529,11 +2574,11 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-	  const handleRevealOverlayBackdropClick = () => {
-	    if (!revealOverlay || revealOverlayClosing) return;
-	    const hasResults = Boolean(revealOverlay.revealedIds?.length);
+  const handleRevealOverlayBackdropClick = () => {
+    if (!revealOverlay || revealOverlayClosing) return;
+    const hasResults = Boolean(revealOverlay.revealedIds?.length);
     if (revealOverlayUsesPonchoRenderer) {
-      if (!ponchoRevealController.revealComplete) {
+      if (!ponchoRevealComplete) {
         return;
       }
       if (hasResults && !ponchoPackDiscardDismissReadyRef.current) {
@@ -2555,35 +2600,43 @@ function App({ currentPath }: AppProps) {
     if (hasResults && Date.now() < revealDismissLockedUntilRef.current) {
       return;
     }
-	    closeRevealOverlay();
-	  };
+    closeRevealOverlay();
+  };
 
-	  const openPreparingOverlayForBox = useCallback(
-	    (box: InventoryItem) => {
-	      preloadRevealSounds(box.dropId);
-	      preloadPonchoRevealPackAssetsForDropId(box.dropId);
-	      preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
-	      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
-	      if (typeof window === 'undefined') return;
-	      const originRect = findInventoryRect(box.id);
-	      const fallbackTarget = calcRevealTargetRectForDrop(
+  const handleRevealOverlayTransitionEnd = useCallback(
+    (evt: TransitionEvent<HTMLDivElement>) => {
+      if (evt.propertyName !== 'opacity') return;
+      if (!revealOverlayClosing) return;
+      finalizeRevealOverlayDismissal();
+    },
+    [finalizeRevealOverlayDismissal, revealOverlayClosing],
+  );
+
+  const openPreparingOverlayForBox = useCallback(
+    (box: InventoryItem) => {
+      preloadRevealSounds(box.dropId);
+      preloadPonchoRevealPackAssetsForDropId(box.dropId);
+      preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
+      preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
+      if (typeof window === 'undefined') return;
+      const originRect = findInventoryRect(box.id);
+      const fallbackTarget = calcRevealTargetRectForDrop(
         window.innerWidth,
         window.innerHeight,
         box.dropId,
         boxAspectRatioForDropId(box.dropId),
       );
-	      const fallbackRect = new DOMRect(
-	        fallbackTarget.left,
-	        fallbackTarget.top,
-	        fallbackTarget.width,
-	        fallbackTarget.height,
-	      );
-	      const overlayItem: InventoryItem = { ...box, image: normalizeBoxDisplayImage(box.dropId, box.image) };
-	      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
-	    },
-	    [
+      const fallbackRect = new DOMRect(
+        fallbackTarget.left,
+        fallbackTarget.top,
+        fallbackTarget.width,
+        fallbackTarget.height,
+      );
+      const overlayItem: InventoryItem = { ...box, image: normalizeBoxDisplayImage(box.dropId, box.image) };
+      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
+    },
+    [
       boxAspectRatioForDropId,
-      boxImageForDropId,
       openRevealOverlay,
       preloadBoxFrames,
       preloadPonchoRevealPackAssetsForDropId,
@@ -2592,7 +2645,7 @@ function App({ currentPath }: AppProps) {
       revealClickMaxForDropId,
       revealFrameCountForDropId,
     ],
-	  );
+  );
 
 	  const handleOpenSelectedBox = async () => {
       if (blockViewerModeAction()) return;
@@ -2892,38 +2945,25 @@ function App({ currentPath }: AppProps) {
       revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
       (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
   );
-  const ponchoRevealController = usePonchoDrifellaRevealController({
+  const ponchoRevealCardAssetsReady = usePonchoDrifellaCardAssetsReady({
     active: Boolean(revealOverlay && revealOverlayUsesPonchoRenderer),
-    phase: revealOverlay?.phase || 'ready',
-    boxLabel: revealOverlayContainerLabel,
-    cardReady: Boolean(revealOverlay?.revealedIds?.length),
-    cardDisplayReady: ponchoRevealCardDisplayReady,
-    loadedImages: preloadedBoxFramesRef.current,
-    pendingImages: boxFramePreloadImagesRef.current,
-    resetKey: revealOverlay ? `${revealOverlay.id}:${revealOverlay.phase}` : 'closed',
-    onRequestReveal: revealOverlay ? () => handleRevealDudes(revealOverlay.id, revealOverlay.dropId) : undefined,
-    onPlayClick: revealOverlay ? () => playClickSoundForDropId(revealOverlay.dropId) : undefined,
-    onPlayReveal: revealOverlay ? () => playRevealSoundForDropId(revealOverlay.dropId) : undefined,
+    card: ponchoRevealCard,
+    imageCache: ponchoImageCacheRef.current,
   });
   const showRevealOutcome = Boolean(
     revealOverlay &&
       revealOverlay.revealedIds?.length &&
-      (revealOverlayUsesPonchoRenderer
-        ? ponchoRevealController.phase === 'revealed'
-        : revealOverlayContent.reveal.mode === 'static' ||
-          revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
+      (revealOverlayContent.reveal.mode === 'static' || revealOverlay.frame >= revealMediaStartForDropId(revealOverlay.dropId)),
   );
   const revealOverlayStage = revealOverlay
-    ? revealOverlayUsesPonchoRenderer
-      ? ponchoRevealController.phase
-      : revealOverlay.phase === 'preparing'
-        ? 'preparing'
-        : showRevealOutcome
-          ? 'revealed'
-          : 'ready'
+    ? revealOverlay.phase === 'preparing'
+      ? 'preparing'
+      : showRevealOutcome
+        ? 'revealed'
+        : 'ready'
     : 'ready';
   useEffect(() => {
-    if (!revealOverlayUsesPonchoRenderer || !revealOverlay?.revealedIds?.length || ponchoRevealController.phase !== 'revealed') {
+    if (!revealOverlayUsesPonchoRenderer || !revealOverlay?.revealedIds?.length || !ponchoRevealComplete) {
       ponchoPackDiscardDismissReadyRef.current = false;
       clearPonchoPackDiscardDismissTimeout();
       return undefined;
@@ -2943,7 +2983,7 @@ function App({ currentPath }: AppProps) {
   }, [
     clearPonchoPackDiscardDismissTimeout,
     markPonchoPackDiscardDismissReady,
-    ponchoRevealController.phase,
+    ponchoRevealComplete,
     revealOverlay?.id,
     revealOverlay?.revealedIds?.length,
     revealOverlayUsesPonchoRenderer,
@@ -3013,36 +3053,6 @@ function App({ currentPath }: AppProps) {
     if (!revealOverlay?.revealedIds?.length) return;
     queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
   }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds]);
-  useEffect(() => {
-    if (!ponchoRevealCard) {
-      setPonchoRevealCardDisplayReady(false);
-      return undefined;
-    }
-    if (
-      arePonchoDrifellaCardAssetsReady(
-        ponchoRevealCard,
-        preloadedPonchoCardAssetsRef.current,
-        ponchoCardPreloadImagesRef.current,
-      )
-    ) {
-      setPonchoRevealCardDisplayReady(true);
-      return undefined;
-    }
-    const abortController = new AbortController();
-    setPonchoRevealCardDisplayReady(false);
-    void waitForPonchoDrifellaCardAssetsUntilReady(
-      ponchoRevealCard,
-      preloadedPonchoCardAssetsRef.current,
-      ponchoCardPreloadImagesRef.current,
-      abortController.signal,
-    ).then((ready) => {
-      if (abortController.signal.aborted) return;
-      setPonchoRevealCardDisplayReady(ready);
-    });
-    return () => {
-      abortController.abort();
-    };
-  }, [ponchoRevealCard]);
 
   const revealMediaStyle = useMemo(() => {
     if (!revealOverlay || !revealMediaItems.length) return undefined;
@@ -3073,26 +3083,22 @@ function App({ currentPath }: AppProps) {
       ? resolveRevealFrameSrc(revealFrameSequence, revealOverlay.frame)
       : undefined;
   const revealBoxFrameSrc =
-    revealOverlay && revealOverlayUsesPonchoRenderer
-      ? ponchoRevealController.boxFrameSrc
-      : revealOverlay && revealOverlay.frame
-        ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
-        : undefined;
+    revealOverlay && !revealOverlayUsesPonchoRenderer && revealOverlay.frame
+      ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
+      : undefined;
   const revealOverlayNote =
     revealOverlayStage === 'preparing'
       ? `preparing to ${openVerbForDropId(revealOverlay?.dropId)}...`
       : revealOverlayStage === 'revealed'
         ? ''
         : revealOverlay
-          ? revealOverlayUsesPonchoRenderer
-            ? ponchoRevealController.note
-            : revealOverlay.hasRevealAttempted
-              ? revealOverlayContent.reveal.mode === 'animated'
-                ? `keep clicking the ${revealOverlayContainerLabel}`
-                : revealLoading === revealOverlay.id
-                  ? 'opening...'
-                  : ''
-              : `click the ${revealOverlayContainerLabel} to open`
+          ? revealOverlay.hasRevealAttempted
+            ? revealOverlayContent.reveal.mode === 'animated'
+              ? `keep clicking the ${revealOverlayContainerLabel}`
+              : revealLoading === revealOverlay.id
+                ? 'opening...'
+                : ''
+            : `click the ${revealOverlayContainerLabel} to open`
           : '';
   const defaultRevealOverlayNode = revealOverlay ? (
     <div
@@ -3106,11 +3112,7 @@ function App({ currentPath }: AppProps) {
       <div className="reveal-overlay__backdrop" />
       <div
         className="reveal-overlay__frame"
-        onTransitionEnd={(evt) => {
-          if (evt.propertyName !== 'opacity') return;
-          if (!revealOverlayClosing) return;
-          finalizeRevealOverlayDismissal();
-        }}
+        onTransitionEnd={handleRevealOverlayTransitionEnd}
       >
         <div
           className={`reveal-overlay__shine${showRevealOutcome ? ' reveal-overlay__shine--visible' : ''}`}
@@ -3221,28 +3223,22 @@ function App({ currentPath }: AppProps) {
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
-        phase={ponchoRevealController.phase}
+        phase={revealOverlay.phase}
         revealedIds={revealOverlay.revealedIds}
+        cardAssetsReady={ponchoRevealCardAssetsReady}
         loading={revealLoading === revealOverlay.id}
-        note={revealOverlayNote}
         boxName={revealOverlay.name}
-        boxFrameSrc={revealBoxFrameSrc}
-        foregroundFrameSrc={ponchoRevealController.foregroundFrameSrc}
-        cardVisible={ponchoRevealController.cardVisible}
-        cardInteractive={ponchoRevealController.cardInteractive}
-        boxDisabled={
-          revealOverlayClosing ||
-          ponchoRevealController.phase !== 'ready' ||
-          ponchoRevealController.revealComplete
-        }
-        onAdvance={handleRevealOverlayClick}
+        boxLabel={revealOverlayContainerLabel}
+        imageCache={ponchoImageCacheRef.current}
+        resetKey={`${revealOverlay.id}:${revealOverlay.phase}`}
+        onRequestReveal={() => handleRevealDudes(revealOverlay.id, revealOverlay.dropId)}
+        onPlayClick={() => playClickSoundForDropId(revealOverlay.dropId)}
+        onPlayReveal={() => playRevealSoundForDropId(revealOverlay.dropId)}
+        onBeforeAdvance={ensureRevealOverlayAdvanceAllowed}
         onDismiss={handleRevealOverlayBackdropClick}
-        onTransitionEnd={(evt) => {
-          if (evt.propertyName !== 'opacity') return;
-          if (!revealOverlayClosing) return;
-          finalizeRevealOverlayDismissal();
-        }}
+        onTransitionEnd={handleRevealOverlayTransitionEnd}
         onPackDiscardEnd={markPonchoPackDiscardDismissReady}
+        onRevealCompleteChange={setPonchoRevealComplete}
       />
     ) : (
       defaultRevealOverlayNode

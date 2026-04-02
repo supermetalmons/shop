@@ -9,12 +9,11 @@ import {
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
-  arePonchoDrifellaCardAssetsReady,
+  createPonchoDrifellaImageCache,
   getRandomPonchoDrifellaBoxClickSoundUrl,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
-  usePonchoDrifellaRevealController,
-  waitForPonchoDrifellaCardAssetsUntilReady,
+  usePonchoDrifellaCardAssetsReady,
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
@@ -54,20 +53,30 @@ function randomWipRevealDelayMs() {
   return WIP_CARD_READY_MIN_DELAY_MS + Math.floor(Math.random() * (WIP_CARD_READY_MAX_DELAY_MS - WIP_CARD_READY_MIN_DELAY_MS + 1));
 }
 
+function nextWipCardIndex(currentIndex: number) {
+  if (DRIF_CARD_COUNT < 2) return currentIndex;
+  let nextIndex = currentIndex;
+  while (nextIndex === currentIndex) {
+    nextIndex = Math.floor(Math.random() * DRIF_CARD_COUNT);
+  }
+  return nextIndex;
+}
+
 function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
   const [cardReady, setCardReady] = useState(false);
-  const [cardDisplayReady, setCardDisplayReady] = useState(false);
   const [resetKey, setResetKey] = useState(0);
-  const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
-  const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
-  const preloadedCardsRef = useRef<Set<string>>(new Set());
-  const cardPreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const currentCard = DRIF_CARDS[cardIndex];
+  const cardAssetsReady = usePonchoDrifellaCardAssetsReady({
+    active: true,
+    card: currentCard,
+    imageCache: ponchoImageCacheRef.current,
+  });
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -105,18 +114,6 @@ function LocalPlayWipApp() {
       void pending.then(play);
     }
   }, []);
-  const ponchoRevealController = usePonchoDrifellaRevealController({
-    active: true,
-    phase: 'ready',
-    boxLabel: revealContainerLabel,
-    cardReady,
-    cardDisplayReady,
-    loadedImages: preloadedBoxFramesRef.current,
-    pendingImages: boxFramePreloadImagesRef.current,
-    resetKey,
-    onPlayClick: playClickSound,
-    onPlayReveal: playRevealSound,
-  });
 
   const revealOverlayStyle = useMemo<React.CSSProperties>(() => {
     const safeTargetWidth = Math.max(1, targetRect.width);
@@ -171,29 +168,8 @@ function LocalPlayWipApp() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    preloadPonchoDrifellaPackAssets(preloadedBoxFramesRef.current, boxFramePreloadImagesRef.current);
+    preloadPonchoDrifellaPackAssets(ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
   }, []);
-
-  useEffect(() => {
-    if (arePonchoDrifellaCardAssetsReady(currentCard, preloadedCardsRef.current, cardPreloadImagesRef.current)) {
-      setCardDisplayReady(true);
-      return undefined;
-    }
-    const abortController = new AbortController();
-    setCardDisplayReady(false);
-    void waitForPonchoDrifellaCardAssetsUntilReady(
-      currentCard,
-      preloadedCardsRef.current,
-      cardPreloadImagesRef.current,
-      abortController.signal,
-    ).then((ready) => {
-      if (abortController.signal.aborted) return;
-      setCardDisplayReady(ready);
-    });
-    return () => {
-      abortController.abort();
-    };
-  }, [currentCard]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -213,16 +189,15 @@ function LocalPlayWipApp() {
 
   const handleReset = useCallback(() => {
     setResetKey((prev) => prev + 1);
-    setCardIndex((prevIndex) => {
-      if (DRIF_CARD_COUNT < 2) return prevIndex;
-      let nextIndex = prevIndex;
-      while (nextIndex === prevIndex) {
-        nextIndex = Math.floor(Math.random() * DRIF_CARD_COUNT);
-      }
-      preloadPonchoDrifellaCardAssets(DRIF_CARDS[nextIndex], preloadedCardsRef.current, cardPreloadImagesRef.current);
-      return nextIndex;
-    });
-  }, []);
+    const nextIndex = nextWipCardIndex(cardIndex);
+    if (nextIndex !== cardIndex) {
+      preloadPonchoDrifellaCardAssets(DRIF_CARDS[nextIndex], ponchoImageCacheRef.current, {
+        mode: 'resident',
+        priority: 'high',
+      });
+    }
+    setCardIndex(nextIndex);
+  }, [cardIndex]);
 
   return (
     <div className="wip-page">
@@ -230,16 +205,16 @@ function LocalPlayWipApp() {
         overlayStyle={revealOverlayStyle}
         active
         closing={false}
-        stage={ponchoRevealController.phase}
-        note={ponchoRevealController.note}
+        phase="ready"
+        boxLabel={revealContainerLabel}
         boxName={mysteryContainerName}
-        boxFrameSrc={ponchoRevealController.boxFrameSrc}
-        foregroundFrameSrc={ponchoRevealController.foregroundFrameSrc}
         card={currentCard}
-        cardVisible={ponchoRevealController.cardVisible}
-        cardInteractive={ponchoRevealController.cardInteractive}
-        boxDisabled={ponchoRevealController.revealComplete}
-        onAdvance={ponchoRevealController.handleAdvance}
+        cardReady={cardReady}
+        cardAssetsReady={cardAssetsReady}
+        imageCache={ponchoImageCacheRef.current}
+        resetKey={resetKey}
+        onPlayClick={playClickSound}
+        onPlayReveal={playRevealSound}
       />
       <button
         type="button"

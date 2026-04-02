@@ -38,10 +38,12 @@ type DrifEffectCardProps = {
   ariaLabel: string;
   imageAlt?: string;
   onClick?: () => void;
+  onImageReadyChange?: (ready: boolean) => void;
   interactive?: boolean;
   disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
   preloadCards?: readonly DrifCardConfig[];
+  imageLoading?: 'lazy' | 'eager';
 };
 
 function round(value: number, precision = 3) {
@@ -173,12 +175,15 @@ export default function DrifEffectCard({
   ariaLabel,
   imageAlt = '',
   onClick,
+  onImageReadyChange,
   interactive = true,
   disableGlow = false,
   preserveTransformOnCardChange = false,
   preloadCards,
+  imageLoading = 'lazy',
 }: DrifEffectCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const springTickLastTimeRef = useRef(0);
   const springUpdateRafRef = useRef<number | null>(null);
@@ -419,7 +424,7 @@ export default function DrifEffectCard({
     applyStylesFromSprings();
   }, [applyStylesFromSprings, interactEnd]);
 
-  const onImageLoad = useCallback(() => {
+  const markImageLoaded = useCallback(() => {
     if (preserveTransformOnCardChange) {
       if (firstImageLoadedRef.current) return;
       firstImageLoadedRef.current = true;
@@ -453,8 +458,18 @@ export default function DrifEffectCard({
   }, [card.imageSrc, preserveTransformOnCardChange, reset]);
 
   useEffect(() => {
+    const image = imageRef.current;
+    if (!image || !image.complete || image.naturalWidth <= 0) return;
+    markImageLoaded();
+  }, [card.imageSrc, markImageLoaded]);
+
+  useEffect(() => {
     applyStylesFromSprings();
   }, [applyStylesFromSprings]);
+
+  useEffect(() => {
+    onImageReadyChange?.(!loading);
+  }, [loading, onImageReadyChange]);
 
   useEffect(() => {
     if (interactive) return;
@@ -543,7 +558,16 @@ export default function DrifEffectCard({
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">
-            <img src={card.imageSrc} alt={imageAlt} onLoad={onImageLoad} loading="lazy" width="1000" height="1400" draggable={false} />
+            <img
+              ref={imageRef}
+              src={card.imageSrc}
+              alt={imageAlt}
+              onLoad={markImageLoaded}
+              loading={imageLoading}
+              width="1000"
+              height="1400"
+              draggable={false}
+            />
             <div className="drif-effect-card__shine" />
             <div className="drif-effect-card__glitter" />
             <div className="drif-effect-card__glare" />

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -11,100 +12,312 @@ import {
 import type { DrifCardConfig } from '../drifCards';
 import {
   getPonchoDrifellaCardByFigureId,
+  type PonchoDrifellaImageCache,
   type PonchoDrifellaRevealPhase,
+  type PonchoDrifellaRevealRequestStatus,
+  usePonchoDrifellaImageCacheGeneration,
+  usePonchoDrifellaRevealController,
 } from '../lib/ponchoDrifellaReveal';
 import WipInteractiveCard from './WipInteractiveCard';
 
-export type PonchoInventoryRevealOverlayProps = {
-  mode: 'inventory-unbox';
+type PonchoRevealSharedProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
   phase: PonchoDrifellaRevealPhase;
-  revealedIds?: number[];
-  loading: boolean;
-  note: string;
+  boxLabel: string;
   boxName: string;
-  boxFrameSrc?: string;
-  foregroundFrameSrc?: string;
-  cardVisible: boolean;
-  cardInteractive: boolean;
-  boxDisabled: boolean;
-  onAdvance: () => void;
-  onDismiss: () => void;
-  onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
-  onPackDiscardEnd?: () => void;
-};
-
-type PonchoRevealOverlayProps = {
-  overlayStyle?: CSSProperties;
-  active: boolean;
-  closing: boolean;
-  stage: PonchoDrifellaRevealPhase;
-  note: string;
-  boxName: string;
-  boxFrameSrc?: string;
-  foregroundFrameSrc?: string;
-  card?: DrifCardConfig;
-  cardVisible?: boolean;
-  cardInteractive?: boolean;
-  boxBusy?: boolean;
-  boxDisabled?: boolean;
-  onAdvance: () => void;
+  imageCache: PonchoDrifellaImageCache;
+  resetKey: string | number;
+  onRequestReveal?: () => PonchoDrifellaRevealRequestStatus | void | Promise<PonchoDrifellaRevealRequestStatus | void>;
+  onPlayClick?: () => void;
+  onPlayReveal?: () => void;
+  onBeforeAdvance?: () => boolean;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
   onPackDiscardEnd?: () => void;
+  onRevealCompleteChange?: (complete: boolean) => void;
 };
+
+type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
+  card?: DrifCardConfig;
+  cardReady: boolean;
+  cardAssetsReady: boolean;
+  loading?: boolean;
+};
+
+export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
+  mode: 'inventory-unbox';
+  revealedIds?: number[];
+  cardAssetsReady: boolean;
+  loading: boolean;
+};
+
+type PonchoFrameCanvasProps = {
+  image?: HTMLImageElement;
+  className: string;
+};
+
+function PonchoFrameCanvas({ image, className }: PonchoFrameCanvasProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | undefined>(image);
+  const drawRafRef = useRef<number | null>(null);
+  const lastRenderSignatureRef = useRef<string>('');
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    const cssWidth = canvas.clientWidth;
+    const cssHeight = canvas.clientHeight;
+    if (!cssWidth || !cssHeight) {
+      lastRenderSignatureRef.current = '';
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    const frameImage = imageRef.current;
+    const imageKey = frameImage ? frameImage.currentSrc || frameImage.src : '';
+    const dpr = typeof window === 'undefined' ? 1 : Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5));
+    const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
+    const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
+    const renderSignature = `${targetWidth}x${targetHeight}|${imageKey}`;
+    if (lastRenderSignatureRef.current === renderSignature) {
+      return;
+    }
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+
+    context.clearRect(0, 0, targetWidth, targetHeight);
+    if (!frameImage || frameImage.naturalWidth <= 0 || frameImage.naturalHeight <= 0) {
+      lastRenderSignatureRef.current = '';
+      return;
+    }
+
+    const scale = Math.min(targetWidth / frameImage.naturalWidth, targetHeight / frameImage.naturalHeight);
+    const drawWidth = frameImage.naturalWidth * scale;
+    const drawHeight = frameImage.naturalHeight * scale;
+    const drawX = (targetWidth - drawWidth) / 2;
+    const drawY = (targetHeight - drawHeight) / 2;
+    const downscaling = drawWidth < frameImage.naturalWidth || drawHeight < frameImage.naturalHeight;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = downscaling && dpr <= 1.2 ? 'high' : 'medium';
+    context.drawImage(frameImage, drawX, drawY, drawWidth, drawHeight);
+    lastRenderSignatureRef.current = renderSignature;
+  }, []);
+
+  const scheduleDraw = useCallback(() => {
+    if (typeof window === 'undefined') {
+      draw();
+      return;
+    }
+    if (drawRafRef.current !== null) return;
+    drawRafRef.current = window.requestAnimationFrame(() => {
+      drawRafRef.current = null;
+      draw();
+    });
+  }, [draw]);
+
+  useEffect(() => {
+    imageRef.current = image;
+    lastRenderSignatureRef.current = '';
+    scheduleDraw();
+  }, [image, scheduleDraw]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    if (typeof ResizeObserver === 'function') {
+      const observer = new ResizeObserver(() => {
+        scheduleDraw();
+      });
+      observer.observe(canvas);
+      return () => {
+        observer.disconnect();
+      };
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', scheduleDraw);
+      return () => {
+        window.removeEventListener('resize', scheduleDraw);
+      };
+    }
+
+    return undefined;
+  }, [scheduleDraw]);
+
+  useEffect(() => {
+    return () => {
+      if (drawRafRef.current === null || typeof window === 'undefined') return;
+      window.cancelAnimationFrame(drawRafRef.current);
+      drawRafRef.current = null;
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
+}
 
 export function PonchoRevealOverlay({
   overlayStyle,
   active,
   closing,
-  stage,
-  note,
+  phase,
+  boxLabel,
   boxName,
-  boxFrameSrc,
-  foregroundFrameSrc,
   card,
-  cardVisible = false,
-  cardInteractive = false,
-  boxBusy = false,
-  boxDisabled = false,
-  onAdvance,
+  cardReady,
+  cardAssetsReady,
+  loading = false,
+  imageCache,
+  resetKey,
+  onRequestReveal,
+  onPlayClick,
+  onPlayReveal,
+  onBeforeAdvance,
   onDismiss,
   onTransitionEnd,
   onPackDiscardEnd,
-}: PonchoRevealOverlayProps) {
-  const foregroundImageRef = useRef<HTMLImageElement | null>(null);
+  onRevealCompleteChange,
+}: PonchoRevealRuntimeProps) {
+  const imageCacheGeneration = usePonchoDrifellaImageCacheGeneration(imageCache);
+  const cardSessionKey = useMemo(
+    () => `${active ? 'active' : 'inactive'}:${resetKey}:${imageCacheGeneration}:${card?.effect.id ?? 'none'}`,
+    [
+      active,
+      card?.effect.id,
+      imageCacheGeneration,
+      resetKey,
+    ],
+  );
+  const [cardPaintReadyState, setCardPaintReadyState] = useState(() => ({
+    ready: false,
+    sessionKey: cardSessionKey,
+  }));
+  const [cardVisibleLatchState, setCardVisibleLatchState] = useState(() => ({
+    sessionKey: cardSessionKey,
+    visible: false,
+  }));
   const discardAnimationReportedRef = useRef(false);
-  const [foregroundPrepared, setForegroundPrepared] = useState(false);
-  const desiredForegroundVisible = Boolean(foregroundFrameSrc) && cardVisible;
-  const foregroundCoverReady = Boolean(foregroundFrameSrc) && foregroundPrepared;
-  const resolvedCardVisible = Boolean(card) && cardVisible && foregroundCoverReady;
-  const packDiscarded = stage === 'revealed';
-  const cardLocked = packDiscarded && resolvedCardVisible && !cardInteractive;
+  const retainedForegroundStateRef = useRef<{
+    image: HTMLImageElement | null;
+    sessionKey: string;
+  }>({
+    image: null,
+    sessionKey: cardSessionKey,
+  });
+
+  const cardPaintReady = cardPaintReadyState.sessionKey === cardSessionKey && cardPaintReadyState.ready;
+  const cardVisibleLatched = cardVisibleLatchState.sessionKey === cardSessionKey && cardVisibleLatchState.visible;
+  const cardDisplayReady = cardAssetsReady && cardPaintReady;
+
+  useEffect(() => {
+    setCardPaintReadyState((currentState) =>
+      currentState.sessionKey === cardSessionKey ? currentState : { ready: false, sessionKey: cardSessionKey },
+    );
+    setCardVisibleLatchState((currentState) =>
+      currentState.sessionKey === cardSessionKey ? currentState : { sessionKey: cardSessionKey, visible: false },
+    );
+  }, [cardSessionKey]);
+
+  const controller = usePonchoDrifellaRevealController({
+    active,
+    phase,
+    boxLabel,
+    cardReady,
+    cardDisplayReady,
+    imageCache,
+    resetKey,
+    onRequestReveal,
+    onPlayClick,
+    onPlayReveal,
+  });
+
+  useEffect(() => {
+    onRevealCompleteChange?.(controller.revealComplete);
+  }, [controller.revealComplete, onRevealCompleteChange]);
+
+  useEffect(() => {
+    if (active && controller.revealComplete) return;
+    discardAnimationReportedRef.current = false;
+  }, [active, controller.revealComplete]);
+
+  const boxFrameImage = imageCache.resident.get(controller.boxFrameSrc);
+  const boxFrameFallbackSrc =
+    !boxFrameImage && controller.stage !== 'autoplay' && controller.stage !== 'revealed'
+      ? controller.boxFrameSrc
+      : undefined;
+  const foregroundFrameImage = controller.foregroundFrameSrc
+    ? imageCache.resident.get(controller.foregroundFrameSrc)
+    : undefined;
+  const retainedForegroundImage =
+    retainedForegroundStateRef.current.sessionKey === cardSessionKey
+      ? retainedForegroundStateRef.current.image
+      : null;
+  const displayedForegroundImage = foregroundFrameImage || retainedForegroundImage || undefined;
+
+  useEffect(() => {
+    if (retainedForegroundStateRef.current.sessionKey !== cardSessionKey) {
+      retainedForegroundStateRef.current = {
+        image: foregroundFrameImage || null,
+        sessionKey: cardSessionKey,
+      };
+      return;
+    }
+    if (foregroundFrameImage) {
+      retainedForegroundStateRef.current.image = foregroundFrameImage;
+    }
+  }, [cardSessionKey, foregroundFrameImage]);
+
+  useEffect(() => {
+    if (!controller.cardVisible || !displayedForegroundImage) return;
+    setCardVisibleLatchState((currentState) => {
+      if (currentState.sessionKey === cardSessionKey && currentState.visible) {
+        return currentState;
+      }
+      return {
+        sessionKey: cardSessionKey,
+        visible: true,
+      };
+    });
+  }, [cardSessionKey, controller.cardVisible, displayedForegroundImage]);
+
+  const allowCardWithoutForeground = controller.phase === 'revealed' && cardDisplayReady;
+  const resolvedCardVisible =
+    Boolean(card) &&
+    (Boolean(displayedForegroundImage) || allowCardWithoutForeground) &&
+    (controller.cardVisible || cardVisibleLatched || allowCardWithoutForeground);
+  const packDiscarded = controller.phase === 'revealed';
+  const cardLocked = packDiscarded && resolvedCardVisible && !controller.cardInteractive;
+  const boxDisabled =
+    closing ||
+    controller.phase !== 'ready' ||
+    controller.revealComplete ||
+    controller.advanceLocked;
+
+  const handleCardImageReadyChange = useCallback(
+    (ready: boolean) => {
+      setCardPaintReadyState((currentState) => {
+        if (currentState.sessionKey === cardSessionKey && currentState.ready === ready) {
+          return currentState;
+        }
+        return {
+          ready,
+          sessionKey: cardSessionKey,
+        };
+      });
+    },
+    [cardSessionKey],
+  );
+
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
   };
-
-  useEffect(() => {
-    if (!active || !foregroundFrameSrc) {
-      setForegroundPrepared(false);
-      return;
-    }
-    if (foregroundPrepared) {
-      return;
-    }
-    const foregroundImage = foregroundImageRef.current;
-    if (foregroundImage?.complete && foregroundImage.naturalWidth > 0) {
-      setForegroundPrepared(true);
-    }
-  }, [active, foregroundFrameSrc, foregroundPrepared]);
-
-  useEffect(() => {
-    if (active && packDiscarded) return;
-    discardAnimationReportedRef.current = false;
-  }, [active, packDiscarded]);
 
   const handlePackDiscardAnimationEnd = (evt: AnimationEvent<HTMLElement>) => {
     if (evt.animationName !== 'wip-pack-discard') return;
@@ -114,9 +327,15 @@ export function PonchoRevealOverlay({
     onPackDiscardEnd?.();
   };
 
+  const handleAdvance = () => {
+    if (boxDisabled) return;
+    if (onBeforeAdvance && !onBeforeAdvance()) return;
+    controller.handleAdvance();
+  };
+
   return (
     <div
-      className={`reveal-overlay wip-overlay reveal-overlay--${stage}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      className={`reveal-overlay wip-overlay reveal-overlay--${controller.phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyle}
       onClick={onDismiss}
@@ -130,105 +349,80 @@ export function PonchoRevealOverlay({
           type="button"
           className={`reveal-overlay__box${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
           aria-label={`Reveal ${boxName}`}
-          aria-busy={boxBusy}
+          aria-busy={loading}
           aria-disabled={boxDisabled}
           disabled={boxDisabled}
           onClick={(evt) => {
             evt.stopPropagation();
-            if (boxDisabled) return;
-            onAdvance();
+            handleAdvance();
           }}
           onAnimationEnd={handlePackDiscardAnimationEnd}
         >
-          {boxFrameSrc ? (
-            <img src={boxFrameSrc} alt={boxName} className="reveal-overlay__image" draggable={false} />
+          {boxFrameImage ? (
+            <PonchoFrameCanvas image={boxFrameImage} className="reveal-overlay__image" />
+          ) : boxFrameFallbackSrc ? (
+            <img
+              src={boxFrameFallbackSrc}
+              alt=""
+              className="reveal-overlay__image"
+              loading="eager"
+              decoding="async"
+              draggable={false}
+              aria-hidden="true"
+            />
           ) : (
             <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
           )}
         </button>
         {card ? (
           <div
-            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
-            aria-hidden={!resolvedCardVisible || !cardInteractive}
+            className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' reveal-overlay__media--visible' : ''}${controller.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
+            aria-hidden={!resolvedCardVisible || !controller.cardInteractive}
           >
             <div
-              className={`reveal-overlay__media-item wip-reveal__card-item${cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
-              onClick={cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
+              className={`reveal-overlay__media-item wip-reveal__card-item${controller.cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
+              onClick={controller.cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
             >
               <div className="reveal-overlay__media-float">
-                <WipInteractiveCard card={card} interactive={cardInteractive} />
+                <WipInteractiveCard
+                  card={card}
+                  interactive={controller.cardInteractive}
+                  onImageReadyChange={handleCardImageReadyChange}
+                />
               </div>
             </div>
           </div>
         ) : null}
-        {foregroundFrameSrc ? (
+        {displayedForegroundImage ? (
           <div
-            className={`wip-reveal__foreground${desiredForegroundVisible ? ' wip-reveal__foreground--visible' : ' wip-reveal__foreground--hidden'}${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
+            className={`wip-reveal__foreground${resolvedCardVisible ? ' wip-reveal__foreground--visible' : ' wip-reveal__foreground--hidden'}${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
             aria-hidden="true"
             onAnimationEnd={handlePackDiscardAnimationEnd}
           >
-            <img
-              ref={foregroundImageRef}
-              src={foregroundFrameSrc}
-              alt=""
-              className="reveal-overlay__image wip-reveal__foreground-image"
-              draggable={false}
-              onLoad={() => {
-                setForegroundPrepared(true);
-              }}
-            />
+            <PonchoFrameCanvas image={displayedForegroundImage} className="reveal-overlay__image wip-reveal__foreground-image" />
           </div>
         ) : null}
       </div>
-      <div className="reveal-overlay__note">{note}</div>
+      <div className="reveal-overlay__note">{controller.note}</div>
     </div>
   );
 }
 
 export default function PonchoInventoryRevealOverlay({
-  overlayStyle,
-  active,
-  closing,
-  phase,
+  mode: _mode,
   revealedIds,
-  loading,
-  note,
-  boxName,
-  boxFrameSrc,
-  foregroundFrameSrc,
-  cardVisible,
-  cardInteractive,
-  boxDisabled,
-  onAdvance,
-  onDismiss,
-  onTransitionEnd,
-  onPackDiscardEnd,
+  ...overlayProps
 }: PonchoInventoryRevealOverlayProps) {
   const revealedCard = useMemo(() => {
     if (!revealedIds?.length || revealedIds.length !== 1) return undefined;
     return getPonchoDrifellaCardByFigureId(revealedIds[0]);
   }, [revealedIds]);
-  const stage = phase === 'preparing' ? 'preparing' : phase === 'revealed' && revealedCard ? 'revealed' : 'ready';
 
   return (
     <PonchoRevealOverlay
-      overlayStyle={overlayStyle}
-      active={active}
-      closing={closing}
-      stage={stage}
-      note={note}
-      boxName={boxName}
-      boxFrameSrc={boxFrameSrc}
-      foregroundFrameSrc={foregroundFrameSrc}
+      {...overlayProps}
       card={revealedCard}
-      cardVisible={cardVisible}
-      cardInteractive={cardInteractive}
-      boxBusy={loading}
-      boxDisabled={boxDisabled}
-      onAdvance={onAdvance}
-      onDismiss={onDismiss}
-      onTransitionEnd={onTransitionEnd}
-      onPackDiscardEnd={onPackDiscardEnd}
+      cardReady={Boolean(revealedCard)}
     />
   );
 }
