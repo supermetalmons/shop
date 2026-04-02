@@ -1038,10 +1038,11 @@ export function usePonchoDrifellaRevealController({
   }, [cardReady, phase, stage]);
 
   useEffect(() => {
-    if (revealPhase !== 'revealed' || revealSoundPlayedRef.current) return;
+    const revealSoundReady = stage === 'autoplay' || revealPhase === 'revealed';
+    if (!revealSoundReady || revealSoundPlayedRef.current) return;
     revealSoundPlayedRef.current = true;
     onPlayReveal?.();
-  }, [onPlayReveal, revealPhase]);
+  }, [onPlayReveal, revealPhase, stage]);
 
   const animating = stage === 'punch' || stage === 'segment_1_1' || stage === 'segment_1_2' || stage === 'autoplay';
   const autoOpening = stage === 'autoplay';
