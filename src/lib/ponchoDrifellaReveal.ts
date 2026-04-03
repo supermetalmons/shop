@@ -831,7 +831,8 @@ export function getPonchoDrifellaAdvanceDecision({
   }
   if (!cardReady) return 'start-punch';
   if (stage === 'idle') {
-    return openingFramesReady ? 'start-segment-1-1' : 'start-punch';
+    // The extracted player advances autoplay on a fixed timer, so only leave idle once the full entry path is ready.
+    return openingFramesReady && autoplayEntryReady ? 'start-segment-1-1' : 'start-punch';
   }
   if (stage === 'segment_1_1_hold') {
     return 'start-segment-1-2';
@@ -979,8 +980,7 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
   let stageTimeoutId: number | null = null;
   let autoplayWaitTimeoutId: number | null = null;
   let cardUnlockTimeoutId: number | null = null;
-  let openingResidentWaitAbortController: AbortController | null = null;
-  let autoplayResidentWaitAbortController: AbortController | null = null;
+  let waitAbortController: AbortController | null = null;
 
   const clearStageTimeout = () => {
     if (stageTimeoutId === null || typeof window === 'undefined') return;
@@ -1000,52 +1000,9 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     cardUnlockTimeoutId = null;
   };
 
-  const clearOpeningResidentWait = () => {
-    openingResidentWaitAbortController?.abort();
-    openingResidentWaitAbortController = null;
-  };
-
-  const clearAutoplayResidentWait = () => {
-    autoplayResidentWaitAbortController?.abort();
-    autoplayResidentWaitAbortController = null;
-  };
-
   const abortWaits = () => {
-    clearOpeningResidentWait();
-    clearAutoplayResidentWait();
-  };
-
-  const ensureResidentWait = ({
-    imageSources,
-    ready,
-    getAbortController,
-    setAbortController,
-    shouldWait = () => true,
-    onReady,
-  }: {
-    imageSources: readonly string[];
-    ready: () => boolean;
-    getAbortController: () => AbortController | null;
-    setAbortController: (abortController: AbortController | null) => void;
-    shouldWait?: () => boolean;
-    onReady: () => void;
-  }) => {
-    if (!config.active || !config.imageCache || !shouldWait() || ready() || getAbortController()) {
-      return;
-    }
-    const abortController = new AbortController();
-    setAbortController(abortController);
-    void waitForPonchoDrifellaResidentImageSources(imageSources, config.imageCache, abortController.signal)
-      .then((residentReady) => {
-        if (!residentReady || disposed || abortController.signal.aborted) return;
-        refreshReadiness();
-        onReady();
-      })
-      .finally(() => {
-        if (getAbortController() === abortController) {
-          setAbortController(null);
-        }
-      });
+    waitAbortController?.abort();
+    waitAbortController = null;
   };
 
   const refreshReadiness = () => {
@@ -1148,8 +1105,6 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       if (next.stage !== 'revealed') {
         state.cardInteractionUnlocked = false;
       }
-      refreshReadiness();
-      ensureResidentPreload();
       commitCurrentVisual();
       if (state.stage === 'revealed' && !state.revealFailedOpen && typeof window !== 'undefined') {
         clearCardUnlockTimeout();
@@ -1181,77 +1136,53 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       emitState();
       return;
     }
-    startAutoplayStage();
-  };
-
-  const startTimedStage = (stage: 'punch' | 'segment_1_1' | 'segment_1_2' | 'autoplay') => {
-    clearStageTimeout();
-    state.stage = stage;
-    state.stageFrameIndex = 0;
-    state.cardInteractionUnlocked = false;
-    refreshReadiness();
-    ensureResidentPreload();
-    commitCurrentVisual();
-    scheduleStageTick();
-  };
-
-  const startAutoplayStage = () => {
     clearAutoplayWaitTimeout();
+    clearStageTimeout();
     state.autoplayQueued = false;
     state.revealFailedOpen = false;
-    startTimedStage('autoplay');
-  };
-
-  const ensureOpeningResidentWait = () => {
-    ensureResidentWait({
-      imageSources: PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS,
-      ready: () => state.openingFramesReady,
-      getAbortController: () => openingResidentWaitAbortController,
-      setAbortController: (abortController) => {
-        openingResidentWaitAbortController = abortController;
-      },
-      onReady: commitCurrentVisual,
-    });
-  };
-
-  const ensureAutoplayResidentWait = () => {
-    ensureResidentWait({
-      imageSources: PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS,
-      ready: () => state.autoplayFramesReady,
-      getAbortController: () => autoplayResidentWaitAbortController,
-      setAbortController: (abortController) => {
-        autoplayResidentWaitAbortController = abortController;
-      },
-      shouldWait: () =>
-        shouldPreparePonchoDrifellaAutoplayResidents({
-          cardReady: config.cardReady,
-          stage: state.stage,
-        }),
-      onReady: () => {
-        commitCurrentVisual();
-        maybeStartQueuedAutoplay();
-      },
-    });
+    state.stage = 'autoplay';
+    state.stageFrameIndex = 0;
+    state.cardInteractionUnlocked = false;
+    commitCurrentVisual();
+    scheduleStageTick();
   };
 
   const ensureResidentPreload = () => {
     if (!config.active || !config.imageCache) return;
     preloadPonchoDrifellaPackAssets(config.imageCache, PONCHO_DRIFELLA_WARM_PRELOAD_OPTIONS);
     preloadPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS, config.imageCache);
-    ensureOpeningResidentWait();
     const shouldPrepareAutoplayResidents = shouldPreparePonchoDrifellaAutoplayResidents({
       cardReady: config.cardReady,
       stage: state.stage,
     });
     if (shouldPrepareAutoplayResidents) {
       preloadPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache);
-      ensureAutoplayResidentWait();
     }
-    if (
-      !state.lastCommittedVisual &&
-      ponchoDrifellaImageResidentReady(PONCHO_DRIFELLA_INITIAL_FRAME_URL, config.imageCache)
-    ) {
-      commitCurrentVisual();
+    abortWaits();
+    waitAbortController = new AbortController();
+    const { signal } = waitAbortController;
+    if (!state.openingFramesReady) {
+      void waitForPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS, config.imageCache, signal).then(() => {
+        if (disposed || signal.aborted) return;
+        refreshReadiness();
+        commitCurrentVisual();
+      });
+    }
+    if (shouldPrepareAutoplayResidents && !state.autoplayFramesReady) {
+      void waitForPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache, signal).then(() => {
+        if (disposed || signal.aborted) return;
+        refreshReadiness();
+        maybeStartQueuedAutoplay();
+      });
+    }
+    if (!ponchoDrifellaImageResidentReady(PONCHO_DRIFELLA_INITIAL_FRAME_URL, config.imageCache)) {
+      void waitForPonchoDrifellaResidentImageSources([PONCHO_DRIFELLA_INITIAL_FRAME_URL], config.imageCache, signal).then(() => {
+        if (disposed || signal.aborted) return;
+        refreshReadiness();
+        if (!state.lastCommittedVisual) {
+          commitCurrentVisual();
+        }
+      });
     }
   };
 
@@ -1310,21 +1241,36 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     }
 
     if (decision === 'start-punch') {
+      clearStageTimeout();
       state.activePunchFrameUrls = selectPonchoDrifellaPunchFrameUrls(config.imageCache);
+      state.stage = 'punch';
+      state.stageFrameIndex = 0;
+      state.cardInteractionUnlocked = false;
       if (!config.cardReady) {
         startRevealRequest();
       }
-      startTimedStage('punch');
+      commitCurrentVisual();
+      scheduleStageTick();
       return;
     }
 
     if (decision === 'start-segment-1-1') {
-      startTimedStage('segment_1_1');
+      clearStageTimeout();
+      state.stage = 'segment_1_1';
+      state.stageFrameIndex = 0;
+      state.cardInteractionUnlocked = false;
+      commitCurrentVisual();
+      scheduleStageTick();
       return;
     }
 
     if (decision === 'start-segment-1-2') {
-      startTimedStage('segment_1_2');
+      clearStageTimeout();
+      state.stage = 'segment_1_2';
+      state.stageFrameIndex = 0;
+      state.cardInteractionUnlocked = false;
+      commitCurrentVisual();
+      scheduleStageTick();
       return;
     }
 
@@ -1342,7 +1288,15 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       return;
     }
 
-    startAutoplayStage();
+    clearAutoplayWaitTimeout();
+    clearStageTimeout();
+    state.autoplayQueued = false;
+    state.revealFailedOpen = false;
+    state.stage = 'autoplay';
+    state.stageFrameIndex = 0;
+    state.cardInteractionUnlocked = false;
+    commitCurrentVisual();
+    scheduleStageTick();
   };
 
   const setCardImageReady = (ready: boolean) => {

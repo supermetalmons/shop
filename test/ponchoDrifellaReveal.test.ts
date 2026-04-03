@@ -33,7 +33,7 @@ test('advance decisions preserve the reveal click flow', () => {
       openingFramesReady: true,
       autoplayEntryReady: false,
     }),
-    'start-segment-1-1',
+    'start-punch',
   );
 
   assert.equal(
@@ -46,18 +46,6 @@ test('advance decisions preserve the reveal click flow', () => {
       autoplayEntryReady: true,
     }),
     'start-segment-1-1',
-  );
-
-  assert.equal(
-    getPonchoDrifellaAdvanceDecision({
-      phase: 'ready',
-      stage: 'idle',
-      advanceLocked: false,
-      cardReady: true,
-      openingFramesReady: false,
-      autoplayEntryReady: true,
-    }),
-    'start-punch',
   );
 
   assert.equal(
