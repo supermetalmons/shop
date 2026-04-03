@@ -271,6 +271,13 @@ export function PonchoRevealOverlay({
   const [revealVisibleLatchState, setRevealVisibleLatchState] = useState(() => createSessionVisibleLatchState(cardSessionKey));
   const [foregroundPaintState, setForegroundPaintState] = useState(() => createSessionForegroundPaintState(cardSessionKey));
   const discardAnimationReportedRef = useRef(false);
+  const retainedBoxStateRef = useRef<{
+    image: HTMLImageElement | null;
+    sessionKey: string;
+  }>({
+    image: null,
+    sessionKey: cardSessionKey,
+  });
   const retainedForegroundStateRef = useRef<{
     image: HTMLImageElement | null;
     sessionKey: string;
@@ -318,8 +325,13 @@ export function PonchoRevealOverlay({
   }, [active, controller.revealComplete]);
 
   const boxFrameImage = imageCache.resident.get(controller.boxFrameSrc);
+  const retainedBoxImage =
+    retainedBoxStateRef.current.sessionKey === cardSessionKey
+      ? retainedBoxStateRef.current.image
+      : null;
+  const displayedBoxFrameImage = boxFrameImage || retainedBoxImage || undefined;
   const boxFrameFallbackSrc =
-    !boxFrameImage && controller.stage !== 'autoplay' && controller.stage !== 'revealed'
+    !displayedBoxFrameImage && controller.stage !== 'autoplay' && controller.stage !== 'revealed'
       ? controller.boxFrameSrc
       : undefined;
   const currentForegroundFrameSrc = controller.foregroundFrameSrc ?? null;
@@ -351,6 +363,16 @@ export function PonchoRevealOverlay({
       return createSessionForegroundPaintState(cardSessionKey, currentForegroundFrameSrc);
     });
   }, [cardSessionKey, currentForegroundFrameSrc, foregroundFrameImage]);
+
+  const handleBoxDrawComplete = useCallback(() => {
+    if (!boxFrameImage) return;
+    if (retainedBoxStateRef.current.sessionKey !== cardSessionKey || retainedBoxStateRef.current.image !== boxFrameImage) {
+      retainedBoxStateRef.current = {
+        image: boxFrameImage,
+        sessionKey: cardSessionKey,
+      };
+    }
+  }, [boxFrameImage, cardSessionKey]);
 
   const revealReadyForStage =
     Boolean(displayedForegroundImage) &&
@@ -470,8 +492,14 @@ export function PonchoRevealOverlay({
           }}
           onAnimationEnd={handlePackDiscardAnimationEnd}
         >
-          {boxFrameImage ? (
-            <PonchoFrameCanvas image={boxFrameImage} className="reveal-overlay__image" />
+          {displayedBoxFrameImage ? (
+            <PonchoFrameCanvas
+              image={displayedBoxFrameImage}
+              className="reveal-overlay__image"
+              drawMode="immediate"
+              onDrawComplete={handleBoxDrawComplete}
+              redrawToken={`${cardSessionKey}:${controller.boxFrameSrc}`}
+            />
           ) : boxFrameFallbackSrc ? (
             <img
               src={boxFrameFallbackSrc}
