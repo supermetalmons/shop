@@ -893,11 +893,11 @@ export function usePonchoDrifellaRevealController({
     const shouldPrepareAutoplayWindow =
       cardReady ||
       stage === 'segment_1_2' ||
-      stage === 'segment_1_2_hold' ||
-      stage === 'autoplay' ||
-      stage === 'revealed';
+      stage === 'segment_1_2_hold';
     if (!shouldPrepareAutoplayWindow) {
-      setAutoplayWindowReady(ponchoDrifellaInitialAutoplayWindowResidentReady(imageCache));
+      if (stage !== 'autoplay' && stage !== 'revealed') {
+        setAutoplayWindowReady(ponchoDrifellaInitialAutoplayWindowResidentReady(imageCache));
+      }
       return undefined;
     }
     const requiredSources = PONCHO_DRIFELLA_INITIAL_AUTOPLAY_WINDOW_SOURCES;
