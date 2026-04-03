@@ -88,6 +88,14 @@ function samePlayerState(a: PonchoDrifellaRevealPlayerViewState, b: PonchoDrifel
   );
 }
 
+function useLatestRef<T>(value: T) {
+  const valueRef = useRef(value);
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+  return valueRef;
+}
+
 function clearPonchoCanvas(canvas: HTMLCanvasElement | null) {
   if (!canvas) return;
   const context = canvas.getContext('2d');
@@ -95,17 +103,32 @@ function clearPonchoCanvas(canvas: HTMLCanvasElement | null) {
   context.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-function drawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLImageElement) {
-  if (!canvas) return false;
-  const context = canvas.getContext('2d');
-  if (!context) return false;
+type PonchoCanvasDrawTarget = {
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
+  cssWidth: number;
+  cssHeight: number;
+};
 
+function getPonchoCanvasDrawTarget(canvas: HTMLCanvasElement | null, image: HTMLImageElement): PonchoCanvasDrawTarget | null {
+  if (!canvas) return null;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
   const cssWidth = canvas.clientWidth;
   const cssHeight = canvas.clientHeight;
   if (!cssWidth || !cssHeight || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
-    return false;
+    return null;
   }
+  return {
+    canvas,
+    context,
+    cssWidth,
+    cssHeight,
+  };
+}
 
+function drawPonchoFrameToCanvas(target: PonchoCanvasDrawTarget, image: HTMLImageElement) {
+  const { canvas, context, cssWidth, cssHeight } = target;
   const dpr = typeof window === 'undefined' ? 1 : Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5));
   const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
   const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
@@ -125,7 +148,6 @@ function drawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLIm
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = downscaling && dpr <= 1.2 ? 'high' : 'medium';
   context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-  return true;
 }
 
 export function PonchoRevealOverlay({
@@ -157,6 +179,9 @@ export function PonchoRevealOverlay({
   const playerRef = useRef<PonchoDrifellaRevealPlayer | null>(null);
   const cardImageReadyRef = useRef(false);
   const discardAnimationReportedRef = useRef(false);
+  const requestRevealRef = useLatestRef(onRequestReveal);
+  const playClickRef = useLatestRef(onPlayClick);
+  const playRevealRef = useLatestRef(onPlayReveal);
   const [hasCommittedBoxVisual, setHasCommittedBoxVisual] = useState(false);
   const [playerState, setPlayerState] = useState<PonchoDrifellaRevealPlayerViewState>(() =>
     createInitialPlayerState(phase, boxLabel),
@@ -177,16 +202,23 @@ export function PonchoRevealOverlay({
       foregroundImage?: HTMLImageElement;
       stageVisible: boolean;
     }) => {
-      const boxDrawn = drawPonchoFrameToCanvas(boxCanvasRef.current, boxImage);
-      if (!boxDrawn) return false;
-      setHasCommittedBoxVisual(true);
+      let foregroundTarget: PonchoCanvasDrawTarget | null = null;
+      let nextForegroundImage: HTMLImageElement | undefined;
       if (stageVisible) {
         if (!foregroundImage) return false;
-        const foregroundDrawn = drawPonchoFrameToCanvas(foregroundCanvasRef.current, foregroundImage);
-        if (!foregroundDrawn) return false;
+        nextForegroundImage = foregroundImage;
+        foregroundTarget = getPonchoCanvasDrawTarget(foregroundCanvasRef.current, nextForegroundImage);
+        if (!foregroundTarget) return false;
+      }
+      const boxTarget = getPonchoCanvasDrawTarget(boxCanvasRef.current, boxImage);
+      if (!boxTarget) return false;
+      drawPonchoFrameToCanvas(boxTarget, boxImage);
+      if (foregroundTarget && nextForegroundImage) {
+        drawPonchoFrameToCanvas(foregroundTarget, nextForegroundImage);
       } else {
         clearPonchoCanvas(foregroundCanvasRef.current);
       }
+      setHasCommittedBoxVisual(true);
       return true;
     },
     [],
@@ -231,9 +263,9 @@ export function PonchoRevealOverlay({
           }),
         onStateChange: handlePlayerStateChange,
       },
-      onRequestReveal,
-      onPlayClick,
-      onPlayReveal,
+      onRequestReveal: () => requestRevealRef.current?.(),
+      onPlayClick: () => playClickRef.current?.(),
+      onPlayReveal: () => playRevealRef.current?.(),
     });
     playerRef.current = player;
     if (cardImageReadyRef.current) {
@@ -267,11 +299,8 @@ export function PonchoRevealOverlay({
       cardReady,
       cardAssetsReady,
       imageCache,
-      onRequestReveal,
-      onPlayClick,
-      onPlayReveal,
     });
-  }, [active, boxLabel, cardAssetsReady, cardReady, imageCache, onPlayClick, onPlayReveal, onRequestReveal, phase]);
+  }, [active, boxLabel, cardAssetsReady, cardReady, imageCache, phase]);
 
   useEffect(() => {
     onRevealCompleteChange?.(playerState.revealComplete);
