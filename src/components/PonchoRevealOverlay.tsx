@@ -20,6 +20,7 @@ import {
   type PonchoDrifellaRevealPlayer,
   type PonchoDrifellaRevealPlayerViewState,
   type PonchoDrifellaRevealRequestStatus,
+  usePonchoDrifellaCardAssetsReady,
   usePonchoDrifellaImageCacheGeneration,
 } from '../lib/ponchoDrifellaReveal';
 import WipInteractiveCard from './WipInteractiveCard';
@@ -46,7 +47,6 @@ type PonchoRevealSharedProps = {
 type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
   card?: DrifCardConfig;
   cardReady: boolean;
-  cardAssetsReady: boolean;
   loading?: boolean;
   boxButtonRef?: RefObject<HTMLButtonElement | null>;
 };
@@ -54,7 +54,6 @@ type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
 export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
   mode: 'inventory-unbox';
   revealedIds?: number[];
-  cardAssetsReady: boolean;
   loading: boolean;
 };
 
@@ -137,6 +136,10 @@ function canDrawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTM
   return Boolean(cssWidth && cssHeight && image.naturalWidth > 0 && image.naturalHeight > 0);
 }
 
+function shouldSuspendPonchoCardResidentPreload(stage: PonchoDrifellaRevealPlayerViewState['stage']) {
+  return stage === 'punch' || stage === 'segment_1_1' || stage === 'segment_1_2';
+}
+
 export function PonchoRevealOverlay({
   overlayStyle,
   active,
@@ -146,7 +149,6 @@ export function PonchoRevealOverlay({
   boxName,
   card,
   cardReady,
-  cardAssetsReady,
   loading = false,
   boxButtonRef,
   imageCache,
@@ -170,6 +172,12 @@ export function PonchoRevealOverlay({
   const [playerState, setPlayerState] = useState<PonchoDrifellaRevealPlayerViewState>(() =>
     createInitialPlayerState(phase, boxLabel),
   );
+  const cardAssetsReady = usePonchoDrifellaCardAssetsReady({
+    active,
+    card,
+    imageCache,
+    suspendResidentPreload: shouldSuspendPonchoCardResidentPreload(playerState.stage),
+  });
 
   const clearVisuals = useCallback(() => {
     clearPonchoCanvas(boxCanvasRef.current);

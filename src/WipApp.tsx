@@ -13,7 +13,6 @@ import {
   getRandomPonchoDrifellaBoxClickSoundUrl,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
-  usePonchoDrifellaCardAssetsReady,
 } from './lib/ponchoDrifellaReveal';
 import { getFrontendDrop } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
@@ -86,11 +85,6 @@ function LocalPlayWipApp() {
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const currentCard = DRIF_CARDS[cardIndex];
-  const cardAssetsReady = usePonchoDrifellaCardAssetsReady({
-    active: true,
-    card: currentCard,
-    imageCache: ponchoImageCacheRef.current,
-  });
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -206,8 +200,8 @@ function LocalPlayWipApp() {
     const nextIndex = nextWipCardIndex(cardIndex);
     if (nextIndex !== cardIndex) {
       preloadPonchoDrifellaCardAssets(DRIF_CARDS[nextIndex], ponchoImageCacheRef.current, {
-        mode: 'resident',
-        priority: 'high',
+        mode: 'warm',
+        priority: 'low',
       });
     }
     setCardIndex(nextIndex);
@@ -251,7 +245,6 @@ function LocalPlayWipApp() {
         boxName={mysteryContainerName}
         card={currentCard}
         cardReady={cardReady}
-        cardAssetsReady={cardAssetsReady}
         imageCache={ponchoImageCacheRef.current}
         boxButtonRef={revealButtonRef}
         resetKey={resetKey}

@@ -61,7 +61,6 @@ import {
   getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
-  usePonchoDrifellaCardAssetsReady,
   type PonchoDrifellaRevealRequestStatus,
 } from './lib/ponchoDrifellaReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
@@ -651,7 +650,7 @@ function App({ currentPath }: AppProps) {
         preloadPonchoDrifellaCardAssets(
           getPonchoDrifellaCardByFigureId(figureId),
           ponchoImageCacheRef.current,
-          { mode: 'resident', priority: 'high' },
+          { mode: 'warm', priority: 'low' },
         );
       });
     },
@@ -3295,11 +3294,6 @@ function App({ currentPath }: AppProps) {
       revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
       (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
   );
-  const ponchoRevealCardAssetsReady = usePonchoDrifellaCardAssetsReady({
-    active: Boolean(revealOverlay && revealOverlayUsesPonchoRenderer),
-    card: ponchoRevealCard,
-    imageCache: ponchoImageCacheRef.current,
-  });
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
     return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
@@ -3587,7 +3581,6 @@ function App({ currentPath }: AppProps) {
         closing={revealOverlayClosing}
         phase={revealOverlay.phase}
         revealedIds={revealOverlay.revealedIds}
-        cardAssetsReady={ponchoRevealCardAssetsReady}
         loading={revealLoading === revealOverlay.id}
         boxName={revealOverlay.name}
         boxLabel={revealOverlayContainerLabel}

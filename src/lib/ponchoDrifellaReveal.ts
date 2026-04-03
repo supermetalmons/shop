@@ -16,6 +16,8 @@ export const PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS = 380;
 const PONCHO_DRIFELLA_CARD_INTERACTION_UNLOCK_DELAY_MS =
   PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS + Math.round(PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS / 2);
 const PONCHO_DRIFELLA_ASSET_RETRY_DELAY_MS = 180;
+const PONCHO_DRIFELLA_BACKGROUND_PRELOAD_PAUSE_MS = 48;
+const PONCHO_DRIFELLA_CARD_IMAGE_SETTLE_DELAY_MS = 96;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_BASE_MS = 12_000;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_MAX_MS = 60_000;
 const PONCHO_DRIFELLA_PUNCH_FALLBACK_FRAME_URLS = [PONCHO_DRIFELLA_INITIAL_FRAME_URL] as const;
@@ -54,6 +56,14 @@ const PONCHO_DRIFELLA_RESIDENT_PRELOAD_OPTIONS = {
 type WaitForPonchoDrifellaAssetsUntilReadyOptions = PonchoDrifellaImagePreloadOptions & {
   signal?: AbortSignal;
   retryDelayMs?: number;
+};
+
+type WaitForPonchoDrifellaResidentImageSourcesProgressivelyOptions = {
+  signal?: AbortSignal;
+  retryDelayMs?: number;
+  priority?: PonchoDrifellaImagePreloadPriority;
+  shouldPause?: () => boolean;
+  pauseDelayMs?: number;
 };
 
 export type PonchoDrifellaRevealPhase = 'preparing' | 'ready' | 'revealed';
@@ -518,13 +528,6 @@ async function waitForPonchoDrifellaImageSources(
   await Promise.all(imageSources.map((imageSrc) => preloadPonchoDrifellaImage(imageSrc, imageCache, options)));
 }
 
-function preloadPonchoDrifellaResidentImageSources(
-  imageSources: readonly string[],
-  imageCache: PonchoDrifellaImageCache,
-) {
-  preloadPonchoDrifellaImageSources(imageSources, imageCache, PONCHO_DRIFELLA_RESIDENT_PRELOAD_OPTIONS);
-}
-
 function waitForPonchoDrifellaResidentImageSources(
   imageSources: readonly string[],
   imageCache: PonchoDrifellaImageCache,
@@ -554,6 +557,51 @@ function waitForPonchoDrifellaRetryDelay(delayMs: number, signal?: AbortSignal) 
   });
 }
 
+function waitForPonchoDrifellaBackgroundTurn(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return Promise.resolve(false);
+  }
+  return new Promise<boolean>((resolve) => {
+    let animationFrameId: number | null = null;
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+    const cleanup = () => {
+      if (animationFrameId !== null && typeof window !== 'undefined') {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      signal?.removeEventListener('abort', handleAbort);
+    };
+
+    const settle = (result: boolean) => {
+      cleanup();
+      resolve(result);
+    };
+
+    const handleAbort = () => {
+      settle(false);
+    };
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+
+    if (typeof window !== 'undefined') {
+      animationFrameId = window.requestAnimationFrame(() => {
+        animationFrameId = null;
+        timeoutId = window.setTimeout(() => {
+          settle(true);
+        }, 0);
+      });
+      return;
+    }
+
+    timeoutId = globalThis.setTimeout(() => {
+      settle(true);
+    }, 0);
+  });
+}
+
 async function waitForPonchoDrifellaAssetsUntilReady(
   waitForAssets: () => Promise<void>,
   { signal, retryDelayMs = PONCHO_DRIFELLA_ASSET_RETRY_DELAY_MS }: WaitForPonchoDrifellaAssetsUntilReadyOptions = {},
@@ -573,6 +621,48 @@ async function waitForPonchoDrifellaAssetsUntilReady(
     }
   }
   return false;
+}
+
+async function waitForPonchoDrifellaResidentImageSourcesProgressively(
+  imageSources: readonly string[],
+  imageCache: PonchoDrifellaImageCache,
+  {
+    signal,
+    retryDelayMs,
+    priority = 'high',
+    shouldPause,
+    pauseDelayMs = PONCHO_DRIFELLA_BACKGROUND_PRELOAD_PAUSE_MS,
+  }: WaitForPonchoDrifellaResidentImageSourcesProgressivelyOptions = {},
+) {
+  for (const imageSrc of imageSources) {
+    const normalizedImageSrc = normalizePonchoDrifellaImageSrc(imageSrc);
+    if (!normalizedImageSrc) continue;
+    while (!signal?.aborted && shouldPause?.()) {
+      const shouldResume = await waitForPonchoDrifellaRetryDelay(pauseDelayMs, signal);
+      if (!shouldResume) {
+        return false;
+      }
+    }
+    if (ponchoDrifellaImageResidentReady(normalizedImageSrc, imageCache)) {
+      continue;
+    }
+    const ready = await waitForPonchoDrifellaAssetsUntilReady(
+      () =>
+        preloadPonchoDrifellaImage(normalizedImageSrc, imageCache, {
+          mode: 'resident',
+          priority,
+        }),
+      { signal, retryDelayMs, priority },
+    );
+    if (!ready) {
+      return false;
+    }
+    const shouldContinue = await waitForPonchoDrifellaBackgroundTurn(signal);
+    if (!shouldContinue) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function getRandomPonchoDrifellaBoxClickSoundUrl() {
@@ -621,24 +711,22 @@ export function waitForPonchoDrifellaCardAssetsUntilReady(
 ) {
   const assetSources = ponchoDrifellaCardAssetSources(card);
   if (!assetSources.length) return Promise.resolve(true);
-  return waitForPonchoDrifellaAssetsUntilReady(
-    () =>
-      waitForPonchoDrifellaImageSources(assetSources, imageCache, {
-        ...PONCHO_DRIFELLA_RESIDENT_PRELOAD_OPTIONS,
-        ...options,
-      }),
-    { signal, ...options },
-  );
+  return waitForPonchoDrifellaResidentImageSourcesProgressively(assetSources, imageCache, {
+    signal,
+    priority: options.priority ?? PONCHO_DRIFELLA_RESIDENT_PRELOAD_OPTIONS.priority,
+  });
 }
 
 export function usePonchoDrifellaCardAssetsReady({
   active,
   card,
   imageCache,
+  suspendResidentPreload = false,
 }: {
   active: boolean;
   card: DrifCardConfig | undefined;
   imageCache: PonchoDrifellaImageCache;
+  suspendResidentPreload?: boolean;
 }) {
   const imageCacheGeneration = usePonchoDrifellaImageCacheGeneration(imageCache);
   const [ready, setReady] = useState(() => active && arePonchoDrifellaCardAssetsReady(card, imageCache));
@@ -650,9 +738,11 @@ export function usePonchoDrifellaCardAssetsReady({
     }
     if (arePonchoDrifellaCardAssetsReady(card, imageCache)) {
       setReady(true);
-      return () => {
-        releasePonchoDrifellaCardAssets(card, imageCache);
-      };
+      return undefined;
+    }
+    if (suspendResidentPreload) {
+      setReady(false);
+      return undefined;
     }
     const abortController = new AbortController();
     setReady(false);
@@ -667,9 +757,15 @@ export function usePonchoDrifellaCardAssetsReady({
     });
     return () => {
       abortController.abort();
+    };
+  }, [active, card, imageCache, imageCacheGeneration, suspendResidentPreload]);
+
+  useEffect(() => {
+    if (!active || !card) return undefined;
+    return () => {
       releasePonchoDrifellaCardAssets(card, imageCache);
     };
-  }, [active, card, imageCache, imageCacheGeneration]);
+  }, [active, card, imageCache]);
 
   return ready;
 }
@@ -766,6 +862,7 @@ type PonchoDrifellaRevealPlayerState = {
   openingFramesReady: boolean;
   autoplayFramesReady: boolean;
   cardImageReady: boolean;
+  cardImageFallbackReady: boolean;
   lastCommittedVisual: PonchoDrifellaRevealVisualTarget | null;
 };
 
@@ -822,16 +919,16 @@ export function canEnterPonchoDrifellaAutoplay({
   cardReady,
   cardAssetsReady,
   cardImageReady,
+  cardImageFallbackReady,
   autoplayFramesReady,
 }: {
   cardReady: boolean;
   cardAssetsReady: boolean;
   cardImageReady: boolean;
+  cardImageFallbackReady: boolean;
   autoplayFramesReady: boolean;
 }) {
-  // Card assets are preloaded as resident images before autoplay starts.
-  // Keep the UI image callback as a preferred signal, but do not deadlock autoplay if that callback is missed.
-  const cardImageGateReady = cardImageReady || cardAssetsReady;
+  const cardImageGateReady = cardImageReady || cardImageFallbackReady;
   return cardReady && cardAssetsReady && cardImageGateReady && autoplayFramesReady;
 }
 
@@ -912,9 +1009,6 @@ export function buildPonchoDrifellaRevealPlayerViewState({
   stage,
   autoplayQueued,
   cardReady,
-  cardAssetsReady,
-  cardImageReady,
-  autoplayFramesReady,
   cardInteractionUnlocked,
   revealFailedOpen,
   lastCommittedVisual,
@@ -925,9 +1019,6 @@ export function buildPonchoDrifellaRevealPlayerViewState({
   stage: PonchoDrifellaRevealStage;
   autoplayQueued: boolean;
   cardReady: boolean;
-  cardAssetsReady: boolean;
-  cardImageReady: boolean;
-  autoplayFramesReady: boolean;
   cardInteractionUnlocked: boolean;
   revealFailedOpen: boolean;
   lastCommittedVisual: PonchoDrifellaRevealVisualTarget | null;
@@ -938,13 +1029,7 @@ export function buildPonchoDrifellaRevealPlayerViewState({
       : stage === 'revealed' && cardReady
         ? 'revealed'
         : 'ready';
-  const autoplayEntryReady = canEnterPonchoDrifellaAutoplay({
-    cardReady,
-    cardAssetsReady,
-    cardImageReady,
-    autoplayFramesReady,
-  });
-  const advanceLocked = stage === 'autoplay' || (stage === 'segment_1_2_hold' && autoplayQueued && !autoplayEntryReady);
+  const advanceLocked = stage === 'autoplay' || (stage === 'segment_1_2_hold' && autoplayQueued);
   const note =
     surfacePhase === 'preparing' || surfacePhase === 'revealed'
       ? ''
@@ -1035,12 +1120,14 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     openingFramesReady: ponchoDrifellaOpeningSequenceResidentReady(config.imageCache),
     autoplayFramesReady: arePonchoDrifellaImageSourcesResidentReady(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache),
     cardImageReady: false,
+    cardImageFallbackReady: false,
     lastCommittedVisual: null,
   };
 
   let disposed = false;
   let stageTimeoutId: number | null = null;
   let cardUnlockTimeoutId: number | null = null;
+  let cardImageFallbackTimeoutId: number | null = null;
   let waitAbortController: AbortController | null = null;
 
   const clearStageTimeout = () => {
@@ -1053,6 +1140,12 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     if (cardUnlockTimeoutId === null || typeof window === 'undefined') return;
     window.clearTimeout(cardUnlockTimeoutId);
     cardUnlockTimeoutId = null;
+  };
+
+  const clearCardImageFallbackTimeout = () => {
+    if (cardImageFallbackTimeoutId === null || typeof window === 'undefined') return;
+    window.clearTimeout(cardImageFallbackTimeoutId);
+    cardImageFallbackTimeoutId = null;
   };
 
   const abortWaits = () => {
@@ -1073,8 +1166,37 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       cardReady: config.cardReady,
       cardAssetsReady: config.cardAssetsReady,
       cardImageReady: state.cardImageReady,
+      cardImageFallbackReady: state.cardImageFallbackReady,
       autoplayFramesReady: state.autoplayFramesReady,
     });
+
+  const refreshCardImagePresentationGate = () => {
+    if (!config.cardReady || !config.cardAssetsReady) {
+      clearCardImageFallbackTimeout();
+      state.cardImageFallbackReady = false;
+      if (!config.cardReady) {
+        state.cardImageReady = false;
+      }
+      return;
+    }
+    if (state.cardImageReady) {
+      clearCardImageFallbackTimeout();
+      state.cardImageFallbackReady = false;
+      return;
+    }
+    if (state.cardImageFallbackReady || cardImageFallbackTimeoutId !== null || typeof window === 'undefined') {
+      return;
+    }
+    cardImageFallbackTimeoutId = window.setTimeout(() => {
+      cardImageFallbackTimeoutId = null;
+      if (disposed || !config.active || !config.cardReady || !config.cardAssetsReady || state.cardImageReady) {
+        return;
+      }
+      state.cardImageFallbackReady = true;
+      maybeStartQueuedAutoplay();
+      commitCurrentVisual();
+    }, PONCHO_DRIFELLA_CARD_IMAGE_SETTLE_DELAY_MS);
+  };
 
   const emitState = () => {
     if (disposed) return;
@@ -1085,9 +1207,6 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       stage: state.stage,
       autoplayQueued: state.autoplayQueued,
       cardReady: config.cardReady,
-      cardAssetsReady: config.cardAssetsReady,
-      cardImageReady: state.cardImageReady,
-      autoplayFramesReady: state.autoplayFramesReady,
       cardInteractionUnlocked: state.cardInteractionUnlocked,
       revealFailedOpen: state.revealFailedOpen,
       lastCommittedVisual: state.lastCommittedVisual,
@@ -1100,39 +1219,44 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     config.host.onStateChange(viewState);
   };
 
-  const commitCurrentVisual = () => {
-    if (disposed || !config.imageCache) {
-      emitState();
-      return false;
+  const resolveHostVisual = (target: PonchoDrifellaRevealVisualTarget): PonchoDrifellaRevealHostVisual | null => {
+    if (disposed || !config.imageCache || state.revealFailedOpen) {
+      return null;
     }
-    if (state.revealFailedOpen) {
-      emitState();
-      return false;
-    }
-    const target = getPonchoDrifellaRevealVisualTarget(state.stage, state.stageFrameIndex, state.activePunchFrameUrls);
     if (target.cardVisible && !autoplayEntryReady()) {
-      emitState();
-      return false;
+      return null;
     }
     const readySources = new Set(config.imageCache.resident.keys());
     if (!canCommitPonchoDrifellaVisualTarget(target, readySources)) {
-      emitState();
-      return false;
+      return null;
     }
     const boxImage = config.imageCache.resident.get(target.boxFrameSrc);
     const foregroundImage = target.foregroundFrameSrc
       ? config.imageCache.resident.get(target.foregroundFrameSrc)
       : undefined;
     if (!boxImage || (target.stageVisible && !foregroundImage)) {
-      emitState();
-      return false;
+      return null;
     }
-    const committed = config.host.commitVisual({
+    return {
       boxImage,
       foregroundImage,
       stageVisible: target.stageVisible,
       cardVisible: target.cardVisible,
-    });
+    };
+  };
+
+  const commitCurrentVisual = () => {
+    if (disposed) {
+      emitState();
+      return false;
+    }
+    const target = getPonchoDrifellaRevealVisualTarget(state.stage, state.stageFrameIndex, state.activePunchFrameUrls);
+    const visual = resolveHostVisual(target);
+    if (!visual) {
+      emitState();
+      return false;
+    }
+    const committed = config.host.commitVisual(visual);
     if (!committed) return false;
     state.lastCommittedVisual = target;
     emitState();
@@ -1180,39 +1304,56 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       emitState();
       return;
     }
+    const target = getPonchoDrifellaRevealVisualTarget('autoplay', 0, state.activePunchFrameUrls);
+    const visual = resolveHostVisual(target);
+    if (!visual) {
+      emitState();
+      return;
+    }
     clearStageTimeout();
     state.autoplayQueued = false;
     state.revealFailedOpen = false;
+    const committed = config.host.commitVisual(visual);
+    if (!committed) {
+      emitState();
+      return;
+    }
     state.stage = 'autoplay';
     state.stageFrameIndex = 0;
     state.cardInteractionUnlocked = false;
-    commitCurrentVisual();
+    state.lastCommittedVisual = target;
+    emitState();
     scheduleStageTick();
   };
+
+  const shouldPauseResidentPromotion = () =>
+    state.stage === 'punch' || state.stage === 'segment_1_1' || state.stage === 'segment_1_2';
 
   const ensureResidentPreload = () => {
     if (!config.active || !config.imageCache) return;
     preloadPonchoDrifellaPackAssets(config.imageCache, PONCHO_DRIFELLA_WARM_PRELOAD_OPTIONS);
-    preloadPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS, config.imageCache);
     const shouldPrepareAutoplayResidents = shouldPreparePonchoDrifellaAutoplayResidents({
       cardReady: config.cardReady,
       stage: state.stage,
     });
-    if (shouldPrepareAutoplayResidents) {
-      preloadPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache);
-    }
     abortWaits();
     waitAbortController = new AbortController();
     const { signal } = waitAbortController;
     if (!state.openingFramesReady) {
-      void waitForPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS, config.imageCache, signal).then(() => {
+      void waitForPonchoDrifellaResidentImageSourcesProgressively(PONCHO_DRIFELLA_OPENING_RESIDENT_FRAME_URLS, config.imageCache, {
+        signal,
+        shouldPause: shouldPauseResidentPromotion,
+      }).then(() => {
         if (disposed || signal.aborted) return;
         refreshReadiness();
         commitCurrentVisual();
       });
     }
     if (shouldPrepareAutoplayResidents && !state.autoplayFramesReady) {
-      void waitForPonchoDrifellaResidentImageSources(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache, signal).then(() => {
+      void waitForPonchoDrifellaResidentImageSourcesProgressively(PONCHO_DRIFELLA_AUTOPLAY_RESIDENT_FRAME_URLS, config.imageCache, {
+        signal,
+        shouldPause: shouldPauseResidentPromotion,
+      }).then(() => {
         if (disposed || signal.aborted) return;
         refreshReadiness();
         maybeStartQueuedAutoplay();
@@ -1249,6 +1390,7 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
   const update = (nextConfig: Partial<Omit<PonchoDrifellaRevealPlayerConfig, 'host'>>) => {
     Object.assign(config, nextConfig);
     refreshReadiness();
+    refreshCardImagePresentationGate();
     ensureResidentPreload();
     commitCurrentVisual();
     maybeStartQueuedAutoplay();
@@ -1257,8 +1399,7 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
 
   const handleAdvance = () => {
     refreshReadiness();
-    const advanceLocked =
-      state.stage === 'autoplay' || (state.stage === 'segment_1_2_hold' && state.autoplayQueued && !autoplayEntryReady());
+    const advanceLocked = state.stage === 'autoplay' || (state.stage === 'segment_1_2_hold' && state.autoplayQueued);
     if (config.phase !== 'ready' || advanceLocked) return;
 
     config.onPlayClick?.();
@@ -1323,20 +1464,16 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
       return;
     }
 
-    clearStageTimeout();
-    state.autoplayQueued = false;
-    state.revealFailedOpen = false;
-    state.stage = 'autoplay';
-    state.stageFrameIndex = 0;
-    state.cardInteractionUnlocked = false;
-    commitCurrentVisual();
-    scheduleStageTick();
+    state.autoplayQueued = true;
+    maybeStartQueuedAutoplay();
   };
 
   const setCardImageReady = (ready: boolean) => {
     if (!ready && state.cardImageReady) return;
     if (!ready) return;
     state.cardImageReady = true;
+    state.cardImageFallbackReady = false;
+    clearCardImageFallbackTimeout();
     maybeStartQueuedAutoplay();
     commitCurrentVisual();
   };
@@ -1345,6 +1482,7 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     disposed = true;
     clearStageTimeout();
     clearCardUnlockTimeout();
+    clearCardImageFallbackTimeout();
     abortWaits();
     config.host.clearVisuals();
     if (config.imageCache) {
@@ -1352,6 +1490,7 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     }
   };
 
+  refreshCardImagePresentationGate();
   ensureResidentPreload();
   commitCurrentVisual();
   emitState();
@@ -1360,7 +1499,10 @@ export function createPonchoDrifellaRevealPlayer(initialConfig: PonchoDrifellaRe
     update,
     handleAdvance,
     setCardImageReady,
-    refreshVisuals: commitCurrentVisual,
+    refreshVisuals: () => {
+      commitCurrentVisual();
+      maybeStartQueuedAutoplay();
+    },
     dispose,
   };
 }
