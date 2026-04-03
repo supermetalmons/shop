@@ -128,6 +128,15 @@ function drawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLIm
   return true;
 }
 
+function canDrawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLImageElement) {
+  if (!canvas) return false;
+  const context = canvas.getContext('2d');
+  if (!context) return false;
+  const cssWidth = canvas.clientWidth;
+  const cssHeight = canvas.clientHeight;
+  return Boolean(cssWidth && cssHeight && image.naturalWidth > 0 && image.naturalHeight > 0);
+}
+
 export function PonchoRevealOverlay({
   overlayStyle,
   active,
@@ -177,16 +186,23 @@ export function PonchoRevealOverlay({
       foregroundImage?: HTMLImageElement;
       stageVisible: boolean;
     }) => {
-      const boxDrawn = drawPonchoFrameToCanvas(boxCanvasRef.current, boxImage);
-      if (!boxDrawn) return false;
-      setHasCommittedBoxVisual(true);
+      if (!canDrawPonchoFrameToCanvas(boxCanvasRef.current, boxImage)) return false;
       if (stageVisible) {
         if (!foregroundImage) return false;
-        const foregroundDrawn = drawPonchoFrameToCanvas(foregroundCanvasRef.current, foregroundImage);
+        if (!canDrawPonchoFrameToCanvas(foregroundCanvasRef.current, foregroundImage)) return false;
+      }
+
+      const boxDrawn = drawPonchoFrameToCanvas(boxCanvasRef.current, boxImage);
+      if (!boxDrawn) return false;
+      if (stageVisible) {
+        const nextForegroundImage = foregroundImage;
+        if (!nextForegroundImage) return false;
+        const foregroundDrawn = drawPonchoFrameToCanvas(foregroundCanvasRef.current, nextForegroundImage);
         if (!foregroundDrawn) return false;
       } else {
         clearPonchoCanvas(foregroundCanvasRef.current);
       }
+      setHasCommittedBoxVisual(true);
       return true;
     },
     [],
@@ -395,7 +411,11 @@ export function PonchoRevealOverlay({
             aria-hidden="true"
             onAnimationEnd={handlePackDiscardAnimationEnd}
           >
-            <canvas ref={foregroundCanvasRef} className="reveal-overlay__image wip-reveal__foreground-image" aria-hidden="true" />
+            <canvas
+              ref={foregroundCanvasRef}
+              className="reveal-overlay__image wip-reveal__foreground-image"
+              aria-hidden="true"
+            />
           </div>
         </div>
       </div>
