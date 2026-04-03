@@ -283,6 +283,81 @@ function displayOrderStatus(order: DeliveryOrderSummary): string {
   return formatOrderStatus(order.status === 'ready_to_ship' ? 'Preparing' : order.status);
 }
 
+function FigureTileImage(props: {
+  dropId: string;
+  figureId: number;
+  alt: string;
+  primarySrc?: string;
+  fallbackSrc?: string;
+  onMetadataResolved?: (record: FigureMetadataRecord) => void;
+}) {
+  const { dropId, figureId, alt, primarySrc, fallbackSrc, onMetadataResolved } = props;
+  const [activeSrc, setActiveSrc] = useState<string | null>(() => primarySrc || fallbackSrc || null);
+  const [usingFallback, setUsingFallback] = useState(() => !primarySrc && Boolean(fallbackSrc));
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    if (primarySrc) {
+      setActiveSrc(primarySrc);
+      setUsingFallback(false);
+      return;
+    }
+    if (fallbackSrc) {
+      setActiveSrc(fallbackSrc);
+      setUsingFallback(true);
+      return;
+    }
+    setActiveSrc(null);
+    setUsingFallback(false);
+  }, [dropId, figureId, primarySrc]);
+
+  useEffect(() => {
+    if (!fallbackSrc) return;
+    setActiveSrc((current) => (current ? current : fallbackSrc));
+    setUsingFallback((current) => current || !primarySrc);
+  }, [fallbackSrc, primarySrc]);
+
+  useEffect(
+    () => () => {
+      requestIdRef.current += 1;
+    },
+    [],
+  );
+
+  const handleError = useCallback(() => {
+    if (usingFallback) {
+      setActiveSrc(null);
+      return;
+    }
+    if (fallbackSrc && fallbackSrc !== primarySrc) {
+      setActiveSrc(fallbackSrc);
+      setUsingFallback(true);
+      return;
+    }
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setActiveSrc(null);
+    void loadFigureMetadata(dropId, figureId)
+      .then((record) => {
+        if (requestIdRef.current !== requestId || !record?.image || record.image === primarySrc) return;
+        onMetadataResolved?.(record);
+        setActiveSrc(record.image);
+        setUsingFallback(true);
+      })
+      .catch(() => {
+        if (requestIdRef.current !== requestId) return;
+        setActiveSrc(null);
+      });
+  }, [dropId, fallbackSrc, figureId, onMetadataResolved, primarySrc, usingFallback]);
+
+  if (!activeSrc) {
+    return <div className="figure-image figure-image--placeholder" aria-hidden="true" />;
+  }
+
+  return <img src={activeSrc} alt={alt} loading="lazy" className="figure-image" onError={handleError} />;
+}
+
 const MAX_SHIPMENT_ITEMS = 24;
 const EMPTY_INVENTORY: InventoryItem[] = [];
 const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
@@ -1338,6 +1413,25 @@ function App({ currentPath }: AppProps) {
     });
     queueFigureMetadataFetch(targets);
   };
+
+  const mergeLoadedFigureMetadata = useCallback((record: FigureMetadataRecord) => {
+    const cacheKey = figureMetadataCacheKey(record.dropId, record.id);
+    setFigureMetadataByKey((prev) => {
+      const existing = prev[cacheKey];
+      if (
+        existing &&
+        existing.image === record.image &&
+        existing.name === record.name &&
+        existing.attributes === record.attributes
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [cacheKey]: record,
+      };
+    });
+  }, []);
 
   const clearRevealOverlayCloseTimeout = useCallback(() => {
     if (revealOverlayCloseTimeoutRef.current === null) return;
@@ -3029,6 +3123,28 @@ function App({ currentPath }: AppProps) {
 
   const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
   const deliveryOrders = viewedProfile?.orders || [];
+  const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
+    const targetsByKey = new Map<string, FigureMetadataTarget>();
+    deliveryOrders.forEach((order) => {
+      const dropConfig = getDropConfig(order.dropId);
+      const dropContent = getDropContent(order.dropId);
+      const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
+      const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
+      order.items.forEach((item) => {
+        if (item.kind !== 'dude') return;
+        if (!shouldUseMetadataFallback) {
+          const hasMappedMedia = Boolean(figureMediaBase && getMediaIdForFigureId(item.refId, dropConfig.figureMedia));
+          if (hasMappedMedia) return;
+        }
+        const cacheKey = figureMetadataCacheKey(order.dropId, item.refId);
+        const metadata = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(order.dropId, item.refId);
+        if (!figureMetadataHasImage(metadata)) {
+          targetsByKey.set(cacheKey, { dropId: order.dropId, figureId: item.refId });
+        }
+      });
+    });
+    return Array.from(targetsByKey.values());
+  }, [deliveryOrders, figureMetadataByKey, getDropConfig, getDropContent]);
   const shipmentsEmptyContent = !viewedProfile
     ? isSignedInWallet && owner
       ? profileLoadingForView
@@ -3065,6 +3181,69 @@ function App({ currentPath }: AppProps) {
       setClaimOpen(false);
     }
   }, [deliveryOrders.length]);
+  useEffect(() => {
+    if (!shipmentFigureTargetsNeedingMetadata.length) return;
+    if (typeof window === 'undefined') return;
+    queueFigureMetadataFetch(shipmentFigureTargetsNeedingMetadata);
+    const interval = window.setInterval(() => {
+      queueFigureMetadataFetch(shipmentFigureTargetsNeedingMetadata);
+    }, FIGURE_METADATA_RETRY_MS);
+    return () => window.clearInterval(interval);
+  }, [queueFigureMetadataFetch, shipmentFigureTargetsNeedingMetadata]);
+
+  const renderShipmentItems = useCallback(
+    (order: DeliveryOrderSummary) => {
+      const dropConfig = getDropConfig(order.dropId);
+      const dropContent = getDropContent(order.dropId);
+      const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
+      const useMediaFolderPreview = dropContent.figures.fulfillmentPreviewMode === 'media_map_folder';
+      return (
+        <div className="figure-grid shipment-item-grid">
+          {order.items.map((item, index) => {
+            const label = dropAssetReference(dropConfig, item.kind === 'box' ? 'box' : 'figure', item.refId);
+            if (item.kind === 'box') {
+              const boxImage = normalizeBoxDisplayImage(order.dropId);
+              return (
+                <div
+                  key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
+                  className="figure-tile shipment-item-tile"
+                >
+                  {boxImage ? (
+                    <img src={boxImage} alt={label} loading="lazy" className="figure-image" />
+                  ) : (
+                    <div className="figure-image figure-image--placeholder" aria-hidden="true" />
+                  )}
+                </div>
+              );
+            }
+
+            const cacheKey = figureMetadataCacheKey(order.dropId, item.refId);
+            const metadata = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(order.dropId, item.refId);
+            const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
+            const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
+            const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
+
+            return (
+              <div
+                key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
+                className="figure-tile shipment-item-tile"
+              >
+                <FigureTileImage
+                  dropId={order.dropId}
+                  figureId={item.refId}
+                  primarySrc={primarySrc}
+                  fallbackSrc={fallbackSrc}
+                  alt={label}
+                  onMetadataResolved={mergeLoadedFigureMetadata}
+                />
+              </div>
+            );
+          })}
+        </div>
+      );
+    },
+    [figureMetadataByKey, getDropConfig, getDropContent, mergeLoadedFigureMetadata],
+  );
 
   const revealOverlayStyle = revealOverlay
     ? (() => {
@@ -3671,24 +3850,13 @@ function App({ currentPath }: AppProps) {
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="card__head">
                     <div>
-                      <div className="card__title">{order.deliveryId}</div>
+                      <div className="card__title">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                       <div className="muted small">{formatOrderDate(order)}</div>
-                      <div className="muted small">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                     </div>
                     <div className="delivery-status">{displayOrderStatus(order)}</div>
                   </div>
                   {order.items.length ? (
-                    <div className="muted small">
-                      {order.items
-                        .map((item) =>
-                          dropAssetReference(
-                            getDropConfig(order.dropId),
-                            item.kind === 'box' ? 'box' : 'figure',
-                            item.refId,
-                          ),
-                        )
-                        .join(', ')}
-                    </div>
+                    renderShipmentItems(order)
                   ) : (
                     <div className="muted small">Items unavailable.</div>
                   )}

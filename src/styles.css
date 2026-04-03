@@ -1760,6 +1760,23 @@ button.inventory__open:focus-visible {
   color: var(--muted);
 }
 
+.shipment-item-grid {
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.shipment-item-tile {
+  flex: 0 0 clamp(28px, 6vw, 36px);
+  gap: 0;
+}
+
+.shipment-item-tile img.figure-image {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
