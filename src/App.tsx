@@ -3300,6 +3300,18 @@ function App({ currentPath }: AppProps) {
     card: ponchoRevealCard,
     imageCache: ponchoImageCacheRef.current,
   });
+  const handlePonchoOverlayRequestReveal = useCallback(() => {
+    if (!revealOverlay) return 'retry' as const;
+    return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
+  }, [handleRevealDudes, revealOverlay?.dropId, revealOverlay?.id]);
+  const handlePonchoOverlayPlayClick = useCallback(() => {
+    if (!revealOverlay) return;
+    playClickSoundForDropId(revealOverlay.dropId);
+  }, [playClickSoundForDropId, revealOverlay?.dropId]);
+  const handlePonchoOverlayPlayReveal = useCallback(() => {
+    if (!revealOverlay) return;
+    playRevealSoundForDropId(revealOverlay.dropId);
+  }, [playRevealSoundForDropId, revealOverlay?.dropId]);
   const showRevealOutcome = Boolean(
     revealOverlay &&
       revealOverlay.revealedIds?.length &&
@@ -3581,9 +3593,9 @@ function App({ currentPath }: AppProps) {
         boxLabel={revealOverlayContainerLabel}
         imageCache={ponchoImageCacheRef.current}
         resetKey={revealOverlay.id}
-        onRequestReveal={() => handleRevealDudes(revealOverlay.id, revealOverlay.dropId)}
-        onPlayClick={() => playClickSoundForDropId(revealOverlay.dropId)}
-        onPlayReveal={() => playRevealSoundForDropId(revealOverlay.dropId)}
+        onRequestReveal={handlePonchoOverlayRequestReveal}
+        onPlayClick={handlePonchoOverlayPlayClick}
+        onPlayReveal={handlePonchoOverlayPlayReveal}
         onBeforeAdvance={ensureRevealOverlayAdvanceAllowed}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
