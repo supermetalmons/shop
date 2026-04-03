@@ -3580,7 +3580,7 @@ function App({ currentPath }: AppProps) {
         boxName={revealOverlay.name}
         boxLabel={revealOverlayContainerLabel}
         imageCache={ponchoImageCacheRef.current}
-        resetKey={`${revealOverlay.id}:${revealOverlay.phase}`}
+        resetKey={revealOverlay.id}
         onRequestReveal={() => handleRevealDudes(revealOverlay.id, revealOverlay.dropId)}
         onPlayClick={() => playClickSoundForDropId(revealOverlay.dropId)}
         onPlayReveal={() => playRevealSoundForDropId(revealOverlay.dropId)}
