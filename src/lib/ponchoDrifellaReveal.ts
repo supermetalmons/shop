@@ -89,6 +89,7 @@ type PonchoDrifellaRevealControllerState = {
   stage: PonchoDrifellaRevealStage;
   boxFrameSrc: string;
   foregroundFrameSrc?: string;
+  foregroundVisible: boolean;
   cardVisible: boolean;
   cardInteractive: boolean;
   note: string;
@@ -183,6 +184,8 @@ export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS = buildPonchoDr
   `${PONCHO_DRIFELLA_SEQUENCE_BASE_URL}/1/autoplay/overtop`,
   PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_IDS.length,
 );
+const PONCHO_DRIFELLA_INITIAL_OVERTOP_FRAME_URL =
+  PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS[PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS.length - 1]!;
 
 const PONCHO_DRIFELLA_PUNCH_FRAME_URLS = PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT.flat();
 const PONCHO_DRIFELLA_MANUAL_SEQUENCE_FRAME_URLS = [
@@ -324,12 +327,18 @@ function ponchoDrifellaCurrentForegroundFrameSrc(
   stage: PonchoDrifellaRevealStage,
   stageFrameIndex: number,
 ) {
+  if (stage === 'segment_1_2' && stageFrameIndex >= PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS.length - 1) {
+    return PONCHO_DRIFELLA_INITIAL_OVERTOP_FRAME_URL;
+  }
+  if (stage === 'segment_1_2_hold') {
+    return PONCHO_DRIFELLA_INITIAL_OVERTOP_FRAME_URL;
+  }
   if (stage === 'autoplay' || stage === 'revealed') {
     return PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS[
       Math.min(stageFrameIndex, PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS.length - 1)
     ];
   }
-  return PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS[0];
+  return undefined;
 }
 
 function ponchoDrifellaAutoplayFrameReady(
@@ -1070,8 +1079,13 @@ export function usePonchoDrifellaRevealController({
   const foregroundFrameSrc = ponchoDrifellaImageResidentReady(currentForegroundFrameSrc, imageCache)
     ? currentForegroundFrameSrc
     : undefined;
-  const autoplayVisualsVisible =
-    fixedSequenceReady && Boolean(foregroundFrameSrc) && (stage === 'autoplay' || stage === 'revealed');
+  const initialForegroundVisible =
+    fixedSequenceReady &&
+    ((stage === 'segment_1_2' && stageFrameIndex >= PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS.length - 1) ||
+      stage === 'segment_1_2_hold');
+  const autoplayForegroundVisible = fixedSequenceReady && (stage === 'autoplay' || stage === 'revealed');
+  const autoplayVisualsVisible = autoplayForegroundVisible && Boolean(foregroundFrameSrc);
+  const foregroundVisible = initialForegroundVisible || autoplayForegroundVisible;
 
   const boxFrameSrc = useMemo(
     () => ponchoDrifellaCurrentBoxFrameSrc(stage, stageFrameIndex, activePunchFrameUrls),
@@ -1190,6 +1204,7 @@ export function usePonchoDrifellaRevealController({
     stage,
     boxFrameSrc,
     foregroundFrameSrc,
+    foregroundVisible,
     cardVisible,
     cardInteractive,
     note,

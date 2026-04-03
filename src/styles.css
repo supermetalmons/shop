@@ -1368,9 +1368,13 @@ body.wip-scroll-lock #root {
 
 .wip-reveal__media {
   z-index: 1;
-  opacity: 1;
+  opacity: 0;
   transform: translate3d(0, 0, 0);
   transition: none;
+}
+
+.wip-reveal__media.wip-reveal__media--visible {
+  opacity: 1;
 }
 
 .wip-reveal__media.wip-reveal__media--locked {

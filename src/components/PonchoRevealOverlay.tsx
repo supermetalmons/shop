@@ -375,7 +375,8 @@ export function PonchoRevealOverlay({
     };
   }, [cardSessionKey, cardVisibleLatched, revealReadyForCard]);
 
-  const resolvedRevealVisible = Boolean(displayedForegroundImage) && cardVisibleLatched;
+  const resolvedForegroundVisible = controller.foregroundVisible && Boolean(displayedForegroundImage);
+  const resolvedRevealVisible = resolvedForegroundVisible && cardVisibleLatched;
   const resolvedCardVisible = Boolean(card) && cardVisibleLatched;
   const packDiscarded = controller.phase === 'revealed' && resolvedRevealVisible;
   const cardLocked = packDiscarded && resolvedCardVisible && !controller.cardInteractive;
@@ -462,12 +463,12 @@ export function PonchoRevealOverlay({
           )}
         </button>
         <div
-          className={`wip-reveal__stage${resolvedRevealVisible ? ' wip-reveal__stage--visible' : ''}`}
-          aria-hidden={!resolvedRevealVisible}
+          className={`wip-reveal__stage${resolvedForegroundVisible ? ' wip-reveal__stage--visible' : ''}`}
+          aria-hidden={!resolvedForegroundVisible}
         >
           {card ? (
             <div
-              className={`reveal-overlay__media wip-reveal__media${controller.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
+              className={`reveal-overlay__media wip-reveal__media${resolvedCardVisible ? ' wip-reveal__media--visible' : ''}${controller.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
               aria-hidden={!resolvedCardVisible || !controller.cardInteractive}
             >
               <div
