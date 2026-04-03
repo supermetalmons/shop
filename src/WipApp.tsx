@@ -62,6 +62,19 @@ function nextWipCardIndex(currentIndex: number) {
   return nextIndex;
 }
 
+function isWipShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tagName = target.tagName;
+  return (
+    tagName === 'INPUT' ||
+    tagName === 'TEXTAREA' ||
+    tagName === 'SELECT' ||
+    tagName === 'BUTTON' ||
+    tagName === 'A'
+  );
+}
+
 function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
@@ -69,6 +82,7 @@ function LocalPlayWipApp() {
   const [resetKey, setResetKey] = useState(0);
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const revealButtonRef = useRef<HTMLButtonElement | null>(null);
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const currentCard = DRIF_CARDS[cardIndex];
@@ -199,6 +213,33 @@ function LocalPlayWipApp() {
     setCardIndex(nextIndex);
   }, [cardIndex]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      if (isWipShortcutTarget(event.target)) {
+        return;
+      }
+      if (event.code === 'KeyR' || event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
+        handleReset();
+        return;
+      }
+      if (event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        revealButtonRef.current?.click();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleReset]);
+
   return (
     <div className="wip-page">
       <PonchoRevealOverlay
@@ -212,6 +253,7 @@ function LocalPlayWipApp() {
         cardReady={cardReady}
         cardAssetsReady={cardAssetsReady}
         imageCache={ponchoImageCacheRef.current}
+        boxButtonRef={revealButtonRef}
         resetKey={resetKey}
         onPlayClick={playClickSound}
         onPlayReveal={playRevealSound}

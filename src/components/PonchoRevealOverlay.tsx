@@ -7,6 +7,7 @@ import {
   useState,
   type AnimationEvent,
   type CSSProperties,
+  type RefObject,
   type SyntheticEvent,
   type TransitionEvent,
 } from 'react';
@@ -45,6 +46,7 @@ type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
   cardReady: boolean;
   cardAssetsReady: boolean;
   loading?: boolean;
+  boxButtonRef?: RefObject<HTMLButtonElement | null>;
 };
 
 export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
@@ -242,6 +244,7 @@ export function PonchoRevealOverlay({
   cardReady,
   cardAssetsReady,
   loading = false,
+  boxButtonRef,
   imageCache,
   resetKey,
   onRequestReveal,
@@ -434,6 +437,7 @@ export function PonchoRevealOverlay({
       <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
         <div className={`reveal-overlay__shine${resolvedCardVisible ? ' reveal-overlay__shine--visible' : ''}`} aria-hidden="true" />
         <button
+          ref={boxButtonRef}
           type="button"
           className={`reveal-overlay__box${packDiscarded ? ' wip-reveal__pack-layer--discarded' : ''}`}
           aria-label={`Reveal ${boxName}`}
