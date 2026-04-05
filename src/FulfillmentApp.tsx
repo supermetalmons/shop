@@ -17,7 +17,7 @@ import {
 import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
-import { FRONTEND_DEPLOYMENT, listFrontendDrops, type FigureMediaConfig } from './config/deployment';
+import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
 const FULFILLMENT_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -206,14 +206,18 @@ function renderFigureTiles(args: {
   );
 }
 
-export default function FulfillmentApp() {
+type FulfillmentAppProps = {
+  selectedDropId: string;
+  onSelectedDropIdChange: (dropId: string) => void;
+};
+
+export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange }: FulfillmentAppProps) {
   const drops = useMemo(() => listFrontendDrops(), []);
-  const [selectedDropId, setSelectedDropId] = useState(FRONTEND_DEPLOYMENT.dropId);
   const selectedDrop = useMemo(
-    () => drops.find((drop) => drop.dropId === selectedDropId) || FRONTEND_DEPLOYMENT,
+    () => drops.find((drop) => drop.dropId === selectedDropId) || null,
     [drops, selectedDropId],
   );
-  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop), [selectedDrop]);
+  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
   const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
@@ -296,7 +300,19 @@ export default function FulfillmentApp() {
   }, []);
 
   const loadInitial = useCallback(async () => {
-    if (!allowed || !signedIn) return;
+    if (!allowed || !signedIn || !selectedDrop) {
+      orderRequestEpochRef.current += 1;
+      setLoading(false);
+      setLoadingMore(false);
+      setOrdersError(null);
+      setHasMore(false);
+      setCursor(null);
+      setOrders([]);
+      setStatusEdits({});
+      setStatusSaving({});
+      setActiveUpdateOrderId(null);
+      return;
+    }
     const requestEpoch = orderRequestEpochRef.current + 1;
     orderRequestEpochRef.current = requestEpoch;
     setLoading(true);
@@ -325,10 +341,10 @@ export default function FulfillmentApp() {
         setLoading(false);
       }
     }
-  }, [allowed, signedIn, mergeStatusEdits, selectedDrop.dropId]);
+  }, [allowed, signedIn, mergeStatusEdits, selectedDrop]);
 
   const loadMore = useCallback(async () => {
-    if (!allowed || !signedIn || loadingMore || loading || !hasMore) return;
+    if (!allowed || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
     const requestEpoch = orderRequestEpochRef.current;
     setLoadingMore(true);
     setOrdersError(null);
@@ -354,7 +370,7 @@ export default function FulfillmentApp() {
         setLoadingMore(false);
       }
     }
-  }, [allowed, signedIn, loadingMore, loading, hasMore, cursor, mergeStatusEdits, selectedDrop.dropId]);
+  }, [allowed, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits]);
 
   useEffect(() => {
     void loadInitial();
@@ -366,6 +382,7 @@ export default function FulfillmentApp() {
   }, []);
 
   const fulfillmentFigureMetadataTargets = useMemo(() => {
+    if (!selectedDrop) return [];
     const shouldUseMetadataFallback = selectedDropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
     const targets = new Map<string, { dropId: string; figureId: number }>();
     orders.forEach((order) => {
@@ -389,13 +406,13 @@ export default function FulfillmentApp() {
     figureMediaBase,
     figureMetadataByKey,
     orders,
-    selectedDrop.dropId,
-    selectedDrop.figureMedia,
+    selectedDrop?.dropId,
+    selectedDrop?.figureMedia,
     selectedDropContent.figures.fulfillmentPreviewMode,
   ]);
 
   useEffect(() => {
-    if (!fulfillmentFigureMetadataTargets.length) return;
+    if (!selectedDrop || !fulfillmentFigureMetadataTargets.length) return;
     let cancelled = false;
     const fetchMetadata = async () => {
       try {
@@ -416,11 +433,11 @@ export default function FulfillmentApp() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata, selectedDrop.dropId]);
+  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata, selectedDrop]);
 
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !allowed || !signedIn) return;
+    if (!node || !allowed || !signedIn || !selectedDrop) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
@@ -431,11 +448,11 @@ export default function FulfillmentApp() {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [allowed, signedIn, loadMore]);
+  }, [allowed, signedIn, selectedDrop, loadMore]);
 
   const handleSaveStatus = useCallback(
     async (deliveryId: number) => {
-      if (!allowed || !signedIn) return false;
+      if (!allowed || !signedIn || !selectedDrop) return false;
       const requestEpoch = orderRequestEpochRef.current;
       setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
@@ -462,7 +479,7 @@ export default function FulfillmentApp() {
         }
       }
     },
-    [allowed, signedIn, statusEdits, selectedDrop.dropId],
+    [allowed, signedIn, selectedDrop, statusEdits],
   );
 
   const statusDirty = useMemo(() => {
@@ -584,11 +601,12 @@ export default function FulfillmentApp() {
                 id="fulfillment-drop-picker"
                 className="fulfillment-drop-picker"
                 aria-label="Drop"
-                value={selectedDrop.dropId}
+                value={selectedDropId}
                 onChange={(evt) => {
-                  setSelectedDropId(evt.target.value);
+                  onSelectedDropIdChange(evt.target.value);
                 }}
               >
+                <option value="">Select a drop</option>
                 {drops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
                     {drop.dropId}
@@ -596,9 +614,12 @@ export default function FulfillmentApp() {
                 ))}
               </select>
             </div>
-            {loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
-            {ordersError ? <div className="error">{ordersError}</div> : null}
-            {orders.length ? (
+            {!selectedDrop ? (
+              <div className="muted small">Choose a drop to load fulfillment orders.</div>
+            ) : null}
+            {selectedDrop && loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
+            {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
+            {selectedDrop && orders.length ? (
               <div className="order-list">
                 {orders.map((order) => (
                   <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="card subtle">
@@ -693,11 +714,11 @@ export default function FulfillmentApp() {
                   </div>
                 ))}
               </div>
-            ) : loading ? null : (
+            ) : selectedDrop && loading ? null : selectedDrop ? (
               <div className="muted small">No orders ready for fulfillment.</div>
-            )}
+            ) : null}
 
-            {loadingMore ? <div className="muted small">Loading more…</div> : null}
+            {selectedDrop && loadingMore ? <div className="muted small">Loading more…</div> : null}
             <div ref={sentinelRef} />
           </section>
         )

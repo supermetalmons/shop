@@ -1,7 +1,4 @@
 import { FormEvent, useState } from 'react';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
-
-const ITEMS_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -42,9 +39,9 @@ export function ClaimForm({
   const [success, setSuccess] = useState<string | null>(null);
   const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
     ? Math.floor(Number(itemsPerBox))
-    : ITEMS_PER_BOX;
-  const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, FRONTEND_DEPLOYMENT.namePrefix);
-  const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, FRONTEND_DEPLOYMENT.figureNamePrefix);
+    : 1;
+  const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
+  const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, 'figure');
 
   const buildSuccessMessage = (args: ClaimFormResult) => {
     const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);

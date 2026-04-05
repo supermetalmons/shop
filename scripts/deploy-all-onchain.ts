@@ -866,8 +866,7 @@ async function writeFrontendDeploymentConfig(args: {
     boxMinterProgramId: args.boxMinterProgramId,
     collectionMint: args.collectionMint,
   };
-  const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
-  writeFrontendDeploymentRegistryFile({ filePath, defaultDropId, drops: nextDrops });
+  writeFrontendDeploymentRegistryFile({ filePath, drops: nextDrops });
   return filePath;
 }
 
@@ -925,8 +924,7 @@ async function writeFunctionsDeploymentConfig(args: {
     receiptsMerkleTree: args.receiptsMerkleTree,
     deliveryLookupTable: args.deliveryLookupTable,
   };
-  const defaultDropId = existing.defaultDropId || Object.keys(nextDrops).sort((a, b) => a.localeCompare(b))[0] || normalizedDropId;
-  writeFunctionsDeploymentRegistryFile({ filePath, defaultDropId, drops: nextDrops });
+  writeFunctionsDeploymentRegistryFile({ filePath, drops: nextDrops });
   return filePath;
 }
 

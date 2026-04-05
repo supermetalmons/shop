@@ -199,8 +199,6 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
 }
 
 // BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY
-export const FRONTEND_DEFAULT_DROP_ID = "little_swag_boxes";
-
 export const FRONTEND_DROPS: FrontendDropsMap = {
   "little_swag_boxes": createFrontendDrop({
     solanaCluster: "mainnet-beta",
@@ -389,6 +387,3 @@ export function listFrontendDrops(): FrontendDropConfig[] {
     .sort((a, b) => a.localeCompare(b))
     .map((dropId) => FRONTEND_DROPS[dropId]);
 }
-
-// Backward-compatible alias: always points to the default drop.
-export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = requireFrontendDrop(FRONTEND_DEFAULT_DROP_ID);

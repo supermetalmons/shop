@@ -1,7 +1,6 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { FaChevronRight } from 'react-icons/fa6';
 import { MintStats } from '../types';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 
@@ -14,8 +13,10 @@ interface MintPanelProps {
   boxImageSrc?: string;
   boxAspectRatio?: number;
   boxNamePrefix?: string;
-  priceSol?: number;
-  discountPriceSol?: number;
+  priceSol: number;
+  discountPriceSol: number;
+  maxSupply: number;
+  maxPerTx: number;
   secondaryHref?: string;
   discountVisible?: boolean;
   discountLabel?: string;
@@ -142,6 +143,8 @@ export function MintPanel({
   boxNamePrefix,
   priceSol,
   discountPriceSol,
+  maxSupply,
+  maxPerTx,
   secondaryHref,
   discountVisible,
   discountLabel,
@@ -150,13 +153,13 @@ export function MintPanel({
   discountBusy,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
-  const total = stats?.total ?? FRONTEND_DEPLOYMENT.maxSupply;
+  const total = stats?.total ?? maxSupply;
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
   const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
   const remainingReady = REMAINING_OVERRIDE !== null || Boolean(stats);
-  const maxPerTx = stats?.maxPerTx ?? FRONTEND_DEPLOYMENT.maxPerTx;
+  const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
   const [quantity, setQuantity] = useState(1);
-  const maxSelectable = Math.min(maxPerTx, remaining);
+  const maxSelectable = Math.min(maxSelectablePerTx, remaining);
   const showQuantitySlider = maxSelectable > 1;
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -185,7 +188,7 @@ export function MintPanel({
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
-    if (quantity < 1 || quantity > maxPerTx) return;
+    if (quantity < 1 || quantity > maxSelectablePerTx) return;
     try {
       await onMint(quantity);
       setQuantity(1);
@@ -201,8 +204,8 @@ export function MintPanel({
     [boxAspectRatio, quantity, previewBounds.height, previewBounds.width],
   );
   const quantityLabel = dropAssetCount({ namePrefix: boxNamePrefix, figureNamePrefix: undefined }, 'box', quantity);
-  const unitPriceLamports = solAmountToLamports(priceSol, FRONTEND_DEPLOYMENT.priceSol);
-  const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, FRONTEND_DEPLOYMENT.discountPriceSol);
+  const unitPriceLamports = solAmountToLamports(priceSol, priceSol);
+  const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const formId = 'mint-form';
   const normalizedDiscountMaxQuantity =

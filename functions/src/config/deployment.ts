@@ -93,8 +93,6 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
 }
 
 // BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY
-export const FUNCTIONS_DEFAULT_DROP_ID = "little_swag_boxes";
-
 export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   "little_swag_boxes": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
@@ -225,13 +223,3 @@ export function listFunctionsDrops(): FunctionsDropConfig[] {
     .sort((a, b) => a.localeCompare(b))
     .map((dropId) => FUNCTIONS_DROPS[dropId]);
 }
-
-// Backward-compatible aliases: always point to the default drop.
-export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = requireFunctionsDrop(FUNCTIONS_DEFAULT_DROP_ID);
-
-/**
- * Canonical derived paths for the default drop.
- *
- * Keep all path building in one place to avoid duplicating URL strings.
- */
-export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);

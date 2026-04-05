@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, type QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
 import { PublicKey } from '@solana/web3.js';
-import { FUNCTIONS_DEPLOYMENT } from '../src/config/deployment.ts';
+import { requireFunctionsDrop, type SolanaCluster } from '../src/config/deployment.ts';
 
 type Args = {
   code?: string;
+  dropId: string;
   limit?: number;
   json: boolean;
 };
@@ -52,24 +53,24 @@ const PROJECT_ID = 'mons-shop';
 const IRL_CODE_DIGITS = 10;
 const FIREBASE_CLI_CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
 const FIREBASE_CLI_CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi';
-const cluster = FUNCTIONS_DEPLOYMENT.solanaCluster;
-const collectionMint = FUNCTIONS_DEPLOYMENT.collectionMint;
-const HELIUS_RPC_BASE =
-  cluster === 'mainnet-beta'
+
+function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
+  return cluster === 'mainnet-beta'
     ? 'https://mainnet.helius-rpc.com'
     : cluster === 'testnet'
       ? 'https://testnet.helius-rpc.com'
       : 'https://devnet.helius-rpc.com';
+}
 
 function usage() {
   return [
     'Check IRL claim codes against on-chain state.',
     '',
     'Usage:',
-    '  npm run check-irl-claims',
-    '  npm run check-irl-claims -- --code 1234567890',
-    '  npm run check-irl-claims -- --limit 25',
-    '  npm run check-irl-claims -- --json',
+    '  npm run check-irl-claims -- --drop-id <dropId>',
+    '  npm run check-irl-claims -- --drop-id <dropId> --code 1234567890',
+    '  npm run check-irl-claims -- --drop-id <dropId> --limit 25',
+    '  npm run check-irl-claims -- --drop-id <dropId> --json',
     '',
     'Requirements:',
     '  - HELIUS_API_KEY or VITE_HELIUS_API_KEY in .env',
@@ -97,6 +98,14 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
 
+    if (arg === '--drop-id') {
+      const value = String(argv[i + 1] || '').trim();
+      if (!value) fail('Missing value for --drop-id');
+      args.dropId = value;
+      i += 1;
+      continue;
+    }
+
     if (arg === '--code') {
       const value = argv[i + 1];
       if (!value) fail('Missing value for --code');
@@ -119,9 +128,18 @@ function parseArgs(argv: string[]): Args {
   if (args.code && args.code.length !== IRL_CODE_DIGITS) {
     fail(`Invalid claim code. Expected ${IRL_CODE_DIGITS} digits.`);
   }
+  if (!args.dropId) {
+    fail(`Missing required --drop-id.\n\n${usage()}`);
+  }
 
   return args;
 }
+
+const args = parseArgs(process.argv.slice(2));
+const dropConfig = requireFunctionsDrop(args.dropId);
+const cluster = dropConfig.solanaCluster;
+const collectionMint = dropConfig.collectionMint;
+const HELIUS_RPC_BASE = heliusRpcBaseForCluster(cluster);
 
 function loadLocalEnv() {
   const envPaths = [
@@ -791,7 +809,6 @@ function printText(results: ClaimInspection[]) {
 
 async function main() {
   loadLocalEnv();
-  const args = parseArgs(process.argv.slice(2));
   const claims = await loadClaims(args);
 
   if (!claims.length) {

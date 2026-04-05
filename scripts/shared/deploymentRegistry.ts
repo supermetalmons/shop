@@ -37,12 +37,10 @@ export type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
 };
 
 export type FrontendDropRegistry = {
-  defaultDropId: string | undefined;
   drops: Record<string, FrontendDropConfigSerialized>;
 };
 
 export type FunctionsDropRegistry = {
-  defaultDropId: string | undefined;
   drops: Record<string, FunctionsDropConfigSerialized>;
 };
 
@@ -221,7 +219,7 @@ async function importModuleFresh(filePath: string): Promise<Record<string, unkno
 
 export async function readFrontendDropRegistry(filePath: string): Promise<FrontendDropRegistry> {
   const drops: Record<string, FrontendDropConfigSerialized> = {};
-  if (!existsSync(filePath)) return { defaultDropId: undefined, drops };
+  if (!existsSync(filePath)) return { drops };
 
   let mod: Record<string, unknown> = {};
   try {
@@ -246,14 +244,12 @@ export async function readFrontendDropRegistry(filePath: string): Promise<Fronte
     if (normalized) drops[normalized.dropId] = normalized;
   }
 
-  const defaultDropIdRaw = asTrimmedString(mod.FRONTEND_DEFAULT_DROP_ID);
-  const defaultDropId = normalizeDropId(defaultDropIdRaw || Object.keys(drops)[0] || '');
-  return { defaultDropId: defaultDropId || undefined, drops };
+  return { drops };
 }
 
 export async function readFunctionsDropRegistry(filePath: string): Promise<FunctionsDropRegistry> {
   const drops: Record<string, FunctionsDropConfigSerialized> = {};
-  if (!existsSync(filePath)) return { defaultDropId: undefined, drops };
+  if (!existsSync(filePath)) return { drops };
 
   let mod: Record<string, unknown> = {};
   try {
@@ -278,9 +274,7 @@ export async function readFunctionsDropRegistry(filePath: string): Promise<Funct
     if (normalized) drops[normalized.dropId] = normalized;
   }
 
-  const defaultDropIdRaw = asTrimmedString(mod.FUNCTIONS_DEFAULT_DROP_ID);
-  const defaultDropId = normalizeDropId(defaultDropIdRaw || Object.keys(drops)[0] || '');
-  return { defaultDropId: defaultDropId || undefined, drops };
+  return { drops };
 }
 
 function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, indent = '    '): string {
@@ -366,14 +360,11 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
 }
 
 export function renderFrontendDeploymentRegistrySection(args: {
-  defaultDropId: string;
   drops: Record<string, FrontendDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
   const entries = dropIds.map((dropId) => renderFrontendDropEntry(args.drops[dropId])).join('\n');
   return `${FRONTEND_DEPLOYMENT_REGISTRY_START}
-export const FRONTEND_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
-
 export const FRONTEND_DROPS: FrontendDropsMap = {
 ${entries}
 };
@@ -381,7 +372,6 @@ ${FRONTEND_DEPLOYMENT_REGISTRY_END}`;
 }
 
 export function renderFrontendDeploymentRegistryFile(args: {
-  defaultDropId: string;
   drops: Record<string, FrontendDropConfigSerialized>;
 }): string {
   const registrySection = renderFrontendDeploymentRegistrySection(args);
@@ -606,21 +596,15 @@ export function listFrontendDrops(): FrontendDropConfig[] {
     .sort((a, b) => a.localeCompare(b))
     .map((dropId) => FRONTEND_DROPS[dropId]);
 }
-
-// Backward-compatible alias: always points to the default drop.
-export const FRONTEND_DEPLOYMENT: FrontendDeploymentConfig = requireFrontendDrop(FRONTEND_DEFAULT_DROP_ID);
 `;
 }
 
 export function renderFunctionsDeploymentRegistrySection(args: {
-  defaultDropId: string;
   drops: Record<string, FunctionsDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
   const entries = dropIds.map((dropId) => renderFunctionsDropEntry(args.drops[dropId])).join('\n');
   return `${FUNCTIONS_DEPLOYMENT_REGISTRY_START}
-export const FUNCTIONS_DEFAULT_DROP_ID = ${tsStringLiteral(args.defaultDropId)};
-
 export const FUNCTIONS_DROPS: FunctionsDropsMap = {
 ${entries}
 };
@@ -628,7 +612,6 @@ ${FUNCTIONS_DEPLOYMENT_REGISTRY_END}`;
 }
 
 export function renderFunctionsDeploymentRegistryFile(args: {
-  defaultDropId: string;
   drops: Record<string, FunctionsDropConfigSerialized>;
 }): string {
   const registrySection = renderFunctionsDeploymentRegistrySection(args);
@@ -747,16 +730,6 @@ export function listFunctionsDrops(): FunctionsDropConfig[] {
     .sort((a, b) => a.localeCompare(b))
     .map((dropId) => FUNCTIONS_DROPS[dropId]);
 }
-
-// Backward-compatible aliases: always point to the default drop.
-export const FUNCTIONS_DEPLOYMENT: FunctionsDeploymentConfig = requireFunctionsDrop(FUNCTIONS_DEFAULT_DROP_ID);
-
-/**
- * Canonical derived paths for the default drop.
- *
- * Keep all path building in one place to avoid duplicating URL strings.
- */
-export const FUNCTIONS_PATHS = dropPathsFromBase(FUNCTIONS_DEPLOYMENT.metadataBase);
 `;
 }
 
@@ -792,11 +765,10 @@ export function writeTextFileIfChanged(filePath: string, content: string): void 
 
 export function writeFrontendDeploymentRegistryFile(args: {
   filePath: string;
-  defaultDropId: string;
   drops: Record<string, FrontendDropConfigSerialized>;
 }): void {
   const prevContent = existsSync(args.filePath) ? readFileSync(args.filePath, 'utf8') : '';
-  const section = renderFrontendDeploymentRegistrySection({ defaultDropId: args.defaultDropId, drops: args.drops });
+  const section = renderFrontendDeploymentRegistrySection({ drops: args.drops });
   const content =
     replaceMarkedSection({
       filePath: args.filePath,
@@ -804,17 +776,16 @@ export function writeFrontendDeploymentRegistryFile(args: {
       startMarker: FRONTEND_DEPLOYMENT_REGISTRY_START,
       endMarker: FRONTEND_DEPLOYMENT_REGISTRY_END,
       nextSection: section,
-    }) || renderFrontendDeploymentRegistryFile({ defaultDropId: args.defaultDropId, drops: args.drops });
+    }) || renderFrontendDeploymentRegistryFile({ drops: args.drops });
   writeTextFileIfChanged(args.filePath, content);
 }
 
 export function writeFunctionsDeploymentRegistryFile(args: {
   filePath: string;
-  defaultDropId: string;
   drops: Record<string, FunctionsDropConfigSerialized>;
 }): void {
   const prevContent = existsSync(args.filePath) ? readFileSync(args.filePath, 'utf8') : '';
-  const section = renderFunctionsDeploymentRegistrySection({ defaultDropId: args.defaultDropId, drops: args.drops });
+  const section = renderFunctionsDeploymentRegistrySection({ drops: args.drops });
   const content =
     replaceMarkedSection({
       filePath: args.filePath,
@@ -822,6 +793,6 @@ export function writeFunctionsDeploymentRegistryFile(args: {
       startMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_START,
       endMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_END,
       nextSection: section,
-    }) || renderFunctionsDeploymentRegistryFile({ defaultDropId: args.defaultDropId, drops: args.drops });
+    }) || renderFunctionsDeploymentRegistryFile({ drops: args.drops });
   writeTextFileIfChanged(args.filePath, content);
 }

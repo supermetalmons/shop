@@ -17,7 +17,6 @@ import {
 
 type Args = {
   dropId: string;
-  newDefault?: string;
   dryRun: boolean;
   yes: boolean;
 };
@@ -29,8 +28,6 @@ type RepoPlan = {
   functionsDropsNext: Record<string, FunctionsDropConfigSerialized>;
   frontendConfigWillChange: boolean;
   functionsConfigWillChange: boolean;
-  frontendDefaultNext: string;
-  functionsDefaultNext: string;
   canonicalDeleteRelPaths: string[];
   canonicalDeleteAbsPaths: string[];
   extraReferences: string[];
@@ -85,7 +82,6 @@ function usage(): string {
     'Options:',
     '  --drop-id <id>      Drop id to remove',
     '  --drop_id <id>      Alias for --drop-id',
-    '  --new-default <id>  Replacement default drop when needed',
     '  --dry-run           Preview only; do not mutate',
     '  --yes               Skip interactive confirmation',
     '  -h, --help          Show this help',
@@ -117,7 +113,6 @@ function readNpmConfigString(keys: string[]): string | undefined {
 
 function parseArgs(argv: string[]): Args {
   let dropId: string | undefined;
-  let newDefault: string | undefined;
   let dryRun = false;
   let yes = false;
   const positional: string[] = [];
@@ -157,17 +152,6 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
 
-    if (arg === '--new-default' || arg.startsWith('--new-default=')) {
-      const { value, nextIndex } = readValue(
-        '--new-default',
-        i,
-        arg.startsWith('--new-default=') ? arg.slice('--new-default='.length) : undefined,
-      );
-      newDefault = value;
-      i = nextIndex;
-      continue;
-    }
-
     if (arg.startsWith('-')) {
       fail(`Unknown arg: ${arg}\n\n${usage()}`);
     }
@@ -181,23 +165,15 @@ function parseArgs(argv: string[]): Args {
 
   const positionalDropId = positional[0];
   const dropIdFromNpmConfig = readNpmConfigString(['drop_id', 'drop-id']);
-  const newDefaultFromNpmConfig = readNpmConfigString(['new_default', 'new-default']);
   const finalDropIdRaw = dropId ?? positionalDropId ?? dropIdFromNpmConfig;
-  const finalNewDefaultRaw = newDefault ?? newDefaultFromNpmConfig;
 
   if (!finalDropIdRaw) {
     fail(`Missing drop id.\n\n${usage()}`);
   }
 
   const normalizedDropId = validateDropId(finalDropIdRaw, 'drop id');
-  const normalizedNewDefault = finalNewDefaultRaw ? validateDropId(finalNewDefaultRaw, 'new default drop id') : undefined;
-  if (normalizedNewDefault && normalizedNewDefault === normalizedDropId) {
-    fail('--new-default must refer to a different drop');
-  }
-
   return {
     dropId: normalizedDropId,
-    ...(normalizedNewDefault ? { newDefault: normalizedNewDefault } : {}),
     dryRun,
     yes,
   };
@@ -751,7 +727,6 @@ async function loadClaimDocs(codes: string[]): Promise<Map<string, FirestoreDocR
 async function buildRepoPlan(args: {
   root: string;
   dropId: string;
-  newDefault?: string;
 }): Promise<RepoPlan> {
   const frontendConfigPath = path.join(args.root, 'src', 'config', 'deployment.ts');
   const functionsConfigPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
@@ -781,41 +756,6 @@ async function buildRepoPlan(args: {
     );
   }
 
-  const targetIsFrontendDefault = frontendRegistry.defaultDropId === args.dropId;
-  const targetIsFunctionsDefault = functionsRegistry.defaultDropId === args.dropId;
-  const requiresNewDefault = targetIsFrontendDefault || targetIsFunctionsDefault;
-
-  let frontendDefaultNext = frontendRegistry.defaultDropId || '';
-  let functionsDefaultNext = functionsRegistry.defaultDropId || '';
-
-  if (args.newDefault) {
-    if (!frontendDropsNext[args.newDefault] || !functionsDropsNext[args.newDefault]) {
-      const frontendChoices = nextFrontendDropIds.join(', ') || '(none)';
-      const functionsChoices = nextFunctionsDropIds.join(', ') || '(none)';
-      fail(
-        `Invalid --new-default ${args.newDefault}.\n` +
-          `Frontend remaining drops : ${frontendChoices}\n` +
-          `Functions remaining drops: ${functionsChoices}`,
-      );
-    }
-    frontendDefaultNext = args.newDefault;
-    functionsDefaultNext = args.newDefault;
-  } else {
-    if (requiresNewDefault) {
-      fail(
-        `Drop ${args.dropId} is currently a default drop. Pass --new-default <remainingDropId>.\n` +
-          `Remaining frontend drops : ${nextFrontendDropIds.join(', ')}\n` +
-          `Remaining functions drops: ${nextFunctionsDropIds.join(', ')}`,
-      );
-    }
-    if (!frontendDefaultNext || !frontendDropsNext[frontendDefaultNext]) {
-      fail(`Frontend default drop would be invalid after wiping ${args.dropId}. Pass --new-default <remainingDropId>.`);
-    }
-    if (!functionsDefaultNext || !functionsDropsNext[functionsDefaultNext]) {
-      fail(`Functions default drop would be invalid after wiping ${args.dropId}. Pass --new-default <remainingDropId>.`);
-    }
-  }
-
   const trackedFiles = listTrackedFiles(args.root);
   const canonicalDeleteRelPaths = sortStrings(
     trackedFiles.filter((relPath) => isCanonicalDropFile(relPath, args.dropId) || relPath === `scripts/discounts/${args.dropId}.csv`),
@@ -839,12 +779,8 @@ async function buildRepoPlan(args: {
     functionsConfigPath,
     frontendDropsNext,
     functionsDropsNext,
-    frontendConfigWillChange:
-      Boolean(frontendRegistry.drops[args.dropId]) || frontendDefaultNext !== (frontendRegistry.defaultDropId || ''),
-    functionsConfigWillChange:
-      Boolean(functionsRegistry.drops[args.dropId]) || functionsDefaultNext !== (functionsRegistry.defaultDropId || ''),
-    frontendDefaultNext,
-    functionsDefaultNext,
+    frontendConfigWillChange: Boolean(frontendRegistry.drops[args.dropId]),
+    functionsConfigWillChange: Boolean(functionsRegistry.drops[args.dropId]),
     canonicalDeleteRelPaths,
     canonicalDeleteAbsPaths: canonicalDeleteRelPaths.map((relPath) => path.join(args.root, relPath)),
     extraReferences,
@@ -947,13 +883,11 @@ function printPlan(args: {
   console.log('codebase');
   if (repoPlan.frontendConfigWillChange) {
     console.log(`- update src/config/deployment.ts`);
-    console.log(`  next frontend default: ${repoPlan.frontendDefaultNext}`);
   } else {
     console.log('- src/config/deployment.ts: no changes');
   }
   if (repoPlan.functionsConfigWillChange) {
     console.log(`- update functions/src/config/deployment.ts`);
-    console.log(`  next functions default: ${repoPlan.functionsDefaultNext}`);
   } else {
     console.log('- functions/src/config/deployment.ts: no changes');
   }
@@ -994,14 +928,12 @@ function applyRepoWipe(plan: RepoPlan): void {
   if (plan.frontendConfigWillChange) {
     writeFrontendDeploymentRegistryFile({
       filePath: plan.frontendConfigPath,
-      defaultDropId: plan.frontendDefaultNext,
       drops: plan.frontendDropsNext,
     });
   }
   if (plan.functionsConfigWillChange) {
     writeFunctionsDeploymentRegistryFile({
       filePath: plan.functionsConfigPath,
-      defaultDropId: plan.functionsDefaultNext,
       drops: plan.functionsDropsNext,
     });
   }
@@ -1045,7 +977,7 @@ function looksLikeCredentialError(message: string): boolean {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const root = repoRoot();
-  const repoPlan = await buildRepoPlan({ root, dropId: args.dropId, newDefault: args.newDefault });
+  const repoPlan = await buildRepoPlan({ root, dropId: args.dropId });
 
   if (repoPlan.extraReferences.length) {
     fail(

@@ -2,10 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Connection, PublicKey } from '@solana/web3.js';
-import { FRONTEND_DEPLOYMENT } from '../src/config/deployment.ts';
+
+type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 type Args = {
   assetId: string;
+  cluster: SolanaCluster;
   rawOwners: boolean;
 };
 
@@ -27,13 +29,15 @@ type CollectionFetchResult = {
   method: 'searchAssets' | 'getAssetsByGroup';
 };
 
-const cluster = FRONTEND_DEPLOYMENT.solanaCluster;
-const HELIUS_RPC_BASE =
-  cluster === 'mainnet-beta'
+function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
+  return cluster === 'mainnet-beta'
     ? 'https://mainnet.helius-rpc.com'
     : cluster === 'testnet'
       ? 'https://testnet.helius-rpc.com'
       : 'https://devnet.helius-rpc.com';
+}
+
+let activeCluster: SolanaCluster | null = null;
 const PAGE_LIMIT = 1000;
 const MAX_PAGES = 1000;
 
@@ -42,11 +46,11 @@ function usage() {
     'Get unique holder addresses for the collection an asset belongs to.',
     '',
     'Usage:',
-    '  npm run get_token_holders <assetId>',
-    '  npm run get_token_holders <assetId> -- --raw-owners',
+    '  npm run get_token_holders <assetId> -- --cluster <mainnet-beta|testnet|devnet>',
+    '  npm run get_token_holders <assetId> -- --cluster <mainnet-beta|testnet|devnet> --raw-owners',
     '',
     'Example:',
-    '  npm run get_token_holders HD7TJ2o4YomVHocngy557SrSsQ5RXNsvJD23WAaNJkwA',
+    '  npm run get_token_holders HD7TJ2o4YomVHocngy557SrSsQ5RXNsvJD23WAaNJkwA -- --cluster mainnet-beta',
     '',
     'Requirements:',
     '  - HELIUS_API_KEY or VITE_HELIUS_API_KEY in .env',
@@ -59,12 +63,24 @@ function fail(message: string): never {
 
 function parseArgs(argv: string[]): Args {
   let assetId: string | undefined;
+  let cluster: SolanaCluster | undefined;
   let rawOwners = false;
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (arg === '-h' || arg === '--help') {
       console.log(usage());
       process.exit(0);
+    }
+
+    if (arg === '--cluster') {
+      const value = String(argv[i + 1] || '').trim();
+      if (value === 'mainnet-beta' || value === 'testnet' || value === 'devnet') {
+        cluster = value;
+        i += 1;
+        continue;
+      }
+      fail(`Invalid value for --cluster: ${value || '(missing)'}\n\n${usage()}`);
     }
 
     if (arg === '--raw-owners') {
@@ -88,7 +104,8 @@ function parseArgs(argv: string[]): Args {
   }
 
   if (!assetId) fail(usage());
-  return { assetId, rawOwners };
+  if (!cluster) fail(`Missing required --cluster.\n\n${usage()}`);
+  return { assetId, cluster, rawOwners };
 }
 
 function loadLocalEnv() {
@@ -136,8 +153,13 @@ function heliusApiKey(): string {
   return raw;
 }
 
+function requireActiveCluster(): SolanaCluster {
+  if (!activeCluster) fail('Missing active cluster. Pass --cluster <mainnet-beta|testnet|devnet>.');
+  return activeCluster;
+}
+
 function heliusRpcUrl(): string {
-  return `${HELIUS_RPC_BASE}/?api-key=${heliusApiKey()}`;
+  return `${heliusRpcBaseForCluster(requireActiveCluster())}/?api-key=${heliusApiKey()}`;
 }
 
 async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
@@ -451,8 +473,9 @@ async function classifyOwners(rawOwners: string[]) {
 async function main() {
   loadLocalEnv();
   const args = parseArgs(process.argv.slice(2));
+  activeCluster = args.cluster;
 
-  console.log(`Cluster: ${cluster}`);
+  console.log(`Cluster: ${args.cluster}`);
   console.log(`Asset:   ${args.assetId}`);
 
   const asset = await fetchAsset(args.assetId);

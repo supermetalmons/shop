@@ -1,4 +1,4 @@
-import { FRONTEND_DEPLOYMENT, type FrontendDeploymentConfig } from '../config/deployment';
+import type { FrontendDeploymentConfig } from '../config/deployment';
 
 type DropLabelSource = Partial<Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix'>> | null | undefined;
 type DropAssetKind = 'box' | 'figure';
@@ -20,11 +20,11 @@ function pluralize(word: string): string {
 }
 
 function boxWord(source?: DropLabelSource): string {
-  return normalizeWord(source?.namePrefix, FRONTEND_DEPLOYMENT.namePrefix || 'box');
+  return normalizeWord(source?.namePrefix, 'box');
 }
 
 function figureWord(source?: DropLabelSource): string {
-  return normalizeWord(source?.figureNamePrefix, FRONTEND_DEPLOYMENT.figureNamePrefix || 'figure');
+  return normalizeWord(source?.figureNamePrefix, 'figure');
 }
 
 function usesUnboxAction(source?: DropLabelSource): boolean {

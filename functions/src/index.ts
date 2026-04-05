@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DEPLOYMENT, FUNCTIONS_DROPS, type FunctionsDropConfig } from './config/deployment.js';
+import { FUNCTIONS_DROPS, type FunctionsDropConfig } from './config/deployment.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -224,9 +224,6 @@ Object.entries(FUNCTIONS_DROPS).forEach(([dropIdKey, dropConfig]) => {
 if (!Object.keys(DROP_RUNTIMES).length) {
   throw new Error('functions/src/config/deployment.ts has no configured drops');
 }
-const DEFAULT_DROP_RUNTIME =
-  DROP_RUNTIMES[normalizeDropId(FUNCTIONS_DEPLOYMENT.dropId)] || DROP_RUNTIMES[Object.keys(DROP_RUNTIMES)[0]];
-const CONFIGURED_DROP_ID = DEFAULT_DROP_RUNTIME.dropId;
 
 function getDropRuntime(dropId: string): DropRuntime {
   const normalizedDropId = normalizeDropId(dropId);
@@ -372,11 +369,6 @@ const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK7
 // Bubblegum -> MPL-Core CPI signer (used when minting cNFTs to an MPL-Core collection).
 const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk');
 
-function heliusRpcUrl() {
-  const apiKey = (process.env.HELIUS_API_KEY || '').trim();
-  if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
-  return `${DEFAULT_DROP_RUNTIME.heliusRpcBase}/?api-key=${apiKey}`;
-}
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
 const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 // Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
@@ -4780,13 +4772,6 @@ export const prepareIrlClaimTx = onCallLogged(
 
   const claim = claimDoc.data() as any;
   const claimDropId = await resolveClaimDropIdForCode(normalizedCode, claim);
-  if (claimDropId !== CONFIGURED_DROP_ID) {
-    logger.warn('prepareIrlClaimTx:claim_drop_differs_from_configured', {
-      code: normalizedCode,
-      claimDropId,
-      configuredDropId: CONFIGURED_DROP_ID,
-    });
-  }
   const claimDropRuntime = getDropRuntime(claimDropId);
   await ensureOnchainCoreConfig(claimDropRuntime);
   const boxIdNum = Number(claim?.boxId);

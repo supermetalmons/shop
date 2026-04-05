@@ -5,14 +5,19 @@ import { MintStats } from '../types';
 import type { FrontendDeploymentConfig } from '../config/deployment';
 
 export function useMintProgress(
-  connection: Connection,
-  dropConfig: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'maxPerTx'>,
+  connection: Connection | null,
+  dropConfig: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'maxPerTx'> | null,
   enabled = true,
 ) {
   return useQuery<MintStats>({
-    queryKey: ['mint-stats', dropConfig.dropId],
-    queryFn: () => fetchMintStatsFromProgram(connection, dropConfig),
+    queryKey: ['mint-stats', dropConfig?.dropId || 'none'],
+    queryFn: () => {
+      if (!connection || !dropConfig) {
+        throw new Error('Mint progress requires an explicit drop');
+      }
+      return fetchMintStatsFromProgram(connection, dropConfig);
+    },
     refetchInterval: enabled ? 30_000 : false,
-    enabled,
+    enabled: enabled && Boolean(connection && dropConfig),
   });
 }

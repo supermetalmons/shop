@@ -1,14 +1,12 @@
 import { normalizeCountryCode } from './solana';
 import { InventoryItem } from '../types';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 
 const DELIVERY_BASE_LAMPORTS = 190_000_000;
 const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
-const DEFAULT_DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 function normalizeItemsPerBox(itemsPerBox?: number): number {
   const parsed = Number(itemsPerBox);
-  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_DELIVERY_FIGURES_PER_BOX;
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
   return Math.floor(parsed);
 }
 

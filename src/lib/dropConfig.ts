@@ -1,6 +1,5 @@
 import { clusterApiUrl } from '@solana/web3.js';
 import {
-  FRONTEND_DEFAULT_DROP_ID,
   FRONTEND_DROPS,
   type FrontendDropConfig,
   type SolanaCluster,
@@ -27,21 +26,12 @@ export function listFrontendDropIds(): string[] {
   return listFrontendDrops().map((drop) => drop.dropId);
 }
 
-export function resolveFrontendDropByPath(pathname: string): FrontendDropConfig {
+export function resolveFrontendDropByPath(pathname: string): FrontendDropConfig | null {
   const normalizedPath = normalizePathname(pathname);
-  if (normalizedPath === '/') {
-    return FRONTEND_DROPS[FRONTEND_DEFAULT_DROP_ID];
-  }
+  if (normalizedPath === '/') return null;
 
   const candidate = normalizedPath.slice(1);
-  const found = getFrontendDrop(candidate);
-  if (found) return found;
-
-  return FRONTEND_DROPS[FRONTEND_DEFAULT_DROP_ID];
-}
-
-export function getFrontendDropPathAliasForDefault(): string {
-  return `/${FRONTEND_DEFAULT_DROP_ID}`;
+  return getFrontendDrop(candidate) || null;
 }
 
 export function heliusRpcUrlForCluster(cluster: SolanaCluster): string | null {

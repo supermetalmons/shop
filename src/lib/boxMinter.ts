@@ -8,14 +8,13 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { MintStats } from '../types';
-import { FRONTEND_DEPLOYMENT, type FrontendDeploymentConfig } from '../config/deployment';
+import type { FrontendDeploymentConfig } from '../config/deployment';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
 const DISCOUNT_RECORD_SEED = 'discount';
 const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
-const DEFAULT_MAX_MINTS_PER_TX = FRONTEND_DEPLOYMENT.maxPerTx;
 const MIN_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
 
@@ -81,7 +80,7 @@ type DropMintLimitsConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' 
 
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
   const parsed = Number(config?.maxPerTx);
-  if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_MAX_MINTS_PER_TX;
+  if (!Number.isInteger(parsed) || parsed < 1) return 1;
   return parsed;
 }
 
@@ -91,19 +90,19 @@ function normalizeDiscountMintsPerWallet(value: number | undefined): number {
   return parsed;
 }
 
-export function boxMinterProgramId(dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT): PublicKey {
+export function boxMinterProgramId(dropConfig: DropProgramConfig): PublicKey {
   return new PublicKey(dropConfig.boxMinterProgramId);
 }
 
-export function boxMinterConfigPda(programId = boxMinterProgramId()): [PublicKey, number] {
+export function boxMinterConfigPda(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
 }
 
-export function discountMintRecordPda(payer: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
+export function discountMintRecordPda(payer: PublicKey, programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([utf8(DISCOUNT_RECORD_SEED), payer.toBuffer()], programId);
 }
 
-export function pendingOpenPda(boxAsset: PublicKey, programId = boxMinterProgramId()): [PublicKey, number] {
+export function pendingOpenPda(boxAsset: PublicKey, programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_OPEN_SEED), boxAsset.toBuffer()], programId);
 }
 
@@ -111,7 +110,7 @@ export function pendingDudeAssetPda(
   pending: PublicKey,
   index: number,
   itemsPerBox: number,
-  programId = boxMinterProgramId(),
+  programId: PublicKey,
 ): [PublicKey, number] {
   const i = Number(index);
   if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
@@ -256,7 +255,7 @@ export function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
 export async function fetchDiscountMintRecordUsedCount(
   connection: Connection,
   payer: PublicKey,
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): Promise<number> {
   const programId = boxMinterProgramId(dropConfig);
   const [discountRecordPda] = discountMintRecordPda(payer, programId);
@@ -279,7 +278,7 @@ export async function fetchDiscountMintRecordUsedCount(
 
 export async function fetchBoxMinterConfig(
   connection: Connection,
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): Promise<BoxMinterConfigAccount> {
   const programId = boxMinterProgramId(dropConfig);
   const [pda] = boxMinterConfigPda(programId);
@@ -294,7 +293,7 @@ export async function fetchBoxMinterConfig(
 
 export async function fetchMintStatsFromProgram(
   connection: Connection,
-  dropConfig: DropMintLimitsConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropMintLimitsConfig,
 ): Promise<MintStats> {
   const cfg = await fetchBoxMinterConfig(connection, dropConfig);
   const minted = Number(cfg.minted || 0);
@@ -396,7 +395,7 @@ export function buildMintBoxesIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropMintLimitsConfig,
 ): TransactionInstruction {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
@@ -426,7 +425,7 @@ export function buildMintDiscountedBoxIx(
   payer: PublicKey,
   quantity: number,
   proof: Uint8Array[],
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): TransactionInstruction {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
@@ -458,7 +457,7 @@ export async function buildMintBoxesTx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropMintLimitsConfig,
 ): Promise<VersionedTransaction> {
   const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
   // Keep conservative; each Core mint creates a new account.
@@ -486,7 +485,7 @@ export async function buildMintDiscountedBoxTx(
   payer: PublicKey,
   quantity: number,
   proof: Uint8Array[],
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
   const mintIx = buildMintDiscountedBoxIx(cfg, payer, quantity, proof, dropConfig);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
@@ -505,7 +504,7 @@ export function buildStartOpenBoxIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   boxAsset: PublicKey,
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): TransactionInstruction {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
@@ -537,7 +536,7 @@ export async function buildStartOpenBoxTx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   boxAsset: PublicKey,
-  dropConfig: DropProgramConfig = FRONTEND_DEPLOYMENT,
+  dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
   const startIx = buildStartOpenBoxIx(cfg, payer, boxAsset, dropConfig);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');

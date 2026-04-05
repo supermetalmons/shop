@@ -121,7 +121,7 @@ async function readDeploymentConfigObject(filePath: string): Promise<Record<stri
 
   try {
     const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
-    const candidates = ['FRONTEND_DEPLOYMENT', 'DEPLOYMENT', 'default'];
+    const candidates = ['DEPLOYMENT', 'default'];
     for (const key of candidates) {
       const candidate = mod[key];
       if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {

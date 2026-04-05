@@ -1,9 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
-import { FRONTEND_DEPLOYMENT } from '../config/deployment';
 import { dropAssetLabel } from '../lib/dropLabels';
-
-const DELIVERY_FIGURES_PER_BOX = FRONTEND_DEPLOYMENT.itemsPerBox;
 
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
@@ -46,7 +43,7 @@ export function DeliveryForm({
   const selectedCountryCode = countryCode ?? localCountryCode;
   const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
     ? Math.floor(Number(itemsPerBox))
-    : DELIVERY_FIGURES_PER_BOX;
+    : 1;
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],

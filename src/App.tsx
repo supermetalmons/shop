@@ -532,29 +532,40 @@ function App({ currentPath }: AppProps) {
     () => (currentPath ? currentPath : getNormalizedPathname()),
     [currentPath],
   );
-  const activeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
+  const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
   const allDrops = useMemo(() => listFrontendDrops(), []);
   const dropById = useMemo(() => new Map(allDrops.map((drop) => [drop.dropId, drop])), [allDrops]);
   const dropConnectionCacheRef = useRef<Map<string, Connection>>(new Map());
-  const getDropConfig = useCallback(
-    (dropId?: string): FrontendDeploymentConfig => {
-      if (!dropId) return activeDrop;
-      return getFrontendDrop(dropId) || activeDrop;
+  const requireRouteDrop = useCallback(
+    (context: string): FrontendDeploymentConfig => {
+      if (!routeDrop) {
+        throw new Error(`This action requires an explicit drop route (${context})`);
+      }
+      return routeDrop;
     },
-    [activeDrop],
+    [routeDrop],
+  );
+  const getDropConfig = useCallback(
+    (dropId?: string): FrontendDeploymentConfig | undefined => {
+      if (!dropId) return routeDrop || undefined;
+      return getFrontendDrop(dropId);
+    },
+    [routeDrop],
   );
   const requireKnownDropConfig = useCallback(
     (dropId: string | undefined, context: string): FrontendDeploymentConfig => {
-      if (!dropId) return activeDrop;
+      if (!dropId) {
+        throw new Error(`Missing dropId from ${context}`);
+      }
       const found = getFrontendDrop(dropId);
       if (found) return found;
       throw new Error(`Unknown dropId "${dropId}" from ${context}`);
     },
-    [activeDrop],
+    [],
   );
   const getDropConnection = useCallback(
-    (dropId?: string): Connection => {
-      const drop = getDropConfig(dropId);
+    (dropId: string): Connection => {
+      const drop = requireKnownDropConfig(dropId, 'connection');
       const cacheKey = `${drop.solanaCluster}:${drop.dropId}`;
       const cached = dropConnectionCacheRef.current.get(cacheKey);
       if (cached) return cached;
@@ -562,11 +573,11 @@ function App({ currentPath }: AppProps) {
       dropConnectionCacheRef.current.set(cacheKey, created);
       return created;
     },
-    [getDropConfig],
+    [requireKnownDropConfig],
   );
   const getDropContent = useCallback(
-    (dropId?: string) => resolveDropContent(dropId ? getFrontendDrop(dropId) || dropId : activeDrop),
-    [activeDrop],
+    (dropId?: string) => resolveDropContent(dropId ? getFrontendDrop(dropId) || dropId : routeDrop || undefined),
+    [routeDrop],
   );
   const boxLabelForDropId = useCallback(
     (dropId?: string, count = 1, options?: { capitalize?: boolean }) =>
@@ -663,11 +674,20 @@ function App({ currentPath }: AppProps) {
     },
     [revealRendererForDropId],
   );
-  const activeConnection = useMemo(() => getDropConnection(activeDrop.dropId), [activeDrop.dropId, getDropConnection]);
-  const activeDiscountVersion = useMemo(() => discountUsedVersion(activeDrop), [activeDrop]);
-  const activeDiscountScope = useMemo(() => discountUsedScope(activeDrop), [activeDrop]);
-  const shouldFetchMintStats = !activeDrop.forceSoldOut;
-  const { data: mintStats, refetch: refetchStats } = useMintProgress(activeConnection, activeDrop, shouldFetchMintStats);
+  const routeConnection = useMemo(
+    () => (routeDrop ? getDropConnection(routeDrop.dropId) : null),
+    [getDropConnection, routeDrop],
+  );
+  const activeDiscountVersion = useMemo(
+    () => (routeDrop ? discountUsedVersion(routeDrop) : 'none'),
+    [routeDrop],
+  );
+  const activeDiscountScope = useMemo(
+    () => (routeDrop ? discountUsedScope(routeDrop) : `${DISCOUNT_USED_STORAGE_PREFIX}:none`),
+    [routeDrop],
+  );
+  const shouldFetchMintStats = Boolean(routeDrop && !routeDrop.forceSoldOut);
+  const { data: mintStats, refetch: refetchStats } = useMintProgress(routeConnection, routeDrop, shouldFetchMintStats);
   const {
     profile,
     token,
@@ -757,25 +777,35 @@ function App({ currentPath }: AppProps) {
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
   const forcedSoldOutStats = useMemo(
-    () => ({
-      minted: activeDrop.maxSupply,
-      total: activeDrop.maxSupply,
-      remaining: 0,
-      maxPerTx: activeDrop.maxPerTx,
-    }),
-    [activeDrop.maxPerTx, activeDrop.maxSupply],
+    () =>
+      routeDrop
+        ? {
+            minted: routeDrop.maxSupply,
+            total: routeDrop.maxSupply,
+            remaining: 0,
+            maxPerTx: routeDrop.maxPerTx,
+          }
+        : undefined,
+    [routeDrop],
   );
   const activeMintStatsFallback = useMemo(
-    () => ({
-      minted: 0,
-      total: activeDrop.maxSupply,
-      remaining: activeDrop.maxSupply,
-      maxPerTx: activeDrop.maxPerTx,
-    }),
-    [activeDrop.maxPerTx, activeDrop.maxSupply],
+    () =>
+      routeDrop
+        ? {
+            minted: 0,
+            total: routeDrop.maxSupply,
+            remaining: routeDrop.maxSupply,
+            maxPerTx: routeDrop.maxPerTx,
+          }
+        : undefined,
+    [routeDrop],
   );
-  const effectiveMintStats = activeDrop.forceSoldOut ? forcedSoldOutStats : mintStats || activeMintStatsFallback;
-  const activeDiscountAllowance = mintStats?.discountMintsPerWallet ?? activeDrop.discountMintsPerWallet;
+  const effectiveMintStats = routeDrop
+    ? routeDrop.forceSoldOut
+      ? forcedSoldOutStats
+      : mintStats || activeMintStatsFallback
+    : undefined;
+  const activeDiscountAllowance = routeDrop ? mintStats?.discountMintsPerWallet ?? routeDrop.discountMintsPerWallet : 0;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
@@ -884,9 +914,9 @@ function App({ currentPath }: AppProps) {
     },
     [getDropContent],
   );
-  const defaultBoxImage = boxImageForDropId(activeDrop.dropId);
-  const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || activeDrop.dropId);
-  const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || activeDrop.dropId);
+  const defaultBoxImage = routeDrop ? boxImageForDropId(routeDrop.dropId) : undefined;
+  const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
+  const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
   const TOAST_VISIBLE_MS = 1800;
   const TOAST_FADE_MS = 250;
@@ -1348,7 +1378,7 @@ function App({ currentPath }: AppProps) {
     targets.forEach((target) => {
       const id = Number(target.figureId);
       if (!Number.isFinite(id) || id <= 0) return;
-      const drop = getDropConfig(target.dropId);
+      const drop = requireKnownDropConfig(target.dropId, `figure metadata target ${target.dropId}:${id}`);
       const cacheKey = figureMetadataCacheKey(drop.dropId, id);
       if (seen.has(cacheKey)) return;
       seen.add(cacheKey);
@@ -1396,12 +1426,12 @@ function App({ currentPath }: AppProps) {
         }
       })();
     });
-  }, [getDropConfig]);
+  }, [requireKnownDropConfig]);
 
   const addLocalRevealedDudes = (ids: number[], dropId: string) => {
     const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
     if (!uniqueIds.length) return;
-    const canonicalDropId = getDropConfig(dropId).dropId;
+    const canonicalDropId = requireKnownDropConfig(dropId, 'revealed dudes').dropId;
     const targets = uniqueIds.map((id) => ({ dropId: canonicalDropId, figureId: id }));
     setLocalRevealedDudeKeys((prev) => {
       const next = new Set(prev);
@@ -1557,7 +1587,8 @@ function App({ currentPath }: AppProps) {
     if (typeof window === 'undefined') return;
     const item = itemOverride || inventoryIndex.get(id);
     if (!item) return;
-    const overlayDropId = item.dropId || activeDrop.dropId;
+    const overlayDropId = item.dropId || routeDrop?.dropId;
+    if (!overlayDropId) return;
     resetPonchoRevealDismissState();
     clearRevealOverlayCloseTimeout();
     preloadRevealSounds(overlayDropId);
@@ -2147,12 +2178,12 @@ function App({ currentPath }: AppProps) {
   const shouldPreloadBoxFramesInitial =
     pendingRevealIds.size > 0 || localMintedItems.length > 0 || inventoryView.some((item) => item.kind === 'box');
   useEffect(() => {
-    if (!shouldPreloadBoxFramesInitial) return;
-    preloadPonchoRevealPackAssetsForDropId(activeDrop.dropId);
-    if (!dropRevealIsAnimated(activeDrop.dropId)) return;
-    preloadBoxFrames(1, revealClickMaxForDropId(activeDrop.dropId), activeDrop.dropId);
+    if (!routeDrop || !shouldPreloadBoxFramesInitial) return;
+    preloadPonchoRevealPackAssetsForDropId(routeDrop.dropId);
+    if (!dropRevealIsAnimated(routeDrop.dropId)) return;
+    preloadBoxFrames(1, revealClickMaxForDropId(routeDrop.dropId), routeDrop.dropId);
   }, [
-    activeDrop.dropId,
+    routeDrop,
     dropRevealIsAnimated,
     preloadBoxFrames,
     preloadPonchoRevealPackAssetsForDropId,
@@ -2160,13 +2191,13 @@ function App({ currentPath }: AppProps) {
     shouldPreloadBoxFramesInitial,
   ]);
   useEffect(() => {
-    if (!shouldPreloadBoxFramesInitial) return;
-    if (!dropRevealIsAnimated(activeDrop.dropId)) return;
+    if (!routeDrop || !shouldPreloadBoxFramesInitial) return;
+    if (!dropRevealIsAnimated(routeDrop.dropId)) return;
     if (typeof window === 'undefined') return;
-    if (autoplayFramePreloadScheduledDropIdRef.current === activeDrop.dropId) return;
-    autoplayFramePreloadScheduledDropIdRef.current = activeDrop.dropId;
+    if (autoplayFramePreloadScheduledDropIdRef.current === routeDrop.dropId) return;
+    autoplayFramePreloadScheduledDropIdRef.current = routeDrop.dropId;
     const run = () =>
-      preloadBoxFrames(revealAutoplayStartForDropId(activeDrop.dropId), revealFrameCountForDropId(activeDrop.dropId), activeDrop.dropId);
+      preloadBoxFrames(routeDrop.dropId ? revealAutoplayStartForDropId(routeDrop.dropId) : 1, revealFrameCountForDropId(routeDrop.dropId), routeDrop.dropId);
     const win = window as unknown as {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
       cancelIdleCallback?: (handle: number) => void;
@@ -2180,7 +2211,7 @@ function App({ currentPath }: AppProps) {
     const timeout = window.setTimeout(run, 750);
     return () => window.clearTimeout(timeout);
   }, [
-    activeDrop.dropId,
+    routeDrop,
     dropRevealIsAnimated,
     preloadBoxFrames,
     revealAutoplayStartForDropId,
@@ -2216,7 +2247,8 @@ function App({ currentPath }: AppProps) {
       seen.add(id);
       const match = inventoryById.get(id);
       const localMatch = localById.get(id);
-      const itemDropId = localMatch?.dropId || entry.dropId || match?.dropId || activeDrop.dropId;
+      const itemDropId = localMatch?.dropId || entry.dropId || match?.dropId || routeDrop?.dropId || '';
+      if (!itemDropId) return;
       pendingItems.push({
         id,
         dropId: itemDropId,
@@ -2231,7 +2263,8 @@ function App({ currentPath }: AppProps) {
       if (!id || seen.has(id)) return;
       seen.add(id);
       const match = inventoryById.get(id);
-      const itemDropId = entry.dropId || match?.dropId || activeDrop.dropId;
+      const itemDropId = entry.dropId || match?.dropId || routeDrop?.dropId || '';
+      if (!itemDropId) return;
       pendingItems.push({
         id,
         dropId: itemDropId,
@@ -2241,7 +2274,7 @@ function App({ currentPath }: AppProps) {
       });
     });
     return moveLittleSwagBoxesFamilyToEnd(pendingItems);
-  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, activeDrop.dropId, boxReferenceForDropId]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, routeDrop?.dropId, boxReferenceForDropId]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
@@ -2291,8 +2324,8 @@ function App({ currentPath }: AppProps) {
   const selectionHasSingleDrop = selectedDropIds.length === 1;
   const selectedDropId = selectionHasSingleDrop ? selectedDropIds[0] : '';
   const selectedDropConfig = useMemo(
-    () => (selectedDropId ? getDropConfig(selectedDropId) : activeDrop),
-    [activeDrop, getDropConfig, selectedDropId],
+    () => (selectedDropId ? getDropConfig(selectedDropId) : undefined),
+    [getDropConfig, selectedDropId],
   );
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
@@ -2304,8 +2337,8 @@ function App({ currentPath }: AppProps) {
     return parts.length ? parts.join(', ') : `${selectedCount} selected`;
   }, [deliverableItems, selectedCount, selectedDropConfig, selectionHasSingleDrop]);
   const deliveryEstimateLamports = useMemo(
-    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox),
-    [deliverableItems, deliveryCountryCode, selectedDropConfig.itemsPerBox],
+    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode, selectedDropConfig?.itemsPerBox),
+    [deliverableItems, deliveryCountryCode, selectedDropConfig?.itemsPerBox],
   );
   const deliveryCtaLabel = useMemo(() => {
     if (deliveryEstimateLamports <= 0) return 'Send';
@@ -2425,8 +2458,8 @@ function App({ currentPath }: AppProps) {
   );
 
   const mintedOut = useMemo(() => {
-    return effectiveMintStats.remaining <= 0;
-  }, [effectiveMintStats.remaining]);
+    return !effectiveMintStats || effectiveMintStats.remaining <= 0;
+  }, [effectiveMintStats]);
 
   useEffect(() => {
     if (publicKey || mintedOut || walletBusy) {
@@ -2446,7 +2479,7 @@ function App({ currentPath }: AppProps) {
   }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
 
   useEffect(() => {
-    if (!publicKey || mintedOut) {
+    if (!routeDrop || !routeConnection || !publicKey || mintedOut) {
       setDiscountEligible(false);
       setDiscountRemainingCount(0);
       setDiscountChecking(false);
@@ -2457,7 +2490,7 @@ function App({ currentPath }: AppProps) {
     (async () => {
       const address = publicKey.toBase58();
       try {
-        const listed = await isDiscountListed(activeDrop.dropId, address);
+        const listed = await isDiscountListed(routeDrop.dropId, address);
         if (cancelled) return;
         if (!listed) {
           setDiscountEligible(false);
@@ -2466,7 +2499,7 @@ function App({ currentPath }: AppProps) {
           persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, 0);
           return;
         }
-        const usedCount = await fetchDiscountMintRecordUsedCount(activeConnection, publicKey, activeDrop);
+        const usedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, routeDrop);
         if (cancelled) return;
         const remainingCount = Math.max(0, activeDiscountAllowance - usedCount);
         setDiscountUsedCount(usedCount);
@@ -2487,13 +2520,13 @@ function App({ currentPath }: AppProps) {
       cancelled = true;
     };
   }, [
-    activeConnection,
     activeDiscountAllowance,
     activeDiscountScope,
     activeDiscountVersion,
-    activeDrop.dropId,
     mintedOut,
     publicKey,
+    routeConnection,
+    routeDrop,
   ]);
 
   const toggleSelected = (id: string) => {
@@ -2528,13 +2561,15 @@ function App({ currentPath }: AppProps) {
       setVisible(true);
       return;
     }
+    const mintDrop = requireRouteDrop('mint');
+    if (!routeConnection) throw new Error('Missing route connection for mint');
     setMinting(true);
     try {
-      const cfg = await fetchBoxMinterConfig(activeConnection, activeDrop);
+      const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
       const sendOnce = async () => {
-        const tx = await buildMintBoxesTx(activeConnection, cfg, publicKey, quantity, activeDrop);
-        const sig = await signAndSendViaConnection(tx, activeConnection);
-        await activeConnection.confirmTransaction(sig, 'confirmed');
+        const tx = await buildMintBoxesTx(routeConnection, cfg, publicKey, quantity, mintDrop);
+        const sig = await signAndSendViaConnection(tx, routeConnection);
+        await routeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
       try {
@@ -2544,7 +2579,7 @@ function App({ currentPath }: AppProps) {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(quantity, activeDrop.dropId);
+      addLocalMintedBoxes(quantity, mintDrop.dropId);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -2560,11 +2595,13 @@ function App({ currentPath }: AppProps) {
       setVisible(true);
       return;
     }
+    const mintDrop = requireRouteDrop('discount mint');
+    if (!routeConnection) throw new Error('Missing route connection for discount mint');
     if (mintedOut || discountMinting || minting) return;
     const maxDiscountQuantity = Math.max(0, discountRemainingCount);
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountQuantity) {
       if (maxDiscountQuantity > 0) {
-        showToast(`Discount available for up to ${dropAssetCount(activeDrop, 'box', maxDiscountQuantity)}`);
+        showToast(`Discount available for up to ${dropAssetCount(mintDrop, 'box', maxDiscountQuantity)}`);
       } else {
         showToast('Wallet is not eligible for the discount');
       }
@@ -2573,7 +2610,7 @@ function App({ currentPath }: AppProps) {
 
     setDiscountMinting(true);
     try {
-      const proof = await getDiscountProof(activeDrop.dropId, publicKey.toBase58());
+      const proof = await getDiscountProof(mintDrop.dropId, publicKey.toBase58());
       if (!proof) {
         setDiscountEligible(false);
         setDiscountRemainingCount(0);
@@ -2581,9 +2618,9 @@ function App({ currentPath }: AppProps) {
         return;
       }
 
-      const cfg = await fetchBoxMinterConfig(activeConnection, activeDrop);
+      const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
       const onchainDiscountAllowance = cfg.discountMintsPerWallet;
-      const onchainUsedCount = await fetchDiscountMintRecordUsedCount(activeConnection, publicKey, activeDrop);
+      const onchainUsedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, mintDrop);
       const onchainRemainingCount = Math.max(0, onchainDiscountAllowance - onchainUsedCount);
       if (quantity > onchainRemainingCount) {
         setDiscountUsedCount(onchainUsedCount);
@@ -2591,16 +2628,16 @@ function App({ currentPath }: AppProps) {
         setDiscountEligible(onchainRemainingCount > 0);
         if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, onchainUsedCount);
         if (onchainRemainingCount > 0) {
-          showToast(`Discount available for up to ${dropAssetCount(activeDrop, 'box', onchainRemainingCount)}`);
+          showToast(`Discount available for up to ${dropAssetCount(mintDrop, 'box', onchainRemainingCount)}`);
         } else {
           showToast('Wallet is not eligible for the discount');
         }
         return;
       }
       const sendOnce = async () => {
-        const tx = await buildMintDiscountedBoxTx(activeConnection, cfg, publicKey, quantity, proof, activeDrop);
-        const sig = await signAndSendViaConnection(tx, activeConnection);
-        await activeConnection.confirmTransaction(sig, 'confirmed');
+        const tx = await buildMintDiscountedBoxTx(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
+        const sig = await signAndSendViaConnection(tx, routeConnection);
+        await routeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
       };
       try {
@@ -2610,7 +2647,7 @@ function App({ currentPath }: AppProps) {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(quantity, activeDrop.dropId);
+      addLocalMintedBoxes(quantity, mintDrop.dropId);
       const nextUsedCount = onchainUsedCount + quantity;
       const nextRemainingCount = Math.max(0, onchainDiscountAllowance - nextUsedCount);
       setDiscountUsedCount(nextUsedCount);
@@ -2620,7 +2657,7 @@ function App({ currentPath }: AppProps) {
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
-      showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(activeDrop.dropId)}`);
+      showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(mintDrop.dropId)}`);
     } finally {
       setDiscountMinting(false);
     }
@@ -2980,7 +3017,7 @@ function App({ currentPath }: AppProps) {
     }
     const deliverableIds = deliverableItems.map((item) => item.id);
     if (!deliverableIds.length) {
-      showToast(`Select ${boxLabelForDropId(activeDrop.dropId, 2)} or ${figureLabelForDropId(activeDrop.dropId, 2)} to ship`);
+      showToast(`Select ${boxLabelForDropId(undefined, 2)} or ${figureLabelForDropId(undefined, 2)} to ship`);
       return;
     }
     const deliveryDropId = deliverableItems[0]?.dropId || '';
@@ -3094,7 +3131,7 @@ function App({ currentPath }: AppProps) {
     }
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
-    let claimDrop = requireKnownDropConfig(resp.dropId || activeDrop.dropId, 'claim transaction response');
+    let claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
     let claimConnection = getDropConnection(claimDrop.dropId);
     let sig: string;
     try {
@@ -3105,7 +3142,7 @@ function App({ currentPath }: AppProps) {
       if (!isBlockhashExpiredError(err)) throw err;
       showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
       resp = await requestTx();
-      claimDrop = requireKnownDropConfig(resp.dropId || activeDrop.dropId, 'claim transaction retry response');
+      claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
       claimConnection = getDropConnection(claimDrop.dropId);
       sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
         signAndSendViaConnection(tx, claimConnection),
@@ -3125,7 +3162,7 @@ function App({ currentPath }: AppProps) {
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();
     deliveryOrders.forEach((order) => {
-      const dropConfig = getDropConfig(order.dropId);
+      const dropConfig = requireKnownDropConfig(order.dropId, `shipment order ${order.deliveryId}`);
       const dropContent = getDropContent(order.dropId);
       const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
@@ -3143,7 +3180,7 @@ function App({ currentPath }: AppProps) {
       });
     });
     return Array.from(targetsByKey.values());
-  }, [deliveryOrders, figureMetadataByKey, getDropConfig, getDropContent]);
+  }, [deliveryOrders, figureMetadataByKey, getDropContent, requireKnownDropConfig]);
   const shipmentsEmptyContent = !viewedProfile
     ? isSignedInWallet && owner
       ? profileLoadingForView
@@ -3192,7 +3229,7 @@ function App({ currentPath }: AppProps) {
 
   const renderShipmentItems = useCallback(
     (order: DeliveryOrderSummary) => {
-      const dropConfig = getDropConfig(order.dropId);
+      const dropConfig = requireKnownDropConfig(order.dropId, `shipment render ${order.deliveryId}`);
       const dropContent = getDropContent(order.dropId);
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
       const useMediaFolderPreview = dropContent.figures.fulfillmentPreviewMode === 'media_map_folder';
@@ -3241,7 +3278,7 @@ function App({ currentPath }: AppProps) {
         </div>
       );
     },
-    [figureMetadataByKey, getDropConfig, getDropContent, mergeLoadedFigureMetadata],
+    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, requireKnownDropConfig],
   );
 
   const revealOverlayStyle = revealOverlay
@@ -3281,10 +3318,12 @@ function App({ currentPath }: AppProps) {
       })()
     : undefined;
   const revealOverlayContent = useMemo(
-    () => getDropContent(revealOverlay?.dropId || activeDrop.dropId),
-    [activeDrop.dropId, getDropContent, revealOverlay?.dropId],
+    () => getDropContent(revealOverlay?.dropId || routeDrop?.dropId),
+    [getDropContent, revealOverlay?.dropId, routeDrop?.dropId],
   );
-  const revealOverlayContainerLabel = revealOverlay ? boxLabelForDropId(revealOverlay.dropId) : boxLabelForDropId(activeDrop.dropId);
+  const revealOverlayContainerLabel = revealOverlay
+    ? boxLabelForDropId(revealOverlay.dropId)
+    : boxLabelForDropId(routeDrop?.dropId);
   const ponchoRevealCard = useMemo(() => {
     if (!revealOverlay?.revealedIds?.length || revealOverlay.revealedIds.length !== 1) return undefined;
     return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
@@ -3348,7 +3387,7 @@ function App({ currentPath }: AppProps) {
     if (!revealOverlay?.revealedIds?.length) {
       return [];
     }
-    const revealDrop = getDropConfig(revealOverlay.dropId);
+    const revealDrop = requireKnownDropConfig(revealOverlay.dropId, 'reveal overlay');
     if (revealOverlayContent.figures.revealPresentation === 'videos') {
       return revealOverlay.revealedIds.map((figureId, index) => {
         const cacheKey = figureMetadataCacheKey(revealOverlay.dropId, figureId);
@@ -3375,7 +3414,7 @@ function App({ currentPath }: AppProps) {
   }, [
     figureMetadataByKey,
     figureReferenceForDropId,
-    getDropConfig,
+    requireKnownDropConfig,
     revealOverlay?.dropId,
     revealOverlay?.revealedIds,
     revealOverlayContent.figures.revealPresentation,
@@ -3432,8 +3471,8 @@ function App({ currentPath }: AppProps) {
   useEffect(() => {
     if (!revealMediaIds.length) return;
     if (revealOverlayContent.figures.revealPresentation !== 'videos') return;
-    preloadRevealVideos(revealMediaIds, revealOverlay?.dropId || activeDrop.dropId);
-  }, [activeDrop.dropId, preloadRevealVideos, revealMediaIds, revealOverlay?.dropId, revealOverlayContent.figures.revealPresentation]);
+    preloadRevealVideos(revealMediaIds, revealOverlay?.dropId || routeDrop?.dropId);
+  }, [preloadRevealVideos, revealMediaIds, revealOverlay?.dropId, revealOverlayContent.figures.revealPresentation, routeDrop?.dropId]);
   const animatedRevealFrameSrc =
     revealOverlay && revealOverlay.frame && revealOverlayContent.reveal.mode === 'animated' && revealFrameSequence
       ? resolveRevealFrameSrc(revealFrameSequence, revealOverlay.frame)
@@ -3743,7 +3782,7 @@ function App({ currentPath }: AppProps) {
         ) : null}
       </header>
 
-      {normalizedCurrentPath === '/' ? (
+      {!routeDrop ? (
         <DropsPanel />
       ) : (
         <MintPanel
@@ -3751,13 +3790,15 @@ function App({ currentPath }: AppProps) {
           onMint={handleMint}
           busy={minting}
           onError={showToast}
-          title={activeDrop.collectionName}
+          title={routeDrop.collectionName}
           boxImageSrc={defaultBoxImage}
-          boxAspectRatio={boxAspectRatioForDropId(activeDrop.dropId)}
-          boxNamePrefix={activeDrop.namePrefix}
-          priceSol={activeDrop.priceSol}
-          discountPriceSol={activeDrop.discountPriceSol}
-          secondaryHref={activeDrop.secondaryMarketHref}
+          boxAspectRatio={boxAspectRatioForDropId(routeDrop.dropId)}
+          boxNamePrefix={routeDrop.namePrefix}
+          priceSol={routeDrop.priceSol}
+          discountPriceSol={routeDrop.discountPriceSol}
+          maxSupply={routeDrop.maxSupply}
+          maxPerTx={routeDrop.maxPerTx}
+          secondaryHref={routeDrop.secondaryMarketHref}
           discountVisible={discountCtaState.visible}
           discountLabel={discountCtaState.label}
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
@@ -3780,7 +3821,8 @@ function App({ currentPath }: AppProps) {
 		              return;
 		            }
                 const revealItem = inventoryIndex.get(id);
-                const revealDropId = revealItem?.dropId || activeDrop.dropId;
+                const revealDropId = revealItem?.dropId || routeDrop?.dropId;
+                if (!revealDropId) return;
 		            preloadRevealSounds(revealDropId);
 		            preloadPonchoRevealPackAssetsForDropId(revealDropId);
 		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
@@ -3820,9 +3862,9 @@ function App({ currentPath }: AppProps) {
             mode="modal"
             onSubmit={handleShip}
             defaultEmail={viewedProfile?.email || ''}
-            itemsPerBox={selectedDropConfig.itemsPerBox}
-            boxNamePrefix={selectedDropConfig.namePrefix}
-            figureNamePrefix={selectedDropConfig.figureNamePrefix}
+            itemsPerBox={selectedDropConfig?.itemsPerBox}
+            boxNamePrefix={selectedDropConfig?.namePrefix}
+            figureNamePrefix={selectedDropConfig?.figureNamePrefix}
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
@@ -3836,9 +3878,9 @@ function App({ currentPath }: AppProps) {
           onClaim={handleClaim}
           mode="modal"
           showTitle={false}
-          itemsPerBox={activeDrop.itemsPerBox}
-          boxNamePrefix={activeDrop.namePrefix}
-          figureNamePrefix={activeDrop.figureNamePrefix}
+          itemsPerBox={routeDrop?.itemsPerBox}
+          boxNamePrefix={routeDrop?.namePrefix}
+          figureNamePrefix={routeDrop?.figureNamePrefix}
         />
       </Modal>
 

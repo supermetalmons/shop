@@ -589,7 +589,7 @@ function waitForPonchoDrifellaBackgroundTurn(signal?: AbortSignal) {
     if (typeof window !== 'undefined') {
       animationFrameId = window.requestAnimationFrame(() => {
         animationFrameId = null;
-        timeoutId = window.setTimeout(() => {
+        timeoutId = globalThis.setTimeout(() => {
           settle(true);
         }, 0);
       });

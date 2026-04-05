@@ -6,6 +6,8 @@ import App from './App';
 import FulfillmentApp from './FulfillmentApp';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { WalletContextProvider } from './wallet/WalletContext';
+import { type SolanaCluster, listFrontendDrops } from './config/deployment';
+import { resolveFrontendDropByPath } from './lib/dropConfig';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -18,6 +20,7 @@ const canonicalDrifPath = '/notify_me';
 const drifPaths = new Set([canonicalDrifPath]);
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const WipApp = React.lazy(() => import('./WipApp'));
+const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
 type RouteAlias = {
   targetPath: string;
@@ -32,18 +35,28 @@ const ROUTE_ALIASES: Record<string, RouteAlias> = {
 const resolveCurrentPath = (): string => {
   const path = getNormalizedPathname();
   const alias = ROUTE_ALIASES[path];
+  const normalizedPath = alias ? alias.targetPath : path;
 
-  if (!alias) {
-    return path;
-  }
-
-  if (alias.replaceUrl) {
+  if (alias?.replaceUrl) {
     const search = window.location.search || '';
     const hash = window.location.hash || '';
     window.history.replaceState(window.history.state, '', `${alias.targetPath}${search}${hash}`);
   }
 
-  return alias.targetPath;
+  if (
+    normalizedPath === '/' ||
+    normalizedPath === canonicalFulfillmentPath ||
+    normalizedPath === '/wip' ||
+    drifPaths.has(normalizedPath) ||
+    resolveFrontendDropByPath(normalizedPath)
+  ) {
+    return normalizedPath;
+  }
+
+  const search = window.location.search || '';
+  const hash = window.location.hash || '';
+  window.history.replaceState(window.history.state, '', `/${search}${hash}`);
+  return '/';
 };
 
 function RoutedApp() {
@@ -62,11 +75,7 @@ function RoutedApp() {
     document.body.classList.remove('drif-body');
   }, [path]);
 
-  return (
-    <WalletContextProvider currentPath={path}>
-      <RoutedContent path={path} />
-    </WalletContextProvider>
-  );
+  return <RoutedContent path={path} />;
 }
 
 type RoutedContentProps = {
@@ -77,6 +86,7 @@ function RoutedContent({ path }: RoutedContentProps) {
   const isDrifRoute = drifPaths.has(path);
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
+  const routeDrop = resolveFrontendDropByPath(path);
 
   if (isDrifRoute) {
     return (
@@ -87,18 +97,33 @@ function RoutedContent({ path }: RoutedContentProps) {
   }
 
   if (isFulfillmentRoute) {
-    return <FulfillmentApp />;
+    return <FulfillmentRoute />;
   }
 
   return (
-    <>
-      <App currentPath={path} />
+    <WalletContextProvider cluster={routeDrop?.solanaCluster || NEUTRAL_WALLET_CLUSTER}>
+      <App currentPath={isWipRoute ? '/' : path} />
       {isWipRoute ? (
         <React.Suspense fallback={null}>
           <WipApp />
         </React.Suspense>
       ) : null}
-    </>
+    </WalletContextProvider>
+  );
+}
+
+function FulfillmentRoute() {
+  const drops = React.useMemo(() => listFrontendDrops(), []);
+  const [selectedDropId, setSelectedDropId] = React.useState('');
+  const selectedDrop = React.useMemo(
+    () => drops.find((drop) => drop.dropId === selectedDropId) || null,
+    [drops, selectedDropId],
+  );
+
+  return (
+    <WalletContextProvider cluster={selectedDrop?.solanaCluster || NEUTRAL_WALLET_CLUSTER}>
+      <FulfillmentApp selectedDropId={selectedDropId} onSelectedDropIdChange={setSelectedDropId} />
+    </WalletContextProvider>
   );
 }
 
