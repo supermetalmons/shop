@@ -96,33 +96,6 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
 export const FUNCTIONS_DEFAULT_DROP_ID = "little_swag_boxes";
 
 export const FUNCTIONS_DROPS: FunctionsDropsMap = {
-  "green_boxes_devnet": createFunctionsDrop({
-    solanaCluster: "devnet",
-    dropId: "green_boxes_devnet",
-    collectionName: "green test",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/test/green",
-
-    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.05,
-    discountPriceSol: 0.023,
-    discountMintsPerWallet: 3,
-    discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
-    maxSupply: 33,
-    itemsPerBox: 1,
-    maxPerTx: 15,
-    namePrefix: "chest",
-    figureNamePrefix: "item",
-    symbol: "green",
-
-    // On-chain ids
-    boxMinterProgramId: "4Booiz4gsMRGAE91XTHWhja4mWtKCGTXW9vkKmgSWQ2H",
-    collectionMint: "7QzUCbzernymV6aBf394FPXLmUaj7eDvtQeWD9NTbVX9",
-    receiptsMerkleTree: "6MLqPJktCbMUhFcBMrbnXR3xQ7RwCKBM4oTTsfXSde4h",
-    deliveryLookupTable: "3ejwFVseYBxdz4sNQFBxxAkG7TuJvtjwaa4J69H4vCLY",
-  }),
   "little_swag_boxes": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
