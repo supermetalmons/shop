@@ -3017,16 +3017,32 @@ function App({ currentPath }: AppProps) {
 	    }
 	  };
 
-  const handleViewSelectedPonchoCard = useCallback(() => {
-    if (!selectedPonchoFigure) return;
-    if (revealOverlayRef.current || revealLoading) return;
-    if (startOpenLoading) return;
-    if (typeof window === 'undefined') return;
+  const openPonchoCardViewer = useCallback((
+    {
+      overlayId,
+      dropId,
+      name,
+      image,
+      figureId,
+      originRect,
+      clearSelection = false,
+    }: {
+      overlayId: string;
+      dropId: string;
+      name: string;
+      image?: string;
+      figureId: number;
+      originRect?: DOMRect | null;
+      clearSelection?: boolean;
+    },
+  ) => {
+    if (!isPonchoDrifellaFamilyDropId(dropId)) return false;
+    if (revealOverlayRef.current || revealLoading) return false;
+    if (startOpenLoading) return false;
+    if (typeof window === 'undefined') return false;
 
-    const figureId = selectedPonchoFigure.dudeId;
-    if (typeof figureId !== 'number') return;
     const card = getPonchoDrifellaCardByFigureId(figureId);
-    if (!card) return;
+    if (!card) return false;
 
     preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
     resetPonchoRevealDismissState();
@@ -3037,18 +3053,18 @@ function App({ currentPath }: AppProps) {
     const targetRect = calcPonchoDrifellaAbsoluteCardRect(
       calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
     );
-    const originRect = findInventoryRect(selectedPonchoFigure.id) || new DOMRect(
+    const resolvedOriginRect = originRect || new DOMRect(
       targetRect.left,
       targetRect.top,
       targetRect.width,
       targetRect.height,
     );
     presentRevealOverlay({
-      id: selectedPonchoFigure.id,
-      dropId: selectedPonchoFigure.dropId,
-      name: selectedPonchoFigure.name,
-      image: selectedPonchoFigure.image,
-      originRect: toOverlayRect(originRect),
+      id: overlayId,
+      dropId,
+      name,
+      image,
+      originRect: toOverlayRect(resolvedOriginRect),
       targetRect,
       phase: 'revealed',
       frame: 1,
@@ -3060,18 +3076,34 @@ function App({ currentPath }: AppProps) {
       autoOpening: false,
       autoMode: undefined,
     });
-    setSelected(new Set());
+    if (clearSelection) {
+      setSelected(new Set());
+    }
+    return true;
   }, [
     clearRevealOverlayCloseTimeout,
-    findInventoryRect,
     inventory,
     pendingOpenBoxes,
     presentRevealOverlay,
     resetPonchoRevealDismissState,
     revealLoading,
-    selectedPonchoFigure,
     startOpenLoading,
   ]);
+
+  const handleViewSelectedPonchoCard = useCallback(() => {
+    if (!selectedPonchoFigure) return;
+    const figureId = selectedPonchoFigure.dudeId;
+    if (typeof figureId !== 'number') return;
+    openPonchoCardViewer({
+      overlayId: selectedPonchoFigure.id,
+      dropId: selectedPonchoFigure.dropId,
+      name: selectedPonchoFigure.name,
+      image: selectedPonchoFigure.image,
+      figureId,
+      originRect: findInventoryRect(selectedPonchoFigure.id),
+      clearSelection: true,
+    });
+  }, [findInventoryRect, openPonchoCardViewer, selectedPonchoFigure]);
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
@@ -3347,11 +3379,46 @@ function App({ currentPath }: AppProps) {
             const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
             const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
+            const canViewPonchoCard =
+              isPonchoDrifellaFamilyDropId(order.dropId) && Boolean(getPonchoDrifellaCardByFigureId(item.refId));
 
             return (
               <div
                 key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
-                className="figure-tile shipment-item-tile"
+                className={`figure-tile shipment-item-tile${canViewPonchoCard ? ' shipment-item-tile--interactive' : ''}`}
+                role={canViewPonchoCard ? 'button' : undefined}
+                tabIndex={canViewPonchoCard ? 0 : undefined}
+                aria-label={canViewPonchoCard ? `View ${label}` : undefined}
+                onClick={
+                  canViewPonchoCard
+                    ? (evt) => {
+                        openPonchoCardViewer({
+                          overlayId: `shipment:${order.dropId}:${order.deliveryId}:${item.refId}:${index}`,
+                          dropId: order.dropId,
+                          name: label,
+                          image: primarySrc || fallbackSrc,
+                          figureId: item.refId,
+                          originRect: getInventoryRevealRect(evt.currentTarget),
+                        });
+                      }
+                    : undefined
+                }
+                onKeyDown={
+                  canViewPonchoCard
+                    ? (evt) => {
+                        if (evt.key !== 'Enter' && evt.key !== ' ') return;
+                        evt.preventDefault();
+                        openPonchoCardViewer({
+                          overlayId: `shipment:${order.dropId}:${order.deliveryId}:${item.refId}:${index}`,
+                          dropId: order.dropId,
+                          name: label,
+                          image: primarySrc || fallbackSrc,
+                          figureId: item.refId,
+                          originRect: getInventoryRevealRect(evt.currentTarget),
+                        });
+                      }
+                    : undefined
+                }
               >
                 <FigureTileImage
                   dropId={order.dropId}
@@ -3367,7 +3434,7 @@ function App({ currentPath }: AppProps) {
         </div>
       );
     },
-    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, requireKnownDropConfig],
+    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, openPonchoCardViewer, requireKnownDropConfig],
   );
 
   const revealOverlayStyle = revealOverlay

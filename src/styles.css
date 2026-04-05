@@ -1789,6 +1789,16 @@ button.inventory__open:focus-visible {
   gap: 0;
 }
 
+.shipment-item-tile--interactive {
+  cursor: pointer;
+}
+
+.shipment-item-tile--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
 .shipment-item-tile img.figure-image {
   background: transparent;
   padding: 0;
