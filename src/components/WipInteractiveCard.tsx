@@ -17,6 +17,7 @@ export default function WipInteractiveCard({
       imageAlt="Revealed Poncho Drifella card"
       onImageReadyChange={onImageReadyChange}
       disableGlow
+      enableInteractiveUnlockWake
       interactive={interactive}
       imageLoading="eager"
     />

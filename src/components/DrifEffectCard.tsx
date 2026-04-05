@@ -40,6 +40,7 @@ type DrifEffectCardProps = {
   onClick?: () => void;
   onImageReadyChange?: (ready: boolean) => void;
   interactive?: boolean;
+  enableInteractiveUnlockWake?: boolean;
   disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
   preloadCards?: readonly DrifCardConfig[];
@@ -177,6 +178,7 @@ export default function DrifEffectCard({
   onClick,
   onImageReadyChange,
   interactive = true,
+  enableInteractiveUnlockWake = false,
   disableGlow = false,
   preserveTransformOnCardChange = false,
   preloadCards,
@@ -207,6 +209,11 @@ export default function DrifEffectCard({
   const [loading, setLoading] = useState(true);
   const [interacting, setInteracting] = useState(false);
   const interactiveReadyRef = useRef(false);
+
+  const canUseHoverWake = useCallback(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return window.matchMedia('(any-hover: hover) and (any-pointer: fine)').matches;
+  }, []);
 
   const staticCardStyle = useMemo<React.CSSProperties>(() => {
     const randomSeed = {
@@ -473,9 +480,10 @@ export default function DrifEffectCard({
   }, [applyStylesFromSprings]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
+    if (typeof window === 'undefined' || !enableInteractiveUnlockWake) return undefined;
 
     const updateLastPointerClient = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse') return;
       lastPointerClientRef.current = {
         x: event.clientX,
         y: event.clientY,
@@ -488,7 +496,7 @@ export default function DrifEffectCard({
       window.removeEventListener('pointermove', updateLastPointerClient);
       window.removeEventListener('pointerdown', updateLastPointerClient);
     };
-  }, []);
+  }, [enableInteractiveUnlockWake]);
 
   useEffect(() => {
     onImageReadyChange?.(!loading);
@@ -496,17 +504,28 @@ export default function DrifEffectCard({
 
   useEffect(() => {
     const interactiveReady = interactive && !loading;
-    if (interactiveReady && !interactiveReadyRef.current) {
+    if (enableInteractiveUnlockWake && interactiveReady && !interactiveReadyRef.current) {
       hoverWakeArmedRef.current = true;
     }
-    if (!interactiveReady) {
+    if (!enableInteractiveUnlockWake || !interactiveReady) {
       hoverWakeArmedRef.current = false;
     }
     interactiveReadyRef.current = interactiveReady;
-  }, [interactive, loading]);
+  }, [enableInteractiveUnlockWake, interactive, loading]);
 
   useEffect(() => {
-    if (!interactive || loading || !hoverWakeArmedRef.current || typeof window === 'undefined' || typeof document === 'undefined') {
+    if (
+      !enableInteractiveUnlockWake ||
+      !interactive ||
+      loading ||
+      !hoverWakeArmedRef.current ||
+      typeof window === 'undefined' ||
+      typeof document === 'undefined'
+    ) {
+      return undefined;
+    }
+    if (!canUseHoverWake()) {
+      hoverWakeArmedRef.current = false;
       return undefined;
     }
 
@@ -549,7 +568,6 @@ export default function DrifEffectCard({
       const hoverWrapper = cardRef.current?.closest('.wip-reveal__card-item, .reveal-overlay__media-item') ?? null;
       const hoveredElements = Array.from(document.querySelectorAll(':hover'));
       const hovered =
-        document.activeElement === element ||
         isHoverChainTarget(element, hoveredElements) ||
         isHoverChainTarget(hoverWrapper, hoveredElements);
 
@@ -570,7 +588,7 @@ export default function DrifEffectCard({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [interactive, loading, setPointerFromPercent]);
+  }, [canUseHoverWake, enableInteractiveUnlockWake, interactive, loading, setPointerFromPercent]);
 
   useEffect(() => {
     if (interactive) return;
