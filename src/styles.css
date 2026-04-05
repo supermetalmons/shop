@@ -2229,6 +2229,10 @@ button.order-status-option:hover:not(:disabled) {
   flex: 0 0 auto;
 }
 
+.selection-panel__view {
+  gap: 6px;
+}
+
 @media (prefers-color-scheme: dark) {
   .selection-panel {
     background: rgba(29, 29, 31, 0.82);

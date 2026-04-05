@@ -4098,6 +4098,24 @@ function App({ currentPath }: AppProps) {
                 className="selection-panel__view"
                 onClick={handleViewSelectedPonchoCard}
               >
+                <svg
+                  aria-hidden="true"
+                  focusable="false"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                >
+                  <rect
+                    x="3.25"
+                    y="1.75"
+                    width="9.5"
+                    height="12.5"
+                    rx="2.5"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                  />
+                </svg>
                 <span>View</span>
               </button>
             ) : null}
