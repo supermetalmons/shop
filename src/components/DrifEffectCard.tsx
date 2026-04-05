@@ -183,11 +183,14 @@ export default function DrifEffectCard({
   imageLoading = 'lazy',
 }: DrifEffectCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const rotatorRef = useRef<HTMLButtonElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const springTickLastTimeRef = useRef(0);
   const springUpdateRafRef = useRef<number | null>(null);
   const firstImageLoadedRef = useRef(false);
+  const hoverWakeArmedRef = useRef(false);
+  const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   const pendingSpringUpdateRef = useRef<{
     background: SpringVec2;
     rotate: SpringVec2;
@@ -203,6 +206,7 @@ export default function DrifEffectCard({
   });
   const [loading, setLoading] = useState(true);
   const [interacting, setInteracting] = useState(false);
+  const interactiveReadyRef = useRef(false);
 
   const staticCardStyle = useMemo<React.CSSProperties>(() => {
     const randomSeed = {
@@ -326,6 +330,7 @@ export default function DrifEffectCard({
       };
 
       clearInteractTimer();
+      hoverWakeArmedRef.current = false;
       interactingRef.current = true;
       setInteracting(true);
 
@@ -468,8 +473,104 @@ export default function DrifEffectCard({
   }, [applyStylesFromSprings]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const updateLastPointerClient = (event: PointerEvent) => {
+      lastPointerClientRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+    };
+
+    window.addEventListener('pointermove', updateLastPointerClient, { passive: true });
+    window.addEventListener('pointerdown', updateLastPointerClient, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', updateLastPointerClient);
+      window.removeEventListener('pointerdown', updateLastPointerClient);
+    };
+  }, []);
+
+  useEffect(() => {
     onImageReadyChange?.(!loading);
   }, [loading, onImageReadyChange]);
+
+  useEffect(() => {
+    const interactiveReady = interactive && !loading;
+    if (interactiveReady && !interactiveReadyRef.current) {
+      hoverWakeArmedRef.current = true;
+    }
+    if (!interactiveReady) {
+      hoverWakeArmedRef.current = false;
+    }
+    interactiveReadyRef.current = interactiveReady;
+  }, [interactive, loading]);
+
+  useEffect(() => {
+    if (!interactive || loading || !hoverWakeArmedRef.current || typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const wakeDeadline = performance.now() + 240;
+    let frameId = 0;
+
+    const isHoverChainTarget = (target: Element | null, hoveredElements: Element[]) =>
+      Boolean(
+        target &&
+          hoveredElements.some((hoveredElement) => hoveredElement === target || target.contains(hoveredElement) || hoveredElement.contains(target)),
+      );
+
+    const tryWake = () => {
+      const element = rotatorRef.current;
+      if (!element || !hoverWakeArmedRef.current) return;
+
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        if (performance.now() < wakeDeadline) {
+          frameId = window.requestAnimationFrame(tryWake);
+        }
+        return;
+      }
+
+      const lastPointer = lastPointerClientRef.current;
+      if (
+        lastPointer &&
+        lastPointer.x >= rect.left &&
+        lastPointer.x <= rect.right &&
+        lastPointer.y >= rect.top &&
+        lastPointer.y <= rect.bottom
+      ) {
+        setPointerFromPercent(
+          (100 / rect.width) * (lastPointer.x - rect.left),
+          (100 / rect.height) * (lastPointer.y - rect.top),
+        );
+        return;
+      }
+
+      const hoverWrapper = cardRef.current?.closest('.wip-reveal__card-item, .reveal-overlay__media-item') ?? null;
+      const hoveredElements = Array.from(document.querySelectorAll(':hover'));
+      const hovered =
+        document.activeElement === element ||
+        isHoverChainTarget(element, hoveredElements) ||
+        isHoverChainTarget(hoverWrapper, hoveredElements);
+
+      if (hovered) {
+        // If the card unlocked under a resting pointer before this component mounted, we may not know the cursor position.
+        setPointerFromPercent(50, 50);
+        return;
+      }
+
+      if (performance.now() < wakeDeadline) {
+        frameId = window.requestAnimationFrame(tryWake);
+      }
+    };
+
+    // If interactivity unlocks under a resting pointer, no enter event fires to wake the holo springs.
+    frameId = window.requestAnimationFrame(tryWake);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [interactive, loading, setPointerFromPercent]);
 
   useEffect(() => {
     if (interactive) return;
@@ -544,6 +645,7 @@ export default function DrifEffectCard({
     >
       <div className="drif-effect-card__translater">
         <button
+          ref={rotatorRef}
           type="button"
           className="drif-effect-card__rotator"
           onPointerEnter={interactive ? interact : undefined}
