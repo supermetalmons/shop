@@ -57,6 +57,15 @@ export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
   loading: boolean;
 };
 
+export type PonchoCardViewerOverlayProps = {
+  overlayStyle?: CSSProperties;
+  active: boolean;
+  closing: boolean;
+  card?: DrifCardConfig;
+  onDismiss?: () => void;
+  onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
+};
+
 function createInitialPlayerState(phase: PonchoDrifellaRevealPhase, boxLabel: string): PonchoDrifellaRevealPlayerViewState {
   return {
     phase,
@@ -443,4 +452,46 @@ export default function PonchoInventoryRevealOverlay({
   }, [revealedIds]);
 
   return <PonchoRevealOverlay {...overlayProps} card={revealedCard} cardReady={Boolean(revealedCard)} />;
+}
+
+export function PonchoCardViewerOverlay({
+  overlayStyle,
+  active,
+  closing,
+  card,
+  onDismiss,
+  onTransitionEnd,
+}: PonchoCardViewerOverlayProps) {
+  const stopOverlayDismiss = (evt: SyntheticEvent) => {
+    evt.stopPropagation();
+  };
+
+  return (
+    <div
+      className={`reveal-overlay wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      role="presentation"
+      style={overlayStyle}
+      onClick={onDismiss}
+      onContextMenu={(evt) => evt.preventDefault()}
+      onDragStart={(evt) => evt.preventDefault()}
+    >
+      <div className="reveal-overlay__backdrop" />
+      <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
+        <div className="wip-reveal__stage wip-reveal__stage--visible">
+          {card ? (
+            <div className="reveal-overlay__media wip-reveal__media wip-reveal__media--visible wip-reveal__media--interactive">
+              <div
+                className="reveal-overlay__media-item wip-reveal__card-item wip-reveal__card-item--interactive"
+                onClick={stopOverlayDismiss}
+              >
+                <div className="reveal-overlay__media-float">
+                  <WipInteractiveCard card={card} interactive />
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 }

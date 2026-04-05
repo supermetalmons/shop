@@ -45,3 +45,15 @@ export function calcPonchoDrifellaCardRect(targetRect: Readonly<{ width: number;
     height: Math.max(1, Math.round(PONCHO_DRIFELLA_CARD_FRAME_RECT.height * scaleY)),
   };
 }
+
+export function calcPonchoDrifellaAbsoluteCardRect(
+  targetRect: Readonly<PonchoDrifellaFrameRect>,
+): PonchoDrifellaFrameRect {
+  const cardRect = calcPonchoDrifellaCardRect(targetRect);
+  return {
+    left: targetRect.left + cardRect.left,
+    top: targetRect.top + cardRect.top,
+    width: cardRect.width,
+    height: cardRect.height,
+  };
+}

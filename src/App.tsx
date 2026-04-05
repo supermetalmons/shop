@@ -50,7 +50,7 @@ import {
 } from './lib/dropLabels';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
-import PonchoInventoryRevealOverlay from './components/PonchoRevealOverlay';
+import PonchoInventoryRevealOverlay, { PonchoCardViewerOverlay } from './components/PonchoRevealOverlay';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
@@ -88,7 +88,11 @@ import {
   rpcEndpointForCluster,
 } from './lib/dropConfig';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
-import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
+import {
+  calcPonchoDrifellaAbsoluteCardRect,
+  calcPonchoDrifellaCardRect,
+  calcPonchoDrifellaRevealTargetRect,
+} from './lib/revealOverlayLayout';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
@@ -429,6 +433,8 @@ type RevealOverlayState = {
   frame: number;
   advanceClicks: number;
   revealedIds?: number[];
+  viewerMode?: 'poncho-card';
+  viewerFigureId?: number;
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
   autoMode?: 'normal' | 'fast';
@@ -1576,6 +1582,23 @@ function App({ currentPath }: AppProps) {
     });
   }, [dropRevealIsAnimated, revealFrameCountForDropId]);
 
+  const presentRevealOverlay = useCallback(
+    (nextOverlay: RevealOverlayState) => {
+      revealOverlayRef.current = nextOverlay;
+      setRevealOverlay(nextOverlay);
+      setRevealOverlayClosing(false);
+      setRevealOverlayActive(false);
+      cancelRevealOverlayAnimationFrame();
+      revealOverlayRafRef.current = requestAnimationFrame(() => {
+        revealOverlayRafRef.current = requestAnimationFrame(() => {
+          setRevealOverlayActive(true);
+          revealOverlayRafRef.current = null;
+        });
+      });
+    },
+    [cancelRevealOverlayAnimationFrame],
+  );
+
   const openRevealOverlay = (
     id: string,
     rect: DOMRect,
@@ -1615,21 +1638,13 @@ function App({ currentPath }: AppProps) {
       frame: 1,
       advanceClicks: 0,
       revealedIds: undefined,
+      viewerMode: undefined,
+      viewerFigureId: undefined,
       hasRevealAttempted: false,
       autoOpening: false,
       autoMode: undefined,
     };
-    revealOverlayRef.current = nextOverlay;
-    setRevealOverlay(nextOverlay);
-    setRevealOverlayClosing(false);
-    setRevealOverlayActive(false);
-    cancelRevealOverlayAnimationFrame();
-    revealOverlayRafRef.current = requestAnimationFrame(() => {
-      revealOverlayRafRef.current = requestAnimationFrame(() => {
-        setRevealOverlayActive(true);
-        revealOverlayRafRef.current = null;
-      });
-    });
+    presentRevealOverlay(nextOverlay);
   };
 
   const findInventoryRect = (id: string) => {
@@ -1994,12 +2009,17 @@ function App({ currentPath }: AppProps) {
         revealOverlayResizeRafRef.current = null;
         setRevealOverlay((prev) => {
           if (!prev) return prev;
-          const nextTarget = calcRevealTargetRectForDrop(
-            window.innerWidth,
-            window.innerHeight,
-            prev.dropId,
-            boxAspectRatioForDropId(prev.dropId),
-          );
+          const nextTarget =
+            prev.viewerMode === 'poncho-card'
+              ? calcPonchoDrifellaAbsoluteCardRect(
+                  calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
+                )
+              : calcRevealTargetRectForDrop(
+                  window.innerWidth,
+                  window.innerHeight,
+                  prev.dropId,
+                  boxAspectRatioForDropId(prev.dropId),
+                );
           if (
             prev.targetRect.left === nextTarget.left &&
             prev.targetRect.top === nextTarget.top &&
@@ -2389,6 +2409,15 @@ function App({ currentPath }: AppProps) {
   const selectedOverflow = Math.max(0, selectedCount - selectedPreview.length);
   const canOpenSelected = selectedCount === 1 && selectedItems[0]?.kind === 'box';
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
+  const selectedPonchoFigure = useMemo(() => {
+    const item = selectedCount === 1 ? selectedItems[0] : null;
+    if (!item || item.kind !== 'dude') return null;
+    if (!isPonchoDrifellaFamilyDropId(item.dropId)) return null;
+    if (typeof item.dudeId !== 'number') return null;
+    if (!getPonchoDrifellaCardByFigureId(item.dudeId)) return null;
+    return item;
+  }, [selectedCount, selectedItems]);
+  const canViewSelected = Boolean(selectedPonchoFigure);
 
   useEffect(() => {
     if (!pendingRevealIds.size) return;
@@ -2863,6 +2892,10 @@ function App({ currentPath }: AppProps) {
 
   const handleRevealOverlayBackdropClick = () => {
     if (!revealOverlay || revealOverlayClosing) return;
+    if (revealOverlay.viewerMode === 'poncho-card') {
+      closeRevealOverlay();
+      return;
+    }
     const hasResults = Boolean(revealOverlay.revealedIds?.length);
     if (revealOverlayUsesPonchoRenderer) {
       if (!ponchoRevealComplete) {
@@ -2983,6 +3016,61 @@ function App({ currentPath }: AppProps) {
 	      openSelectedLockRef.current = false;
 	    }
 	  };
+
+  const handleViewSelectedPonchoCard = useCallback(() => {
+    if (!selectedPonchoFigure) return;
+    if (revealOverlayRef.current || revealLoading) return;
+    if (startOpenLoading) return;
+    if (typeof window === 'undefined') return;
+
+    const figureId = selectedPonchoFigure.dudeId;
+    if (typeof figureId !== 'number') return;
+    const card = getPonchoDrifellaCardByFigureId(figureId);
+    if (!card) return;
+
+    preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
+    resetPonchoRevealDismissState();
+    clearRevealOverlayCloseTimeout();
+    setInventorySnapshot(inventory);
+    setPendingOpenSnapshot(pendingOpenBoxes);
+
+    const targetRect = calcPonchoDrifellaAbsoluteCardRect(
+      calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
+    );
+    const originRect = findInventoryRect(selectedPonchoFigure.id) || new DOMRect(
+      targetRect.left,
+      targetRect.top,
+      targetRect.width,
+      targetRect.height,
+    );
+    presentRevealOverlay({
+      id: selectedPonchoFigure.id,
+      dropId: selectedPonchoFigure.dropId,
+      name: selectedPonchoFigure.name,
+      image: selectedPonchoFigure.image,
+      originRect: toOverlayRect(originRect),
+      targetRect,
+      phase: 'revealed',
+      frame: 1,
+      advanceClicks: 0,
+      revealedIds: undefined,
+      viewerMode: 'poncho-card',
+      viewerFigureId: figureId,
+      hasRevealAttempted: true,
+      autoOpening: false,
+      autoMode: undefined,
+    });
+  }, [
+    clearRevealOverlayCloseTimeout,
+    findInventoryRect,
+    inventory,
+    pendingOpenBoxes,
+    presentRevealOverlay,
+    resetPonchoRevealDismissState,
+    revealLoading,
+    selectedPonchoFigure,
+    startOpenLoading,
+  ]);
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
@@ -3289,10 +3377,17 @@ function App({ currentPath }: AppProps) {
         const scaleX = Math.max(0.01, originRect.width / safeTargetWidth);
         const scaleY = Math.max(0.01, originRect.height / safeTargetHeight);
         const ponchoCardRect = isPonchoDrifellaFamilyDropId(revealOverlay.dropId)
-          ? calcPonchoDrifellaCardRect({
-              width: safeTargetWidth,
-              height: safeTargetHeight,
-            })
+          ? revealOverlay.viewerMode === 'poncho-card'
+            ? {
+                left: 0,
+                top: 0,
+                width: safeTargetWidth,
+                height: safeTargetHeight,
+              }
+            : calcPonchoDrifellaCardRect({
+                width: safeTargetWidth,
+                height: safeTargetHeight,
+              })
           : undefined;
         return {
           ['--reveal-target-left' as never]: `${targetRect.left}px`,
@@ -3324,12 +3419,18 @@ function App({ currentPath }: AppProps) {
   const revealOverlayContainerLabel = revealOverlay
     ? boxLabelForDropId(revealOverlay.dropId)
     : boxLabelForDropId(routeDrop?.dropId);
+  const ponchoViewerCard = useMemo(() => {
+    if (revealOverlay?.viewerMode !== 'poncho-card' || typeof revealOverlay.viewerFigureId !== 'number') return undefined;
+    return getPonchoDrifellaCardByFigureId(revealOverlay.viewerFigureId);
+  }, [revealOverlay?.viewerFigureId, revealOverlay?.viewerMode]);
   const ponchoRevealCard = useMemo(() => {
     if (!revealOverlay?.revealedIds?.length || revealOverlay.revealedIds.length !== 1) return undefined;
     return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
   }, [revealOverlay?.revealedIds]);
+  const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
   const revealOverlayUsesPonchoRenderer = Boolean(
     revealOverlay &&
+      !revealOverlayUsesPonchoViewer &&
       revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
       (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
   );
@@ -3612,7 +3713,16 @@ function App({ currentPath }: AppProps) {
     </div>
   ) : null;
   const revealOverlayNode = revealOverlay ? (
-    revealOverlayUsesPonchoRenderer ? (
+    revealOverlayUsesPonchoViewer ? (
+      <PonchoCardViewerOverlay
+        overlayStyle={revealOverlayStyle}
+        active={revealOverlayActive}
+        closing={revealOverlayClosing}
+        card={ponchoViewerCard}
+        onDismiss={handleRevealOverlayBackdropClick}
+        onTransitionEnd={handleRevealOverlayTransitionEnd}
+      />
+    ) : revealOverlayUsesPonchoRenderer ? (
       <PonchoInventoryRevealOverlay
         mode="inventory-unbox"
         overlayStyle={revealOverlayStyle}
@@ -3981,6 +4091,16 @@ function App({ currentPath }: AppProps) {
             <button type="button" className="quiet" onClick={() => setSelected(new Set())}>
               Cancel
             </button>
+            {canViewSelected ? (
+              <button
+                type="button"
+                className="selection-panel__view"
+                onClick={handleViewSelectedPonchoCard}
+              >
+                <FaTableCellsLarge aria-hidden="true" focusable="false" size={16} />
+                <span>View</span>
+              </button>
+            ) : null}
             {canOpenSelected ? (
 	              <button
 	                type="button"
