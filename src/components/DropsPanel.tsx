@@ -5,7 +5,7 @@ import { dropPath } from '../lib/dropConfig';
 const lsbContent = resolveDropContent('little_swag_boxes');
 const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
 const lsbImage = lsbBase ? `${lsbBase}/default.webp` : undefined;
-const ponchoImage = resolveDropContent('poncho_drifella_devnet').box.previewImageUrl;
+const ponchoImage = resolveDropContent('poncho_drifella').box.previewImageUrl;
 
 export function DropsPanel() {
   return (
