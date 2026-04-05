@@ -47,7 +47,6 @@ function dropBase(dropId: string): string {
   return FRONTEND_DROPS[normalizeDropId(dropId)]?.paths.base || '';
 }
 
-const GREEN_BASE = dropBase('green_boxes_devnet');
 const PONCHO_DRIFELLA_DROP_ID_PREFIX = normalizeDropId('Poncho_Drifella');
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
@@ -72,20 +71,6 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
 };
 
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
-  green_boxes_devnet: {
-    box: {
-      previewImageUrl: GREEN_BASE ? `${GREEN_BASE}/box/default.png` : undefined,
-      aspectRatio: 1,
-    },
-    reveal: {
-      mode: 'static',
-    },
-    figures: {
-      inventoryImageMode: 'metadata_raw',
-      revealPresentation: 'metadata_stills',
-      fulfillmentPreviewMode: 'metadata_stills',
-    },
-  },
 };
 
 export function isPonchoDrifellaFamilyDropId(dropId?: string): boolean {

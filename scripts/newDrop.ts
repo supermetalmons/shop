@@ -60,7 +60,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'green_boxes_devnet',
+    dropId: '',
     metadataBase: 'https://assets.mons.link/drops/test/green',
     collectionMetadata: {
       name: 'green test',
