@@ -3060,6 +3060,7 @@ function App({ currentPath }: AppProps) {
       autoOpening: false,
       autoMode: undefined,
     });
+    setSelected(new Set());
   }, [
     clearRevealOverlayCloseTimeout,
     findInventoryRect,
@@ -4097,7 +4098,6 @@ function App({ currentPath }: AppProps) {
                 className="selection-panel__view"
                 onClick={handleViewSelectedPonchoCard}
               >
-                <FaTableCellsLarge aria-hidden="true" focusable="false" size={16} />
                 <span>View</span>
               </button>
             ) : null}
