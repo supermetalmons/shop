@@ -45,8 +45,32 @@ type FirestorePlan = {
   recursiveDeletePath: string;
 };
 
+type FirestoreDocRecord = {
+  path: string;
+  id: string;
+  data: Record<string, unknown>;
+};
+
+type FirestoreClientMode = 'admin' | 'rest';
+type FirestoreStringFilter =
+  | {
+      op?: 'EQUAL';
+      value: string;
+    }
+  | {
+      op: 'IN';
+      values: string[];
+    };
+
 const PROJECT_ID = 'mons-shop';
 const DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const FIREBASE_CLI_CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
+const FIREBASE_CLI_CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi';
+const FIRESTORE_LIST_PAGE_SIZE = 1000;
+const FIRESTORE_IN_QUERY_MAX_VALUES = 10;
+
+let firestoreClientMode: FirestoreClientMode | undefined;
+let cachedFirebaseCliAccessTokenPromise: Promise<string> | null = null;
 
 function usage(): string {
   return [
@@ -195,6 +219,34 @@ function sortStrings(values: Iterable<string>): string[] {
   return Array.from(new Set(Array.from(values).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
+function chunkStrings(values: string[], size: number): string[][] {
+  if (!values.length || size < 1) return [];
+  const out: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    out.push(values.slice(index, index + size));
+  }
+  return out;
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  if (!items.length) return [];
+  const out = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      out[current] = await fn(items[current], current);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return out;
+}
+
 function repoRoot(): string {
   return path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 }
@@ -249,11 +301,451 @@ function isCanonicalDropFile(relPath: string, dropId: string): boolean {
   return path.parse(relPath).name === dropId;
 }
 
-function dropIdFromDropSubcollectionPath(pathValue: string, subcollection: string): string | undefined {
-  const parts = String(pathValue || '').split('/');
-  if (parts.length !== 4) return undefined;
-  if (parts[0] !== 'drops' || parts[2] !== subcollection) return undefined;
-  return normalizeMaybeDropId(parts[1]);
+function adminDb() {
+  const app = getApps()[0] || initializeApp({ projectId: PROJECT_ID });
+  return getFirestore(app);
+}
+
+function firestorePathUrl(pathValue: string, suffix = ''): URL {
+  const encodedPath = String(pathValue || '')
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return new URL(`https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${encodedPath}${suffix}`);
+}
+
+function firestoreDocumentsUrl(suffix = ''): URL {
+  return new URL(`https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents${suffix}`);
+}
+
+function firebaseCliAuthState(): { refreshToken: string; scope?: string } {
+  const result = spawnSync('firebase', ['login:list', '--json'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      FIREBASE_CLI_DISABLE_UPDATE_CHECK: '1',
+    },
+  });
+
+  if (result.status !== 0) {
+    const message = result.stderr?.trim() || result.stdout?.trim() || 'firebase login:list failed';
+    throw new Error(message);
+  }
+
+  const payload = JSON.parse(result.stdout || '{}') as any;
+  const refreshToken = payload?.result?.[0]?.tokens?.refresh_token;
+  const scope = payload?.result?.[0]?.tokens?.scope;
+  if (typeof refreshToken !== 'string' || !refreshToken) {
+    throw new Error('No Firebase CLI refresh token available');
+  }
+  return { refreshToken, ...(typeof scope === 'string' && scope ? { scope } : {}) };
+}
+
+async function firebaseCliAccessToken(): Promise<string> {
+  if (!cachedFirebaseCliAccessTokenPromise) {
+    cachedFirebaseCliAccessTokenPromise = (async () => {
+      const authState = firebaseCliAuthState();
+      const body = new URLSearchParams({
+        refresh_token: authState.refreshToken,
+        client_id: FIREBASE_CLI_CLIENT_ID,
+        client_secret: FIREBASE_CLI_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+        ...(authState.scope ? { scope: authState.scope } : {}),
+      });
+
+      const res = await fetch('https://www.googleapis.com/oauth2/v3/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || typeof (json as any)?.access_token !== 'string') {
+        const message = (json as any)?.error_description || (json as any)?.error || res.statusText || 'OAuth token refresh failed';
+        throw new Error(message);
+      }
+      return String((json as any).access_token);
+    })().catch((err) => {
+      cachedFirebaseCliAccessTokenPromise = null;
+      throw err;
+    });
+  }
+
+  return cachedFirebaseCliAccessTokenPromise;
+}
+
+async function firestoreRestRequest(args: {
+  url: URL;
+  method?: 'GET' | 'POST' | 'DELETE';
+  body?: unknown;
+  allow404?: boolean;
+}): Promise<any> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${await firebaseCliAccessToken()}`,
+  };
+  if (args.body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(args.url, {
+    method: args.method ?? (args.body === undefined ? 'GET' : 'POST'),
+    headers,
+    ...(args.body !== undefined ? { body: JSON.stringify(args.body) } : {}),
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+
+  if (args.allow404 && (res.status === 404 || json?.error?.status === 'NOT_FOUND')) {
+    return undefined;
+  }
+
+  if (!res.ok || json?.error) {
+    const message = json?.error?.message || res.statusText || 'Firestore REST request failed';
+    throw new Error(message);
+  }
+
+  return json;
+}
+
+function relativeFirestoreDocumentPath(name: unknown): string | undefined {
+  if (typeof name !== 'string') return undefined;
+  const marker = '/documents/';
+  const index = name.indexOf(marker);
+  if (index < 0) return undefined;
+  return name.slice(index + marker.length);
+}
+
+function decodeFirestoreValue(value: any): unknown {
+  if (!value || typeof value !== 'object') return undefined;
+  if ('nullValue' in value) return null;
+  if ('stringValue' in value) return String(value.stringValue || '');
+  if ('integerValue' in value) return Number(value.integerValue);
+  if ('doubleValue' in value) return Number(value.doubleValue);
+  if ('booleanValue' in value) return value.booleanValue === true;
+  if ('timestampValue' in value) return String(value.timestampValue || '');
+  if ('referenceValue' in value) return String(value.referenceValue || '');
+  if ('bytesValue' in value) return String(value.bytesValue || '');
+  if ('arrayValue' in value) {
+    const values = Array.isArray(value.arrayValue?.values) ? value.arrayValue.values : [];
+    return values.map((entry: any) => decodeFirestoreValue(entry));
+  }
+  if ('mapValue' in value) {
+    const fields = value.mapValue?.fields && typeof value.mapValue.fields === 'object' ? value.mapValue.fields : {};
+    return Object.fromEntries(Object.entries(fields).map(([key, entry]) => [key, decodeFirestoreValue(entry)]));
+  }
+  return undefined;
+}
+
+function decodeFirestoreDocument(doc: any): FirestoreDocRecord | undefined {
+  const pathValue = relativeFirestoreDocumentPath(doc?.name);
+  if (!pathValue) return undefined;
+  const fields = doc?.fields && typeof doc.fields === 'object' ? doc.fields : {};
+  return {
+    path: pathValue,
+    id: pathValue.split('/').pop() || pathValue,
+    data: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, decodeFirestoreValue(value)])),
+  };
+}
+
+function normalizeFirestoreDocPath(pathValue: string): string {
+  return String(pathValue || '').replace(/^\/+/, '');
+}
+
+async function listCollectionDocumentsViaRest(
+  collectionPath: string,
+  opts?: { maskFieldPaths?: string[]; showMissing?: boolean },
+): Promise<FirestoreDocRecord[]> {
+  const docs: FirestoreDocRecord[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = firestorePathUrl(collectionPath);
+    url.searchParams.set('pageSize', String(FIRESTORE_LIST_PAGE_SIZE));
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    if (opts?.showMissing) url.searchParams.set('showMissing', 'true');
+    (opts?.maskFieldPaths || []).forEach((fieldPath) => {
+      url.searchParams.append('mask.fieldPaths', fieldPath);
+    });
+    const json = await firestoreRestRequest({ url, allow404: true });
+    const pageDocs = Array.isArray(json?.documents) ? json.documents : [];
+    pageDocs.forEach((doc) => {
+      const decoded = decodeFirestoreDocument(doc);
+      if (decoded) docs.push(decoded);
+    });
+    pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
+  } while (pageToken);
+
+  return docs;
+}
+
+async function getDocumentViaRest(documentPath: string): Promise<FirestoreDocRecord | null> {
+  const json = await firestoreRestRequest({ url: firestorePathUrl(documentPath), allow404: true });
+  if (!json) return null;
+  return decodeFirestoreDocument(json) || null;
+}
+
+async function runCollectionQueryViaRest(args: {
+  collectionId: string;
+  fieldPath: string;
+  filter: FirestoreStringFilter;
+  parentPath?: string;
+  allDescendants?: boolean;
+  maskFieldPaths?: string[];
+  limit?: number;
+}): Promise<FirestoreDocRecord[]> {
+  const url = args.parentPath
+    ? firestorePathUrl(args.parentPath, ':runQuery')
+    : firestoreDocumentsUrl(':runQuery');
+  const json = await firestoreRestRequest({
+    url,
+    method: 'POST',
+    body: {
+      structuredQuery: {
+        from: [
+          {
+            collectionId: args.collectionId,
+            ...(args.allDescendants ? { allDescendants: true } : {}),
+          },
+        ],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: args.fieldPath },
+            op: args.filter.op || 'EQUAL',
+            value:
+              args.filter.op === 'IN'
+                ? {
+                    arrayValue: {
+                      values: args.filter.values.map((value) => ({ stringValue: value })),
+                    },
+                  }
+                : { stringValue: args.filter.value },
+          },
+        },
+        ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+        ...(args.maskFieldPaths?.length
+          ? {
+              select: {
+                fields: args.maskFieldPaths.map((fieldPath) => ({ fieldPath })),
+              },
+            }
+          : {}),
+      },
+    },
+  });
+  return (Array.isArray(json) ? json : [])
+    .map((entry) => decodeFirestoreDocument(entry?.document))
+    .filter((doc): doc is FirestoreDocRecord => Boolean(doc));
+}
+
+async function listCollectionIdsViaRest(documentPath: string): Promise<string[]> {
+  const collectionIds: string[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const json = await firestoreRestRequest({
+      url: firestorePathUrl(documentPath, ':listCollectionIds'),
+      method: 'POST',
+      body: {
+        pageSize: FIRESTORE_LIST_PAGE_SIZE,
+        ...(pageToken ? { pageToken } : {}),
+      },
+      allow404: true,
+    });
+    collectionIds.push(...((Array.isArray(json?.collectionIds) ? json.collectionIds : []).filter(Boolean) as string[]));
+    pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
+  } while (pageToken);
+
+  return sortStrings(collectionIds);
+}
+
+async function deleteDocumentViaRest(documentPath: string): Promise<void> {
+  await firestoreRestRequest({
+    url: firestorePathUrl(documentPath),
+    method: 'DELETE',
+    allow404: true,
+  });
+}
+
+async function recursiveDeleteDocumentViaRest(documentPath: string): Promise<void> {
+  const normalizedPath = normalizeFirestoreDocPath(documentPath);
+  const subcollectionIds = await listCollectionIdsViaRest(normalizedPath);
+
+  for (const subcollectionId of subcollectionIds) {
+    const nestedDocs = await listCollectionDocumentsViaRest(`${normalizedPath}/${subcollectionId}`, {
+      maskFieldPaths: ['__name__'],
+      showMissing: true,
+    });
+    await mapLimit(
+      nestedDocs.map((doc) => doc.path),
+      8,
+      async (childDocPath) => recursiveDeleteDocumentViaRest(childDocPath),
+    );
+  }
+
+  await deleteDocumentViaRest(normalizedPath);
+}
+
+function looksLikeFirestorePermissionError(message: string): boolean {
+  return /permission[-_\s]?denied|missing or insufficient permissions/i.test(message);
+}
+
+async function withFirestoreFallback<T>(adminOp: () => Promise<T>, restOp: () => Promise<T>): Promise<T> {
+  if (firestoreClientMode !== 'rest') {
+    try {
+      const result = await adminOp();
+      firestoreClientMode = 'admin';
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!looksLikeFirestorePermissionError(message)) throw err;
+      firestoreClientMode = 'rest';
+    }
+  }
+
+  return restOp();
+}
+
+async function listDropIds(): Promise<string[]> {
+  return withFirestoreFallback(
+    async () => {
+      const refs = await adminDb().collection('drops').listDocuments();
+      return sortStrings(refs.map((ref) => normalizeMaybeDropId(ref.id)).filter((dropId): dropId is string => Boolean(dropId)));
+    },
+    async () => {
+      const docs = await listCollectionDocumentsViaRest('drops', { maskFieldPaths: ['__name__'], showMissing: true });
+      return sortStrings(docs.map((doc) => normalizeMaybeDropId(doc.id)).filter((dropId): dropId is string => Boolean(dropId)));
+    },
+  );
+}
+
+async function listClaimCodesByDropId(dropId: string): Promise<string[]> {
+  return withFirestoreFallback(
+    async () => {
+      const snap = await adminDb().collection('claimCodes').where('dropId', '==', dropId).get();
+      return sortStrings(snap.docs.map((doc) => doc.id));
+    },
+    async () => {
+      const docs = await runCollectionQueryViaRest({
+        collectionId: 'claimCodes',
+        fieldPath: 'dropId',
+        filter: { value: dropId },
+        maskFieldPaths: ['dropId'],
+      });
+      return sortStrings(docs.map((doc) => doc.id));
+    },
+  );
+}
+
+async function listBoxAssignmentClaimCodes(dropId: string): Promise<string[]> {
+  return withFirestoreFallback(
+    async () => {
+      const snap = await adminDb().collection(`drops/${dropId}/boxAssignments`).select('irlClaimCode').get();
+      return sortStrings(
+        snap.docs.map((doc) => normalizeClaimCode(doc.get('irlClaimCode'))).filter((code): code is string => Boolean(code)),
+      );
+    },
+    async () => {
+      const docs = await listCollectionDocumentsViaRest(`drops/${dropId}/boxAssignments`, { maskFieldPaths: ['irlClaimCode'] });
+      return sortStrings(docs.map((doc) => normalizeClaimCode(doc.data.irlClaimCode)).filter((code): code is string => Boolean(code)));
+    },
+  );
+}
+
+async function listDeliveryOrderClaimCodes(dropId: string): Promise<string[]> {
+  return withFirestoreFallback(
+    async () => {
+      const snap = await adminDb().collection(`drops/${dropId}/deliveryOrders`).select('irlClaims').get();
+      return sortStrings(snap.docs.flatMap((doc) => extractClaimCodesFromDeliveryOrders(doc.data())));
+    },
+    async () => {
+      const docs = await listCollectionDocumentsViaRest(`drops/${dropId}/deliveryOrders`, { maskFieldPaths: ['irlClaims'] });
+      return sortStrings(docs.flatMap((doc) => extractClaimCodesFromDeliveryOrders(doc.data)));
+    },
+  );
+}
+
+async function findClaimCodesInBoxAssignments(dropId: string, codes: string[]): Promise<string[]> {
+  const normalizedCodes = sortStrings(codes);
+  if (!normalizedCodes.length) return [];
+
+  return withFirestoreFallback(
+    async () => {
+      const chunks = chunkStrings(normalizedCodes, FIRESTORE_IN_QUERY_MAX_VALUES);
+      const matches = await mapLimit(chunks, 4, async (chunk) => {
+        const snap = await adminDb()
+          .collection(`drops/${dropId}/boxAssignments`)
+          .where('irlClaimCode', 'in', chunk)
+          .select('irlClaimCode')
+          .get();
+        return snap.docs.map((doc) => normalizeClaimCode(doc.get('irlClaimCode'))).filter((code): code is string => Boolean(code));
+      });
+      return sortStrings(matches.flat());
+    },
+    async () => {
+      const chunks = chunkStrings(normalizedCodes, FIRESTORE_IN_QUERY_MAX_VALUES);
+      const matches = await mapLimit(chunks, 4, async (chunk) => {
+        const docs = await runCollectionQueryViaRest({
+          parentPath: `drops/${dropId}`,
+          collectionId: 'boxAssignments',
+          fieldPath: 'irlClaimCode',
+          filter: { op: 'IN', values: chunk },
+          maskFieldPaths: ['irlClaimCode'],
+        });
+        return docs.map((doc) => normalizeClaimCode(doc.data.irlClaimCode)).filter((code): code is string => Boolean(code));
+      });
+      return sortStrings(matches.flat());
+    },
+  );
+}
+
+async function findAssignmentOwnerDropIdsByCode(args: {
+  dropIds: string[];
+  targetDropId: string;
+  targetClaimCodes: string[];
+  codesToInspect: string[];
+}): Promise<Map<string, Set<string>>> {
+  const ownership = new Map<string, Set<string>>();
+
+  const addOwners = (ownerDropId: string, codes: string[]) => {
+    codes.forEach((code) => {
+      const owners = ownership.get(code) || new Set<string>();
+      owners.add(ownerDropId);
+      ownership.set(code, owners);
+    });
+  };
+
+  addOwners(args.targetDropId, args.targetClaimCodes);
+
+  const foreignDropIds = sortStrings(args.dropIds.filter((dropId) => dropId && dropId !== args.targetDropId));
+  const codeChunks = chunkStrings(sortStrings(args.codesToInspect), FIRESTORE_IN_QUERY_MAX_VALUES);
+  const queryTasks = foreignDropIds.flatMap((ownerDropId) => codeChunks.map((codes) => ({ ownerDropId, codes })));
+
+  const results = await mapLimit(queryTasks, 8, async ({ ownerDropId, codes }) => ({
+    ownerDropId,
+    codes: await findClaimCodesInBoxAssignments(ownerDropId, codes),
+  }));
+
+  results.forEach(({ ownerDropId, codes }) => addOwners(ownerDropId, codes));
+  return ownership;
+}
+
+async function loadClaimDocs(codes: string[]): Promise<Map<string, FirestoreDocRecord>> {
+  if (!codes.length) return new Map<string, FirestoreDocRecord>();
+
+  return withFirestoreFallback(
+    async () => {
+      const docs = await adminDb().getAll(...codes.map((code) => adminDb().doc(`claimCodes/${code}`)));
+      return new Map<string, FirestoreDocRecord>(
+        docs
+          .filter((snap) => snap.exists)
+          .map((snap) => [snap.id, { path: snap.ref.path, id: snap.id, data: snap.data() || {} }]),
+      );
+    },
+    async () => {
+      const docs = await mapLimit(codes, 8, async (code) => getDocumentViaRest(`claimCodes/${code}`));
+      return new Map<string, FirestoreDocRecord>(
+        docs.filter((doc): doc is FirestoreDocRecord => Boolean(doc)).map((doc) => [doc.id, doc]),
+      );
+    },
+  );
 }
 
 async function buildRepoPlan(args: {
@@ -367,23 +859,14 @@ function extractClaimCodesFromDeliveryOrders(orderData: unknown): string[] {
     .filter((code): code is string => Boolean(code));
 }
 
-async function buildFirestorePlan(dropId: string): Promise<FirestorePlan> {
-  const app = getApps()[0] || initializeApp({ projectId: PROJECT_ID });
-  const db = getFirestore(app);
-
-  const [claimCodesByDropSnap, boxAssignmentsSnap, deliveryOrdersSnap] = await Promise.all([
-    db.collection('claimCodes').where('dropId', '==', dropId).get(),
-    db.collection(`drops/${dropId}/boxAssignments`).select('irlClaimCode').get(),
-    db.collection(`drops/${dropId}/deliveryOrders`).select('irlClaims').get(),
+async function buildFirestorePlan(dropId: string, knownDropIds: string[]): Promise<FirestorePlan> {
+  const [claimCodesByDropId, claimCodesFromAssignments, claimCodesFromDeliveryOrders, firestoreDropIds] = await Promise.all([
+    listClaimCodesByDropId(dropId),
+    listBoxAssignmentClaimCodes(dropId),
+    listDeliveryOrderClaimCodes(dropId),
+    listDropIds(),
   ]);
 
-  const claimCodesByDropId = sortStrings(claimCodesByDropSnap.docs.map((doc) => doc.id));
-  const claimCodesFromAssignments = sortStrings(
-    boxAssignmentsSnap.docs.map((doc) => normalizeClaimCode(doc.get('irlClaimCode'))).filter((code): code is string => Boolean(code)),
-  );
-  const claimCodesFromDeliveryOrders = sortStrings(
-    deliveryOrdersSnap.docs.flatMap((doc) => extractClaimCodesFromDeliveryOrders(doc.data())),
-  );
   const claimCodesByDropIdSet = new Set<string>(claimCodesByDropId);
   const claimCodesFromAssignmentsSet = new Set<string>(claimCodesFromAssignments);
   const claimCodesFromDeliveryOrdersSet = new Set<string>(claimCodesFromDeliveryOrders);
@@ -393,31 +876,28 @@ async function buildFirestorePlan(dropId: string): Promise<FirestorePlan> {
     ...claimCodesFromDeliveryOrders,
   ]);
 
-  const claimDocSnapshots = claimCodesToInspect.length
-    ? await db.getAll(...claimCodesToInspect.map((code) => db.doc(`claimCodes/${code}`)))
-    : [];
-  const claimDocByCode = new Map<string, FirebaseFirestore.DocumentSnapshot>(
-    claimDocSnapshots.map((snap) => [snap.id, snap]),
-  );
+  const dropIdsToInspect = sortStrings([...knownDropIds, ...firestoreDropIds]);
+  const assignmentOwnerDropIdsByCode = await findAssignmentOwnerDropIdsByCode({
+    dropIds: dropIdsToInspect,
+    targetDropId: dropId,
+    targetClaimCodes: claimCodesFromAssignments,
+    codesToInspect: claimCodesToInspect,
+  });
+  const claimDocByCode = await loadClaimDocs(claimCodesToInspect);
 
   const conflicts: string[] = [];
   for (const code of claimCodesToInspect) {
-    const snap = claimDocByCode.get(code);
-    if (!snap?.exists) continue;
+    const doc = claimDocByCode.get(code);
+    if (!doc) continue;
 
-    const assignmentRefs = await db.collectionGroup('boxAssignments').where('irlClaimCode', '==', code).get();
-    const assignmentOwnerDropIds = sortStrings(
-      assignmentRefs.docs
-        .map((doc) => dropIdFromDropSubcollectionPath(doc.ref.path, 'boxAssignments'))
-        .filter((ownerDropId): ownerDropId is string => Boolean(ownerDropId)),
-    );
+    const assignmentOwnerDropIds = sortStrings(assignmentOwnerDropIdsByCode.get(code) || []);
     const foreignAssignmentOwners = assignmentOwnerDropIds.filter((ownerDropId) => ownerDropId !== dropId);
     if (foreignAssignmentOwners.length) {
       conflicts.push(`claimCodes/${code} is referenced by drop(s): ${foreignAssignmentOwners.join(', ')}`);
       continue;
     }
 
-    const explicitDropId = normalizeMaybeDropId(snap.get('dropId'));
+    const explicitDropId = normalizeMaybeDropId(doc.data.dropId);
     if (explicitDropId && explicitDropId !== dropId) {
       conflicts.push(`claimCodes/${code} belongs to ${explicitDropId}`);
       continue;
@@ -446,8 +926,8 @@ async function buildFirestorePlan(dropId: string): Promise<FirestorePlan> {
     claimCodesByDropId,
     claimCodesFromAssignments,
     claimCodesFromDeliveryOrders,
-    claimCodesToDelete: sortStrings(claimDocSnapshots.filter((snap) => snap.exists).map((snap) => snap.id)),
-    missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.get(code)?.exists)),
+    claimCodesToDelete: sortStrings(claimDocByCode.keys()),
+    missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.has(code))),
     recursiveDeletePath: `drops/${dropId}`,
   };
 }
@@ -531,26 +1011,33 @@ function applyRepoWipe(plan: RepoPlan): void {
 }
 
 async function applyFirestoreWipe(dropId: string, plan: FirestorePlan): Promise<void> {
-  const app = getApps()[0] || initializeApp({ projectId: PROJECT_ID });
-  const db = getFirestore(app);
+  await withFirestoreFallback(
+    async () => {
+      const db = adminDb();
 
-  if (plan.claimCodesToDelete.length) {
-    const writer = db.bulkWriter();
-    writer.onWriteError((err) => {
-      console.error(`claimCodes delete failed for ${err.documentRef.path}: ${err.message}`);
-      return false;
-    });
-    plan.claimCodesToDelete.forEach((code) => {
-      writer.delete(db.doc(`claimCodes/${code}`));
-    });
-    await writer.close();
-  }
+      if (plan.claimCodesToDelete.length) {
+        const writer = db.bulkWriter();
+        writer.onWriteError((err) => {
+          console.error(`claimCodes delete failed for ${err.documentRef.path}: ${err.message}`);
+          return false;
+        });
+        plan.claimCodesToDelete.forEach((code) => {
+          writer.delete(db.doc(`claimCodes/${code}`));
+        });
+        await writer.close();
+      }
 
-  await db.recursiveDelete(db.doc(`drops/${dropId}`));
+      await db.recursiveDelete(db.doc(`drops/${dropId}`));
+    },
+    async () => {
+      await mapLimit(plan.claimCodesToDelete, 8, async (code) => deleteDocumentViaRest(`claimCodes/${code}`));
+      await recursiveDeleteDocumentViaRest(`drops/${dropId}`);
+    },
+  );
 }
 
 function looksLikeCredentialError(message: string): boolean {
-  return /Could not load the default credentials|Failed to determine service account|credential implementation provided|Failed to read credentials from file/i.test(
+  return /Could not load the default credentials|Failed to determine service account|credential implementation provided|Failed to read credentials from file|No Firebase CLI refresh token available|firebase login:list failed/i.test(
     message,
   );
 }
@@ -568,7 +1055,12 @@ async function main() {
     );
   }
 
-  const firestorePlan = await buildFirestorePlan(args.dropId);
+  const knownDropIds = sortStrings([
+    ...Object.keys(repoPlan.frontendDropsNext),
+    ...Object.keys(repoPlan.functionsDropsNext),
+    args.dropId,
+  ]);
+  const firestorePlan = await buildFirestorePlan(args.dropId, knownDropIds);
   printPlan({ dropId: args.dropId, dryRun: args.dryRun, repoPlan, firestorePlan });
 
   if (args.dryRun) {
@@ -586,8 +1078,8 @@ async function main() {
     }
   }
 
-  applyRepoWipe(repoPlan);
   await applyFirestoreWipe(args.dropId, firestorePlan);
+  applyRepoWipe(repoPlan);
 
   console.log('');
   console.log(
@@ -599,7 +1091,9 @@ async function main() {
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
   if (looksLikeCredentialError(message)) {
-    console.error('Firebase admin credentials are not available. Set GOOGLE_APPLICATION_CREDENTIALS or local ADC, then retry.');
+    console.error(
+      'Firestore access is unavailable. Set GOOGLE_APPLICATION_CREDENTIALS/local ADC or authenticate with `firebase login`, then retry.',
+    );
   }
   console.error(message);
   process.exit(1);
