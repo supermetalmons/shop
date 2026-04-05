@@ -62,6 +62,7 @@ export type PonchoCardViewerOverlayProps = {
   active: boolean;
   closing: boolean;
   card?: DrifCardConfig;
+  loadingImageSrc?: string;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
@@ -459,6 +460,7 @@ export function PonchoCardViewerOverlay({
   active,
   closing,
   card,
+  loadingImageSrc,
   onDismiss,
   onTransitionEnd,
 }: PonchoCardViewerOverlayProps) {
@@ -485,7 +487,7 @@ export function PonchoCardViewerOverlay({
                 onClick={stopOverlayDismiss}
               >
                 <div className="reveal-overlay__media-float">
-                  <WipInteractiveCard card={card} interactive />
+                  <WipInteractiveCard card={card} interactive loadingImageSrc={loadingImageSrc} />
                 </div>
               </div>
             </div>

@@ -444,6 +444,23 @@ function toOverlayRect(rect: DOMRect): OverlayRect {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
 }
 
+function calcAspectLockedViewerOriginRect(
+  originRect: DOMRect,
+  targetRect: Readonly<{ width: number; height: number }>,
+): DOMRect {
+  const safeSourceHeight = Math.max(1, originRect.height);
+  const safeTargetWidth = Math.max(1, targetRect.width);
+  const safeTargetHeight = Math.max(1, targetRect.height);
+  const aspectRatio = safeTargetWidth / safeTargetHeight;
+  const width = Math.max(1, safeSourceHeight * aspectRatio);
+  return new DOMRect(
+    originRect.left + (originRect.width - width) / 2,
+    originRect.top,
+    width,
+    safeSourceHeight,
+  );
+}
+
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, aspectRatio: number): OverlayRect {
   const maxWidth = viewportWidth * 0.65;
   const maxHeight = viewportHeight * 0.43;
@@ -3053,12 +3070,14 @@ function App({ currentPath }: AppProps) {
     const targetRect = calcPonchoDrifellaAbsoluteCardRect(
       calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
     );
-    const resolvedOriginRect = originRect || new DOMRect(
-      targetRect.left,
-      targetRect.top,
-      targetRect.width,
-      targetRect.height,
-    );
+    const resolvedOriginRect = originRect
+      ? calcAspectLockedViewerOriginRect(originRect, targetRect)
+      : new DOMRect(
+          targetRect.left,
+          targetRect.top,
+          targetRect.width,
+          targetRect.height,
+        );
     presentRevealOverlay({
       id: overlayId,
       dropId,
@@ -3442,8 +3461,13 @@ function App({ currentPath }: AppProps) {
         const { originRect, targetRect } = revealOverlay;
         const safeTargetWidth = Math.max(1, targetRect.width);
         const safeTargetHeight = Math.max(1, targetRect.height);
-        const scaleX = Math.max(0.01, originRect.width / safeTargetWidth);
-        const scaleY = Math.max(0.01, originRect.height / safeTargetHeight);
+        const viewerScale = Math.max(0.01, originRect.height / safeTargetHeight);
+        const scaleX = revealOverlay.viewerMode === 'poncho-card'
+          ? viewerScale
+          : Math.max(0.01, originRect.width / safeTargetWidth);
+        const scaleY = revealOverlay.viewerMode === 'poncho-card'
+          ? viewerScale
+          : Math.max(0.01, originRect.height / safeTargetHeight);
         const ponchoCardRect = isPonchoDrifellaFamilyDropId(revealOverlay.dropId)
           ? revealOverlay.viewerMode === 'poncho-card'
             ? {
@@ -3787,6 +3811,7 @@ function App({ currentPath }: AppProps) {
         active={revealOverlayActive}
         closing={revealOverlayClosing}
         card={ponchoViewerCard}
+        loadingImageSrc={revealOverlay.image}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />

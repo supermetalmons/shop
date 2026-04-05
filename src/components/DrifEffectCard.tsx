@@ -37,6 +37,7 @@ type DrifEffectCardProps = {
   card: DrifCardConfig;
   ariaLabel: string;
   imageAlt?: string;
+  loadingImageSrc?: string;
   onClick?: () => void;
   onImageReadyChange?: (ready: boolean) => void;
   interactive?: boolean;
@@ -175,6 +176,7 @@ export default function DrifEffectCard({
   card,
   ariaLabel,
   imageAlt = '',
+  loadingImageSrc,
   onClick,
   onImageReadyChange,
   interactive = true,
@@ -206,9 +208,18 @@ export default function DrifEffectCard({
     glare: createSpring<SpringVec3>({ x: 50, y: 50, o: 0 }, { stiffness: 0.066, damping: 0.25 }),
     background: createSpring<SpringVec2>({ x: 50, y: 50 }, { stiffness: 0.066, damping: 0.25 }),
   });
-  const [loading, setLoading] = useState(true);
+  const normalizedLoadingImageSrc = useMemo(() => {
+    const next = String(loadingImageSrc || '').trim();
+    return next || undefined;
+  }, [loadingImageSrc]);
+  const useLoadingImage = Boolean(normalizedLoadingImageSrc && normalizedLoadingImageSrc !== card.imageSrc);
+  const initialDisplayImageSrc = useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc;
+  const [loading, setLoading] = useState(!useLoadingImage);
+  const [finalImageReady, setFinalImageReady] = useState(false);
+  const [displayImageSrc, setDisplayImageSrc] = useState(initialDisplayImageSrc);
   const [interacting, setInteracting] = useState(false);
   const interactiveReadyRef = useRef(false);
+  const showingLoadingImage = displayImageSrc !== card.imageSrc;
 
   const canUseHoverWake = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
@@ -442,7 +453,10 @@ export default function DrifEffectCard({
       firstImageLoadedRef.current = true;
     }
     setLoading(false);
-  }, [preserveTransformOnCardChange]);
+    if (displayImageSrc === card.imageSrc) {
+      setFinalImageReady(true);
+    }
+  }, [card.imageSrc, displayImageSrc, preserveTransformOnCardChange]);
 
   useEffect(() => {
     if (!preloadCards?.length || typeof window === 'undefined') return undefined;
@@ -463,17 +477,53 @@ export default function DrifEffectCard({
 
   useEffect(() => {
     if (preserveTransformOnCardChange) return;
-    setLoading(true);
+    setLoading(!useLoadingImage);
+    setFinalImageReady(false);
+    setDisplayImageSrc(useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc);
     interactingRef.current = false;
     setInteracting(false);
     reset();
-  }, [card.imageSrc, preserveTransformOnCardChange, reset]);
+  }, [card.imageSrc, normalizedLoadingImageSrc, preserveTransformOnCardChange, reset, useLoadingImage]);
+
+  useEffect(() => {
+    if (!preserveTransformOnCardChange) return;
+    setDisplayImageSrc(useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc);
+  }, [card.imageSrc, normalizedLoadingImageSrc, preserveTransformOnCardChange, useLoadingImage]);
+
+  useEffect(() => {
+    if (!useLoadingImage) return;
+    let cancelled = false;
+    const image = new Image();
+    image.decoding = 'async';
+    const markReady = () => {
+      if (cancelled) return;
+      setFinalImageReady(true);
+      setDisplayImageSrc(card.imageSrc);
+      setLoading(false);
+    };
+    const markFailed = () => {
+      if (cancelled) return;
+      setDisplayImageSrc(card.imageSrc);
+    };
+    image.onload = markReady;
+    image.onerror = markFailed;
+    image.src = card.imageSrc;
+    if (image.complete && image.naturalWidth > 0) {
+      markReady();
+    }
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+      image.src = '';
+    };
+  }, [card.imageSrc, preserveTransformOnCardChange, useLoadingImage]);
 
   useEffect(() => {
     const image = imageRef.current;
     if (!image || !image.complete || image.naturalWidth <= 0) return;
     markImageLoaded();
-  }, [card.imageSrc, markImageLoaded]);
+  }, [displayImageSrc, markImageLoaded]);
 
   useEffect(() => {
     applyStylesFromSprings();
@@ -499,11 +549,11 @@ export default function DrifEffectCard({
   }, [enableInteractiveUnlockWake]);
 
   useEffect(() => {
-    onImageReadyChange?.(!loading);
-  }, [loading, onImageReadyChange]);
+    onImageReadyChange?.(finalImageReady);
+  }, [finalImageReady, onImageReadyChange]);
 
   useEffect(() => {
-    const interactiveReady = interactive && !loading;
+    const interactiveReady = interactive && finalImageReady;
     if (enableInteractiveUnlockWake && interactiveReady && !interactiveReadyRef.current) {
       hoverWakeArmedRef.current = true;
     }
@@ -511,13 +561,13 @@ export default function DrifEffectCard({
       hoverWakeArmedRef.current = false;
     }
     interactiveReadyRef.current = interactiveReady;
-  }, [enableInteractiveUnlockWake, interactive, loading]);
+  }, [enableInteractiveUnlockWake, finalImageReady, interactive]);
 
   useEffect(() => {
     if (
       !enableInteractiveUnlockWake ||
       !interactive ||
-      loading ||
+      !finalImageReady ||
       !hoverWakeArmedRef.current ||
       typeof window === 'undefined' ||
       typeof document === 'undefined'
@@ -588,7 +638,9 @@ export default function DrifEffectCard({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [canUseHoverWake, enableInteractiveUnlockWake, interactive, loading, setPointerFromPercent]);
+  }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, interactive, setPointerFromPercent]);
+
+  const interactiveEnabled = interactive && finalImageReady;
 
   useEffect(() => {
     if (interactive) return;
@@ -666,22 +718,23 @@ export default function DrifEffectCard({
           ref={rotatorRef}
           type="button"
           className="drif-effect-card__rotator"
-          onPointerEnter={interactive ? interact : undefined}
-          onPointerMove={interactive ? interact : undefined}
-          onPointerLeave={interactive ? () => interactEnd() : undefined}
-          onPointerCancel={interactive ? () => interactEnd() : undefined}
-          onBlur={interactive ? () => interactEnd(0) : undefined}
-          onClick={interactive ? onClick : undefined}
+          onPointerEnter={interactiveEnabled ? interact : undefined}
+          onPointerMove={interactiveEnabled ? interact : undefined}
+          onPointerLeave={interactiveEnabled ? () => interactEnd() : undefined}
+          onPointerCancel={interactiveEnabled ? () => interactEnd() : undefined}
+          onBlur={interactiveEnabled ? () => interactEnd(0) : undefined}
+          onClick={interactiveEnabled ? onClick : undefined}
           aria-label={ariaLabel}
-          aria-disabled={interactive ? undefined : true}
-          tabIndex={interactive ? 0 : -1}
+          aria-disabled={interactiveEnabled ? undefined : true}
+          tabIndex={interactiveEnabled ? 0 : -1}
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">
             <img
               ref={imageRef}
-              src={card.imageSrc}
+              src={displayImageSrc}
               alt={imageAlt}
+              style={showingLoadingImage ? { objectFit: 'cover', objectPosition: 'center' } : undefined}
               onLoad={markImageLoaded}
               loading={imageLoading}
               width="1000"
