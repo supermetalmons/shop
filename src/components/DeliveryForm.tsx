@@ -55,7 +55,7 @@ export function DeliveryForm({
   const shippingNote =
     selectedCountryCode === 'US'
       ? 'Free US shipping'
-      : `International delivery: 0.19 SOL up to ${figuresPerBox} ${figureLabel}. 0.04 SOL each additional ${singleFigureLabel}.`;
+      : `International delivery: 0.25 SOL up to ${figuresPerBox} ${figureLabel}. 0.05 SOL each additional ${singleFigureLabel}.`;
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);

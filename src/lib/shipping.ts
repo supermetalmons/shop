@@ -1,8 +1,8 @@
 import { normalizeCountryCode } from './solana';
 import { InventoryItem } from '../types';
 
-const DELIVERY_BASE_LAMPORTS = 190_000_000;
-const DELIVERY_EXTRA_LAMPORTS = 40_000_000;
+const DELIVERY_BASE_LAMPORTS = 250_000_000;
+const DELIVERY_EXTRA_LAMPORTS = 50_000_000;
 
 function normalizeItemsPerBox(itemsPerBox?: number): number {
   const parsed = Number(itemsPerBox);
