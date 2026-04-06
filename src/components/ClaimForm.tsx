@@ -8,6 +8,7 @@ type ClaimFormResult = {
 
 interface ClaimFormProps {
   onClaim: (payload: { code: string }) => Promise<ClaimFormResult | void>;
+  onSuccess?: () => void;
   mode?: 'card' | 'modal';
   showTitle?: boolean;
   itemsPerBox?: number;
@@ -27,6 +28,7 @@ function receiptLabel(word: string, count: number): string {
 
 export function ClaimForm({
   onClaim,
+  onSuccess,
   mode = 'card',
   showTitle = true,
   itemsPerBox,
@@ -63,7 +65,11 @@ export function ClaimForm({
     setSuccess(null);
     try {
       const result = await onClaim({ code: code.trim() });
-      setSuccess(buildSuccessMessage(result || {}));
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        setSuccess(buildSuccessMessage(result || {}));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to claim certificates');
     } finally {

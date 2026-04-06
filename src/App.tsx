@@ -4100,6 +4100,7 @@ function App({ currentPath }: AppProps) {
       <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
         <ClaimForm
           onClaim={handleClaim}
+          onSuccess={() => setClaimOpen(false)}
           mode="modal"
           showTitle={false}
           itemsPerBox={routeDrop?.itemsPerBox}
