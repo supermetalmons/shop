@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { type DropFamily } from '../config/deployment';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
 
@@ -14,6 +15,7 @@ interface DeliveryFormProps {
   countryCode?: string;
   onCountryCodeChange?: (code: string) => void;
   submitLabel?: string;
+  dropFamily?: DropFamily;
 }
 
 export function DeliveryForm({
@@ -28,6 +30,7 @@ export function DeliveryForm({
   countryCode,
   onCountryCodeChange,
   submitLabel,
+  dropFamily,
 }: DeliveryFormProps) {
   const [email, setEmail] = useState(defaultEmail || '');
   const [emailTouched, setEmailTouched] = useState(false);
@@ -54,7 +57,11 @@ export function DeliveryForm({
   const singleFigureLabel = dropAssetLabel(labelSource, 'figure', 1);
   const shippingNote =
     selectedCountryCode === 'US'
-      ? 'Free US shipping'
+      ? dropFamily === 'little_swag_boxes'
+        ? `US delivery: 0.1 SOL up to ${figuresPerBox} ${figureLabel}. 0.025 SOL each additional ${singleFigureLabel}.`
+        : dropFamily === 'poncho_drifella'
+          ? 'US delivery: 0.05 SOL flat.'
+          : 'Free US shipping'
       : `International delivery: 0.25 SOL up to ${figuresPerBox} ${figureLabel}. 0.05 SOL each additional ${singleFigureLabel}.`;
 
   useEffect(() => {

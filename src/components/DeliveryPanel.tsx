@@ -1,3 +1,4 @@
+import { type DropFamily } from '../config/deployment';
 import { DeliveryForm } from './DeliveryForm';
 
 interface DeliveryPanelProps {
@@ -8,6 +9,7 @@ interface DeliveryPanelProps {
   itemsPerBox?: number;
   boxNamePrefix?: string;
   figureNamePrefix?: string;
+  dropFamily?: DropFamily;
   onShip: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
   submitDisabled?: boolean;
 }
@@ -20,6 +22,7 @@ export function DeliveryPanel({
   itemsPerBox,
   boxNamePrefix,
   figureNamePrefix,
+  dropFamily,
   onShip,
   submitDisabled,
 }: DeliveryPanelProps) {
@@ -42,6 +45,7 @@ export function DeliveryPanel({
         itemsPerBox={itemsPerBox}
         boxNamePrefix={boxNamePrefix}
         figureNamePrefix={figureNamePrefix}
+        dropFamily={dropFamily}
       />
     </section>
   );

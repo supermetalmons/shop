@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DROPS, type FunctionsDropConfig } from './config/deployment.js';
+import { FUNCTIONS_DROPS, type DropFamily, type FunctionsDropConfig } from './config/deployment.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -385,8 +385,11 @@ const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 // Bubblegum v2 burn discriminator (kinobi generated).
 const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
-const DELIVERY_BASE_LAMPORTS = 250_000_000;
-const DELIVERY_EXTRA_LAMPORTS = 50_000_000;
+const INTL_DELIVERY_BASE_LAMPORTS = 250_000_000;
+const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
+const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
+const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
+const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 const MAX_DELIVERY_ITEMS = 32;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
@@ -400,7 +403,8 @@ const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
 const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * MAX_CONFIGURED_ITEMS_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
 const MAX_DELIVERY_LAMPORTS =
-  DELIVERY_BASE_LAMPORTS + Math.max(0, MAX_DELIVERY_FIGURES - MAX_CONFIGURED_ITEMS_PER_BOX) * DELIVERY_EXTRA_LAMPORTS;
+  INTL_DELIVERY_BASE_LAMPORTS +
+  Math.max(0, MAX_DELIVERY_FIGURES - MAX_CONFIGURED_ITEMS_PER_BOX) * INTL_DELIVERY_EXTRA_LAMPORTS;
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
@@ -2203,13 +2207,30 @@ function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBo
   return items.reduce((total, item) => total + (item.kind === 'box' ? itemsPerBox : 1), 0);
 }
 
-function calculateDeliveryLamports(items: Array<{ kind: 'box' | 'dude' }>, countryCode: string | undefined, itemsPerBox: number): number {
-  const normalized = normalizeCountryCode(countryCode);
-  if (normalized === 'US') return 0;
+function calculateUsDeliveryLamports(figureCount: number, itemsPerBox: number, dropFamily: DropFamily): number {
+  if (figureCount <= 0) return 0;
+  if (dropFamily === 'little_swag_boxes') {
+    const extraFigures = Math.max(0, figureCount - itemsPerBox);
+    return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
+  }
+  if (dropFamily === 'poncho_drifella') {
+    return PONCHO_DRIFELLA_US_FLAT_LAMPORTS;
+  }
+  return 0;
+}
+
+function calculateDeliveryLamports(
+  items: Array<{ kind: 'box' | 'dude' }>,
+  countryCode: string | undefined,
+  itemsPerBox: number,
+  dropFamily: DropFamily,
+): number {
   const figureCount = countDeliveryFigures(items, itemsPerBox);
   if (figureCount <= 0) return 0;
+  const normalized = normalizeCountryCode(countryCode);
+  if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
   const extraFigures = Math.max(0, figureCount - itemsPerBox);
-  return DELIVERY_BASE_LAMPORTS + extraFigures * DELIVERY_EXTRA_LAMPORTS;
+  return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
 }
 
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
@@ -3437,7 +3458,12 @@ export const prepareDeliveryTx = onCallLogged(
     }
   }
 
-  const deliveryLamports = calculateDeliveryLamports(orderItems, addressCountry, dropRuntime.itemsPerBox);
+  const deliveryLamports = calculateDeliveryLamports(
+    orderItems,
+    addressCountry,
+    dropRuntime.itemsPerBox,
+    dropRuntime.config.dropFamily,
+  );
   const conn = connection(dropRuntime);
 
   // Ensure COSIGNER_SECRET matches on-chain admin, and COLLECTION_MINT matches configured core collection.

@@ -2390,12 +2390,22 @@ function App({ currentPath }: AppProps) {
     return parts.length ? parts.join(', ') : `${selectedCount} selected`;
   }, [deliverableItems, selectedCount, selectedDropConfig, selectionHasSingleDrop]);
   const deliveryEstimateLamports = useMemo(
-    () => calculateDeliveryLamports(deliverableItems, deliveryCountryCode, selectedDropConfig?.itemsPerBox),
-    [deliverableItems, deliveryCountryCode, selectedDropConfig?.itemsPerBox],
+    () =>
+      calculateDeliveryLamports(
+        deliverableItems,
+        deliveryCountryCode,
+        selectedDropConfig?.itemsPerBox,
+        selectedDropConfig?.dropFamily,
+      ),
+    [deliverableItems, deliveryCountryCode, selectedDropConfig?.dropFamily, selectedDropConfig?.itemsPerBox],
   );
   const deliveryCtaLabel = useMemo(() => {
     if (deliveryEstimateLamports <= 0) return 'Send';
-    const sol = (deliveryEstimateLamports / LAMPORTS_PER_SOL).toFixed(2);
+    const sol = (deliveryEstimateLamports / LAMPORTS_PER_SOL).toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 9,
+      useGrouping: false,
+    });
     return `Send for ${sol} SOL`;
   }, [deliveryEstimateLamports]);
   const [compactPanel, setCompactPanel] = useState(false);
@@ -4095,6 +4105,7 @@ function App({ currentPath }: AppProps) {
             itemsPerBox={selectedDropConfig?.itemsPerBox}
             boxNamePrefix={selectedDropConfig?.namePrefix}
             figureNamePrefix={selectedDropConfig?.figureNamePrefix}
+            dropFamily={selectedDropConfig?.dropFamily}
             submitDisabled={!deliverableItems.length || !publicKey}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
