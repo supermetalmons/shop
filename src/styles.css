@@ -855,14 +855,19 @@ button.link:hover:not(:disabled) {
 }
 
 .inventory--receipts {
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
 }
 
 @media (max-width: 560px) {
   .inventory,
   .inventory--receipts {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    gap: 8px;
+  }
+
+  .inventory--receipts {
+    gap: 6px;
   }
 }
 
@@ -870,6 +875,10 @@ button.link:hover:not(:disabled) {
   .inventory,
   .inventory--receipts {
     gap: 8px;
+  }
+
+  .inventory--receipts {
+    gap: 4px;
   }
 }
 
@@ -921,8 +930,8 @@ button.link:hover:not(:disabled) {
 .inventory__item--receipt .inventory__image {
   border: 1px solid rgba(0, 0, 0, 0.22);
   border-radius: 0;
-  width: 82%;
-  height: 82%;
+  width: 88%;
+  height: 88%;
 }
 
 .inventory__item--pending {
@@ -1636,8 +1645,8 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 .inventory__item--receipt .inventory__media > .placeholder {
-  width: 82%;
-  height: 82%;
+  width: 88%;
+  height: 88%;
   border-radius: 0;
 }
 
