@@ -242,6 +242,8 @@ export function MintPanel({
                   src={mintBoxImageSrc}
                   alt=""
                   aria-hidden="true"
+                  draggable={false}
+                  onDragStart={(evt) => evt.preventDefault()}
                   onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
                   onError={(evt) => hideImageShowFallback(evt.currentTarget)}
                 />

@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useState, type DragEvent, type MouseEvent } from 'react';
 import { InventoryItem } from '../types';
 import { getFrontendDrop } from '../config/deployment';
 import { dropAssetCount } from '../lib/dropLabels';
@@ -44,6 +44,8 @@ function InventoryMedia({ item }: { item: InventoryItem }) {
           aria-hidden="true"
           hidden
           loading="lazy"
+          draggable={false}
+          onDragStart={(evt) => evt.preventDefault()}
           onError={() => setFigureImageFailed(true)}
         />
         {figureImageFailed ? (
@@ -69,6 +71,8 @@ function InventoryMedia({ item }: { item: InventoryItem }) {
         src={item.image}
         alt={item.name}
         loading="lazy"
+        draggable={false}
+        onDragStart={(evt) => evt.preventDefault()}
         onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
         onError={(evt) => hideImageShowFallback(evt.currentTarget)}
       />
@@ -145,6 +149,8 @@ export function InventoryGrid({
             onClick={handleClick}
             role={canInteract ? 'button' : undefined}
             tabIndex={canInteract ? 0 : undefined}
+            draggable={false}
+            onDragStart={(evt) => evt.preventDefault()}
             aria-pressed={canSelect ? isSelected : undefined}
             onKeyDown={
               canSelect || revealEnabled

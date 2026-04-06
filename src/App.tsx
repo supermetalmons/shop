@@ -358,7 +358,17 @@ function FigureTileImage(props: {
     return <div className="figure-image figure-image--placeholder" aria-hidden="true" />;
   }
 
-  return <img src={activeSrc} alt={alt} loading="lazy" className="figure-image" onError={handleError} />;
+  return (
+    <img
+      src={activeSrc}
+      alt={alt}
+      loading="lazy"
+      className="figure-image"
+      draggable={false}
+      onDragStart={(evt) => evt.preventDefault()}
+      onError={handleError}
+    />
+  );
 }
 
 const MAX_SHIPMENT_ITEMS = 24;
@@ -3383,9 +3393,18 @@ function App({ currentPath }: AppProps) {
                 <div
                   key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
                   className="figure-tile shipment-item-tile"
+                  draggable={false}
+                  onDragStart={(evt) => evt.preventDefault()}
                 >
                   {boxImage ? (
-                    <img src={boxImage} alt={label} loading="lazy" className="figure-image" />
+                    <img
+                      src={boxImage}
+                      alt={label}
+                      loading="lazy"
+                      className="figure-image"
+                      draggable={false}
+                      onDragStart={(evt) => evt.preventDefault()}
+                    />
                   ) : (
                     <div className="figure-image figure-image--placeholder" aria-hidden="true" />
                   )}
@@ -3408,6 +3427,8 @@ function App({ currentPath }: AppProps) {
                 role={canViewPonchoCard ? 'button' : undefined}
                 tabIndex={canViewPonchoCard ? 0 : undefined}
                 aria-label={canViewPonchoCard ? `View ${label}` : undefined}
+                draggable={false}
+                onDragStart={(evt) => evt.preventDefault()}
                 onClick={
                   canViewPonchoCard
                     ? (evt) => {

@@ -14,7 +14,13 @@ export function DropsPanel() {
         <div className="drops-panel__drop">
           <div className="drops-panel__image-wrap">
             {lsbImage ? (
-              <img className="drops-panel__image" src={lsbImage} alt="Little Swag Boxes" />
+              <img
+                className="drops-panel__image"
+                src={lsbImage}
+                alt="Little Swag Boxes"
+                draggable={false}
+                onDragStart={(evt) => evt.preventDefault()}
+              />
             ) : (
               <div className="drops-panel__image drops-panel__image--placeholder" />
             )}
@@ -32,7 +38,13 @@ export function DropsPanel() {
         <div className="drops-panel__drop">
           <div className="drops-panel__image-wrap">
             {ponchoImage ? (
-              <img className="drops-panel__image" src={ponchoImage} alt="Poncho Drifella" />
+              <img
+                className="drops-panel__image"
+                src={ponchoImage}
+                alt="Poncho Drifella"
+                draggable={false}
+                onDragStart={(evt) => evt.preventDefault()}
+              />
             ) : (
               <div className="drops-panel__image drops-panel__image--placeholder" />
             )}
