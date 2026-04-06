@@ -38,7 +38,7 @@ import {
   type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
-import { isLittleSwagBoxesFamilyDropId, joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
+import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
 import {
   dropAssetCount,
   dropAssetLabel,
@@ -78,8 +78,7 @@ import {
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
 } from './types';
-import { type FrontendDeploymentConfig, getFrontendDrop } from './config/deployment';
-import { isPonchoDrifellaFamilyDropId } from './config/dropsExtraContent';
+import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily } from './config/deployment';
 import { getNormalizedPathname, navigate } from './navigation';
 import {
   dropPath,
@@ -106,8 +105,15 @@ function pickRandomSoundUrl(soundUrls: readonly string[]) {
 function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string }>(items: readonly T[]): T[] {
   const leading: T[] = [];
   const trailing: T[] = [];
+  const littleSwagFamilyByDropId = new Map<string, boolean>();
   items.forEach((item) => {
-    if (isLittleSwagBoxesFamilyDropId(item.dropId)) trailing.push(item);
+    const dropId = item.dropId || '';
+    let isLittleSwagFamily = littleSwagFamilyByDropId.get(dropId);
+    if (typeof isLittleSwagFamily !== 'boolean') {
+      isLittleSwagFamily = isDropFamily(dropId, 'little_swag_boxes');
+      littleSwagFamilyByDropId.set(dropId, isLittleSwagFamily);
+    }
+    if (isLittleSwagFamily) trailing.push(item);
     else leading.push(item);
   });
   return trailing.length ? [...leading, ...trailing] : [...leading];
@@ -492,7 +498,7 @@ function calcRevealTargetRectForDrop(
   dropId: string | undefined,
   aspectRatio: number,
 ): OverlayRect {
-  if (isPonchoDrifellaFamilyDropId(dropId)) {
+  if (isDropFamily(dropId, 'poncho_drifella')) {
     return calcPonchoDrifellaRevealTargetRect(viewportWidth, viewportHeight);
   }
   return calcRevealTargetRect(viewportWidth, viewportHeight, aspectRatio);
@@ -2439,7 +2445,7 @@ function App({ currentPath }: AppProps) {
   const selectedPonchoFigure = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
     if (!item || item.kind !== 'dude') return null;
-    if (!isPonchoDrifellaFamilyDropId(item.dropId)) return null;
+    if (!isDropFamily(item.dropId, 'poncho_drifella')) return null;
     if (typeof item.dudeId !== 'number') return null;
     if (!getPonchoDrifellaCardByFigureId(item.dudeId)) return null;
     return item;
@@ -3063,7 +3069,7 @@ function App({ currentPath }: AppProps) {
       clearSelection?: boolean;
     },
   ) => {
-    if (!isPonchoDrifellaFamilyDropId(dropId)) return false;
+    if (!isDropFamily(dropId, 'poncho_drifella')) return false;
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
@@ -3383,6 +3389,7 @@ function App({ currentPath }: AppProps) {
       const dropContent = getDropContent(order.dropId);
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
       const useMediaFolderPreview = dropContent.figures.fulfillmentPreviewMode === 'media_map_folder';
+      const isPonchoFamily = isDropFamily(order.dropId, 'poncho_drifella');
       return (
         <div className="figure-grid shipment-item-grid">
           {order.items.map((item, index) => {
@@ -3417,8 +3424,7 @@ function App({ currentPath }: AppProps) {
             const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
             const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
-            const canViewPonchoCard =
-              isPonchoDrifellaFamilyDropId(order.dropId) && Boolean(getPonchoDrifellaCardByFigureId(item.refId));
+            const canViewPonchoCard = isPonchoFamily && Boolean(getPonchoDrifellaCardByFigureId(item.refId));
 
             return (
               <div
@@ -3489,7 +3495,7 @@ function App({ currentPath }: AppProps) {
         const scaleY = revealOverlay.viewerMode === 'poncho-card'
           ? viewerScale
           : Math.max(0.01, originRect.height / safeTargetHeight);
-        const ponchoCardRect = isPonchoDrifellaFamilyDropId(revealOverlay.dropId)
+        const ponchoCardRect = isDropFamily(revealOverlay.dropId, 'poncho_drifella')
           ? revealOverlay.viewerMode === 'poncho-card'
             ? {
                 left: 0,

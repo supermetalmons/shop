@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
+
 export type FigureMediaConfigSerialized = {
   strategy?: 'direct' | 'cyclic';
   count?: number;
@@ -11,6 +13,7 @@ export type FigureMediaConfigSerialized = {
 export type FrontendDropConfigSerialized = {
   solanaCluster: string;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
   secondaryMarketHref?: string;
@@ -70,6 +73,38 @@ export function normalizeDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  little_swag_boxes: 'little_swag_boxes',
+  little_swag_boxes_devnet: 'little_swag_boxes',
+  poncho_drifella: 'poncho_drifella',
+  poncho_drifella_draft: 'poncho_drifella',
+};
+
+export function defaultDropFamilyForDropId(dropId: string): DropFamily {
+  const normalizedDropId = normalizeDropId(dropId);
+  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
+}
+
+function asDropFamily(value: unknown): DropFamily | undefined {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function requireDropFamily(value: string, label: string): DropFamily {
+  const normalized = asDropFamily(value);
+  if (normalized) return normalized;
+  throw new Error(`Invalid ${label}: ${value} (expected default, little_swag_boxes, or poncho_drifella)`);
+}
+
+export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
+  const normalized = asDropFamily(value);
+  if (normalized) return normalized;
+  return defaultDropFamilyForDropId(dropId || '');
+}
+
 const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
@@ -102,8 +137,6 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
   return parsed;
 }
 
-// Keep family variants such as little_swag_boxes_devnet aligned with the canonical media ids.
-const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
 const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfigSerialized = {
   strategy: 'cyclic',
   count: 333,
@@ -155,13 +188,8 @@ function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigS
   };
 }
 
-function isLittleSwagBoxesFamilyDropId(dropId: string): boolean {
-  const normalizedDropId = normalizeDropId(dropId);
-  return normalizedDropId === LITTLE_SWAG_BOXES_DROP_ID_PREFIX || normalizedDropId.startsWith(`${LITTLE_SWAG_BOXES_DROP_ID_PREFIX}_`);
-}
-
-export function defaultFrontendFigureMediaForDropId(dropId: string): FigureMediaConfigSerialized | undefined {
-  if (!isLittleSwagBoxesFamilyDropId(dropId)) return undefined;
+export function defaultFrontendFigureMediaForDropFamily(dropFamily: DropFamily): FigureMediaConfigSerialized | undefined {
+  if (dropFamily !== 'little_swag_boxes') return undefined;
   return normalizeFigureMediaConfigForRegistry(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
@@ -170,14 +198,16 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const obj = raw as Record<string, unknown>;
   const dropId = normalizeDropId(asTrimmedString(obj.dropId));
   if (!dropId) return undefined;
+  const dropFamily = normalizeDropFamily(obj.dropFamily, dropId);
   const metadataBase = asTrimmedString(obj.metadataBase) || asTrimmedString((obj.paths as any)?.base);
   const secondaryMarketHref = asTrimmedString(obj.secondaryMarketHref);
   const defaultMarketHref = defaultSecondaryMarketHref(dropId);
-  const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropId(dropId);
+  const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropFamily(dropFamily);
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
+    dropFamily,
     collectionName: asTrimmedString(obj.collectionName) || dropId,
     metadataBase: normalizeDropBase(metadataBase),
     ...(secondaryMarketHref && secondaryMarketHref !== defaultMarketHref ? { secondaryMarketHref } : {}),
@@ -304,6 +334,7 @@ function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
   return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
+    dropFamily: ${tsStringLiteral(drop.dropFamily)},
     collectionName: ${tsStringLiteral(drop.collectionName)},
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -333,6 +364,7 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
   return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
+    dropFamily: ${tsStringLiteral(drop.dropFamily)},
     collectionName: ${tsStringLiteral(drop.collectionName)},
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -389,6 +421,7 @@ export function renderFrontendDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
 
@@ -401,6 +434,7 @@ export type FigureMediaConfig = {
 export type FrontendDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
@@ -452,6 +486,26 @@ export function normalizeDropBase(base: string): string {
 
 export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
+}
+
+const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  little_swag_boxes: 'little_swag_boxes',
+  little_swag_boxes_devnet: 'little_swag_boxes',
+  poncho_drifella: 'poncho_drifella',
+  poncho_drifella_draft: 'poncho_drifella',
+};
+
+export function defaultDropFamilyForDropId(dropId: string): DropFamily {
+  const normalizedDropId = normalizeDropId(dropId);
+  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
+}
+
+export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+    return normalized as DropFamily;
+  }
+  return defaultDropFamilyForDropId(dropId || '');
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -506,8 +560,6 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
   };
 }
 
-// Keep family variants such as little_swag_boxes_devnet aligned with the canonical media ids.
-const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
 const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   strategy: 'cyclic',
   count: 333,
@@ -539,11 +591,8 @@ const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   },
 };
 
-function defaultFigureMediaConfigForDropId(dropId: string): FigureMediaConfig | undefined {
-  const normalizedDropId = normalizeDropId(dropId);
-  if (normalizedDropId !== LITTLE_SWAG_BOXES_DROP_ID_PREFIX && !normalizedDropId.startsWith(LITTLE_SWAG_BOXES_DROP_ID_PREFIX + '_')) {
-    return undefined;
-  }
+function defaultFigureMediaConfigForDropFamily(dropFamily: DropFamily): FigureMediaConfig | undefined {
+  if (dropFamily !== 'little_swag_boxes') return undefined;
   return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
@@ -561,11 +610,13 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 
 function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'> & { dropId: string }): FrontendDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
-  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropId(normalizedDropId);
+  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
+  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
+    dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
@@ -581,6 +632,21 @@ ${registrySection}
 export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);
   return FRONTEND_DROPS[normalizedDropId];
+}
+
+export function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
+  const drop =
+    typeof dropOrId === 'string'
+      ? getFrontendDrop(dropOrId)
+      : dropOrId && typeof dropOrId === 'object'
+        ? dropOrId
+        : undefined;
+  const fallbackDropId = typeof dropOrId === 'string' ? dropOrId : drop?.dropId;
+  return normalizeDropFamily(drop?.dropFamily, fallbackDropId);
+}
+
+export function isDropFamily(dropOrId: FrontendDropConfig | string | undefined, dropFamily: DropFamily): boolean {
+  return dropFamilyForDrop(dropOrId) === dropFamily;
 }
 
 export function requireFrontendDrop(dropId: string): FrontendDropConfig {
@@ -628,10 +694,12 @@ export function renderFunctionsDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
 
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
@@ -681,6 +749,26 @@ export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
 
+const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  little_swag_boxes: 'little_swag_boxes',
+  little_swag_boxes_devnet: 'little_swag_boxes',
+  poncho_drifella: 'poncho_drifella',
+  poncho_drifella_draft: 'poncho_drifella',
+};
+
+export function defaultDropFamilyForDropId(dropId: string): DropFamily {
+  const normalizedDropId = normalizeDropId(dropId);
+  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
+}
+
+export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+    return normalized as DropFamily;
+  }
+  return defaultDropFamilyForDropId(dropId || '');
+}
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -701,9 +789,11 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
+  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
+    dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),

@@ -1,3 +1,5 @@
+import type { DropFamily } from './shared/deploymentRegistry.ts';
+
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 export type NewDropDeployConfig = {
@@ -9,6 +11,7 @@ export type NewDropDeployConfig = {
 
 export type NewDropOnchainConfig = {
   dropId: string;
+  dropFamily: DropFamily;
   metadataBase: string;
   collectionMetadata: {
     name: string;
@@ -61,6 +64,7 @@ export const NEW_DROP: NewDropConfig = {
   },
   onchain: {
     dropId: '',
+    dropFamily: 'default',
     metadataBase: 'https://assets.mons.link/drops/test/green',
     collectionMetadata: {
       name: 'green test',

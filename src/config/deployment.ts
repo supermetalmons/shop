@@ -11,6 +11,7 @@
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
 
@@ -23,6 +24,7 @@ export type FigureMediaConfig = {
 export type FrontendDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
@@ -74,6 +76,26 @@ export function normalizeDropBase(base: string): string {
 
 export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
+}
+
+const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  little_swag_boxes: 'little_swag_boxes',
+  little_swag_boxes_devnet: 'little_swag_boxes',
+  poncho_drifella: 'poncho_drifella',
+  poncho_drifella_draft: 'poncho_drifella',
+};
+
+export function defaultDropFamilyForDropId(dropId: string): DropFamily {
+  const normalizedDropId = normalizeDropId(dropId);
+  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
+}
+
+export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+    return normalized as DropFamily;
+  }
+  return defaultDropFamilyForDropId(dropId || '');
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -128,8 +150,6 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
   };
 }
 
-// Keep family variants such as `little_swag_boxes_devnet` aligned with the canonical media ids.
-const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
 const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   strategy: 'cyclic',
   count: 333,
@@ -161,11 +181,8 @@ const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   },
 };
 
-function defaultFigureMediaConfigForDropId(dropId: string): FigureMediaConfig | undefined {
-  const normalizedDropId = normalizeDropId(dropId);
-  if (normalizedDropId !== LITTLE_SWAG_BOXES_DROP_ID_PREFIX && !normalizedDropId.startsWith(`${LITTLE_SWAG_BOXES_DROP_ID_PREFIX}_`)) {
-    return undefined;
-  }
+function defaultFigureMediaConfigForDropFamily(dropFamily: DropFamily): FigureMediaConfig | undefined {
+  if (dropFamily !== 'little_swag_boxes') return undefined;
   return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
@@ -183,11 +200,13 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 
 function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'> & { dropId: string }): FrontendDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
-  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropId(normalizedDropId);
+  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
+  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
+    dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
@@ -203,6 +222,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
   "little_swag_boxes": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
+    dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -260,6 +280,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
   "little_swag_boxes_devnet": createFrontendDrop({
     solanaCluster: "devnet",
     dropId: "little_swag_boxes_devnet",
+    dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -316,6 +337,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
   "poncho_drifella": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
+    dropFamily: "poncho_drifella",
     collectionName: "Poncho Drifella",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -343,6 +365,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
   "poncho_drifella_draft": createFrontendDrop({
     solanaCluster: "devnet",
     dropId: "poncho_drifella_draft",
+    dropFamily: "poncho_drifella",
     collectionName: "Poncho Drifella",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -372,6 +395,21 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
 export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);
   return FRONTEND_DROPS[normalizedDropId];
+}
+
+export function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
+  const drop =
+    typeof dropOrId === 'string'
+      ? getFrontendDrop(dropOrId)
+      : dropOrId && typeof dropOrId === 'object'
+        ? dropOrId
+        : undefined;
+  const fallbackDropId = typeof dropOrId === 'string' ? dropOrId : drop?.dropId;
+  return normalizeDropFamily(drop?.dropFamily, fallbackDropId);
+}
+
+export function isDropFamily(dropOrId: FrontendDropConfig | string | undefined, dropFamily: DropFamily): boolean {
+  return dropFamilyForDrop(dropOrId) === dropFamily;
 }
 
 export function requireFrontendDrop(dropId: string): FrontendDropConfig {

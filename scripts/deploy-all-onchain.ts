@@ -8,11 +8,13 @@ import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
 import { NEW_DROP, type SolanaCluster } from './newDrop.ts';
 import {
-  defaultFrontendFigureMediaForDropId,
+  defaultFrontendFigureMediaForDropFamily,
   readFrontendDropRegistry,
   readFunctionsDropRegistry,
+  requireDropFamily,
   writeFrontendDeploymentRegistryFile,
   writeFunctionsDeploymentRegistryFile,
+  type DropFamily,
   type FrontendDropConfigSerialized,
   type FunctionsDropConfigSerialized,
 } from './shared/deploymentRegistry.ts';
@@ -818,6 +820,7 @@ async function writeFrontendDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
   treasury: string;
@@ -845,10 +848,12 @@ async function writeFrontendDeploymentConfig(args: {
   }
   const nextDrops = { ...existing.drops };
   const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
-  const figureMedia = defaultFrontendFigureMediaForDropId(normalizedDropId);
+  const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
+  const figureMedia = defaultFrontendFigureMediaForDropFamily(dropFamily);
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
+    dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
     ...(figureMedia ? { figureMedia } : {}),
@@ -874,6 +879,7 @@ async function writeFunctionsDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
   treasury: string;
@@ -903,9 +909,11 @@ async function writeFunctionsDeploymentConfig(args: {
   }
   const nextDrops = { ...existing.drops };
   const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
+  const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
+    dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
     treasury: args.treasury,
@@ -1916,6 +1924,7 @@ async function main() {
   const deployCfg = NEW_DROP.deploy;
   const dropCfg = NEW_DROP.onchain;
   const dropId = requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId');
+  const dropFamily = requireDropFamily(dropCfg.dropFamily, 'NEW_DROP.onchain.dropFamily');
   await assertDropIdNotConfiguredInDeploymentFiles({
     dropId,
     frontendConfigPath: frontendDeploymentCfgPath,
@@ -2323,6 +2332,7 @@ async function main() {
     root,
     solanaCluster: cluster,
     dropId,
+    dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),
@@ -2343,6 +2353,7 @@ async function main() {
     root,
     solanaCluster: cluster,
     dropId,
+    dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
     treasury: treasury.toBase58(),

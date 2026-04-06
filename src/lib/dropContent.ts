@@ -1,4 +1,4 @@
-import { type FrontendDropConfig, getFrontendDrop, normalizeDropId } from '../config/deployment';
+import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId } from '../config/deployment';
 import {
   getDropExtraContentOverride,
   type DropExtraContentOverride,
@@ -33,7 +33,6 @@ export type ResolvedDropContent = {
 };
 
 const LEGACY_BOX_ASPECT_RATIO = 1440 / 1030;
-const LITTLE_SWAG_BOXES_DROP_ID_PREFIX = 'little_swag_boxes';
 const DEFAULT_DROP_REVEAL_SOUND_PROFILE: DropRevealSoundProfile = {
   clickVolume: 0.42,
   revealVolume: 0.42,
@@ -114,14 +113,6 @@ function mergeFrameSequence(
     mediaStart,
     ...(hasExplicitFrames ? { frames } : { baseUrl, ext }),
   };
-}
-
-export function isLittleSwagBoxesFamilyDropId(dropId?: string): boolean {
-  const normalizedDropId = normalizeDropId(dropId || '');
-  return (
-    normalizedDropId === LITTLE_SWAG_BOXES_DROP_ID_PREFIX ||
-    normalizedDropId.startsWith(`${LITTLE_SWAG_BOXES_DROP_ID_PREFIX}_`)
-  );
 }
 
 function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropContent {
@@ -223,7 +214,7 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
   if (cached) return cached;
 
   const base = drop
-    ? isLittleSwagBoxesFamilyDropId(drop.dropId)
+    ? isDropFamily(drop, 'little_swag_boxes')
       ? defaultAnimatedDropContent(drop)
       : defaultStaticDropContent()
     : defaultStaticDropContent();

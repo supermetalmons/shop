@@ -10,10 +10,12 @@
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
 
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
+  dropFamily: DropFamily;
   collectionName: string;
 
   // Drop metadata base (collection.json + json/* + images/*)
@@ -63,6 +65,26 @@ export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
 
+const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  little_swag_boxes: 'little_swag_boxes',
+  little_swag_boxes_devnet: 'little_swag_boxes',
+  poncho_drifella: 'poncho_drifella',
+  poncho_drifella_draft: 'poncho_drifella',
+};
+
+export function defaultDropFamilyForDropId(dropId: string): DropFamily {
+  const normalizedDropId = normalizeDropId(dropId);
+  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
+}
+
+export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+    return normalized as DropFamily;
+  }
+  return defaultDropFamilyForDropId(dropId || '');
+}
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -83,9 +105,11 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
+  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   return {
     ...config,
     dropId: normalizedDropId,
+    dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
@@ -97,6 +121,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   "little_swag_boxes": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
+    dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -124,6 +149,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   "little_swag_boxes_devnet": createFunctionsDrop({
     solanaCluster: "devnet",
     dropId: "little_swag_boxes_devnet",
+    dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -151,6 +177,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   "poncho_drifella": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
+    dropFamily: "poncho_drifella",
     collectionName: "Poncho Drifella",
 
     // Drop metadata base (collection.json + json/* + images/*)
@@ -178,6 +205,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   "poncho_drifella_draft": createFunctionsDrop({
     solanaCluster: "devnet",
     dropId: "poncho_drifella_draft",
+    dropFamily: "poncho_drifella",
     collectionName: "Poncho Drifella",
 
     // Drop metadata base (collection.json + json/* + images/*)

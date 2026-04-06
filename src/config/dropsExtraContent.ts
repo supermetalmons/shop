@@ -1,5 +1,5 @@
 import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal';
-import { FRONTEND_DROPS, normalizeDropId } from './deployment';
+import { isDropFamily, normalizeDropId } from './deployment';
 
 export type DropRevealMode = 'animated' | 'static';
 export type DropRevealRenderer = 'default' | 'poncho_drifella';
@@ -43,11 +43,6 @@ export type DropExtraContentOverride = {
   };
 };
 
-function dropBase(dropId: string): string {
-  return FRONTEND_DROPS[normalizeDropId(dropId)]?.paths.base || '';
-}
-
-const PONCHO_DRIFELLA_DROP_ID_PREFIX = normalizeDropId('Poncho_Drifella');
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
@@ -73,15 +68,10 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
 };
 
-export function isPonchoDrifellaFamilyDropId(dropId?: string): boolean {
-  const normalizedDropId = normalizeDropId(dropId || '');
-  return normalizedDropId.startsWith(PONCHO_DRIFELLA_DROP_ID_PREFIX);
-}
-
 export function getDropExtraContentOverride(dropId?: string): DropExtraContentOverride | undefined {
   const normalizedDropId = normalizeDropId(dropId || '');
   if (!normalizedDropId) return undefined;
   return DROPS_EXTRA_CONTENT[normalizedDropId] || (
-    isPonchoDrifellaFamilyDropId(normalizedDropId) ? PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT : undefined
+    isDropFamily(normalizedDropId, 'poncho_drifella') ? PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT : undefined
   );
 }
