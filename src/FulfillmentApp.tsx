@@ -243,6 +243,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [showAllOrders, setShowAllOrders] = useState(false);
   const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
@@ -399,11 +400,19 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setFigureMetadataByKey((prev) => mergeFigureMetadataRecords(prev, records));
   }, []);
 
+  const displayedOrders = useMemo(
+    () =>
+      showAllOrders
+        ? orders
+        : orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped'),
+    [orders, showAllOrders],
+  );
+
   const fulfillmentFigureMetadataTargets = useMemo(() => {
     if (!selectedDrop) return [];
     const shouldUseMetadataFallback = selectedDropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
     const targets = new Map<string, { dropId: string; figureId: number }>();
-    orders.forEach((order) => {
+    displayedOrders.forEach((order) => {
       [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)].forEach((figureId) => {
         const normalizedFigureId = Math.floor(Number(figureId));
         if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
@@ -421,9 +430,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     });
     return Array.from(targets.values());
   }, [
+    displayedOrders,
     figureMediaBase,
     figureMetadataByKey,
-    orders,
     selectedDrop?.dropId,
     selectedDrop?.figureMedia,
     selectedDropContent.figures.fulfillmentPreviewMode,
@@ -614,7 +623,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           </section>
         ) : (
           <section className="orders">
-            <div className="row">
+            <div className="row fulfillment-orders-toolbar">
               <select
                 id="fulfillment-drop-picker"
                 className="fulfillment-drop-picker"
@@ -631,12 +640,22 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   </option>
                 ))}
               </select>
+              <button
+                type="button"
+                className="ghost small fulfillment-orders-toggle"
+                aria-pressed={showAllOrders}
+                onClick={() => {
+                  setShowAllOrders((prev) => !prev);
+                }}
+              >
+                {showAllOrders ? 'show only pending' : 'show all'}
+              </button>
             </div>
-            {selectedDrop && loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
+            {selectedDrop && loading && !displayedOrders.length ? <div className="muted small">Loading orders…</div> : null}
             {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
-            {selectedDrop && orders.length ? (
+            {selectedDrop && displayedOrders.length ? (
               <div className="order-list">
-                {orders.map((order) => (
+                {displayedOrders.map((order) => (
                   <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="card subtle">
                     <div className="card__head">
                       <div>
@@ -730,7 +749,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 ))}
               </div>
             ) : selectedDrop && loading ? null : selectedDrop ? (
-              <div className="muted small">No orders ready for fulfillment.</div>
+              <div className="muted small">
+                {showAllOrders ? 'No orders ready for fulfillment.' : 'No pending orders ready for fulfillment.'}
+              </div>
             ) : null}
 
             {selectedDrop && loadingMore ? <div className="muted small">Loading more…</div> : null}
