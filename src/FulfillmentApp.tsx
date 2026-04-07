@@ -741,8 +741,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
       <Modal
         open={activeUpdateOrderId !== null}
-        title="Fulfillment status"
+        title={activeUpdateOrder ? `Order ${activeUpdateOrder.deliveryId}` : 'Order'}
         onClose={handleCancelUpdate}
+        showCloseButton={false}
       >
         <div className="modal-form">
           <select
@@ -771,7 +772,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               onClick={() => void handleSaveActiveUpdate()}
               disabled={!activeUpdateOrder || activeUpdateSaving || !activeUpdateDirty}
             >
-              {activeUpdateSaving ? 'Saving…' : activeUpdateDirty ? 'Save status' : 'Saved'}
+              Save
             </button>
           </div>
         </div>

@@ -4,10 +4,11 @@ interface ModalProps {
   open: boolean;
   title: string;
   onClose: () => void;
+  showCloseButton?: boolean;
   children: ReactNode;
 }
 
-export function Modal({ open, title, onClose, children }: ModalProps) {
+export function Modal({ open, title, onClose, showCloseButton = true, children }: ModalProps) {
   useEffect(() => {
     if (!open) return;
 
@@ -37,14 +38,15 @@ export function Modal({ open, title, onClose, children }: ModalProps) {
       <div className="modal card" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal__head">
           <div className="card__title">{title}</div>
-          <button type="button" className="ghost" onClick={onClose}>
-            Close
-          </button>
+          {showCloseButton ? (
+            <button type="button" className="ghost" onClick={onClose}>
+              Close
+            </button>
+          ) : null}
         </div>
         {children}
       </div>
     </div>
   );
 }
-
 
