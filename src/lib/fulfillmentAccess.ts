@@ -1,6 +1,5 @@
 export const ADMIN_WALLETS = new Set<string>([
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
 ]);
 
 export const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>([
