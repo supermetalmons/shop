@@ -22,7 +22,6 @@ import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 const ADMIN_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
 ]);
 
 const PAGE_SIZE = 20;

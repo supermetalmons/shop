@@ -390,7 +390,6 @@ const DEFAULT_BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.
 const ADMIN_WALLETS = new Set<string>([
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
 ]);
 const ADMIN_OWNER_DOC_PAGE_SIZE = 200;
 const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
