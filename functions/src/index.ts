@@ -298,14 +298,34 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
   return { uid, wallet: normalizeWallet(wallet) };
 }
 
-const SHIPPER_WALLETS = new Set<string>();
+const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
 [
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-].forEach((raw) => {
+  {
+    wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    dropIds: ['little_swag_boxes', 'poncho_drifella'],
+  },
+  {
+    wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+    dropIds: ['poncho_drifella'],
+  },
+  {
+    wallet: '5aQv5wR9KWPwHxtiChKk877BPHpb4FJZhsDhi5bisUkk',
+    dropIds: ['little_swag_boxes'],
+  },
+].forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
   try {
-    SHIPPER_WALLETS.add(new PublicKey(raw).toBase58());
+    const wallet = new PublicKey(rawWallet).toBase58();
+    const normalizedDropIds = SHIPPER_DROP_IDS_BY_WALLET.get(wallet) || new Set<string>();
+    rawDropIds.forEach((rawDropId) => {
+      const dropId = normalizeDropId(rawDropId);
+      if (!DROP_RUNTIMES[dropId]) {
+        throw new Error(`Unsupported shipper dropId: ${dropId}`);
+      }
+      normalizedDropIds.add(dropId);
+    });
+    SHIPPER_DROP_IDS_BY_WALLET.set(wallet, normalizedDropIds);
   } catch (err) {
-    console.error('[mons/functions] invalid shipper wallet', raw, summarizeError(err));
+    console.error('[mons/functions] invalid shipper fulfillment access config', { rawWallet, rawDropIds, error: summarizeError(err) });
   }
 });
 
@@ -321,9 +341,18 @@ const ADMIN_WALLETS = new Set<string>();
   }
 });
 
-async function requireFulfillmentAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
+function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
+  if (ADMIN_WALLETS.has(wallet)) return true;
+  return Boolean(SHIPPER_DROP_IDS_BY_WALLET.get(wallet)?.has(dropId));
+}
+
+function canViewSensitiveFulfillmentAddress(wallet: string, dropId: string): boolean {
+  return !ADMIN_WALLETS.has(wallet) && hasFulfillmentDropAccess(wallet, dropId);
+}
+
+async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: string): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
-  if (!ADMIN_WALLETS.has(wallet)) {
+  if (!hasFulfillmentDropAccess(wallet, dropId)) {
     throw new HttpsError('permission-denied', 'Fulfillment access denied.');
   }
   return { uid, wallet };
@@ -335,10 +364,6 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
     throw new HttpsError('permission-denied', 'Admin access denied.');
   }
   return { uid, wallet };
-}
-
-function shouldSkipRuntimeForWallet(wallet: string, dropRuntime: Pick<DropRuntime, 'cluster'>): boolean {
-  return dropRuntime.cluster === 'devnet' && !ADMIN_WALLETS.has(wallet);
 }
 
 // MPL Core program id (uncompressed Core assets).
@@ -3112,8 +3137,6 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
 export const listFulfillmentOrders = onCallLogged(
   'listFulfillmentOrders',
   async (request) => {
-    const { wallet } = await requireFulfillmentAccess(request);
-    const canViewSensitiveAddress = SHIPPER_WALLETS.has(wallet);
     const schema = z.object({
       dropId: z.string().min(1).max(64),
       limit: z.number().int().min(1).max(50).optional(),
@@ -3130,10 +3153,8 @@ export const listFulfillmentOrders = onCallLogged(
     });
     const { dropId: requestDropId, limit = 20, cursor } = parseRequest(schema, request.data);
     const dropId = requireDropId(requestDropId);
-    const dropRuntime = getDropRuntime(dropId);
-    if (shouldSkipRuntimeForWallet(wallet, dropRuntime)) {
-      return { orders: [], nextCursor: null };
-    }
+    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
+    const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
 
     let query = db
       .collection(dropDeliveryOrdersCollectionPath(dropId))
@@ -3149,7 +3170,7 @@ export const listFulfillmentOrders = onCallLogged(
 
     const snap = await query.get();
     const orders = snap.docs
-      .map((doc) => toFulfillmentOrder(doc.id, doc.data(), { canViewSensitiveAddress }))
+      .map((doc) => toFulfillmentOrder(doc.id, doc.data(), { canViewSensitiveAddress: allowSensitiveAddressView }))
       .filter((entry): entry is FulfillmentOrder => Boolean(entry));
 
     const last = snap.docs[snap.docs.length - 1];
@@ -3167,7 +3188,6 @@ export const listFulfillmentOrders = onCallLogged(
 );
 
 export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {
-  const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
     dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
@@ -3175,6 +3195,7 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
   });
   const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
+  const { wallet } = await requireFulfillmentDropAccess(request, dropId);
   const nextStatus = status || '';
 
   const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
@@ -3199,7 +3220,6 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
 });
 
 export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {
-  const { wallet } = await requireFulfillmentAccess(request);
   const schema = z.object({
     dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
@@ -3207,6 +3227,7 @@ export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentIn
   });
   const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
+  const { wallet } = await requireFulfillmentDropAccess(request, dropId);
 
   const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
   const snap = await orderRef.get();

@@ -19,14 +19,24 @@ import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
+const PAGE_SIZE = 20;
+const FIGURE_METADATA_RETRY_MS = 3000;
+const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ADMIN_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
 ]);
+const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>([
+  ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ['little_swag_boxes', 'poncho_drifella']],
+  ['AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', ['poncho_drifella']],
+  ['5aQv5wR9KWPwHxtiChKk877BPHpb4FJZhsDhi5bisUkk', ['little_swag_boxes']],
+]);
 
-const PAGE_SIZE = 20;
-const FIGURE_METADATA_RETRY_MS = 3000;
-const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
+function listAllowedFulfillmentDropIds(wallet: string, dropIds: string[]): string[] {
+  if (!wallet) return [];
+  if (ADMIN_WALLETS.has(wallet)) return dropIds;
+  return SHIPPER_DROP_IDS_BY_WALLET.get(wallet) || [];
+}
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
   return value === 'Preparing' || value === 'Shipped' ? value : '';
@@ -211,20 +221,29 @@ type FulfillmentAppProps = {
 };
 
 export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange }: FulfillmentAppProps) {
-  const drops = useMemo(() => listFrontendDrops(), []);
-  const selectedDrop = useMemo(
-    () => drops.find((drop) => drop.dropId === selectedDropId) || null,
-    [drops, selectedDropId],
-  );
-  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
-  const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
+  const allDrops = useMemo(() => listFrontendDrops(), []);
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
   const { profile, signIn, loading: authLoading, error: authError } = useSolanaAuth();
   const walletAddress = publicKey?.toBase58() || '';
-  const allowed = walletAddress ? ADMIN_WALLETS.has(walletAddress) : false;
+  const allowedDropIds = useMemo(
+    () => listAllowedFulfillmentDropIds(walletAddress, allDrops.map((drop) => drop.dropId)),
+    [allDrops, walletAddress],
+  );
+  const visibleDrops = useMemo(() => {
+    const allowedDropIdsSet = new Set(allowedDropIds);
+    return allDrops.filter((drop) => allowedDropIdsSet.has(drop.dropId));
+  }, [allowedDropIds, allDrops]);
+  const selectedDrop = useMemo(
+    () => visibleDrops.find((drop) => drop.dropId === selectedDropId) || null,
+    [visibleDrops, selectedDropId],
+  );
+  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
+  const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
+  const walletHasFulfillmentAccess = visibleDrops.length > 0;
+  const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
   const walletBusy = walletAdapter.connecting || walletAdapter.disconnecting;
   const walletReadyState = walletAdapter.wallet?.readyState;
   const autoConnectPossible =
@@ -286,6 +305,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     }
   }, [authLoading, profile?.wallet, walletAddress]);
 
+  useEffect(() => {
+    if (!walletAddress) {
+      if (selectedDropId) onSelectedDropIdChange('');
+      return;
+    }
+    if (!visibleDrops.length) {
+      if (selectedDropId) onSelectedDropIdChange('');
+      return;
+    }
+    if (!visibleDrops.some((drop) => drop.dropId === selectedDropId)) {
+      onSelectedDropIdChange(visibleDrops[0].dropId);
+    }
+  }, [onSelectedDropIdChange, selectedDropId, visibleDrops, walletAddress]);
+
   const mergeStatusEdits = useCallback((incoming: FulfillmentOrder[]) => {
     setStatusEdits((prev) => {
       const next = { ...prev };
@@ -299,7 +332,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, []);
 
   const loadInitial = useCallback(async () => {
-    if (!allowed || !signedIn || !selectedDrop) {
+    if (!hasFulfillmentAccess || !signedIn || !selectedDrop) {
       orderRequestEpochRef.current += 1;
       setLoading(false);
       setLoadingMore(false);
@@ -340,10 +373,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoading(false);
       }
     }
-  }, [allowed, signedIn, mergeStatusEdits, selectedDrop]);
+  }, [hasFulfillmentAccess, signedIn, mergeStatusEdits, selectedDrop]);
 
   const loadMore = useCallback(async () => {
-    if (!allowed || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
+    if (!hasFulfillmentAccess || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
     const requestEpoch = orderRequestEpochRef.current;
     setLoadingMore(true);
     setOrdersError(null);
@@ -369,7 +402,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoadingMore(false);
       }
     }
-  }, [allowed, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits]);
+  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits]);
 
   useEffect(() => {
     void loadInitial();
@@ -436,7 +469,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !allowed || !signedIn || !selectedDrop) return;
+    if (!node || !hasFulfillmentAccess || !signedIn || !selectedDrop) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
@@ -447,11 +480,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [allowed, signedIn, selectedDrop, loadMore]);
+  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadMore]);
 
   const handleSaveStatus = useCallback(
     async (deliveryId: number) => {
-      if (!allowed || !signedIn || !selectedDrop) return false;
+      if (!hasFulfillmentAccess || !signedIn || !selectedDrop) return false;
       const requestEpoch = orderRequestEpochRef.current;
       setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
       setOrdersError(null);
@@ -478,7 +511,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         }
       }
     },
-    [allowed, signedIn, selectedDrop, statusEdits],
+    [hasFulfillmentAccess, signedIn, selectedDrop, statusEdits],
   );
 
   const statusDirty = useMemo(() => {
@@ -534,20 +567,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setWalletModalVisible(true);
       return;
     }
-    if (!allowed || signedIn) return;
+    if (!walletHasFulfillmentAccess || signedIn) return;
     void signIn();
-  }, [allowed, authLoading, publicKey, setWalletModalVisible, signIn, signedIn]);
+  }, [authLoading, publicKey, setWalletModalVisible, signIn, signedIn, walletHasFulfillmentAccess]);
 
   useEffect(() => {
     if (!pendingSignIn || !publicKey) return;
-    if (!allowed || signedIn) {
+    if (!walletHasFulfillmentAccess || signedIn) {
       setPendingSignIn(false);
       return;
     }
     if (authLoading) return;
     setPendingSignIn(false);
     void signIn();
-  }, [allowed, authLoading, pendingSignIn, publicKey, signIn, signedIn]);
+  }, [authLoading, pendingSignIn, publicKey, signIn, signedIn, walletHasFulfillmentAccess]);
 
   useEffect(() => {
     if (!pendingSignIn || walletModalVisible || publicKey) return;
@@ -575,14 +608,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         </div>
       </header>
 
-      {!walletBusy && walletReady && (walletAddress ? (!allowed || authReady) : true) ? (
+      {!walletBusy && walletReady && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : true) ? (
         !walletAddress ? (
           <section className="card">
             <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>
               {authLoading ? 'Signing in…' : 'Sign in with Solana'}
             </button>
           </section>
-        ) : !allowed ? (
+        ) : !walletHasFulfillmentAccess ? (
           <section className="card">
             <div className="card__title">Access denied</div>
             <p className="muted small">This wallet is not authorized for fulfillment.</p>
@@ -606,7 +639,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 }}
               >
                 <option value="">Select a drop</option>
-                {drops.map((drop) => (
+                {visibleDrops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
                     {drop.dropId}
                   </option>
