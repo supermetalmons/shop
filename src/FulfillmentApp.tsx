@@ -54,6 +54,7 @@ function listOrderFigureIds(order: FulfillmentOrder): number[] {
 }
 
 type DuplicateFigureSummary = {
+  groupKey: string;
   figureId: number;
   labelId: string;
   count: number;
@@ -64,8 +65,9 @@ function summarizeDuplicateFigures(args: {
   orders: FulfillmentOrder[];
   previewMode: 'media_map_folder' | 'metadata_stills';
   figureMedia?: FigureMediaConfig;
+  minimumCount?: number;
 }): DuplicateFigureSummary[] {
-  const { orders, previewMode, figureMedia } = args;
+  const { orders, previewMode, figureMedia, minimumCount = 2 } = args;
   const grouped = new Map<string, DuplicateFigureSummary>();
 
   orders.forEach((order) => {
@@ -88,6 +90,7 @@ function summarizeDuplicateFigures(args: {
       }
 
       grouped.set(key, {
+        groupKey: key,
         figureId,
         labelId,
         count: 1,
@@ -97,7 +100,7 @@ function summarizeDuplicateFigures(args: {
   });
 
   return Array.from(grouped.values())
-    .filter((entry) => entry.count > 1)
+    .filter((entry) => entry.count >= minimumCount)
     .sort((a, b) => b.count - a.count || a.sortValue - b.sortValue || a.figureId - b.figureId);
 }
 
@@ -482,8 +485,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     [orderVisibilityFilter, orders],
   );
 
-  const duplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop) return [];
+  const allDuplicateFigures = useMemo(() => {
+    if (!isLittleSwagBoxesDrop || !selectedDrop || !orders.length) return [];
     return summarizeDuplicateFigures({
       orders,
       previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
@@ -492,6 +495,36 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [
     isLittleSwagBoxesDrop,
     orders,
+    selectedDrop,
+    selectedDrop?.figureMedia,
+    selectedDropContent.figures.fulfillmentPreviewMode,
+  ]);
+
+  const duplicateFigures = useMemo(() => {
+    if (!isLittleSwagBoxesDrop || !selectedDrop || orderVisibilityFilter === 'shipped') return [];
+    if (orderVisibilityFilter === 'all') return allDuplicateFigures;
+    if (!displayedOrders.length || !allDuplicateFigures.length) return [];
+
+    const remainingDuplicates = summarizeDuplicateFigures({
+      orders: displayedOrders,
+      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+      figureMedia: selectedDrop.figureMedia,
+      minimumCount: 1,
+    });
+    const remainingCountByGroupKey = new Map(remainingDuplicates.map((entry) => [entry.groupKey, entry.count]));
+
+    return allDuplicateFigures
+      .map((entry) => {
+        const remainingCount = remainingCountByGroupKey.get(entry.groupKey) ?? 0;
+        if (remainingCount < 1) return null;
+        return { ...entry, count: remainingCount };
+      })
+      .filter((entry): entry is DuplicateFigureSummary => Boolean(entry));
+  }, [
+    allDuplicateFigures,
+    displayedOrders,
+    isLittleSwagBoxesDrop,
+    orderVisibilityFilter,
     selectedDrop,
     selectedDrop?.figureMedia,
     selectedDropContent.figures.fulfillmentPreviewMode,
