@@ -614,9 +614,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 ))}
               </select>
             </div>
-            {!selectedDrop ? (
-              <div className="muted small">Choose a drop to load fulfillment orders.</div>
-            ) : null}
             {selectedDrop && loading && !orders.length ? <div className="muted small">Loading orders…</div> : null}
             {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
             {selectedDrop && orders.length ? (

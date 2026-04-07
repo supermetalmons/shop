@@ -3944,7 +3944,7 @@ function App({ currentPath }: AppProps) {
                       setOwnerPickerOpened(true);
                     }}
                   >
-                    address override
+                    override address
                   </button>
                 ) : null}
                 {ownerPickerOpened ? (
