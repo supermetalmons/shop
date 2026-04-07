@@ -6,6 +6,7 @@ export const ADMIN_WALLETS = new Set<string>([
 export const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>([
   ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ['little_swag_boxes', 'poncho_drifella']],
   ['AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', ['poncho_drifella']],
+  ['A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz', ['little_swag_boxes', 'poncho_drifella']],
 ]);
 
 export function hasFulfillmentAppAccess(wallet: string | null | undefined): boolean {

@@ -311,6 +311,10 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
     wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
     dropIds: ['poncho_drifella'],
   },
+  {
+    wallet: 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+    dropIds: ['little_swag_boxes', 'poncho_drifella'],
+  },
 ].forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
   try {
     const wallet = new PublicKey(rawWallet).toBase58();
