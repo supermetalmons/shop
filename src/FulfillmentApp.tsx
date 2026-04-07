@@ -25,10 +25,12 @@ const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
+  { value: 'shipped', label: 'Shipped' },
   { value: 'all', label: 'All' },
 ] as const;
 
 type OrderVisibilityFilter = (typeof ORDER_VISIBILITY_OPTIONS)[number]['value'];
+const DEFAULT_ORDER_VISIBILITY_FILTER: OrderVisibilityFilter = 'not_shipped';
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
   return value === 'Preparing' || value === 'Shipped' ? value : '';
@@ -249,7 +251,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>('not_shipped');
+  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>(
+    DEFAULT_ORDER_VISIBILITY_FILTER,
+  );
   const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
@@ -407,10 +411,13 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, []);
 
   const displayedOrders = useMemo(
-    () =>
-      orderVisibilityFilter === 'all'
-        ? orders
-        : orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped'),
+    () => {
+      if (orderVisibilityFilter === 'all') return orders;
+      if (orderVisibilityFilter === 'shipped') {
+        return orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) === 'Shipped');
+      }
+      return orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
+    },
     [orderVisibilityFilter, orders],
   );
 
@@ -636,6 +643,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 aria-label="Drop"
                 value={selectedDropId}
                 onChange={(evt) => {
+                  setOrderVisibilityFilter(DEFAULT_ORDER_VISIBILITY_FILTER);
                   onSelectedDropIdChange(evt.target.value);
                 }}
               >
@@ -766,7 +774,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               <div className="muted small">
                 {orderVisibilityFilter === 'all'
                   ? 'No orders.'
-                  : 'No unshipped orders.'}
+                  : orderVisibilityFilter === 'shipped'
+                    ? 'No shipped orders.'
+                    : 'No unshipped orders.'}
               </div>
             ) : null}
 
