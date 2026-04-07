@@ -644,7 +644,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         })()}
                         <button
                           type="button"
-                          className="link small"
+                          className="link small no-focus-style"
                           onClick={() => handleOpenUpdateModal(order.deliveryId)}
                         >
                           {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}

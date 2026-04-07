@@ -821,6 +821,12 @@ button.link:hover:not(:disabled) {
   text-decoration: underline;
 }
 
+button.no-focus-style:focus,
+button.no-focus-style:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .shipments-signin {
   display: inline-flex;
   align-items: baseline;
@@ -1753,6 +1759,12 @@ button.inventory__open:focus-visible {
   background-size: 10px 6px;
 }
 
+.fulfillment-drop-picker:focus,
+.fulfillment-drop-picker:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .country-picker {
   min-width: 140px;
   width: 100%;
@@ -1827,6 +1839,12 @@ button.inventory__open:focus-visible {
 
 .status-input {
   width: 100%;
+}
+
+.status-input:focus,
+.status-input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .order-update {
