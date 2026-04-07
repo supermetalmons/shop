@@ -720,7 +720,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           {order.boxes.map((box) => (
                             <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
                               <div className="card__title">
-                                {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret {box.claimCode}
+                                {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                                <span className="fulfillment-secret-code">{box.claimCode}</span>
                               </div>
                               {box.dudeIds.length ? (
                                 renderFigureTiles({

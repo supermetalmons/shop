@@ -1982,6 +1982,10 @@ button.order-status-option:hover:not(:disabled) {
   max-width: 100%;
 }
 
+.fulfillment-secret-code {
+  color: #ff3b30;
+}
+
 .address-lines {
   display: flex;
   flex-direction: column;
