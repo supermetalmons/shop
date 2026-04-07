@@ -501,8 +501,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   ]);
 
   const duplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop || orderVisibilityFilter === 'shipped') return [];
-    if (orderVisibilityFilter === 'all') return allDuplicateFigures;
+    if (!isLittleSwagBoxesDrop || !selectedDrop || orderVisibilityFilter !== 'not_shipped') return [];
     if (!displayedOrders.length || !allDuplicateFigures.length) return [];
 
     const remainingDuplicates = summarizeDuplicateFigures({
@@ -815,7 +814,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 {duplicateFigures.length ? (
                   <div key={`${selectedDrop.dropId}:duplicates`} className="card subtle">
                     <div className="card__head">
-                      <div className="card__title">Duplicates</div>
+                      <div className="card__title">New Duplicates</div>
                     </div>
                     <div className="order-items">
                       {renderFigureTiles({
