@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import FulfillmentApp from './FulfillmentApp';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
+import { getBuildInfo } from './lib/buildInfo';
 import { WalletContextProvider } from './wallet/WalletContext';
 import { type SolanaCluster, listFrontendDrops } from './config/deployment';
 import { resolveFrontendDropByPath } from './lib/dropConfig';
@@ -13,6 +14,8 @@ import './styles.css';
 if (!window.Buffer) {
   window.Buffer = Buffer;
 }
+
+document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 
 const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fullfillment';
