@@ -106,9 +106,7 @@ const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
 const TX_MAX_SEND_ATTEMPTS = 3;
-const FULFILLMENT_ORDER_PAGE_LIMIT = 50;
-const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
-const LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT = 1000;
+const FULFILLMENT_ORDER_LIMIT = 1000;
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -3141,7 +3139,7 @@ export const listFulfillmentOrders = onCallLogged(
   async (request) => {
     const schema = z.object({
       dropId: z.string().min(1).max(64),
-      limit: z.number().int().min(1).max(LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT).optional(),
+      limit: z.number().int().min(1).max(FULFILLMENT_ORDER_LIMIT).optional(),
       cursor: z
         .object({
           processedAt: z.object({
@@ -3153,12 +3151,8 @@ export const listFulfillmentOrders = onCallLogged(
         .nullable()
         .optional(),
     });
-    const { dropId: requestDropId, limit = 20, cursor } = parseRequest(schema, request.data);
+    const { dropId: requestDropId, limit = FULFILLMENT_ORDER_LIMIT, cursor } = parseRequest(schema, request.data);
     const dropId = requireDropId(requestDropId);
-    const maxLimit = dropId === LITTLE_SWAG_BOXES_DROP_ID ? LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT : FULFILLMENT_ORDER_PAGE_LIMIT;
-    if (limit > maxLimit) {
-      throw new HttpsError('invalid-argument', `limit must be <= ${maxLimit} for drop ${dropId}`);
-    }
     const { wallet } = await requireFulfillmentDropAccess(request, dropId);
     const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
 
@@ -3167,7 +3161,7 @@ export const listFulfillmentOrders = onCallLogged(
       .where('status', '==', 'ready_to_ship')
       .orderBy('processedAt', 'desc')
       .orderBy(FieldPath.documentId(), 'desc')
-      .limit(limit);
+      .limit(limit + 1);
 
     if (cursor) {
       const ts = new Timestamp(cursor.processedAt.seconds, cursor.processedAt.nanos);
@@ -3175,16 +3169,18 @@ export const listFulfillmentOrders = onCallLogged(
     }
 
     const snap = await query.get();
-    const orders = snap.docs
+    const hasMore = snap.docs.length > limit;
+    const pageDocs = hasMore ? snap.docs.slice(0, limit) : snap.docs;
+    const orders = pageDocs
       .map((doc) => toFulfillmentOrder(doc.id, doc.data(), { canViewSensitiveAddress: allowSensitiveAddressView }))
       .filter((entry): entry is FulfillmentOrder => Boolean(entry));
 
-    const last = snap.docs[snap.docs.length - 1];
+    const last = hasMore ? pageDocs[pageDocs.length - 1] : null;
     const lastProcessedAt = last ? last.get('processedAt') : null;
     const lastSeconds = typeof lastProcessedAt?.seconds === 'number' ? lastProcessedAt.seconds : null;
     const lastNanos = typeof lastProcessedAt?.nanoseconds === 'number' ? lastProcessedAt.nanoseconds : null;
     const nextCursor =
-      last && lastSeconds != null && lastNanos != null
+      hasMore && last && lastSeconds != null && lastNanos != null
         ? { processedAt: { seconds: lastSeconds, nanos: lastNanos }, id: last.id }
         : null;
 

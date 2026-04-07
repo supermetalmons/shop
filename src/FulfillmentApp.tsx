@@ -20,9 +20,8 @@ import { Modal } from './components/Modal';
 import { listFrontendDrops, normalizeDropId, type FigureMediaConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
-const PAGE_SIZE = 20;
+const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
-const LITTLE_SWAG_BOXES_ORDER_LIMIT = 1000;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ORDER_VISIBILITY_OPTIONS = [
@@ -60,6 +59,26 @@ type DuplicateFigureSummary = {
   count: number;
   sortValue: number;
 };
+
+type FulfillmentOrderGroup = {
+  pageIndex: number;
+  groupKey: string;
+  orders: FulfillmentOrder[];
+};
+
+function fulfillmentOrderGroupKey(order: FulfillmentOrder): string {
+  const owner = typeof order.owner === 'string' ? order.owner.trim() : '';
+  return owner ? `owner:${owner}` : `delivery:${order.deliveryId}`;
+}
+
+function dedupeOrdersByDeliveryId(orders: FulfillmentOrder[], existingDeliveryIds?: Set<number>): FulfillmentOrder[] {
+  const seen = existingDeliveryIds ? new Set(existingDeliveryIds) : new Set<number>();
+  return orders.filter((order) => {
+    if (seen.has(order.deliveryId)) return false;
+    seen.add(order.deliveryId);
+    return true;
+  });
+}
 
 function summarizeDuplicateFigures(args: {
   orders: FulfillmentOrder[];
@@ -306,6 +325,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     (walletReadyState === WalletReadyState.Installed || walletReadyState === WalletReadyState.Loadable);
 
   const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
+  const [orderPageDeliveryIds, setOrderPageDeliveryIds] = useState<number[][]>([]);
   const [cursor, setCursor] = useState<FulfillmentOrdersCursor | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -397,6 +417,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setHasMore(false);
       setCursor(null);
       setOrders([]);
+      setOrderPageDeliveryIds([]);
       setStatusEdits({});
       setStatusSaving({});
       setActiveUpdateOrderId(null);
@@ -410,21 +431,23 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setHasMore(true);
     setCursor(null);
     setOrders([]);
+    setOrderPageDeliveryIds([]);
     setStatusEdits({});
     setStatusSaving({});
     setActiveUpdateOrderId(null);
     try {
       const resp = await listFulfillmentOrders({
-        limit: isLittleSwagBoxesDrop ? LITTLE_SWAG_BOXES_ORDER_LIMIT : PAGE_SIZE,
+        limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
         cursor: null,
         dropId: selectedDrop.dropId,
       });
       if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
+      const nextOrders = dedupeOrdersByDeliveryId(Array.isArray(resp.orders) ? resp.orders : []);
       setOrders(nextOrders);
+      setOrderPageDeliveryIds(nextOrders.length ? [nextOrders.map((order) => order.deliveryId)] : []);
       mergeStatusEdits(nextOrders);
-      setCursor(isLittleSwagBoxesDrop ? null : resp.nextCursor || null);
-      setHasMore(isLittleSwagBoxesDrop ? false : Boolean(resp.nextCursor));
+      setCursor(resp.nextCursor || null);
+      setHasMore(Boolean(resp.nextCursor));
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -434,24 +457,27 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoading(false);
       }
     }
-  }, [hasFulfillmentAccess, isLittleSwagBoxesDrop, signedIn, mergeStatusEdits, selectedDrop]);
+  }, [hasFulfillmentAccess, signedIn, mergeStatusEdits, selectedDrop]);
 
   const loadMore = useCallback(async () => {
     if (!hasFulfillmentAccess || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
     const requestEpoch = orderRequestEpochRef.current;
+    const existingDeliveryIds = new Set(orders.map((order) => order.deliveryId));
     setLoadingMore(true);
     setOrdersError(null);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor, dropId: selectedDrop.dropId });
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
-      setOrders((prev) => {
-        if (!nextOrders.length) return prev;
-        const existing = new Set(prev.map((order) => order.deliveryId));
-        const deduped = nextOrders.filter((order) => !existing.has(order.deliveryId));
-        return prev.concat(deduped);
+      const resp = await listFulfillmentOrders({
+        limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
+        cursor,
+        dropId: selectedDrop.dropId,
       });
-      mergeStatusEdits(nextOrders);
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      const nextOrders = dedupeOrdersByDeliveryId(Array.isArray(resp.orders) ? resp.orders : [], existingDeliveryIds);
+      if (nextOrders.length) {
+        setOrders((prev) => prev.concat(nextOrders));
+        setOrderPageDeliveryIds((prev) => prev.concat([nextOrders.map((order) => order.deliveryId)]));
+        mergeStatusEdits(nextOrders);
+      }
       setCursor(resp.nextCursor || null);
       setHasMore(Boolean(resp.nextCursor));
     } catch (err) {
@@ -463,7 +489,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoadingMore(false);
       }
     }
-  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits]);
+  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits, orders]);
 
   useEffect(() => {
     void loadInitial();
@@ -484,6 +510,30 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     },
     [orderVisibilityFilter, orders],
   );
+
+  const orderByDeliveryId = useMemo(() => new Map(orders.map((order) => [order.deliveryId, order] as const)), [orders]);
+  const displayedOrderIds = useMemo(() => new Set(displayedOrders.map((order) => order.deliveryId)), [displayedOrders]);
+
+  const groupedOrders = useMemo(() => {
+    const groups: FulfillmentOrderGroup[] = [];
+    orderPageDeliveryIds.forEach((pageDeliveryIds, pageIndex) => {
+      const grouped = new Map<string, FulfillmentOrderGroup>();
+      pageDeliveryIds.forEach((deliveryId) => {
+        if (!displayedOrderIds.has(deliveryId)) return;
+        const order = orderByDeliveryId.get(deliveryId);
+        if (!order) return;
+        const groupKey = fulfillmentOrderGroupKey(order);
+        const existing = grouped.get(groupKey);
+        if (existing) {
+          existing.orders.push(order);
+          return;
+        }
+        grouped.set(groupKey, { pageIndex, groupKey, orders: [order] });
+      });
+      groups.push(...grouped.values());
+    });
+    return groups;
+  }, [displayedOrderIds, orderByDeliveryId, orderPageDeliveryIds]);
 
   const allDuplicateFigures = useMemo(() => {
     if (!isLittleSwagBoxesDrop || !selectedDrop || !orders.length) return [];
@@ -728,7 +778,94 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setPendingSignIn(false);
   }, [pendingSignIn, publicKey, walletModalVisible]);
 
-  const hasVisibleOrderCards = duplicateFigures.length > 0 || displayedOrders.length > 0;
+  const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
+
+  const renderFulfillmentOrderSection = (order: FulfillmentOrder) => {
+    if (!selectedDrop) return null;
+    return (
+      <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="fulfillment-order-section">
+        <div className="card__head">
+          <div>
+            <div className="card__title">Order {order.deliveryId}</div>
+            <div className="muted small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
+            {order.address.full !== '***' && order.address.email ? (
+              <div className="muted small">{order.address.email}</div>
+            ) : null}
+          </div>
+          <div className="order-update">
+            {(() => {
+              const statusText = normalizeFulfillmentStatus(order.fulfillmentStatus);
+              return statusText ? <div className="status-readout small">{statusText}</div> : <em className="muted small">Not set</em>;
+            })()}
+            <button
+              type="button"
+              className="link small no-focus-style"
+              onClick={() => handleOpenUpdateModal(order.deliveryId)}
+            >
+              {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}
+            </button>
+          </div>
+        </div>
+
+        <div className="order-items">
+          <div className="address-lines">
+            {order.address.full ? (
+              <div className="address-text">
+                {order.address.full === '***' ? order.address.country || order.address.countryCode || '***' : order.address.full}
+              </div>
+            ) : (
+              <>
+                <div className="muted small">Encrypted address payload</div>
+                <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+              </>
+            )}
+          </div>
+
+          {order.boxes.length ? (
+            <div className="grid">
+              {order.boxes.map((box) => (
+                <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
+                  <div className="card__title">
+                    {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                    <span className="fulfillment-secret-code">{box.claimCode}</span>
+                  </div>
+                  {box.dudeIds.length ? (
+                    renderFigureTiles({
+                      dropId: selectedDrop.dropId,
+                      figureIds: box.dudeIds,
+                      keyPrefix: `${order.deliveryId}:${box.boxId}`,
+                      figureNamePrefix: selectedDrop.figureNamePrefix,
+                      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+                      figureMediaBase,
+                      figureMedia: selectedDrop.figureMedia,
+                      figureMetadataByKey,
+                      onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                    })
+                  ) : (
+                    <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {order.looseDudes.length
+            ? renderFigureTiles({
+                dropId: selectedDrop.dropId,
+                figureIds: order.looseDudes,
+                keyPrefix: `${order.deliveryId}:dude`,
+                figureNamePrefix: selectedDrop.figureNamePrefix,
+                previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+                figureMediaBase,
+                figureMedia: selectedDrop.figureMedia,
+                figureMetadataByKey,
+                onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+              })
+            : null}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="page">
@@ -837,97 +974,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     </div>
                   </div>
                 ) : null}
-                {displayedOrders.map((order) => (
-                  <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="card subtle">
-                    <div className="card__head">
-                      <div>
-                        <div className="card__title">Order {order.deliveryId}</div>
-                        <div className="muted small">
-                          {formatOrderDate(order.processedAt || order.createdAt)}
-                        </div>
-                        {order.address.full !== '***' && order.address.email ? (
-                          <div className="muted small">{order.address.email}</div>
-                        ) : null}
-                      </div>
-                      <div className="order-update">
-                        {(() => {
-                          const statusText = normalizeFulfillmentStatus(order.fulfillmentStatus);
-                          return statusText ? (
-                            <div className="status-readout small">{statusText}</div>
-                          ) : (
-                            <em className="muted small">Not set</em>
-                          );
-                        })()}
-                        <button
-                          type="button"
-                          className="link small no-focus-style"
-                          onClick={() => handleOpenUpdateModal(order.deliveryId)}
-                        >
-                          {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="order-items">
-                      <div className="address-lines">
-                        {order.address.full ? (
-                          <div className="address-text">
-                            {order.address.full === '***'
-                              ? order.address.country || order.address.countryCode || '***'
-                              : order.address.full}
-                          </div>
-                        ) : (
-                          <>
-                            <div className="muted small">Encrypted address payload</div>
-                            <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-                          </>
-                        )}
-                      </div>
-
-                      {order.boxes.length ? (
-                        <div className="grid">
-                          {order.boxes.map((box) => (
-                            <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                              <div className="card__title">
-                                {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
-                                <span className="fulfillment-secret-code">{box.claimCode}</span>
-                              </div>
-                              {box.dudeIds.length ? (
-                                renderFigureTiles({
-                                  dropId: selectedDrop.dropId,
-                                  figureIds: box.dudeIds,
-                                  keyPrefix: `${order.deliveryId}:${box.boxId}`,
-                                  figureNamePrefix: selectedDrop.figureNamePrefix,
-                                  previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                                  figureMediaBase,
-                                  figureMedia: selectedDrop.figureMedia,
-                                  figureMetadataByKey,
-                                  onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                                })
-                              ) : (
-                                <div className="muted small">
-                                  Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {order.looseDudes.length
-                        ? renderFigureTiles({
-                            dropId: selectedDrop.dropId,
-                            figureIds: order.looseDudes,
-                            keyPrefix: `${order.deliveryId}:dude`,
-                            figureNamePrefix: selectedDrop.figureNamePrefix,
-                            previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                            figureMediaBase,
-                            figureMedia: selectedDrop.figureMedia,
-                            figureMetadataByKey,
-                            onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                          })
-                        : null}
-                    </div>
+                {groupedOrders.map((group) => (
+                  <div
+                    key={`${selectedDrop.dropId}:${group.pageIndex}:${group.groupKey}`}
+                    className="card subtle fulfillment-order-group"
+                  >
+                    {group.orders.map((order) => renderFulfillmentOrderSection(order))}
                   </div>
                 ))}
               </div>

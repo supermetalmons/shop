@@ -1793,6 +1793,23 @@ button.inventory__open:focus-visible {
   gap: 16px;
 }
 
+.fulfillment-order-group {
+  gap: 0;
+}
+
+.fulfillment-order-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.fulfillment-order-section + .fulfillment-order-section {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 24px;
+}
+
 .delivery-list {
   display: flex;
   flex-direction: column;
