@@ -517,7 +517,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       .map((entry) => {
         const remainingCount = remainingCountByGroupKey.get(entry.groupKey) ?? 0;
         if (remainingCount < 1) return null;
-        return { ...entry, count: remainingCount };
+        const adjustedCount = remainingCount === entry.count ? remainingCount - 1 : remainingCount;
+        if (adjustedCount < 1) return null;
+        return { ...entry, count: adjustedCount };
       })
       .filter((entry): entry is DuplicateFigureSummary => Boolean(entry));
   }, [
