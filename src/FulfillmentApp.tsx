@@ -307,8 +307,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       if (selectedDropId) onSelectedDropIdChange('');
       return;
     }
-    if (!visibleDrops.some((drop) => drop.dropId === selectedDropId)) {
-      onSelectedDropIdChange(visibleDrops[0].dropId);
+    if (selectedDropId && !visibleDrops.some((drop) => drop.dropId === selectedDropId)) {
+      onSelectedDropIdChange('');
     }
   }, [onSelectedDropIdChange, selectedDropId, visibleDrops, walletAddress]);
 
@@ -646,21 +646,23 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   </option>
                 ))}
               </select>
-              <select
-                id="fulfillment-orders-filter-picker"
-                className="fulfillment-drop-picker fulfillment-orders-filter-picker"
-                aria-label="Order filter"
-                value={orderVisibilityFilter}
-                onChange={(evt) => {
-                  setOrderVisibilityFilter(evt.target.value as OrderVisibilityFilter);
-                }}
-              >
-                {ORDER_VISIBILITY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              {selectedDrop ? (
+                <select
+                  id="fulfillment-orders-filter-picker"
+                  className="fulfillment-drop-picker fulfillment-orders-filter-picker"
+                  aria-label="Order filter"
+                  value={orderVisibilityFilter}
+                  onChange={(evt) => {
+                    setOrderVisibilityFilter(evt.target.value as OrderVisibilityFilter);
+                  }}
+                >
+                  {ORDER_VISIBILITY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </div>
             {selectedDrop && loading && !displayedOrders.length ? <div className="muted small">Loading orders…</div> : null}
             {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
