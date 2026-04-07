@@ -64,6 +64,7 @@ type FulfillmentOrderGroup = {
   pageIndex: number;
   groupKey: string;
   orders: FulfillmentOrder[];
+  collapseSharedContact: boolean;
 };
 
 function fulfillmentOrderGroupKey(order: FulfillmentOrder): string {
@@ -77,6 +78,49 @@ function dedupeOrdersByDeliveryId(orders: FulfillmentOrder[], existingDeliveryId
     if (seen.has(order.deliveryId)) return false;
     seen.add(order.deliveryId);
     return true;
+  });
+}
+
+function normalizeFulfillmentOrderMatchValue(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/[\s\u200B\u200C\u200D\u2060\uFEFF]+/g, '')
+    .toLowerCase();
+}
+
+function parseFulfillmentOrderFullAddress(full?: string | null): { name: string; deliveryAddress: string } | null {
+  if (typeof full !== 'string') return null;
+  const normalized = full.replace(/\r\n/g, '\n').trim();
+  if (!normalized || normalized === '***') return null;
+  const [name, ...addressLines] = normalized.split('\n');
+  const deliveryAddress = addressLines.join('\n');
+  if (!name || !deliveryAddress) return null;
+  return { name, deliveryAddress };
+}
+
+function canCollapseFulfillmentOrderGroupContact(orders: FulfillmentOrder[]): boolean {
+  if (orders.length < 2) return false;
+  const [firstOrder, ...restOrders] = orders;
+  const firstAddress = parseFulfillmentOrderFullAddress(firstOrder.address.full);
+  if (!firstAddress) return false;
+  const firstEmail = normalizeFulfillmentOrderMatchValue(
+    typeof firstOrder.address.email === 'string' ? firstOrder.address.email : '',
+  );
+  const firstName = normalizeFulfillmentOrderMatchValue(firstAddress.name);
+  const firstDeliveryAddress = normalizeFulfillmentOrderMatchValue(firstAddress.deliveryAddress);
+  if (!firstName) return false;
+
+  return restOrders.every((order) => {
+    const currentAddress = parseFulfillmentOrderFullAddress(order.address.full);
+    if (!currentAddress) return false;
+    const currentEmail = normalizeFulfillmentOrderMatchValue(
+      typeof order.address.email === 'string' ? order.address.email : '',
+    );
+    return (
+      currentEmail === firstEmail &&
+      normalizeFulfillmentOrderMatchValue(currentAddress.deliveryAddress) === firstDeliveryAddress &&
+      normalizeFulfillmentOrderMatchValue(currentAddress.name) === firstName
+    );
   });
 }
 
@@ -517,20 +561,27 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const groupedOrders = useMemo(() => {
     const groups: FulfillmentOrderGroup[] = [];
     orderPageDeliveryIds.forEach((pageDeliveryIds, pageIndex) => {
-      const grouped = new Map<string, FulfillmentOrderGroup>();
+      const visibleGroups = new Map<string, FulfillmentOrder[]>();
       pageDeliveryIds.forEach((deliveryId) => {
-        if (!displayedOrderIds.has(deliveryId)) return;
         const order = orderByDeliveryId.get(deliveryId);
         if (!order) return;
         const groupKey = fulfillmentOrderGroupKey(order);
-        const existing = grouped.get(groupKey);
-        if (existing) {
-          existing.orders.push(order);
-          return;
+        if (!displayedOrderIds.has(deliveryId)) return;
+        const visibleGroupOrders = visibleGroups.get(groupKey);
+        if (visibleGroupOrders) {
+          visibleGroupOrders.push(order);
+        } else {
+          visibleGroups.set(groupKey, [order]);
         }
-        grouped.set(groupKey, { pageIndex, groupKey, orders: [order] });
       });
-      groups.push(...grouped.values());
+      visibleGroups.forEach((visibleGroupOrders, groupKey) => {
+        groups.push({
+          pageIndex,
+          groupKey,
+          orders: visibleGroupOrders,
+          collapseSharedContact: canCollapseFulfillmentOrderGroupContact(visibleGroupOrders),
+        });
+      });
     });
     return groups;
   }, [displayedOrderIds, orderByDeliveryId, orderPageDeliveryIds]);
@@ -780,15 +831,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
 
-  const renderFulfillmentOrderSection = (order: FulfillmentOrder) => {
+  const renderFulfillmentOrderSection = (
+    order: FulfillmentOrder,
+    options?: { showEmail?: boolean; showFullAddress?: boolean },
+  ) => {
     if (!selectedDrop) return null;
+    const showEmail = options?.showEmail ?? true;
+    const showFullAddress = options?.showFullAddress ?? true;
     return (
       <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="fulfillment-order-section">
         <div className="card__head">
           <div>
             <div className="card__title">Order {order.deliveryId}</div>
             <div className="muted small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
-            {order.address.full !== '***' && order.address.email ? (
+            {showEmail && order.address.full !== '***' && order.address.email ? (
               <div className="muted small">{order.address.email}</div>
             ) : null}
           </div>
@@ -808,18 +864,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         </div>
 
         <div className="order-items">
-          <div className="address-lines">
-            {order.address.full ? (
-              <div className="address-text">
-                {order.address.full === '***' ? order.address.country || order.address.countryCode || '***' : order.address.full}
-              </div>
-            ) : (
-              <>
-                <div className="muted small">Encrypted address payload</div>
-                <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-              </>
-            )}
-          </div>
+          {showFullAddress ? (
+            <div className="address-lines">
+              {order.address.full ? (
+                <div className="address-text">
+                  {order.address.full === '***' ? order.address.country || order.address.countryCode || '***' : order.address.full}
+                </div>
+              ) : (
+                <>
+                  <div className="muted small">Encrypted address payload</div>
+                  <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+                </>
+              )}
+            </div>
+          ) : null}
 
           {order.boxes.length ? (
             <div className="grid">
@@ -979,7 +1037,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     key={`${selectedDrop.dropId}:${group.pageIndex}:${group.groupKey}`}
                     className="card subtle fulfillment-order-group"
                   >
-                    {group.orders.map((order) => renderFulfillmentOrderSection(order))}
+                    {group.orders.map((order, index) =>
+                      renderFulfillmentOrderSection(order, {
+                        showEmail: !group.collapseSharedContact || index === 0,
+                        showFullAddress: !group.collapseSharedContact || index === 0,
+                      }),
+                    )}
                   </div>
                 ))}
               </div>
