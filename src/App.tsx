@@ -642,6 +642,7 @@ function App({ currentPath }: AppProps) {
       dropAssetReference(getDropConfig(dropId), 'figure', reference),
     [getDropConfig],
   );
+  const adminMenuLabel = (value: string) => value.replace(/^\/+/, '');
   const openActionLabelForDropId = useCallback((dropId?: string) => dropOpenActionLabel(getDropConfig(dropId)), [getDropConfig]);
   const openActionProgressForDropId = useCallback(
     (dropId?: string) => dropOpenActionProgress(getDropConfig(dropId)),
@@ -3974,7 +3975,7 @@ function App({ currentPath }: AppProps) {
                     navigate('/ff');
                   }}
                 >
-                  /fullfillment
+                  {adminMenuLabel('/fullfillment')}
                 </button>
                 <button
                   type="button"
@@ -3983,7 +3984,7 @@ function App({ currentPath }: AppProps) {
                     navigate('/wip');
                   }}
                 >
-                  /wip
+                  {adminMenuLabel('/wip')}
                 </button>
                 <button
                   type="button"
@@ -3992,7 +3993,7 @@ function App({ currentPath }: AppProps) {
                     navigate('/notify_me');
                   }}
                 >
-                  /notify_me
+                  {adminMenuLabel('/notify_me')}
                 </button>
                 {adminMenuDrops.map((drop) => (
                   <button
@@ -4003,7 +4004,7 @@ function App({ currentPath }: AppProps) {
                       navigate(dropPath(drop.dropId));
                     }}
                   >
-                    {dropPath(drop.dropId)}
+                    {adminMenuLabel(dropPath(drop.dropId))}
                   </button>
                 ))}
                 {canLoadMoreOwners ? (
