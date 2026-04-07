@@ -18,25 +18,11 @@ import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
+import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
 const PAGE_SIZE = 20;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
-const ADMIN_WALLETS = new Set<string>([
-  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-]);
-const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>([
-  ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ['little_swag_boxes', 'poncho_drifella']],
-  ['AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', ['poncho_drifella']],
-  ['5aQv5wR9KWPwHxtiChKk877BPHpb4FJZhsDhi5bisUkk', ['little_swag_boxes']],
-]);
-
-function listAllowedFulfillmentDropIds(wallet: string, dropIds: string[]): string[] {
-  if (!wallet) return [];
-  if (ADMIN_WALLETS.has(wallet)) return dropIds;
-  return SHIPPER_DROP_IDS_BY_WALLET.get(wallet) || [];
-}
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
   return value === 'Preparing' || value === 'Shipped' ? value : '';

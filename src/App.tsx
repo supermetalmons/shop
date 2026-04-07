@@ -86,6 +86,7 @@ import {
   resolveFrontendDropByPath,
   rpcEndpointForCluster,
 } from './lib/dropConfig';
+import { ADMIN_WALLETS, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
 import {
   calcPonchoDrifellaAbsoluteCardRect,
@@ -387,10 +388,6 @@ const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const DEFAULT_BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
 const DEFAULT_BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
-const ADMIN_WALLETS = new Set<string>([
-  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-]);
 const ADMIN_OWNER_DOC_PAGE_SIZE = 200;
 const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
 
@@ -744,6 +741,7 @@ function App({ currentPath }: AppProps) {
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
   const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
   const isSignedInWallet = Boolean(token && connectedWallet && profile?.wallet === connectedWallet);
+  const canUseAdminMenu = Boolean(isSignedInWallet && hasFulfillmentAppAccess(connectedWallet));
   const canUseAdminViewer = isAdminWallet && isSignedInWallet;
   const owner = canUseAdminViewer && adminViewedOwner ? adminViewedOwner : connectedWallet;
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
@@ -998,10 +996,15 @@ function App({ currentPath }: AppProps) {
   }, [adminViewedOwner, connectedWallet]);
 
   useEffect(() => {
+    if (canUseAdminMenu) return;
+    if (settingsOpen) setSettingsOpen(false);
+  }, [canUseAdminMenu, settingsOpen]);
+
+  useEffect(() => {
     if (canUseAdminViewer) return;
     if (adminViewedOwner) setAdminViewedOwner(null);
-    if (settingsOpen) setSettingsOpen(false);
-  }, [adminViewedOwner, canUseAdminViewer, settingsOpen]);
+    if (ownerPickerOpened) setOwnerPickerOpened(false);
+  }, [adminViewedOwner, canUseAdminViewer, ownerPickerOpened]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -3899,7 +3902,7 @@ function App({ currentPath }: AppProps) {
         </div>
       ) : null}
       {revealOverlayNode}
-      <header className={`top${canUseAdminViewer ? ' top--with-admin' : ''}`}>
+      <header className={`top${canUseAdminMenu ? ' top--with-admin' : ''}`}>
         <div className="brand">
           <a
             href="/"
@@ -3920,21 +3923,21 @@ function App({ currentPath }: AppProps) {
             </h1>
           </a>
         </div>
-        {canUseAdminViewer ? (
+        {canUseAdminMenu ? (
           <div className="top__actions" ref={settingsRef}>
             <button
               type="button"
               className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
               onClick={() => setSettingsOpen((prev) => !prev)}
-              aria-label="Admin settings"
+              aria-label="App menu"
               aria-haspopup="menu"
               aria-expanded={settingsOpen}
             >
               <FaTableCellsLarge aria-hidden />
             </button>
             {settingsOpen ? (
-              <div className="top__submenu" role="menu" aria-label="Admin settings">
-                {!ownerPickerOpened ? (
+              <div className="top__submenu" role="menu" aria-label="App menu">
+                {canUseAdminViewer && !ownerPickerOpened ? (
                   <button
                     type="button"
                     className="link small top__submenu-nav"
@@ -3946,7 +3949,7 @@ function App({ currentPath }: AppProps) {
                     override address
                   </button>
                 ) : null}
-                {ownerPickerOpened ? (
+                {canUseAdminViewer && ownerPickerOpened ? (
                   <select
                     id="admin-owner-picker"
                     aria-label="Viewer owner"
@@ -4014,7 +4017,7 @@ function App({ currentPath }: AppProps) {
                     {adminMenuLabel(dropPath(drop.dropId))}
                   </button>
                 ))}
-                {canLoadMoreOwners ? (
+                {canUseAdminViewer && canLoadMoreOwners ? (
                   <button
                     type="button"
                     className="link small top__submenu-more"
@@ -4026,7 +4029,9 @@ function App({ currentPath }: AppProps) {
                     {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
                   </button>
                 ) : null}
-                {deliveryOrderOwnersErrorMessage ? <div className="error small">{deliveryOrderOwnersErrorMessage}</div> : null}
+                {canUseAdminViewer && deliveryOrderOwnersErrorMessage ? (
+                  <div className="error small">{deliveryOrderOwnersErrorMessage}</div>
+                ) : null}
                 <div className="muted small top__build-info">{BUILD_INFO}</div>
               </div>
             ) : null}
