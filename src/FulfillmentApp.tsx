@@ -23,6 +23,12 @@ import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 const PAGE_SIZE = 20;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
+const ORDER_VISIBILITY_OPTIONS = [
+  { value: 'not_shipped', label: 'Not shipped' },
+  { value: 'all', label: 'All' },
+] as const;
+
+type OrderVisibilityFilter = (typeof ORDER_VISIBILITY_OPTIONS)[number]['value'];
 
 function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
   return value === 'Preparing' || value === 'Shipped' ? value : '';
@@ -243,7 +249,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [showAllOrders, setShowAllOrders] = useState(false);
+  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>('not_shipped');
   const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
@@ -402,10 +408,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   const displayedOrders = useMemo(
     () =>
-      showAllOrders
+      orderVisibilityFilter === 'all'
         ? orders
         : orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped'),
-    [orders, showAllOrders],
+    [orderVisibilityFilter, orders],
   );
 
   const fulfillmentFigureMetadataTargets = useMemo(() => {
@@ -640,16 +646,21 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                className="ghost small fulfillment-orders-toggle"
-                aria-pressed={showAllOrders}
-                onClick={() => {
-                  setShowAllOrders((prev) => !prev);
+              <select
+                id="fulfillment-orders-filter-picker"
+                className="fulfillment-drop-picker fulfillment-orders-filter-picker"
+                aria-label="Order filter"
+                value={orderVisibilityFilter}
+                onChange={(evt) => {
+                  setOrderVisibilityFilter(evt.target.value as OrderVisibilityFilter);
                 }}
               >
-                {showAllOrders ? 'show only pending' : 'show all'}
-              </button>
+                {ORDER_VISIBILITY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
             {selectedDrop && loading && !displayedOrders.length ? <div className="muted small">Loading orders…</div> : null}
             {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
@@ -750,7 +761,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               </div>
             ) : selectedDrop && loading ? null : selectedDrop ? (
               <div className="muted small">
-                {showAllOrders ? 'No orders ready for fulfillment.' : 'No pending orders ready for fulfillment.'}
+                {orderVisibilityFilter === 'all'
+                  ? 'No orders.'
+                  : 'No unshipped orders.'}
               </div>
             ) : null}
 

@@ -1769,9 +1769,8 @@ button.inventory__open:focus-visible {
   box-shadow: none;
 }
 
-.fulfillment-orders-toggle {
+.fulfillment-orders-filter-picker {
   margin-left: auto;
-  white-space: nowrap;
 }
 
 .country-picker {
