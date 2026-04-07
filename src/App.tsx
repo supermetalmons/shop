@@ -1005,9 +1005,12 @@ function App({ currentPath }: AppProps) {
   }, [adminViewedOwner, canUseAdminViewer, settingsOpen]);
 
   useEffect(() => {
-    if (settingsOpen) return;
-    setOwnerPickerOpened(false);
-  }, [settingsOpen]);
+    if (!settingsOpen) {
+      setOwnerPickerOpened(false);
+      return;
+    }
+    setOwnerPickerOpened(Boolean(adminViewedOwner && adminViewedOwner !== connectedWallet));
+  }, [adminViewedOwner, connectedWallet, settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -3932,42 +3935,47 @@ function App({ currentPath }: AppProps) {
             </button>
             {settingsOpen ? (
               <div className="top__submenu" role="menu" aria-label="Admin settings">
-                <select
-                  id="admin-owner-picker"
-                  aria-label="Viewer owner"
-                  value={ownerPickerValue}
-                  onPointerDown={() => {
-                    if (!ownerPickerOpened) setOwnerPickerOpened(true);
-                  }}
-                  onKeyDown={(evt) => {
-                    if (evt.key !== 'ArrowDown' && evt.key !== 'ArrowUp' && evt.key !== 'Enter' && evt.key !== ' ') {
-                      return;
-                    }
-                    if (!ownerPickerOpened) setOwnerPickerOpened(true);
-                  }}
-                  onChange={(evt) => {
-                    const value = evt.target.value.trim();
-                    if (!connectedWallet || !value || value === connectedWallet) {
-                      setAdminViewedOwner(null);
-                      return;
-                    }
-                    setAdminViewedOwner(value);
-                  }}
-                >
-                  {connectedWallet ? (
-                    <option value={connectedWallet}>{connectedWallet}</option>
-                  ) : null}
-                  {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
-                    <option value={adminViewedOwner}>{adminViewedOwner}</option>
-                  ) : null}
-                  {deliveryOrderOwners
-                    .filter((entry) => entry !== connectedWallet)
-                    .map((entry) => (
-                      <option key={entry} value={entry}>
-                        {entry}
-                      </option>
-                    ))}
-                </select>
+                {!ownerPickerOpened ? (
+                  <button
+                    type="button"
+                    className="link small top__submenu-nav"
+                    aria-expanded={ownerPickerOpened}
+                    onClick={() => {
+                      setOwnerPickerOpened(true);
+                    }}
+                  >
+                    address override
+                  </button>
+                ) : null}
+                {ownerPickerOpened ? (
+                  <select
+                    id="admin-owner-picker"
+                    aria-label="Viewer owner"
+                    value={ownerPickerValue}
+                    onChange={(evt) => {
+                      const value = evt.target.value.trim();
+                      if (!connectedWallet || !value || value === connectedWallet) {
+                        setAdminViewedOwner(null);
+                        return;
+                      }
+                      setAdminViewedOwner(value);
+                    }}
+                  >
+                    {connectedWallet ? (
+                      <option value={connectedWallet}>{connectedWallet}</option>
+                    ) : null}
+                    {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
+                      <option value={adminViewedOwner}>{adminViewedOwner}</option>
+                    ) : null}
+                    {deliveryOrderOwners
+                      .filter((entry) => entry !== connectedWallet)
+                      .map((entry) => (
+                        <option key={entry} value={entry}>
+                          {entry}
+                        </option>
+                      ))}
+                  </select>
+                ) : null}
                 <button
                   type="button"
                   className="link small top__submenu-nav"
