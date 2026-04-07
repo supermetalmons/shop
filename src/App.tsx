@@ -573,6 +573,10 @@ function App({ currentPath }: AppProps) {
   );
   const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
   const allDrops = useMemo(() => listFrontendDrops(), []);
+  const adminMenuDrops = useMemo(
+    () => allDrops.filter((drop) => !['little_swag_boxes', 'poncho_drifella'].includes(drop.dropId)),
+    [allDrops],
+  );
   const dropById = useMemo(() => new Map(allDrops.map((drop) => [drop.dropId, drop])), [allDrops]);
   const dropConnectionCacheRef = useRef<Map<string, Connection>>(new Map());
   const requireRouteDrop = useCallback(
@@ -3967,19 +3971,19 @@ function App({ currentPath }: AppProps) {
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    navigate('/wip');
+                    navigate('/ff');
                   }}
                 >
-                  /wip
+                  /fullfillment
                 </button>
                 <button
                   type="button"
                   className="link small top__submenu-nav"
                   onClick={() => {
-                    navigate('/ff');
+                    navigate('/wip');
                   }}
                 >
-                  /fullfillment
+                  /wip
                 </button>
                 <button
                   type="button"
@@ -3990,7 +3994,7 @@ function App({ currentPath }: AppProps) {
                 >
                   /notify_me
                 </button>
-                {allDrops.map((drop) => (
+                {adminMenuDrops.map((drop) => (
                   <button
                     key={drop.dropId}
                     type="button"

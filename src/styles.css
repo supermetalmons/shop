@@ -138,6 +138,13 @@ header.top {
   background-size: 10px 6px;
 }
 
+#admin-owner-picker:focus,
+#admin-owner-picker:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background-color: var(--surface);
+}
+
 .top__submenu-nav,
 .top__submenu-more {
   align-self: flex-start;
