@@ -17,10 +17,12 @@ import {
 import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
-import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
+import { listFrontendDrops, normalizeDropId, type FigureMediaConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
 const PAGE_SIZE = 20;
+const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
+const LITTLE_SWAG_BOXES_ORDER_LIMIT = 1000;
 const FIGURE_METADATA_RETRY_MS = 3000;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ORDER_VISIBILITY_OPTIONS = [
@@ -45,6 +47,58 @@ function formatOrderStatus(status: string) {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
   if (!normalized) return 'Unknown';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function listOrderFigureIds(order: FulfillmentOrder): number[] {
+  return [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)];
+}
+
+type DuplicateFigureSummary = {
+  figureId: number;
+  labelId: string;
+  count: number;
+  sortValue: number;
+};
+
+function summarizeDuplicateFigures(args: {
+  orders: FulfillmentOrder[];
+  previewMode: 'media_map_folder' | 'metadata_stills';
+  figureMedia?: FigureMediaConfig;
+}): DuplicateFigureSummary[] {
+  const { orders, previewMode, figureMedia } = args;
+  const grouped = new Map<string, DuplicateFigureSummary>();
+
+  orders.forEach((order) => {
+    listOrderFigureIds(order).forEach((figureIdRaw) => {
+      const figureId = Math.floor(Number(figureIdRaw));
+      if (!Number.isFinite(figureId) || figureId <= 0) return;
+
+      const mediaId = previewMode === 'media_map_folder' ? getMediaIdForFigureId(figureId, figureMedia) : null;
+      const key = mediaId ? `media:${mediaId}` : `figure:${figureId}`;
+      const labelId = mediaId ? String(mediaId) : String(figureId);
+      const sortValue = mediaId ?? figureId;
+      const existing = grouped.get(key);
+
+      if (existing) {
+        existing.count += 1;
+        if (figureId < existing.figureId) {
+          existing.figureId = figureId;
+        }
+        return;
+      }
+
+      grouped.set(key, {
+        figureId,
+        labelId,
+        count: 1,
+        sortValue,
+      });
+    });
+  });
+
+  return Array.from(grouped.values())
+    .filter((entry) => entry.count > 1)
+    .sort((a, b) => b.count - a.count || a.sortValue - b.sortValue || a.figureId - b.figureId);
 }
 
 function mergeFigureMetadataRecords(
@@ -155,6 +209,7 @@ function renderFigureTiles(args: {
   figureMediaBase?: string;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
+  labelOverride?: (args: { figureId: number; index: number; mediaId: number | null; fallbackName: string }) => string;
 }) {
   const {
     dropId,
@@ -166,6 +221,7 @@ function renderFigureTiles(args: {
     figureMediaBase,
     figureMetadataByKey,
     onMetadataResolved,
+    labelOverride,
   } = args;
   const labelSource = { namePrefix: undefined, figureNamePrefix };
   return (
@@ -174,10 +230,10 @@ function renderFigureTiles(args: {
         const metadata = figureMetadataByKey[figureMetadataCacheKey(dropId, figureId)] || getCachedFigureMetadata(dropId, figureId);
         const metadataImage = figureMetadataHasImage(metadata) ? metadata.image : undefined;
         const fallbackName = metadata?.name || dropAssetReference(labelSource, 'figure', figureId);
+        const mediaId = previewMode === 'media_map_folder' ? getMediaIdForFigureId(figureId, figureMedia) : null;
+        const label = labelOverride?.({ figureId, index, mediaId, fallbackName }) || (mediaId ? String(mediaId) : fallbackName);
         if (previewMode === 'media_map_folder') {
-          const mediaId = getMediaIdForFigureId(figureId, figureMedia);
           const src = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
-          const label = mediaId ? String(mediaId) : fallbackName;
           return (
             <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
               <FigureTileImage
@@ -201,7 +257,7 @@ function renderFigureTiles(args: {
               alt={fallbackName}
               onMetadataResolved={onMetadataResolved}
             />
-            <div className="muted small">{fallbackName}</div>
+            <div className="muted small">{label}</div>
           </div>
         );
       })}
@@ -233,6 +289,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     () => visibleDrops.find((drop) => drop.dropId === selectedDropId) || null,
     [visibleDrops, selectedDropId],
   );
+  const isLittleSwagBoxesDrop = normalizeDropId(selectedDrop?.dropId || '') === LITTLE_SWAG_BOXES_DROP_ID;
   const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
   const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
@@ -354,13 +411,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setStatusSaving({});
     setActiveUpdateOrderId(null);
     try {
-      const resp = await listFulfillmentOrders({ limit: PAGE_SIZE, cursor: null, dropId: selectedDrop.dropId });
+      const resp = await listFulfillmentOrders({
+        limit: isLittleSwagBoxesDrop ? LITTLE_SWAG_BOXES_ORDER_LIMIT : PAGE_SIZE,
+        cursor: null,
+        dropId: selectedDrop.dropId,
+      });
       if (orderRequestEpochRef.current !== requestEpoch) return;
       const nextOrders = Array.isArray(resp.orders) ? resp.orders : [];
       setOrders(nextOrders);
       mergeStatusEdits(nextOrders);
-      setCursor(resp.nextCursor || null);
-      setHasMore(Boolean(resp.nextCursor));
+      setCursor(isLittleSwagBoxesDrop ? null : resp.nextCursor || null);
+      setHasMore(isLittleSwagBoxesDrop ? false : Boolean(resp.nextCursor));
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -370,7 +431,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoading(false);
       }
     }
-  }, [hasFulfillmentAccess, signedIn, mergeStatusEdits, selectedDrop]);
+  }, [hasFulfillmentAccess, isLittleSwagBoxesDrop, signedIn, mergeStatusEdits, selectedDrop]);
 
   const loadMore = useCallback(async () => {
     if (!hasFulfillmentAccess || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
@@ -421,12 +482,32 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     [orderVisibilityFilter, orders],
   );
 
+  const duplicateFigures = useMemo(() => {
+    if (!isLittleSwagBoxesDrop || !selectedDrop) return [];
+    return summarizeDuplicateFigures({
+      orders,
+      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+      figureMedia: selectedDrop.figureMedia,
+    });
+  }, [
+    isLittleSwagBoxesDrop,
+    orders,
+    selectedDrop,
+    selectedDrop?.figureMedia,
+    selectedDropContent.figures.fulfillmentPreviewMode,
+  ]);
+
+  const duplicateFigureByFigureId = useMemo(
+    () => new Map(duplicateFigures.map((entry) => [entry.figureId, entry])),
+    [duplicateFigures],
+  );
+
   const fulfillmentFigureMetadataTargets = useMemo(() => {
     if (!selectedDrop) return [];
     const shouldUseMetadataFallback = selectedDropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
     const targets = new Map<string, { dropId: string; figureId: number }>();
     displayedOrders.forEach((order) => {
-      [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)].forEach((figureId) => {
+      listOrderFigureIds(order).forEach((figureId) => {
         const normalizedFigureId = Math.floor(Number(figureId));
         if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
         if (!shouldUseMetadataFallback) {
@@ -441,11 +522,29 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         targets.set(key, { dropId: selectedDrop.dropId, figureId: normalizedFigureId });
       });
     });
+    if (isLittleSwagBoxesDrop) {
+      duplicateFigures.forEach(({ figureId }) => {
+        const normalizedFigureId = Math.floor(Number(figureId));
+        if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
+        if (!shouldUseMetadataFallback) {
+          const hasMappedMedia = Boolean(
+            figureMediaBase && getMediaIdForFigureId(normalizedFigureId, selectedDrop.figureMedia),
+          );
+          if (hasMappedMedia) return;
+        }
+        const key = figureMetadataCacheKey(selectedDrop.dropId, normalizedFigureId);
+        const cached = figureMetadataByKey[key] || getCachedFigureMetadata(selectedDrop.dropId, normalizedFigureId);
+        if (figureMetadataHasImage(cached)) return;
+        targets.set(key, { dropId: selectedDrop.dropId, figureId: normalizedFigureId });
+      });
+    }
     return Array.from(targets.values());
   }, [
+    duplicateFigures,
     displayedOrders,
     figureMediaBase,
     figureMetadataByKey,
+    isLittleSwagBoxesDrop,
     selectedDrop?.dropId,
     selectedDrop?.figureMedia,
     selectedDropContent.figures.fulfillmentPreviewMode,
@@ -595,6 +694,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setPendingSignIn(false);
   }, [pendingSignIn, publicKey, walletModalVisible]);
 
+  const hasVisibleOrderCards = duplicateFigures.length > 0 || displayedOrders.length > 0;
+
   return (
     <div className="page">
       <header className="top">
@@ -672,10 +773,36 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 </select>
               ) : null}
             </div>
-            {selectedDrop && loading && !displayedOrders.length ? <div className="muted small">Loading orders…</div> : null}
+            {selectedDrop && loading && !hasVisibleOrderCards ? <div className="muted small">Loading orders…</div> : null}
             {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
-            {selectedDrop && displayedOrders.length ? (
+            {selectedDrop && hasVisibleOrderCards ? (
               <div className="order-list">
+                {duplicateFigures.length ? (
+                  <div key={`${selectedDrop.dropId}:duplicates`} className="card subtle">
+                    <div className="card__head">
+                      <div className="card__title">Duplicates</div>
+                    </div>
+                    <div className="order-items">
+                      {renderFigureTiles({
+                        dropId: selectedDrop.dropId,
+                        figureIds: duplicateFigures.map((entry) => entry.figureId),
+                        keyPrefix: 'duplicates',
+                        figureNamePrefix: selectedDrop.figureNamePrefix,
+                        previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+                        figureMediaBase,
+                        figureMedia: selectedDrop.figureMedia,
+                        figureMetadataByKey,
+                        onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                        labelOverride: ({ figureId, mediaId }) => {
+                          const duplicate = duplicateFigureByFigureId.get(figureId);
+                          const labelId = duplicate?.labelId || (mediaId ? String(mediaId) : String(figureId));
+                          const count = duplicate?.count || 0;
+                          return `${labelId} x ${count}`;
+                        },
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 {displayedOrders.map((order) => (
                   <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="card subtle">
                     <div className="card__head">

@@ -106,6 +106,9 @@ const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
 const TX_MAX_SEND_ATTEMPTS = 3;
+const FULFILLMENT_ORDER_PAGE_LIMIT = 50;
+const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
+const LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT = 1000;
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -3135,7 +3138,7 @@ export const listFulfillmentOrders = onCallLogged(
   async (request) => {
     const schema = z.object({
       dropId: z.string().min(1).max(64),
-      limit: z.number().int().min(1).max(50).optional(),
+      limit: z.number().int().min(1).max(LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT).optional(),
       cursor: z
         .object({
           processedAt: z.object({
@@ -3149,6 +3152,10 @@ export const listFulfillmentOrders = onCallLogged(
     });
     const { dropId: requestDropId, limit = 20, cursor } = parseRequest(schema, request.data);
     const dropId = requireDropId(requestDropId);
+    const maxLimit = dropId === LITTLE_SWAG_BOXES_DROP_ID ? LITTLE_SWAG_BOXES_FULFILLMENT_ORDER_LIMIT : FULFILLMENT_ORDER_PAGE_LIMIT;
+    if (limit > maxLimit) {
+      throw new HttpsError('invalid-argument', `limit must be <= ${maxLimit} for drop ${dropId}`);
+    }
     const { wallet } = await requireFulfillmentDropAccess(request, dropId);
     const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
 
