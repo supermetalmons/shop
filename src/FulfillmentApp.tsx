@@ -19,7 +19,7 @@ import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, type FigureMediaConfig } from './config/deployment';
 
-const FULFILLMENT_WALLETS = new Set<string>([
+const ADMIN_WALLETS = new Set<string>([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
   '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
@@ -224,7 +224,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
   const { profile, signIn, loading: authLoading, error: authError } = useSolanaAuth();
   const walletAddress = publicKey?.toBase58() || '';
-  const allowed = walletAddress ? FULFILLMENT_WALLETS.has(walletAddress) : false;
+  const allowed = walletAddress ? ADMIN_WALLETS.has(walletAddress) : false;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
   const walletBusy = walletAdapter.connecting || walletAdapter.disconnecting;
   const walletReadyState = walletAdapter.wallet?.readyState;

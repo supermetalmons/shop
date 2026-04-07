@@ -298,19 +298,6 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
   return { uid, wallet: normalizeWallet(wallet) };
 }
 
-const FULFILLMENT_WALLETS = new Set<string>();
-[
-  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-].forEach((raw) => {
-  try {
-    FULFILLMENT_WALLETS.add(new PublicKey(raw).toBase58());
-  } catch (err) {
-    console.error('[mons/functions] invalid fulfillment wallet', raw, summarizeError(err));
-  }
-});
-
 const SHIPPER_WALLETS = new Set<string>();
 [
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -338,7 +325,7 @@ const ADMIN_WALLETS = new Set<string>();
 
 async function requireFulfillmentAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
-  if (!FULFILLMENT_WALLETS.has(wallet)) {
+  if (!ADMIN_WALLETS.has(wallet)) {
     throw new HttpsError('permission-denied', 'Fulfillment access denied.');
   }
   return { uid, wallet };
