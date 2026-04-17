@@ -652,6 +652,7 @@ function App({ currentPath }: AppProps) {
   );
   const openVerbForDropId = useCallback((dropId?: string) => dropOpenVerb(getDropConfig(dropId)), [getDropConfig]);
   const openGerundForDropId = useCallback((dropId?: string) => dropOpenGerund(getDropConfig(dropId)), [getDropConfig]);
+  const canOpenBoxesForDropId = useCallback((dropId?: string) => !isDropFamily(dropId, 'lsw_cobalt_figure_hoodie'), []);
   const dropRevealIsAnimated = useCallback(
     (dropId?: string) => {
       const content = getDropContent(dropId);
@@ -2467,7 +2468,10 @@ function App({ currentPath }: AppProps) {
     return preview;
   }, [selectedItems, boxImageForDropId, compactPanel]);
   const selectedOverflow = Math.max(0, selectedCount - selectedPreview.length);
-  const canOpenSelected = selectedCount === 1 && selectedItems[0]?.kind === 'box';
+  const canOpenSelected =
+    selectedCount === 1 &&
+    selectedItems[0]?.kind === 'box' &&
+    canOpenBoxesForDropId(selectedItems[0]?.dropId);
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
   const selectedPonchoFigure = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
@@ -2754,6 +2758,10 @@ function App({ currentPath }: AppProps) {
 
   const handleStartOpenBox = async (item: InventoryItem) => {
     if (blockViewerModeAction()) return;
+    if (!canOpenBoxesForDropId(item.dropId)) {
+      showToast(`${boxLabelForDropId(item.dropId)} does not support opening.`);
+      return;
+    }
     if (!publicKey) throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
     setStartOpenLoading(item.id);
     try {
@@ -2805,6 +2813,7 @@ function App({ currentPath }: AppProps) {
 
   const handleRevealDudes = async (boxAssetId: string, dropId: string): Promise<PonchoDrifellaRevealRequestStatus> => {
     if (blockViewerModeAction()) return 'retry';
+    if (!canOpenBoxesForDropId(dropId)) return 'resolved';
     const requestSession = revealOverlaySessionRef.current;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return 'retry';
@@ -2898,6 +2907,7 @@ function App({ currentPath }: AppProps) {
 
   const handleRevealOverlayClick = () => {
     if (!revealOverlay || revealOverlayClosing) return;
+    if (!canOpenBoxesForDropId(revealOverlay.dropId)) return;
     if (revealOverlay.phase !== 'ready') return;
     if (revealOverlay.autoOpening) return;
     const revealContent = getDropContent(revealOverlay.dropId);
@@ -2994,6 +3004,7 @@ function App({ currentPath }: AppProps) {
 
   const openPreparingOverlayForBox = useCallback(
     (box: InventoryItem) => {
+      if (!canOpenBoxesForDropId(box.dropId)) return;
       preloadRevealSounds(box.dropId);
       preloadPonchoRevealPackAssetsForDropId(box.dropId);
       preloadBoxFrames(1, revealClickMaxForDropId(box.dropId), box.dropId);
@@ -3016,6 +3027,7 @@ function App({ currentPath }: AppProps) {
       openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
     },
     [
+      canOpenBoxesForDropId,
       boxAspectRatioForDropId,
       openRevealOverlay,
       preloadBoxFrames,
@@ -3030,6 +3042,7 @@ function App({ currentPath }: AppProps) {
 	  const handleOpenSelectedBox = async () => {
       if (blockViewerModeAction()) return;
 	    if (!selectedBox) return;
+      if (!canOpenBoxesForDropId(selectedBox.dropId)) return;
 	    if (!publicKey) {
 	      setVisible(true);
 	      return;
@@ -4078,6 +4091,7 @@ function App({ currentPath }: AppProps) {
 		          selected={selected}
 		          onToggle={toggleSelected}
 		          pendingRevealIds={pendingRevealIds}
+              canRevealItem={(item) => canOpenBoxesForDropId(item.dropId)}
 		          onReveal={async (id, rect) => {
                 if (blockViewerModeAction()) return;
 		            if (!publicKey) {
@@ -4087,6 +4101,7 @@ function App({ currentPath }: AppProps) {
                 const revealItem = inventoryIndex.get(id);
                 const revealDropId = revealItem?.dropId || routeDrop?.dropId;
                 if (!revealDropId) return;
+                if (!canOpenBoxesForDropId(revealDropId)) return;
 		            preloadRevealSounds(revealDropId);
 		            preloadPonchoRevealPackAssetsForDropId(revealDropId);
 		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);

@@ -13,6 +13,7 @@ interface InventoryGridProps {
   className?: string;
   pendingRevealIds?: Set<string>;
   onReveal?: (id: string, rect: DOMRect) => void;
+  canRevealItem?: (item: InventoryItem) => boolean;
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
@@ -91,6 +92,7 @@ export function InventoryGrid({
   className,
   pendingRevealIds,
   onReveal,
+  canRevealItem,
   revealLoadingId,
   revealDisabled,
   emptyStateVisibility = 'visible',
@@ -117,7 +119,7 @@ export function InventoryGrid({
         const isPendingLocal = item.status === 'pending';
         const canSelect = !isReceipt && !isPendingReveal && !isPendingLocal;
         const isSelected = canSelect ? selected.has(item.id) : false;
-        const canReveal = Boolean(isPendingReveal && onReveal);
+        const canReveal = Boolean(isPendingReveal && onReveal && (canRevealItem ? canRevealItem(item) : true));
         const isRevealing = revealLoadingId === item.id;
         const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
         const hasFooter = Boolean(item.assignedDudes?.length);
