@@ -11,7 +11,7 @@
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
 
@@ -81,6 +81,7 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
+  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -92,7 +93,12 @@ export function defaultDropFamilyForDropId(dropId: string): DropFamily {
 
 export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
   const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+  if (
+    normalized === 'little_swag_boxes' ||
+    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'poncho_drifella' ||
+    normalized === 'default'
+  ) {
     return normalized as DropFamily;
   }
   return defaultDropFamilyForDropId(dropId || '');
@@ -337,7 +343,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
   "lsw_cobalt_figure_hoodie_26_draft": createFrontendDrop({
     solanaCluster: "devnet",
     dropId: "lsw_cobalt_figure_hoodie_26_draft",
-    dropFamily: "default",
+    dropFamily: "lsw_cobalt_figure_hoodie",
     collectionName: "lsw cobalt figure hoodie 26",
 
     // Drop metadata base (collection.json + json/* + images/*)

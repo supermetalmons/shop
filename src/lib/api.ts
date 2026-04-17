@@ -17,7 +17,7 @@ import {
   RecoverDeliveryOrdersResult,
 } from '../types';
 import { getHeliusApiKey } from './helius';
-import { normalizeFigureDisplayImage } from './dropContent';
+import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
 import {
   FRONTEND_DROPS,
   type FrontendDeploymentConfig,
@@ -395,7 +395,12 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     asset?.content?.files?.[0]?.uri ||
     asset?.content?.files?.[0]?.cdn_uri;
 
-  const image = kind === 'dude' ? normalizeFigureDisplayImage(dropId, imageRaw, dudeId) : imageRaw;
+  const image =
+    kind === 'dude'
+      ? normalizeFigureDisplayImage(dropId, imageRaw, dudeId)
+      : kind === 'certificate'
+        ? normalizeCertificateDisplayImage(dropId, imageRaw)
+        : imageRaw;
   return {
     id: asset.id,
     dropId,

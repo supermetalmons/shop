@@ -16,6 +16,10 @@ export type ResolvedDropContent = {
     previewImageUrl?: string;
     aspectRatio: number;
   };
+  mintPanel: {
+    previewImageUrl?: string;
+    aspectRatio: number;
+  };
   reveal: {
     mode: DropRevealMode;
     renderer: DropRevealRenderer;
@@ -25,10 +29,14 @@ export type ResolvedDropContent = {
   figures: {
     inventoryImageMode: DropFigureInventoryImageMode;
     inventoryImageBaseUrl?: string;
+    inventoryImageUrl?: string;
     revealPresentation: DropFigureRevealPresentation;
     fulfillmentPreviewMode: DropFigureFulfillmentPreviewMode;
     revealVideoBaseUrl?: string;
     fulfillmentMediaBaseUrl?: string;
+  };
+  certificates: {
+    inventoryImageUrl?: string;
   };
 };
 
@@ -122,6 +130,10 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
       previewImageUrl: `${base}/box/tight.webp`,
       aspectRatio: LEGACY_BOX_ASPECT_RATIO,
     },
+    mintPanel: {
+      previewImageUrl: `${base}/box/tight.webp`,
+      aspectRatio: LEGACY_BOX_ASPECT_RATIO,
+    },
     reveal: {
       mode: 'animated',
       renderer: 'default',
@@ -138,10 +150,14 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
     figures: {
       inventoryImageMode: 'clean_variant',
       inventoryImageBaseUrl: undefined,
+      inventoryImageUrl: undefined,
       revealPresentation: 'videos',
       fulfillmentPreviewMode: 'media_map_folder',
       revealVideoBaseUrl: `${base}/figures/small-rotating/`,
       fulfillmentMediaBaseUrl: `${base}/figures/clean`,
+    },
+    certificates: {
+      inventoryImageUrl: undefined,
     },
   };
 }
@@ -149,6 +165,10 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
 function defaultStaticDropContent(): ResolvedDropContent {
   return {
     box: {
+      previewImageUrl: undefined,
+      aspectRatio: 1,
+    },
+    mintPanel: {
       previewImageUrl: undefined,
       aspectRatio: 1,
     },
@@ -161,10 +181,14 @@ function defaultStaticDropContent(): ResolvedDropContent {
     figures: {
       inventoryImageMode: 'metadata_raw',
       inventoryImageBaseUrl: undefined,
+      inventoryImageUrl: undefined,
       revealPresentation: 'metadata_stills',
       fulfillmentPreviewMode: 'metadata_stills',
       revealVideoBaseUrl: undefined,
       fulfillmentMediaBaseUrl: undefined,
+    },
+    certificates: {
+      inventoryImageUrl: undefined,
     },
   };
 }
@@ -181,6 +205,10 @@ function applyDropExtraContentOverride(
       previewImageUrl: asOptionalString(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
       aspectRatio: asPositiveNumber(override.box?.aspectRatio, base.box.aspectRatio),
     },
+    mintPanel: {
+      previewImageUrl: asOptionalString(override.mintPanel?.previewImageUrl) ?? base.mintPanel.previewImageUrl,
+      aspectRatio: asPositiveNumber(override.mintPanel?.aspectRatio, base.mintPanel.aspectRatio),
+    },
     reveal: {
       mode: nextMode,
       renderer: override.reveal?.renderer || base.reveal.renderer,
@@ -193,11 +221,16 @@ function applyDropExtraContentOverride(
     figures: {
       inventoryImageMode: override.figures?.inventoryImageMode || base.figures.inventoryImageMode,
       inventoryImageBaseUrl: asOptionalString(override.figures?.inventoryImageBaseUrl) ?? base.figures.inventoryImageBaseUrl,
+      inventoryImageUrl: asOptionalString(override.figures?.inventoryImageUrl) ?? base.figures.inventoryImageUrl,
       revealPresentation: override.figures?.revealPresentation || base.figures.revealPresentation,
       fulfillmentPreviewMode: override.figures?.fulfillmentPreviewMode || base.figures.fulfillmentPreviewMode,
       revealVideoBaseUrl: asOptionalString(override.figures?.revealVideoBaseUrl) ?? base.figures.revealVideoBaseUrl,
       fulfillmentMediaBaseUrl:
         asOptionalString(override.figures?.fulfillmentMediaBaseUrl) ?? base.figures.fulfillmentMediaBaseUrl,
+    },
+    certificates: {
+      inventoryImageUrl:
+        asOptionalString(override.certificates?.inventoryImageUrl) ?? base.certificates.inventoryImageUrl,
     },
   };
 }
@@ -231,8 +264,21 @@ export function normalizeBoxDisplayImage(dropId: string, imageRaw?: string): str
   return content.box.previewImageUrl || imageRaw;
 }
 
+export function mintPanelPreviewImage(dropId: string): string | undefined {
+  const content = resolveDropContent(dropId);
+  return content.mintPanel.previewImageUrl || content.box.previewImageUrl;
+}
+
+export function mintPanelPreviewAspectRatio(dropId: string): number {
+  const content = resolveDropContent(dropId);
+  return content.mintPanel.previewImageUrl ? content.mintPanel.aspectRatio : content.box.aspectRatio;
+}
+
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   const content = resolveDropContent(dropId);
+  if (content.figures.inventoryImageUrl) {
+    return content.figures.inventoryImageUrl;
+  }
   const normalizedFigureId = asPositiveInteger(figureId);
   if (content.figures.inventoryImageBaseUrl && normalizedFigureId) {
     return joinDropAssetUrl(content.figures.inventoryImageBaseUrl, `${normalizedFigureId}.webp`) || imageRaw;
@@ -241,4 +287,9 @@ export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, f
   if (content.figures.inventoryImageMode !== 'clean_variant') return imageRaw;
   if (imageRaw.includes('/figures/clean/')) return imageRaw;
   return imageRaw.includes('/figures/') ? imageRaw.replace('/figures/', '/figures/clean/') : imageRaw;
+}
+
+export function normalizeCertificateDisplayImage(dropId: string, imageRaw?: string): string | undefined {
+  const content = resolveDropContent(dropId);
+  return content.certificates.inventoryImageUrl || imageRaw;
 }

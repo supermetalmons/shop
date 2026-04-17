@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
 
 export type FigureMediaConfigSerialized = {
   strategy?: 'direct' | 'cyclic';
@@ -76,6 +76,7 @@ export function normalizeDropId(value: string | undefined): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
+  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -87,7 +88,12 @@ export function defaultDropFamilyForDropId(dropId: string): DropFamily {
 
 function asDropFamily(value: unknown): DropFamily | undefined {
   const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+  if (
+    normalized === 'little_swag_boxes' ||
+    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'poncho_drifella' ||
+    normalized === 'default'
+  ) {
     return normalized;
   }
   return undefined;
@@ -96,7 +102,9 @@ function asDropFamily(value: unknown): DropFamily | undefined {
 export function requireDropFamily(value: string, label: string): DropFamily {
   const normalized = asDropFamily(value);
   if (normalized) return normalized;
-  throw new Error(`Invalid ${label}: ${value} (expected default, little_swag_boxes, or poncho_drifella)`);
+  throw new Error(
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, lsw_cobalt_figure_hoodie, or poncho_drifella)`,
+  );
 }
 
 export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
@@ -421,7 +429,7 @@ export function renderFrontendDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
 
@@ -491,6 +499,7 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
+  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -502,7 +511,12 @@ export function defaultDropFamilyForDropId(dropId: string): DropFamily {
 
 export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
   const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+  if (
+    normalized === 'little_swag_boxes' ||
+    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'poncho_drifella' ||
+    normalized === 'default'
+  ) {
     return normalized as DropFamily;
   }
   return defaultDropFamilyForDropId(dropId || '');
@@ -694,7 +708,7 @@ export function renderFunctionsDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
 
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
@@ -752,6 +766,7 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
+  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -763,7 +778,12 @@ export function defaultDropFamilyForDropId(dropId: string): DropFamily {
 
 export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
   const normalized = String(value ?? '').trim().toLowerCase();
-  if (normalized === 'little_swag_boxes' || normalized === 'poncho_drifella' || normalized === 'default') {
+  if (
+    normalized === 'little_swag_boxes' ||
+    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'poncho_drifella' ||
+    normalized === 'default'
+  ) {
     return normalized as DropFamily;
   }
   return defaultDropFamilyForDropId(dropId || '');

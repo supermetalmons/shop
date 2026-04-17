@@ -64,7 +64,7 @@ export const NEW_DROP: NewDropConfig = {
   },
   onchain: {
     dropId: 'lsw_cobalt_figure_hoodie_26_draft',
-    dropFamily: 'default',
+    dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     collectionMetadata: {
       name: 'lsw cobalt figure hoodie 26',

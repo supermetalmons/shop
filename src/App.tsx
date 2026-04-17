@@ -38,7 +38,13 @@ import {
   type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
-import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
+import {
+  joinDropAssetUrl,
+  mintPanelPreviewAspectRatio,
+  mintPanelPreviewImage,
+  normalizeBoxDisplayImage,
+  resolveDropContent,
+} from './lib/dropContent';
 import {
   dropAssetCount,
   dropAssetLabel,
@@ -955,7 +961,8 @@ function App({ currentPath }: AppProps) {
     },
     [getDropContent],
   );
-  const defaultBoxImage = routeDrop ? boxImageForDropId(routeDrop.dropId) : undefined;
+  const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
+  const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
@@ -4048,8 +4055,8 @@ function App({ currentPath }: AppProps) {
           busy={minting}
           onError={showToast}
           title={routeDrop.collectionName}
-          boxImageSrc={defaultBoxImage}
-          boxAspectRatio={boxAspectRatioForDropId(routeDrop.dropId)}
+          boxImageSrc={mintPreviewImage}
+          boxAspectRatio={mintPreviewAspectRatio}
           boxNamePrefix={routeDrop.namePrefix}
           priceSol={routeDrop.priceSol}
           discountPriceSol={routeDrop.discountPriceSol}
