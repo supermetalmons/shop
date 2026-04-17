@@ -48,7 +48,7 @@ export type NewDropConfig = {
 // Toggle this to pick deployment network from one place.
 const isMainnet = false;
 const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'green';
+const dropSymbol = 'hoodie';
 const sellerFeeBasisPoints = 500;
 
 /**
@@ -63,16 +63,16 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: '',
+    dropId: 'lsw_cobalt_figure_hoodie_26_draft',
     dropFamily: 'default',
-    metadataBase: 'https://assets.mons.link/drops/test/green',
+    metadataBase: 'https://assets.mons.link/drops/hoodie',
     collectionMetadata: {
-      name: 'green test',
+      name: 'lsw cobalt figure hoodie 26',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'green test mons.shop drop',
+      description: 'little swag world hoodie Â· redeem physical on mons.shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/test/green/box/default.png',
+      image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
     receiptsTree: {
@@ -84,12 +84,12 @@ export const NEW_DROP: NewDropConfig = {
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 0.069,
     discountPriceSol: 0.042,
-    discountMintsPerWallet: 3,
-    maxSupply: 33,
+    discountMintsPerWallet: 1,
+    maxSupply: 34,
     itemsPerBox: 1,
     maxPerTx: 15,
-    namePrefix: 'box',
-    figureNamePrefix: 'item',
+    namePrefix: 'hoodie',
+    figureNamePrefix: 'hoodie',
     symbol: dropSymbol,
   },
 };
