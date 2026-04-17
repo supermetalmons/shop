@@ -70,7 +70,7 @@ export const NEW_DROP: NewDropConfig = {
       name: 'lsw cobalt figure hoodie 26',
       symbol: dropSymbol,
       sellerFeeBasisPoints,
-      description: 'little swag world hoodie Â· redeem physical on mons.shop',
+      description: 'little swag world hoodie · redeem physical on mons.shop',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },

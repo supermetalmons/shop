@@ -174,6 +174,34 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
   }),
+  "lsw_cobalt_figure_hoodie_26_draft": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "lsw_cobalt_figure_hoodie_26_draft",
+    dropFamily: "default",
+    collectionName: "lsw cobalt figure hoodie 26",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/hoodie",
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
+    maxSupply: 34,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: "hoodie",
+    figureNamePrefix: "hoodie",
+    symbol: "hoodie",
+
+    // On-chain ids
+    boxMinterProgramId: "HnRphG2N4wX6mG6Pbz1LacUkUX8J4FB1gjK5AqP5Ed4K",
+    collectionMint: "7gTdmjNtRUcmqdhMtnck4SYLc9xXDU8Y1mY4vmkey5Eq",
+    receiptsMerkleTree: "J1cFF4bX4XuzK1n3KQ9YMe4nffv6wHup7ikip3Y5QsnU",
+    deliveryLookupTable: "2nGXrq2zT9U5Ftxpno89z3sTnNv64DbWCm7NjkdLm8bU",
+  }),
   "poncho_drifella": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
