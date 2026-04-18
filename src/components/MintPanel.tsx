@@ -443,7 +443,7 @@ export function MintPanel({
                         </tbody>
                       </table>
                       <p className="mint-panel__size-quote">
-                        Designed for a relaxed fit, but many customers find this style runs slightly small. We recommend sizing up for a roomier fit.
+                      No returns; please check your sizing carefully.
                       </p>
                     </div>
                   ) : null}
