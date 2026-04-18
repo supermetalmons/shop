@@ -418,19 +418,34 @@ header.top {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  line-height: 1;
+  font-size: 16px;
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: #b0b0b5;
   cursor: pointer;
   border-radius: 999px;
-  opacity: 0.7;
-  transition: opacity 0.15s ease;
+  transition: color 0.15s ease;
+}
+
+.mint-panel__size-info > svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .mint-panel__size-info:hover:not(:disabled) {
-  color: var(--muted);
-  opacity: 1;
+  color: #6e6e73;
   background: transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mint-panel__size-info {
+    color: #6e6e73;
+  }
+  .mint-panel__size-info:hover:not(:disabled) {
+    color: #b0b0b5;
+  }
 }
 
 .mint-panel__size-info:focus,
