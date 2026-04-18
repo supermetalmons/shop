@@ -353,7 +353,7 @@ export function MintPanel({
                             ? 'mint-panel__size mint-panel__size--selected'
                             : 'mint-panel__size'
                         }
-                        onClick={() => setSelectedSize(size)}
+                        onClick={() => setSelectedSize((prev) => (prev === size ? null : size))}
                         disabled={busy}
                       >
                         {size}
