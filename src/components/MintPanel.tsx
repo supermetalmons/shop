@@ -176,6 +176,8 @@ export function MintPanel({
   // otherwise selecting a different size later flips the previously selected
   // button back into the blink selector and re-triggers the animation.
   const [isBlinking, setIsBlinking] = useState(false);
+  const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
+  const sizeInfoRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
@@ -195,6 +197,30 @@ export function MintPanel({
     if (maxSelectable < 1) return;
     setQuantity((prev) => (prev > maxSelectable ? maxSelectable : prev));
   }, [maxSelectable]);
+
+  useEffect(() => {
+    if (!showSizeSelector && sizeInfoOpen) setSizeInfoOpen(false);
+  }, [showSizeSelector, sizeInfoOpen]);
+
+  useEffect(() => {
+    if (!sizeInfoOpen) return;
+    const onPointerDown = (evt: MouseEvent) => {
+      const root = sizeInfoRef.current;
+      if (!root) return;
+      if (!root.contains(evt.target as Node)) {
+        setSizeInfoOpen(false);
+      }
+    };
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') setSizeInfoOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [sizeInfoOpen]);
 
   useEffect(() => {
     const el = previewRef.current;
@@ -361,15 +387,59 @@ export function MintPanel({
                     );
                   })}
                 </div>
-                <button
-                  type="button"
-                  className="mint-panel__size-info"
-                  aria-label="Size info"
-                  // TODO: open size info popup.
-                  onClick={() => {}}
-                >
-                  <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
-                </button>
+                <div className="mint-panel__size-info-wrap" ref={sizeInfoRef}>
+                  <button
+                    type="button"
+                    className="mint-panel__size-info"
+                    aria-label="Size info"
+                    aria-expanded={sizeInfoOpen}
+                    aria-haspopup="dialog"
+                    onClick={() => setSizeInfoOpen((prev) => !prev)}
+                  >
+                    <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
+                  </button>
+                  {sizeInfoOpen ? (
+                    <div
+                      className="mint-panel__size-popover"
+                      role="dialog"
+                      aria-label="Hoodie sizing"
+                    >
+                      <table className="mint-panel__size-table">
+                        <thead>
+                          <tr>
+                            <th scope="col" aria-label="Size" />
+                            <th scope="col">Body Length</th>
+                            <th scope="col">Chest Width</th>
+                            <th scope="col">Sleeve Length</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <th scope="row">L</th>
+                            <td>28 1/2</td>
+                            <td>25 1/2</td>
+                            <td>24 3/4</td>
+                          </tr>
+                          <tr>
+                            <th scope="row">XL</th>
+                            <td>29 1/2</td>
+                            <td>27 1/2</td>
+                            <td>25 1/4</td>
+                          </tr>
+                          <tr>
+                            <th scope="row">2XL</th>
+                            <td>30 1/2</td>
+                            <td>29 1/2</td>
+                            <td>26</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <p className="mint-panel__size-quote">
+                        Designed for a relaxed fit, but many customers find this style runs slightly small. We recommend sizing up for a roomier fit.
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : showQuantitySlider ? (
               <label className="mint-panel__label">
