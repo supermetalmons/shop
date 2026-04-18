@@ -172,12 +172,24 @@ export function MintPanel({
   // Bumping this token forces the size buttons to re-mount so the blink
   // animation restarts even when the user clicks Mint repeatedly.
   const [sizeBlinkToken, setSizeBlinkToken] = useState(0);
+  // The blink class must only be applied for the duration of the animation —
+  // otherwise selecting a different size later flips the previously selected
+  // button back into the blink selector and re-triggers the animation.
+  const [isBlinking, setIsBlinking] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   useEffect(() => {
     if (requiresSizeSelection) setQuantity(1);
   }, [requiresSizeSelection]);
+
+  useEffect(() => {
+    if (sizeBlinkToken === 0) return;
+    setIsBlinking(true);
+    // Matches the CSS animation duration (3 iterations × 0.65s).
+    const handle = window.setTimeout(() => setIsBlinking(false), 2000);
+    return () => window.clearTimeout(handle);
+  }, [sizeBlinkToken]);
 
   useEffect(() => {
     if (maxSelectable < 1) return;
@@ -321,7 +333,7 @@ export function MintPanel({
                 <div
                   key={sizeBlinkToken}
                   className={
-                    sizeBlinkToken > 0
+                    isBlinking
                       ? 'mint-panel__sizes mint-panel__sizes--blink'
                       : 'mint-panel__sizes'
                   }
