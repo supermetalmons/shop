@@ -394,7 +394,30 @@ header.top {
   cursor: not-allowed;
 }
 
-.mint-panel__sizes--blink .mint-panel__size:not(.mint-panel__size--selected) {
+.mint-panel__size--unavailable,
+.mint-panel__size--unavailable:hover,
+.mint-panel__size--unavailable:disabled {
+  background: transparent;
+  border-color: var(--border);
+  border-style: dashed;
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--muted);
+  text-decoration-thickness: 1px;
+  cursor: default;
+  opacity: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mint-panel__size--unavailable,
+  .mint-panel__size--unavailable:hover,
+  .mint-panel__size--unavailable:disabled {
+    color: #8e8e93;
+    text-decoration-color: #8e8e93;
+  }
+}
+
+.mint-panel__sizes--blink .mint-panel__size:not(.mint-panel__size--selected):not(.mint-panel__size--unavailable) {
   animation: mint-panel-size-blink 0.65s ease-in-out 0s 3;
 }
 

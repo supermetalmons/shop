@@ -368,19 +368,27 @@ export function MintPanel({
                 >
                   {HOODIE_SIZE_OPTIONS.map((size) => {
                     const selected = selectedSize === size;
+                    // Hardcoded for the lsw_cobalt_figure_hoodie drop family while
+                    // 2XL stock is unavailable. Keep the button visible so users
+                    // know the size exists, but make it clearly non-interactive.
+                    const unavailable = size === '2XL';
+                    const classes = ['mint-panel__size'];
+                    if (selected) classes.push('mint-panel__size--selected');
+                    if (unavailable) classes.push('mint-panel__size--unavailable');
                     return (
                       <button
                         key={size}
                         type="button"
                         role="radio"
                         aria-checked={selected}
-                        className={
-                          selected
-                            ? 'mint-panel__size mint-panel__size--selected'
-                            : 'mint-panel__size'
-                        }
-                        onClick={() => setSelectedSize((prev) => (prev === size ? null : size))}
-                        disabled={busy}
+                        aria-disabled={unavailable || undefined}
+                        title={unavailable ? 'Currently unavailable' : undefined}
+                        className={classes.join(' ')}
+                        onClick={() => {
+                          if (unavailable) return;
+                          setSelectedSize((prev) => (prev === size ? null : size));
+                        }}
+                        disabled={busy || unavailable}
                       >
                         {size}
                       </button>
