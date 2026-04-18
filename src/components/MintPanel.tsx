@@ -443,7 +443,7 @@ export function MintPanel({
                         </tbody>
                       </table>
                       <p className="mint-panel__size-quote">
-                      No returns; please check your sizing carefully.
+                      No returns; please choose your size carefully.
                       </p>
                     </div>
                   ) : null}
