@@ -1,8 +1,11 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight } from 'react-icons/fa6';
+import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
+
+const HOODIE_SIZE_OPTIONS = ['L', 'XL', '2XL'] as const;
+type HoodieSize = (typeof HOODIE_SIZE_OPTIONS)[number];
 
 interface MintPanelProps {
   stats?: MintStats;
@@ -23,6 +26,7 @@ interface MintPanelProps {
   discountMaxQuantity?: number;
   onDiscountClick?: (quantity: number) => void | Promise<void>;
   discountBusy?: boolean;
+  requiresSizeSelection?: boolean;
 }
 
 /**
@@ -151,6 +155,7 @@ export function MintPanel({
   discountMaxQuantity,
   onDiscountClick,
   discountBusy,
+  requiresSizeSelection,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -160,9 +165,19 @@ export function MintPanel({
   const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
   const [quantity, setQuantity] = useState(1);
   const maxSelectable = Math.min(maxSelectablePerTx, remaining);
-  const showQuantitySlider = maxSelectable > 1;
+  const showQuantitySlider = !requiresSizeSelection && maxSelectable > 1;
+  const showSizeSelector = Boolean(requiresSizeSelection);
+  const showFormControls = showQuantitySlider || showSizeSelector;
+  const [selectedSize, setSelectedSize] = useState<HoodieSize | null>(null);
+  // Bumping this token forces the size buttons to re-mount so the blink
+  // animation restarts even when the user clicks Mint repeatedly.
+  const [sizeBlinkToken, setSizeBlinkToken] = useState(0);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (requiresSizeSelection) setQuantity(1);
+  }, [requiresSizeSelection]);
 
   useEffect(() => {
     if (maxSelectable < 1) return;
@@ -188,6 +203,12 @@ export function MintPanel({
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
+    if (requiresSizeSelection && !selectedSize) {
+      // The selected size isn't passed to onMint yet; we just gate the action
+      // and visually nudge the user to pick one before we wire it up.
+      setSizeBlinkToken((prev) => prev + 1);
+      return;
+    }
     if (quantity < 1 || quantity > maxSelectablePerTx) return;
     try {
       await onMint(quantity);
@@ -280,7 +301,7 @@ export function MintPanel({
           ) : null}
         </div>
       ) : (
-        <div className={showQuantitySlider ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
+        <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
             <div className="mint-panel__price">{mintTitle}</div>
             <div
@@ -292,10 +313,53 @@ export function MintPanel({
           </div>
           <form
             id={formId}
-            className={showQuantitySlider ? 'mint-panel__slider' : 'mint-panel__slider mint-panel__slider--hidden'}
+            className={showFormControls ? 'mint-panel__slider' : 'mint-panel__slider mint-panel__slider--hidden'}
             onSubmit={handleMint}
           >
-            {showQuantitySlider ? (
+            {showSizeSelector ? (
+              <div className="mint-panel__sizes-row">
+                <div
+                  key={sizeBlinkToken}
+                  className={
+                    sizeBlinkToken > 0
+                      ? 'mint-panel__sizes mint-panel__sizes--blink'
+                      : 'mint-panel__sizes'
+                  }
+                  role="radiogroup"
+                  aria-label="Hoodie size"
+                >
+                  {HOODIE_SIZE_OPTIONS.map((size) => {
+                    const selected = selectedSize === size;
+                    return (
+                      <button
+                        key={size}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={
+                          selected
+                            ? 'mint-panel__size mint-panel__size--selected'
+                            : 'mint-panel__size'
+                        }
+                        onClick={() => setSelectedSize(size)}
+                        disabled={busy}
+                      >
+                        {size}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  className="mint-panel__size-info"
+                  aria-label="Size info"
+                  // TODO: open size info popup.
+                  onClick={() => {}}
+                >
+                  <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
+                </button>
+              </div>
+            ) : showQuantitySlider ? (
               <label className="mint-panel__label">
                 <span className="mint-panel__label-text muted small">{quantityLabel}</span>
                 <input
@@ -331,6 +395,10 @@ export function MintPanel({
                   type="button"
                   className="mint-panel__discount ghost"
                   onClick={() => {
+                    if (requiresSizeSelection && !selectedSize) {
+                      setSizeBlinkToken((prev) => prev + 1);
+                      return;
+                    }
                     if (!onDiscountClick) return;
                     void onDiscountClick(quantity);
                   }}

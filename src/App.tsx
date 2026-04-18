@@ -4081,6 +4081,7 @@ function App({ currentPath }: AppProps) {
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
+          requiresSizeSelection={isDropFamily(routeDrop.dropId, 'lsw_cobalt_figure_hoodie')}
         />
       )}
 
