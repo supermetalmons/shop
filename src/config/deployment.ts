@@ -21,6 +21,18 @@ export type FigureMediaConfig = {
   overrides?: Record<number, number>;
 };
 
+export type MintSelectionOption = {
+  key: string;
+  label: string;
+  startId: number;
+  endId: number;
+};
+
+export type MintSelectionConfig = {
+  kind: 'size';
+  options: MintSelectionOption[];
+};
+
 export type FrontendDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
@@ -32,6 +44,7 @@ export type FrontendDropConfig = {
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
   forceSoldOut?: boolean;
+  mintSelection?: MintSelectionConfig;
 
   // Drop config (kept in sync with on-chain config; useful for UI defaults)
   treasury: string;
@@ -156,6 +169,25 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
   };
 }
 
+function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
+  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
+  const options = raw.options.flatMap((entry) => {
+    const key = String(entry?.key || '').trim();
+    const label = String(entry?.label || key).trim();
+    const startId = Math.floor(Number(entry?.startId));
+    const endId = Math.floor(Number(entry?.endId));
+    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
+      return [];
+    }
+    return [{ key, label, startId, endId }];
+  });
+  if (options.length !== 3) return undefined;
+  return {
+    kind: 'size',
+    options,
+  };
+}
+
 const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   strategy: 'cyclic',
   count: 333,
@@ -209,6 +241,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
+  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   return {
     ...config,
     dropId: normalizedDropId,
@@ -216,6 +249,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
@@ -348,6 +382,29 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
 
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/hoodie",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
 
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
@@ -357,7 +414,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     discountMintsPerWallet: 1,
     discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
     maxSupply: 34,
-    itemsPerBox: 1,
+    itemsPerBox: 0,
     maxPerTx: 15,
     namePrefix: "hoodie",
     figureNamePrefix: "hoodie",

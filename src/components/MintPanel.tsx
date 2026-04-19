@@ -3,13 +3,12 @@ import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
-
-const HOODIE_SIZE_OPTIONS = ['L', 'XL', '2XL'] as const;
-type HoodieSize = (typeof HOODIE_SIZE_OPTIONS)[number];
+import type { MintSelectionConfig } from '../config/deployment';
+import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 
 interface MintPanelProps {
   stats?: MintStats;
-  onMint: (quantity: number) => Promise<void>;
+  onMint: (quantity: number, variantKey?: string) => Promise<void>;
   busy: boolean;
   onError?: (message: string) => void;
   title?: string;
@@ -24,9 +23,10 @@ interface MintPanelProps {
   discountVisible?: boolean;
   discountLabel?: string;
   discountMaxQuantity?: number;
-  onDiscountClick?: (quantity: number) => void | Promise<void>;
+  onDiscountClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
   discountBusy?: boolean;
-  requiresSizeSelection?: boolean;
+  mintSelection?: MintSelectionConfig;
+  showSizeInfo?: boolean;
 }
 
 /**
@@ -155,7 +155,8 @@ export function MintPanel({
   discountMaxQuantity,
   onDiscountClick,
   discountBusy,
-  requiresSizeSelection,
+  mintSelection,
+  showSizeInfo,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -163,12 +164,18 @@ export function MintPanel({
   const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
   const remainingReady = REMAINING_OVERRIDE !== null || Boolean(stats);
   const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
+  const sizeSelection = mintSelection?.kind === 'size' ? mintSelection : undefined;
+  const sizeOptions = sizeSelection?.options ?? [];
+  const sizeAvailability = useMemo(
+    () => stats?.mintSelectionAvailability ?? deriveMintSelectionAvailabilityFromConfig(sizeSelection) ?? {},
+    [stats?.mintSelectionAvailability, sizeSelection],
+  );
   const [quantity, setQuantity] = useState(1);
   const maxSelectable = Math.min(maxSelectablePerTx, remaining);
-  const showQuantitySlider = !requiresSizeSelection && maxSelectable > 1;
-  const showSizeSelector = Boolean(requiresSizeSelection);
+  const showSizeSelector = Boolean(sizeSelection);
+  const showQuantitySlider = !showSizeSelector && maxSelectable > 1;
   const showFormControls = showQuantitySlider || showSizeSelector;
-  const [selectedSize, setSelectedSize] = useState<HoodieSize | null>(null);
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
   // Bumping this token forces the size buttons to re-mount so the blink
   // animation restarts even when the user clicks Mint repeatedly.
   const [sizeBlinkToken, setSizeBlinkToken] = useState(0);
@@ -182,8 +189,12 @@ export function MintPanel({
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   useEffect(() => {
-    if (requiresSizeSelection) setQuantity(1);
-  }, [requiresSizeSelection]);
+    if (showSizeSelector) setQuantity(1);
+  }, [showSizeSelector]);
+
+  useEffect(() => {
+    if (!showSizeSelector) setSelectedSize(null);
+  }, [showSizeSelector]);
 
   useEffect(() => {
     if (sizeBlinkToken === 0) return;
@@ -199,6 +210,12 @@ export function MintPanel({
   useEffect(() => {
     if (selectedSize) setIsBlinking(false);
   }, [selectedSize]);
+
+  useEffect(() => {
+    if (!selectedSize) return;
+    if ((sizeAvailability[selectedSize] ?? 0) > 0) return;
+    setSelectedSize(null);
+  }, [selectedSize, sizeAvailability]);
 
   useEffect(() => {
     if (maxSelectable < 1) return;
@@ -248,15 +265,13 @@ export function MintPanel({
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
-    if (requiresSizeSelection && !selectedSize) {
-      // The selected size isn't passed to onMint yet; we just gate the action
-      // and visually nudge the user to pick one before we wire it up.
+    if (showSizeSelector && !selectedSize) {
       setSizeBlinkToken((prev) => prev + 1);
       return;
     }
     if (quantity < 1 || quantity > maxSelectablePerTx) return;
     try {
-      await onMint(quantity);
+      await onMint(quantity, selectedSize || undefined);
       setQuantity(1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to mint';
@@ -373,88 +388,87 @@ export function MintPanel({
                   role="radiogroup"
                   aria-label="Hoodie size"
                 >
-                  {HOODIE_SIZE_OPTIONS.map((size) => {
-                    const selected = selectedSize === size;
-                    // Hardcoded for the lsw_cobalt_figure_hoodie drop family while
-                    // 2XL stock is unavailable. Keep the button visible so users
-                    // know the size exists, but make it clearly non-interactive.
-                    const unavailable = size === '2XL';
+                  {sizeOptions.map((size) => {
+                    const selected = selectedSize === size.key;
+                    const unavailable = (sizeAvailability[size.key] ?? 0) <= 0;
                     const classes = ['mint-panel__size'];
                     if (selected) classes.push('mint-panel__size--selected');
                     if (unavailable) classes.push('mint-panel__size--unavailable');
                     return (
                       <button
-                        key={size}
+                        key={size.key}
                         type="button"
                         role="radio"
                         aria-checked={selected}
                         aria-disabled={unavailable || undefined}
-                        title={unavailable ? 'Currently unavailable' : undefined}
+                        title={unavailable ? 'Currently unavailable' : `${sizeAvailability[size.key] ?? 0} left`}
                         className={classes.join(' ')}
                         onClick={() => {
                           if (unavailable) return;
-                          setSelectedSize((prev) => (prev === size ? null : size));
+                          setSelectedSize((prev) => (prev === size.key ? null : size.key));
                         }}
                         disabled={busy || unavailable}
                       >
-                        {size}
+                        {size.label}
                       </button>
                     );
                   })}
                 </div>
-                <div className="mint-panel__size-info-wrap" ref={sizeInfoRef}>
-                  <button
-                    type="button"
-                    className="mint-panel__size-info"
-                    aria-label="Size info"
-                    aria-expanded={sizeInfoOpen}
-                    aria-haspopup="dialog"
-                    onClick={() => setSizeInfoOpen((prev) => !prev)}
-                  >
-                    <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
-                  </button>
-                  {sizeInfoOpen ? (
-                    <div
-                      className="mint-panel__size-popover"
-                      role="dialog"
-                      aria-label="Hoodie sizing"
+                {showSizeInfo ? (
+                  <div className="mint-panel__size-info-wrap" ref={sizeInfoRef}>
+                    <button
+                      type="button"
+                      className="mint-panel__size-info"
+                      aria-label="Size info"
+                      aria-expanded={sizeInfoOpen}
+                      aria-haspopup="dialog"
+                      onClick={() => setSizeInfoOpen((prev) => !prev)}
                     >
-                      <table className="mint-panel__size-table">
-                        <thead>
-                          <tr>
-                            <th scope="col" aria-label="Size" />
-                            <th scope="col">Body Length</th>
-                            <th scope="col">Chest Width</th>
-                            <th scope="col">Sleeve Length</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr>
-                            <th scope="row">L</th>
-                            <td>28 1/2</td>
-                            <td>25 1/2</td>
-                            <td>24 3/4</td>
-                          </tr>
-                          <tr>
-                            <th scope="row">XL</th>
-                            <td>29 1/2</td>
-                            <td>27 1/2</td>
-                            <td>25 1/4</td>
-                          </tr>
-                          <tr>
-                            <th scope="row">2XL</th>
-                            <td>30 1/2</td>
-                            <td>29 1/2</td>
-                            <td>26</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                      <p className="mint-panel__size-quote">
-                      No returns; please choose your size carefully.
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
+                      <FaCircleQuestion aria-hidden="true" focusable="false" size={16} />
+                    </button>
+                    {sizeInfoOpen ? (
+                      <div
+                        className="mint-panel__size-popover"
+                        role="dialog"
+                        aria-label="Hoodie sizing"
+                      >
+                        <table className="mint-panel__size-table">
+                          <thead>
+                            <tr>
+                              <th scope="col" aria-label="Size" />
+                              <th scope="col">Body Length</th>
+                              <th scope="col">Chest Width</th>
+                              <th scope="col">Sleeve Length</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <th scope="row">L</th>
+                              <td>28 1/2</td>
+                              <td>25 1/2</td>
+                              <td>24 3/4</td>
+                            </tr>
+                            <tr>
+                              <th scope="row">XL</th>
+                              <td>29 1/2</td>
+                              <td>27 1/2</td>
+                              <td>25 1/4</td>
+                            </tr>
+                            <tr>
+                              <th scope="row">2XL</th>
+                              <td>30 1/2</td>
+                              <td>29 1/2</td>
+                              <td>26</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <p className="mint-panel__size-quote">
+                          No returns; please choose your size carefully.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : showQuantitySlider ? (
               <label className="mint-panel__label">
@@ -492,12 +506,12 @@ export function MintPanel({
                   type="button"
                   className="mint-panel__discount ghost"
                   onClick={() => {
-                    if (requiresSizeSelection && !selectedSize) {
+                    if (showSizeSelector && !selectedSize) {
                       setSizeBlinkToken((prev) => prev + 1);
                       return;
                     }
                     if (!onDiscountClick) return;
-                    void onDiscountClick(quantity);
+                    void onDiscountClick(quantity, selectedSize || undefined);
                   }}
                   disabled={discountBusy || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance}
                 >

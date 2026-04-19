@@ -25,7 +25,16 @@ import {
   issueReceipts,
 } from './lib/api';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
-import { buildMintBoxesTx, buildMintDiscountedBoxTx, buildStartOpenBoxTx, fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount } from './lib/boxMinter';
+import {
+  buildMintBoxesTx,
+  buildMintDiscountedBoxTx,
+  buildMintDiscountedVariantBoxTx,
+  buildMintVariantBoxTx,
+  buildStartOpenBoxTx,
+  deriveMintSelectionAvailabilityFromConfig,
+  fetchBoxMinterConfig,
+  fetchDiscountMintRecordUsedCount,
+} from './lib/boxMinter';
 import { getDiscountProof, isDiscountListed } from './lib/discounts';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
@@ -831,29 +840,42 @@ function App({ currentPath }: AppProps) {
 
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
-  const forcedSoldOutStats = useMemo(
+  const fallbackMintSelectionAvailability = useMemo(
+    () => deriveMintSelectionAvailabilityFromConfig(routeDrop?.mintSelection),
+    [routeDrop?.mintSelection],
+  );
+  const soldOutMintSelectionAvailability = useMemo(
     () =>
-      routeDrop
-        ? {
-            minted: routeDrop.maxSupply,
-            total: routeDrop.maxSupply,
-            remaining: 0,
-            maxPerTx: routeDrop.maxPerTx,
-          }
+      fallbackMintSelectionAvailability
+        ? Object.fromEntries(Object.keys(fallbackMintSelectionAvailability).map((key) => [key, 0]))
         : undefined,
-    [routeDrop],
+    [fallbackMintSelectionAvailability],
+  );
+  const forcedSoldOutStats = useMemo(
+    () => {
+      if (!routeDrop) return undefined;
+      return {
+        minted: routeDrop.maxSupply,
+        total: routeDrop.maxSupply,
+        remaining: 0,
+        maxPerTx: routeDrop.maxPerTx,
+        ...(soldOutMintSelectionAvailability ? { mintSelectionAvailability: soldOutMintSelectionAvailability } : {}),
+      };
+    },
+    [routeDrop, soldOutMintSelectionAvailability],
   );
   const activeMintStatsFallback = useMemo(
-    () =>
-      routeDrop
-        ? {
-            minted: 0,
-            total: routeDrop.maxSupply,
-            remaining: routeDrop.maxSupply,
-            maxPerTx: routeDrop.maxPerTx,
-          }
-        : undefined,
-    [routeDrop],
+    () => {
+      if (!routeDrop) return undefined;
+      return {
+        minted: 0,
+        total: routeDrop.maxSupply,
+        remaining: routeDrop.maxSupply,
+        maxPerTx: routeDrop.maxPerTx,
+        ...(fallbackMintSelectionAvailability ? { mintSelectionAvailability: fallbackMintSelectionAvailability } : {}),
+      };
+    },
+    [routeDrop, fallbackMintSelectionAvailability],
   );
   const effectiveMintStats = routeDrop
     ? routeDrop.forceSoldOut
@@ -2655,7 +2677,7 @@ function App({ currentPath }: AppProps) {
     });
   };
 
-  const handleMint = async (quantity: number) => {
+  const handleMint = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
@@ -2663,11 +2685,18 @@ function App({ currentPath }: AppProps) {
     }
     const mintDrop = requireRouteDrop('mint');
     if (!routeConnection) throw new Error('Missing route connection for mint');
+    if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
+      showToast('Select a size');
+      return;
+    }
     setMinting(true);
     try {
       const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
       const sendOnce = async () => {
-        const tx = await buildMintBoxesTx(routeConnection, cfg, publicKey, quantity, mintDrop);
+        const tx =
+          mintDrop.mintSelection?.kind === 'size'
+            ? await buildMintVariantBoxTx(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
+            : await buildMintBoxesTx(routeConnection, cfg, publicKey, quantity, mintDrop);
         const sig = await signAndSendViaConnection(tx, routeConnection);
         await routeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
@@ -2679,7 +2708,7 @@ function App({ currentPath }: AppProps) {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(quantity, mintDrop.dropId);
+      addLocalMintedBoxes(mintDrop.mintSelection?.kind === 'size' ? 1 : quantity, mintDrop.dropId);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -2689,7 +2718,7 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleDiscountMint = async (quantity: number) => {
+  const handleDiscountMint = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
     if (!publicKey) {
       setVisible(true);
@@ -2698,6 +2727,10 @@ function App({ currentPath }: AppProps) {
     const mintDrop = requireRouteDrop('discount mint');
     if (!routeConnection) throw new Error('Missing route connection for discount mint');
     if (mintedOut || discountMinting || minting) return;
+    if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
+      showToast('Select a size');
+      return;
+    }
     const maxDiscountQuantity = Math.max(0, discountRemainingCount);
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountQuantity) {
       if (maxDiscountQuantity > 0) {
@@ -2735,7 +2768,10 @@ function App({ currentPath }: AppProps) {
         return;
       }
       const sendOnce = async () => {
-        const tx = await buildMintDiscountedBoxTx(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
+        const tx =
+          mintDrop.mintSelection?.kind === 'size'
+            ? await buildMintDiscountedVariantBoxTx(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
+            : await buildMintDiscountedBoxTx(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
         const sig = await signAndSendViaConnection(tx, routeConnection);
         await routeConnection.confirmTransaction(sig, 'confirmed');
         return sig;
@@ -2747,8 +2783,9 @@ function App({ currentPath }: AppProps) {
         showToast('Transaction expired before you approved it. Please approve again…');
         await sendOnce();
       }
-      addLocalMintedBoxes(quantity, mintDrop.dropId);
-      const nextUsedCount = onchainUsedCount + quantity;
+      const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
+      addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+      const nextUsedCount = onchainUsedCount + mintedQuantity;
       const nextRemainingCount = Math.max(0, onchainDiscountAllowance - nextUsedCount);
       setDiscountUsedCount(nextUsedCount);
       setDiscountRemainingCount(nextRemainingCount);
@@ -4088,7 +4125,8 @@ function App({ currentPath }: AppProps) {
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
-          requiresSizeSelection={isDropFamily(routeDrop.dropId, 'lsw_cobalt_figure_hoodie')}
+          mintSelection={routeDrop.mintSelection}
+          showSizeInfo={isDropFamily(routeDrop.dropId, 'lsw_cobalt_figure_hoodie') && routeDrop.mintSelection?.kind === 'size'}
         />
       )}
 

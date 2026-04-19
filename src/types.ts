@@ -28,6 +28,7 @@ export interface MintStats {
   maxPerTx?: number;
   priceLamports?: number;
   discountMintsPerWallet?: number;
+  mintSelectionAvailability?: Record<string, number>;
 }
 
 export interface ProfileAddress {

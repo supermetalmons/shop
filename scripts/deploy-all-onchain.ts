@@ -17,6 +17,7 @@ import {
   type DropFamily,
   type FrontendDropConfigSerialized,
   type FunctionsDropConfigSerialized,
+  type MintSelectionConfigSerialized,
 } from './shared/deploymentRegistry.ts';
 import {
   clusterApiUrl,
@@ -508,6 +509,75 @@ type PreparedInitDropInputs = {
   discountMerkle: { root: Buffer; proofs: Record<string, string[]> };
 };
 
+function prepareMintSelectionConfig(dropCfg: typeof NEW_DROP.onchain): MintSelectionConfigSerialized | undefined {
+  const selection = dropCfg.mintSelection;
+  if (!selection) return undefined;
+  if (selection.kind !== 'size') {
+    throw new Error(`Unsupported NEW_DROP.onchain.mintSelection.kind: ${String((selection as { kind?: unknown }).kind ?? '')}`);
+  }
+  if (dropCfg.itemsPerBox !== 0) {
+    throw new Error(
+      `NEW_DROP.onchain.mintSelection.kind='size' currently supports direct-delivery drops only.\n` +
+        `Fix: set NEW_DROP.onchain.itemsPerBox=0 for this drop.`,
+    );
+  }
+  const options = Array.isArray(selection.options) ? selection.options : [];
+  if (options.length !== 3) {
+    throw new Error('NEW_DROP.onchain.mintSelection.options must contain exactly 3 size options.');
+  }
+  const normalized = options.map((option, index) => {
+    const key = requireNonEmptyString(option.key, `NEW_DROP.onchain.mintSelection.options[${index}].key`);
+    const label = requireNonEmptyString(option.label, `NEW_DROP.onchain.mintSelection.options[${index}].label`);
+    const startId = requireIntegerInRange({
+      value: option.startId,
+      label: `NEW_DROP.onchain.mintSelection.options[${index}].startId`,
+      min: 1,
+      max: 0xffff_ffff,
+    });
+    const endId = requireIntegerInRange({
+      value: option.endId,
+      label: `NEW_DROP.onchain.mintSelection.options[${index}].endId`,
+      min: startId,
+      max: 0xffff_ffff,
+    });
+    return { key, label, startId, endId };
+  });
+  const seenKeys = new Set<string>();
+  normalized.forEach((option, index) => {
+    if (seenKeys.has(option.key)) {
+      throw new Error(`Duplicate NEW_DROP.onchain.mintSelection.options[${index}].key: ${option.key}`);
+    }
+    seenKeys.add(option.key);
+  });
+  normalized.forEach((option, index) => {
+    if (index === 0 && option.startId !== 1) {
+      throw new Error('NEW_DROP.onchain.mintSelection.options[0].startId must be 1.');
+    }
+    if (index > 0) {
+      const prev = normalized[index - 1];
+      if (option.startId !== prev.endId + 1) {
+        throw new Error(
+          `NEW_DROP.onchain.mintSelection.options[${index}] must start immediately after the previous range ends.\n` +
+            `- previous endId: ${prev.endId}\n` +
+            `- current startId: ${option.startId}`,
+        );
+      }
+    }
+  });
+  const lastEndId = normalized[normalized.length - 1]?.endId || 0;
+  if (lastEndId !== dropCfg.maxSupply) {
+    throw new Error(
+      `NEW_DROP.onchain.mintSelection ranges must exactly cover 1..maxSupply.\n` +
+        `- configured maxSupply: ${dropCfg.maxSupply}\n` +
+        `- final endId        : ${lastEndId}`,
+    );
+  }
+  return {
+    kind: 'size',
+    options: normalized,
+  };
+}
+
 type PreparedCollectionMetadata = {
   name: string;
   symbol: string;
@@ -823,6 +893,7 @@ async function writeFrontendDeploymentConfig(args: {
   dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
+  mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
@@ -856,6 +927,7 @@ async function writeFrontendDeploymentConfig(args: {
     dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
+    ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
     ...(figureMedia ? { figureMedia } : {}),
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
@@ -882,6 +954,7 @@ async function writeFunctionsDeploymentConfig(args: {
   dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
+  mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
@@ -916,6 +989,7 @@ async function writeFunctionsDeploymentConfig(args: {
     dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
+    ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
@@ -963,6 +1037,20 @@ function borshString(value: string): Buffer {
 
 function u8(value: number): Buffer {
   return Buffer.from([value & 0xff]);
+}
+
+function encodeMintSelectionInitializeArgs(mintSelection: MintSelectionConfigSerialized | undefined): Buffer {
+  const zeroArray = Array.from({ length: 3 }, () => u32LE(0));
+  if (!mintSelection) {
+    return Buffer.concat([u8(0), ...zeroArray, ...zeroArray, ...zeroArray]);
+  }
+  if (mintSelection.kind !== 'size' || mintSelection.options.length !== 3) {
+    throw new Error('Invalid mintSelection config for initialize');
+  }
+  const startIds = mintSelection.options.map((option) => u32LE(option.startId));
+  const endIds = mintSelection.options.map((option) => u32LE(option.endId));
+  const nextIds = mintSelection.options.map((option) => u32LE(option.startId));
+  return Buffer.concat([u8(1), ...startIds, ...endIds, ...nextIds]);
 }
 
 function borshOption(value: Buffer | null | undefined): Buffer {
@@ -1490,6 +1578,7 @@ function buildInitializeIx(args: {
   namePrefix: string;
   figureNamePrefix: string;
   symbol: string;
+  mintSelection?: MintSelectionConfigSerialized;
   /**
    * Drop base URL (canonical), e.g. `https://assets.example.com/drops/your-drop`.
    *
@@ -1511,6 +1600,7 @@ function buildInitializeIx(args: {
     borshString(args.metadataBase),
     Buffer.from([requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'initialize discountMintsPerWallet') & 0xff]),
     borshString(args.figureNamePrefix),
+    encodeMintSelectionInitializeArgs(args.mintSelection),
   ]);
 
   return new TransactionInstruction({
@@ -2165,6 +2255,7 @@ async function main() {
     // - receipts: `${metadataBase}/json/receipts/{kind}/{id}.json`
     // (The program also supports legacy configs where the stored value is already `${base}/json/boxes/`.)
     metadataBase: requiredDropMetadataBase,
+    mintSelection: prepareMintSelectionConfig(dropCfg),
   };
 
   // Payment treasury (defaults to deployer/admin key if unset).
@@ -2275,6 +2366,7 @@ async function main() {
     figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
+    mintSelection: boxMinterConfig.mintSelection,
   });
 
   const setupTx = new Transaction().add(initIx);
@@ -2335,6 +2427,7 @@ async function main() {
     dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
+    mintSelection: boxMinterConfig.mintSelection,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
@@ -2356,6 +2449,7 @@ async function main() {
     dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
+    mintSelection: boxMinterConfig.mintSelection,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),

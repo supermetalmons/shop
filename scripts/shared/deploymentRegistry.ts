@@ -10,6 +10,18 @@ export type FigureMediaConfigSerialized = {
   overrides?: Record<number, number>;
 };
 
+export type MintSelectionOptionSerialized = {
+  key: string;
+  label: string;
+  startId: number;
+  endId: number;
+};
+
+export type MintSelectionConfigSerialized = {
+  kind: 'size';
+  options: MintSelectionOptionSerialized[];
+};
+
 export type FrontendDropConfigSerialized = {
   solanaCluster: string;
   dropId: string;
@@ -19,6 +31,7 @@ export type FrontendDropConfigSerialized = {
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfigSerialized;
   forceSoldOut?: boolean;
+  mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
@@ -196,6 +209,28 @@ function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigS
   };
 }
 
+function normalizeMintSelectionConfigForRegistry(raw: unknown): MintSelectionConfigSerialized | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  if (obj.kind !== 'size') return undefined;
+  const optionsRaw = Array.isArray(obj.options) ? obj.options : [];
+  const options = optionsRaw.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+    const option = entry as Record<string, unknown>;
+    const key = asTrimmedString(option.key);
+    const label = asTrimmedString(option.label) || key;
+    const startId = normalizePositiveInteger(option.startId);
+    const endId = normalizePositiveInteger(option.endId);
+    if (!key || !label || !startId || !endId || endId < startId) return [];
+    return [{ key, label, startId, endId }];
+  });
+  if (options.length !== 3) return undefined;
+  return {
+    kind: 'size',
+    options,
+  };
+}
+
 export function defaultFrontendFigureMediaForDropFamily(dropFamily: DropFamily): FigureMediaConfigSerialized | undefined {
   if (dropFamily !== 'little_swag_boxes') return undefined;
   return normalizeFigureMediaConfigForRegistry(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
@@ -212,6 +247,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const defaultMarketHref = defaultSecondaryMarketHref(dropId);
   const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropFamily(dropFamily);
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
+  const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
@@ -221,6 +257,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     ...(secondaryMarketHref && secondaryMarketHref !== defaultMarketHref ? { secondaryMarketHref } : {}),
     ...(figureMedia ? { figureMedia } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
+    ...(mintSelection ? { mintSelection } : {}),
     treasury: asTrimmedString(obj.treasury),
     priceSol: asFiniteNumber(obj.priceSol),
     discountPriceSol: asFiniteNumber(obj.discountPriceSol),
@@ -338,6 +375,21 @@ function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, ind
   return lines.join('\n');
 }
 
+function renderMintSelectionConfigLiteral(config: MintSelectionConfigSerialized, indent = '    '): string {
+  const lines = [`${indent}mintSelection: {`, `${indent}  kind: ${tsStringLiteral(config.kind)},`, `${indent}  options: [`];
+  config.options.forEach((option) => {
+    lines.push(`${indent}    {`);
+    lines.push(`${indent}      key: ${tsStringLiteral(option.key)},`);
+    lines.push(`${indent}      label: ${tsStringLiteral(option.label)},`);
+    lines.push(`${indent}      startId: ${Math.floor(Number(option.startId))},`);
+    lines.push(`${indent}      endId: ${Math.floor(Number(option.endId))},`);
+    lines.push(`${indent}    },`);
+  });
+  lines.push(`${indent}  ],`);
+  lines.push(`${indent}},`);
+  return lines.join('\n');
+}
+
 function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
   return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
@@ -347,7 +399,7 @@ function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
 
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: ${tsStringLiteral(drop.metadataBase)},
-${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},\n` : ''}${drop.forceSoldOut ? `    forceSoldOut: true,\n` : ''}${drop.figureMedia ? `${renderFigureMediaConfigLiteral(drop.figureMedia)}\n` : ''}
+${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},\n` : ''}${drop.forceSoldOut ? `    forceSoldOut: true,\n` : ''}${drop.figureMedia ? `${renderFigureMediaConfigLiteral(drop.figureMedia)}\n` : ''}${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\n` : ''}
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: ${tsStringLiteral(drop.treasury)},
@@ -377,6 +429,7 @@ function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
 
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: ${tsStringLiteral(drop.metadataBase)},
+${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\n` : ''}
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: ${tsStringLiteral(drop.treasury)},
@@ -439,6 +492,18 @@ export type FigureMediaConfig = {
   overrides?: Record<number, number>;
 };
 
+export type MintSelectionOption = {
+  key: string;
+  label: string;
+  startId: number;
+  endId: number;
+};
+
+export type MintSelectionConfig = {
+  kind: 'size';
+  options: MintSelectionOption[];
+};
+
 export type FrontendDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
@@ -450,6 +515,7 @@ export type FrontendDropConfig = {
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
   forceSoldOut?: boolean;
+  mintSelection?: MintSelectionConfig;
 
   // Drop config (kept in sync with on-chain config; useful for UI defaults)
   treasury: string;
@@ -574,6 +640,25 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
   };
 }
 
+function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
+  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
+  const options = raw.options.flatMap((entry) => {
+    const key = String(entry?.key || '').trim();
+    const label = String(entry?.label || key).trim();
+    const startId = Math.floor(Number(entry?.startId));
+    const endId = Math.floor(Number(entry?.endId));
+    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
+      return [];
+    }
+    return [{ key, label, startId, endId }];
+  });
+  if (options.length !== 3) return undefined;
+  return {
+    kind: 'size',
+    options,
+  };
+}
+
 const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
   strategy: 'cyclic',
   count: 333,
@@ -634,6 +719,7 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(normalizeMintSelectionConfig(config.mintSelection) ? { mintSelection: normalizeMintSelectionConfig(config.mintSelection) } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
@@ -710,6 +796,18 @@ export function renderFunctionsDeploymentRegistryFile(args: {
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
 
+export type MintSelectionOption = {
+  key: string;
+  label: string;
+  startId: number;
+  endId: number;
+};
+
+export type MintSelectionConfig = {
+  kind: 'size';
+  options: MintSelectionOption[];
+};
+
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
   dropId: string;
@@ -718,6 +816,7 @@ export type FunctionsDropConfig = {
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
+  mintSelection?: MintSelectionConfig;
 
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: string;
@@ -795,6 +894,25 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
   return parsed;
 }
 
+function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
+  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
+  const options = raw.options.flatMap((entry) => {
+    const key = String(entry?.key || '').trim();
+    const label = String(entry?.label || key).trim();
+    const startId = Math.floor(Number(entry?.startId));
+    const endId = Math.floor(Number(entry?.endId));
+    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
+      return [];
+    }
+    return [{ key, label, startId, endId }];
+  });
+  if (options.length !== 3) return undefined;
+  return {
+    kind: 'size',
+    options,
+  };
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -815,6 +933,7 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
+    ...(normalizeMintSelectionConfig(config.mintSelection) ? { mintSelection: normalizeMintSelectionConfig(config.mintSelection) } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };

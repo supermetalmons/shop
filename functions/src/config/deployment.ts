@@ -20,6 +20,7 @@ export type FunctionsDropConfig = {
 
   // Drop metadata base (collection.json + json/* + images/*)
   metadataBase: string;
+  mintSelection?: MintSelectionConfig;
 
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
   treasury: string;
@@ -45,6 +46,18 @@ export type FunctionsDropConfig = {
 export type FunctionsDeploymentConfig = FunctionsDropConfig;
 
 export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
+
+export type MintSelectionOption = {
+  key: string;
+  label: string;
+  startId: number;
+  endId: number;
+};
+
+export type MintSelectionConfig = {
+  kind: 'size';
+  options: MintSelectionOption[];
+};
 
 export type DropPaths = {
   /** Normalized drop base (no trailing slash). */
@@ -97,6 +110,25 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
   return parsed;
 }
 
+function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
+  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
+  const options = raw.options.flatMap((entry) => {
+    const key = String(entry?.key || '').trim();
+    const label = String(entry?.label || key).trim();
+    const startId = Math.floor(Number(entry?.startId));
+    const endId = Math.floor(Number(entry?.endId));
+    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
+      return [];
+    }
+    return [{ key, label, startId, endId }];
+  });
+  if (options.length !== 3) return undefined;
+  return {
+    kind: 'size',
+    options,
+  };
+}
+
 export function dropPathsFromBase(dropBase: string): DropPaths {
   const base = normalizeDropBase(dropBase);
   return {
@@ -112,11 +144,13 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
+  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   return {
     ...config,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
+    ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
@@ -188,6 +222,29 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
 
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/hoodie",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
@@ -196,7 +253,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     discountMintsPerWallet: 1,
     discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
     maxSupply: 34,
-    itemsPerBox: 1,
+    itemsPerBox: 0,
     maxPerTx: 15,
     namePrefix: "hoodie",
     figureNamePrefix: "hoodie",

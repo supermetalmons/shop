@@ -8,7 +8,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { MintStats } from '../types';
-import type { FrontendDeploymentConfig } from '../config/deployment';
+import type { FrontendDeploymentConfig, MintSelectionConfig } from '../config/deployment';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
@@ -18,6 +18,11 @@ const PENDING_DUDE_ASSET_SEED = 'pdude';
 const MIN_CONFIGURED_ITEMS_PER_BOX = 0;
 const MIN_OPENABLE_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
+const MINT_VARIANT_KIND_NONE = 0;
+const MINT_VARIANT_KIND_SIZE = 1;
+const MINT_VARIANT_OPTION_COUNT = 3;
+const MINT_COMPUTE_UNIT_LIMIT = 1_400_000;
+const SIZE_SELECTION_REQUIRED_ERROR = 'This drop requires a size selection before minting';
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -48,6 +53,8 @@ async function retryRpc<T>(
 // Computed in-repo to avoid shipping Anchor in the browser.
 const IX_MINT_BOXES = Uint8Array.from([0xa7, 0xe1, 0xd5, 0xb1, 0x52, 0x1d, 0x55, 0x66]);
 const IX_MINT_DISCOUNTED_BOX = Uint8Array.from([0x1d, 0xe3, 0xc9, 0x63, 0xa4, 0x40, 0x25, 0x8b]);
+const IX_MINT_VARIANT_BOX = Uint8Array.from([0x0e, 0x56, 0x06, 0xf6, 0x1c, 0x1d, 0x02, 0x9b]);
+const IX_MINT_DISCOUNTED_VARIANT_BOX = Uint8Array.from([0x02, 0x8d, 0x83, 0x46, 0x2f, 0x1f, 0x5b, 0x62]);
 const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0x28, 0x8f]);
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 const ACCOUNT_DISCOUNT_MINT_RECORD = Uint8Array.from([0x63, 0xca, 0x74, 0x83, 0xde, 0x9f, 0x0f, 0x70]);
@@ -74,10 +81,14 @@ export interface BoxMinterConfigAccount {
   symbol: string;
   uriBase: string;
   bump: number;
+  mintVariantKind: number;
+  mintVariantStartIds: [number, number, number];
+  mintVariantEndIds: [number, number, number];
+  mintVariantNextIds: [number, number, number];
 }
 
-type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx'>;
-type DropMintLimitsConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx'>;
+type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx' | 'mintSelection'>;
+type DropMintLimitsConfig = DropProgramConfig;
 
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
   const parsed = Number(config?.maxPerTx);
@@ -89,6 +100,38 @@ function normalizeDiscountMintsPerWallet(value: number | undefined): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3) return 1;
   return parsed;
+}
+
+function isSizeMintSelection(selection: MintSelectionConfig | undefined): selection is MintSelectionConfig {
+  return selection?.kind === 'size' && Array.isArray(selection.options) && selection.options.length === MINT_VARIANT_OPTION_COUNT;
+}
+
+function mapMintSelectionAvailability(
+  selection: MintSelectionConfig | undefined,
+  resolveRemaining: (option: MintSelectionConfig['options'][number], index: number) => number,
+): Record<string, number> | undefined {
+  if (!isSizeMintSelection(selection)) return undefined;
+  return Object.fromEntries(selection.options.map((option, index) => [option.key, resolveRemaining(option, index)]));
+}
+
+function assertStandardMintConfig(cfg: BoxMinterConfigAccount): void {
+  if (cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
+    throw new Error(SIZE_SELECTION_REQUIRED_ERROR);
+  }
+}
+
+async function buildMintTransaction(
+  connection: Connection,
+  payer: PublicKey,
+  mintIx: TransactionInstruction,
+): Promise<VersionedTransaction> {
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: MINT_COMPUTE_UNIT_LIMIT }), mintIx],
+  }).compileToV0Message();
+  return new VersionedTransaction(message);
 }
 
 export function boxMinterProgramId(dropConfig: DropProgramConfig): PublicKey {
@@ -141,6 +184,66 @@ function readBorshString(buf: Uint8Array, offset: number): { value: string; next
   const end = start + len;
   const value = new TextDecoder().decode(buf.subarray(start, end));
   return { value, next: end };
+}
+
+function readU32Tuple(
+  buf: Uint8Array,
+  offset: number,
+): { value: [number, number, number]; next: number } {
+  const value: [number, number, number] = [0, 0, 0];
+  let next = offset;
+  for (let i = 0; i < MINT_VARIANT_OPTION_COUNT; i += 1) {
+    value[i] = readU32(buf, next);
+    next += 4;
+  }
+  return { value, next };
+}
+
+function resolveMintSelectionAvailability(
+  cfg: BoxMinterConfigAccount,
+  selection: MintSelectionConfig | undefined,
+): Record<string, number> | undefined {
+  if (cfg.mintVariantKind !== MINT_VARIANT_KIND_SIZE) return undefined;
+  return mapMintSelectionAvailability(selection, (option, index) => {
+    const onchainStart = cfg.mintVariantStartIds[index];
+    const onchainEnd = cfg.mintVariantEndIds[index];
+    if (option.startId !== onchainStart || option.endId !== onchainEnd) {
+      throw new Error('Drop mint selection is out of sync with on-chain variant ranges');
+    }
+    const nextId = cfg.mintVariantNextIds[index];
+    return nextId > onchainEnd ? 0 : Math.max(0, onchainEnd - Math.max(nextId, onchainStart) + 1);
+  });
+}
+
+export function deriveMintSelectionAvailabilityFromConfig(
+  selection: MintSelectionConfig | undefined,
+): Record<string, number> | undefined {
+  return mapMintSelectionAvailability(selection, (option) => Math.max(0, option.endId - option.startId + 1));
+}
+
+function resolveMintVariantIndex(
+  cfg: BoxMinterConfigAccount,
+  dropConfig: DropProgramConfig,
+  variantKey: string,
+): number {
+  if (cfg.mintVariantKind !== MINT_VARIANT_KIND_SIZE) {
+    throw new Error('This drop does not use variant minting');
+  }
+  const selection = dropConfig.mintSelection;
+  if (!isSizeMintSelection(selection)) {
+    throw new Error('Missing drop mint selection configuration');
+  }
+  const index = selection.options.findIndex((option) => option.key === variantKey);
+  if (index === -1) {
+    throw new Error(`Unknown mint variant: ${variantKey}`);
+  }
+  if (
+    selection.options[index].startId !== cfg.mintVariantStartIds[index] ||
+    selection.options[index].endId !== cfg.mintVariantEndIds[index]
+  ) {
+    throw new Error('Drop mint selection is out of sync with on-chain variant ranges');
+  }
+  return index;
 }
 
 export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array): BoxMinterConfigAccount {
@@ -212,7 +315,33 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 1;
   const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
   o += 1;
-  const figureNamePrefix = o + 4 <= data.length ? readBorshString(data, o).value : 'figure';
+  let figureNamePrefix = 'figure';
+  if (o + 4 <= data.length) {
+    const decoded = readBorshString(data, o);
+    figureNamePrefix = decoded.value;
+    o = decoded.next;
+  }
+  let mintVariantKind = MINT_VARIANT_KIND_NONE;
+  let mintVariantStartIds: [number, number, number] = [0, 0, 0];
+  let mintVariantEndIds: [number, number, number] = [0, 0, 0];
+  let mintVariantNextIds: [number, number, number] = [0, 0, 0];
+  const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
+  if (o < data.length) {
+    if (o + mintVariantBytes > data.length) {
+      throw new Error('Unsupported box minter config schema. Variant mint data is truncated.');
+    }
+    mintVariantKind = data[o] ?? MINT_VARIANT_KIND_NONE;
+    o += 1;
+    const startIds = readU32Tuple(data, o);
+    mintVariantStartIds = startIds.value;
+    o = startIds.next;
+    const endIds = readU32Tuple(data, o);
+    mintVariantEndIds = endIds.value;
+    o = endIds.next;
+    const nextIds = readU32Tuple(data, o);
+    mintVariantNextIds = nextIds.value;
+    o = nextIds.next;
+  }
 
   return {
     pubkey,
@@ -233,6 +362,10 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     symbol: symbol.value,
     uriBase: uriBase.value,
     bump,
+    mintVariantKind,
+    mintVariantStartIds,
+    mintVariantEndIds,
+    mintVariantNextIds,
   };
 }
 
@@ -302,6 +435,7 @@ export async function fetchMintStatsFromProgram(
   const remaining = Math.max(0, total - minted);
   // Keep in sync with on-chain config; clamp to our deployment-config defaults for safety.
   const maxPerTx = Math.min(cfg.maxPerTx || 0, normalizeMaxMintsPerTx(dropConfig));
+  const mintSelectionAvailability = resolveMintSelectionAvailability(cfg, dropConfig.mintSelection);
   return {
     minted,
     total,
@@ -309,6 +443,7 @@ export async function fetchMintStatsFromProgram(
     maxPerTx,
     priceLamports: Number(cfg.priceLamports || 0n),
     discountMintsPerWallet: cfg.discountMintsPerWallet,
+    ...(mintSelectionAvailability ? { mintSelectionAvailability } : {}),
   };
 }
 
@@ -392,12 +527,41 @@ function encodeMintDiscountedBoxData(mintId: bigint, boxBumps: number[], proof: 
   return Buffer.concat([Buffer.from(IX_MINT_DISCOUNTED_BOX), u64LE(mintId), bumpsLen, bumps, proofLen, proofBytes]);
 }
 
+function encodeMintVariantBoxData(variantIndex: number, mintId: bigint, boxBump: number): Buffer {
+  if (!Number.isInteger(variantIndex) || variantIndex < 0 || variantIndex >= MINT_VARIANT_OPTION_COUNT) {
+    throw new Error('Invalid mint variant');
+  }
+  return Buffer.concat([Buffer.from(IX_MINT_VARIANT_BOX), Buffer.from([variantIndex & 0xff]), u64LE(mintId), Buffer.from([boxBump & 0xff])]);
+}
+
+function encodeMintDiscountedVariantBoxData(variantIndex: number, mintId: bigint, boxBump: number, proof: Uint8Array[]): Buffer {
+  if (!Array.isArray(proof)) {
+    throw new Error('Missing discount proof');
+  }
+  const proofLen = u32LE(proof.length);
+  const proofBytes = Buffer.concat(
+    proof.map((node) => {
+      if (node.length !== 32) throw new Error('Invalid discount proof node');
+      return Buffer.from(node);
+    }),
+  );
+  return Buffer.concat([
+    Buffer.from(IX_MINT_DISCOUNTED_VARIANT_BOX),
+    Buffer.from([variantIndex & 0xff]),
+    u64LE(mintId),
+    Buffer.from([boxBump & 0xff]),
+    proofLen,
+    proofBytes,
+  ]);
+}
+
 export function buildMintBoxesIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
   dropConfig: DropMintLimitsConfig,
 ): TransactionInstruction {
+  assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
@@ -428,6 +592,7 @@ export function buildMintDiscountedBoxIx(
   proof: Uint8Array[],
   dropConfig: DropProgramConfig,
 ): TransactionInstruction {
+  assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const [discountRecordPda] = discountMintRecordPda(payer, programId);
@@ -453,6 +618,59 @@ export function buildMintDiscountedBoxIx(
   });
 }
 
+export function buildMintVariantBoxIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  dropConfig: DropMintLimitsConfig,
+): TransactionInstruction {
+  const programId = boxMinterProgramId(dropConfig);
+  const [configPda] = boxMinterConfigPda(programId);
+  const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+    ],
+    data: encodeMintVariantBoxData(variantIndex, mintId, boxBumps[0]),
+  });
+}
+
+export function buildMintDiscountedVariantBoxIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): TransactionInstruction {
+  const programId = boxMinterProgramId(dropConfig);
+  const [configPda] = boxMinterConfigPda(programId);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: configPda, isSigner: false, isWritable: true },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: discountRecordPda, isSigner: false, isWritable: true },
+      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+    ],
+    data: encodeMintDiscountedVariantBoxData(variantIndex, mintId, boxBumps[0], proof),
+  });
+}
+
 export async function buildMintBoxesTx(
   connection: Connection,
   cfg: BoxMinterConfigAccount,
@@ -460,6 +678,7 @@ export async function buildMintBoxesTx(
   quantity: number,
   dropConfig: DropMintLimitsConfig,
 ): Promise<VersionedTransaction> {
+  assertStandardMintConfig(cfg);
   const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
   // Keep conservative; each Core mint creates a new account.
   if (quantity > maxMintsPerTx) {
@@ -467,17 +686,7 @@ export async function buildMintBoxesTx(
   }
 
   const mintIx = buildMintBoxesIx(cfg, payer, quantity, dropConfig);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      // Optional: add setComputeUnitPrice here if you want priority fees.
-      mintIx,
-    ],
-  }).compileToV0Message();
-  return new VersionedTransaction(msg);
+  return buildMintTransaction(connection, payer, mintIx);
 }
 
 export async function buildMintDiscountedBoxTx(
@@ -489,16 +698,30 @@ export async function buildMintDiscountedBoxTx(
   dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
   const mintIx = buildMintDiscountedBoxIx(cfg, payer, quantity, proof, dropConfig);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      mintIx,
-    ],
-  }).compileToV0Message();
-  return new VersionedTransaction(msg);
+  return buildMintTransaction(connection, payer, mintIx);
+}
+
+export async function buildMintVariantBoxTx(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  dropConfig: DropMintLimitsConfig,
+): Promise<VersionedTransaction> {
+  const mintIx = buildMintVariantBoxIx(cfg, payer, variantKey, dropConfig);
+  return buildMintTransaction(connection, payer, mintIx);
+}
+
+export async function buildMintDiscountedVariantBoxTx(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): Promise<VersionedTransaction> {
+  const mintIx = buildMintDiscountedVariantBoxIx(cfg, payer, variantKey, proof, dropConfig);
+  return buildMintTransaction(connection, payer, mintIx);
 }
 
 export function buildStartOpenBoxIx(

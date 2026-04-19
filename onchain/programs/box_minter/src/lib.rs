@@ -25,6 +25,9 @@ const MIN_ITEMS_PER_BOX: u8 = 0;
 const MIN_OPENABLE_ITEMS_PER_BOX: u8 = 1;
 // Keep this conservative: start_open_box + finalize_open_box do multiple MPL-Core CPIs per figure.
 const MAX_ITEMS_PER_BOX: u8 = 5;
+const MINT_VARIANT_OPTION_COUNT: usize = 3;
+const MINT_VARIANT_KIND_NONE: u8 = 0;
+const MINT_VARIANT_KIND_SIZE: u8 = 1;
 
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
@@ -124,37 +127,17 @@ impl<'info> MintBoxesInnerAccounts<'info> {
     }
 }
 
-fn mint_boxes_inner<'info>(
-    cfg: &mut Account<'info, BoxMinterConfig>,
+struct MintBoxAssetBuffers {
+    name_buf: String,
+    uri_buf: String,
+    create_ix: anchor_lang::solana_program::instruction::Instruction,
+}
+
+fn charge_mint_payment<'info>(
     accounts: &MintBoxesInnerAccounts<'info>,
-    remaining_accounts: &[AccountInfo<'info>],
-    quantity: u8,
-    mint_id: u64,
-    box_bumps: Vec<u8>,
-    program_id: &Pubkey,
     unit_price_lamports: u64,
+    quantity: u8,
 ) -> Result<()> {
-    // Early fail-fast: do not allow minting until the admin explicitly starts the program.
-    require!(cfg.started, BoxMinterError::MintNotStarted);
-
-    require_keys_eq!(
-        accounts.mpl_core_program.key(),
-        MPL_CORE_PROGRAM_ID,
-        BoxMinterError::InvalidMplCoreProgram
-    );
-
-    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
-    let max_qty = cfg.max_per_tx.min(MAX_SAFE_MINTS_PER_TX);
-    require!(quantity <= max_qty, BoxMinterError::InvalidQuantity);
-
-    let qty_u32 = quantity as u32;
-    let new_total = cfg
-        .minted
-        .checked_add(qty_u32)
-        .ok_or(BoxMinterError::MathOverflow)?;
-    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
-
-    // Take payment.
     let cost = (unit_price_lamports as u128)
         .checked_mul(quantity as u128)
         .ok_or(BoxMinterError::MathOverflow)?;
@@ -175,38 +158,16 @@ fn mint_boxes_inner<'info>(
             ],
         )?;
     }
+    Ok(())
+}
 
-    // Remaining accounts: `quantity` PDA addresses for the new box assets.
-    require!(
-        remaining_accounts.len() == quantity as usize,
-        BoxMinterError::InvalidRemainingAccounts
-    );
-    require!(
-        box_bumps.len() == quantity as usize,
-        BoxMinterError::InvalidRemainingAccounts
-    );
-
-    let mpl_core_program = accounts.mpl_core_program.clone();
-    let core_collection = accounts.core_collection.clone();
-    let payer = accounts.payer.clone();
-    let cfg_ai = cfg.to_account_info();
-    let system_program = accounts.system_program.clone();
-
-    let cfg_bump = cfg.bump;
-    let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg_bump]];
-    let start_index = cfg.minted + 1;
-    let payer_key = accounts.payer.key();
-    let mint_id_bytes = mint_id.to_le_bytes();
-
-    // IMPORTANT (memory): kinobi CPI builders allocate fresh Vec/Box per mint and the SBF heap is tiny.
-    // Reuse buffers across the loop so minting 10+ assets doesn't OOM.
-    // Canonical config: cfg.uri_base is the DROP BASE.
+fn new_mint_box_asset_buffers<'info>(
+    cfg: &Account<'info, BoxMinterConfig>,
+    accounts: &MintBoxesInnerAccounts<'info>,
+) -> MintBoxAssetBuffers {
     let drop_base = cfg.uri_base.as_str();
-    // Pre-allocate enough for: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
     let max_uri_len: usize = drop_base.len() + URI_SUFFIX_BOXES.len() + 16;
-
-    let mut name_buf = String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12);
-    let mut uri_buf = String::with_capacity(max_uri_len);
+    let cfg_ai = cfg.to_account_info();
 
     let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
         program_id: MPL_CORE_PROGRAM_ID,
@@ -219,7 +180,6 @@ fn mint_boxes_inner<'info>(
                 + 1, // plugins option
         ),
     };
-    // Build constant accounts once; only `asset` changes per mint.
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new(
@@ -229,7 +189,7 @@ fn mint_boxes_inner<'info>(
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-            core_collection.key(),
+            accounts.core_collection.key(),
             false,
         )); // collection
     create_ix
@@ -241,13 +201,13 @@ fn mint_boxes_inner<'info>(
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-            payer.key(),
+            accounts.payer.key(),
             true,
         )); // payer
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            payer.key(),
+            accounts.payer.key(),
             false,
         )); // owner
     create_ix
@@ -259,7 +219,7 @@ fn mint_boxes_inner<'info>(
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            system_program.key(),
+            accounts.system_program.key(),
             false,
         )); // system_program
     create_ix
@@ -269,109 +229,333 @@ fn mint_boxes_inner<'info>(
             false,
         )); // log_wrapper: None (placeholder)
 
-    for i in 0..qty_u32 {
-        // IMPORTANT: the asset address must NOT depend on `cfg.minted` (global counter), otherwise
-        // concurrent mints will frequently fail due to clients building stale PDAs.
-        //
-        // Asset PDA seeds: ["box", payer, mint_id, i, bump]
-        let i_u8: u8 = i
-            .try_into()
-            .map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
-        let i_seed = [i_u8];
+    MintBoxAssetBuffers {
+        name_buf: String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12),
+        uri_buf: String::with_capacity(max_uri_len),
+        create_ix,
+    }
+}
 
-        let idx = start_index + i;
-        let asset_bump = box_bumps[i as usize];
-        let asset_bump_bytes = [asset_bump];
-        let expected = Pubkey::create_program_address(
-            &[
-                SEED_BOX_ASSET,
-                payer_key.as_ref(),
-                &mint_id_bytes,
-                &i_seed,
-                &asset_bump_bytes,
-            ],
-            program_id,
-        )
-        .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
-
-        let asset_ai = &remaining_accounts[i as usize];
-        require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-        // Ensure the account is uninitialized (otherwise Create will fail and waste compute).
-        require_keys_eq!(
-            *asset_ai.owner,
-            anchor_lang::solana_program::system_program::ID,
-            BoxMinterError::InvalidAssetPda
-        );
-
-        // Prevent PDA "squatting": a pre-funded system-owned stub would make downstream Create fail.
-        // Since this is a PDA, we can sign for it and drain any prefunded lamports back to the payer.
-        let asset_seeds: &[&[u8]] = &[
+fn mint_one_box_asset<'info>(
+    cfg: &Account<'info, BoxMinterConfig>,
+    accounts: &MintBoxesInnerAccounts<'info>,
+    asset_ai: &AccountInfo<'info>,
+    program_id: &Pubkey,
+    mint_id: u64,
+    asset_seed_index: u8,
+    asset_bump: u8,
+    metadata_id: u32,
+    buffers: &mut MintBoxAssetBuffers,
+) -> Result<()> {
+    let payer_key = accounts.payer.key();
+    let mint_id_bytes = mint_id.to_le_bytes();
+    let i_seed = [asset_seed_index];
+    let asset_bump_bytes = [asset_bump];
+    let expected = Pubkey::create_program_address(
+        &[
             SEED_BOX_ASSET,
             payer_key.as_ref(),
             &mint_id_bytes,
             &i_seed,
             &asset_bump_bytes,
-        ];
-        let prefund_lamports = asset_ai.lamports();
-        if prefund_lamports > 0 {
-            let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
-                asset_ai.key,
-                payer.key,
-                prefund_lamports,
-            );
-            invoke_signed(
-                &sweep_ix,
-                &[asset_ai.clone(), payer.clone(), system_program.clone()],
-                &[asset_seeds],
-            )
-            .map_err(anchor_lang::error::Error::from)?;
-        }
+        ],
+        program_id,
+    )
+    .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
 
-        // Build metadata without allocating fresh Strings each loop.
-        name_buf.clear();
-        append_label_and_id(&mut name_buf, &cfg.name_prefix, idx)?;
+    require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
+    require_keys_eq!(
+        *asset_ai.owner,
+        anchor_lang::solana_program::system_program::ID,
+        BoxMinterError::InvalidAssetPda
+    );
 
-        uri_buf.clear();
-        // Per-box JSON URI: `${drop_base}{URI_SUFFIX_BOXES}{id}.json`
-        uri_buf.push_str(drop_base);
-        uri_buf.push_str(URI_SUFFIX_BOXES);
-        write!(&mut uri_buf, "{}", idx).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-        uri_buf.push_str(".json");
-        let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+    let asset_seeds: &[&[u8]] = &[
+        SEED_BOX_ASSET,
+        payer_key.as_ref(),
+        &mint_id_bytes,
+        &i_seed,
+        &asset_bump_bytes,
+    ];
+    let prefund_lamports = asset_ai.lamports();
+    if prefund_lamports > 0 {
+        let sweep_ix = anchor_lang::solana_program::system_instruction::transfer(
+            asset_ai.key,
+            &accounts.payer.key(),
+            prefund_lamports,
+        );
+        invoke_signed(
+            &sweep_ix,
+            &[asset_ai.clone(), accounts.payer.clone(), accounts.system_program.clone()],
+            &[asset_seeds],
+        )
+        .map_err(anchor_lang::error::Error::from)?;
+    }
 
-        // Reuse instruction buffers to keep heap usage flat.
-        create_ix.accounts[0].pubkey = asset_ai.key();
-        create_ix.data.clear();
-        // discriminator for CreateV1 is 0
-        create_ix.data.push(0);
-        // DataState::AccountState is enum variant 0
-        create_ix.data.push(0);
-        create_ix
-            .data
-            .extend_from_slice(&(name_buf.len() as u32).to_le_bytes());
-        create_ix.data.extend_from_slice(name_buf.as_bytes());
-        create_ix
-            .data
-            .extend_from_slice(&(uri_buf.len() as u32).to_le_bytes());
-        create_ix.data.extend_from_slice(uri_buf.as_bytes());
-        // plugins: None
-        create_ix.data.push(0);
+    buffers.name_buf.clear();
+    append_label_and_id(&mut buffers.name_buf, &cfg.name_prefix, metadata_id)?;
 
-        // AccountInfos order must match mpl-core CPI expectations (program first).
-        let cpi_infos = [
-            mpl_core_program.clone(),
-            asset_ai.clone(),
-            core_collection.clone(),
-            cfg_ai.clone(),
-            payer.clone(),
-            payer.clone(), // owner (same pubkey; cheap clone)
-            system_program.clone(),
-        ];
-        invoke_signed(&create_ix, &cpi_infos, signer_seeds).map_err(anchor_lang::error::Error::from)?;
+    buffers.uri_buf.clear();
+    buffers.uri_buf.push_str(cfg.uri_base.as_str());
+    buffers.uri_buf.push_str(URI_SUFFIX_BOXES);
+    write!(&mut buffers.uri_buf, "{}", metadata_id)
+        .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+    buffers.uri_buf.push_str(".json");
+
+    let cfg_bump = cfg.bump;
+    let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg_bump]];
+    let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
+
+    buffers.create_ix.accounts[0].pubkey = asset_ai.key();
+    buffers.create_ix.data.clear();
+    buffers.create_ix.data.push(0); // CreateV1 discriminator
+    buffers.create_ix.data.push(0); // DataState::AccountState
+    buffers
+        .create_ix
+        .data
+        .extend_from_slice(&(buffers.name_buf.len() as u32).to_le_bytes());
+    buffers
+        .create_ix
+        .data
+        .extend_from_slice(buffers.name_buf.as_bytes());
+    buffers
+        .create_ix
+        .data
+        .extend_from_slice(&(buffers.uri_buf.len() as u32).to_le_bytes());
+    buffers
+        .create_ix
+        .data
+        .extend_from_slice(buffers.uri_buf.as_bytes());
+    buffers.create_ix.data.push(0); // plugins: None
+
+    let cfg_ai = cfg.to_account_info();
+    let cpi_infos = [
+        accounts.mpl_core_program.clone(),
+        asset_ai.clone(),
+        accounts.core_collection.clone(),
+        cfg_ai,
+        accounts.payer.clone(),
+        accounts.payer.clone(),
+        accounts.system_program.clone(),
+    ];
+    invoke_signed(&buffers.create_ix, &cpi_infos, signer_seeds)
+        .map_err(anchor_lang::error::Error::from)?;
+    Ok(())
+}
+
+fn mint_standard_boxes_inner<'info>(
+    cfg: &mut Account<'info, BoxMinterConfig>,
+    accounts: &MintBoxesInnerAccounts<'info>,
+    remaining_accounts: &[AccountInfo<'info>],
+    quantity: u8,
+    mint_id: u64,
+    box_bumps: Vec<u8>,
+    program_id: &Pubkey,
+    unit_price_lamports: u64,
+) -> Result<()> {
+    // Early fail-fast: do not allow minting until the admin explicitly starts the program.
+    require!(cfg.started, BoxMinterError::MintNotStarted);
+
+    require_keys_eq!(
+        accounts.mpl_core_program.key(),
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidMplCoreProgram
+    );
+    require!(
+        !cfg.requires_variant_selection(),
+        BoxMinterError::MintVariantSelectionRequired
+    );
+
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    let max_qty = cfg.max_per_tx.min(MAX_SAFE_MINTS_PER_TX);
+    require!(quantity <= max_qty, BoxMinterError::InvalidQuantity);
+
+    let qty_u32 = quantity as u32;
+    let new_total = cfg
+        .minted
+        .checked_add(qty_u32)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
+
+    charge_mint_payment(accounts, unit_price_lamports, quantity)?;
+
+    require!(
+        remaining_accounts.len() == quantity as usize,
+        BoxMinterError::InvalidRemainingAccounts
+    );
+    require!(
+        box_bumps.len() == quantity as usize,
+        BoxMinterError::InvalidRemainingAccounts
+    );
+
+    let start_index = cfg.minted + 1;
+    let mut buffers = new_mint_box_asset_buffers(cfg, accounts);
+
+    for i in 0..qty_u32 {
+        let i_u8: u8 = i
+            .try_into()
+            .map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
+        mint_one_box_asset(
+            cfg,
+            accounts,
+            &remaining_accounts[i as usize],
+            program_id,
+            mint_id,
+            i_u8,
+            box_bumps[i as usize],
+            start_index + i,
+            &mut buffers,
+        )?;
     }
 
     cfg.minted = new_total;
     Ok(())
+}
+
+fn mint_variant_box_inner<'info>(
+    cfg: &mut Account<'info, BoxMinterConfig>,
+    accounts: &MintBoxesInnerAccounts<'info>,
+    remaining_accounts: &[AccountInfo<'info>],
+    variant_index: u8,
+    mint_id: u64,
+    box_bump: u8,
+    program_id: &Pubkey,
+    unit_price_lamports: u64,
+) -> Result<()> {
+    require!(cfg.started, BoxMinterError::MintNotStarted);
+    require_keys_eq!(
+        accounts.mpl_core_program.key(),
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidMplCoreProgram
+    );
+    require!(
+        remaining_accounts.len() == 1,
+        BoxMinterError::InvalidRemainingAccounts
+    );
+    require!(
+        cfg.requires_variant_selection(),
+        BoxMinterError::MintVariantSelectionRequired
+    );
+
+    let new_total = cfg
+        .minted
+        .checked_add(1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
+
+    let variant_slot = cfg.variant_slot(variant_index)?;
+    let metadata_id = cfg.next_variant_metadata_id(variant_slot)?;
+    charge_mint_payment(accounts, unit_price_lamports, 1)?;
+
+    let mut buffers = new_mint_box_asset_buffers(cfg, accounts);
+    mint_one_box_asset(
+        cfg,
+        accounts,
+        &remaining_accounts[0],
+        program_id,
+        mint_id,
+        0,
+        box_bump,
+        metadata_id,
+        &mut buffers,
+    )?;
+
+    cfg.minted = new_total;
+    cfg.mint_variant_next_ids[variant_slot] = metadata_id
+        .checked_add(1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    Ok(())
+}
+
+fn load_or_create_discount_record<'info>(
+    payer_key: Pubkey,
+    payer_ai: AccountInfo<'info>,
+    discount_ai: AccountInfo<'info>,
+    system_program: AccountInfo<'info>,
+    program_id: &Pubkey,
+) -> Result<(DiscountMintRecord, u8)> {
+    let (_, discount_bump) =
+        Pubkey::find_program_address(&[SEED_DISCOUNT_MINT, payer_key.as_ref()], program_id);
+    let discount_seeds: &[&[u8]] = &[SEED_DISCOUNT_MINT, payer_key.as_ref(), &[discount_bump]];
+
+    let record = if discount_ai.lamports() == 0 {
+        let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
+        let create_discount_ix = anchor_lang::solana_program::system_instruction::create_account(
+            &payer_key,
+            &discount_ai.key(),
+            rent_lamports,
+            DiscountMintRecord::SPACE as u64,
+            program_id,
+        );
+        invoke_signed(
+            &create_discount_ix,
+            &[payer_ai.clone(), discount_ai.clone(), system_program.clone()],
+            &[discount_seeds],
+        )?;
+        DiscountMintRecord {
+            payer: payer_key,
+            minted: 0,
+            bump: discount_bump,
+        }
+    } else if *discount_ai.owner == anchor_lang::solana_program::system_program::ID {
+        require!(
+            discount_ai.data_len() == 0,
+            BoxMinterError::InvalidDiscountRecord
+        );
+        let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
+        if discount_ai.lamports() < rent_lamports {
+            let diff = rent_lamports - discount_ai.lamports();
+            let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
+                &payer_key,
+                &discount_ai.key(),
+                diff,
+            );
+            invoke(
+                &topup_ix,
+                &[payer_ai.clone(), discount_ai.clone(), system_program.clone()],
+            )?;
+        }
+
+        let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
+            &discount_ai.key(),
+            DiscountMintRecord::SPACE as u64,
+        );
+        invoke_signed(
+            &allocate_ix,
+            &[discount_ai.clone(), system_program.clone()],
+            &[discount_seeds],
+        )?;
+
+        let assign_ix = anchor_lang::solana_program::system_instruction::assign(
+            &discount_ai.key(),
+            program_id,
+        );
+        invoke_signed(
+            &assign_ix,
+            &[discount_ai.clone(), system_program.clone()],
+            &[discount_seeds],
+        )?;
+
+        DiscountMintRecord {
+            payer: payer_key,
+            minted: 0,
+            bump: discount_bump,
+        }
+    } else {
+        require_keys_eq!(
+            *discount_ai.owner,
+            *program_id,
+            BoxMinterError::InvalidDiscountRecord
+        );
+        let data = discount_ai.try_borrow_data()?;
+        let mut data: &[u8] = &data;
+        let existing = DiscountMintRecord::try_deserialize(&mut data)
+            .map_err(|_| error!(BoxMinterError::InvalidDiscountRecord))?;
+        require_keys_eq!(existing.payer, payer_key, BoxMinterError::InvalidDiscountRecord);
+        existing
+    };
+
+    Ok((record, discount_bump))
 }
 
 #[program]
@@ -411,6 +595,11 @@ pub mod box_minter {
             BoxMinterError::InvalidDiscountPrice
         );
         require!(
+            args.mint_variant_kind == MINT_VARIANT_KIND_NONE
+                || args.mint_variant_kind == MINT_VARIANT_KIND_SIZE,
+            BoxMinterError::InvalidMintVariantConfig
+        );
+        require!(
             args.discount_merkle_root != [0u8; 32],
             BoxMinterError::DiscountNotConfigured
         );
@@ -443,6 +632,43 @@ pub mod box_minter {
         require!(!drop_base.contains("/json/boxes"), BoxMinterError::InvalidMetadataBase);
         require!(!drop_base.contains("/json/figures"), BoxMinterError::InvalidMetadataBase);
         require!(!drop_base.contains("/json/receipts"), BoxMinterError::InvalidMetadataBase);
+        if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
+            require!(
+                args.items_per_box == 0,
+                BoxMinterError::MintVariantDirectDeliveryOnly
+            );
+            require!(
+                args.max_supply < u32::MAX,
+                BoxMinterError::InvalidMintVariantConfig
+            );
+            for i in 0..MINT_VARIANT_OPTION_COUNT {
+                let start_id = args.mint_variant_start_ids[i];
+                let end_id = args.mint_variant_end_ids[i];
+                let next_id = args.mint_variant_next_ids[i];
+                require!(start_id >= 1, BoxMinterError::InvalidMintVariantConfig);
+                require!(end_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
+                require!(next_id == start_id, BoxMinterError::InvalidMintVariantConfig);
+                if i == 0 {
+                    require!(start_id == 1, BoxMinterError::InvalidMintVariantConfig);
+                } else {
+                    require!(
+                        start_id == args.mint_variant_end_ids[i - 1].checked_add(1).ok_or(BoxMinterError::MathOverflow)?,
+                        BoxMinterError::InvalidMintVariantConfig
+                    );
+                }
+            }
+            require!(
+                args.mint_variant_end_ids[MINT_VARIANT_OPTION_COUNT - 1] == args.max_supply,
+                BoxMinterError::InvalidMintVariantConfig
+            );
+        } else {
+            require!(
+                args.mint_variant_start_ids == [0; MINT_VARIANT_OPTION_COUNT]
+                    && args.mint_variant_end_ids == [0; MINT_VARIANT_OPTION_COUNT]
+                    && args.mint_variant_next_ids == [0; MINT_VARIANT_OPTION_COUNT],
+                BoxMinterError::InvalidMintVariantConfig
+            );
+        }
 
         let core_collection_ai = ctx.accounts.core_collection.to_account_info();
         require!(
@@ -475,6 +701,10 @@ pub mod box_minter {
         cfg.uri_base = drop_base.to_string();
         cfg.bump = ctx.bumps.config;
         cfg.figure_name_prefix = args.figure_name_prefix;
+        cfg.mint_variant_kind = args.mint_variant_kind;
+        cfg.mint_variant_start_ids = args.mint_variant_start_ids;
+        cfg.mint_variant_end_ids = args.mint_variant_end_ids;
+        cfg.mint_variant_next_ids = args.mint_variant_next_ids;
         Ok(())
     }
 
@@ -508,13 +738,39 @@ pub mod box_minter {
             ctx.accounts.system_program.to_account_info(),
         );
         let unit_price_lamports = ctx.accounts.config.price_lamports;
-        mint_boxes_inner(
+        mint_standard_boxes_inner(
             &mut ctx.accounts.config,
             &accounts,
             ctx.remaining_accounts,
             quantity,
             mint_id,
             box_bumps,
+            ctx.program_id,
+            unit_price_lamports,
+        )
+    }
+
+    pub fn mint_variant_box<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, MintBoxes<'info>>,
+        variant_index: u8,
+        mint_id: u64,
+        box_bump: u8,
+    ) -> Result<()> {
+        let accounts = MintBoxesInnerAccounts::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.treasury.to_account_info(),
+            ctx.accounts.core_collection.to_account_info(),
+            ctx.accounts.mpl_core_program.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        );
+        let unit_price_lamports = ctx.accounts.config.price_lamports;
+        mint_variant_box_inner(
+            &mut ctx.accounts.config,
+            &accounts,
+            ctx.remaining_accounts,
+            variant_index,
+            mint_id,
+            box_bump,
             ctx.program_id,
             unit_price_lamports,
         )
@@ -542,87 +798,13 @@ pub mod box_minter {
         let quantity = u8::try_from(box_bumps.len()).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
         let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
         let discount_ai = ctx.accounts.discount_record.to_account_info();
-        let (_, discount_bump) =
-            Pubkey::find_program_address(&[SEED_DISCOUNT_MINT, payer_key.as_ref()], ctx.program_id);
-        let discount_seeds: &[&[u8]] = &[SEED_DISCOUNT_MINT, payer_key.as_ref(), &[discount_bump]];
-
-        let mut discount_record = if discount_ai.lamports() == 0 {
-            let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
-            let create_discount_ix = anchor_lang::solana_program::system_instruction::create_account(
-                &ctx.accounts.payer.key(),
-                &ctx.accounts.discount_record.key(),
-                rent_lamports,
-                DiscountMintRecord::SPACE as u64,
-                ctx.program_id,
-            );
-            invoke_signed(
-                &create_discount_ix,
-                &[
-                    ctx.accounts.payer.to_account_info(),
-                    discount_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[discount_seeds],
-            )?;
-            DiscountMintRecord {
-                payer: payer_key,
-                minted: 0,
-                bump: discount_bump,
-            }
-        } else if *discount_ai.owner == anchor_lang::solana_program::system_program::ID {
-            require!(discount_ai.data_len() == 0, BoxMinterError::InvalidDiscountRecord);
-            let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
-            if discount_ai.lamports() < rent_lamports {
-                let diff = rent_lamports - discount_ai.lamports();
-                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
-                    &ctx.accounts.payer.key(),
-                    &ctx.accounts.discount_record.key(),
-                    diff,
-                );
-                invoke(
-                    &topup_ix,
-                    &[
-                        ctx.accounts.payer.to_account_info(),
-                        discount_ai.clone(),
-                        ctx.accounts.system_program.to_account_info(),
-                    ],
-                )?;
-            }
-
-            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
-                &ctx.accounts.discount_record.key(),
-                DiscountMintRecord::SPACE as u64,
-            );
-            invoke_signed(
-                &allocate_ix,
-                &[discount_ai.clone(), ctx.accounts.system_program.to_account_info()],
-                &[discount_seeds],
-            )?;
-
-            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
-                &ctx.accounts.discount_record.key(),
-                ctx.program_id,
-            );
-            invoke_signed(
-                &assign_ix,
-                &[discount_ai.clone(), ctx.accounts.system_program.to_account_info()],
-                &[discount_seeds],
-            )?;
-
-            DiscountMintRecord {
-                payer: payer_key,
-                minted: 0,
-                bump: discount_bump,
-            }
-        } else {
-            require_keys_eq!(*discount_ai.owner, *ctx.program_id, BoxMinterError::InvalidDiscountRecord);
-            let data = discount_ai.try_borrow_data()?;
-            let mut data: &[u8] = &data;
-            let existing = DiscountMintRecord::try_deserialize(&mut data)
-                .map_err(|_| error!(BoxMinterError::InvalidDiscountRecord))?;
-            require_keys_eq!(existing.payer, payer_key, BoxMinterError::InvalidDiscountRecord);
-            existing
-        };
+        let (mut discount_record, discount_bump) = load_or_create_discount_record(
+            payer_key,
+            ctx.accounts.payer.to_account_info(),
+            discount_ai.clone(),
+            ctx.accounts.system_program.to_account_info(),
+            ctx.program_id,
+        )?;
         let new_discount_total = discount_record
             .minted
             .checked_add(quantity)
@@ -636,13 +818,71 @@ pub mod box_minter {
             ctx.accounts.mpl_core_program.to_account_info(),
             ctx.accounts.system_program.to_account_info(),
         );
-        mint_boxes_inner(
+        mint_standard_boxes_inner(
             &mut ctx.accounts.config,
             &accounts,
             ctx.remaining_accounts,
             quantity,
             mint_id,
             box_bumps,
+            ctx.program_id,
+            discount_price,
+        )?;
+        discount_record.minted = new_discount_total;
+        discount_record.bump = discount_bump;
+        discount_record.try_serialize(&mut &mut discount_ai.data.borrow_mut()[..])?;
+        Ok(())
+    }
+
+    pub fn mint_discounted_variant_box<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, MintDiscountedBox<'info>>,
+        variant_index: u8,
+        mint_id: u64,
+        box_bump: u8,
+        proof: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        let discount_price = ctx.accounts.config.discount_price_lamports;
+        require!(discount_price > 0, BoxMinterError::InvalidDiscountPrice);
+        let discount_root = ctx.accounts.config.discount_merkle_root;
+        require!(
+            discount_root != [0u8; 32],
+            BoxMinterError::DiscountNotConfigured
+        );
+
+        let payer_key = ctx.accounts.payer.key();
+        require!(
+            verify_merkle_proof(payer_key.as_ref(), &proof, discount_root),
+            BoxMinterError::InvalidDiscountProof
+        );
+        let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
+        let discount_ai = ctx.accounts.discount_record.to_account_info();
+        let (mut discount_record, discount_bump) = load_or_create_discount_record(
+            payer_key,
+            ctx.accounts.payer.to_account_info(),
+            discount_ai.clone(),
+            ctx.accounts.system_program.to_account_info(),
+            ctx.program_id,
+        )?;
+        let new_discount_total = discount_record
+            .minted
+            .checked_add(1)
+            .ok_or(BoxMinterError::MathOverflow)?;
+        require!(new_discount_total <= discount_limit, BoxMinterError::DiscountAllowanceExceeded);
+
+        let accounts = MintBoxesInnerAccounts::new(
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.treasury.to_account_info(),
+            ctx.accounts.core_collection.to_account_info(),
+            ctx.accounts.mpl_core_program.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        );
+        mint_variant_box_inner(
+            &mut ctx.accounts.config,
+            &accounts,
+            ctx.remaining_accounts,
+            variant_index,
+            mint_id,
+            box_bump,
             ctx.program_id,
             discount_price,
         )?;
@@ -1626,6 +1866,10 @@ pub struct InitializeArgs {
     pub uri_base: String,
     pub discount_mints_per_wallet: u8,
     pub figure_name_prefix: String,
+    pub mint_variant_kind: u8,
+    pub mint_variant_start_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub mint_variant_end_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub mint_variant_next_ids: [u32; MINT_VARIANT_OPTION_COUNT],
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1673,6 +1917,10 @@ pub struct BoxMinterConfig {
     pub bump: u8,
     pub discount_mints_per_wallet: u8,
     pub figure_name_prefix: String,
+    pub mint_variant_kind: u8,
+    pub mint_variant_start_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub mint_variant_end_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub mint_variant_next_ids: [u32; MINT_VARIANT_OPTION_COUNT],
 }
 
 #[account]
@@ -1727,7 +1975,11 @@ impl BoxMinterConfig {
         + 1 // started (bool)
         + 1 // bump
         + 1 // discount_mints_per_wallet
-        + 4 + Self::MAX_FIGURE_NAME_PREFIX; // figure_name_prefix
+        + 4 + Self::MAX_FIGURE_NAME_PREFIX // figure_name_prefix
+        + 1 // mint_variant_kind
+        + 4 * MINT_VARIANT_OPTION_COUNT // mint_variant_start_ids
+        + 4 * MINT_VARIANT_OPTION_COUNT // mint_variant_end_ids
+        + 4 * MINT_VARIANT_OPTION_COUNT; // mint_variant_next_ids
 
     pub fn items_per_box_len(&self) -> usize {
         self.items_per_box as usize
@@ -1747,6 +1999,36 @@ impl BoxMinterConfig {
             .ok_or(BoxMinterError::MathOverflow)?;
         require!(total <= u16::MAX as u64, BoxMinterError::InvalidItemsPerBox);
         Ok(total as u16)
+    }
+
+    pub fn requires_variant_selection(&self) -> bool {
+        self.mint_variant_kind == MINT_VARIANT_KIND_SIZE
+    }
+
+    pub fn variant_slot(&self, variant_index: u8) -> Result<usize> {
+        require!(
+            self.requires_variant_selection(),
+            BoxMinterError::MintVariantSelectionRequired
+        );
+        let slot = usize::from(variant_index);
+        require!(
+            slot < MINT_VARIANT_OPTION_COUNT,
+            BoxMinterError::InvalidMintVariant
+        );
+        Ok(slot)
+    }
+
+    pub fn next_variant_metadata_id(&self, slot: usize) -> Result<u32> {
+        require!(
+            slot < MINT_VARIANT_OPTION_COUNT,
+            BoxMinterError::InvalidMintVariant
+        );
+        let next_id = self.mint_variant_next_ids[slot];
+        let start_id = self.mint_variant_start_ids[slot];
+        let end_id = self.mint_variant_end_ids[slot];
+        require!(next_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
+        require!(next_id <= end_id, BoxMinterError::MintVariantUnavailable);
+        Ok(next_id)
     }
 }
 
@@ -2311,6 +2593,16 @@ pub enum BoxMinterError {
     InvalidReceiptUriBase,
     #[msg("Invalid metadata base")]
     InvalidMetadataBase,
+    #[msg("Mint variant selection is required for this drop")]
+    MintVariantSelectionRequired,
+    #[msg("Invalid mint variant")]
+    InvalidMintVariant,
+    #[msg("Mint variant is sold out")]
+    MintVariantUnavailable,
+    #[msg("Invalid mint variant configuration")]
+    InvalidMintVariantConfig,
+    #[msg("Mint variant selection currently supports direct-delivery drops only")]
+    MintVariantDirectDeliveryOnly,
     #[msg("Pending open record already exists")]
     PendingAlreadyExists,
     #[msg("Unauthorized initializer")]
@@ -2319,4 +2611,73 @@ pub enum BoxMinterError {
     MintNotStarted,
     #[msg("Opening is disabled for this drop")]
     OpeningDisabled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_size_variant_cfg() -> BoxMinterConfig {
+        BoxMinterConfig {
+            admin: Pubkey::default(),
+            treasury: Pubkey::default(),
+            core_collection: Pubkey::default(),
+            price_lamports: 1,
+            discount_price_lamports: 1,
+            discount_merkle_root: [1u8; 32],
+            max_supply: 34,
+            max_per_tx: 15,
+            items_per_box: 0,
+            minted: 0,
+            name_prefix: "hoodie".to_string(),
+            symbol: "hoodie".to_string(),
+            uri_base: "https://assets.mons.link/drops/hoodie".to_string(),
+            started: false,
+            bump: 0,
+            discount_mints_per_wallet: 1,
+            figure_name_prefix: "hoodie".to_string(),
+            mint_variant_kind: MINT_VARIANT_KIND_SIZE,
+            mint_variant_start_ids: [1, 16, 31],
+            mint_variant_end_ids: [15, 30, 34],
+            mint_variant_next_ids: [1, 16, 31],
+        }
+    }
+
+    #[test]
+    fn size_variant_initial_cursors_match_range_starts() {
+        let cfg = test_size_variant_cfg();
+        assert_eq!(cfg.variant_slot(0).unwrap(), 0);
+        assert_eq!(cfg.variant_slot(1).unwrap(), 1);
+        assert_eq!(cfg.variant_slot(2).unwrap(), 2);
+        assert_eq!(cfg.next_variant_metadata_id(0).unwrap(), 1);
+        assert_eq!(cfg.next_variant_metadata_id(1).unwrap(), 16);
+        assert_eq!(cfg.next_variant_metadata_id(2).unwrap(), 31);
+    }
+
+    #[test]
+    fn size_variant_advances_within_each_range() {
+        let mut cfg = test_size_variant_cfg();
+        cfg.mint_variant_next_ids[0] += 1;
+        cfg.mint_variant_next_ids[1] += 1;
+        cfg.mint_variant_next_ids[2] += 1;
+        assert_eq!(cfg.next_variant_metadata_id(0).unwrap(), 2);
+        assert_eq!(cfg.next_variant_metadata_id(1).unwrap(), 17);
+        assert_eq!(cfg.next_variant_metadata_id(2).unwrap(), 32);
+    }
+
+    #[test]
+    fn exhausting_one_size_does_not_block_other_sizes() {
+        let mut cfg = test_size_variant_cfg();
+        cfg.mint_variant_next_ids[0] = 16;
+        assert!(cfg.next_variant_metadata_id(0).is_err());
+        assert_eq!(cfg.next_variant_metadata_id(1).unwrap(), 16);
+        assert_eq!(cfg.next_variant_metadata_id(2).unwrap(), 31);
+    }
+
+    #[test]
+    fn exhausted_size_returns_error() {
+        let mut cfg = test_size_variant_cfg();
+        cfg.mint_variant_next_ids[2] = 35;
+        assert!(cfg.next_variant_metadata_id(2).is_err());
+    }
 }

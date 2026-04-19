@@ -1,4 +1,4 @@
-import type { DropFamily } from './shared/deploymentRegistry.ts';
+import type { DropFamily, MintSelectionConfigSerialized } from './shared/deploymentRegistry.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -13,6 +13,7 @@ export type NewDropOnchainConfig = {
   dropId: string;
   dropFamily: DropFamily;
   metadataBase: string;
+  mintSelection?: MintSelectionConfigSerialized;
   collectionMetadata: {
     name: string;
     symbol: string;
@@ -66,6 +67,14 @@ export const NEW_DROP: NewDropConfig = {
     dropId: 'lsw_cobalt_figure_hoodie_26_devnet',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
+    mintSelection: {
+      kind: 'size',
+      options: [
+        { key: 'L', label: 'L', startId: 1, endId: 15 },
+        { key: 'XL', label: 'XL', startId: 16, endId: 30 },
+        { key: '2XL', label: '2XL', startId: 31, endId: 34 },
+      ],
+    },
     collectionMetadata: {
       name: 'lsw cobalt figure hoodie 26',
       symbol: dropSymbol,
