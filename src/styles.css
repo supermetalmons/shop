@@ -492,6 +492,7 @@ header.top {
   display: block;
   width: 16px;
   height: 16px;
+  overflow: visible;
 }
 
 .mint-panel__size-info:hover:not(:disabled) {
