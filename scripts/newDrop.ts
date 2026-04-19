@@ -74,7 +74,7 @@ export const NEW_DROP: NewDropConfig = {
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_world.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/lsw_hoodie.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
