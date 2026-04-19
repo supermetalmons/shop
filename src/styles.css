@@ -526,6 +526,7 @@ header.top {
   top: calc(100% + 8px);
   right: 0;
   z-index: 60;
+  width: max-content;
   min-width: 280px;
   max-width: min(340px, calc(100vw - 32px));
   padding: 14px 16px 12px;
