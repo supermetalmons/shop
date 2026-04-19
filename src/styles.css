@@ -9,6 +9,8 @@
   --accent: #0071e3;
   --accent-hover: #0077ed;
   --accent-tint: rgba(0, 113, 227, 0.12);
+  --mint-size-accent: #1d8745;
+  --mint-size-accent-tint: rgba(29, 135, 69, 0.14);
   --radius: 12px;
   --radius-sm: 8px;
   color-scheme: light;
@@ -26,6 +28,8 @@
     --accent: #2997ff;
     --accent-hover: #4dabff;
     --accent-tint: rgba(41, 151, 255, 0.16);
+    --mint-size-accent: #28a64a;
+    --mint-size-accent-tint: rgba(48, 209, 88, 0.18);
     color-scheme: dark;
   }
 }
@@ -384,8 +388,8 @@ header.top {
 
 .mint-panel__size--selected,
 .mint-panel__size--selected:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--mint-size-accent);
+  border-color: var(--mint-size-accent);
   color: #ffffff;
 }
 
@@ -425,12 +429,12 @@ header.top {
   0%, 100% {
     border-color: var(--border);
     background: var(--surface);
-    box-shadow: 0 0 0 0 var(--accent-tint);
+    box-shadow: 0 0 0 0 var(--mint-size-accent-tint);
   }
   50% {
-    border-color: var(--accent);
-    background: var(--accent-tint);
-    box-shadow: 0 0 0 3px var(--accent-tint);
+    border-color: var(--mint-size-accent);
+    background: var(--mint-size-accent-tint);
+    box-shadow: 0 0 0 3px var(--mint-size-accent-tint);
   }
 }
 
