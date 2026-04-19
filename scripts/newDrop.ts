@@ -63,7 +63,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: false,
   },
   onchain: {
-    dropId: 'lsw_cobalt_figure_hoodie_26_draft',
+    dropId: 'lsw_cobalt_figure_hoodie_26_devnet',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     collectionMetadata: {
@@ -74,7 +74,7 @@ export const NEW_DROP: NewDropConfig = {
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_world.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
@@ -86,7 +86,7 @@ export const NEW_DROP: NewDropConfig = {
     discountPriceSol: 0.042,
     discountMintsPerWallet: 1,
     maxSupply: 34,
-    itemsPerBox: 1,
+    itemsPerBox: 0,
     maxPerTx: 15,
     namePrefix: 'hoodie',
     figureNamePrefix: 'hoodie',
