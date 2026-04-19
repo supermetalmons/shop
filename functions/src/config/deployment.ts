@@ -167,6 +167,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/lsb",
 
+
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 1,
@@ -195,6 +196,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/lsb",
 
+
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.1,
@@ -213,6 +215,58 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     collectionMint: "4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6",
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
+  }),
+  "lsw_cobalt_figure_hoodie_26_devnet": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "lsw_cobalt_figure_hoodie_26_devnet",
+    dropFamily: "lsw_cobalt_figure_hoodie",
+    collectionName: "lsw cobalt figure hoodie 26",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/hoodie",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
+    maxSupply: 34,
+    itemsPerBox: 0,
+    maxPerTx: 15,
+    namePrefix: "hoodie",
+    figureNamePrefix: "hoodie",
+    symbol: "hoodie",
+
+    // On-chain ids
+    boxMinterProgramId: "5yUurzWhpwMLWsANm3bHv4a9SchRP7hsQShyfzqjq61U",
+    collectionMint: "Ez5iii1kH4VeSqu3fiaKQtHhY8ioWUaBNJqEYEGbMmXi",
+    receiptsMerkleTree: "2zUurdTuj9h51ckjBNv6R16gqk4XZ5X89uxtXQ8BSTNG",
+    deliveryLookupTable: "GLgw3hEgBCZ7cCUTAThg7nEdpt5CzJwXUeifFqWqjhct",
   }),
   "lsw_cobalt_figure_hoodie_26_draft": createFunctionsDrop({
     solanaCluster: "devnet",
@@ -246,6 +300,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
       ],
     },
 
+
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.069,
@@ -274,6 +329,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/poncho",
 
+
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
     priceSol: 0.69,
@@ -301,6 +357,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
 
     // Drop metadata base (collection.json + json/* + images/*)
     metadataBase: "https://assets.mons.link/drops/poncho",
+
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
     treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
