@@ -8,25 +8,32 @@ const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
 const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 
-function normalizeItemsPerBox(itemsPerBox?: number): number {
+export function isDirectDeliveryItemsPerBox(itemsPerBox?: number): boolean {
   const parsed = Number(itemsPerBox);
-  if (!Number.isFinite(parsed) || parsed < 1) return 1;
-  return Math.floor(parsed);
+  return Number.isFinite(parsed) && Math.floor(parsed) === 0;
+}
+
+export function normalizeDeliveryUnitsPerBox(itemsPerBox?: number): number {
+  const parsed = Math.floor(Number(itemsPerBox));
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return parsed;
 }
 
 export function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>, itemsPerBox?: number): number {
-  const figuresPerBox = normalizeItemsPerBox(itemsPerBox);
-  return items.reduce((total, item) => total + (item.kind === 'box' ? figuresPerBox : 1), 0);
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
+  return items.reduce((total, item) => total + (item.kind === 'box' ? deliveryUnitsPerBox : 1), 0);
 }
 
 function calculateUsDeliveryLamports(
   figureCount: number,
-  figuresPerBox: number,
+  itemsPerBox?: number,
   dropFamily?: DropFamily,
 ): number {
   if (figureCount <= 0) return 0;
+  if (isDirectDeliveryItemsPerBox(itemsPerBox)) return 0;
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   if (dropFamily === 'little_swag_boxes') {
-    const extraFigures = Math.max(0, figureCount - figuresPerBox);
+    const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
     return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
   }
   if (dropFamily === 'poncho_drifella') {
@@ -41,11 +48,11 @@ export function calculateDeliveryLamports(
   itemsPerBox?: number,
   dropFamily?: DropFamily,
 ): number {
-  const figuresPerBox = normalizeItemsPerBox(itemsPerBox);
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   const normalized = normalizeCountryCode(countryCode);
-  const figureCount = countDeliveryFigures(items, figuresPerBox);
+  const figureCount = countDeliveryFigures(items, itemsPerBox);
   if (figureCount <= 0) return 0;
-  if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, figuresPerBox, dropFamily);
-  const extraFigures = Math.max(0, figureCount - figuresPerBox);
+  if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
+  const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
   return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
 }

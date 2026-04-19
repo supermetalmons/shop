@@ -382,7 +382,7 @@ async function retryRpcRead<T>(
   throw new Error(`${label} failed after ${retries + 1} attempts: ${errorMessage(lastErr)}`);
 }
 
-const MIN_ITEMS_PER_BOX = 1;
+const MIN_ITEMS_PER_BOX = 0;
 const MAX_ITEMS_PER_BOX = 5;
 const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
 const MAX_DISCOUNT_MINTS_PER_WALLET = 3;

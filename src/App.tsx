@@ -76,7 +76,7 @@ import {
   sendPreparedTransaction,
   shortAddress,
 } from './lib/solana';
-import { calculateDeliveryLamports } from './lib/shipping';
+import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
 import {
   DeliveryOrderSummary,
   InventoryItem,
@@ -652,7 +652,14 @@ function App({ currentPath }: AppProps) {
   );
   const openVerbForDropId = useCallback((dropId?: string) => dropOpenVerb(getDropConfig(dropId)), [getDropConfig]);
   const openGerundForDropId = useCallback((dropId?: string) => dropOpenGerund(getDropConfig(dropId)), [getDropConfig]);
-  const canOpenBoxesForDropId = useCallback((dropId?: string) => !isDropFamily(dropId, 'lsw_cobalt_figure_hoodie'), []);
+  const canOpenBoxesForDropId = useCallback(
+    (dropId?: string) => {
+      const dropConfig = getDropConfig(dropId);
+      if (isDropFamily(dropConfig, 'lsw_cobalt_figure_hoodie')) return false;
+      return !isDirectDeliveryItemsPerBox(dropConfig?.itemsPerBox);
+    },
+    [getDropConfig],
+  );
   const dropRevealIsAnimated = useCallback(
     (dropId?: string) => {
       const content = getDropContent(dropId);

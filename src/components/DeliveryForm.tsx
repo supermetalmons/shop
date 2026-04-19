@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { type DropFamily } from '../config/deployment';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
+import { isDirectDeliveryItemsPerBox, normalizeDeliveryUnitsPerBox } from '../lib/shipping';
 
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
@@ -44,25 +45,29 @@ export function DeliveryForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedCountryCode = countryCode ?? localCountryCode;
-  const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
-    ? Math.floor(Number(itemsPerBox))
-    : 1;
+  const directDelivery = isDirectDeliveryItemsPerBox(itemsPerBox);
+  const unitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
   );
   const countryName = countryOption?.name || selectedCountryCode;
   const labelSource = { namePrefix: boxNamePrefix, figureNamePrefix };
-  const figureLabel = dropAssetLabel(labelSource, 'figure', figuresPerBox);
-  const singleFigureLabel = dropAssetLabel(labelSource, 'figure', 1);
-  const shippingNote =
-    selectedCountryCode === 'US'
-      ? dropFamily === 'little_swag_boxes'
-        ? `US delivery: 0.1 SOL up to ${figuresPerBox} ${figureLabel}. 0.025 SOL each additional ${singleFigureLabel}.`
-        : dropFamily === 'poncho_drifella'
-          ? 'US delivery: 0.05 SOL flat.'
-          : 'Free US shipping'
-      : `International delivery: 0.25 SOL up to ${figuresPerBox} ${figureLabel}. 0.05 SOL each additional ${singleFigureLabel}.`;
+  const deliveryUnitKind = directDelivery ? 'box' : 'figure';
+  const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, unitsPerBox);
+  const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
+  let shippingNote = `International delivery: 0.25 SOL up to ${unitsPerBox} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
+  if (selectedCountryCode === 'US') {
+    if (directDelivery) {
+      shippingNote = 'Free US shipping';
+    } else if (dropFamily === 'little_swag_boxes') {
+      shippingNote = `US delivery: 0.1 SOL up to ${unitsPerBox} ${deliveryUnitLabel}. 0.025 SOL each additional ${singleDeliveryUnitLabel}.`;
+    } else if (dropFamily === 'poncho_drifella') {
+      shippingNote = 'US delivery: 0.05 SOL flat.';
+    } else {
+      shippingNote = 'Free US shipping';
+    }
+  }
 
   useEffect(() => {
     if (!emailTouched && !email && defaultEmail) setEmail(defaultEmail);

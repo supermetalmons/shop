@@ -26,6 +26,10 @@ function receiptLabel(word: string, count: number): string {
   return count === 1 ? `${word} receipt` : `${word} receipts`;
 }
 
+function normalizeItemsPerBoxCount(value: number | undefined, fallback = 1): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : fallback;
+}
+
 export function ClaimForm({
   onClaim,
   onSuccess,
@@ -39,19 +43,17 @@ export function ClaimForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const figuresPerBox = Number.isFinite(itemsPerBox) && Number(itemsPerBox) > 0
-    ? Math.floor(Number(itemsPerBox))
-    : 1;
+  const figuresPerBox = normalizeItemsPerBoxCount(itemsPerBox);
   const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
   const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, 'figure');
 
   const buildSuccessMessage = (args: ClaimFormResult) => {
     const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);
     const normalizedFigureReceiptWord = resolveReceiptWord(args.figureNamePrefix, defaultFigureReceiptWord);
-    const normalizedCount =
-      Number.isFinite(args.itemsPerBox) && Number(args.itemsPerBox) > 0
-        ? Math.floor(Number(args.itemsPerBox))
-        : figuresPerBox;
+    const normalizedCount = normalizeItemsPerBoxCount(args.itemsPerBox, figuresPerBox);
+    if (normalizedCount === 0) {
+      return `Claim submitted successfully! Your ${receiptLabel(normalizedBoxReceiptWord, 1)} was transferred.`;
+    }
     const boxReceiptLabel = receiptLabel(normalizedBoxReceiptWord, 1);
     const figureLabel = receiptLabel(normalizedFigureReceiptWord, normalizedCount);
     const figureVerb = normalizedCount === 1 ? 'is' : 'are';

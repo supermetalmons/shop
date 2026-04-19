@@ -94,7 +94,8 @@ function requireAuth(request: CallableReq<any>): string {
 
 const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MIN_ITEMS_PER_BOX = 1;
+const MIN_ITEMS_PER_BOX = 0;
+const MIN_OPENABLE_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
 const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
 const MAX_DISCOUNT_MINTS_PER_WALLET = 3;
@@ -129,6 +130,24 @@ type DropRuntime = {
   maxSupply: number;
   maxDudeId: number;
 };
+
+function isDirectDeliveryItemsPerBox(itemsPerBox: number): boolean {
+  return Math.floor(Number(itemsPerBox)) === 0;
+}
+
+function normalizeDeliveryUnitsPerBox(itemsPerBox: number): number {
+  return isDirectDeliveryItemsPerBox(itemsPerBox) ? 1 : Math.max(MIN_OPENABLE_ITEMS_PER_BOX, Math.floor(Number(itemsPerBox)));
+}
+
+function isOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>): boolean {
+  return dropRuntime.itemsPerBox >= MIN_OPENABLE_ITEMS_PER_BOX;
+}
+
+function assertOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>, message: string): void {
+  if (!isOpenableDrop(dropRuntime)) {
+    throw new HttpsError('failed-precondition', message);
+  }
+}
 
 function normalizeDropId(dropId: string): string {
   const value = String(dropId || '').trim().toLowerCase();
@@ -183,7 +202,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     );
   }
   const maxDudeId = maxSupply * itemsPerBox;
-  if (!Number.isFinite(maxDudeId) || maxDudeId < 1 || maxDudeId > 0xffff) {
+  if (!Number.isFinite(maxDudeId) || maxDudeId > 0xffff) {
     throw new Error(
       `Configured max figure id is invalid in functions/src/config/deployment.ts for drop ${dropId}: maxSupply=${maxSupply}, itemsPerBox=${itemsPerBox}`,
     );
@@ -407,8 +426,8 @@ const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS = [30_000, 2 * 60 * 1000, 10 * 60 * 1000] as const;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
-  MIN_ITEMS_PER_BOX,
-  ...Object.values(DROP_RUNTIMES).map((runtime) => runtime.itemsPerBox),
+  1,
+  ...Object.values(DROP_RUNTIMES).map((runtime) => normalizeDeliveryUnitsPerBox(runtime.itemsPerBox)),
 );
 const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * MAX_CONFIGURED_ITEMS_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
@@ -1666,6 +1685,7 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
 }
 
 function encodeFinalizeOpenBoxArgs(dudeIds: number[], dropRuntime: DropRuntime): Buffer {
+  assertOpenableDrop(dropRuntime, 'This drop does not support opening.');
   if (!Array.isArray(dudeIds) || dudeIds.length !== dropRuntime.itemsPerBox) {
     throw new HttpsError('invalid-argument', `dudeIds must have length ${dropRuntime.itemsPerBox}`);
   }
@@ -1772,6 +1792,7 @@ function decodeDeliveryRecord(data: Buffer): {
 async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
   const dropRuntime = getDropRuntime(dropId);
   const itemsPerBox = dropRuntime.itemsPerBox;
+  assertOpenableDrop(dropRuntime, 'This drop does not support figure assignment.');
   const maxDudeId = dropRuntime.maxDudeId;
   const ref = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
   const poolRef = db.doc(dropDudePoolPath(dropId));
@@ -2087,6 +2108,7 @@ async function ensureIrlClaimCodeForBox(params: {
   const boxId = Number(params.boxId);
   const dudeIds = Array.isArray(params.dudeIds) ? params.dudeIds.map((n) => Number(n)) : [];
 
+  assertOpenableDrop(dropRuntime, 'This drop does not use IRL claim codes.');
   if (!boxAssetId) throw new HttpsError('failed-precondition', 'Missing boxAssetId for IRL claim code');
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
     throw new HttpsError('failed-precondition', 'Invalid deliveryId for IRL claim code');
@@ -2214,13 +2236,16 @@ function normalizeCountryCode(country?: string) {
 }
 
 function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBox: number): number {
-  return items.reduce((total, item) => total + (item.kind === 'box' ? itemsPerBox : 1), 0);
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
+  return items.reduce((total, item) => total + (item.kind === 'box' ? deliveryUnitsPerBox : 1), 0);
 }
 
 function calculateUsDeliveryLamports(figureCount: number, itemsPerBox: number, dropFamily: DropFamily): number {
   if (figureCount <= 0) return 0;
+  if (isDirectDeliveryItemsPerBox(itemsPerBox)) return 0;
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   if (dropFamily === 'little_swag_boxes') {
-    const extraFigures = Math.max(0, figureCount - itemsPerBox);
+    const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
     return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
   }
   if (dropFamily === 'poncho_drifella') {
@@ -2239,7 +2264,8 @@ function calculateDeliveryLamports(
   if (figureCount <= 0) return 0;
   const normalized = normalizeCountryCode(countryCode);
   if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
-  const extraFigures = Math.max(0, figureCount - itemsPerBox);
+  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
+  const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
   return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
 }
 
@@ -4424,15 +4450,17 @@ export async function retryIssueReceiptsForDeliveryOrder(
 
   // Create IRL claim codes for each delivered box (so the admin can ship the secret code inside the physical box).
   const irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }> = [];
-  const deliveredItems: any[] = Array.isArray(order.items) ? order.items : [];
-  const deliveredBoxes = deliveredItems.filter((it) => it && it.kind === 'box' && typeof it.assetId === 'string');
-  for (const box of deliveredBoxes) {
-    const boxAssetId = String(box.assetId);
-    const boxId = Number(box.refId);
-    if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) continue;
-    const dudeIds = await assignDudes(dropId, boxAssetId);
-    const code = await ensureIrlClaimCodeForBox({ dropId, ownerWallet, deliveryId, boxAssetId, boxId, dudeIds });
-    irlClaims.push({ code, boxId, boxAssetId, dudeIds });
+  if (isOpenableDrop(dropRuntime)) {
+    const deliveredItems: any[] = Array.isArray(order.items) ? order.items : [];
+    const deliveredBoxes = deliveredItems.filter((it) => it && it.kind === 'box' && typeof it.assetId === 'string');
+    for (const box of deliveredBoxes) {
+      const boxAssetId = String(box.assetId);
+      const boxId = Number(box.refId);
+      if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) continue;
+      const dudeIds = await assignDudes(dropId, boxAssetId);
+      const code = await ensureIrlClaimCodeForBox({ dropId, ownerWallet, deliveryId, boxAssetId, boxId, dudeIds });
+      irlClaims.push({ code, boxId, boxAssetId, dudeIds });
+    }
   }
 
   // Mark Firestore ready-to-ship BEFORE closing on-chain delivery record.
@@ -4807,6 +4835,7 @@ export const prepareIrlClaimTx = onCallLogged(
   const claim = claimDoc.data() as any;
   const claimDropId = await resolveClaimDropIdForCode(normalizedCode, claim);
   const claimDropRuntime = getDropRuntime(claimDropId);
+  assertOpenableDrop(claimDropRuntime, 'This drop does not use secret claim codes.');
   await ensureOnchainCoreConfig(claimDropRuntime);
   const boxIdNum = Number(claim?.boxId);
   const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';

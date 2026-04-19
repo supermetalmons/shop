@@ -16,6 +16,7 @@ import {
 } from './lib/figureMetadata';
 import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
+import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, normalizeDropId, type FigureMediaConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
@@ -356,6 +357,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     [visibleDrops, selectedDropId],
   );
   const isLittleSwagBoxesDrop = normalizeDropId(selectedDrop?.dropId || '') === LITTLE_SWAG_BOXES_DROP_ID;
+  const isDirectDeliveryDrop = isDirectDeliveryItemsPerBox(selectedDrop?.itemsPerBox);
   const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
   const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
@@ -884,9 +886,22 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               {order.boxes.map((box) => (
                 <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
                   <div className="card__title">
-                    {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
-                    <span className="fulfillment-secret-code">{box.claimCode}</span>
+                    {!isDirectDeliveryDrop && box.claimCode ? (
+                      <>
+                        {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                        <span className="fulfillment-secret-code">{box.claimCode}</span>
+                      </>
+                    ) : (
+                      dropAssetReference(selectedDrop, 'box', box.boxId, { capitalize: true })
+                    )}
                   </div>
+                  {isDirectDeliveryDrop && !box.dudeIds.length ? (
+                    <div className="muted small">Direct-delivery item</div>
+                  ) : !box.claimCode ? (
+                    <div className="muted small">Secret code unavailable</div>
+                  ) : !box.dudeIds.length ? (
+                    <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
+                  ) : null}
                   {box.dudeIds.length ? (
                     renderFigureTiles({
                       dropId: selectedDrop.dropId,
@@ -899,9 +914,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                       figureMetadataByKey,
                       onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
                     })
-                  ) : (
-                    <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>

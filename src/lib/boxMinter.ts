@@ -15,7 +15,8 @@ const BOX_ASSET_SEED = 'box';
 const DISCOUNT_RECORD_SEED = 'discount';
 const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
-const MIN_ITEMS_PER_BOX = 1;
+const MIN_CONFIGURED_ITEMS_PER_BOX = 0;
+const MIN_OPENABLE_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
 
 const TE = new TextEncoder();
@@ -113,8 +114,8 @@ export function pendingDudeAssetPda(
   programId: PublicKey,
 ): [PublicKey, number] {
   const i = Number(index);
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
-    throw new Error(`Invalid itemsPerBox in config (expected ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_OPENABLE_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new Error(`Invalid itemsPerBox in config (expected ${MIN_OPENABLE_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX} for openable drops)`);
   }
   if (!Number.isFinite(i) || i < 0 || i >= itemsPerBox) throw new Error('Invalid pending dude index');
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_DUDE_ASSET_SEED), pending.toBuffer(), Buffer.from([i & 0xff])], programId);
@@ -193,8 +194,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 1;
   const itemsPerBox = data[o];
   o += 1;
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
-    throw new Error(`Invalid on-chain itemsPerBox: ${itemsPerBox} (expected ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_CONFIGURED_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+    throw new Error(`Invalid on-chain itemsPerBox: ${itemsPerBox} (expected ${MIN_CONFIGURED_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
   }
   const minted = readU32(data, o);
   o += 4;
@@ -506,6 +507,9 @@ export function buildStartOpenBoxIx(
   boxAsset: PublicKey,
   dropConfig: DropProgramConfig,
 ): TransactionInstruction {
+  if (cfg.itemsPerBox < MIN_OPENABLE_ITEMS_PER_BOX) {
+    throw new Error('This drop does not support opening.');
+  }
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const [pendingPda] = pendingOpenPda(boxAsset, programId);

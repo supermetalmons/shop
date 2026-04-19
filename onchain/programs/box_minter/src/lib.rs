@@ -21,7 +21,8 @@ const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
 const MIN_DISCOUNT_MINTS_PER_WALLET: u8 = 1;
 const MAX_DISCOUNT_MINTS_PER_WALLET: u8 = 3;
 
-const MIN_ITEMS_PER_BOX: u8 = 1;
+const MIN_ITEMS_PER_BOX: u8 = 0;
+const MIN_OPENABLE_ITEMS_PER_BOX: u8 = 1;
 // Keep this conservative: start_open_box + finalize_open_box do multiple MPL-Core CPIs per figure.
 const MAX_ITEMS_PER_BOX: u8 = 5;
 
@@ -397,7 +398,7 @@ pub mod box_minter {
             .checked_mul(args.items_per_box as u64)
             .ok_or(BoxMinterError::MathOverflow)?;
         require!(
-            max_figure_id > 0 && max_figure_id <= u16::MAX as u64,
+            max_figure_id <= u16::MAX as u64,
             BoxMinterError::InvalidItemsPerBox
         );
         require!(args.price_lamports > 0, BoxMinterError::InvalidPrice);
@@ -665,6 +666,7 @@ pub mod box_minter {
         ctx: Context<'a, 'b, 'c, 'info, StartOpenBox<'info>>,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+        cfg.require_openable()?;
         let items_per_box = cfg.items_per_box_len();
 
         require_keys_eq!(
@@ -961,6 +963,7 @@ pub mod box_minter {
         args: FinalizeOpenBoxArgs,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+        cfg.require_openable()?;
         let items_per_box = cfg.items_per_box_len();
         let max_dude_id = cfg.max_figure_id()?;
         let dude_ids = &args.dude_ids;
@@ -1730,14 +1733,19 @@ impl BoxMinterConfig {
         self.items_per_box as usize
     }
 
+    pub fn require_openable(&self) -> Result<()> {
+        require!(
+            self.items_per_box >= MIN_OPENABLE_ITEMS_PER_BOX,
+            BoxMinterError::OpeningDisabled
+        );
+        Ok(())
+    }
+
     pub fn max_figure_id(&self) -> Result<u16> {
         let total = (self.max_supply as u64)
             .checked_mul(self.items_per_box as u64)
             .ok_or(BoxMinterError::MathOverflow)?;
-        require!(
-            total > 0 && total <= u16::MAX as u64,
-            BoxMinterError::InvalidItemsPerBox
-        );
+        require!(total <= u16::MAX as u64, BoxMinterError::InvalidItemsPerBox);
         Ok(total as u16)
     }
 }
@@ -2309,4 +2317,6 @@ pub enum BoxMinterError {
     UnauthorizedInitializer,
     #[msg("Minting has not started yet")]
     MintNotStarted,
+    #[msg("Opening is disabled for this drop")]
+    OpeningDisabled,
 }
