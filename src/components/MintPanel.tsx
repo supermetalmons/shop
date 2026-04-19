@@ -188,10 +188,17 @@ export function MintPanel({
   useEffect(() => {
     if (sizeBlinkToken === 0) return;
     setIsBlinking(true);
-    // Matches the CSS animation duration (3 iterations × 0.65s).
-    const handle = window.setTimeout(() => setIsBlinking(false), 2000);
+    // Matches the CSS animation duration (2 iterations × 0.18s) with a small buffer
+    // so the class is removed only after the final pulse settles.
+    const handle = window.setTimeout(() => setIsBlinking(false), 460);
     return () => window.clearTimeout(handle);
   }, [sizeBlinkToken]);
+
+  // Picking a size should immediately silence the attention blink — otherwise the
+  // remaining unselected pill keeps pulsing for the rest of the animation window.
+  useEffect(() => {
+    if (selectedSize) setIsBlinking(false);
+  }, [selectedSize]);
 
   useEffect(() => {
     if (maxSelectable < 1) return;
