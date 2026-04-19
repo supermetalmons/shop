@@ -87,6 +87,26 @@ export interface BoxMinterConfigAccount {
   mintVariantNextIds: [number, number, number];
 }
 
+export interface BuiltMintTx {
+  tx: VersionedTransaction;
+  boxAccounts: PublicKey[];
+}
+
+export interface BuiltStartOpenBoxTx {
+  tx: VersionedTransaction;
+  pendingPda: PublicKey;
+}
+
+type BuiltMintInstructionPlan = {
+  instruction: TransactionInstruction;
+  boxAccounts: PublicKey[];
+};
+
+type BuiltStartOpenBoxInstructionPlan = {
+  instruction: TransactionInstruction;
+  pendingPda: PublicKey;
+};
+
 type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx' | 'mintSelection'>;
 type DropMintLimitsConfig = DropProgramConfig;
 
@@ -561,6 +581,15 @@ export function buildMintBoxesIx(
   quantity: number,
   dropConfig: DropMintLimitsConfig,
 ): TransactionInstruction {
+  return buildMintBoxesInstructionPlan(cfg, payer, quantity, dropConfig).instruction;
+}
+
+function buildMintBoxesInstructionPlan(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  quantity: number,
+  dropConfig: DropMintLimitsConfig,
+): BuiltMintInstructionPlan {
   assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
@@ -570,19 +599,22 @@ export function buildMintBoxesIx(
   // This avoids stale-PDA failures when many users mint concurrently.
   const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
 
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: encodeMintBoxesData(quantity, mintId, boxBumps, maxMintsPerTx),
-  });
+  return {
+    instruction: new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+        { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+      ],
+      data: encodeMintBoxesData(quantity, mintId, boxBumps, maxMintsPerTx),
+    }),
+    boxAccounts,
+  };
 }
 
 export function buildMintDiscountedBoxIx(
@@ -592,6 +624,16 @@ export function buildMintDiscountedBoxIx(
   proof: Uint8Array[],
   dropConfig: DropProgramConfig,
 ): TransactionInstruction {
+  return buildMintDiscountedBoxInstructionPlan(cfg, payer, quantity, proof, dropConfig).instruction;
+}
+
+function buildMintDiscountedBoxInstructionPlan(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  quantity: number,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): BuiltMintInstructionPlan {
   assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
@@ -602,20 +644,23 @@ export function buildMintDiscountedBoxIx(
   }
   const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
 
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: discountRecordPda, isSigner: false, isWritable: true },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: encodeMintDiscountedBoxData(mintId, boxBumps, proof),
-  });
+  return {
+    instruction: new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: discountRecordPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+        { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+      ],
+      data: encodeMintDiscountedBoxData(mintId, boxBumps, proof),
+    }),
+    boxAccounts,
+  };
 }
 
 export function buildMintVariantBoxIx(
@@ -624,23 +669,35 @@ export function buildMintVariantBoxIx(
   variantKey: string,
   dropConfig: DropMintLimitsConfig,
 ): TransactionInstruction {
+  return buildMintVariantInstructionPlan(cfg, payer, variantKey, dropConfig).instruction;
+}
+
+function buildMintVariantInstructionPlan(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  dropConfig: DropMintLimitsConfig,
+): BuiltMintInstructionPlan {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
   const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
-    ],
-    data: encodeMintVariantBoxData(variantIndex, mintId, boxBumps[0]),
-  });
+  return {
+    instruction: new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+        { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+      ],
+      data: encodeMintVariantBoxData(variantIndex, mintId, boxBumps[0]),
+    }),
+    boxAccounts,
+  };
 }
 
 export function buildMintDiscountedVariantBoxIx(
@@ -650,25 +707,169 @@ export function buildMintDiscountedVariantBoxIx(
   proof: Uint8Array[],
   dropConfig: DropProgramConfig,
 ): TransactionInstruction {
+  return buildMintDiscountedVariantInstructionPlan(cfg, payer, variantKey, proof, dropConfig).instruction;
+}
+
+function buildMintDiscountedVariantInstructionPlan(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): BuiltMintInstructionPlan {
   const programId = boxMinterProgramId(dropConfig);
   const [configPda] = boxMinterConfigPda(programId);
   const [discountRecordPda] = discountMintRecordPda(payer, programId);
   const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
   const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: discountRecordPda, isSigner: false, isWritable: true },
-      { pubkey: cfg.treasury, isSigner: false, isWritable: true },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+  return {
+    instruction: new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: discountRecordPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.treasury, isSigner: false, isWritable: true },
+        { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+      ],
+      data: encodeMintDiscountedVariantBoxData(variantIndex, mintId, boxBumps[0], proof),
+    }),
+    boxAccounts,
+  };
+}
+
+async function buildMintTxFromPlan(
+  connection: Connection,
+  payer: PublicKey,
+  plan: BuiltMintInstructionPlan,
+): Promise<BuiltMintTx> {
+  return {
+    tx: await buildMintTransaction(connection, payer, plan.instruction),
+    boxAccounts: plan.boxAccounts,
+  };
+}
+
+export async function buildMintBoxesTxWithAccounts(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  quantity: number,
+  dropConfig: DropMintLimitsConfig,
+): Promise<BuiltMintTx> {
+  assertStandardMintConfig(cfg);
+  const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
+  // Keep conservative; each Core mint creates a new account.
+  if (quantity > maxMintsPerTx) {
+    throw new Error(`Max ${maxMintsPerTx} boxes per transaction.`);
+  }
+
+  return buildMintTxFromPlan(connection, payer, buildMintBoxesInstructionPlan(cfg, payer, quantity, dropConfig));
+}
+
+export async function buildMintDiscountedBoxTxWithAccounts(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  quantity: number,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): Promise<BuiltMintTx> {
+  return buildMintTxFromPlan(connection, payer, buildMintDiscountedBoxInstructionPlan(cfg, payer, quantity, proof, dropConfig));
+}
+
+export async function buildMintVariantBoxTxWithAccounts(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  dropConfig: DropMintLimitsConfig,
+): Promise<BuiltMintTx> {
+  return buildMintTxFromPlan(connection, payer, buildMintVariantInstructionPlan(cfg, payer, variantKey, dropConfig));
+}
+
+export async function buildMintDiscountedVariantBoxTxWithAccounts(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  variantKey: string,
+  proof: Uint8Array[],
+  dropConfig: DropProgramConfig,
+): Promise<BuiltMintTx> {
+  return buildMintTxFromPlan(
+    connection,
+    payer,
+    buildMintDiscountedVariantInstructionPlan(cfg, payer, variantKey, proof, dropConfig),
+  );
+}
+
+export function buildStartOpenBoxIx(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  boxAsset: PublicKey,
+  dropConfig: DropProgramConfig,
+): TransactionInstruction {
+  return buildStartOpenBoxInstructionPlan(cfg, payer, boxAsset, dropConfig).instruction;
+}
+
+function buildStartOpenBoxInstructionPlan(
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  boxAsset: PublicKey,
+  dropConfig: DropProgramConfig,
+): BuiltStartOpenBoxInstructionPlan {
+  if (cfg.itemsPerBox < MIN_OPENABLE_ITEMS_PER_BOX) {
+    throw new Error('This drop does not support opening.');
+  }
+  const programId = boxMinterProgramId(dropConfig);
+  const [configPda] = boxMinterConfigPda(programId);
+  const [pendingPda] = pendingOpenPda(boxAsset, programId);
+  const dudePdas = Array.from({ length: cfg.itemsPerBox }, (_, i) => pendingDudeAssetPda(pendingPda, i, cfg.itemsPerBox, programId)[0]);
+
+  return {
+    instruction: new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda, isSigner: false, isWritable: false },
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: boxAsset, isSigner: false, isWritable: true },
+        { pubkey: cfg.admin, isSigner: false, isWritable: false },
+        { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
+        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: pendingPda, isSigner: false, isWritable: true },
+        ...dudePdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+      ],
+      data: Buffer.from(IX_START_OPEN_BOX),
+    }),
+    pendingPda,
+  };
+}
+
+export async function buildStartOpenBoxTxWithPending(
+  connection: Connection,
+  cfg: BoxMinterConfigAccount,
+  payer: PublicKey,
+  boxAsset: PublicKey,
+  dropConfig: DropProgramConfig,
+): Promise<BuiltStartOpenBoxTx> {
+  const { instruction, pendingPda } = buildStartOpenBoxInstructionPlan(cfg, payer, boxAsset, dropConfig);
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const msg = new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      instruction,
     ],
-    data: encodeMintDiscountedVariantBoxData(variantIndex, mintId, boxBumps[0], proof),
-  });
+  }).compileToV0Message();
+  return {
+    tx: new VersionedTransaction(msg),
+    pendingPda,
+  };
 }
 
 export async function buildMintBoxesTx(
@@ -678,15 +879,8 @@ export async function buildMintBoxesTx(
   quantity: number,
   dropConfig: DropMintLimitsConfig,
 ): Promise<VersionedTransaction> {
-  assertStandardMintConfig(cfg);
-  const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
-  // Keep conservative; each Core mint creates a new account.
-  if (quantity > maxMintsPerTx) {
-    throw new Error(`Max ${maxMintsPerTx} boxes per transaction.`);
-  }
-
-  const mintIx = buildMintBoxesIx(cfg, payer, quantity, dropConfig);
-  return buildMintTransaction(connection, payer, mintIx);
+  const { tx } = await buildMintBoxesTxWithAccounts(connection, cfg, payer, quantity, dropConfig);
+  return tx;
 }
 
 export async function buildMintDiscountedBoxTx(
@@ -697,8 +891,8 @@ export async function buildMintDiscountedBoxTx(
   proof: Uint8Array[],
   dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
-  const mintIx = buildMintDiscountedBoxIx(cfg, payer, quantity, proof, dropConfig);
-  return buildMintTransaction(connection, payer, mintIx);
+  const { tx } = await buildMintDiscountedBoxTxWithAccounts(connection, cfg, payer, quantity, proof, dropConfig);
+  return tx;
 }
 
 export async function buildMintVariantBoxTx(
@@ -708,8 +902,8 @@ export async function buildMintVariantBoxTx(
   variantKey: string,
   dropConfig: DropMintLimitsConfig,
 ): Promise<VersionedTransaction> {
-  const mintIx = buildMintVariantBoxIx(cfg, payer, variantKey, dropConfig);
-  return buildMintTransaction(connection, payer, mintIx);
+  const { tx } = await buildMintVariantBoxTxWithAccounts(connection, cfg, payer, variantKey, dropConfig);
+  return tx;
 }
 
 export async function buildMintDiscountedVariantBoxTx(
@@ -720,42 +914,8 @@ export async function buildMintDiscountedVariantBoxTx(
   proof: Uint8Array[],
   dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
-  const mintIx = buildMintDiscountedVariantBoxIx(cfg, payer, variantKey, proof, dropConfig);
-  return buildMintTransaction(connection, payer, mintIx);
-}
-
-export function buildStartOpenBoxIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  boxAsset: PublicKey,
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  if (cfg.itemsPerBox < MIN_OPENABLE_ITEMS_PER_BOX) {
-    throw new Error('This drop does not support opening.');
-  }
-  const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
-  const [pendingPda] = pendingOpenPda(boxAsset, programId);
-  const dudePdas = Array.from({ length: cfg.itemsPerBox }, (_, i) => pendingDudeAssetPda(pendingPda, i, cfg.itemsPerBox, programId)[0]);
-
-  return new TransactionInstruction({
-    programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: false },
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: boxAsset, isSigner: false, isWritable: true },
-      // Vault/custody address for opened boxes (admin/deployer). Payments go to `cfg.treasury`.
-      { pubkey: cfg.admin, isSigner: false, isWritable: false },
-      { pubkey: cfg.coreCollection, isSigner: false, isWritable: false },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      // MPL-Core log wrapper (SPL noop).
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: pendingPda, isSigner: false, isWritable: true },
-      ...dudePdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: Buffer.from(IX_START_OPEN_BOX),
-  });
+  const { tx } = await buildMintDiscountedVariantBoxTxWithAccounts(connection, cfg, payer, variantKey, proof, dropConfig);
+  return tx;
 }
 
 export async function buildStartOpenBoxTx(
@@ -765,15 +925,6 @@ export async function buildStartOpenBoxTx(
   boxAsset: PublicKey,
   dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
-  const startIx = buildStartOpenBoxIx(cfg, payer, boxAsset, dropConfig);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      startIx,
-    ],
-  }).compileToV0Message();
-  return new VersionedTransaction(msg);
+  const { tx } = await buildStartOpenBoxTxWithPending(connection, cfg, payer, boxAsset, dropConfig);
+  return tx;
 }

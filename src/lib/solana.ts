@@ -1,4 +1,5 @@
-import { Connection, LAMPORTS_PER_SOL, VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
+import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 
 function unwrapTxErrorMessage(err: unknown): string {
@@ -12,6 +13,12 @@ function unwrapTxErrorMessage(err: unknown): string {
   return 'Unexpected error';
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+const ALREADY_PROCESSED_ERROR_RE = /this transaction has already been processed|already been processed/i;
+
 export function isBlockhashExpiredError(err: unknown): boolean {
   if (!err) return false;
   const anyErr = err as any;
@@ -20,6 +27,50 @@ export function isBlockhashExpiredError(err: unknown): boolean {
   return /blockhash not found|blockhash expired|transaction expired|expired blockhash|signature has expired|block height exceeded|TransactionExpiredBlockheightExceededError/i.test(
     msg,
   );
+}
+
+function isAlreadyProcessedError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as any;
+  const msg = unwrapTxErrorMessage(err);
+  if (ALREADY_PROCESSED_ERROR_RE.test(msg)) return true;
+  if (anyErr?.cause) return isAlreadyProcessedError(anyErr.cause);
+  return false;
+}
+
+function isLikelyBase58Signature(value: string): boolean {
+  return value.length >= 64 && value.length <= 88 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(value);
+}
+
+type WaitForConditionOptions = {
+  attempts?: number;
+  delayMs?: number;
+};
+
+// Only the duplicate-submit recovery path uses this longer window.
+// That keeps normal failures fast while giving devnet/load-balanced RPCs
+// enough time to surface a transaction we already know was accepted elsewhere.
+const ALREADY_PROCESSED_RECOVERY_WAIT: WaitForConditionOptions = {
+  attempts: 15,
+  delayMs: 1_000,
+};
+
+async function waitForCondition(check: () => Promise<boolean>, opts: WaitForConditionOptions = {}): Promise<boolean> {
+  const attempts = Math.max(1, Math.floor(opts.attempts ?? 6));
+  const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      if (await check()) return true;
+    } catch {
+      // Ignore transient RPC issues and keep polling briefly.
+    }
+    if (attempt < attempts - 1 && delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+
+  return false;
 }
 
 async function extractSendTransactionLogs(err: unknown): Promise<string[] | undefined> {
@@ -53,6 +104,92 @@ function isZeroSignature(sig: Uint8Array | null | undefined): boolean {
   for (let i = 0; i < sig.length; i += 1) {
     if (sig[i] !== 0) return false;
   }
+  return true;
+}
+
+function extractTransactionSignature(tx: VersionedTransaction): string | null {
+  const signature = tx.signatures[0];
+  if (isZeroSignature(signature)) return null;
+  return bs58.encode(signature);
+}
+
+function extractSignatureCandidate(value: unknown, seen = new Set<unknown>(), depth = 0): string | null {
+  if (!value || depth > 4) return null;
+  if (typeof value !== 'object') return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+
+  const anyValue = value as any;
+  const directSignature = anyValue?.signature;
+  if (typeof directSignature === 'string' && isLikelyBase58Signature(directSignature)) {
+    return directSignature;
+  }
+  if (directSignature instanceof Uint8Array && !isZeroSignature(directSignature)) {
+    return bs58.encode(directSignature);
+  }
+
+  const candidateKeys = ['cause', 'error', 'transactionError', 'data'];
+  for (const key of candidateKeys) {
+    const nested = anyValue?.[key];
+    const nestedSignature = extractSignatureCandidate(nested, seen, depth + 1);
+    if (nestedSignature) return nestedSignature;
+  }
+
+  return null;
+}
+
+async function waitForProcessedSignature(
+  connection: Connection,
+  signature: string,
+  opts: WaitForConditionOptions = {},
+): Promise<boolean> {
+  return waitForCondition(async () => {
+    const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+    return !!status.value && status.value.err == null;
+  }, opts);
+}
+
+export async function recoverAlreadyProcessedSignature(
+  tx: VersionedTransaction | null,
+  connection: Connection,
+  err: unknown,
+): Promise<string | null> {
+  if (!isAlreadyProcessedError(err)) return null;
+  const signature = (tx ? extractTransactionSignature(tx) : null) || extractSignatureCandidate(err);
+  if (!signature) return null;
+  const confirmed = await waitForProcessedSignature(connection, signature, ALREADY_PROCESSED_RECOVERY_WAIT);
+  if (!confirmed) return null;
+  console.warn('[mons/solana] transaction was already processed; treating existing signature as success', {
+    signature,
+    error: unwrapTxErrorMessage(err),
+  });
+  return signature;
+}
+
+async function waitForAccounts(
+  connection: Connection,
+  accounts: readonly PublicKey[],
+  opts: WaitForConditionOptions = {},
+): Promise<boolean> {
+  return waitForCondition(async () => {
+    const infos = await connection.getMultipleAccountsInfo([...accounts], { commitment: 'confirmed' });
+    return infos.length === accounts.length && infos.every(Boolean);
+  }, opts);
+}
+
+export async function recoverAlreadyProcessedAccounts(
+  connection: Connection,
+  accounts: readonly PublicKey[],
+  err: unknown,
+): Promise<boolean> {
+  if (!isAlreadyProcessedError(err)) return false;
+  if (!accounts.length) return false;
+  const confirmed = await waitForAccounts(connection, accounts, ALREADY_PROCESSED_RECOVERY_WAIT);
+  if (!confirmed) return false;
+  console.warn('[mons/solana] transaction was already processed; treating confirmed account changes as success', {
+    accounts: accounts.map((account) => account.toBase58()),
+    error: unwrapTxErrorMessage(err),
+  });
   return true;
 }
 
@@ -111,6 +248,11 @@ export async function sendPreparedTransaction(
     await connection.confirmTransaction(signature, 'confirmed');
     return signature;
   } catch (err) {
+    const recoveredSignature = await recoverAlreadyProcessedSignature(tx, connection, err);
+    if (recoveredSignature) {
+      await connection.confirmTransaction(recoveredSignature, 'confirmed');
+      return recoveredSignature;
+    }
     const logs = await extractSendTransactionLogs(err);
     let msg = unwrapTxErrorMessage(err);
     if (logs?.length) {

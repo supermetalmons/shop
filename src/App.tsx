@@ -26,11 +26,11 @@ import {
 } from './lib/api';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
 import {
-  buildMintBoxesTx,
-  buildMintDiscountedBoxTx,
-  buildMintDiscountedVariantBoxTx,
-  buildMintVariantBoxTx,
-  buildStartOpenBoxTx,
+  buildMintBoxesTxWithAccounts,
+  buildMintDiscountedBoxTxWithAccounts,
+  buildMintDiscountedVariantBoxTxWithAccounts,
+  buildMintVariantBoxTxWithAccounts,
+  buildStartOpenBoxTxWithPending,
   deriveMintSelectionAvailabilityFromConfig,
   fetchBoxMinterConfig,
   fetchDiscountMintRecordUsedCount,
@@ -82,6 +82,8 @@ import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSeq
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
+  recoverAlreadyProcessedAccounts,
+  recoverAlreadyProcessedSignature,
   sendPreparedTransaction,
   shortAddress,
 } from './lib/solana';
@@ -570,6 +572,25 @@ function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingR
   return true;
 }
 
+type SendViaConnectionOptions = {
+  onAlreadyProcessedWithoutSignature?: (err: unknown) => Promise<boolean>;
+};
+
+async function recoverConnectionSendError(
+  tx: VersionedTransaction | null,
+  targetConnection: Connection,
+  err: unknown,
+  options?: SendViaConnectionOptions,
+): Promise<string | null> {
+  const recoveredSignature = await recoverAlreadyProcessedSignature(tx, targetConnection, err);
+  if (recoveredSignature) return recoveredSignature;
+  if (options?.onAlreadyProcessedWithoutSignature) {
+    const recovered = await options.onAlreadyProcessedWithoutSignature(err);
+    if (recovered) return null;
+  }
+  throw err;
+}
+
 type AppProps = {
   currentPath?: string;
 };
@@ -937,6 +958,7 @@ function App({ currentPath }: AppProps) {
   const lastScheduledDeliveryRecoveryAtRef = useRef<number | null>(null);
   const authReadyRef = useRef(false);
   const authLoadingRef = useRef(false);
+  const mintActionLockRef = useRef<null | 'mint' | 'discount'>(null);
   const openSelectedLockRef = useRef(false);
   const openSelectedBoxIdRef = useRef<string | null>(null);
   const previousConnectedWalletForOwnerRef = useRef(connectedWallet);
@@ -2564,20 +2586,65 @@ function App({ currentPath }: AppProps) {
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
   const signAndSendViaConnection = useCallback(
-    async (tx: VersionedTransaction, targetConnection: Connection) => {
+    async (
+      tx: VersionedTransaction,
+      targetConnection: Connection,
+      options?: SendViaConnectionOptions,
+    ): Promise<string | null> => {
       if (wallet.signTransaction) {
         const signed = await wallet.signTransaction(tx);
         const raw = signed.serialize();
-        return targetConnection.sendRawTransaction(raw, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
+        try {
+          return await targetConnection.sendRawTransaction(raw, {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          });
+        } catch (err) {
+          return recoverConnectionSendError(signed, targetConnection, err, options);
+        }
       }
-      return sendTransaction(tx, targetConnection, { skipPreflight: false });
+      try {
+        return await sendTransaction(tx, targetConnection, { skipPreflight: false });
+      } catch (err) {
+        return recoverConnectionSendError(tx, targetConnection, err, options);
+      }
     },
     [sendTransaction, wallet],
   );
+
+  async function sendAndConfirmViaConnection(
+    tx: VersionedTransaction,
+    targetConnection: Connection,
+    options?: SendViaConnectionOptions,
+  ): Promise<string | null> {
+    const signature = await signAndSendViaConnection(tx, targetConnection, options);
+    if (signature) {
+      await targetConnection.confirmTransaction(signature, 'confirmed');
+    }
+    return signature;
+  }
+
+  const signAndSendPreparedViaConnection = useCallback(
+    async (tx: VersionedTransaction, targetConnection: Connection): Promise<string> => {
+      const signature = await signAndSendViaConnection(tx, targetConnection);
+      if (!signature) {
+        throw new Error('Wallet submitted the transaction but did not provide a recoverable signature');
+      }
+      return signature;
+    },
+    [signAndSendViaConnection],
+  );
+
+  async function retryAfterBlockhashExpiry<T>(sendOnce: () => Promise<T>, expiredMessage: string): Promise<T> {
+    try {
+      return await sendOnce();
+    } catch (err) {
+      if (!isBlockhashExpiredError(err)) throw err;
+      showToast(expiredMessage);
+      return sendOnce();
+    }
+  }
 
   const mintedOut = useMemo(() => {
     return !effectiveMintStats || effectiveMintStats.remaining <= 0;
@@ -2685,35 +2752,35 @@ function App({ currentPath }: AppProps) {
     }
     const mintDrop = requireRouteDrop('mint');
     if (!routeConnection) throw new Error('Missing route connection for mint');
+    if (mintedOut || minting || discountMinting || mintActionLockRef.current) return;
     if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
       showToast('Select a size');
       return;
     }
+    mintActionLockRef.current = 'mint';
     setMinting(true);
     try {
       const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
       const sendOnce = async () => {
-        const tx =
+        const { tx, boxAccounts } =
           mintDrop.mintSelection?.kind === 'size'
-            ? await buildMintVariantBoxTx(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
-            : await buildMintBoxesTx(routeConnection, cfg, publicKey, quantity, mintDrop);
-        const sig = await signAndSendViaConnection(tx, routeConnection);
-        await routeConnection.confirmTransaction(sig, 'confirmed');
-        return sig;
+            ? await buildMintVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
+            : await buildMintBoxesTxWithAccounts(routeConnection, cfg, publicKey, quantity, mintDrop);
+        return sendAndConfirmViaConnection(tx, routeConnection, {
+          onAlreadyProcessedWithoutSignature: (err) =>
+            recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
+        });
       };
-      try {
-        await sendOnce();
-      } catch (err) {
-        if (!isBlockhashExpiredError(err)) throw err;
-        showToast('Transaction expired before you approved it. Please approve again…');
-        await sendOnce();
-      }
+      await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
       addLocalMintedBoxes(mintDrop.mintSelection?.kind === 'size' ? 1 : quantity, mintDrop.dropId);
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
       throw err;
     } finally {
+      if (mintActionLockRef.current === 'mint') {
+        mintActionLockRef.current = null;
+      }
       setMinting(false);
     }
   };
@@ -2726,7 +2793,7 @@ function App({ currentPath }: AppProps) {
     }
     const mintDrop = requireRouteDrop('discount mint');
     if (!routeConnection) throw new Error('Missing route connection for discount mint');
-    if (mintedOut || discountMinting || minting) return;
+    if (mintedOut || discountMinting || minting || mintActionLockRef.current) return;
     if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
       showToast('Select a size');
       return;
@@ -2741,6 +2808,7 @@ function App({ currentPath }: AppProps) {
       return;
     }
 
+    mintActionLockRef.current = 'discount';
     setDiscountMinting(true);
     try {
       const proof = await getDiscountProof(mintDrop.dropId, publicKey.toBase58());
@@ -2768,21 +2836,16 @@ function App({ currentPath }: AppProps) {
         return;
       }
       const sendOnce = async () => {
-        const tx =
+        const { tx, boxAccounts } =
           mintDrop.mintSelection?.kind === 'size'
-            ? await buildMintDiscountedVariantBoxTx(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
-            : await buildMintDiscountedBoxTx(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
-        const sig = await signAndSendViaConnection(tx, routeConnection);
-        await routeConnection.confirmTransaction(sig, 'confirmed');
-        return sig;
+            ? await buildMintDiscountedVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
+            : await buildMintDiscountedBoxTxWithAccounts(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
+        return sendAndConfirmViaConnection(tx, routeConnection, {
+          onAlreadyProcessedWithoutSignature: (err) =>
+            recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
+        });
       };
-      try {
-        await sendOnce();
-      } catch (err) {
-        if (!isBlockhashExpiredError(err)) throw err;
-        showToast('Transaction expired before you approved it. Please approve again…');
-        await sendOnce();
-      }
+      await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
       const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
       addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
       const nextUsedCount = onchainUsedCount + mintedQuantity;
@@ -2796,6 +2859,9 @@ function App({ currentPath }: AppProps) {
       if (isUserRejectedError(err)) return;
       showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(mintDrop.dropId)}`);
     } finally {
+      if (mintActionLockRef.current === 'discount') {
+        mintActionLockRef.current = null;
+      }
       setDiscountMinting(false);
     }
   };
@@ -2813,18 +2879,19 @@ function App({ currentPath }: AppProps) {
       const targetConnection = getDropConnection(targetDrop.dropId);
       const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop);
       const sendOnce = async () => {
-        const tx = await buildStartOpenBoxTx(targetConnection, cfg, publicKey, new PublicKey(item.id), targetDrop);
-        const sig = await signAndSendViaConnection(tx, targetConnection);
-        await targetConnection.confirmTransaction(sig, 'confirmed');
-        return sig;
+        const { tx, pendingPda } = await buildStartOpenBoxTxWithPending(
+          targetConnection,
+          cfg,
+          publicKey,
+          new PublicKey(item.id),
+          targetDrop,
+        );
+        return sendAndConfirmViaConnection(tx, targetConnection, {
+          onAlreadyProcessedWithoutSignature: (err) =>
+            recoverAlreadyProcessedAccounts(targetConnection, [pendingPda], err),
+        });
       };
-      try {
-        await sendOnce();
-      } catch (err) {
-        if (!isBlockhashExpiredError(err)) throw err;
-        showToast('Transaction expired before you approved it. Please approve again…');
-        await sendOnce();
-      }
+      await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
       queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;
@@ -3298,14 +3365,14 @@ function App({ currentPath }: AppProps) {
       let sig: string;
       try {
         sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
-          signAndSendViaConnection(tx, deliveryConnection),
+          signAndSendPreparedViaConnection(tx, deliveryConnection),
         );
       } catch (err) {
         if (!isBlockhashExpiredError(err)) throw err;
         showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         resp = await requestTx();
         sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
-          signAndSendViaConnection(tx, deliveryConnection),
+          signAndSendPreparedViaConnection(tx, deliveryConnection),
         );
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
@@ -3376,7 +3443,7 @@ function App({ currentPath }: AppProps) {
     let sig: string;
     try {
       sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
-        signAndSendViaConnection(tx, claimConnection),
+        signAndSendPreparedViaConnection(tx, claimConnection),
       );
     } catch (err) {
       if (!isBlockhashExpiredError(err)) throw err;
@@ -3385,7 +3452,7 @@ function App({ currentPath }: AppProps) {
       claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
       claimConnection = getDropConnection(claimDrop.dropId);
       sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
-        signAndSendViaConnection(tx, claimConnection),
+        signAndSendPreparedViaConnection(tx, claimConnection),
       );
     }
     showToast(`Claimed certificates · ${sig}`);
