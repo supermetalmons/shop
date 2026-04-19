@@ -89,7 +89,6 @@ export function normalizeDropId(value: string | undefined): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
-  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -565,7 +564,6 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
-  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };
@@ -865,7 +863,6 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
-  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
   poncho_drifella_draft: 'poncho_drifella',
 };

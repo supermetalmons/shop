@@ -424,56 +424,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: "5yUurzWhpwMLWsANm3bHv4a9SchRP7hsQShyfzqjq61U",
     collectionMint: "Ez5iii1kH4VeSqu3fiaKQtHhY8ioWUaBNJqEYEGbMmXi",
   }),
-  "lsw_cobalt_figure_hoodie_26_draft": createFrontendDrop({
-    solanaCluster: "devnet",
-    dropId: "lsw_cobalt_figure_hoodie_26_draft",
-    dropFamily: "lsw_cobalt_figure_hoodie",
-    collectionName: "lsw cobalt figure hoodie 26",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/hoodie",
-    mintSelection: {
-      kind: "size",
-      options: [
-        {
-          key: "L",
-          label: "L",
-          startId: 1,
-          endId: 15,
-        },
-        {
-          key: "XL",
-          label: "XL",
-          startId: 16,
-          endId: 30,
-        },
-        {
-          key: "2XL",
-          label: "2XL",
-          startId: 31,
-          endId: 34,
-        },
-      ],
-    },
-
-
-    // Drop config (kept in sync with on-chain config; useful for UI defaults)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 1,
-    discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
-    maxSupply: 34,
-    itemsPerBox: 0,
-    maxPerTx: 15,
-    namePrefix: "hoodie",
-    figureNamePrefix: "hoodie",
-    symbol: "hoodie",
-
-    // On-chain ids
-    boxMinterProgramId: "HnRphG2N4wX6mG6Pbz1LacUkUX8J4FB1gjK5AqP5Ed4K",
-    collectionMint: "7gTdmjNtRUcmqdhMtnck4SYLc9xXDU8Y1mY4vmkey5Eq",
-  }),
   "poncho_drifella": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
