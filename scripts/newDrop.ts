@@ -63,7 +63,7 @@ export const NEW_DROP: NewDropConfig = {
     coreCollectionPubkey: undefined,
     // Steady-state drop deploys should reuse the shared program.
     // Set this to false only when intentionally deploying/upgrading the shared program id itself.
-    reuseProgramId: true,
+    reuseProgramId: false,
   },
   onchain: {
     dropId: 'lsw_cobalt_figure_hoodie_26_devnet',
