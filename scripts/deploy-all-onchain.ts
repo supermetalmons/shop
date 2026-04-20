@@ -775,7 +775,7 @@ function throwFreshDeployOnlyForExistingConfig(args: {
       `\n` +
       `This script no longer updates existing deployments.\n` +
       `Fix: choose a new NEW_DROP.onchain.dropId and rerun this script.`,
-  });
+  );
 }
 
 async function writeFrontendDeploymentConfig(args: {
