@@ -18,6 +18,7 @@ import {
   getProfile,
   listDeliveryOrderOwners,
   recoverMyDeliveryOrders,
+  rememberPendingOpenDropId,
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
@@ -2892,6 +2893,7 @@ function App({ currentPath }: AppProps) {
         });
       };
       await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
+      rememberPendingOpenDropId(targetDrop.solanaCluster, item.id, targetDrop.dropId);
       queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;

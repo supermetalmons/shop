@@ -61,7 +61,9 @@ export const NEW_DROP: NewDropConfig = {
     solanaCluster,
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
-    reuseProgramId: false,
+    // Steady-state drop deploys should reuse the shared program.
+    // Set this to false only when intentionally deploying/upgrading the shared program id itself.
+    reuseProgramId: true,
   },
   onchain: {
     dropId: 'lsw_cobalt_figure_hoodie_26_devnet',

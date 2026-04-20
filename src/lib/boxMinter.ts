@@ -8,7 +8,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type { MintStats } from '../types';
-import type { FrontendDeploymentConfig, MintSelectionConfig } from '../config/deployment';
+import { normalizeDropBase, type FrontendDeploymentConfig, type MintSelectionConfig } from '../config/deployment.ts';
 
 const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
@@ -85,6 +85,7 @@ export interface BoxMinterConfigAccount {
   mintVariantStartIds: [number, number, number];
   mintVariantEndIds: [number, number, number];
   mintVariantNextIds: [number, number, number];
+  dropSeed?: Uint8Array;
 }
 
 export interface BuiltMintTx {
@@ -107,8 +108,12 @@ type BuiltStartOpenBoxInstructionPlan = {
   pendingPda: PublicKey;
 };
 
-type DropProgramConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'maxPerTx' | 'mintSelection'>;
-type DropMintLimitsConfig = DropProgramConfig;
+type DropProgramScopeConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'boxMinterConfigPda'>;
+type DropProgramValidationConfig = Partial<Pick<FrontendDeploymentConfig, 'collectionMint' | 'metadataBase'>>;
+type DropProgramConfig = DropProgramScopeConfig &
+  DropProgramValidationConfig &
+  Pick<FrontendDeploymentConfig, 'maxPerTx' | 'mintSelection'>;
+type ScopedConfigPda = Pick<BoxMinterConfigAccount, 'pubkey'>;
 
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
   const parsed = Number(config?.maxPerTx);
@@ -140,30 +145,97 @@ function assertStandardMintConfig(cfg: BoxMinterConfigAccount): void {
   }
 }
 
-async function buildMintTransaction(
+async function buildComputeBudgetTransaction(
   connection: Connection,
   payer: PublicKey,
-  mintIx: TransactionInstruction,
+  instruction: TransactionInstruction,
+  units = MINT_COMPUTE_UNIT_LIMIT,
 ): Promise<VersionedTransaction> {
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const message = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: blockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: MINT_COMPUTE_UNIT_LIMIT }), mintIx],
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units }), instruction],
   }).compileToV0Message();
   return new VersionedTransaction(message);
 }
 
-export function boxMinterProgramId(dropConfig: DropProgramConfig): PublicKey {
+export function boxMinterProgramId(dropConfig: DropProgramScopeConfig): PublicKey {
   return new PublicKey(dropConfig.boxMinterProgramId);
 }
 
-export function boxMinterConfigPda(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
+export function boxMinterConfigPda(programId: PublicKey, dropSeed?: Uint8Array): [PublicKey, number] {
+  return dropSeed?.length === 32
+    ? PublicKey.findProgramAddressSync([utf8(CONFIG_SEED), Buffer.from(dropSeed)], programId)
+    : PublicKey.findProgramAddressSync([utf8(CONFIG_SEED)], programId);
 }
 
-export function discountMintRecordPda(payer: PublicKey, programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([utf8(DISCOUNT_RECORD_SEED), payer.toBuffer()], programId);
+function isLegacySingletonConfigPda(programId: PublicKey, configPda: PublicKey): boolean {
+  return configPda.equals(boxMinterConfigPda(programId)[0]);
+}
+
+function scopedConfigPubkey(programId: PublicKey, cfg?: ScopedConfigPda): PublicKey | undefined {
+  if (!cfg || isLegacySingletonConfigPda(programId, cfg.pubkey)) return undefined;
+  return cfg.pubkey;
+}
+
+function resolveConfiguredBoxMinterConfigPda(dropConfig: DropProgramScopeConfig, programId: PublicKey): PublicKey {
+  const configured = String(dropConfig.boxMinterConfigPda || '').trim();
+  return configured ? new PublicKey(configured) : boxMinterConfigPda(programId)[0];
+}
+
+function normalizeConfiguredUriBaseForComparison(uriBase: string): string {
+  const normalized = normalizeDropBase(uriBase);
+  // Legacy singleton configs stored `${dropBase}/json/boxes/` instead of the canonical drop base.
+  // Keep accepting that older shape so untouched singleton drops continue to work.
+  return normalized.replace(/\/json\/boxes$/i, '');
+}
+
+export function assertBoxMinterConfigMatchesDropConfig(
+  cfg: Pick<BoxMinterConfigAccount, 'coreCollection' | 'uriBase'>,
+  dropConfig: DropProgramValidationConfig,
+): void {
+  const expectedCollectionMint =
+    typeof dropConfig.collectionMint === 'string' ? dropConfig.collectionMint.trim() : '';
+  if (expectedCollectionMint && cfg.coreCollection.toBase58() !== expectedCollectionMint) {
+    throw new Error('Deployment config is out of sync with the on-chain collection mint');
+  }
+
+  const expectedMetadataBase =
+    typeof dropConfig.metadataBase === 'string' ? normalizeDropBase(dropConfig.metadataBase) : '';
+  if (expectedMetadataBase && normalizeConfiguredUriBaseForComparison(cfg.uriBase) !== expectedMetadataBase) {
+    throw new Error('Deployment config is out of sync with the on-chain metadata base');
+  }
+}
+
+export function boxAssetPda(
+  payer: PublicKey,
+  mintId: bigint,
+  index: number,
+  programId: PublicKey,
+  cfg?: ScopedConfigPda,
+): [PublicKey, number] {
+  const seeds: Uint8Array[] = [Buffer.from(BOX_ASSET_SEED)];
+  const configPubkey = scopedConfigPubkey(programId, cfg);
+  if (configPubkey) {
+    seeds.push(configPubkey.toBuffer());
+  }
+  seeds.push(payer.toBuffer(), u64LE(mintId), Buffer.from([index & 0xff]));
+  return PublicKey.findProgramAddressSync(seeds, programId);
+}
+
+export function discountMintRecordPda(
+  payer: PublicKey,
+  programId: PublicKey,
+  cfg?: ScopedConfigPda,
+): [PublicKey, number] {
+  const seeds: Uint8Array[] = [utf8(DISCOUNT_RECORD_SEED)];
+  const configPubkey = scopedConfigPubkey(programId, cfg);
+  if (configPubkey) {
+    seeds.push(configPubkey.toBuffer());
+  }
+  seeds.push(payer.toBuffer());
+  return PublicKey.findProgramAddressSync(seeds, programId);
 }
 
 export function pendingOpenPda(boxAsset: PublicKey, programId: PublicKey): [PublicKey, number] {
@@ -217,6 +289,32 @@ function readU32Tuple(
     next += 4;
   }
   return { value, next };
+}
+
+function hasAnyNonZeroByte(data: Uint8Array): boolean {
+  for (let i = 0; i < data.length; i += 1) {
+    if (data[i] !== 0) return true;
+  }
+  return false;
+}
+
+function decodeOptionalTrailingDropSeed(data: Uint8Array, offset: number): Uint8Array | undefined {
+  // `getAccountInfo` returns the full allocated account buffer, so legacy configs have trailing
+  // zero padding beyond the serialized payload. Treat all-zero trailing bytes as padding, not v2 data.
+  if (offset >= data.length) return undefined;
+  const trailing = data.subarray(offset);
+  if (!hasAnyNonZeroByte(trailing)) return undefined;
+  if (trailing.length < 32) {
+    throw new Error('Unsupported box minter config schema. Drop seed data is truncated.');
+  }
+  const dropSeed = data.slice(offset, offset + 32);
+  if (!hasAnyNonZeroByte(dropSeed)) {
+    throw new Error('Unsupported box minter config schema. Unexpected trailing data after config payload.');
+  }
+  if (hasAnyNonZeroByte(trailing.subarray(32))) {
+    throw new Error('Unsupported box minter config schema. Unexpected trailing data after drop seed.');
+  }
+  return dropSeed;
 }
 
 function resolveMintSelectionAvailability(
@@ -362,6 +460,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     mintVariantNextIds = nextIds.value;
     o = nextIds.next;
   }
+  const dropSeed = decodeOptionalTrailingDropSeed(data, o);
 
   return {
     pubkey,
@@ -386,6 +485,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     mintVariantStartIds,
     mintVariantEndIds,
     mintVariantNextIds,
+    ...(dropSeed ? { dropSeed } : {}),
   };
 }
 
@@ -409,10 +509,11 @@ export function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
 export async function fetchDiscountMintRecordUsedCount(
   connection: Connection,
   payer: PublicKey,
-  dropConfig: DropProgramConfig,
+  dropConfig: DropProgramScopeConfig & DropProgramValidationConfig,
 ): Promise<number> {
   const programId = boxMinterProgramId(dropConfig);
-  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const cfg = await fetchBoxMinterConfig(connection, dropConfig);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId, cfg);
   const info = await retryRpc(() => connection.getAccountInfo(discountRecordPda, 'confirmed'), {
     retries: 3,
     baseDelayMs: 300,
@@ -432,22 +533,24 @@ export async function fetchDiscountMintRecordUsedCount(
 
 export async function fetchBoxMinterConfig(
   connection: Connection,
-  dropConfig: DropProgramConfig,
+  dropConfig: DropProgramScopeConfig & DropProgramValidationConfig,
 ): Promise<BoxMinterConfigAccount> {
   const programId = boxMinterProgramId(dropConfig);
-  const [pda] = boxMinterConfigPda(programId);
+  const pda = resolveConfiguredBoxMinterConfigPda(dropConfig, programId);
   const info = await retryRpc(() => connection.getAccountInfo(pda, 'confirmed'), {
     retries: 3,
     baseDelayMs: 300,
     maxDelayMs: 2_000,
   });
   if (!info?.data) throw new Error('Box minter is not initialized on this cluster');
-  return decodeBoxMinterConfigAccount(pda, info.data);
+  const cfg = decodeBoxMinterConfigAccount(pda, info.data);
+  assertBoxMinterConfigMatchesDropConfig(cfg, dropConfig);
+  return cfg;
 }
 
 export async function fetchMintStatsFromProgram(
   connection: Connection,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): Promise<MintStats> {
   const cfg = await fetchBoxMinterConfig(connection, dropConfig);
   const minted = Number(cfg.minted || 0);
@@ -494,20 +597,21 @@ function randomU64(): bigint {
   return (BigInt(arr[0]) | (BigInt(arr[1]) << 32n)) & 0xffff_ffff_ffff_ffffn;
 }
 
-function deriveMintPlan(payer: PublicKey, programId: PublicKey, quantity: number) {
+function deriveMintPlan(
+  payer: PublicKey,
+  programId: PublicKey,
+  quantity: number,
+  cfg?: ScopedConfigPda,
+) {
   const mintId = randomU64();
-  const mintIdBytes = u64LE(mintId);
   const boxAccounts: PublicKey[] = [];
   const boxBumps: number[] = [];
   for (let i = 0; i < quantity; i += 1) {
-    const [pda, bump] = PublicKey.findProgramAddressSync(
-      [Buffer.from(BOX_ASSET_SEED), payer.toBuffer(), mintIdBytes, Buffer.from([i & 0xff])],
-      programId,
-    );
+    const [pda, bump] = boxAssetPda(payer, mintId, i, programId, cfg);
     boxAccounts.push(pda);
     boxBumps.push(bump);
   }
-  return { mintId, mintIdBytes, boxAccounts, boxBumps };
+  return { mintId, boxAccounts, boxBumps };
 }
 
 function encodeMintBoxesData(quantity: number, mintId: bigint, boxBumps: number[], maxMintsPerTx: number): Buffer {
@@ -579,7 +683,7 @@ export function buildMintBoxesIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): TransactionInstruction {
   return buildMintBoxesInstructionPlan(cfg, payer, quantity, dropConfig).instruction;
 }
@@ -588,22 +692,21 @@ function buildMintBoxesInstructionPlan(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): BuiltMintInstructionPlan {
   assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
   const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
 
   // IMPORTANT: derive box asset PDAs from (payer + random mintId), not from cfg.minted.
   // This avoids stale-PDA failures when many users mint concurrently.
-  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity, cfg);
 
   return {
     instruction: new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.pubkey, isSigner: false, isWritable: true },
         { pubkey: payer, isSigner: true, isWritable: true },
         { pubkey: cfg.treasury, isSigner: false, isWritable: true },
         { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
@@ -636,19 +739,18 @@ function buildMintDiscountedBoxInstructionPlan(
 ): BuiltMintInstructionPlan {
   assertStandardMintConfig(cfg);
   const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
-  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId, cfg);
   const maxDiscountMints = Math.min(normalizeMaxMintsPerTx(dropConfig), cfg.discountMintsPerWallet);
   if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountMints) {
     throw new Error(`Discount mint quantity must be between 1 and ${maxDiscountMints}`);
   }
-  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, quantity, cfg);
 
   return {
     instruction: new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.pubkey, isSigner: false, isWritable: true },
         { pubkey: payer, isSigner: true, isWritable: true },
         { pubkey: discountRecordPda, isSigner: false, isWritable: true },
         { pubkey: cfg.treasury, isSigner: false, isWritable: true },
@@ -667,7 +769,7 @@ export function buildMintVariantBoxIx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   variantKey: string,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): TransactionInstruction {
   return buildMintVariantInstructionPlan(cfg, payer, variantKey, dropConfig).instruction;
 }
@@ -676,17 +778,16 @@ function buildMintVariantInstructionPlan(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   variantKey: string,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): BuiltMintInstructionPlan {
   const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
   const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
-  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1, cfg);
   return {
     instruction: new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.pubkey, isSigner: false, isWritable: true },
         { pubkey: payer, isSigner: true, isWritable: true },
         { pubkey: cfg.treasury, isSigner: false, isWritable: true },
         { pubkey: cfg.coreCollection, isSigner: false, isWritable: true },
@@ -718,15 +819,14 @@ function buildMintDiscountedVariantInstructionPlan(
   dropConfig: DropProgramConfig,
 ): BuiltMintInstructionPlan {
   const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
-  const [discountRecordPda] = discountMintRecordPda(payer, programId);
+  const [discountRecordPda] = discountMintRecordPda(payer, programId, cfg);
   const variantIndex = resolveMintVariantIndex(cfg, dropConfig, variantKey);
-  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1);
+  const { mintId, boxAccounts, boxBumps } = deriveMintPlan(payer, programId, 1, cfg);
   return {
     instruction: new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: cfg.pubkey, isSigner: false, isWritable: true },
         { pubkey: payer, isSigner: true, isWritable: true },
         { pubkey: discountRecordPda, isSigner: false, isWritable: true },
         { pubkey: cfg.treasury, isSigner: false, isWritable: true },
@@ -747,7 +847,7 @@ async function buildMintTxFromPlan(
   plan: BuiltMintInstructionPlan,
 ): Promise<BuiltMintTx> {
   return {
-    tx: await buildMintTransaction(connection, payer, plan.instruction),
+    tx: await buildComputeBudgetTransaction(connection, payer, plan.instruction),
     boxAccounts: plan.boxAccounts,
   };
 }
@@ -757,7 +857,7 @@ export async function buildMintBoxesTxWithAccounts(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): Promise<BuiltMintTx> {
   assertStandardMintConfig(cfg);
   const maxMintsPerTx = normalizeMaxMintsPerTx(dropConfig);
@@ -785,7 +885,7 @@ export async function buildMintVariantBoxTxWithAccounts(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   variantKey: string,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): Promise<BuiltMintTx> {
   return buildMintTxFromPlan(connection, payer, buildMintVariantInstructionPlan(cfg, payer, variantKey, dropConfig));
 }
@@ -824,7 +924,6 @@ function buildStartOpenBoxInstructionPlan(
     throw new Error('This drop does not support opening.');
   }
   const programId = boxMinterProgramId(dropConfig);
-  const [configPda] = boxMinterConfigPda(programId);
   const [pendingPda] = pendingOpenPda(boxAsset, programId);
   const dudePdas = Array.from({ length: cfg.itemsPerBox }, (_, i) => pendingDudeAssetPda(pendingPda, i, cfg.itemsPerBox, programId)[0]);
 
@@ -832,7 +931,7 @@ function buildStartOpenBoxInstructionPlan(
     instruction: new TransactionInstruction({
       programId,
       keys: [
-        { pubkey: configPda, isSigner: false, isWritable: false },
+        { pubkey: cfg.pubkey, isSigner: false, isWritable: false },
         { pubkey: payer, isSigner: true, isWritable: true },
         { pubkey: boxAsset, isSigner: false, isWritable: true },
         { pubkey: cfg.admin, isSigner: false, isWritable: false },
@@ -857,17 +956,8 @@ export async function buildStartOpenBoxTxWithPending(
   dropConfig: DropProgramConfig,
 ): Promise<BuiltStartOpenBoxTx> {
   const { instruction, pendingPda } = buildStartOpenBoxInstructionPlan(cfg, payer, boxAsset, dropConfig);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      instruction,
-    ],
-  }).compileToV0Message();
   return {
-    tx: new VersionedTransaction(msg),
+    tx: await buildComputeBudgetTransaction(connection, payer, instruction),
     pendingPda,
   };
 }
@@ -877,7 +967,7 @@ export async function buildMintBoxesTx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   quantity: number,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
   const { tx } = await buildMintBoxesTxWithAccounts(connection, cfg, payer, quantity, dropConfig);
   return tx;
@@ -900,7 +990,7 @@ export async function buildMintVariantBoxTx(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
   variantKey: string,
-  dropConfig: DropMintLimitsConfig,
+  dropConfig: DropProgramConfig,
 ): Promise<VersionedTransaction> {
   const { tx } = await buildMintVariantBoxTxWithAccounts(connection, cfg, payer, variantKey, dropConfig);
   return tx;

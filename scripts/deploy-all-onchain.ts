@@ -1,12 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
-import { createHash } from 'crypto';
-import bs58 from 'bs58';
-import { createInterface } from 'node:readline/promises';
 import { NEW_DROP, type SolanaCluster } from './newDrop.ts';
+import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
   defaultFrontendFigureMediaForDropFamily,
   readFrontendDropRegistry,
@@ -59,118 +58,6 @@ function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: num
   const treeSize = 24 + (maxBufferSize + 1) * nodeSize;
   const canopySize = canopyDepth > 0 ? Math.max((Math.pow(2, canopyDepth + 1) - 2) * 32, 0) : 0;
   return 2 + headerSize + treeSize + canopySize;
-}
-
-async function promptMaskedInput(prompt: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new Error('Cannot prompt for private key: stdin is not a TTY. Run this script in an interactive terminal.');
-  }
-
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-
-  stdout.write(prompt);
-  stdin.setEncoding('utf8');
-
-  const wasRaw = (stdin as any).isRaw;
-  stdin.setRawMode(true);
-  stdin.resume();
-
-  let input = '';
-
-  return await new Promise((resolve, reject) => {
-    function cleanup() {
-      stdin.removeListener('data', onData);
-      try {
-        stdin.setRawMode(Boolean(wasRaw));
-      } catch {
-        // ignore
-      }
-      stdin.pause();
-    }
-
-    function onData(chunk: string) {
-      for (const ch of chunk) {
-        // Ctrl+C
-        if (ch === '\u0003') {
-          stdout.write('\n');
-          cleanup();
-          reject(new Error('Cancelled'));
-          return;
-        }
-
-        // Enter
-        if (ch === '\r' || ch === '\n') {
-          stdout.write('\n');
-          cleanup();
-          resolve(input);
-          return;
-        }
-
-        // Backspace (DEL / BS)
-        if (ch === '\u007f' || ch === '\b') {
-          if (input.length > 0) {
-            input = input.slice(0, -1);
-            stdout.write('\b \b');
-          }
-          continue;
-        }
-
-        // Ignore other control chars
-        if (ch < ' ' && ch !== '\t') continue;
-
-        input += ch;
-        stdout.write('*');
-      }
-    }
-
-    stdin.on('data', onData);
-  });
-}
-
-async function promptYConfirmation(prompt: string): Promise<boolean> {
-  if (!process.stdin.isTTY) {
-    throw new Error('Cannot prompt for confirmation: stdin is not a TTY. Run this script in an interactive terminal.');
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(prompt)).trim().toLowerCase();
-    return answer === 'y';
-  } finally {
-    rl.close();
-  }
-}
-
-function keypairFromBytes(bytes: Uint8Array): Keypair {
-  if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
-  if (bytes.length === 32) return Keypair.fromSeed(bytes);
-  throw new Error(`Invalid private key length: ${bytes.length} bytes (expected 32 or 64).`);
-}
-
-function parsePrivateKeyInput(input: string): Keypair {
-  const raw = (input || '').trim();
-  if (!raw) throw new Error('Empty private key input.');
-
-  // Accept Solana CLI-style JSON keypair arrays (e.g. ~/.config/solana/id.json contents).
-  if (raw.startsWith('[')) {
-    let arr: unknown;
-    try {
-      arr = JSON.parse(raw);
-    } catch {
-      throw new Error('Invalid JSON private key. Expected a JSON array of numbers or a base58-encoded secret key.');
-    }
-    if (!Array.isArray(arr) || arr.some((n) => typeof n !== 'number')) {
-      throw new Error('Invalid JSON private key. Expected a JSON array of numbers.');
-    }
-    return keypairFromBytes(Uint8Array.from(arr as number[]));
-  }
-
-  // Otherwise, treat as base58.
-  try {
-    return keypairFromBytes(bs58.decode(raw));
-  } catch {
-    throw new Error('Invalid base58 private key.');
-  }
 }
 
 async function assertExecutableProgram(args: {
@@ -305,9 +192,29 @@ function normalizeDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+function deriveDropSeed(dropId: string): Buffer {
+  return sha256(Buffer.from(normalizeDropId(dropId), 'utf8'));
+}
+
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = String(value || '').trim();
   return trimmed || undefined;
+}
+
+function describeExistingBoxMinterConfig(configData: Buffer): string {
+  try {
+    const cfg = decodeBoxMinterConfig(configData);
+    return (
+      `- existing admin   : ${cfg.admin.toBase58()}\n` +
+      `- existing minted  : ${cfg.minted}/${cfg.maxSupply}\n` +
+      `- existing uriBase : ${cfg.uriBase}`
+    );
+  } catch (err) {
+    return (
+      `- existing bytes   : ${configData.length}\n` +
+      `- existing decode  : ${errorMessage(err)}`
+    );
+  }
 }
 
 function requireNonEmptyString(value: string, label: string): string {
@@ -857,23 +764,8 @@ function throwFreshDeployOnlyForExistingConfig(args: {
   programId: string;
   configPda: PublicKey;
   configData: Buffer;
-  reuseProgramId: boolean;
 }) {
-  let existingConfigDetails: string;
-  try {
-    const cfg = decodeBoxMinterConfig(args.configData);
-    existingConfigDetails =
-      `- existing admin   : ${cfg.admin.toBase58()}\n` +
-      `- existing minted  : ${cfg.minted}/${cfg.maxSupply}\n` +
-      `- existing uriBase : ${cfg.uriBase}`;
-  } catch (err) {
-    existingConfigDetails =
-      `- existing bytes   : ${args.configData.length}\n` +
-      `- existing decode  : ${errorMessage(err)}`;
-  }
-  const guidance = args.reuseProgramId
-    ? `Set NEW_DROP.deploy.reuseProgramId=false to generate a fresh program id, then choose a new NEW_DROP.onchain.dropId.`
-    : `Choose a new NEW_DROP.onchain.dropId and rerun this script with a fresh program id.`;
+  const existingConfigDetails = describeExistingBoxMinterConfig(args.configData);
   throw new Error(
     `Fresh deploy only: found an existing box minter config during ${args.stage}.\n` +
       `- requested dropId : ${args.dropId}\n` +
@@ -882,8 +774,8 @@ function throwFreshDeployOnlyForExistingConfig(args: {
       `${existingConfigDetails}\n` +
       `\n` +
       `This script no longer updates existing deployments.\n` +
-      `Fix: ${guidance}`,
-  );
+      `Fix: choose a new NEW_DROP.onchain.dropId and rerun this script.`,
+  });
 }
 
 async function writeFrontendDeploymentConfig(args: {
@@ -906,6 +798,7 @@ async function writeFrontendDeploymentConfig(args: {
   figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
 }) {
   const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
@@ -941,6 +834,7 @@ async function writeFrontendDeploymentConfig(args: {
     figureNamePrefix: args.figureNamePrefix,
     symbol: args.symbol,
     boxMinterProgramId: args.boxMinterProgramId,
+    ...(trimToUndefined(args.boxMinterConfigPda) ? { boxMinterConfigPda: trimToUndefined(args.boxMinterConfigPda) } : {}),
     collectionMint: args.collectionMint,
   };
   writeFrontendDeploymentRegistryFile({ filePath, drops: nextDrops });
@@ -967,6 +861,7 @@ async function writeFunctionsDeploymentConfig(args: {
   figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
@@ -1002,6 +897,7 @@ async function writeFunctionsDeploymentConfig(args: {
     figureNamePrefix: args.figureNamePrefix,
     symbol: args.symbol,
     boxMinterProgramId: args.boxMinterProgramId,
+    ...(trimToUndefined(args.boxMinterConfigPda) ? { boxMinterConfigPda: trimToUndefined(args.boxMinterConfigPda) } : {}),
     collectionMint: args.collectionMint,
     receiptsMerkleTree: args.receiptsMerkleTree,
     deliveryLookupTable: args.deliveryLookupTable,
@@ -1497,7 +1393,7 @@ function decodeBoxMinterConfig(data: Buffer) {
         `- actual config account size      : ${data.length} bytes\n` +
         `\n` +
         `This configurable items-per-box change requires a fresh deployment/init.\n` +
-        `Fix: set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts and redeploy.`,
+        `Fix: deploy to a fresh program id and rerun this script.`,
     );
   }
   // Anchor account discriminator is the first 8 bytes.
@@ -1554,8 +1450,31 @@ function decodeBoxMinterConfig(data: Buffer) {
   };
 }
 
-function boxMinterConfigPda(programId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0];
+function boxMinterConfigPda(programId: PublicKey, dropSeed?: Buffer): PublicKey {
+  return (dropSeed?.length === 32
+    ? PublicKey.findProgramAddressSync([Buffer.from('config'), dropSeed], programId)
+    : PublicKey.findProgramAddressSync([Buffer.from('config')], programId))[0];
+}
+
+async function assertLegacySingletonConfigAbsentForSharedProgramReuse(args: {
+  connection: Connection;
+  programId: PublicKey;
+  programIdString: string;
+}): Promise<void> {
+  const legacyConfigPda = boxMinterConfigPda(args.programId);
+  const legacyConfigInfo = await retryRpcRead(`getAccountInfo(legacy singleton config ${legacyConfigPda.toBase58()})`, () =>
+    args.connection.getAccountInfo(legacyConfigPda, { commitment: 'confirmed' }),
+  );
+  if (!legacyConfigInfo?.data?.length) return;
+
+  throw new Error(
+    `Cannot reuse program id ${args.programIdString} for the shared-program lineage.\n` +
+      `A legacy singleton config already exists at ${legacyConfigPda.toBase58()}.\n` +
+      `${describeExistingBoxMinterConfig(Buffer.from(legacyConfigInfo.data))}\n` +
+      `\n` +
+      `Existing singleton drops must keep their original program ids unchanged.\n` +
+      `Fix: set NEW_DROP.deploy.reuseProgramId=false once to generate and deploy a fresh shared program id for this drop, then switch reuseProgramId back to true for later shared drops.`,
+  );
 }
 
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
@@ -1579,6 +1498,7 @@ function buildInitializeIx(args: {
   figureNamePrefix: string;
   symbol: string;
   mintSelection?: MintSelectionConfigSerialized;
+  dropSeed: Buffer;
   /**
    * Drop base URL (canonical), e.g. `https://assets.example.com/drops/your-drop`.
    *
@@ -1586,7 +1506,7 @@ function buildInitializeIx(args: {
    */
   metadataBase: string;
 }): TransactionInstruction {
-  const configPda = boxMinterConfigPda(args.programId);
+  const configPda = boxMinterConfigPda(args.programId, args.dropSeed);
   const data = Buffer.concat([
     IX_INITIALIZE,
     u64LE(args.priceLamports),
@@ -1601,6 +1521,7 @@ function buildInitializeIx(args: {
     Buffer.from([requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'initialize discountMintsPerWallet') & 0xff]),
     borshString(args.figureNamePrefix),
     encodeMintSelectionInitializeArgs(args.mintSelection),
+    Buffer.from(args.dropSeed),
   ]);
 
   return new TransactionInstruction({
@@ -1616,8 +1537,14 @@ function buildInitializeIx(args: {
   });
 }
 
-function buildSetTreasuryIx(args: { programId: PublicKey; admin: PublicKey; treasury: PublicKey }): TransactionInstruction {
-  const configPda = boxMinterConfigPda(args.programId);
+function buildSetTreasuryIx(args: {
+  programId: PublicKey;
+  admin: PublicKey;
+  treasury: PublicKey;
+  configPda?: PublicKey;
+  dropSeed?: Buffer;
+}): TransactionInstruction {
+  const configPda = args.configPda || boxMinterConfigPda(args.programId, args.dropSeed);
   const data = Buffer.concat([IX_SET_TREASURY, args.treasury.toBuffer()]);
   return new TransactionInstruction({
     programId: args.programId,
@@ -1746,6 +1673,22 @@ function readProgramId(onchainDir: string): string {
     throw new Error(`Could not find declare_id!(\"...\") in ${libPath}`);
   }
   return match[1];
+}
+
+function readProgramIdFromKeypair(programKeypairPath: string): string {
+  if (!existsSync(programKeypairPath)) {
+    throw new Error(`Missing program keypair: ${programKeypairPath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(programKeypairPath, 'utf8'));
+  } catch {
+    throw new Error(`Invalid program keypair JSON: ${programKeypairPath}`);
+  }
+  if (!Array.isArray(parsed) || parsed.some((n) => typeof n !== 'number')) {
+    throw new Error(`Invalid program keypair format: ${programKeypairPath}`);
+  }
+  return keypairFromBytes(Uint8Array.from(parsed as number[])).publicKey.toBase58();
 }
 
 function uniquePubkeys(keys: PublicKey[]) {
@@ -1929,22 +1872,6 @@ function writeFreshProgramKeypair(programKeypairPath: string, kp: Keypair): { ba
   return { backupPath };
 }
 
-function readProgramIdFromKeypair(programKeypairPath: string): string {
-  if (!existsSync(programKeypairPath)) {
-    throw new Error(`Missing program keypair: ${programKeypairPath}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(programKeypairPath, 'utf8'));
-  } catch {
-    throw new Error(`Invalid program keypair JSON: ${programKeypairPath}`);
-  }
-  if (!Array.isArray(parsed) || parsed.some((n) => typeof n !== 'number')) {
-    throw new Error(`Invalid program keypair format: ${programKeypairPath}`);
-  }
-  return keypairFromBytes(Uint8Array.from(parsed as number[])).publicKey.toBase58();
-}
-
 function cargoLockHasPackage(onchainDir: string, name: string, version: string): boolean {
   const lockPath = path.join(onchainDir, 'Cargo.lock');
   if (!existsSync(lockPath)) return false;
@@ -2013,8 +1940,9 @@ async function main() {
   const functionsDeploymentCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
   const deployCfg = NEW_DROP.deploy;
   const dropCfg = NEW_DROP.onchain;
-  const dropId = requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId');
+  const dropId = normalizeDropId(requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId'));
   const dropFamily = requireDropFamily(dropCfg.dropFamily, 'NEW_DROP.onchain.dropFamily');
+  const dropSeed = deriveDropSeed(dropId);
   await assertDropIdNotConfiguredInDeploymentFiles({
     dropId,
     frontendConfigPath: frontendDeploymentCfgPath,
@@ -2083,7 +2011,7 @@ async function main() {
     if (!existsSync(programKeypair)) {
       throw new Error(
         `Missing program keypair: ${programKeypair}\n` +
-          `Either create it first, or set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts to auto-generate a fresh program id.\n` +
+          `Either create it first, or set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts to deploy a fresh shared program id.\n` +
           `Generate it with:\n` +
           `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n`,
       );
@@ -2097,7 +2025,14 @@ async function main() {
   // Safety preflight: validate target drop/admin and required NEW_DROP init fields before any build/deploy side effects.
   const preflightProgramId = reuseProgramId ? readProgramIdFromKeypair(programKeypair) : expectedProgramId!;
   const preflightProgramPk = new PublicKey(preflightProgramId);
-  const preflightConfigPda = boxMinterConfigPda(preflightProgramPk);
+  if (reuseProgramId) {
+    await assertLegacySingletonConfigAbsentForSharedProgramReuse({
+      connection,
+      programId: preflightProgramPk,
+      programIdString: preflightProgramId,
+    });
+  }
+  const preflightConfigPda = boxMinterConfigPda(preflightProgramPk, dropSeed);
   const preflightCfgInfo = await retryRpcRead(`getAccountInfo(preflight config ${preflightConfigPda.toBase58()})`, () =>
     connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' }),
   );
@@ -2108,7 +2043,6 @@ async function main() {
       programId: preflightProgramId,
       configPda: preflightConfigPda,
       configData: preflightCfgInfo.data,
-      reuseProgramId,
     });
   }
   assertReceiptsTreeCapacityForMaxSupply({
@@ -2140,18 +2074,17 @@ async function main() {
   // 1) Build + deploy program via Anchor.
   removeStaleAnchorGeneratedArtifacts(onchainDir);
   run('anchor', ['keys', 'sync'], { cwd: onchainDir, env: toolEnv });
-  if (expectedProgramId) {
-    const synced = readProgramId(onchainDir);
-    if (synced !== expectedProgramId) {
-      throw new Error(
-        `Program id sync mismatch.\n` +
-          `Expected: ${expectedProgramId}\n` +
-          `Synced  : ${synced}\n` +
-          `\n` +
-          `This usually means 'anchor keys sync' did not update the program source/Anchor.toml.\n` +
-          `Try running it manually in ${onchainDir} and re-run this script.`,
-      );
-    }
+  const syncedProgramId = readProgramId(onchainDir);
+  const requiredProgramId = reuseProgramId ? preflightProgramId : expectedProgramId;
+  if (requiredProgramId && syncedProgramId !== requiredProgramId) {
+    throw new Error(
+      `Program id sync mismatch.\n` +
+        `Expected: ${requiredProgramId}\n` +
+        `Synced  : ${syncedProgramId}\n` +
+        `\n` +
+        `This usually means 'anchor keys sync' did not update the program source/Anchor.toml.\n` +
+        `Try running it manually in ${onchainDir} and re-run this script.`,
+    );
   }
 
   // Ensure Cargo.lock is compatible with the Solana toolchain (cargo 1.72.x).
@@ -2204,8 +2137,7 @@ async function main() {
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
   const programPk = new PublicKey(programId);
-  const configPda = boxMinterConfigPda(programPk);
-
+  const configPda = boxMinterConfigPda(programPk, dropSeed);
   const existingCfg = await retryRpcRead(`getAccountInfo(post-deploy config ${configPda.toBase58()})`, () =>
     connection.getAccountInfo(configPda, { commitment: 'confirmed' }),
   );
@@ -2216,7 +2148,6 @@ async function main() {
       programId,
       configPda,
       configData: existingCfg.data,
-      reuseProgramId,
     });
   }
   const requiredDropMetadataBase = initDropInputs.requiredDropMetadataBase;
@@ -2367,6 +2298,7 @@ async function main() {
     symbol: boxMinterConfig.symbol,
     metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
     mintSelection: boxMinterConfig.mintSelection,
+    dropSeed,
   });
 
   const setupTx = new Transaction().add(initIx);
@@ -2440,6 +2372,7 @@ async function main() {
     figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
+    boxMinterConfigPda: configPda.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
   });
   const functionsCfgWrittenPath = await writeFunctionsDeploymentConfig({
@@ -2462,6 +2395,7 @@ async function main() {
     figureNamePrefix: boxMinterConfig.figureNamePrefix,
     symbol: boxMinterConfig.symbol,
     boxMinterProgramId: programPk.toBase58(),
+    boxMinterConfigPda: configPda.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,
     deliveryLookupTable: deliveryLutStr,

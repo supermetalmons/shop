@@ -44,6 +44,7 @@ export type FrontendDropConfigSerialized = {
   figureNamePrefix: string;
   symbol: string;
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
 };
 
@@ -247,6 +248,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropFamily(dropFamily);
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
   const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
+  const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
@@ -269,6 +271,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     figureNamePrefix: asTrimmedString(obj.figureNamePrefix) || 'figure',
     symbol: asTrimmedString(obj.symbol),
     boxMinterProgramId: asTrimmedString(obj.boxMinterProgramId),
+    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     collectionMint: asTrimmedString(obj.collectionMint),
   };
 }
@@ -389,6 +392,34 @@ function renderMintSelectionConfigLiteral(config: MintSelectionConfigSerialized,
   return lines.join('\n');
 }
 
+function renderOptionalBoxMinterConfigPdaLine(boxMinterConfigPda?: string): string {
+  return boxMinterConfigPda ? `    boxMinterConfigPda: ${tsStringLiteral(boxMinterConfigPda)},\n` : '';
+}
+
+function renderSharedProgramConfigPdaAssertion(registryName: string, registryLabel: string): string {
+  return [
+    `function assertSharedProgramDropsUseExplicitConfigPdas<`,
+    `  T extends { dropId: string; solanaCluster: SolanaCluster; boxMinterProgramId: string; boxMinterConfigPda?: string },`,
+    `>(drops: Record<string, T>, registryLabel: string): void {`,
+    `  const counts = new Map<string, number>();`,
+    `  Object.values(drops).forEach((drop) => {`,
+    '    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;',
+    `    counts.set(key, (counts.get(key) || 0) + 1);`,
+    `  });`,
+    `  Object.values(drops).forEach((drop) => {`,
+    '    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;',
+    `    if ((counts.get(key) || 0) < 2) return;`,
+    `    if (String(drop.boxMinterConfigPda || '').trim()) return;`,
+    `    throw new Error(`,
+    '      `${registryLabel} drop ${drop.dropId} shares program ${drop.boxMinterProgramId} on ${drop.solanaCluster} and must set boxMinterConfigPda.`,',
+    `    );`,
+    `  });`,
+    `}`,
+    ``,
+    `assertSharedProgramDropsUseExplicitConfigPdas(${registryName}, ${tsStringLiteral(registryLabel)});`,
+  ].join('\n');
+}
+
 function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
   return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
@@ -415,7 +446,7 @@ ${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.se
 
     // On-chain ids
     boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
-    collectionMint: ${tsStringLiteral(drop.collectionMint)},
+${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMint: ${tsStringLiteral(drop.collectionMint)},
   }),`;
 }
 
@@ -445,7 +476,7 @@ ${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\
 
     // On-chain ids
     boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
-    collectionMint: ${tsStringLiteral(drop.collectionMint)},
+${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMint: ${tsStringLiteral(drop.collectionMint)},
     receiptsMerkleTree: ${tsStringLiteral(drop.receiptsMerkleTree)},
     deliveryLookupTable: ${tsStringLiteral(drop.deliveryLookupTable)},
   }),`;
@@ -531,6 +562,7 @@ export type FrontendDropConfig = {
 
   // On-chain ids
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
 
   // Canonical derived drop paths (avoid duplicating URL strings).
@@ -710,6 +742,8 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
+  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
+  const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
   return {
     ...config,
     dropId: normalizedDropId,
@@ -717,7 +751,8 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
     metadataBase: normalizeDropBase(config.metadataBase),
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
-    ...(normalizeMintSelectionConfig(config.mintSelection) ? { mintSelection: normalizeMintSelectionConfig(config.mintSelection) } : {}),
+    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
+    ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
@@ -726,6 +761,8 @@ function createFrontendDrop(config: Omit<FrontendDropConfig, 'dropId' | 'paths'>
 }
 
 ${registrySection}
+
+${renderSharedProgramConfigPdaAssertion('FRONTEND_DROPS', 'Frontend deployment config')}
 
 export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);
@@ -831,6 +868,7 @@ export type FunctionsDropConfig = {
 
   // On-chain ids
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
@@ -925,18 +963,23 @@ export function dropPathsFromBase(dropBase: string): DropPaths {
 function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
+  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
+  const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
   return {
     ...config,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
-    ...(normalizeMintSelectionConfig(config.mintSelection) ? { mintSelection: normalizeMintSelectionConfig(config.mintSelection) } : {}),
+    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
+    ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
 }
 
 ${registrySection}
+
+${renderSharedProgramConfigPdaAssertion('FUNCTIONS_DROPS', 'Functions deployment config')}
 
 export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);

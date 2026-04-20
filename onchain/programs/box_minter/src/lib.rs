@@ -8,8 +8,8 @@ declare_id!("5yUurzWhpwMLWsANm3bHv4a9SchRP7hsQShyfzqjq61U");
 
 /// The only signer allowed to run `initialize()`.
 ///
-/// This prevents a permissionless first-initializer from permanently taking over the canonical
-/// `config` PDA (`seeds = [b"config"]`).
+/// This prevents a permissionless first-initializer from permanently taking over a drop config
+/// PDA (`seeds = [b"config", drop_seed]`).
 const EXPECTED_INITIALIZER: Pubkey = pubkey!("kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx");
 
 // Uncompressed Core NFTs are much heavier than cNFTs, but they don't require proofs.
@@ -39,38 +39,38 @@ const SEED_DISCOUNT_MINT: &[u8] = b"discount";
 
 // Metaplex Core program id.
 const MPL_CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    175, 84, 171, 16, 189, 151, 165, 66, 160, 158, 247, 179, 152, 137, 221, 12, 211, 148,
-    164, 204, 233, 223, 166, 205, 201, 126, 190, 45, 35, 91, 167, 72,
+    175, 84, 171, 16, 189, 151, 165, 66, 160, 158, 247, 179, 152, 137, 221, 12, 211, 148, 164, 204,
+    233, 223, 166, 205, 201, 126, 190, 45, 35, 91, 167, 72,
 ]);
 
 // SPL Noop program id (MPL-Core log wrapper).
 const SPL_NOOP_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    11, 188, 15, 192, 187, 71, 202, 47, 116, 196, 17, 46, 148, 171, 19, 207, 163, 198, 52,
-    229, 220, 23, 234, 203, 3, 205, 26, 35, 205, 126, 120, 124,
+    11, 188, 15, 192, 187, 71, 202, 47, 116, 196, 17, 46, 148, 171, 19, 207, 163, 198, 52, 229,
+    220, 23, 234, 203, 3, 205, 26, 35, 205, 126, 120, 124,
 ]);
 
 // Metaplex Noop program id (Bubblegum v2 log wrapper).
 const MPL_NOOP_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    11, 121, 89, 138, 15, 175, 40, 176, 251, 210, 37, 99, 35, 51, 65, 75, 208, 58, 171, 36,
-    15, 112, 50, 209, 222, 71, 87, 160, 172, 93, 198, 6,
+    11, 121, 89, 138, 15, 175, 40, 176, 251, 210, 37, 99, 35, 51, 65, 75, 208, 58, 171, 36, 15,
+    112, 50, 209, 222, 71, 87, 160, 172, 93, 198, 6,
 ]);
 
 // Metaplex Account Compression program id (used by Bubblegum v2).
 const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    11, 110, 1, 83, 35, 73, 37, 196, 7, 241, 129, 86, 118, 252, 211, 44, 245, 164, 143, 110,
-    139, 22, 153, 55, 86, 36, 187, 205, 94, 20, 114, 203,
+    11, 110, 1, 83, 35, 73, 37, 196, 7, 241, 129, 86, 118, 252, 211, 44, 245, 164, 143, 110, 139,
+    22, 153, 55, 86, 36, 187, 205, 94, 20, 114, 203,
 ]);
 
 // Metaplex Bubblegum v2 program id.
 const BUBBLEGUM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    152, 139, 128, 235, 121, 53, 40, 105, 178, 36, 116, 95, 89, 221, 191, 138, 38, 88, 202,
-    19, 220, 104, 129, 33, 38, 53, 28, 174, 7, 193, 165, 165,
+    152, 139, 128, 235, 121, 53, 40, 105, 178, 36, 116, 95, 89, 221, 191, 138, 38, 88, 202, 19,
+    220, 104, 129, 33, 38, 53, 28, 174, 7, 193, 165, 165,
 ]);
 
 // Bubblegum -> MPL-Core CPI signer (fixed address).
 const MPL_CORE_CPI_SIGNER: Pubkey = Pubkey::new_from_array([
-    172, 62, 167, 81, 182, 229, 187, 148, 54, 215, 103, 188, 191, 118, 136, 109, 246, 185,
-    148, 74, 208, 130, 94, 187, 44, 164, 169, 205, 130, 57, 140, 171,
+    172, 62, 167, 81, 182, 229, 187, 148, 54, 215, 103, 188, 191, 118, 136, 109, 246, 185, 148, 74,
+    208, 130, 94, 187, 44, 164, 169, 205, 130, 57, 140, 171,
 ]);
 
 // Bubblegum v2 mint discriminator: [120, 121, 23, 146, 173, 110, 199, 205]
@@ -89,8 +89,16 @@ fn hash_leaf(data: &[u8]) -> [u8; 32] {
 }
 
 fn hash_sorted_pair(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
-    let (a, b) = if left <= right { (left, right) } else { (right, left) };
+    let (a, b) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     hashv(&[a.as_ref(), b.as_ref()]).to_bytes()
+}
+
+fn has_any_non_zero_byte(data: &[u8]) -> bool {
+    data.iter().any(|b| *b != 0)
 }
 
 fn verify_merkle_proof(leaf: &[u8], proof: &[[u8; 32]], root: [u8; 32]) -> bool {
@@ -192,42 +200,39 @@ fn new_mint_box_asset_buffers<'info>(
             accounts.core_collection.key(),
             false,
         )); // collection
-    create_ix
-        .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            cfg_ai.key(),
-            true,
-        )); // authority
+    create_ix.accounts.push(
+        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true),
+    ); // authority
     create_ix
         .accounts
         .push(anchor_lang::solana_program::instruction::AccountMeta::new(
             accounts.payer.key(),
             true,
         )); // payer
-    create_ix
-        .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+    create_ix.accounts.push(
+        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
             accounts.payer.key(),
             false,
-        )); // owner
-    create_ix
-        .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+        ),
+    ); // owner
+    create_ix.accounts.push(
+        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
             MPL_CORE_PROGRAM_ID,
             false,
-        )); // update_authority: None (placeholder)
-    create_ix
-        .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+        ),
+    ); // update_authority: None (placeholder)
+    create_ix.accounts.push(
+        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
             accounts.system_program.key(),
             false,
-        )); // system_program
-    create_ix
-        .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+        ),
+    ); // system_program
+    create_ix.accounts.push(
+        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
             MPL_CORE_PROGRAM_ID,
             false,
-        )); // log_wrapper: None (placeholder)
+        ),
+    ); // log_wrapper: None (placeholder)
 
     MintBoxAssetBuffers {
         name_buf: String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12),
@@ -248,12 +253,14 @@ fn mint_one_box_asset<'info>(
     buffers: &mut MintBoxAssetBuffers,
 ) -> Result<()> {
     let payer_key = accounts.payer.key();
+    let config_key = cfg.key();
     let mint_id_bytes = mint_id.to_le_bytes();
     let i_seed = [asset_seed_index];
     let asset_bump_bytes = [asset_bump];
     let expected = Pubkey::create_program_address(
         &[
             SEED_BOX_ASSET,
+            config_key.as_ref(),
             payer_key.as_ref(),
             &mint_id_bytes,
             &i_seed,
@@ -272,6 +279,7 @@ fn mint_one_box_asset<'info>(
 
     let asset_seeds: &[&[u8]] = &[
         SEED_BOX_ASSET,
+        config_key.as_ref(),
         payer_key.as_ref(),
         &mint_id_bytes,
         &i_seed,
@@ -286,7 +294,11 @@ fn mint_one_box_asset<'info>(
         );
         invoke_signed(
             &sweep_ix,
-            &[asset_ai.clone(), accounts.payer.clone(), accounts.system_program.clone()],
+            &[
+                asset_ai.clone(),
+                accounts.payer.clone(),
+                accounts.system_program.clone(),
+            ],
             &[asset_seeds],
         )
         .map_err(anchor_lang::error::Error::from)?;
@@ -303,7 +315,12 @@ fn mint_one_box_asset<'info>(
     buffers.uri_buf.push_str(".json");
 
     let cfg_bump = cfg.bump;
-    let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg_bump]];
+    let cfg_bump_bytes = [cfg_bump];
+    let cfg_signer_seeds: &[&[u8]] = &[
+        BoxMinterConfig::SEED,
+        cfg.drop_seed.as_ref(),
+        &cfg_bump_bytes,
+    ];
     let signer_seeds: &[&[&[u8]]] = &[cfg_signer_seeds, asset_seeds];
 
     buffers.create_ix.accounts[0].pubkey = asset_ai.key();
@@ -468,15 +485,24 @@ fn mint_variant_box_inner<'info>(
 }
 
 fn load_or_create_discount_record<'info>(
+    config_key: Pubkey,
     payer_key: Pubkey,
     payer_ai: AccountInfo<'info>,
     discount_ai: AccountInfo<'info>,
     system_program: AccountInfo<'info>,
     program_id: &Pubkey,
 ) -> Result<(DiscountMintRecord, u8)> {
-    let (_, discount_bump) =
-        Pubkey::find_program_address(&[SEED_DISCOUNT_MINT, payer_key.as_ref()], program_id);
-    let discount_seeds: &[&[u8]] = &[SEED_DISCOUNT_MINT, payer_key.as_ref(), &[discount_bump]];
+    let (_, discount_bump) = Pubkey::find_program_address(
+        &[SEED_DISCOUNT_MINT, config_key.as_ref(), payer_key.as_ref()],
+        program_id,
+    );
+    let discount_bump_bytes = [discount_bump];
+    let discount_seeds: &[&[u8]] = &[
+        SEED_DISCOUNT_MINT,
+        config_key.as_ref(),
+        payer_key.as_ref(),
+        &discount_bump_bytes,
+    ];
 
     let record = if discount_ai.lamports() == 0 {
         let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
@@ -489,7 +515,11 @@ fn load_or_create_discount_record<'info>(
         );
         invoke_signed(
             &create_discount_ix,
-            &[payer_ai.clone(), discount_ai.clone(), system_program.clone()],
+            &[
+                payer_ai.clone(),
+                discount_ai.clone(),
+                system_program.clone(),
+            ],
             &[discount_seeds],
         )?;
         DiscountMintRecord {
@@ -512,7 +542,11 @@ fn load_or_create_discount_record<'info>(
             );
             invoke(
                 &topup_ix,
-                &[payer_ai.clone(), discount_ai.clone(), system_program.clone()],
+                &[
+                    payer_ai.clone(),
+                    discount_ai.clone(),
+                    system_program.clone(),
+                ],
             )?;
         }
 
@@ -526,10 +560,8 @@ fn load_or_create_discount_record<'info>(
             &[discount_seeds],
         )?;
 
-        let assign_ix = anchor_lang::solana_program::system_instruction::assign(
-            &discount_ai.key(),
-            program_id,
-        );
+        let assign_ix =
+            anchor_lang::solana_program::system_instruction::assign(&discount_ai.key(), program_id);
         invoke_signed(
             &assign_ix,
             &[discount_ai.clone(), system_program.clone()],
@@ -551,7 +583,11 @@ fn load_or_create_discount_record<'info>(
         let mut data: &[u8] = &data;
         let existing = DiscountMintRecord::try_deserialize(&mut data)
             .map_err(|_| error!(BoxMinterError::InvalidDiscountRecord))?;
-        require_keys_eq!(existing.payer, payer_key, BoxMinterError::InvalidDiscountRecord);
+        require_keys_eq!(
+            existing.payer,
+            payer_key,
+            BoxMinterError::InvalidDiscountRecord
+        );
         existing
     };
 
@@ -624,14 +660,30 @@ pub mod box_minter {
             args.uri_base.len() <= BoxMinterConfig::MAX_URI_BASE,
             BoxMinterError::UriTooLong
         );
+        require!(
+            has_any_non_zero_byte(args.drop_seed.as_ref()),
+            BoxMinterError::InvalidDropSeed
+        );
         // Canonical config: `uri_base` is the DROP BASE (not `/json/boxes/` and not a `.json` file).
         // Example: `https://assets.mons.link/drops/lsb`
         let drop_base = args.uri_base.trim_end_matches('/');
         require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
-        require!(!drop_base.ends_with(".json"), BoxMinterError::InvalidMetadataBase);
-        require!(!drop_base.contains("/json/boxes"), BoxMinterError::InvalidMetadataBase);
-        require!(!drop_base.contains("/json/figures"), BoxMinterError::InvalidMetadataBase);
-        require!(!drop_base.contains("/json/receipts"), BoxMinterError::InvalidMetadataBase);
+        require!(
+            !drop_base.ends_with(".json"),
+            BoxMinterError::InvalidMetadataBase
+        );
+        require!(
+            !drop_base.contains("/json/boxes"),
+            BoxMinterError::InvalidMetadataBase
+        );
+        require!(
+            !drop_base.contains("/json/figures"),
+            BoxMinterError::InvalidMetadataBase
+        );
+        require!(
+            !drop_base.contains("/json/receipts"),
+            BoxMinterError::InvalidMetadataBase
+        );
         if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
             require!(
                 args.items_per_box == 0,
@@ -647,12 +699,18 @@ pub mod box_minter {
                 let next_id = args.mint_variant_next_ids[i];
                 require!(start_id >= 1, BoxMinterError::InvalidMintVariantConfig);
                 require!(end_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
-                require!(next_id == start_id, BoxMinterError::InvalidMintVariantConfig);
+                require!(
+                    next_id == start_id,
+                    BoxMinterError::InvalidMintVariantConfig
+                );
                 if i == 0 {
                     require!(start_id == 1, BoxMinterError::InvalidMintVariantConfig);
                 } else {
                     require!(
-                        start_id == args.mint_variant_end_ids[i - 1].checked_add(1).ok_or(BoxMinterError::MathOverflow)?,
+                        start_id
+                            == args.mint_variant_end_ids[i - 1]
+                                .checked_add(1)
+                                .ok_or(BoxMinterError::MathOverflow)?,
                         BoxMinterError::InvalidMintVariantConfig
                     );
                 }
@@ -705,6 +763,7 @@ pub mod box_minter {
         cfg.mint_variant_start_ids = args.mint_variant_start_ids;
         cfg.mint_variant_end_ids = args.mint_variant_end_ids;
         cfg.mint_variant_next_ids = args.mint_variant_next_ids;
+        cfg.drop_seed = args.drop_seed;
         Ok(())
     }
 
@@ -795,10 +854,12 @@ pub mod box_minter {
             verify_merkle_proof(payer_key.as_ref(), &proof, discount_root),
             BoxMinterError::InvalidDiscountProof
         );
-        let quantity = u8::try_from(box_bumps.len()).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
+        let quantity =
+            u8::try_from(box_bumps.len()).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
         let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
         let discount_ai = ctx.accounts.discount_record.to_account_info();
         let (mut discount_record, discount_bump) = load_or_create_discount_record(
+            ctx.accounts.config.key(),
             payer_key,
             ctx.accounts.payer.to_account_info(),
             discount_ai.clone(),
@@ -809,7 +870,10 @@ pub mod box_minter {
             .minted
             .checked_add(quantity)
             .ok_or(BoxMinterError::MathOverflow)?;
-        require!(new_discount_total <= discount_limit, BoxMinterError::DiscountAllowanceExceeded);
+        require!(
+            new_discount_total <= discount_limit,
+            BoxMinterError::DiscountAllowanceExceeded
+        );
 
         let accounts = MintBoxesInnerAccounts::new(
             ctx.accounts.payer.to_account_info(),
@@ -857,6 +921,7 @@ pub mod box_minter {
         let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
         let discount_ai = ctx.accounts.discount_record.to_account_info();
         let (mut discount_record, discount_bump) = load_or_create_discount_record(
+            ctx.accounts.config.key(),
             payer_key,
             ctx.accounts.payer.to_account_info(),
             discount_ai.clone(),
@@ -867,7 +932,10 @@ pub mod box_minter {
             .minted
             .checked_add(1)
             .ok_or(BoxMinterError::MathOverflow)?;
-        require!(new_discount_total <= discount_limit, BoxMinterError::DiscountAllowanceExceeded);
+        require!(
+            new_discount_total <= discount_limit,
+            BoxMinterError::DiscountAllowanceExceeded
+        );
 
         let accounts = MintBoxesInnerAccounts::new(
             ctx.accounts.payer.to_account_info(),
@@ -938,11 +1006,7 @@ pub mod box_minter {
         let rent_lamports = Rent::get()?.minimum_balance(pending_space);
         let pending_bump: u8 = ctx.bumps.pending;
         let box_asset_key = ctx.accounts.box_asset.key();
-        let pending_seeds: &[&[u8]] = &[
-            SEED_PENDING_OPEN,
-            box_asset_key.as_ref(),
-            &[pending_bump],
-        ];
+        let pending_seeds: &[&[u8]] = &[SEED_PENDING_OPEN, box_asset_key.as_ref(), &[pending_bump]];
         if pending_ai.lamports() == 0 {
             let create_pending_ix = anchor_lang::solana_program::system_instruction::create_account(
                 &ctx.accounts.payer.key(),
@@ -967,7 +1031,10 @@ pub mod box_minter {
                 anchor_lang::solana_program::system_program::ID,
                 BoxMinterError::InvalidPendingRecord
             );
-            require!(pending_ai.data_len() == 0, BoxMinterError::PendingAlreadyExists);
+            require!(
+                pending_ai.data_len() == 0,
+                BoxMinterError::PendingAlreadyExists
+            );
 
             // Ensure rent exemption for the allocated size.
             if pending_ai.lamports() < rent_lamports {
@@ -993,7 +1060,10 @@ pub mod box_minter {
             );
             invoke_signed(
                 &allocate_ix,
-                &[pending_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[
+                    pending_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
                 &[pending_seeds],
             )?;
 
@@ -1003,7 +1073,10 @@ pub mod box_minter {
             );
             invoke_signed(
                 &assign_ix,
-                &[pending_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[
+                    pending_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
                 &[pending_seeds],
             )?;
         }
@@ -1047,19 +1120,39 @@ pub mod box_minter {
         let system_program = ctx.accounts.system_program.to_account_info();
         let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
         let cfg_ai = ctx.accounts.config.to_account_info();
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        let cfg_bump_bytes = [cfg.bump];
+        let cfg_signer_seeds: &[&[u8]] = &[
+            BoxMinterConfig::SEED,
+            cfg.drop_seed.as_ref(),
+            &cfg_bump_bytes,
+        ];
 
         let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
                 anchor_lang::solana_program::instruction::AccountMeta::new(box_asset.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    core_collection.key(),
+                    false,
+                ),
                 anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    payer.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    vault.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1091,19 +1184,37 @@ pub mod box_minter {
                 // 0 asset (placeholder)
                 anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true),
                 // 1 collection: None => placeholder = program id (must be readonly when absent)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    MPL_CORE_PROGRAM_ID,
+                    false,
+                ),
                 // 2 authority (signer): config PDA
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cfg_ai.key(),
+                    true,
+                ),
                 // 3 payer (signer)
                 anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
                 // 4 owner: vault/admin (not signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    vault.key(),
+                    false,
+                ),
                 // 5 update authority: config PDA (not signer account meta)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cfg_ai.key(),
+                    false,
+                ),
                 // 6 system program
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
                 // 7 log wrapper: None => placeholder = program id
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    MPL_CORE_PROGRAM_ID,
+                    false,
+                ),
             ],
             data: Vec::with_capacity(32),
         };
@@ -1185,6 +1296,7 @@ pub mod box_minter {
             dudes,
             created_slot: Clock::get()?.slot,
             bump: pending_bump,
+            config: ctx.accounts.config.key(),
         };
         record.try_serialize(&mut &mut pending_ai.data.borrow_mut()[..])?;
 
@@ -1203,6 +1315,16 @@ pub mod box_minter {
         args: FinalizeOpenBoxArgs,
     ) -> Result<()> {
         let cfg = &ctx.accounts.config;
+        let pending_ai = ctx.accounts.pending.to_account_info();
+        require_keys_eq!(
+            *pending_ai.owner,
+            *ctx.program_id,
+            BoxMinterError::InvalidPendingRecord
+        );
+        let pending = {
+            let pending_data = pending_ai.try_borrow_data()?;
+            decode_pending_open_box_account(&pending_data)?
+        };
         cfg.require_openable()?;
         let items_per_box = cfg.items_per_box_len();
         let max_dude_id = cfg.max_figure_id()?;
@@ -1227,9 +1349,15 @@ pub mod box_minter {
         );
 
         // Validate figure IDs.
-        require!(dude_ids.len() == items_per_box, BoxMinterError::InvalidDudeId);
+        require!(
+            dude_ids.len() == items_per_box,
+            BoxMinterError::InvalidDudeId
+        );
         for id in dude_ids.iter() {
-            require!(*id >= 1 && *id <= max_dude_id, BoxMinterError::InvalidDudeId);
+            require!(
+                *id >= 1 && *id <= max_dude_id,
+                BoxMinterError::InvalidDudeId
+            );
         }
         for i in 0..dude_ids.len() {
             for j in (i + 1)..dude_ids.len() {
@@ -1239,18 +1367,25 @@ pub mod box_minter {
 
         // Pending record must belong to the provided user, and must correspond to this box.
         require_keys_eq!(
-            ctx.accounts.pending.box_asset,
+            pending.box_asset,
             ctx.accounts.box_asset.key(),
             BoxMinterError::InvalidPendingRecord
         );
         require_keys_eq!(
             ctx.accounts.user.key(),
-            ctx.accounts.pending.owner,
+            pending.owner,
             BoxMinterError::InvalidPendingRecord
         );
+        if let Some(pending_config) = pending.config {
+            require_keys_eq!(
+                pending_config,
+                ctx.accounts.config.key(),
+                BoxMinterError::InvalidPendingRecord
+            );
+        }
 
         require!(
-            ctx.accounts.pending.dudes.len() == items_per_box,
+            pending.dudes.len() == items_per_box,
             BoxMinterError::InvalidPendingRecord
         );
         // Remaining accounts: exactly `items_per_box` placeholder figure assets, in the order stored on-chain.
@@ -1261,7 +1396,7 @@ pub mod box_minter {
         for i in 0..items_per_box {
             require_keys_eq!(
                 ctx.remaining_accounts[i].key(),
-                ctx.accounts.pending.dudes[i],
+                pending.dudes[i],
                 BoxMinterError::InvalidRemainingAccounts
             );
         }
@@ -1283,19 +1418,39 @@ pub mod box_minter {
         let system_program = ctx.accounts.system_program.to_account_info();
         let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
         let cfg_ai = ctx.accounts.config.to_account_info();
-        let cfg_signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        let cfg_bump_bytes = [cfg.bump];
+        let cfg_signer_seeds: &[&[u8]] = &[
+            BoxMinterConfig::SEED,
+            cfg.drop_seed.as_ref(),
+            &cfg_bump_bytes,
+        ];
 
         // 1) Burn the box (reclaim rent to the admin payer).
         let burn_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(ctx.accounts.box_asset.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.box_asset.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    core_collection.key(),
+                    false,
+                ),
                 anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cosigner.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
             ],
             // BurnV1 discriminator=12, compression_proof=None (0)
             data: vec![12u8, 0u8],
@@ -1325,15 +1480,33 @@ pub mod box_minter {
             accounts: vec![
                 // UpdateV2 accounts:
                 //   asset, collection (optional), payer, authority, new_collection (optional), system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    Pubkey::default(),
+                    false,
+                ), // asset placeholder
                 // collection: None (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    MPL_CORE_PROGRAM_ID,
+                    false,
+                ),
                 anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cfg_ai.key(),
+                    true,
+                ), // authority (config PDA)
                 // new_collection: core collection (writable; mpl-core increments size)
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    core_collection.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
             ],
             data: Vec::with_capacity(128),
         };
@@ -1344,13 +1517,31 @@ pub mod box_minter {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    Pubkey::default(),
+                    false,
+                ), // asset placeholder
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    core_collection.key(),
+                    false,
+                ),
                 anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cosigner.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    user_ai.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1364,7 +1555,8 @@ pub mod box_minter {
             uri_buf.clear();
             uri_buf.push_str(drop_base);
             uri_buf.push_str(URI_SUFFIX_FIGURES);
-            write!(&mut uri_buf, "{}", dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            write!(&mut uri_buf, "{}", dude_id)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
 
             // UpdateV2:
@@ -1390,7 +1582,9 @@ pub mod box_minter {
             // newUpdateAuthority: Some(BaseUpdateAuthority::Collection(core_collection))
             update_ix.data.push(1u8); // Option::Some
             update_ix.data.push(2u8); // BaseUpdateAuthority::Collection enum index
-            update_ix.data.extend_from_slice(core_collection.key().as_ref());
+            update_ix
+                .data
+                .extend_from_slice(core_collection.key().as_ref());
 
             invoke_signed(
                 &update_ix,
@@ -1424,6 +1618,7 @@ pub mod box_minter {
             )?;
         }
 
+        close_program_account(&pending_ai, &cosigner)?;
         Ok(())
     }
 
@@ -1461,10 +1656,16 @@ pub mod box_minter {
             BoxMinterError::InvalidLogWrapper
         );
 
-        // Delivery record PDA: `delivery` + delivery_id.
+        // Delivery record PDA: `delivery` + config + delivery_id.
+        let config_key = ctx.accounts.config.key();
         let delivery_id_bytes = args.delivery_id.to_le_bytes();
         let expected_delivery = Pubkey::create_program_address(
-            &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]],
+            &[
+                SEED_DELIVERY,
+                config_key.as_ref(),
+                &delivery_id_bytes,
+                &[args.delivery_bump],
+            ],
             ctx.program_id,
         )
         .map_err(|_| error!(BoxMinterError::InvalidDeliveryPda))?;
@@ -1485,15 +1686,22 @@ pub mod box_minter {
         // we can sign for it and reclaim it via `allocate` + `assign`.
         let delivery_space: usize = DeliveryRecord::SPACE;
         let rent_lamports = Rent::get()?.minimum_balance(delivery_space);
-        let delivery_seeds: &[&[u8]] = &[SEED_DELIVERY, &delivery_id_bytes, &[args.delivery_bump]];
+        let delivery_bump_bytes = [args.delivery_bump];
+        let delivery_seeds: &[&[u8]] = &[
+            SEED_DELIVERY,
+            config_key.as_ref(),
+            &delivery_id_bytes,
+            &delivery_bump_bytes,
+        ];
         if delivery_ai.lamports() == 0 {
-            let create_delivery_ix = anchor_lang::solana_program::system_instruction::create_account(
-                &ctx.accounts.payer.key(),
-                &ctx.accounts.delivery.key(),
-                rent_lamports,
-                delivery_space as u64,
-                ctx.program_id,
-            );
+            let create_delivery_ix =
+                anchor_lang::solana_program::system_instruction::create_account(
+                    &ctx.accounts.payer.key(),
+                    &ctx.accounts.delivery.key(),
+                    rent_lamports,
+                    delivery_space as u64,
+                    ctx.program_id,
+                );
             invoke_signed(
                 &create_delivery_ix,
                 &[
@@ -1510,7 +1718,10 @@ pub mod box_minter {
                 anchor_lang::solana_program::system_program::ID,
                 BoxMinterError::InvalidDeliveryPda
             );
-            require!(delivery_ai.data_len() == 0, BoxMinterError::DeliveryAlreadyExists);
+            require!(
+                delivery_ai.data_len() == 0,
+                BoxMinterError::DeliveryAlreadyExists
+            );
 
             // Ensure rent exemption for the allocated size.
             if delivery_ai.lamports() < rent_lamports {
@@ -1536,7 +1747,10 @@ pub mod box_minter {
             );
             invoke_signed(
                 &allocate_ix,
-                &[delivery_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[
+                    delivery_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
                 &[delivery_seeds],
             )?;
 
@@ -1546,7 +1760,10 @@ pub mod box_minter {
             );
             invoke_signed(
                 &assign_ix,
-                &[delivery_ai.clone(), ctx.accounts.system_program.to_account_info()],
+                &[
+                    delivery_ai.clone(),
+                    ctx.accounts.system_program.to_account_info(),
+                ],
                 &[delivery_seeds],
             )?;
         }
@@ -1588,13 +1805,31 @@ pub mod box_minter {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), false), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    Pubkey::default(),
+                    false,
+                ), // asset placeholder
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    core_collection.key(),
+                    false,
+                ),
                 anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(vault.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    payer.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    vault.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1676,23 +1911,35 @@ pub mod box_minter {
         let max_dude_id = cfg.max_figure_id()?;
 
         // Defensive caps (Bubblegum mints are compute-heavy).
-        let total = box_ids.len().checked_add(dude_ids.len()).ok_or(BoxMinterError::MathOverflow)?;
+        let total = box_ids
+            .len()
+            .checked_add(dude_ids.len())
+            .ok_or(BoxMinterError::MathOverflow)?;
         require!(total > 0, BoxMinterError::InvalidQuantity);
         // Conservative cap; if the backend wants more, it should batch.
         require!(total <= 24, BoxMinterError::InvalidQuantity);
 
         // Validate box IDs (must correspond to configured box supply).
         for id in box_ids.iter() {
-            require!(*id >= 1 && *id <= cfg.max_supply, BoxMinterError::InvalidAssetMetadata);
+            require!(
+                *id >= 1 && *id <= cfg.max_supply,
+                BoxMinterError::InvalidAssetMetadata
+            );
         }
         // Validate dude IDs.
         for id in dude_ids.iter() {
-            require!(*id >= 1 && *id <= max_dude_id, BoxMinterError::InvalidDudeId);
+            require!(
+                *id >= 1 && *id <= max_dude_id,
+                BoxMinterError::InvalidDudeId
+            );
         }
         // Ensure there are no duplicates (cheap O(n^2) since n is tiny).
         for i in 0..box_ids.len() {
             for j in (i + 1)..box_ids.len() {
-                require!(box_ids[i] != box_ids[j], BoxMinterError::InvalidAssetMetadata);
+                require!(
+                    box_ids[i] != box_ids[j],
+                    BoxMinterError::InvalidAssetMetadata
+                );
             }
         }
         for i in 0..dude_ids.len() {
@@ -1737,31 +1984,67 @@ pub mod box_minter {
             accounts: vec![
                 // mintV2 accounts order (kinobi):
                 // 0 treeConfig (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(tree_config.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    tree_config.key(),
+                    false,
+                ),
                 // 1 payer (writable signer)
                 anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
                 // 2 treeCreatorOrDelegate (signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cosigner.key(),
+                    true,
+                ),
                 // 3 collectionAuthority (signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cosigner.key(), true),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    cosigner.key(),
+                    true,
+                ),
                 // 4 leafOwner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    user_ai.key(),
+                    false,
+                ),
                 // 5 leafDelegate
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(user_ai.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    user_ai.key(),
+                    false,
+                ),
                 // 6 merkleTree (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(merkle_tree.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    merkle_tree.key(),
+                    false,
+                ),
                 // 7 coreCollection (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(core_collection.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    core_collection.key(),
+                    false,
+                ),
                 // 8 mplCoreCpiSigner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(mpl_core_cpi_signer.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    mpl_core_cpi_signer.key(),
+                    false,
+                ),
                 // 9 logWrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(log_wrapper.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    log_wrapper.key(),
+                    false,
+                ),
                 // 10 compressionProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(compression_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    compression_program.key(),
+                    false,
+                ),
                 // 11 mplCoreProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(mpl_core_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    mpl_core_program.key(),
+                    false,
+                ),
                 // 12 systemProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(system_program.key(), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    system_program.key(),
+                    false,
+                ),
             ],
             data: Vec::with_capacity(256),
         };
@@ -1794,7 +2077,9 @@ pub mod box_minter {
             mint_ix.data.push(0u8); // NonFungible enum index
             mint_ix.data.extend_from_slice(&(0u32).to_le_bytes()); // creators vec len=0
             mint_ix.data.push(1u8); // collection: Some
-            mint_ix.data.extend_from_slice(core_collection.key().as_ref());
+            mint_ix
+                .data
+                .extend_from_slice(core_collection.key().as_ref());
             // assetData: None
             mint_ix.data.push(0u8);
             // assetDataSchema: None
@@ -1831,7 +2116,8 @@ pub mod box_minter {
             uri_buf.clear();
             uri_buf.push_str(drop_base);
             uri_buf.push_str(URI_SUFFIX_RECEIPTS_BOXES);
-            write!(&mut uri_buf, "{}", *box_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            write!(&mut uri_buf, "{}", *box_id)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
             mint_one(&name_buf, &uri_buf)?;
         }
@@ -1844,7 +2130,8 @@ pub mod box_minter {
             uri_buf.clear();
             uri_buf.push_str(drop_base);
             uri_buf.push_str(URI_SUFFIX_RECEIPTS_FIGURES);
-            write!(&mut uri_buf, "{}", *dude_id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+            write!(&mut uri_buf, "{}", *dude_id)
+                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
             mint_one(&name_buf, &uri_buf)?;
         }
@@ -1870,6 +2157,7 @@ pub struct InitializeArgs {
     pub mint_variant_start_ids: [u32; MINT_VARIANT_OPTION_COUNT],
     pub mint_variant_end_ids: [u32; MINT_VARIANT_OPTION_COUNT],
     pub mint_variant_next_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub drop_seed: [u8; 32],
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1921,6 +2209,7 @@ pub struct BoxMinterConfig {
     pub mint_variant_start_ids: [u32; MINT_VARIANT_OPTION_COUNT],
     pub mint_variant_end_ids: [u32; MINT_VARIANT_OPTION_COUNT],
     pub mint_variant_next_ids: [u32; MINT_VARIANT_OPTION_COUNT],
+    pub drop_seed: [u8; 32],
 }
 
 #[account]
@@ -1979,7 +2268,8 @@ impl BoxMinterConfig {
         + 1 // mint_variant_kind
         + 4 * MINT_VARIANT_OPTION_COUNT // mint_variant_start_ids
         + 4 * MINT_VARIANT_OPTION_COUNT // mint_variant_end_ids
-        + 4 * MINT_VARIANT_OPTION_COUNT; // mint_variant_next_ids
+        + 4 * MINT_VARIANT_OPTION_COUNT // mint_variant_next_ids
+        + 32; // drop_seed
 
     pub fn items_per_box_len(&self) -> usize {
         self.items_per_box as usize
@@ -2026,7 +2316,10 @@ impl BoxMinterConfig {
         let next_id = self.mint_variant_next_ids[slot];
         let start_id = self.mint_variant_start_ids[slot];
         let end_id = self.mint_variant_end_ids[slot];
-        require!(next_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
+        require!(
+            next_id >= start_id,
+            BoxMinterError::InvalidMintVariantConfig
+        );
         require!(next_id <= end_id, BoxMinterError::MintVariantUnavailable);
         Ok(next_id)
     }
@@ -2044,6 +2337,9 @@ pub struct PendingOpenBox {
     pub created_slot: u64,
     /// PDA bump for this record.
     pub bump: u8,
+    /// Config PDA that created this pending record. Shared-program drops use this to
+    /// disambiguate pending reveals without relying on external indexers.
+    pub config: Pubkey,
 }
 
 impl PendingOpenBox {
@@ -2055,7 +2351,107 @@ impl PendingOpenBox {
         + 32 * items_per_box as usize // dudes
         + 8 // created_slot
         + 1 // bump
+        + 32 // config
     }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+struct PendingOpenBoxLegacyLayout {
+    pub owner: Pubkey,
+    pub box_asset: Pubkey,
+    pub dudes: Vec<Pubkey>,
+    pub created_slot: u64,
+    pub bump: u8,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+struct PendingOpenBoxDecoded {
+    pub owner: Pubkey,
+    pub box_asset: Pubkey,
+    pub dudes: Vec<Pubkey>,
+    pub created_slot: u64,
+    pub bump: u8,
+    pub config: Option<Pubkey>,
+}
+
+fn decode_pending_open_box_account(data: &[u8]) -> Result<PendingOpenBoxDecoded> {
+    const MIN_PENDING_OPEN_BOX_LEN: usize = 8 + 32 + 32 + 4 + 8 + 1;
+
+    require!(
+        data.len() >= MIN_PENDING_OPEN_BOX_LEN,
+        BoxMinterError::InvalidPendingRecord
+    );
+    require!(
+        data.get(..8) == Some(PendingOpenBox::DISCRIMINATOR.as_ref()),
+        BoxMinterError::InvalidPendingRecord
+    );
+
+    let mut o = 8usize;
+    let owner = read_pubkey(data, o)?;
+    o += 32;
+    let box_asset = read_pubkey(data, o)?;
+    o += 32;
+    let dude_count = read_u32_le_pending(data, o)? as usize;
+    o += 4;
+
+    let dude_bytes = dude_count
+        .checked_mul(32)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let dudes_end = o
+        .checked_add(dude_bytes)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    require!(dudes_end <= data.len(), BoxMinterError::InvalidPendingRecord);
+
+    let mut dudes = Vec::with_capacity(dude_count);
+    for _ in 0..dude_count {
+        dudes.push(read_pubkey(data, o)?);
+        o += 32;
+    }
+
+    let created_slot = read_u64_le(data, o)?;
+    o += 8;
+    let bump = *data.get(o).ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    o += 1;
+
+    let config = if o == data.len() {
+        None
+    } else {
+        let config_end = o
+            .checked_add(32)
+            .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+        require!(
+            config_end == data.len(),
+            BoxMinterError::InvalidPendingRecord
+        );
+        Some(read_pubkey(data, o)?)
+    };
+
+    Ok(PendingOpenBoxDecoded {
+        owner,
+        box_asset,
+        dudes,
+        created_slot,
+        bump,
+        config,
+    })
+}
+
+fn close_program_account<'info>(
+    account: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+) -> Result<()> {
+    let account_lamports = account.lamports();
+    let destination_lamports = destination.lamports();
+    let updated_destination_lamports = destination_lamports
+        .checked_add(account_lamports)
+        .ok_or(error!(BoxMinterError::MathOverflow))?;
+
+    **destination.try_borrow_mut_lamports()? = updated_destination_lamports;
+    **account.try_borrow_mut_lamports()? = 0;
+    account.assign(&anchor_lang::solana_program::system_program::ID);
+    account.resize(0)?;
+    Ok(())
 }
 
 #[derive(Accounts)]
@@ -2065,7 +2461,7 @@ pub struct Initialize<'info> {
         init,
         payer = admin,
         space = BoxMinterConfig::SPACE,
-        seeds = [BoxMinterConfig::SEED],
+        seeds = [BoxMinterConfig::SEED, args.drop_seed.as_ref()],
         bump,
     )]
     pub config: Account<'info, BoxMinterConfig>,
@@ -2087,21 +2483,21 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct SetTreasury<'info> {
-    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
     pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct StartMint<'info> {
-    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
     pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct MintBoxes<'info> {
-    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     #[account(mut)]
@@ -2123,7 +2519,7 @@ pub struct MintBoxes<'info> {
 
 #[derive(Accounts)]
 pub struct MintDiscountedBox<'info> {
-    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     #[account(mut)]
@@ -2131,7 +2527,7 @@ pub struct MintDiscountedBox<'info> {
 
     #[account(
         mut,
-        seeds = [SEED_DISCOUNT_MINT, payer.key().as_ref()],
+        seeds = [SEED_DISCOUNT_MINT, config.key().as_ref(), payer.key().as_ref()],
         bump,
     )]
     pub discount_record: UncheckedAccount<'info>,
@@ -2152,7 +2548,7 @@ pub struct MintDiscountedBox<'info> {
 
 #[derive(Accounts)]
 pub struct StartOpenBox<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     #[account(mut)]
@@ -2195,7 +2591,7 @@ pub struct StartOpenBox<'info> {
 
 #[derive(Accounts)]
 pub struct FinalizeOpenBox<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
@@ -2219,14 +2615,15 @@ pub struct FinalizeOpenBox<'info> {
     #[account(address = SPL_NOOP_PROGRAM_ID)]
     pub log_wrapper: UncheckedAccount<'info>,
 
-    /// Pending open record PDA, closed after finalize to reclaim rent.
+    /// CHECK: Pending open record PDA. The handler manually decodes either the legacy or v2 layout,
+    /// then explicitly closes the account after a successful finalize to preserve backward
+    /// compatibility for in-flight opens created before the `config` field was added.
     #[account(
         mut,
         seeds = [SEED_PENDING_OPEN, box_asset.key().as_ref()],
-        bump = pending.bump,
-        close = cosigner
+        bump
     )]
-    pub pending: Account<'info, PendingOpenBox>,
+    pub pending: UncheckedAccount<'info>,
 
     /// CHECK: User who will receive the dudes (must equal `pending.owner`).
     pub user: UncheckedAccount<'info>,
@@ -2234,7 +2631,7 @@ pub struct FinalizeOpenBox<'info> {
 
 #[derive(Accounts)]
 pub struct Deliver<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
@@ -2268,7 +2665,7 @@ pub struct Deliver<'info> {
 #[derive(Accounts)]
 #[instruction(args: CloseDeliveryArgs)]
 pub struct CloseDelivery<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
@@ -2278,7 +2675,7 @@ pub struct CloseDelivery<'info> {
     /// Delivery record PDA to close (rent reclaimed to `cosigner`).
     #[account(
         mut,
-        seeds = [SEED_DELIVERY, &args.delivery_id.to_le_bytes()],
+        seeds = [SEED_DELIVERY, config.key().as_ref(), &args.delivery_id.to_le_bytes()],
         bump = args.delivery_bump,
         close = cosigner
     )]
@@ -2289,7 +2686,7 @@ pub struct CloseDelivery<'info> {
 
 #[derive(Accounts)]
 pub struct MintReceipts<'info> {
-    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump)]
+    #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
 
     /// Cloud-held signer (must match config.admin).
@@ -2347,9 +2744,47 @@ struct ParsedMplCoreBaseAssetV1<'a> {
 }
 
 fn read_u32_le(data: &[u8], offset: usize) -> Result<u32> {
-    let end = offset.checked_add(4).ok_or(error!(BoxMinterError::InvalidAsset))?;
-    let slice = data.get(offset..end).ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let end = offset
+        .checked_add(4)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let slice = data
+        .get(offset..end)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
     Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_u32_le_pending(data: &[u8], offset: usize) -> Result<u32> {
+    let end = offset
+        .checked_add(4)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let slice = data
+        .get(offset..end)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_u64_le(data: &[u8], offset: usize) -> Result<u64> {
+    let end = offset
+        .checked_add(8)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let slice = data
+        .get(offset..end)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    Ok(u64::from_le_bytes([
+        slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7],
+    ]))
+}
+
+fn read_pubkey(data: &[u8], offset: usize) -> Result<Pubkey> {
+    let end = offset
+        .checked_add(32)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let slice = data
+        .get(offset..end)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let mut key = [0u8; 32];
+    key.copy_from_slice(slice);
+    Ok(Pubkey::new_from_array(key))
 }
 
 fn parse_mpl_core_base_asset_v1(data: &[u8]) -> Result<ParsedMplCoreBaseAssetV1<'_>> {
@@ -2392,22 +2827,32 @@ fn parse_mpl_core_base_asset_v1(data: &[u8]) -> Result<ParsedMplCoreBaseAssetV1<
     }
 
     let name_len = read_u32_le(data, o)? as usize;
-    o = o.checked_add(4).ok_or(error!(BoxMinterError::InvalidAsset))?;
+    o = o
+        .checked_add(4)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
     if name_len > MAX_MPL_CORE_NAME_BYTES {
         return Err(error!(BoxMinterError::InvalidAsset));
     }
-    o = o.checked_add(name_len).ok_or(error!(BoxMinterError::InvalidAsset))?;
+    o = o
+        .checked_add(name_len)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
     if o > data.len() {
         return Err(error!(BoxMinterError::InvalidAsset));
     }
 
     let uri_len = read_u32_le(data, o)? as usize;
-    o = o.checked_add(4).ok_or(error!(BoxMinterError::InvalidAsset))?;
+    o = o
+        .checked_add(4)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
     if uri_len > MAX_MPL_CORE_URI_BYTES {
         return Err(error!(BoxMinterError::InvalidAsset));
     }
-    let uri_end = o.checked_add(uri_len).ok_or(error!(BoxMinterError::InvalidAsset))?;
-    let uri = data.get(o..uri_end).ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let uri_end = o
+        .checked_add(uri_len)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let uri = data
+        .get(o..uri_end)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
 
     Ok(ParsedMplCoreBaseAssetV1 {
         owner,
@@ -2457,7 +2902,11 @@ fn verify_core_asset_owned_by_uri(
     expected_uri_suffix: &str,
     expected_ref_id: Option<u32>,
 ) -> Result<()> {
-    require_keys_eq!(*asset_ai.owner, MPL_CORE_PROGRAM_ID, BoxMinterError::InvalidAsset);
+    require_keys_eq!(
+        *asset_ai.owner,
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidAsset
+    );
     let data = asset_ai.try_borrow_data()?;
     let base = parse_mpl_core_base_asset_v1(&data)?;
     require_keys_eq!(base.owner, owner, BoxMinterError::InvalidAssetOwner);
@@ -2611,6 +3060,8 @@ pub enum BoxMinterError {
     MintNotStarted,
     #[msg("Opening is disabled for this drop")]
     OpeningDisabled,
+    #[msg("Invalid drop seed")]
+    InvalidDropSeed,
 }
 
 #[cfg(test)]
@@ -2640,6 +3091,7 @@ mod tests {
             mint_variant_start_ids: [1, 16, 31],
             mint_variant_end_ids: [15, 30, 34],
             mint_variant_next_ids: [1, 16, 31],
+            drop_seed: [7u8; 32],
         }
     }
 
@@ -2679,5 +3131,141 @@ mod tests {
         let mut cfg = test_size_variant_cfg();
         cfg.mint_variant_next_ids[2] = 35;
         assert!(cfg.next_variant_metadata_id(2).is_err());
+    }
+
+    #[test]
+    fn decode_pending_open_box_account_supports_legacy_and_v2_layouts() {
+        let legacy = PendingOpenBoxLegacyLayout {
+            owner: Pubkey::new_unique(),
+            box_asset: Pubkey::new_unique(),
+            dudes: vec![Pubkey::new_unique(), Pubkey::new_unique()],
+            created_slot: 42,
+            bump: 7,
+        };
+
+        let mut legacy_data = PendingOpenBox::DISCRIMINATOR.to_vec();
+        legacy.serialize(&mut legacy_data).unwrap();
+
+        let decoded_legacy = decode_pending_open_box_account(&legacy_data).unwrap();
+        assert_eq!(decoded_legacy.owner, legacy.owner);
+        assert_eq!(decoded_legacy.box_asset, legacy.box_asset);
+        assert_eq!(decoded_legacy.dudes, legacy.dudes);
+        assert_eq!(decoded_legacy.created_slot, legacy.created_slot);
+        assert_eq!(decoded_legacy.bump, legacy.bump);
+        assert_eq!(decoded_legacy.config, None);
+
+        let config = Pubkey::new_unique();
+        let mut v2_data = legacy_data.clone();
+        v2_data.extend_from_slice(config.as_ref());
+
+        let decoded_v2 = decode_pending_open_box_account(&v2_data).unwrap();
+        assert_eq!(decoded_v2.owner, legacy.owner);
+        assert_eq!(decoded_v2.box_asset, legacy.box_asset);
+        assert_eq!(decoded_v2.dudes, legacy.dudes);
+        assert_eq!(decoded_v2.created_slot, legacy.created_slot);
+        assert_eq!(decoded_v2.bump, legacy.bump);
+        assert_eq!(decoded_v2.config, Some(config));
+    }
+
+    #[test]
+    fn decode_pending_open_box_account_rejects_unexpected_trailing_bytes() {
+        let legacy = PendingOpenBoxLegacyLayout {
+            owner: Pubkey::new_unique(),
+            box_asset: Pubkey::new_unique(),
+            dudes: vec![Pubkey::new_unique()],
+            created_slot: 7,
+            bump: 1,
+        };
+
+        let mut invalid = PendingOpenBox::DISCRIMINATOR.to_vec();
+        legacy.serialize(&mut invalid).unwrap();
+        invalid.push(9);
+
+        assert!(decode_pending_open_box_account(&invalid).is_err());
+    }
+
+    #[test]
+    fn pending_open_space_includes_config_pubkey() {
+        assert_eq!(PendingOpenBox::space(2), 8 + 32 + 32 + 4 + 32 * 2 + 8 + 1 + 32);
+    }
+
+    #[test]
+    fn zero_drop_seed_is_rejected() {
+        assert!(!has_any_non_zero_byte(&[0u8; 32]));
+
+        let mut drop_seed = [0u8; 32];
+        drop_seed[31] = 1;
+        assert!(has_any_non_zero_byte(&drop_seed));
+    }
+
+    #[test]
+    fn config_pdas_differ_for_distinct_drop_seeds() {
+        let program_id = Pubkey::new_unique();
+        let drop_seed_a = [1u8; 32];
+        let drop_seed_b = [2u8; 32];
+        let (config_a, _) = Pubkey::find_program_address(
+            &[BoxMinterConfig::SEED, drop_seed_a.as_ref()],
+            &program_id,
+        );
+        let (config_b, _) = Pubkey::find_program_address(
+            &[BoxMinterConfig::SEED, drop_seed_b.as_ref()],
+            &program_id,
+        );
+        assert_ne!(config_a, config_b);
+    }
+
+    #[test]
+    fn v2_pdas_are_namespaced_by_config() {
+        let program_id = Pubkey::new_unique();
+        let payer = Pubkey::new_unique();
+        let config_a = Pubkey::new_unique();
+        let config_b = Pubkey::new_unique();
+        let mint_id = 42u64;
+        let mint_id_bytes = mint_id.to_le_bytes();
+        let box_index = [0u8];
+        let delivery_id = 99u32;
+        let delivery_id_bytes = delivery_id.to_le_bytes();
+
+        let (box_a, _) = Pubkey::find_program_address(
+            &[
+                SEED_BOX_ASSET,
+                config_a.as_ref(),
+                payer.as_ref(),
+                &mint_id_bytes,
+                &box_index,
+            ],
+            &program_id,
+        );
+        let (box_b, _) = Pubkey::find_program_address(
+            &[
+                SEED_BOX_ASSET,
+                config_b.as_ref(),
+                payer.as_ref(),
+                &mint_id_bytes,
+                &box_index,
+            ],
+            &program_id,
+        );
+        assert_ne!(box_a, box_b);
+
+        let (discount_a, _) = Pubkey::find_program_address(
+            &[SEED_DISCOUNT_MINT, config_a.as_ref(), payer.as_ref()],
+            &program_id,
+        );
+        let (discount_b, _) = Pubkey::find_program_address(
+            &[SEED_DISCOUNT_MINT, config_b.as_ref(), payer.as_ref()],
+            &program_id,
+        );
+        assert_ne!(discount_a, discount_b);
+
+        let (delivery_a, _) = Pubkey::find_program_address(
+            &[SEED_DELIVERY, config_a.as_ref(), &delivery_id_bytes],
+            &program_id,
+        );
+        let (delivery_b, _) = Pubkey::find_program_address(
+            &[SEED_DELIVERY, config_b.as_ref(), &delivery_id_bytes],
+            &program_id,
+        );
+        assert_ne!(delivery_a, delivery_b);
     }
 }

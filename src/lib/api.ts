@@ -22,6 +22,7 @@ import {
   FRONTEND_DROPS,
   type FrontendDeploymentConfig,
   type SolanaCluster,
+  normalizeDropBase,
 } from '../config/deployment';
 
 const region = FIREBASE_FUNCTIONS_REGION;
@@ -149,8 +150,22 @@ const heliusApiKey = getHeliusApiKey();
 
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
-  'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId'
+  'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'metadataBase' | 'itemsPerBox'
 >;
+
+type PendingOpenProgramScope = Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'> & {
+  drops: FrontendDropRuntime[];
+};
+
+type PendingOpenRecordCandidate = {
+  solanaCluster: SolanaCluster;
+  pendingPda: string;
+  boxAssetId: string;
+  dudeAssetIds: string[];
+  createdSlot?: number;
+  configPda?: string;
+  candidateDrops: FrontendDropRuntime[];
+};
 
 export type DropFetchOptions = {
   includeDevnet?: boolean;
@@ -165,6 +180,9 @@ const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS
       solanaCluster: drop.solanaCluster,
       collectionMint: drop.collectionMint,
       boxMinterProgramId: drop.boxMinterProgramId,
+      boxMinterConfigPda: typeof drop.boxMinterConfigPda === 'string' ? drop.boxMinterConfigPda.trim() || undefined : undefined,
+      metadataBase: normalizeDropBase(drop.metadataBase),
+      itemsPerBox: drop.itemsPerBox,
     };
   });
 
@@ -172,15 +190,123 @@ const FRONTEND_DROP_BY_ID = new Map<string, FrontendDropRuntime>(
   FRONTEND_DROP_RUNTIMES.map((drop) => [drop.dropId, drop]),
 );
 const FRONTEND_DROPS_BY_COLLECTION_MINT = new Map<string, FrontendDropRuntime[]>();
+const FRONTEND_DROPS_BY_PROGRAM_SCOPE = new Map<string, FrontendDropRuntime[]>();
+const FRONTEND_DROPS_BY_CONFIG_PDA = new Map<string, FrontendDropRuntime>();
+const PENDING_OPEN_DROP_ID_BY_ASSET = new Map<string, string>();
+const PENDING_OPEN_DROP_ID_STORAGE_KEY = 'monsPendingOpenDropIds:v1';
+const MAX_PENDING_OPEN_DROP_ID_CACHE_ENTRIES = 512;
+let pendingOpenDropIdCacheHydrated = false;
+
+function appendIndexedValue<K, V>(index: Map<K, V[]>, key: K, value: V): void {
+  const existing = index.get(key);
+  if (existing) {
+    existing.push(value);
+    return;
+  }
+  index.set(key, [value]);
+}
+
 FRONTEND_DROP_RUNTIMES.forEach((drop) => {
-  const existing = FRONTEND_DROPS_BY_COLLECTION_MINT.get(drop.collectionMint) || [];
-  existing.push(drop);
-  FRONTEND_DROPS_BY_COLLECTION_MINT.set(drop.collectionMint, existing);
+  appendIndexedValue(FRONTEND_DROPS_BY_COLLECTION_MINT, drop.collectionMint, drop);
+  appendIndexedValue(FRONTEND_DROPS_BY_PROGRAM_SCOPE, frontendDropProgramScopeKey(drop), drop);
+  if (drop.boxMinterConfigPda) {
+    FRONTEND_DROPS_BY_CONFIG_PDA.set(frontendDropConfigPdaKey(drop.solanaCluster, drop.boxMinterConfigPda), drop);
+  }
 });
 const MAINNET_FRONTEND_DROP_RUNTIMES = FRONTEND_DROP_RUNTIMES.filter((drop) => drop.solanaCluster !== 'devnet');
+const PENDING_OPEN_PROGRAM_SCOPES: PendingOpenProgramScope[] = Array.from(FRONTEND_DROPS_BY_PROGRAM_SCOPE.values()).map((drops) => ({
+  solanaCluster: drops[0].solanaCluster,
+  boxMinterProgramId: drops[0].boxMinterProgramId,
+  drops: [...drops],
+}));
+const MAINNET_PENDING_OPEN_PROGRAM_SCOPES = PENDING_OPEN_PROGRAM_SCOPES.filter((scope) => scope.solanaCluster !== 'devnet');
 
 function listFrontendDropRuntimes(options?: DropFetchOptions): FrontendDropRuntime[] {
   return options?.includeDevnet === true ? FRONTEND_DROP_RUNTIMES : MAINNET_FRONTEND_DROP_RUNTIMES;
+}
+
+function frontendDropProgramScopeKey(drop: Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'>): string {
+  return `${drop.solanaCluster}:${drop.boxMinterProgramId}`;
+}
+
+function frontendDropConfigPdaKey(solanaCluster: SolanaCluster, configPda: string): string {
+  return `${solanaCluster}:${configPda}`;
+}
+
+function listPendingOpenProgramScopes(options?: DropFetchOptions): PendingOpenProgramScope[] {
+  return options?.includeDevnet === true ? PENDING_OPEN_PROGRAM_SCOPES : MAINNET_PENDING_OPEN_PROGRAM_SCOPES;
+}
+
+function pendingOpenDropCacheKey(solanaCluster: SolanaCluster, boxAssetId: string): string {
+  return `${solanaCluster}:${boxAssetId}`;
+}
+
+function trimPendingOpenDropIdCache(): void {
+  while (PENDING_OPEN_DROP_ID_BY_ASSET.size > MAX_PENDING_OPEN_DROP_ID_CACHE_ENTRIES) {
+    const oldestKey = PENDING_OPEN_DROP_ID_BY_ASSET.keys().next().value;
+    if (!oldestKey) break;
+    PENDING_OPEN_DROP_ID_BY_ASSET.delete(oldestKey);
+  }
+}
+
+function hydratePendingOpenDropIdCache(): void {
+  if (pendingOpenDropIdCacheHydrated || typeof window === 'undefined') return;
+  pendingOpenDropIdCacheHydrated = true;
+  try {
+    const raw = window.localStorage?.getItem(PENDING_OPEN_DROP_ID_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    parsed.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length !== 2) return;
+      const [cacheKey, dropId] = entry;
+      if (typeof cacheKey !== 'string' || typeof dropId !== 'string' || !FRONTEND_DROP_BY_ID.has(dropId)) return;
+      PENDING_OPEN_DROP_ID_BY_ASSET.set(cacheKey, dropId);
+    });
+    trimPendingOpenDropIdCache();
+  } catch {
+    // Ignore storage corruption; the cache is opportunistic.
+  }
+}
+
+function persistPendingOpenDropIdCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    trimPendingOpenDropIdCache();
+    window.localStorage?.setItem(
+      PENDING_OPEN_DROP_ID_STORAGE_KEY,
+      JSON.stringify(Array.from(PENDING_OPEN_DROP_ID_BY_ASSET.entries())),
+    );
+  } catch {
+    // Ignore storage failures; memory cache is still useful for the current session.
+  }
+}
+
+function setPendingOpenDropIdCache(solanaCluster: SolanaCluster, boxAssetId: string, dropId: string): void {
+  if (!boxAssetId) return;
+  hydratePendingOpenDropIdCache();
+  const cacheKey = pendingOpenDropCacheKey(solanaCluster, boxAssetId);
+  if (PENDING_OPEN_DROP_ID_BY_ASSET.get(cacheKey) === dropId) return;
+  PENDING_OPEN_DROP_ID_BY_ASSET.delete(cacheKey);
+  PENDING_OPEN_DROP_ID_BY_ASSET.set(cacheKey, dropId);
+  persistPendingOpenDropIdCache();
+}
+
+function getPendingOpenDropIdCache(solanaCluster: SolanaCluster, boxAssetId: string): string | null {
+  hydratePendingOpenDropIdCache();
+  const dropId = PENDING_OPEN_DROP_ID_BY_ASSET.get(pendingOpenDropCacheKey(solanaCluster, boxAssetId));
+  return typeof dropId === 'string' ? dropId : null;
+}
+
+function cachePendingOpenDropId(entry: PendingOpenRecordCandidate, dropId: string): string {
+  setPendingOpenDropIdCache(entry.solanaCluster, entry.boxAssetId, dropId);
+  return dropId;
+}
+
+export function rememberPendingOpenDropId(solanaCluster: SolanaCluster, boxAssetId: string, dropId: string): void {
+  const drop = FRONTEND_DROP_BY_ID.get(dropId);
+  if (!drop || drop.solanaCluster !== solanaCluster || !boxAssetId) return;
+  setPendingOpenDropIdCache(solanaCluster, boxAssetId, drop.dropId);
 }
 
 type DasAsset = Record<string, any>;
@@ -243,13 +369,7 @@ function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
   const value = kindAttr?.value;
   if (value === 'box' || value === 'dude' || value === 'certificate') return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
+  const uri = assetMetadataUri(asset);
   const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
   if (lowerUri.includes('/json/boxes/')) return 'box';
   if (lowerUri.includes('/json/figures/')) return 'dude';
@@ -272,13 +392,7 @@ function getBoxIdFromAsset(asset: DasAsset): string | undefined {
   const value = boxAttr?.value;
   if (typeof value === 'string' && value) return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
+  const uri = assetMetadataUri(asset);
   if (typeof uri === 'string' && uri) {
     const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
     if (matchBoxes?.[1]) return matchBoxes[1];
@@ -298,13 +412,7 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   const num = Number(dudeAttr?.value);
   if (Number.isFinite(num)) return num;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
+  const uri = assetMetadataUri(asset);
   if (typeof uri === 'string' && uri) {
     const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
     const n = Number(match?.[1]);
@@ -334,6 +442,34 @@ function assetCollectionMints(asset: DasAsset): string[] {
   return Array.from(out);
 }
 
+function assetMetadataUri(asset: DasAsset): string {
+  const candidates = [
+    asset?.content?.json_uri,
+    asset?.content?.jsonUri,
+    asset?.content?.metadata?.uri,
+    asset?.content?.metadata?.json_uri,
+    asset?.content?.metadata?.jsonUri,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate) return candidate;
+  }
+  return '';
+}
+
+function metadataBaseFromAsset(asset: DasAsset): string | null {
+  const uri = assetMetadataUri(asset);
+  if (!uri) return null;
+
+  const normalized = normalizeDropBase(uri)
+    .replace(/\/collection\.json$/i, '')
+    .replace(/\/json\/boxes\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/figures\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/receipts\/boxes\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/receipts\/figures\/[^/?#]+\.json$/i, '');
+
+  return normalized && normalized !== uri ? normalized : null;
+}
+
 function isBurntAsset(asset: DasAsset): boolean {
   const anyAsset = asset as any;
   const burnt =
@@ -359,18 +495,153 @@ function resolveSingleDropRuntime(
   return scoped[0];
 }
 
+function cacheAssetDropId(asset: DasAsset, dropId: string): string {
+  (asset as any)[ASSET_DROP_ID_FIELD] = dropId;
+  return dropId;
+}
+
 function resolveAssetDropId(asset: DasAsset, solanaCluster?: SolanaCluster): string | null {
   const cached = (asset as any)?.[ASSET_DROP_ID_FIELD];
   if (typeof cached === 'string' && FRONTEND_DROP_BY_ID.has(cached)) return cached;
 
+  const collectionCandidates: FrontendDropRuntime[] = [];
   for (const collectionMint of assetCollectionMints(asset)) {
-    const drop = resolveSingleDropRuntime(FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [], solanaCluster);
-    if (!drop) continue;
-    (asset as any)[ASSET_DROP_ID_FIELD] = drop.dropId;
-    return drop.dropId;
+    const matches = FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [];
+    for (const drop of matches) {
+      if (solanaCluster && drop.solanaCluster !== solanaCluster) continue;
+      collectionCandidates.push(drop);
+    }
+  }
+  if (!collectionCandidates.length) return null;
+
+  const uniqueCollectionCandidates = Array.from(new Map(collectionCandidates.map((drop) => [drop.dropId, drop])).values());
+  const collectionDrop = resolveSingleDropRuntime(uniqueCollectionCandidates, solanaCluster);
+  if (collectionDrop) return cacheAssetDropId(asset, collectionDrop.dropId);
+
+  const metadataBase = metadataBaseFromAsset(asset);
+  if (metadataBase) {
+    const metadataCandidates = uniqueCollectionCandidates.filter((drop) => drop.metadataBase === metadataBase);
+    const drop = resolveSingleDropRuntime(metadataCandidates, solanaCluster);
+    if (drop) return cacheAssetDropId(asset, drop.dropId);
   }
 
   return null;
+}
+
+async function fetchAssetById(assetId: string, solanaCluster: SolanaCluster): Promise<DasAsset | null> {
+  if (!assetId) return null;
+  try {
+    const asset = await heliusRpc<any>(solanaCluster, 'getAsset', { id: assetId });
+    return asset && typeof asset === 'object' ? (asset as DasAsset) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isCandidateDropId(entry: PendingOpenRecordCandidate, dropId: string): boolean {
+  return entry.candidateDrops.some((drop) => drop.dropId === dropId);
+}
+
+function resolvePendingOpenDropIdByConfigPda(entry: PendingOpenRecordCandidate): string | null {
+  const configPda = typeof entry.configPda === 'string' ? entry.configPda.trim() : '';
+  if (!configPda) return null;
+  const drop = FRONTEND_DROPS_BY_CONFIG_PDA.get(frontendDropConfigPdaKey(entry.solanaCluster, configPda));
+  if (!drop || !isCandidateDropId(entry, drop.dropId)) return null;
+  return drop.dropId;
+}
+
+function resolvePendingOpenDropIdByPlaceholderCount(entry: PendingOpenRecordCandidate): string | null {
+  const matches = entry.candidateDrops.filter((drop) => drop.itemsPerBox === entry.dudeAssetIds.length);
+  return matches.length === 1 ? matches[0].dropId : null;
+}
+
+async function resolvePendingOpenDropId(entry: PendingOpenRecordCandidate): Promise<string | null> {
+  const configDropId = resolvePendingOpenDropIdByConfigPda(entry);
+  if (configDropId) return cachePendingOpenDropId(entry, configDropId);
+  if (entry.configPda) {
+    // New shared-program pending records carry their config PDA explicitly.
+    // If this client does not recognize that config, hiding the row is safer than
+    // mislabeling it as some other known drop on the same shared program.
+    return null;
+  }
+
+  if (entry.candidateDrops.length === 1) {
+    return cachePendingOpenDropId(entry, entry.candidateDrops[0].dropId);
+  }
+
+  const placeholderDropId = resolvePendingOpenDropIdByPlaceholderCount(entry);
+  if (placeholderDropId) return cachePendingOpenDropId(entry, placeholderDropId);
+
+  const cachedDropId = getPendingOpenDropIdCache(entry.solanaCluster, entry.boxAssetId);
+  if (cachedDropId && isCandidateDropId(entry, cachedDropId)) {
+    return cachedDropId;
+  }
+
+  const asset = await fetchAssetById(entry.boxAssetId, entry.solanaCluster);
+  if (!asset) return null;
+
+  const resolvedDropId = resolveAssetDropId(asset, entry.solanaCluster);
+  if (!resolvedDropId) return null;
+  if (!isCandidateDropId(entry, resolvedDropId)) {
+    return null;
+  }
+  return cachePendingOpenDropId(entry, resolvedDropId);
+}
+
+function decodePendingOpenRecordCandidate(
+  entry: any,
+  owner: string,
+  scope: PendingOpenProgramScope,
+): PendingOpenRecordCandidate | null {
+  const pendingPda = typeof entry?.pubkey === 'string' ? entry.pubkey : null;
+  const dataField = entry?.account?.data;
+  const dataB64 =
+    Array.isArray(dataField) && typeof dataField[0] === 'string'
+      ? dataField[0]
+      : typeof dataField === 'string'
+        ? dataField
+        : null;
+  if (!pendingPda || !dataB64) return null;
+
+  const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
+  if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) return null;
+  if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) return null;
+
+  const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
+  if (ownerFromChain !== owner) return null;
+
+  const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
+  const dudeAssetIds: string[] = [];
+  let o = 8 + 32 + 32;
+  const dudeCount = readU32(buf, o);
+  o += 4;
+  if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) return null;
+  for (let i = 0; i < dudeCount; i += 1) {
+    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
+    o += 32;
+  }
+
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const createdSlotBig = view.getBigUint64(o, true);
+  o += 8;
+  o += 1; // bump
+  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
+  let configPda: string | undefined;
+  if (o < buf.length) {
+    const trailing = buf.length - o;
+    if (trailing !== 32) return null;
+    configPda = new PublicKey(buf.subarray(o, o + 32)).toBase58();
+  }
+
+  return {
+    solanaCluster: scope.solanaCluster,
+    pendingPda,
+    boxAssetId,
+    dudeAssetIds,
+    candidateDrops: scope.drops,
+    ...(createdSlot != null ? { createdSlot } : {}),
+    ...(configPda ? { configPda } : {}),
+  };
 }
 
 function isMonsAsset(asset: DasAsset): boolean {
@@ -491,10 +762,10 @@ export async function fetchInventory(owner: string, options?: DropFetchOptions):
 }
 
 export async function fetchPendingOpenBoxes(owner: string, options?: DropFetchOptions): Promise<PendingOpenBox[]> {
-  const out: PendingOpenBox[] = [];
-  for (const drop of listFrontendDropRuntimes(options)) {
-    const result = await heliusRpc<any>(drop.solanaCluster, 'getProgramAccounts', [
-      drop.boxMinterProgramId,
+  const discovered: PendingOpenRecordCandidate[] = [];
+  for (const scope of listPendingOpenProgramScopes(options)) {
+    const result = await heliusRpc<any>(scope.solanaCluster, 'getProgramAccounts', [
+      scope.boxMinterProgramId,
       {
         encoding: 'base64',
         filters: [
@@ -504,8 +775,9 @@ export async function fetchPendingOpenBoxes(owner: string, options?: DropFetchOp
       },
     ]).catch((err) => {
       console.warn('[mons/helius] getProgramAccounts failed for pending opens', {
-        dropId: drop.dropId,
-        cluster: drop.solanaCluster,
+        programId: scope.boxMinterProgramId,
+        dropIds: scope.drops.map((drop) => drop.dropId),
+        cluster: scope.solanaCluster,
         error: err,
       });
       return [];
@@ -513,49 +785,35 @@ export async function fetchPendingOpenBoxes(owner: string, options?: DropFetchOp
 
     const accounts = Array.isArray(result) ? result : [];
     for (const entry of accounts) {
-      const pendingPda = typeof entry?.pubkey === 'string' ? entry.pubkey : null;
-      const dataField = entry?.account?.data;
-      const dataB64 =
-        Array.isArray(dataField) && typeof dataField[0] === 'string'
-          ? dataField[0]
-          : typeof dataField === 'string'
-            ? dataField
-            : null;
-      if (!pendingPda || !dataB64) continue;
-      const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
-      if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) continue;
-      if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) continue;
-      const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
-      if (ownerFromChain !== owner) continue;
-      const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
-      const dudeAssetIds: string[] = [];
-      let o = 8 + 32 + 32;
-      const dudeCount = readU32(buf, o);
-      o += 4;
-      if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) continue;
-      for (let i = 0; i < dudeCount; i += 1) {
-        dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
-        o += 32;
-      }
-      const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      const createdSlotBig = view.getBigUint64(o, true);
-      const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
-      out.push({
-        dropId: drop.dropId,
-        pendingPda,
-        boxAssetId,
-        dudeAssetIds,
-        ...(createdSlot != null ? { createdSlot } : {}),
-      });
+      const candidate = decodePendingOpenRecordCandidate(entry, owner, scope);
+      if (candidate) discovered.push(candidate);
     }
   }
-  const deduped = new Map<string, PendingOpenBox>();
-  out.forEach((entry) => {
-    deduped.set(`${entry.dropId}:${entry.pendingPda}`, entry);
+
+  // Querying per drop breaks once multiple drops reuse one program id. Discover the pending
+  // records once per shared program, then recover the real drop from the stored box asset.
+  const deduped = new Map<string, PendingOpenRecordCandidate>();
+  discovered.forEach((entry) => {
+    deduped.set(`${entry.solanaCluster}:${entry.pendingPda}`, entry);
   });
-  const dedupedRows = Array.from(deduped.values());
-  dedupedRows.sort((a, b) => (Number(b.createdSlot || 0) - Number(a.createdSlot || 0)));
-  return dedupedRows;
+
+  const resolved = await Promise.all(
+    Array.from(deduped.values()).map(async (entry): Promise<PendingOpenBox | null> => {
+      const dropId = await resolvePendingOpenDropId(entry);
+      if (!dropId) return null;
+      return {
+        dropId,
+        pendingPda: entry.pendingPda,
+        boxAssetId: entry.boxAssetId,
+        dudeAssetIds: entry.dudeAssetIds,
+        ...(entry.createdSlot != null ? { createdSlot: entry.createdSlot } : {}),
+      };
+    }),
+  );
+
+  const rows = resolved.filter((entry): entry is PendingOpenBox => Boolean(entry));
+  rows.sort((a, b) => (Number(b.createdSlot || 0) - Number(a.createdSlot || 0)));
+  return rows;
 }
 
 export async function revealDudes(

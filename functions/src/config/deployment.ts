@@ -37,6 +37,7 @@ export type FunctionsDropConfig = {
 
   // On-chain ids
   boxMinterProgramId: string;
+  boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
@@ -145,15 +146,35 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
+  const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
   return {
     ...config,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     ...(mintSelection ? { mintSelection } : {}),
+    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
+}
+
+function assertSharedProgramDropsUseExplicitConfigPdas<
+  T extends { dropId: string; solanaCluster: SolanaCluster; boxMinterProgramId: string; boxMinterConfigPda?: string },
+>(drops: Record<string, T>, registryLabel: string): void {
+  const counts = new Map<string, number>();
+  Object.values(drops).forEach((drop) => {
+    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  Object.values(drops).forEach((drop) => {
+    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;
+    if ((counts.get(key) || 0) < 2) return;
+    if (String(drop.boxMinterConfigPda || '').trim()) return;
+    throw new Error(
+      `${registryLabel} drop ${drop.dropId} shares program ${drop.boxMinterProgramId} on ${drop.solanaCluster} and must set boxMinterConfigPda.`,
+    );
+  });
 }
 
 // BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY
@@ -264,6 +285,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
 
     // On-chain ids
     boxMinterProgramId: "5yUurzWhpwMLWsANm3bHv4a9SchRP7hsQShyfzqjq61U",
+    boxMinterConfigPda: "6EzGd62jjdEzb67zbWP52xcHpuN1Nw9szX6c158qfbnw",
     collectionMint: "Ez5iii1kH4VeSqu3fiaKQtHhY8ioWUaBNJqEYEGbMmXi",
     receiptsMerkleTree: "2zUurdTuj9h51ckjBNv6R16gqk4XZ5X89uxtXQ8BSTNG",
     deliveryLookupTable: "GLgw3hEgBCZ7cCUTAThg7nEdpt5CzJwXUeifFqWqjhct",
@@ -328,6 +350,8 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
   }),
 };
 // END AUTO-GENERATED FUNCTIONS DROP REGISTRY
+
+assertSharedProgramDropsUseExplicitConfigPdas(FUNCTIONS_DROPS, 'Functions deployment config');
 
 export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
   const normalizedDropId = normalizeDropId(dropId);

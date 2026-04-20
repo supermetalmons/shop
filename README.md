@@ -51,10 +51,10 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
 ### On-chain + address helpers
 - Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
-  - One-command deploy (auto-generates a fresh program id each run):
+  - One-command deploy:
     - `npm run deploy-all-onchain` (prompts for deployer private key; no CLI args)
-    - To change cluster/RPC/reuse behavior or pin an existing MPL-Core collection, edit the constants at the top of `scripts/deploy-all-onchain.ts`.
-  - Reuse the existing program id/keypair (upgrade in-place): set `REUSE_PROGRAM_ID = true` in `scripts/deploy-all-onchain.ts` (skips init if the config PDA already exists).
+    - To change cluster/RPC, pin an existing MPL-Core collection, or choose whether to reuse the shared program id, edit `NEW_DROP.deploy` in `scripts/newDrop.ts`.
+    - Steady-state cheaper drop deploys should keep `NEW_DROP.deploy.reuseProgramId = true`; set it to `false` only when intentionally deploying/upgrading the shared program itself.
   - Updates tracked config files:
     - `src/config/deployment.ts` (frontend)
     - `functions/src/config/deployment.ts` (cloud functions)

@@ -6,7 +6,12 @@ import type { FrontendDeploymentConfig } from '../config/deployment';
 
 export function useMintProgress(
   connection: Connection | null,
-  dropConfig: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'maxPerTx'> | null,
+  dropConfig:
+    | Pick<
+        FrontendDeploymentConfig,
+        'dropId' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'maxPerTx' | 'mintSelection'
+      >
+    | null,
   enabled = true,
 ) {
   return useQuery<MintStats>({

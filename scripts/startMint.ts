@@ -2,113 +2,14 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
-import bs58 from 'bs58';
-import { createInterface } from 'node:readline/promises';
-import { clusterApiUrl, Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { clusterApiUrl, Connection, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 // Anchor instruction discriminator: sha256("global:start_mint")[0..8]
 const IX_START_MINT = createHash('sha256').update('global:start_mint').digest().subarray(0, 8);
-
-async function promptMaskedInput(prompt: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    throw new Error('Cannot prompt for private key: stdin is not a TTY. Run this script in an interactive terminal.');
-  }
-
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-
-  stdout.write(prompt);
-  stdin.setEncoding('utf8');
-
-  const wasRaw = (stdin as any).isRaw;
-  stdin.setRawMode(true);
-  stdin.resume();
-
-  let input = '';
-
-  return await new Promise((resolve, reject) => {
-    function cleanup() {
-      stdin.removeListener('data', onData);
-      try {
-        stdin.setRawMode(Boolean(wasRaw));
-      } catch {
-        // ignore
-      }
-      stdin.pause();
-    }
-
-    function onData(chunk: string) {
-      for (const ch of chunk) {
-        // Ctrl+C
-        if (ch === '\u0003') {
-          stdout.write('\n');
-          cleanup();
-          reject(new Error('Cancelled'));
-          return;
-        }
-
-        // Enter
-        if (ch === '\r' || ch === '\n') {
-          stdout.write('\n');
-          cleanup();
-          resolve(input);
-          return;
-        }
-
-        // Backspace (DEL / BS)
-        if (ch === '\u007f' || ch === '\b') {
-          if (input.length > 0) {
-            input = input.slice(0, -1);
-            stdout.write('\b \b');
-          }
-          continue;
-        }
-
-        // Ignore other control chars
-        if (ch < ' ' && ch !== '\t') continue;
-
-        input += ch;
-        stdout.write('*');
-      }
-    }
-
-    stdin.on('data', onData);
-  });
-}
-
-function keypairFromBytes(bytes: Uint8Array): Keypair {
-  if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
-  if (bytes.length === 32) return Keypair.fromSeed(bytes);
-  throw new Error(`Invalid private key length: ${bytes.length} bytes (expected 32 or 64).`);
-}
-
-function parsePrivateKeyInput(input: string): Keypair {
-  const raw = (input || '').trim();
-  if (!raw) throw new Error('Empty private key input.');
-
-  // Accept Solana CLI-style JSON keypair arrays (e.g. ~/.config/solana/id.json contents).
-  if (raw.startsWith('[')) {
-    let arr: unknown;
-    try {
-      arr = JSON.parse(raw);
-    } catch {
-      throw new Error('Invalid JSON private key. Expected a JSON array of numbers or a base58-encoded secret key.');
-    }
-    if (!Array.isArray(arr) || arr.some((n) => typeof n !== 'number')) {
-      throw new Error('Invalid JSON private key. Expected a JSON array of numbers.');
-    }
-    return keypairFromBytes(Uint8Array.from(arr as number[]));
-  }
-
-  // Otherwise, treat as base58.
-  try {
-    return keypairFromBytes(bs58.decode(raw));
-  } catch {
-    throw new Error('Invalid base58 private key.');
-  }
-}
+const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 const deploymentConfigObjectCache = new Map<string, Record<string, unknown> | null>();
 
@@ -205,21 +106,46 @@ async function resolveFrontendDropConfig(args: {
   return { dropConfig: legacyConfig, knownDropIds: legacyDropId ? [legacyDropId] : [] };
 }
 
-async function promptYConfirmation(prompt: string): Promise<boolean> {
-  if (!process.stdin.isTTY) {
-    throw new Error('Cannot prompt for confirmation: stdin is not a TTY. Run this script in an interactive terminal.');
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(prompt)).trim().toLowerCase();
-    return answer === 'y';
-  } finally {
-    rl.close();
-  }
-}
-
 function boxMinterConfigPda(programId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0];
+}
+
+function normalizeDropBase(base: unknown): string {
+  return String(base || '').replace(/\/+$/, '');
+}
+
+function configuredBoxMinterConfigPda(programId: PublicKey, configured: unknown): PublicKey {
+  const value = typeof configured === 'string' ? configured.trim() : '';
+  return value ? new PublicKey(value) : boxMinterConfigPda(programId);
+}
+
+function readBorshString(data: Buffer, offset: number): { value: string; next: number } {
+  if (offset + 4 > data.length) {
+    throw new Error('Unsupported box minter config schema while decoding metadata base.');
+  }
+  const len = data.readUInt32LE(offset);
+  const start = offset + 4;
+  const end = start + len;
+  if (end > data.length) {
+    throw new Error('Unsupported box minter config schema while decoding metadata base.');
+  }
+  return { value: data.subarray(start, end).toString('utf8'), next: end };
+}
+
+function decodeConfigMetadataBase(data: Buffer): string {
+  if (data.length < 8 + 32 * 3 + 8 + 8 + 32 + 4 + 1 + 1 + 4) {
+    throw new Error('Unsupported box minter config schema while decoding metadata base.');
+  }
+  for (let i = 0; i < ACCOUNT_BOX_MINTER_CONFIG.length; i += 1) {
+    if (data[i] !== ACCOUNT_BOX_MINTER_CONFIG[i]) {
+      throw new Error('Invalid box minter config discriminator.');
+    }
+  }
+
+  let o = 8 + 32 * 3 + 8 + 8 + 32 + 4 + 1 + 1 + 4;
+  o = readBorshString(data, o).next;
+  o = readBorshString(data, o).next;
+  return readBorshString(data, o).value;
 }
 
 async function main() {
@@ -268,6 +194,10 @@ async function main() {
     | undefined;
   const programIdStr =
     typeof dropConfig.boxMinterProgramId === 'string' ? String(dropConfig.boxMinterProgramId).trim() : undefined;
+  const configPdaStr =
+    typeof dropConfig.boxMinterConfigPda === 'string' ? String(dropConfig.boxMinterConfigPda).trim() : undefined;
+  const metadataBase =
+    typeof dropConfig.metadataBase === 'string' ? normalizeDropBase(dropConfig.metadataBase) : undefined;
   const deployedDropId = typeof dropConfig.dropId === 'string' ? String(dropConfig.dropId).trim() : undefined;
   const activeDropId = deployedDropId || requestedDropId || '(unknown)';
 
@@ -290,7 +220,7 @@ async function main() {
   const connection = new Connection(rpcUrl, { commitment: 'confirmed' });
 
   const programId = new PublicKey(programIdStr);
-  const configPda = boxMinterConfigPda(programId);
+  const configPda = configuredBoxMinterConfigPda(programId, configPdaStr);
 
   console.log('--- start mint (box_minter) ---');
   console.log('cluster:', clusterStr);
@@ -304,6 +234,18 @@ async function main() {
   const info = await connection.getAccountInfo(configPda, { commitment: 'confirmed' });
   if (!info) {
     throw new Error(`Missing config PDA on this cluster: ${configPda.toBase58()}`);
+  }
+  if (metadataBase) {
+    const onchainMetadataBase = normalizeDropBase(decodeConfigMetadataBase(Buffer.from(info.data)));
+    if (onchainMetadataBase !== metadataBase) {
+      throw new Error(
+        `Config PDA ${configPda.toBase58()} does not match drop ${activeDropId}.\n` +
+          `- configured metadataBase : ${metadataBase}\n` +
+          `- on-chain metadata base  : ${onchainMetadataBase}\n` +
+          `\n` +
+          `This usually means the deployment config is stale or boxMinterConfigPda is missing for a scoped config.`,
+      );
+    }
   }
 
   console.log('This will permanently enable minting until the program is redeployed/reinitialized.');

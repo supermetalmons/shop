@@ -22,7 +22,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DROPS, type DropFamily, type FunctionsDropConfig } from './config/deployment.js';
+import { FUNCTIONS_DROPS, normalizeDropBase, type DropFamily, type FunctionsDropConfig } from './config/deployment.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -208,7 +208,10 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     );
   }
   const boxMinterProgramId = requireConfiguredPubkey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId);
-  const boxMinterConfigPda = PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
+  const configuredBoxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
+  const boxMinterConfigPda = configuredBoxMinterConfigPda
+    ? requireConfiguredPubkey('BOX_MINTER_CONFIG_PDA', configuredBoxMinterConfigPda)
+    : PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
   const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', config.collectionMint);
   const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree);
   const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable);
@@ -244,6 +247,23 @@ Object.entries(FUNCTIONS_DROPS).forEach(([dropIdKey, dropConfig]) => {
 if (!Object.keys(DROP_RUNTIMES).length) {
   throw new Error('functions/src/config/deployment.ts has no configured drops');
 }
+const DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION = new Map<string, number>();
+const DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE = new Map<string, number>();
+const DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION = new Map<string, number>();
+Object.values(DROP_RUNTIMES).forEach((runtime) => {
+  const clusterCollectionKey = dropRuntimeClusterCollectionKey(runtime);
+  DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.set(
+    clusterCollectionKey,
+    (DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.get(clusterCollectionKey) || 0) + 1,
+  );
+  const scopeKey = revealScopeKey(runtime);
+  DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.set(scopeKey, (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.get(scopeKey) || 0) + 1);
+  const collectionScopeKey = revealScopeCollectionKey(runtime);
+  DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.set(
+    collectionScopeKey,
+    (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.get(collectionScopeKey) || 0) + 1,
+  );
+});
 
 function getDropRuntime(dropId: string): DropRuntime {
   const normalizedDropId = normalizeDropId(dropId);
@@ -252,6 +272,52 @@ function getDropRuntime(dropId: string): DropRuntime {
     throw new HttpsError('invalid-argument', `Unsupported dropId: ${normalizedDropId}`);
   }
   return runtime;
+}
+
+function normalizeConfiguredUriBaseForComparison(uriBase: string): string {
+  const normalized = normalizeDropBase(uriBase);
+  // Legacy singleton configs stored `${dropBase}/json/boxes/` instead of the canonical drop base.
+  // Keep accepting that older shape so untouched singleton drops continue to work.
+  return normalized.replace(/\/json\/boxes$/i, '');
+}
+
+function requiresRevealAssetDisambiguation(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox'>,
+): boolean {
+  const scopeKey = revealScopeKey(dropRuntime);
+  return (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.get(scopeKey) || 0) > 1;
+}
+
+function revealScopeKey(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox'>,
+): string {
+  return `${dropRuntime.cluster}:${dropRuntime.boxMinterProgramId.toBase58()}:${dropRuntime.itemsPerBox}`;
+}
+
+function dropRuntimeClusterCollectionKey(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'collectionMintStr'>,
+): string {
+  return `${dropRuntime.cluster}:${dropRuntime.collectionMintStr}`;
+}
+
+function revealScopeCollectionKey(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox' | 'collectionMintStr'>,
+): string {
+  return `${revealScopeKey(dropRuntime)}:${dropRuntime.collectionMintStr}`;
+}
+
+function clusterSharesCollectionMint(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'collectionMintStr'>,
+): boolean {
+  if (!dropRuntime.collectionMintStr) return false;
+  return (DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.get(dropRuntimeClusterCollectionKey(dropRuntime)) || 0) > 1;
+}
+
+function revealScopeSharesCollectionMint(
+  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox' | 'collectionMintStr'>,
+): boolean {
+  if (!dropRuntime.collectionMintStr) return false;
+  return (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.get(revealScopeCollectionKey(dropRuntime)) || 0) > 1;
 }
 
 function requireDropId(rawDropId: unknown): string {
@@ -1066,6 +1132,19 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) 
       },
     );
   }
+  if (normalizeConfiguredUriBaseForComparison(decoded.uriBase) !== normalizeDropBase(dropRuntime.config.metadataBase)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'functions/src/config/deployment.ts is out of sync with the on-chain metadata base for this drop.',
+      {
+        configuredMetadataBase: normalizeDropBase(dropRuntime.config.metadataBase),
+        onchainMetadataBase: normalizeConfiguredUriBaseForComparison(decoded.uriBase),
+        onchainMetadataBaseRaw: decoded.uriBase,
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        dropId: dropRuntime.dropId,
+      },
+    );
+  }
 
   onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true });
 }
@@ -1329,13 +1408,7 @@ function getDudeIdFromAsset(asset: any): number | undefined {
   const num = Number(dudeAttr?.value);
   if (Number.isFinite(num)) return num;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
+  const uri = assetMetadataUri(asset);
   if (typeof uri === 'string' && uri) {
     const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
     const n = Number(match?.[1]);
@@ -1344,23 +1417,88 @@ function getDudeIdFromAsset(asset: any): number | undefined {
   return undefined;
 }
 
-function assetMatchesCollection(asset: any, expectedCollectionMint: string): boolean {
+function assetMetadataUri(asset: any): string {
+  const candidates = [
+    asset?.content?.json_uri,
+    asset?.content?.jsonUri,
+    asset?.content?.metadata?.uri,
+    asset?.content?.metadata?.json_uri,
+    asset?.content?.metadata?.jsonUri,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate) return candidate;
+  }
+  return '';
+}
+
+function metadataBaseFromAsset(asset: any): string | null {
+  const uri = assetMetadataUri(asset);
+  if (!uri) return null;
+
+  const normalized = normalizeDropBase(uri)
+    .replace(/\/collection\.json$/i, '')
+    .replace(/\/json\/boxes\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/figures\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/receipts\/boxes\/[^/?#]+\.json$/i, '')
+    .replace(/\/json\/receipts\/figures\/[^/?#]+\.json$/i, '');
+
+  return normalized && normalized !== uri ? normalized : null;
+}
+
+function assetCollectionMints(asset: any): string[] {
+  const out = new Set<string>();
   const grouped = asset?.grouping;
   if (Array.isArray(grouped)) {
     for (const group of grouped) {
-      if (group?.group_key === 'collection' && group?.group_value === expectedCollectionMint) return true;
+      if (group?.group_key === 'collection' && typeof group?.group_value === 'string' && group.group_value) {
+        out.add(group.group_value);
+      }
     }
   }
   const collectionKey = asset?.content?.metadata?.collection?.key;
-  return typeof collectionKey === 'string' && collectionKey === expectedCollectionMint;
+  if (typeof collectionKey === 'string' && collectionKey) out.add(collectionKey);
+  return Array.from(out);
 }
 
-function isMonsAsset(asset: any, dropRuntime: DropRuntime): boolean {
+function assetMatchesDropMetadataBase(
+  asset: any,
+  dropRuntime: DropRuntime,
+  allowedKinds?: ReadonlyArray<'box' | 'dude' | 'certificate'>,
+): boolean | null {
   const kind = getAssetKind(asset);
   if (!kind) return false;
+  if (allowedKinds && !allowedKinds.includes(kind)) return false;
 
-  if (!dropRuntime.collectionMintStr) return false;
-  return assetMatchesCollection(asset, dropRuntime.collectionMintStr);
+  const collections = assetCollectionMints(asset);
+  const collectionMatches = Boolean(dropRuntime.collectionMintStr) && collections.includes(dropRuntime.collectionMintStr);
+  // Collection membership is mandatory. Metadata base only disambiguates assets that are
+  // already in the expected collection.
+  if (!collectionMatches) {
+    return false;
+  }
+
+  const assetMetadataBase = metadataBaseFromAsset(asset);
+  if (assetMetadataBase) {
+    return assetMetadataBase === normalizeDropBase(dropRuntime.config.metadataBase);
+  }
+
+  return null;
+}
+
+function assetMatchesRequestedDrop(asset: any, dropRuntime: DropRuntime): boolean {
+  const metadataMatch = assetMatchesDropMetadataBase(asset, dropRuntime);
+  if (metadataMatch !== null) {
+    return metadataMatch;
+  }
+  return !clusterSharesCollectionMint(dropRuntime);
+}
+
+function assetMatchesDropRuntime(asset: any, dropRuntime: DropRuntime): boolean {
+  const metadataMatch = assetMatchesDropMetadataBase(asset, dropRuntime, ['box']);
+  if (metadataMatch !== null) {
+    return metadataMatch;
+  }
+  return !revealScopeSharesCollectionMint(dropRuntime);
 }
 
 async function fetchAssetRetry(assetId: string, dropRuntime: DropRuntime) {
@@ -1466,8 +1604,28 @@ function encodeCloseDeliveryArgs(args: { deliveryId: number; deliveryBump: numbe
   return Buffer.concat([IX_CLOSE_DELIVERY, u32LE(deliveryId), Buffer.from([bump & 0xff])]);
 }
 
-function deriveDeliveryPda(programId: PublicKey, deliveryId: number): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('delivery'), u32LE(deliveryId)], programId);
+function isLegacySingletonConfigPda(programId: PublicKey, configPda: PublicKey): boolean {
+  return configPda.equals(PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0]);
+}
+
+function deriveDeliveryPda(
+  programId: PublicKey,
+  configPda: PublicKey,
+  deliveryId: number,
+): [PublicKey, number] {
+  const seeds: Uint8Array[] = [Buffer.from('delivery')];
+  if (!isLegacySingletonConfigPda(programId, configPda)) {
+    seeds.push(configPda.toBuffer());
+  }
+  seeds.push(u32LE(deliveryId));
+  return PublicKey.findProgramAddressSync(seeds, programId);
+}
+
+function deriveDeliveryPdaForDrop(
+  dropRuntime: Pick<DropRuntime, 'boxMinterProgramId' | 'boxMinterConfigPda'>,
+  deliveryId: number,
+): [PublicKey, number] {
+  return deriveDeliveryPda(dropRuntime.boxMinterProgramId, dropRuntime.boxMinterConfigPda, deliveryId);
 }
 
 function deriveTreeConfigPda(merkleTree: PublicKey): PublicKey {
@@ -1614,6 +1772,8 @@ type DecodedBoxMinterConfig = {
   maxPerTx: number;
   itemsPerBox: number;
   discountMintsPerWallet: number;
+  uriBase: string;
+  dropSeed?: Buffer;
 };
 
 function normalizeDiscountMintsPerWallet(value: number | undefined): number {
@@ -1633,6 +1793,40 @@ function readBorshString(data: Buffer, offset: number): { value: string; next: n
   const start = offset + 4;
   const end = start + len;
   return { value: data.subarray(start, end).toString('utf8'), next: end };
+}
+
+function readU32Tuple(data: Buffer, offset: number): { next: number } {
+  let next = offset;
+  for (let i = 0; i < 3; i += 1) {
+    next += 4;
+  }
+  return { next };
+}
+
+function hasAnyNonZeroByte(data: Uint8Array): boolean {
+  for (let i = 0; i < data.length; i += 1) {
+    if (data[i] !== 0) return true;
+  }
+  return false;
+}
+
+function decodeOptionalTrailingDropSeed(data: Buffer, offset: number): Buffer | undefined {
+  // RPC returns the full allocated account data, so legacy configs have trailing zero padding
+  // after the serialized payload. Treat all-zero trailing bytes as padding, not v2 data.
+  if (offset >= data.length) return undefined;
+  const trailing = data.subarray(offset);
+  if (!hasAnyNonZeroByte(trailing)) return undefined;
+  if (trailing.length < 32) {
+    throw new HttpsError('failed-precondition', 'Box minter config drop seed data is truncated');
+  }
+  const dropSeed = Buffer.from(data.subarray(offset, offset + 32));
+  if (!hasAnyNonZeroByte(dropSeed)) {
+    throw new HttpsError('failed-precondition', 'Unexpected trailing data after the box minter config payload');
+  }
+  if (hasAnyNonZeroByte(trailing.subarray(32))) {
+    throw new HttpsError('failed-precondition', 'Unexpected trailing data after the box minter drop seed');
+  }
+  return dropSeed;
 }
 
 function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterConfig {
@@ -1664,10 +1858,26 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   o += 4; // minted
   o = readBorshString(buf, o).next;
   o = readBorshString(buf, o).next;
-  o = readBorshString(buf, o).next;
+  const uriBase = readBorshString(buf, o);
+  o = uriBase.next;
   o += 1; // started
   o += 1; // bump
   const discountMintsPerWallet = normalizeDiscountMintsPerWallet(buf[o]);
+  o += 1;
+  if (o + 4 <= buf.length) {
+    o = readBorshString(buf, o).next; // figureNamePrefix
+  }
+  const mintVariantBytes = 1 + 4 * 3 * 3;
+  if (o < buf.length) {
+    if (o + mintVariantBytes > buf.length) {
+      throw new HttpsError('failed-precondition', 'Box minter config variant data is truncated');
+    }
+    o += 1; // mintVariantKind
+    o = readU32Tuple(buf, o).next;
+    o = readU32Tuple(buf, o).next;
+    o = readU32Tuple(buf, o).next;
+  }
+  const dropSeed = decodeOptionalTrailingDropSeed(buf, o);
 
   if (!Number.isFinite(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
     throw new HttpsError('failed-precondition', 'On-chain config has invalid itemsPerBox', { itemsPerBox });
@@ -1681,7 +1891,30 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     maxPerTx,
     itemsPerBox,
     discountMintsPerWallet,
+    uriBase: uriBase.value,
+    ...(dropSeed ? { dropSeed } : {}),
   };
+}
+
+async function fetchDecodedBoxMinterConfigAccount(params: {
+  dropRuntime: DropRuntime;
+  conn: Connection;
+  context: string;
+}): Promise<DecodedBoxMinterConfig> {
+  const { dropRuntime, conn, context } = params;
+  const cfgInfo = await withTimeout(
+    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
+    RPC_TIMEOUT_MS,
+    context,
+  );
+  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
+      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
+    );
+  }
+  return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
 }
 
 function encodeFinalizeOpenBoxArgs(dudeIds: number[], dropRuntime: DropRuntime): Buffer {
@@ -1731,6 +1964,7 @@ function decodePendingOpenBox(data: Buffer): {
   dudeAssets: PublicKey[];
   createdSlot: bigint;
   bump: number;
+  config?: PublicKey;
 } {
   if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
   const minLen = 8 + 32 + 32 + 4 + 8 + 1;
@@ -1759,7 +1993,19 @@ function decodePendingOpenBox(data: Buffer): {
   const createdSlot = data.readBigUInt64LE(o);
   o += 8;
   const bump = data.readUInt8(o);
-  return { owner, boxAsset, dudeAssets, createdSlot, bump };
+  o += 1;
+  let config: PublicKey | undefined;
+  if (o < data.length) {
+    const trailing = data.subarray(o);
+    if (trailing.length < 32) {
+      throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (truncated config)');
+    }
+    config = new PublicKey(trailing.subarray(0, 32));
+    if (hasAnyNonZeroByte(trailing.subarray(32))) {
+      throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (unexpected trailing bytes)');
+    }
+  }
+  return { owner, boxAsset, dudeAssets, createdSlot, bump, ...(config ? { config } : {}) };
 }
 
 function decodeDeliveryRecord(data: Buffer): {
@@ -2729,7 +2975,7 @@ async function fetchConfirmedDeliveryRecordAccount(params: {
   includeData?: boolean;
 }) {
   const { dropRuntime, conn, deliveryId, context, includeData = true } = params;
-  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPdaForDrop(dropRuntime, deliveryId);
   const deliveryInfo = await withTimeout(
     conn.getAccountInfo(
       expectedDeliveryPda,
@@ -3300,19 +3546,11 @@ export const revealDudes = onCallLogged(
   const conn = connection(dropRuntime);
 
   // Load on-chain config and enforce server cosigner matches on-chain admin.
-  const cfgInfo = await withTimeout(
-    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig:reveal',
-  );
-  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
-      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId },
-    );
-  }
-  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfg = await fetchDecodedBoxMinterConfigAccount({
+    dropRuntime,
+    conn,
+    context: 'getAccountInfo:boxMinterConfig:reveal',
+  });
   const cfgAdmin = cfg.admin;
   const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
@@ -3368,6 +3606,35 @@ export const revealDudes = onCallLogged(
         dropId,
       },
     );
+  }
+
+  if (pending.config && !pending.config.equals(dropRuntime.boxMinterConfigPda)) {
+    throw new HttpsError('failed-precondition', 'Pending open belongs to a different drop config', {
+      boxAssetId,
+      dropId,
+      pending: pendingPda.toBase58(),
+      pendingConfig: pending.config.toBase58(),
+      expectedConfig: dropRuntime.boxMinterConfigPda.toBase58(),
+    });
+  }
+
+  if (!pending.config && requiresRevealAssetDisambiguation(dropRuntime)) {
+    const boxAsset = await fetchAssetRetry(boxAssetId, dropRuntime);
+    if (getAssetKind(boxAsset) !== 'box') {
+      throw new HttpsError('failed-precondition', 'Pending open asset is not a box', {
+        boxAssetId,
+        dropId,
+        pending: pendingPda.toBase58(),
+      });
+    }
+    if (!assetMatchesDropRuntime(boxAsset, dropRuntime)) {
+      throw new HttpsError('failed-precondition', 'Box asset does not belong to the requested drop', {
+        boxAssetId,
+        dropId,
+        pending: pendingPda.toBase58(),
+        metadataBase: metadataBaseFromAsset(boxAsset),
+      });
+    }
   }
 
   // Assign dudes NOW (after the box has already been transferred away); keep this admin-only.
@@ -3459,8 +3726,8 @@ export const prepareDeliveryTx = onCallLogged(
     if (kind === 'certificate') {
       throw new HttpsError('failed-precondition', 'Certificates cannot be delivered');
     }
-    if (!isMonsAsset(asset, dropRuntime)) {
-      throw new HttpsError('failed-precondition', 'Item is not part of the Mons collection');
+    if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
+      throw new HttpsError('failed-precondition', 'Item does not belong to the requested drop');
     }
     const assetOwner = asset?.ownership?.owner;
     if (assetOwner !== ownerWallet) {
@@ -3501,19 +3768,11 @@ export const prepareDeliveryTx = onCallLogged(
   const conn = connection(dropRuntime);
 
   // Ensure COSIGNER_SECRET matches on-chain admin, and COLLECTION_MINT matches configured core collection.
-  const cfgInfo = await withTimeout(
-    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig',
-  );
-  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
-      { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId },
-    );
-  }
-  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfg = await fetchDecodedBoxMinterConfigAccount({
+    dropRuntime,
+    conn,
+    context: 'getAccountInfo:boxMinterConfig',
+  });
   const cfgAdmin = cfg.admin;
   const cfgTreasury = cfg.treasury;
   const cfgCoreCollection = cfg.coreCollection;
@@ -3546,7 +3805,7 @@ export const prepareDeliveryTx = onCallLogged(
 
   for (let attempt = 0; attempt < MAX_DELIVERY_ID_ATTEMPTS; attempt += 1) {
     const candidate = randomInt(1, 2 ** 31);
-    const [deliveryPda, deliveryBump] = PublicKey.findProgramAddressSync([Buffer.from('delivery'), u32LE(candidate)], programId);
+    const [deliveryPda, deliveryBump] = deriveDeliveryPdaForDrop(dropRuntime, candidate);
 
     const chainInfo = await withTimeout(
       conn.getAccountInfo(deliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
@@ -3779,7 +4038,7 @@ export async function findConfirmedDeliverySignatureForDeliveryOrder(
   const dropId = requireDropId(args.dropId);
   const dropRuntime = getDropRuntime(dropId);
   const conn = connection(dropRuntime);
-  const [expectedDeliveryPda] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  const [expectedDeliveryPda] = deriveDeliveryPdaForDrop(dropRuntime, deliveryId);
   assertStoredDeliveryPdaMatchesExpected(args.deliveryPda, expectedDeliveryPda);
 
   const itemIds = Array.isArray(args.itemIds) ? args.itemIds.filter((id): id is string => typeof id === 'string' && !!id) : [];
@@ -3834,10 +4093,9 @@ export async function hasConfirmedDeliveryRecordForDeliveryOrder(
   const deliveryId = requirePositiveDeliveryId(args.deliveryId);
   const dropId = requireDropId(args.dropId);
   const dropRuntime = getDropRuntime(dropId);
-  const [expectedDeliveryPda] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
-  assertStoredDeliveryPdaMatchesExpected(args.deliveryPda, expectedDeliveryPda);
-
   const conn = connection(dropRuntime);
+  const [expectedDeliveryPda] = deriveDeliveryPdaForDrop(dropRuntime, deliveryId);
+  assertStoredDeliveryPdaMatchesExpected(args.deliveryPda, expectedDeliveryPda);
   const deliveryRecord = await fetchConfirmedDeliveryRecordAccount({
     dropRuntime,
     conn,
@@ -3866,7 +4124,7 @@ async function verifyReceiptIssuanceBySignature(params: {
     throw deliverySignatureProbeFailedPrecondition('transaction_not_found_or_failed', 'Delivery transaction not found or failed');
   }
 
-  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPdaForDrop(dropRuntime, deliveryId);
   const keys = resolveInstructionAccounts(tx);
   const FIXED_DELIVER_ACCOUNTS = 9;
   const deliverIxs = (tx?.transaction?.message?.compiledInstructions || []).filter((ix: any) => {
@@ -4075,7 +4333,12 @@ export async function retryIssueReceiptsForDeliveryOrder(
 
   // Fast-path idempotency (already finalized).
   if (order.status === 'ready_to_ship') {
-    const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(dropRuntime.boxMinterProgramId, deliveryId);
+    const cfg = await fetchDecodedBoxMinterConfigAccount({
+      dropRuntime,
+      conn,
+      context: 'getAccountInfo:boxMinterConfig:lateClose',
+    });
+    const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPdaForDrop(dropRuntime, deliveryId);
     let closeDeliveryTx: string | null = order.closeDeliveryTx || null;
     if (!closeDeliveryTx) {
       // Best-effort late cleanup: if the delivery PDA still exists, close it now.
@@ -4086,15 +4349,6 @@ export async function retryIssueReceiptsForDeliveryOrder(
       );
       if (deliveryInfo) {
         try {
-          const cfgInfo = await withTimeout(
-            conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
-            RPC_TIMEOUT_MS,
-            'getAccountInfo:boxMinterConfig:lateClose',
-          );
-          if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-            throw new HttpsError('failed-precondition', 'Box minter config PDA not found (late close)');
-          }
-          const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
           const cfgAdmin = cfg.admin;
           const signer = cosigner();
           if (!signer.publicKey.equals(cfgAdmin)) {
@@ -4157,18 +4411,11 @@ export async function retryIssueReceiptsForDeliveryOrder(
   const targetAssetIds = verified.targetAssetIds;
 
   // Ensure the cosigner key matches the on-chain admin (custody vault).
-  const cfgInfo = await withTimeout(
-    conn.getAccountInfo(dropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig',
-  );
-  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
-    );
-  }
-  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfg = await fetchDecodedBoxMinterConfigAccount({
+    dropRuntime,
+    conn,
+    context: 'getAccountInfo:boxMinterConfig',
+  });
   const cfgAdmin = cfg.admin;
   const cfgTreasury = cfg.treasury;
   const cfgCoreCollection = cfg.coreCollection;
@@ -4861,13 +5108,17 @@ export const prepareIrlClaimTx = onCallLogged(
   // - detecting an already-claimed code (dude receipts already present)
   // - finding the matching box certificate in the wallet
   const ownedAssets = await fetchAssetsOwned(ownerWallet, claimDropRuntime);
+  // Filter to certificates that belong to the requested drop before matching ids.
+  // Shared collections can legitimately reuse box/dude number ranges across drops.
+  const ownedRequestedDropCertificates = ownedAssets.filter(
+    (asset: any) => getAssetKind(asset) === 'certificate' && assetMatchesRequestedDrop(asset, claimDropRuntime),
+  );
 
   // If any of the expected dude receipts are already in the wallet, the claim is already done.
   // (The claim tx is atomic; once any of these exist, the box certificate must already be burned.)
   const dudeSet = new Set(dudeIds.map((n) => Number(n)));
   const mintedDudeReceipts = new Set<number>();
-  for (const a of ownedAssets) {
-    if (getAssetKind(a) !== 'certificate') continue;
+  for (const a of ownedRequestedDropCertificates) {
     const id = getDudeIdFromAsset(a);
     if (id != null && dudeSet.has(Number(id))) mintedDudeReceipts.add(Number(id));
   }
@@ -4876,8 +5127,7 @@ export const prepareIrlClaimTx = onCallLogged(
   }
 
   // Locate the matching box certificate (receipt) in the requesting wallet.
-  const certificate =
-    ownedAssets.find((asset: any) => getAssetKind(asset) === 'certificate' && getBoxIdFromAsset(asset) === boxIdStr) || null;
+  const certificate = ownedRequestedDropCertificates.find((asset: any) => getBoxIdFromAsset(asset) === boxIdStr) || null;
   if (!certificate) {
     throw new HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
   }
@@ -4898,27 +5148,19 @@ export const prepareIrlClaimTx = onCallLogged(
   if (String(certificateBoxId) !== boxIdStr) {
     throw new HttpsError('failed-precondition', 'Certificate does not match claim box');
   }
-  if (!isMonsAsset(certificate, claimDropRuntime)) {
-    throw new HttpsError('failed-precondition', 'Certificate is outside the Mons collection');
+  if (!assetMatchesRequestedDrop(certificate, claimDropRuntime)) {
+    throw new HttpsError('failed-precondition', 'Certificate does not belong to the requested drop');
   }
   const certificateId = String(certificate.id || '');
 
   const conn = connection(claimDropRuntime);
 
   // Load on-chain config so we can build correct burn + mint instructions.
-  const cfgInfo = await withTimeout(
-    conn.getAccountInfo(claimDropRuntime.boxMinterConfigPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig:claimIrl',
-  );
-  if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Box minter config PDA not found. Re-run deploy-all, update env, and redeploy.',
-      { configPda: claimDropRuntime.boxMinterConfigPda.toBase58(), dropId: claimDropId },
-    );
-  }
-  const cfg = decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+  const cfg = await fetchDecodedBoxMinterConfigAccount({
+    dropRuntime: claimDropRuntime,
+    conn,
+    context: 'getAccountInfo:boxMinterConfig:claimIrl',
+  });
   const cfgAdmin = cfg.admin;
   const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
