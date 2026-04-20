@@ -2290,6 +2290,14 @@ button.order-status-option:hover:not(:disabled) {
   font-size: 12px;
 }
 
+.fulfillment-size-label {
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
 .checkbox {
   position: relative;
   display: inline-flex;

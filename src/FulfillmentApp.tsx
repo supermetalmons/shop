@@ -14,11 +14,11 @@ import {
   loadFigureMetadataBatch,
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
-import { joinDropAssetUrl, resolveDropContent } from './lib/dropContent';
+import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
-import { listFrontendDrops, normalizeDropId, type FigureMediaConfig } from './config/deployment';
+import { listFrontendDrops, normalizeDropId, type FigureMediaConfig, type FrontendDeploymentConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
@@ -332,6 +332,35 @@ function renderFigureTiles(args: {
   );
 }
 
+function renderBoxTiles(args: {
+  boxIds: number[];
+  keyPrefix: string;
+  labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
+  previewSrc?: string;
+}) {
+  const { boxIds, keyPrefix, labelSource, previewSrc } = args;
+  return (
+    <div className="figure-grid">
+      {boxIds.map((boxId, index) => {
+        const sizeLabel = labelSource.mintSelection?.kind === 'size'
+          ? labelSource.mintSelection.options.find((option) => boxId >= option.startId && boxId <= option.endId)?.label
+          : undefined;
+        const label = sizeLabel || dropAssetReference(labelSource, 'box', boxId);
+        return (
+          <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
+            {previewSrc ? (
+              <img src={previewSrc} alt={label} loading="lazy" className="figure-image" />
+            ) : (
+              <div className="figure-image figure-image--placeholder" aria-hidden="true" />
+            )}
+            <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type FulfillmentAppProps = {
   selectedDropId: string;
   onSelectedDropIdChange: (dropId: string) => void;
@@ -359,6 +388,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const isLittleSwagBoxesDrop = normalizeDropId(selectedDrop?.dropId || '') === LITTLE_SWAG_BOXES_DROP_ID;
   const isDirectDeliveryDrop = isDirectDeliveryItemsPerBox(selectedDrop?.itemsPerBox);
   const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
+  const boxPreviewImage = selectedDrop ? normalizeBoxDisplayImage(selectedDrop.dropId) : undefined;
   const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
@@ -882,42 +912,49 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           ) : null}
 
           {order.boxes.length ? (
-            <div className="grid">
-              {order.boxes.map((box) => (
-                <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
-                  <div className="card__title">
-                    {!isDirectDeliveryDrop && box.claimCode ? (
-                      <>
-                        {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
-                        <span className="fulfillment-secret-code">{box.claimCode}</span>
-                      </>
-                    ) : (
-                      dropAssetReference(selectedDrop, 'box', box.boxId, { capitalize: true })
-                    )}
+            isDirectDeliveryDrop ? (
+              renderBoxTiles({
+                boxIds: order.boxes.map((box) => box.boxId),
+                keyPrefix: `${order.deliveryId}:box`,
+                labelSource: selectedDrop,
+                previewSrc: boxPreviewImage,
+              })
+            ) : (
+              <div className="grid">
+                {order.boxes.map((box) => (
+                  <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
+                    <div className="card__title">
+                      {box.claimCode ? (
+                        <>
+                          {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                          <span className="fulfillment-secret-code">{box.claimCode}</span>
+                        </>
+                      ) : (
+                        dropAssetReference(selectedDrop, 'box', box.boxId, { capitalize: true })
+                      )}
+                    </div>
+                    {!box.claimCode ? (
+                      <div className="muted small">Secret code unavailable</div>
+                    ) : !box.dudeIds.length ? (
+                      <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
+                    ) : null}
+                    {box.dudeIds.length ? (
+                      renderFigureTiles({
+                        dropId: selectedDrop.dropId,
+                        figureIds: box.dudeIds,
+                        keyPrefix: `${order.deliveryId}:${box.boxId}`,
+                        figureNamePrefix: selectedDrop.figureNamePrefix,
+                        previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
+                        figureMediaBase,
+                        figureMedia: selectedDrop.figureMedia,
+                        figureMetadataByKey,
+                        onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                      })
+                    ) : null}
                   </div>
-                  {isDirectDeliveryDrop && !box.dudeIds.length ? (
-                    <div className="muted small">Direct-delivery item</div>
-                  ) : !box.claimCode ? (
-                    <div className="muted small">Secret code unavailable</div>
-                  ) : !box.dudeIds.length ? (
-                    <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
-                  ) : null}
-                  {box.dudeIds.length ? (
-                    renderFigureTiles({
-                      dropId: selectedDrop.dropId,
-                      figureIds: box.dudeIds,
-                      keyPrefix: `${order.deliveryId}:${box.boxId}`,
-                      figureNamePrefix: selectedDrop.figureNamePrefix,
-                      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                      figureMediaBase,
-                      figureMedia: selectedDrop.figureMedia,
-                      figureMetadataByKey,
-                      onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                    })
-                  ) : null}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )
           ) : null}
 
           {order.looseDudes.length
