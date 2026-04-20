@@ -2626,6 +2626,17 @@ function App({ currentPath }: AppProps) {
     return signature;
   }
 
+  async function sendAndConfirmMintViaConnection(
+    tx: VersionedTransaction,
+    targetConnection: Connection,
+    options?: SendViaConnectionOptions,
+  ): Promise<boolean> {
+    const signature = await signAndSendViaConnection(tx, targetConnection, options);
+    if (!signature) return false;
+    const result = await targetConnection.confirmTransaction(signature, 'confirmed');
+    return Boolean(result.value.err);
+  }
+
   const signAndSendPreparedViaConnection = useCallback(
     async (tx: VersionedTransaction, targetConnection: Connection): Promise<string> => {
       const signature = await signAndSendViaConnection(tx, targetConnection);
@@ -2758,6 +2769,7 @@ function App({ currentPath }: AppProps) {
       showToast('Select a size');
       return;
     }
+    const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
     mintActionLockRef.current = 'mint';
     setMinting(true);
     try {
@@ -2767,13 +2779,18 @@ function App({ currentPath }: AppProps) {
           mintDrop.mintSelection?.kind === 'size'
             ? await buildMintVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
             : await buildMintBoxesTxWithAccounts(routeConnection, cfg, publicKey, quantity, mintDrop);
-        return sendAndConfirmViaConnection(tx, routeConnection, {
+        return sendAndConfirmMintViaConnection(tx, routeConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
             recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
         });
       };
-      await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
-      addLocalMintedBoxes(mintDrop.mintSelection?.kind === 'size' ? 1 : quantity, mintDrop.dropId);
+      const hasConfirmationError = await retryAfterBlockhashExpiry(
+        sendOnce,
+        'Transaction expired before you approved it. Please approve again…',
+      );
+      if (!hasConfirmationError) {
+        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+      }
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
@@ -2820,6 +2837,7 @@ function App({ currentPath }: AppProps) {
         return;
       }
 
+      const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
       const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
       const onchainDiscountAllowance = cfg.discountMintsPerWallet;
       const onchainUsedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, mintDrop);
@@ -2841,16 +2859,22 @@ function App({ currentPath }: AppProps) {
           mintDrop.mintSelection?.kind === 'size'
             ? await buildMintDiscountedVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
             : await buildMintDiscountedBoxTxWithAccounts(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
-        return sendAndConfirmViaConnection(tx, routeConnection, {
+        return sendAndConfirmMintViaConnection(tx, routeConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
             recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
         });
       };
-      await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
-      const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
-      addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
-      const nextUsedCount = onchainUsedCount + mintedQuantity;
-      const nextRemainingCount = Math.max(0, onchainDiscountAllowance - nextUsedCount);
+      const hasConfirmationError = await retryAfterBlockhashExpiry(
+        sendOnce,
+        'Transaction expired before you approved it. Please approve again…',
+      );
+      if (!hasConfirmationError) {
+        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+      }
+      const nextUsedCount = hasConfirmationError ? onchainUsedCount : onchainUsedCount + mintedQuantity;
+      const nextRemainingCount = hasConfirmationError
+        ? onchainRemainingCount
+        : Math.max(0, onchainDiscountAllowance - nextUsedCount);
       setDiscountUsedCount(nextUsedCount);
       setDiscountRemainingCount(nextRemainingCount);
       setDiscountEligible(nextRemainingCount > 0);
