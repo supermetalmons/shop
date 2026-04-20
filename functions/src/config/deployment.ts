@@ -290,59 +290,6 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "Bz3uut5ckj4ZGWZyTYJZnRp2fKc4FauNnMmWfjiniKF9",
     deliveryLookupTable: "Fg8FY7UtNQLLvKq29Hsp9XQBSVwVVuWmsFMAAg9Akegk",
   }),
-  "lsw_cobalt_figure_hoodie_26_devnet_x2": createFunctionsDrop({
-    solanaCluster: "devnet",
-    dropId: "lsw_cobalt_figure_hoodie_26_devnet_x2",
-    dropFamily: "lsw_cobalt_figure_hoodie",
-    collectionName: "lsw cobalt figure hoodie 26",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/hoodie",
-    mintSelection: {
-      kind: "size",
-      options: [
-        {
-          key: "L",
-          label: "L",
-          startId: 1,
-          endId: 15,
-        },
-        {
-          key: "XL",
-          label: "XL",
-          startId: 16,
-          endId: 30,
-        },
-        {
-          key: "2XL",
-          label: "2XL",
-          startId: 31,
-          endId: 34,
-        },
-      ],
-    },
-
-
-    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 1,
-    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
-    maxSupply: 34,
-    itemsPerBox: 0,
-    maxPerTx: 15,
-    namePrefix: "hoodie",
-    figureNamePrefix: "hoodie",
-    symbol: "hoodie",
-
-    // On-chain ids
-    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
-    boxMinterConfigPda: "E9PaWn2uhbxPrbfRCNe5WVbGmzJQNVdWw84dAgVHSNaZ",
-    collectionMint: "HfWB3PgYL7bUB6oC8V9StvEbQsD7LWBY8NDEu4Zi2Fmt",
-    receiptsMerkleTree: "4t8yqDWg4NTXtwg6fsYu6ws4JdXi6W8r8HNeLpP5jttF",
-    deliveryLookupTable: "GFUyCARPsKKRiKg58gnEfpBj5EJiL7cGvX8ZWuEPX45V",
-  }),
   "poncho_drifella": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",

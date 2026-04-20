@@ -66,7 +66,7 @@ export const NEW_DROP: NewDropConfig = {
     reuseProgramId: true,
   },
   onchain: {
-    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x2',
+    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x3',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     mintSelection: {
