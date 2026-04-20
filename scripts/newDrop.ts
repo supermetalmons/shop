@@ -63,10 +63,10 @@ export const NEW_DROP: NewDropConfig = {
     coreCollectionPubkey: undefined,
     // Steady-state drop deploys should reuse the shared program.
     // Set this to false only when intentionally deploying/upgrading the shared program id itself.
-    reuseProgramId: false,
+    reuseProgramId: true,
   },
   onchain: {
-    dropId: 'lsw_cobalt_figure_hoodie_26_devnet',
+    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x2',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     mintSelection: {
