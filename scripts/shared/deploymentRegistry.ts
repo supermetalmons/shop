@@ -91,7 +91,6 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
-  poncho_drifella_draft: 'poncho_drifella',
 };
 
 export function defaultDropFamilyForDropId(dropId: string): DropFamily {
@@ -597,7 +596,6 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
-  poncho_drifella_draft: 'poncho_drifella',
 };
 
 export function defaultDropFamilyForDropId(dropId: string): DropFamily {
@@ -902,7 +900,6 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
-  poncho_drifella_draft: 'poncho_drifella',
 };
 
 export function defaultDropFamilyForDropId(dropId: string): DropFamily {

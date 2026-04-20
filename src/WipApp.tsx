@@ -24,7 +24,7 @@ import { navigate } from './navigation';
 const REVEAL_NOTE_OFFSET = 28;
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
-const WIP_DROP = getFrontendDrop('poncho_drifella_draft');
+const WIP_DROP = getFrontendDrop('poncho_drifella_devnet');
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
