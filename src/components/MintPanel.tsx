@@ -272,6 +272,7 @@ export function MintPanel({
     if (quantity < 1 || quantity > maxSelectablePerTx) return;
     try {
       await onMint(quantity, selectedSize || undefined);
+      setSelectedSize(null);
       setQuantity(1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to mint';
