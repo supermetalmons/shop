@@ -277,6 +277,10 @@ function isCanonicalDropFile(relPath: string, dropId: string): boolean {
   return path.parse(relPath).name === dropId;
 }
 
+function isPreservedDropConfigFile(relPath: string): boolean {
+  return relPath.startsWith('scripts/newDrops/');
+}
+
 function adminDb() {
   const app = getApps()[0] || initializeApp({ projectId: PROJECT_ID });
   return getFirestore(app);
@@ -769,6 +773,7 @@ async function buildRepoPlan(args: {
   const extraReferences = sortStrings(
     trackedFiles.filter((relPath) => {
       if (allowedReferencePaths.has(relPath)) return false;
+      if (isPreservedDropConfigFile(relPath)) return false;
       if (hasDropIdToken(relPath, dropIdTokenRegex)) return true;
       return fileContainsDropIdToken(path.join(args.root, relPath), dropIdTokenRegex);
     }),
