@@ -237,6 +237,36 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
   }),
+  "little_swag_boxes_devnet_on_shared": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "little_swag_boxes_devnet_on_shared",
+    dropFamily: "little_swag_boxes",
+    collectionName: "Little Swag Boxes",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/lsb",
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.042,
+    discountPriceSol: 0.01,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "6f1626377cd32663ba24a8b3788eddcddca6feac46a827eee8053e5b0fd5c14c",
+    maxSupply: 333,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: "box",
+    figureNamePrefix: "figure",
+    symbol: "lsb",
+
+    // On-chain ids
+    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
+    boxMinterConfigPda: "8Tno1GmoHHD48KQ5mZWUtMqpRTkVajriY4GAPCBUhQub",
+    collectionMint: "6ULiwELHHAKgKvoac7wYzermKwrWFJkNEgWAud1C2DbN",
+    receiptsMerkleTree: "7uB6d3ikqu3xfMWFuzLN8gzB4PPonwd3SqQeKNCbaF3e",
+    deliveryLookupTable: "4N6EQzWQr9jYA6k8NNQctvGqwPSruXWyQ4891VdnKNmV",
+  }),
   "lsw_cobalt_figure_hoodie_26_devnet": createFunctionsDrop({
     solanaCluster: "devnet",
     dropId: "lsw_cobalt_figure_hoodie_26_devnet",
