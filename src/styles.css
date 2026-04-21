@@ -158,9 +158,13 @@ header.top {
 .top__submenu-toggle {
   width: 100%;
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
   color: var(--text);
   cursor: pointer;
   user-select: none;
@@ -169,6 +173,12 @@ header.top {
 .top__submenu-toggle input {
   margin: 0;
   accent-color: var(--accent);
+}
+
+.top__submenu-toggle input:focus,
+.top__submenu-toggle input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .top__submenu-nav,

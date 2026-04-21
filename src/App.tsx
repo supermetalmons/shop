@@ -4171,7 +4171,7 @@ function App({ currentPath }: AppProps) {
                       setShowHoodieOnMain(evt.target.checked);
                     }}
                   />
-                  <span>show hoodie on main</span>
+                  <span>hoodie on main</span>
                 </label>
                 <button
                   type="button"
