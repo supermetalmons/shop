@@ -82,7 +82,7 @@ async function resolveFrontendDropConfig(args: {
       throw new Error(
         `Drop ${args.requestedDropId} is not present in ${args.filePath}.\n` +
           `Known deployed drops: ${formatKnownDrops(knownDropIds)}\n` +
-          `Run npm run deploy-all-onchain for this drop before start-mint.`,
+          `Run npm run deploy-all-onchain -- ${args.requestedDropId} for this drop before start-mint.`,
       );
     }
     return { dropConfig: entry, knownDropIds };
@@ -92,7 +92,7 @@ async function resolveFrontendDropConfig(args: {
   if (!legacyConfig) {
     throw new Error(
       `Could not parse frontend deployment config from ${args.filePath}.\n` +
-        `Run npm run deploy-all-onchain and retry.`,
+        `Run npm run deploy-all-onchain -- <dropId> and retry.`,
     );
   }
   const legacyDropId = normalizeDropId(typeof legacyConfig.dropId === 'string' ? legacyConfig.dropId : undefined);
@@ -100,7 +100,7 @@ async function resolveFrontendDropConfig(args: {
     throw new Error(
       `Drop ${args.requestedDropId} does not match the deployed config in ${args.filePath}.\n` +
         `Configured deployed drop: ${legacyDropId}\n` +
-        `Pass the deployed dropId explicitly, or rerun deploy-all-onchain first.`,
+        `Pass the deployed dropId explicitly, or rerun npm run deploy-all-onchain -- ${args.requestedDropId} first.`,
     );
   }
   return { dropConfig: legacyConfig, knownDropIds: legacyDropId ? [legacyDropId] : [] };
@@ -180,7 +180,7 @@ async function main() {
         `  - ${frontendDeploymentCfgPath}\n` +
         `  - ${legacyFrontendDeployedCfgPath}\n` +
         `Make sure you've run:\n` +
-        `  npm run deploy-all-onchain\n`,
+        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
     );
   }
 
@@ -205,14 +205,14 @@ async function main() {
     throw new Error(
       `Could not read solanaCluster from ${frontendCfgPath}.\n` +
         `Make sure you've run:\n` +
-        `  npm run deploy-all-onchain\n`,
+        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
     );
   }
   if (!programIdStr) {
     throw new Error(
       `Could not read boxMinterProgramId from ${frontendCfgPath}.\n` +
         `Make sure you've run:\n` +
-        `  npm run deploy-all-onchain\n`,
+        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
     );
   }
 

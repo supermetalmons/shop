@@ -1,4 +1,4 @@
-import { defineNewDropConfig } from './shared/newDropConfig.ts';
+import { defineNewDropConfig } from '../shared/newDropConfig.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {

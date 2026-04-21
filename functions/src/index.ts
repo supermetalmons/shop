@@ -1063,7 +1063,7 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) 
   if (Object.keys(missing).length) {
     throw new HttpsError(
       'failed-precondition',
-      'On-chain mint config is missing or mismatched. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
+      'On-chain mint config is missing or mismatched. Re-run `npm run deploy-all-onchain -- <dropId>`, update functions env, and redeploy.',
       {
         missing,
         collection: dropRuntime.collectionMint.toBase58(),
@@ -1091,7 +1091,7 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) 
   if (!configInfo?.data) {
     throw new HttpsError(
       'failed-precondition',
-      'On-chain mint config is missing or unreadable. Re-run `npm run deploy-all-onchain`, update functions env, and redeploy.',
+      'On-chain mint config is missing or unreadable. Re-run `npm run deploy-all-onchain -- <dropId>`, update functions env, and redeploy.',
       { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
     );
   }
@@ -1910,7 +1910,7 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
   if (!cfgInfo?.data || cfgInfo.data.length < 8 + 32 * 3) {
     throw new HttpsError(
       'failed-precondition',
-      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain`, update env, and redeploy.',
+      'Box minter config PDA not found. Re-run `npm run deploy-all-onchain -- <dropId>`, update env, and redeploy.',
       { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
     );
   }

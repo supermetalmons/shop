@@ -4,8 +4,8 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
-import { NEW_DROP } from './newDrop.ts';
-import type { SolanaCluster } from './shared/newDropConfig.ts';
+import { loadNewDropConfigById, newDropConfigUsage } from './shared/newDropLoader.ts';
+import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig.ts';
 import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
   defaultFrontendFigureMediaForDropFamily,
@@ -46,11 +46,24 @@ const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK7
 // NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
 // ---------------------------------------------------------------------------
-// Edit scripts/newDrop.ts to change deploy + drop behavior.
-// This script intentionally accepts NO CLI args.
+// Edit scripts/newDrops/<dropId>.ts to change deploy + drop behavior.
+// This script requires the target dropId so it can load that config file.
 // NOTE: Metaplex programs (MPL Core/Bubblegum/etc) are often NOT deployed on Solana testnet.
 // If you hit "Attempt to load a program that does not exist", use devnet or mainnet-beta.
 // ---------------------------------------------------------------------------
+
+const DEFAULT_NEW_DROP_CONFIG_PATH = 'scripts/newDrops/<dropId>.ts';
+
+let activeNewDropConfigPath = DEFAULT_NEW_DROP_CONFIG_PATH;
+
+function setActiveNewDropConfigPath(root: string, configPath: string) {
+  const relativePath = path.relative(root, configPath);
+  activeNewDropConfigPath = relativePath || configPath;
+}
+
+function getActiveNewDropConfigPath(): string {
+  return activeNewDropConfigPath;
+}
 
 function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
   // Matches @solana/spl-account-compression sizing (ConcurrentMerkleTreeHeaderDataV1 + tree + optional canopy).
@@ -72,7 +85,7 @@ async function assertExecutableProgram(args: {
   if (!info) {
     const hint =
       cluster === 'testnet'
-        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Use devnet instead (set NEW_DROP.shared.isMainnet=false in scripts/newDrop.ts).`
+        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Use devnet instead (set NEW_DROP.shared.isMainnet=false in ${getActiveNewDropConfigPath()}).`
         : '';
     throw new Error(
       `${name} program is not deployed on this cluster.\n` +
@@ -221,7 +234,7 @@ function describeExistingBoxMinterConfig(configData: Buffer): string {
 function requireNonEmptyString(value: string, label: string): string {
   const trimmed = trimToUndefined(value);
   if (!trimmed) {
-    throw new Error(`Missing ${label} in scripts/newDrop.ts`);
+    throw new Error(`Missing ${label} in ${getActiveNewDropConfigPath()}`);
   }
   return trimmed;
 }
@@ -344,14 +357,14 @@ function requireMaxFigureIdWithinU16(args: {
         `- max figure id (maxSupply * itemsPerBox): ${maxFigureId}\n` +
         `- maximum supported                     : 65535\n` +
         `\n` +
-        `Fix: lower maxSupply or itemsPerBox in scripts/newDrop.ts.`,
+        `Fix: lower maxSupply or itemsPerBox in ${getActiveNewDropConfigPath()}.`,
     );
   }
 }
 
-function prepareReceiptsTreeConfig(dropCfg: typeof NEW_DROP.onchain): PreparedReceiptsTreeConfig {
+function prepareReceiptsTreeConfig(dropCfg: NewDropOnchainConfig): PreparedReceiptsTreeConfig {
   if (!dropCfg.receiptsTree || typeof dropCfg.receiptsTree !== 'object') {
-    throw new Error('Missing NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts');
+    throw new Error(`Missing NEW_DROP.onchain.receiptsTree in ${getActiveNewDropConfigPath()}`);
   }
   const receiptsTreeCfg = dropCfg.receiptsTree;
   const maxDepth = requireIntegerInRange({
@@ -407,7 +420,7 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
         `- required leaves (maxSupply * ${receiptsPerBox}) : ${requiredLeaves}\n` +
         `- configured capacity (2^maxDepth)               : ${treeCapacity}\n` +
         `\n` +
-        `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in scripts/newDrop.ts.`,
+        `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in ${getActiveNewDropConfigPath()}.`,
     );
   }
 }
@@ -417,7 +430,7 @@ type PreparedInitDropInputs = {
   discountMerkle: { root: Buffer; proofs: Record<string, string[]> };
 };
 
-function prepareMintSelectionConfig(dropCfg: typeof NEW_DROP.onchain): MintSelectionConfigSerialized | undefined {
+function prepareMintSelectionConfig(dropCfg: NewDropOnchainConfig): MintSelectionConfigSerialized | undefined {
   const selection = dropCfg.mintSelection;
   if (!selection) return undefined;
   if (selection.kind !== 'size') {
@@ -495,9 +508,9 @@ type PreparedCollectionMetadata = {
   image?: string;
 };
 
-function prepareCollectionMetadata(dropCfg: typeof NEW_DROP.onchain): PreparedCollectionMetadata {
+function prepareCollectionMetadata(dropCfg: NewDropOnchainConfig): PreparedCollectionMetadata {
   if (!dropCfg.collectionMetadata || typeof dropCfg.collectionMetadata !== 'object') {
-    throw new Error('Missing NEW_DROP.onchain.collectionMetadata in scripts/newDrop.ts');
+    throw new Error(`Missing NEW_DROP.onchain.collectionMetadata in ${getActiveNewDropConfigPath()}`);
   }
   const collectionMetadataCfg = dropCfg.collectionMetadata;
   const name = requireNonEmptyString(collectionMetadataCfg.name, 'NEW_DROP.onchain.collectionMetadata.name');
@@ -622,14 +635,14 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
         `- url: ${collectionJsonUrl}\n` +
         mismatches.map((line) => `- ${line}`).join('\n') +
         `\n` +
-        `Fix scripts/newDrop.ts or the collection.json content before deploying.`,
+        `Fix ${getActiveNewDropConfigPath()} or the collection.json content before deploying.`,
     );
   }
 }
 
 function prepareInitDropInputs(args: {
   root: string;
-  dropCfg: typeof NEW_DROP.onchain;
+  dropCfg: NewDropOnchainConfig;
   dropMetadataBase: string;
 }): PreparedInitDropInputs {
   const discountWhitelistCsvRelativePath = requireNonEmptyString(
@@ -755,7 +768,7 @@ async function assertDropIdNotConfiguredInDeploymentFiles(args: {
   throw new Error(
     `Drop ${normalizedDropId} already exists in deployment registry (${presentIn.join(', ')}).\n` +
       `This script only supports fresh deployments and will not update an existing drop.\n` +
-      `Choose a new NEW_DROP.onchain.dropId in scripts/newDrop.ts.`,
+      `Choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()}.`,
   );
 }
 
@@ -775,7 +788,7 @@ function throwFreshDeployOnlyForExistingConfig(args: {
       `${existingConfigDetails}\n` +
       `\n` +
       `This script no longer updates existing deployments.\n` +
-      `Fix: choose a new NEW_DROP.onchain.dropId and rerun this script.`,
+      `Fix: choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()} and rerun this script.`,
   );
 }
 
@@ -1474,7 +1487,7 @@ async function assertLegacySingletonConfigAbsentForSharedProgramReuse(args: {
       `${describeExistingBoxMinterConfig(Buffer.from(legacyConfigInfo.data))}\n` +
       `\n` +
       `Existing singleton drops must keep their original program ids unchanged.\n` +
-      `Fix: set NEW_DROP.deploy.reuseProgramId=false once to generate and deploy a fresh shared program id for this drop, then switch reuseProgramId back to true for later shared drops.`,
+      `Fix: set NEW_DROP.deploy.reuseProgramId=false once in ${getActiveNewDropConfigPath()} to generate and deploy a fresh shared program id for this drop, then switch reuseProgramId back to true for later shared drops.`,
   );
 }
 
@@ -1766,7 +1779,7 @@ async function ensureDeliveryLookupTable(args: {
 // This tree ONLY stores *compressed receipt NFTs* minted via `box_minter::mint_receipts`.
 // The uncompressed MPL-Core assets (boxes + revealed figures) are NOT stored in this tree.
 //
-// Sizing is configured in NEW_DROP.onchain.receiptsTree (scripts/newDrop.ts) and validated
+// Sizing is configured in the selected NEW_DROP.onchain.receiptsTree config and validated
 // against NEW_DROP.onchain.maxSupply before deploy side effects begin.
 // ---------------------------------------------------------------------------
 const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
@@ -1888,7 +1901,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
   if (!info) {
     throw new Error(
       `Missing core collection account: ${coreCollection.toBase58()}\n` +
-        `Make sure NEW_DROP.shared.isMainnet / NEW_DROP.deploy.solanaRpcUrl are correct (scripts/newDrop.ts).`,
+        `Make sure NEW_DROP.shared.isMainnet / NEW_DROP.deploy.solanaRpcUrl are correct (${getActiveNewDropConfigPath()}).`,
     );
   }
   if (!info.owner.equals(MPL_CORE_PROGRAM_ID)) {
@@ -1923,14 +1936,15 @@ async function getMplCoreCollectionUpdateAuthority(connection: Connection, coreC
 
 async function main() {
   const extraArgs = process.argv.slice(2);
-  if (extraArgs.length) {
+  if (extraArgs.length !== 1) {
     throw new Error(
-      `This script accepts no CLI args.\n` +
-        `Run:\n` +
-        `  npm run deploy-all-onchain\n` +
-        `\n` +
-        `To change deploy/drop settings, edit scripts/newDrop.ts.\n`,
+      `This script requires exactly one dropId argument so it can load scripts/newDrops/<dropId>.ts.\n` +
+        `${newDropConfigUsage()}`,
     );
+  }
+  const requestedDropId = String(extraArgs[0] || '').trim().toLowerCase();
+  if (!requestedDropId) {
+    throw new Error(`Missing dropId.\n${newDropConfigUsage()}`);
   }
 
   const __filename = fileURLToPath(import.meta.url);
@@ -1939,8 +1953,13 @@ async function main() {
   const onchainDir = path.join(root, 'onchain');
   const frontendDeploymentCfgPath = path.join(root, 'src', 'config', 'deployment.ts');
   const functionsDeploymentCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
-  const deployCfg = NEW_DROP.deploy;
-  const dropCfg = NEW_DROP.onchain;
+  const { config: newDropConfig, configPath } = await loadNewDropConfigById({
+    root,
+    dropId: requestedDropId,
+  });
+  setActiveNewDropConfigPath(root, configPath);
+  const deployCfg = newDropConfig.deploy;
+  const dropCfg = newDropConfig.onchain;
   const dropId = normalizeDropId(requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId'));
   const dropFamily = requireDropFamily(dropCfg.dropFamily, 'NEW_DROP.onchain.dropFamily');
   const dropSeed = deriveDropSeed(dropId);
@@ -1955,7 +1974,7 @@ async function main() {
   const coreCollectionRoyaltiesBps = requireRoyaltiesBps(dropCfg.coreCollectionRoyaltiesBps);
   if (collectionMetadata.sellerFeeBasisPoints !== coreCollectionRoyaltiesBps) {
     throw new Error(
-      `Mismatch in scripts/newDrop.ts for collection royalties.\n` +
+      `Mismatch in ${getActiveNewDropConfigPath()} for collection royalties.\n` +
         `- NEW_DROP.onchain.collectionMetadata.sellerFeeBasisPoints: ${collectionMetadata.sellerFeeBasisPoints}\n` +
         `- NEW_DROP.onchain.coreCollectionRoyaltiesBps            : ${coreCollectionRoyaltiesBps}\n` +
         `\n` +
@@ -1977,6 +1996,7 @@ async function main() {
     'receipts tree:',
     `depth=${receiptsTreeConfig.maxDepth}, buffer=${receiptsTreeConfig.maxBufferSize}, canopy=${receiptsTreeConfig.canopyDepth}`,
   );
+  console.log('config  :', getActiveNewDropConfigPath());
   console.log('collection metadata url:', `${dropMetadataBase}/collection.json`);
   if (deployCfg.coreCollectionPubkey) console.log('core collection:', deployCfg.coreCollectionPubkey);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
@@ -1986,7 +2006,7 @@ async function main() {
     metadataBase: dropMetadataBase,
     expected: collectionMetadata,
   });
-  console.log('✅ collection.json preflight matches scripts/newDrop.ts');
+  console.log(`✅ collection.json preflight matches ${getActiveNewDropConfigPath()}`);
 
   // Fail fast if the target cluster/RPC does not have the Metaplex programs we depend on.
   const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
@@ -2012,7 +2032,7 @@ async function main() {
     if (!existsSync(programKeypair)) {
       throw new Error(
         `Missing program keypair: ${programKeypair}\n` +
-          `Either create it first, or set NEW_DROP.deploy.reuseProgramId=false in scripts/newDrop.ts to deploy a fresh shared program id.\n` +
+          `Either create it first, or set NEW_DROP.deploy.reuseProgramId=false in ${getActiveNewDropConfigPath()} to deploy a fresh shared program id.\n` +
           `Generate it with:\n` +
           `  solana-keygen new --no-bip39-passphrase -o ${programKeypair}\n`,
       );
@@ -2220,7 +2240,7 @@ async function main() {
           `Expected update authority (program config PDA): ${configPda.toBase58()}\n` +
           `Actual update authority: ${updateAuthority.toBase58()}\n` +
           `\n` +
-          `Fix: unset NEW_DROP.deploy.coreCollectionPubkey in scripts/newDrop.ts to auto-create one, or transfer collection update authority to the config PDA.`,
+          `Fix: unset NEW_DROP.deploy.coreCollectionPubkey in ${getActiveNewDropConfigPath()} to auto-create one, or transfer collection update authority to the config PDA.`,
       );
     }
     console.log('\n[2/3] Using existing MPL-Core collection…');
@@ -2329,7 +2349,7 @@ async function main() {
         `- error           : ${errorMessage(err)}\n` +
         `\n` +
         `Aborting to avoid writing stale receipts tree values from previous deployments.\n` +
-        `Fix NEW_DROP.onchain.receiptsTree in scripts/newDrop.ts and rerun.`,
+        `Fix NEW_DROP.onchain.receiptsTree in ${getActiveNewDropConfigPath()} and rerun.`,
     );
   }
 

@@ -500,7 +500,7 @@ export function renderFrontendDeploymentRegistryFile(args: {
   return `/**
  * Frontend deployment constants (COMMITTED).
  *
- * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
+ * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain -- <dropId>\`) after
  * an on-chain deployment.
  * Manual edits outside the auto-generated registry section are preserved.
  *
@@ -817,7 +817,7 @@ export function renderFunctionsDeploymentRegistryFile(args: {
   return `/**
  * Cloud Functions deployment constants (COMMITTED).
  *
- * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain\`) after
+ * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain -- <dropId>\`) after
  * an on-chain deployment, so functions can run with minimal env usage.
  * Manual edits outside the auto-generated registry section are preserved.
  *

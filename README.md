@@ -52,8 +52,9 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
 - Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
   - One-command deploy:
-    - `npm run deploy-all-onchain` (prompts for deployer private key; no CLI args)
-    - To change cluster/RPC, pin an existing MPL-Core collection, or choose whether to reuse the shared program id, edit `NEW_DROP.deploy` in `scripts/newDrop.ts`.
+    - `npm run deploy-all-onchain -- <dropId>` (prompts for deployer private key; `dropId` is required)
+    - Drop configs live in `scripts/newDrops/` and each file name must match its `dropId`, for example `scripts/newDrops/<dropId>.ts`.
+    - To change cluster/RPC, pin an existing MPL-Core collection, or choose whether to reuse the shared program id, edit `NEW_DROP.deploy` in that drop's config file.
     - Steady-state cheaper drop deploys should keep `NEW_DROP.deploy.reuseProgramId = true`; set it to `false` only when intentionally deploying/upgrading the shared program itself.
   - Updates tracked config files:
     - `src/config/deployment.ts` (frontend)
