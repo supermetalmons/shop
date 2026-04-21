@@ -2,7 +2,7 @@ import { defineNewDropConfig } from '../shared/newDropConfig.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {
-    isMainnet: true,
+    isMainnet: false,
     dropSymbol: 'poncho',
     sellerFeeBasisPoints: 500,
   },
@@ -12,7 +12,7 @@ export const NEW_DROP = defineNewDropConfig({
     reuseProgramId: true,
   },
   onchain: {
-    dropId: 'poncho_drifella',
+    dropId: 'poncho_drifella_devnet',
     dropFamily: 'poncho_drifella',
     metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {
@@ -28,8 +28,8 @@ export const NEW_DROP = defineNewDropConfig({
       canopyDepth: 0,
     },
     treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    priceSol: 0.69,
-    discountPriceSol: 0.42,
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
     discountMintsPerWallet: 3,
     maxSupply: 207,
     itemsPerBox: 1,
