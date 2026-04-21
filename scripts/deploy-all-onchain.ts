@@ -4,7 +4,8 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
-import { NEW_DROP, type SolanaCluster } from './newDrop.ts';
+import { NEW_DROP } from './newDrop.ts';
+import type { SolanaCluster } from './shared/newDropConfig.ts';
 import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
   defaultFrontendFigureMediaForDropFamily,
@@ -71,7 +72,7 @@ async function assertExecutableProgram(args: {
   if (!info) {
     const hint =
       cluster === 'testnet'
-        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Try NEW_DROP.deploy.solanaCluster='devnet' in scripts/newDrop.ts.`
+        ? `\nNote: Metaplex programs are often not deployed on Solana testnet. Use devnet instead (set NEW_DROP.shared.isMainnet=false in scripts/newDrop.ts).`
         : '';
     throw new Error(
       `${name} program is not deployed on this cluster.\n` +
@@ -1887,7 +1888,7 @@ async function assertMplCoreCollection(connection: Connection, coreCollection: P
   if (!info) {
     throw new Error(
       `Missing core collection account: ${coreCollection.toBase58()}\n` +
-        `Make sure NEW_DROP.deploy.solanaCluster / NEW_DROP.deploy.solanaRpcUrl are correct (scripts/newDrop.ts).`,
+        `Make sure NEW_DROP.shared.isMainnet / NEW_DROP.deploy.solanaRpcUrl are correct (scripts/newDrop.ts).`,
     );
   }
   if (!info.owner.equals(MPL_CORE_PROGRAM_ID)) {
