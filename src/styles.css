@@ -857,6 +857,7 @@ header.top {
 
 .drops-panel {
   padding: 0;
+  container-type: inline-size;
 }
 
 .drops-panel__grid {
@@ -872,6 +873,14 @@ header.top {
   align-items: center;
   justify-content: flex-end;
   min-width: 0;
+}
+
+@container (min-width: 368px) and (max-width: 555.98px) {
+  .drops-panel__drop--orphan {
+    grid-column: 1 / -1;
+    justify-self: center;
+    width: min(100%, calc((100% - 8px) / 2));
+  }
 }
 
 .drops-panel__image-wrap {

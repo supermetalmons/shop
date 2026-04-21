@@ -23,9 +23,9 @@ type DropPanelItem = {
   path: string;
 };
 
-function DropPanelCard({ item }: { item: DropPanelItem }) {
+function DropPanelCard({ item, isOrphan }: { item: DropPanelItem; isOrphan?: boolean }) {
   return (
-    <div className="drops-panel__drop">
+    <div className={`drops-panel__drop${isOrphan ? ' drops-panel__drop--orphan' : ''}`}>
       <div className="drops-panel__image-wrap">
         {item.image ? (
           <img
@@ -82,8 +82,12 @@ export function DropsPanel({ showHoodieOnMain = false }: DropsPanelProps) {
   return (
     <section className="card drops-panel">
       <div className="drops-panel__grid">
-        {items.map((item) => (
-          <DropPanelCard key={item.key} item={item} />
+        {items.map((item, index) => (
+          <DropPanelCard
+            key={item.key}
+            item={item}
+            isOrphan={items.length > 1 && items.length % 2 === 1 && index === items.length - 1}
+          />
         ))}
       </div>
     </section>
