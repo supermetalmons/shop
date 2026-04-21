@@ -41,24 +41,63 @@ export type NewDropOnchainConfig = {
   symbol: string;
 };
 
+export type NewDropSharedConfig = {
+  isMainnet: boolean;
+  dropSymbol: string;
+  sellerFeeBasisPoints: number;
+};
+
 export type NewDropConfig = {
+  shared: NewDropSharedConfig;
   deploy: NewDropDeployConfig;
   onchain: NewDropOnchainConfig;
 };
 
-// Toggle this to pick deployment network from one place.
-const isMainnet = false;
-const solanaCluster: SolanaCluster = isMainnet ? 'mainnet-beta' : 'devnet';
-const dropSymbol = 'hoodie';
-const sellerFeeBasisPoints = 500;
+type NewDropConfigInput = {
+  shared: NewDropSharedConfig;
+  deploy: Omit<NewDropDeployConfig, 'solanaCluster'>;
+  onchain: Omit<NewDropOnchainConfig, 'collectionMetadata' | 'coreCollectionRoyaltiesBps' | 'symbol'> & {
+    collectionMetadata: Omit<
+      NewDropOnchainConfig['collectionMetadata'],
+      'symbol' | 'sellerFeeBasisPoints'
+    >;
+  };
+};
+
+const defineNewDropConfig = (config: NewDropConfigInput): NewDropConfig => {
+  const { shared, deploy, onchain } = config;
+  const solanaCluster: SolanaCluster = shared.isMainnet ? 'mainnet-beta' : 'devnet';
+
+  return {
+    shared,
+    deploy: {
+      ...deploy,
+      solanaCluster,
+    },
+    onchain: {
+      ...onchain,
+      collectionMetadata: {
+        ...onchain.collectionMetadata,
+        symbol: shared.dropSymbol,
+        sellerFeeBasisPoints: shared.sellerFeeBasisPoints,
+      },
+      coreCollectionRoyaltiesBps: shared.sellerFeeBasisPoints,
+      symbol: shared.dropSymbol,
+    },
+  };
+};
 
 /**
  * Single source of truth for editable deploy + drop metadata.
  * Update this file for each new drop.
  */
-export const NEW_DROP: NewDropConfig = {
+export const NEW_DROP: NewDropConfig = defineNewDropConfig({
+  shared: {
+    isMainnet: false,
+    dropSymbol: 'hoodie',
+    sellerFeeBasisPoints: 500,
+  },
   deploy: {
-    solanaCluster,
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
     // Steady-state drop deploys should reuse the shared program.
@@ -79,8 +118,6 @@ export const NEW_DROP: NewDropConfig = {
     },
     collectionMetadata: {
       name: 'lsw cobalt figure hoodie 26',
-      symbol: dropSymbol,
-      sellerFeeBasisPoints,
       description: 'little swag world hoodie · redeem physical on mons.shop',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
@@ -91,7 +128,6 @@ export const NEW_DROP: NewDropConfig = {
       maxBufferSize: 64,
       canopyDepth: 0,
     },
-    coreCollectionRoyaltiesBps: sellerFeeBasisPoints,
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 0.069,
     discountPriceSol: 0.042,
@@ -101,6 +137,5 @@ export const NEW_DROP: NewDropConfig = {
     maxPerTx: 15,
     namePrefix: 'hoodie',
     figureNamePrefix: 'hoodie',
-    symbol: dropSymbol,
   },
-};
+});
