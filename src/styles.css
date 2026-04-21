@@ -155,6 +155,22 @@ header.top {
   background-color: var(--surface);
 }
 
+.top__submenu-toggle {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.top__submenu-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .top__submenu-nav,
 .top__submenu-more {
   align-self: flex-start;
@@ -835,7 +851,7 @@ header.top {
 
 .drops-panel__grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 0 8px;
   min-width: 0;
 }

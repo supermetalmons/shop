@@ -1,64 +1,90 @@
+import { isDropFamily } from '../config/deployment';
 import { navigate } from '../navigation';
 import { resolveDropContent } from '../lib/dropContent';
-import { dropPath } from '../lib/dropConfig';
+import { dropPath, listFrontendDrops } from '../lib/dropConfig';
 
 const lsbContent = resolveDropContent('little_swag_boxes');
 const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
 const lsbImage = lsbBase ? `${lsbBase}/default.webp` : undefined;
 const ponchoImage = resolveDropContent('poncho_drifella').box.previewImageUrl;
+const hoodieDrops = listFrontendDrops().filter((drop) => isDropFamily(drop, 'lsw_cobalt_figure_hoodie'));
+const hoodieDrop = hoodieDrops.find((drop) => drop.solanaCluster === 'mainnet-beta') ?? hoodieDrops[0];
+const hoodieImage = hoodieDrop ? resolveDropContent(hoodieDrop.dropId).box.previewImageUrl : undefined;
 
-export function DropsPanel() {
+type DropsPanelProps = {
+  showHoodieOnMain?: boolean;
+};
+
+type DropPanelItem = {
+  key: string;
+  image?: string;
+  alt: string;
+  label: string;
+  path: string;
+};
+
+function DropPanelCard({ item }: { item: DropPanelItem }) {
+  return (
+    <div className="drops-panel__drop">
+      <div className="drops-panel__image-wrap">
+        {item.image ? (
+          <img
+            className="drops-panel__image"
+            src={item.image}
+            alt={item.alt}
+            draggable={false}
+            onDragStart={(evt) => evt.preventDefault()}
+          />
+        ) : (
+          <div className="drops-panel__image drops-panel__image--placeholder" />
+        )}
+      </div>
+      <div className="drops-panel__cta">
+        <button
+          type="button"
+          className="drops-panel__link"
+          onClick={() => navigate(item.path)}
+        >
+          <span className="drops-panel__link-text">{item.label}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function DropsPanel({ showHoodieOnMain = false }: DropsPanelProps) {
+  const items: DropPanelItem[] = [
+    {
+      key: 'little_swag_boxes',
+      image: lsbImage,
+      alt: 'Little Swag Boxes',
+      label: 'Little Swag Boxes',
+      path: dropPath('little_swag_boxes'),
+    },
+    {
+      key: 'poncho_drifella',
+      image: ponchoImage,
+      alt: 'Poncho Drifella',
+      label: 'Poncho Drifella',
+      path: dropPath('poncho_drifella'),
+    },
+  ];
+  if (showHoodieOnMain && hoodieDrop) {
+    items.push({
+      key: hoodieDrop.dropId,
+      image: hoodieImage,
+      alt: 'lsw cobalt figure hoodie 26',
+      label: 'lsw cobalt figure hoodie 26',
+      path: dropPath(hoodieDrop.dropId),
+    });
+  }
+
   return (
     <section className="card drops-panel">
       <div className="drops-panel__grid">
-        <div className="drops-panel__drop">
-          <div className="drops-panel__image-wrap">
-            {lsbImage ? (
-              <img
-                className="drops-panel__image"
-                src={lsbImage}
-                alt="Little Swag Boxes"
-                draggable={false}
-                onDragStart={(evt) => evt.preventDefault()}
-              />
-            ) : (
-              <div className="drops-panel__image drops-panel__image--placeholder" />
-            )}
-          </div>
-          <div className="drops-panel__cta">
-            <button
-              type="button"
-              className="drops-panel__link"
-              onClick={() => navigate('/little_swag_boxes')}
-            >
-              <span className="drops-panel__link-text">Little Swag Boxes</span>
-            </button>
-          </div>
-        </div>
-        <div className="drops-panel__drop">
-          <div className="drops-panel__image-wrap">
-            {ponchoImage ? (
-              <img
-                className="drops-panel__image"
-                src={ponchoImage}
-                alt="Poncho Drifella"
-                draggable={false}
-                onDragStart={(evt) => evt.preventDefault()}
-              />
-            ) : (
-              <div className="drops-panel__image drops-panel__image--placeholder" />
-            )}
-          </div>
-          <div className="drops-panel__cta">
-            <button
-              type="button"
-              className="drops-panel__link"
-              onClick={() => navigate(dropPath('poncho_drifella'))}
-            >
-              <span className="drops-panel__link-text">Poncho Drifella</span>
-            </button>
-          </div>
-        </div>
+        {items.map((item) => (
+          <DropPanelCard key={item.key} item={item} />
+        ))}
       </div>
     </section>
   );
