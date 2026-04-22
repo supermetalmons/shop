@@ -237,59 +237,6 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
   }),
-  "lsw_cobalt_figure_hoodie_26_devnet_x3": createFunctionsDrop({
-    solanaCluster: "devnet",
-    dropId: "lsw_cobalt_figure_hoodie_26_devnet_x3",
-    dropFamily: "lsw_cobalt_figure_hoodie",
-    collectionName: "lsw cobalt figure hoodie 26",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/hoodie",
-    mintSelection: {
-      kind: "size",
-      options: [
-        {
-          key: "L",
-          label: "L",
-          startId: 1,
-          endId: 15,
-        },
-        {
-          key: "XL",
-          label: "XL",
-          startId: 16,
-          endId: 30,
-        },
-        {
-          key: "2XL",
-          label: "2XL",
-          startId: 31,
-          endId: 34,
-        },
-      ],
-    },
-
-
-    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 1,
-    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
-    maxSupply: 34,
-    itemsPerBox: 0,
-    maxPerTx: 15,
-    namePrefix: "hoodie",
-    figureNamePrefix: "hoodie",
-    symbol: "hoodie",
-
-    // On-chain ids
-    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
-    boxMinterConfigPda: "2oRUPpJGUpY6p9guFcH5ipCjERRgLVzz6vXaHTVDprq3",
-    collectionMint: "8hZT39MqWrvGVrpe5Ga4ii3yL9hdof1whH4dNt8NohuB",
-    receiptsMerkleTree: "CXDjADp4L1UftqWwgaGTPTDacxCUE5nUJPHaVQpZgZkJ",
-    deliveryLookupTable: "4fnj5tp1B6KPNeniNy2jGANV67LeyDHV1M89giiKvPys",
-  }),
   "lsw_cobalt_figure_hoodie_26_devnet_x4": createFunctionsDrop({
     solanaCluster: "devnet",
     dropId: "lsw_cobalt_figure_hoodie_26_devnet_x4",
