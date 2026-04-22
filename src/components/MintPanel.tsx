@@ -8,7 +8,7 @@ import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 
 interface MintPanelProps {
   stats?: MintStats;
-  onMint: (quantity: number, variantKey?: string) => Promise<void>;
+  onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
   busy: boolean;
   onError?: (message: string) => void;
   title?: string;
@@ -27,6 +27,7 @@ interface MintPanelProps {
   discountBusy?: boolean;
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
+  successfulMintToken?: number;
 }
 
 /**
@@ -157,6 +158,7 @@ export function MintPanel({
   discountBusy,
   mintSelection,
   showSizeInfo,
+  successfulMintToken = 0,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -183,10 +185,12 @@ export function MintPanel({
   // otherwise selecting a different size later flips the previously selected
   // button back into the blink selector and re-triggers the animation.
   const [isBlinking, setIsBlinking] = useState(false);
+  const [discountSubmitPending, setDiscountSubmitPending] = useState(false);
   const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
   const sizeInfoRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const controlsBusy = busy || discountSubmitPending;
 
   useEffect(() => {
     if (showSizeSelector) setQuantity(1);
@@ -216,6 +220,14 @@ export function MintPanel({
     if ((sizeAvailability[selectedSize] ?? 0) > 0) return;
     setSelectedSize(null);
   }, [selectedSize, sizeAvailability]);
+
+  useEffect(() => {
+    if (successfulMintToken === 0) return;
+    // Success is signaled explicitly from the parent so local controls can
+    // reset without depending on how long the post-mint refresh takes.
+    setSelectedSize(null);
+    setQuantity(1);
+  }, [successfulMintToken]);
 
   useEffect(() => {
     if (maxSelectable < 1) return;
@@ -265,6 +277,7 @@ export function MintPanel({
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
+    if (discountSubmitPending) return;
     if (showSizeSelector && !selectedSize) {
       setSizeBlinkToken((prev) => prev + 1);
       return;
@@ -272,11 +285,27 @@ export function MintPanel({
     if (quantity < 1 || quantity > maxSelectablePerTx) return;
     try {
       await onMint(quantity, selectedSize || undefined);
-      setSelectedSize(null);
-      setQuantity(1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to mint';
       if (onError) onError(message);
+    }
+  };
+
+  const handleDiscountClick = async () => {
+    if (discountSubmitPending) return;
+    if (showSizeSelector && !selectedSize) {
+      setSizeBlinkToken((prev) => prev + 1);
+      return;
+    }
+    if (!onDiscountClick || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance) return;
+    setDiscountSubmitPending(true);
+    try {
+      await onDiscountClick(quantity, selectedSize || undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to mint';
+      if (onError) onError(message);
+    } finally {
+      setDiscountSubmitPending(false);
     }
   };
 
@@ -408,7 +437,7 @@ export function MintPanel({
                           if (unavailable) return;
                           setSelectedSize((prev) => (prev === size.key ? null : size.key));
                         }}
-                        disabled={busy || unavailable}
+                        disabled={controlsBusy || unavailable}
                       >
                         {size.label}
                       </button>
@@ -480,7 +509,7 @@ export function MintPanel({
                   max={maxSelectable}
                   value={quantity}
                   onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
-                  disabled={busy}
+                  disabled={controlsBusy}
                 />
               </label>
             ) : null}
@@ -491,7 +520,7 @@ export function MintPanel({
                 type="submit"
                 form={formId}
                 className={busy ? 'mint-panel__submit mint-panel__submit--busy' : 'mint-panel__submit'}
-                disabled={busy || quantity < 1 || quantity > maxSelectable}
+                disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
               >
                 {busy ? (
                   <span className="mint-panel__submit-text">Minting…</span>
@@ -507,14 +536,9 @@ export function MintPanel({
                   type="button"
                   className="mint-panel__discount ghost"
                   onClick={() => {
-                    if (showSizeSelector && !selectedSize) {
-                      setSizeBlinkToken((prev) => prev + 1);
-                      return;
-                    }
-                    if (!onDiscountClick) return;
-                    void onDiscountClick(quantity, selectedSize || undefined);
+                    void handleDiscountClick();
                   }}
-                  disabled={discountBusy || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance}
+                  disabled={discountBusy || discountSubmitPending || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance}
                 >
                   <span className="mint-panel__discount-text">{discountText}</span>
                 </button>

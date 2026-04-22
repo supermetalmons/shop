@@ -933,6 +933,9 @@ function App({ currentPath }: AppProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
+  // A confirmed mint should reset MintPanel controls immediately even if the
+  // stats/inventory refresh that follows takes longer or fails.
+  const [successfulMintToken, setSuccessfulMintToken] = useState(0);
   const [discountEligible, setDiscountEligible] = useState(false);
   const [discountRemainingCount, setDiscountRemainingCount] = useState(0);
   const [discountChecking, setDiscountChecking] = useState(false);
@@ -2798,6 +2801,7 @@ function App({ currentPath }: AppProps) {
       return;
     }
     const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
+    let didConfirmMint = false;
     mintActionLockRef.current = 'mint';
     setMinting(true);
     try {
@@ -2818,10 +2822,16 @@ function App({ currentPath }: AppProps) {
       );
       if (!hasConfirmationError) {
         addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+        setSuccessfulMintToken((prev) => prev + 1);
+        didConfirmMint = true;
       }
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
+      if (didConfirmMint) {
+        console.warn('Mint succeeded but failed to refresh mint state', err);
+        return;
+      }
       throw err;
     } finally {
       if (mintActionLockRef.current === 'mint') {
@@ -2856,6 +2866,7 @@ function App({ currentPath }: AppProps) {
 
     mintActionLockRef.current = 'discount';
     setDiscountMinting(true);
+    let didConfirmMint = false;
     try {
       const proof = await getDiscountProof(mintDrop.dropId, publicKey.toBase58());
       if (!proof) {
@@ -2898,6 +2909,8 @@ function App({ currentPath }: AppProps) {
       );
       if (!hasConfirmationError) {
         addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+        setSuccessfulMintToken((prev) => prev + 1);
+        didConfirmMint = true;
       }
       const nextUsedCount = hasConfirmationError ? onchainUsedCount : onchainUsedCount + mintedQuantity;
       const nextRemainingCount = hasConfirmationError
@@ -2910,7 +2923,12 @@ function App({ currentPath }: AppProps) {
       await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
+      if (didConfirmMint) {
+        console.warn('Discount mint succeeded but failed to refresh mint state', err);
+        return;
+      }
       showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(mintDrop.dropId)}`);
+      return;
     } finally {
       if (mintActionLockRef.current === 'discount') {
         mintActionLockRef.current = null;
@@ -4258,6 +4276,7 @@ function App({ currentPath }: AppProps) {
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
           mintSelection={routeDrop.mintSelection}
           showSizeInfo={isDropFamily(routeDrop.dropId, 'lsw_cobalt_figure_hoodie') && routeDrop.mintSelection?.kind === 'size'}
+          successfulMintToken={successfulMintToken}
         />
       )}
 
