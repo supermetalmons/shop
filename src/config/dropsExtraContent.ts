@@ -52,8 +52,8 @@ export type DropExtraContentOverride = {
 };
 
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
-const HOODIE_CLEAN_IMAGE_URL = 'https://assets.mons.link/drops/hoodie/hoodie_clean.webp';
-const HOODIE_RECEIPT_IMAGE_URL = 'https://assets.mons.link/drops/hoodie/hoodie_receipt.webp';
+const HOODIE_CLEAN_IMAGE_URL = 'https://bafybeiegstwuc3a6qzcztylkrchlgrrd46ibakoplmupqgsy473wcdo5gy.ipfs.dweb.link/hoodie_clean.webp';
+const HOODIE_RECEIPT_IMAGE_URL = 'https://bafybeiegstwuc3a6qzcztylkrchlgrrd46ibakoplmupqgsy473wcdo5gy.ipfs.dweb.link/hoodie_receipt.webp';
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 884;
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
