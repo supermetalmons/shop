@@ -17,7 +17,7 @@ export const NEW_DROP = defineNewDropConfig({
     metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {
       name: 'Poncho Drifella',
-      description: 'poncho drifella cards · redeem physical on mons.shop',
+      description: 'poncho drifella cards · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/poncho/pack.webp',
     },
