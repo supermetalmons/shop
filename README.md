@@ -55,7 +55,8 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
     - `npm run deploy-all-onchain -- <dropId>` (prompts for deployer private key; `dropId` is required)
     - Drop configs live in `scripts/newDrops/` and each file name must match its `dropId`, for example `scripts/newDrops/<dropId>.ts`.
     - To change cluster/RPC, pin an existing MPL-Core collection, or choose whether to reuse the shared program id, edit `NEW_DROP.deploy` in that drop's config file.
-    - Steady-state cheaper drop deploys should keep `NEW_DROP.deploy.reuseProgramId = true`; set it to `false` only when intentionally deploying/upgrading the shared program itself.
+    - `NEW_DROP.onchain.metadataBase` accepts either `https://...`, `ipfs://...`, or a raw IPFS CID like `bafy...` (raw CIDs are normalized to canonical `ipfs://CID`).
+    - The first compact-metadata drop in a lineage must set `NEW_DROP.deploy.reuseProgramId = false` so existing legacy `/json/...` drops keep their current program binary. Later compact drops can reuse that fresh lineage with `reuseProgramId = true`.
   - Updates tracked config files:
     - `src/config/deployment.ts` (frontend)
     - `functions/src/config/deployment.ts` (cloud functions)

@@ -23,6 +23,14 @@ import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
 import { FUNCTIONS_DROPS, normalizeDropBase, type DropFamily, type FunctionsDropConfig } from './config/deployment.js';
+import {
+  boxIdFromMetadataUri,
+  canonicalMetadataBase,
+  dudeIdFromMetadataUri,
+  metadataBaseFromMetadataUri,
+  metadataKindFromUri,
+  selectMetadataUri,
+} from './dropMetadataUri.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -114,6 +122,7 @@ type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 type DropRuntime = {
   dropId: string;
   config: FunctionsDropConfig;
+  canonicalMetadataBase: string;
   cluster: SolanaCluster;
   heliusRpcBase: string;
   connectionRpcUrl: string;
@@ -221,6 +230,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   return {
     dropId,
     config,
+    canonicalMetadataBase: canonicalMetadataBase(config.metadataBase),
     cluster,
     heliusRpcBase,
     connectionRpcUrl,
@@ -1353,17 +1363,8 @@ function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
   const value = kindAttr?.value;
   if (value === 'box' || value === 'dude' || value === 'certificate') return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
-  if (lowerUri.includes('/json/boxes/')) return 'box';
-  if (lowerUri.includes('/json/figures/')) return 'dude';
-  if (lowerUri.includes('/json/receipts/')) return 'certificate';
+  const kindFromUri = metadataKindFromUri(assetMetadataUri(asset));
+  if (kindFromUri) return kindFromUri;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
@@ -1382,19 +1383,8 @@ function getBoxIdFromAsset(asset: any): string | undefined {
   const value = boxAttr?.value;
   if (typeof value === 'string' && value) return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  if (typeof uri === 'string' && uri) {
-    const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
-    if (matchBoxes?.[1]) return matchBoxes[1];
-    const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
-    if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
-  }
+  const uriBoxId = boxIdFromMetadataUri(assetMetadataUri(asset));
+  if (uriBoxId) return uriBoxId;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
@@ -1408,41 +1398,24 @@ function getDudeIdFromAsset(asset: any): number | undefined {
   const num = Number(dudeAttr?.value);
   if (Number.isFinite(num)) return num;
 
-  const uri = assetMetadataUri(asset);
-  if (typeof uri === 'string' && uri) {
-    const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
-    const n = Number(match?.[1]);
-    return Number.isFinite(n) ? n : undefined;
-  }
+  const idFromUri = dudeIdFromMetadataUri(assetMetadataUri(asset));
+  if (typeof idFromUri === 'number') return idFromUri;
   return undefined;
 }
 
 function assetMetadataUri(asset: any): string {
-  const candidates = [
+  return selectMetadataUri(
     asset?.content?.json_uri,
     asset?.content?.jsonUri,
-    asset?.content?.metadata?.uri,
     asset?.content?.metadata?.json_uri,
     asset?.content?.metadata?.jsonUri,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate) return candidate;
-  }
-  return '';
+    asset?.content?.metadata?.uri,
+  );
 }
 
 function metadataBaseFromAsset(asset: any): string | null {
   const uri = assetMetadataUri(asset);
-  if (!uri) return null;
-
-  const normalized = normalizeDropBase(uri)
-    .replace(/\/collection\.json$/i, '')
-    .replace(/\/json\/boxes\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/figures\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/receipts\/boxes\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/receipts\/figures\/[^/?#]+\.json$/i, '');
-
-  return normalized && normalized !== uri ? normalized : null;
+  return metadataBaseFromMetadataUri(uri);
 }
 
 function assetCollectionMints(asset: any): string[] {
@@ -1479,7 +1452,7 @@ function assetMatchesDropMetadataBase(
 
   const assetMetadataBase = metadataBaseFromAsset(asset);
   if (assetMetadataBase) {
-    return assetMetadataBase === normalizeDropBase(dropRuntime.config.metadataBase);
+    return assetMetadataBase === dropRuntime.canonicalMetadataBase;
   }
 
   return null;

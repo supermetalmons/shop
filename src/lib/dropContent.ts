@@ -1,4 +1,4 @@
-import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId } from '../config/deployment';
+import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
 import {
   getDropExtraContentOverride,
   type DropExtraContentOverride,
@@ -79,8 +79,10 @@ export function joinDropAssetUrl(baseUrl: string | undefined, path: string): str
   const normalizedBaseUrl = asOptionalString(baseUrl);
   const normalizedPath = String(path || '').trim();
   if (!normalizedBaseUrl) return undefined;
-  if (!normalizedPath) return trimTrailingSlashes(normalizedBaseUrl);
-  return `${trimTrailingSlashes(normalizedBaseUrl)}/${trimLeadingSlashes(normalizedPath)}`;
+  const joined = !normalizedPath
+    ? trimTrailingSlashes(normalizedBaseUrl)
+    : `${trimTrailingSlashes(normalizedBaseUrl)}/${trimLeadingSlashes(normalizedPath)}`;
+  return resolveDropAssetUrl(joined);
 }
 
 function mergeFrameSequence(
@@ -127,18 +129,18 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
   const base = drop.paths.base;
   return {
     box: {
-      previewImageUrl: `${base}/box/tight.webp`,
+      previewImageUrl: joinDropAssetUrl(base, 'box/tight.webp'),
       aspectRatio: LEGACY_BOX_ASPECT_RATIO,
     },
     mintPanel: {
-      previewImageUrl: `${base}/box/tight.webp`,
+      previewImageUrl: joinDropAssetUrl(base, 'box/tight.webp'),
       aspectRatio: LEGACY_BOX_ASPECT_RATIO,
     },
     reveal: {
       mode: 'animated',
       renderer: 'default',
       frameSequence: {
-        baseUrl: `${base}/box/`,
+        baseUrl: joinDropAssetUrl(base, 'box/'),
         ext: 'webp',
         frameCount: 21,
         clickMax: 8,
@@ -153,8 +155,8 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
       inventoryImageUrl: undefined,
       revealPresentation: 'videos',
       fulfillmentPreviewMode: 'media_map_folder',
-      revealVideoBaseUrl: `${base}/figures/small-rotating/`,
-      fulfillmentMediaBaseUrl: `${base}/figures/clean`,
+      revealVideoBaseUrl: joinDropAssetUrl(base, 'figures/small-rotating/'),
+      fulfillmentMediaBaseUrl: joinDropAssetUrl(base, 'figures/clean'),
     },
     certificates: {
       inventoryImageUrl: undefined,
@@ -261,7 +263,8 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
 
 export function normalizeBoxDisplayImage(dropId: string, imageRaw?: string): string | undefined {
   const content = resolveDropContent(dropId);
-  return content.box.previewImageUrl || imageRaw;
+  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
+  return content.box.previewImageUrl || resolvedImage || undefined;
 }
 
 export function mintPanelPreviewImage(dropId: string): string | undefined {
@@ -277,19 +280,21 @@ export function mintPanelPreviewAspectRatio(dropId: string): number {
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   const content = resolveDropContent(dropId);
   if (content.figures.inventoryImageUrl) {
-    return content.figures.inventoryImageUrl;
+    return resolveDropAssetUrl(content.figures.inventoryImageUrl);
   }
   const normalizedFigureId = asPositiveInteger(figureId);
   if (content.figures.inventoryImageBaseUrl && normalizedFigureId) {
     return joinDropAssetUrl(content.figures.inventoryImageBaseUrl, `${normalizedFigureId}.webp`) || imageRaw;
   }
-  if (!imageRaw) return imageRaw;
-  if (content.figures.inventoryImageMode !== 'clean_variant') return imageRaw;
-  if (imageRaw.includes('/figures/clean/')) return imageRaw;
-  return imageRaw.includes('/figures/') ? imageRaw.replace('/figures/', '/figures/clean/') : imageRaw;
+  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
+  if (!resolvedImage) return undefined;
+  if (content.figures.inventoryImageMode !== 'clean_variant') return resolvedImage;
+  if (resolvedImage.includes('/figures/clean/')) return resolvedImage;
+  return resolvedImage.includes('/figures/') ? resolvedImage.replace('/figures/', '/figures/clean/') : resolvedImage;
 }
 
 export function normalizeCertificateDisplayImage(dropId: string, imageRaw?: string): string | undefined {
   const content = resolveDropContent(dropId);
-  return content.certificates.inventoryImageUrl || imageRaw;
+  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
+  return content.certificates.inventoryImageUrl || resolvedImage || undefined;
 }

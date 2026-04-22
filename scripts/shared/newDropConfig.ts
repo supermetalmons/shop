@@ -1,4 +1,8 @@
-import type { DropFamily, MintSelectionConfigSerialized } from './deploymentRegistry.ts';
+import {
+  normalizeAndValidateMetadataBaseInput,
+  type DropFamily,
+  type MintSelectionConfigSerialized,
+} from './deploymentRegistry.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -12,6 +16,7 @@ export type NewDropDeployConfig = {
 export type NewDropOnchainConfig = {
   dropId: string;
   dropFamily: DropFamily;
+  // Accept either `https://...`, `ipfs://...`, or a raw IPFS CID like `bafy...`.
   metadataBase: string;
   mintSelection?: MintSelectionConfigSerialized;
   collectionMetadata: {
@@ -76,6 +81,7 @@ export const defineNewDropConfig = (config: NewDropConfigInput): NewDropConfig =
     },
     onchain: {
       ...onchain,
+      metadataBase: normalizeAndValidateMetadataBaseInput(onchain.metadataBase),
       collectionMetadata: {
         ...onchain.collectionMetadata,
         symbol: shared.dropSymbol,

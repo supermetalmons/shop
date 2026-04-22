@@ -19,10 +19,17 @@ import {
 import { getHeliusApiKey } from './helius';
 import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
 import {
+  boxIdFromMetadataUri,
+  canonicalMetadataBase,
+  dudeIdFromMetadataUri,
+  metadataBaseFromMetadataUri,
+  metadataKindFromUri,
+  selectMetadataUri,
+} from './dropMetadataUri';
+import {
   FRONTEND_DROPS,
   type FrontendDeploymentConfig,
   type SolanaCluster,
-  normalizeDropBase,
 } from '../config/deployment';
 
 const region = FIREBASE_FUNCTIONS_REGION;
@@ -150,8 +157,10 @@ const heliusApiKey = getHeliusApiKey();
 
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
-  'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'metadataBase' | 'itemsPerBox'
->;
+  'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'itemsPerBox'
+> & {
+  canonicalMetadataBase: string;
+};
 
 type PendingOpenProgramScope = Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'> & {
   drops: FrontendDropRuntime[];
@@ -181,7 +190,7 @@ const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS
       collectionMint: drop.collectionMint,
       boxMinterProgramId: drop.boxMinterProgramId,
       boxMinterConfigPda: typeof drop.boxMinterConfigPda === 'string' ? drop.boxMinterConfigPda.trim() || undefined : undefined,
-      metadataBase: normalizeDropBase(drop.metadataBase),
+      canonicalMetadataBase: canonicalMetadataBase(drop.metadataBase),
       itemsPerBox: drop.itemsPerBox,
     };
   });
@@ -370,10 +379,8 @@ function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
   if (value === 'box' || value === 'dude' || value === 'certificate') return value;
 
   const uri = assetMetadataUri(asset);
-  const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
-  if (lowerUri.includes('/json/boxes/')) return 'box';
-  if (lowerUri.includes('/json/figures/')) return 'dude';
-  if (lowerUri.includes('/json/receipts/')) return 'certificate';
+  const kindFromUri = metadataKindFromUri(uri);
+  if (kindFromUri) return kindFromUri;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
@@ -393,12 +400,8 @@ function getBoxIdFromAsset(asset: DasAsset): string | undefined {
   if (typeof value === 'string' && value) return value;
 
   const uri = assetMetadataUri(asset);
-  if (typeof uri === 'string' && uri) {
-    const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
-    if (matchBoxes?.[1]) return matchBoxes[1];
-    const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
-    if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
-  }
+  const uriBoxId = boxIdFromMetadataUri(uri);
+  if (uriBoxId) return uriBoxId;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
@@ -413,11 +416,8 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   if (Number.isFinite(num)) return num;
 
   const uri = assetMetadataUri(asset);
-  if (typeof uri === 'string' && uri) {
-    const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
-    const n = Number(match?.[1]);
-    return Number.isFinite(n) ? n : undefined;
-  }
+  const idFromUri = dudeIdFromMetadataUri(uri);
+  if (typeof idFromUri === 'number') return idFromUri;
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   if (typeof name === 'string' && name) {
     const match = name.match(/(?:figure|dude)\s*#?\s*(\d+)/i);
@@ -443,31 +443,18 @@ function assetCollectionMints(asset: DasAsset): string[] {
 }
 
 function assetMetadataUri(asset: DasAsset): string {
-  const candidates = [
+  return selectMetadataUri(
     asset?.content?.json_uri,
     asset?.content?.jsonUri,
-    asset?.content?.metadata?.uri,
     asset?.content?.metadata?.json_uri,
     asset?.content?.metadata?.jsonUri,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate) return candidate;
-  }
-  return '';
+    asset?.content?.metadata?.uri,
+  );
 }
 
 function metadataBaseFromAsset(asset: DasAsset): string | null {
   const uri = assetMetadataUri(asset);
-  if (!uri) return null;
-
-  const normalized = normalizeDropBase(uri)
-    .replace(/\/collection\.json$/i, '')
-    .replace(/\/json\/boxes\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/figures\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/receipts\/boxes\/[^/?#]+\.json$/i, '')
-    .replace(/\/json\/receipts\/figures\/[^/?#]+\.json$/i, '');
-
-  return normalized && normalized !== uri ? normalized : null;
+  return metadataBaseFromMetadataUri(uri);
 }
 
 function isBurntAsset(asset: DasAsset): boolean {
@@ -520,7 +507,7 @@ function resolveAssetDropId(asset: DasAsset, solanaCluster?: SolanaCluster): str
 
   const metadataBase = metadataBaseFromAsset(asset);
   if (metadataBase) {
-    const metadataCandidates = uniqueCollectionCandidates.filter((drop) => drop.metadataBase === metadataBase);
+    const metadataCandidates = uniqueCollectionCandidates.filter((drop) => drop.canonicalMetadataBase === metadataBase);
     const drop = resolveSingleDropRuntime(metadataCandidates, solanaCluster);
     if (drop) return cacheAssetDropId(asset, drop.dropId);
   }

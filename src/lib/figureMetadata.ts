@@ -1,4 +1,4 @@
-import { getFrontendDrop, normalizeDropId } from '../config/deployment';
+import { getFrontendDrop, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
 import { normalizeFigureDisplayImage } from './dropContent';
 
 export type FigureMetadataAttributes = { trait_type: string; value: string };
@@ -77,12 +77,23 @@ export async function loadFigureMetadata(dropId: string, figureId: number): Prom
   if (!drop) return null;
 
   const metadataPromise = (async () => {
-    const metadataUrl = `${drop.paths.figuresJsonBase}${normalizedFigureId}.json`;
-    const resp = await fetch(metadataUrl);
-    if (!resp.ok) {
+    const metadataUrl = resolveDropAssetUrl(`${drop.paths.figuresJsonBase}${normalizedFigureId}.json`);
+    if (!metadataUrl) {
+      throw new Error(`metadata url missing for ${normalizedDropId}:${normalizedFigureId}`);
+    }
+
+    let data: FigureMetadataResponse | null = null;
+    try {
+      const resp = await fetch(metadataUrl);
+      if (resp.ok) {
+        data = (await resp.json()) as FigureMetadataResponse;
+      }
+    } catch {
+      // fall through to the common error path below
+    }
+    if (!data) {
       throw new Error(`metadata fetch failed for ${normalizedDropId}:${normalizedFigureId}`);
     }
-    const data = (await resp.json()) as FigureMetadataResponse;
     const rawImage =
       (typeof data.image === 'string' ? data.image : undefined) ||
       (typeof data.properties?.files?.[0]?.uri === 'string' ? data.properties?.files?.[0]?.uri : undefined) ||

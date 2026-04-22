@@ -5,6 +5,12 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, type QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
 import { PublicKey } from '@solana/web3.js';
 import { requireFunctionsDrop, type SolanaCluster } from '../src/config/deployment.ts';
+import {
+  boxIdFromMetadataUri,
+  dudeIdFromMetadataUri,
+  metadataKindFromUri,
+  selectMetadataUri,
+} from '../src/dropMetadataUri.ts';
 
 type Args = {
   code?: string;
@@ -261,17 +267,8 @@ function getAssetKind(asset: DasAsset): 'box' | 'dude' | 'certificate' | null {
   const value = kindAttr?.value;
   if (value === 'box' || value === 'dude' || value === 'certificate') return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  const lowerUri = typeof uri === 'string' ? uri.toLowerCase() : '';
-  if (lowerUri.includes('/json/boxes/')) return 'box';
-  if (lowerUri.includes('/json/figures/')) return 'dude';
-  if (lowerUri.includes('/json/receipts/')) return 'certificate';
+  const kindFromUri = metadataKindFromUri(getAssetJsonUri(asset) || '');
+  if (kindFromUri) return kindFromUri;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
@@ -289,19 +286,8 @@ function getBoxIdFromAsset(asset: DasAsset): string | undefined {
   const value = boxAttr?.value;
   if (typeof value === 'string' && value) return value;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  if (typeof uri === 'string' && uri) {
-    const matchBoxes = uri.match(/\/json\/boxes\/(\d+)\.json/i);
-    if (matchBoxes?.[1]) return matchBoxes[1];
-    const matchReceiptBoxes = uri.match(/\/json\/receipts\/boxes\/([^/?#]+)\.json/i);
-    if (matchReceiptBoxes?.[1]) return matchReceiptBoxes[1];
-  }
+  const boxId = boxIdFromMetadataUri(getAssetJsonUri(asset) || '');
+  if (boxId) return boxId;
 
   const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
   const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
@@ -315,29 +301,21 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   const num = Number(dudeAttr?.value);
   if (Number.isFinite(num)) return num;
 
-  const uri: string =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri ||
-    '';
-  if (typeof uri === 'string' && uri) {
-    const match = uri.match(/\/json\/figures\/(\d+)\.json/i) || uri.match(/\/json\/receipts\/figures\/(\d+)\.json/i);
-    const valueFromUri = Number(match?.[1]);
-    return Number.isFinite(valueFromUri) ? valueFromUri : undefined;
-  }
+  const idFromUri = dudeIdFromMetadataUri(getAssetJsonUri(asset) || '');
+  if (typeof idFromUri === 'number') return idFromUri;
   return undefined;
 }
 
 function getAssetJsonUri(asset: DasAsset): string | undefined {
-  const uri =
-    asset?.content?.json_uri ||
-    asset?.content?.jsonUri ||
-    asset?.content?.metadata?.uri ||
-    asset?.content?.metadata?.json_uri ||
-    asset?.content?.metadata?.jsonUri;
-  return typeof uri === 'string' && uri ? uri : undefined;
+  return (
+    selectMetadataUri(
+      asset?.content?.json_uri,
+      asset?.content?.jsonUri,
+      asset?.content?.metadata?.json_uri,
+      asset?.content?.metadata?.jsonUri,
+      asset?.content?.metadata?.uri,
+    ) || undefined
+  );
 }
 
 function getAssetName(asset: DasAsset): string | undefined {

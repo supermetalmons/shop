@@ -11,6 +11,7 @@
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
+export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
@@ -18,8 +19,9 @@ export type FunctionsDropConfig = {
   dropFamily: DropFamily;
   collectionName: string;
 
-  // Drop metadata base (collection.json + json/* + images/*)
+  // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
   metadataBase: string;
+  metadataPathFormat: MetadataPathFormat;
   mintSelection?: MintSelectionConfig;
 
   // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
@@ -70,9 +72,124 @@ export type DropPaths = {
   receiptsFiguresJsonBase: string;
 };
 
+export const DROP_METADATA_IPFS_GATEWAY = 'https://dweb.link/ipfs/';
+const IPFS_PROTOCOL = 'ipfs://';
+const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
+const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
+
+const BASE32_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
+  Object.fromEntries(Array.from(BASE32_ALPHABET).map((char, index) => [char, index] as const)),
+);
+
+function trimTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function normalizeMetadataPathFormat(value: unknown, fallback: MetadataPathFormat = 'legacy'): MetadataPathFormat {
+  return value === 'compact' || value === 'legacy' ? value : fallback;
+}
+
+function decodeBase32Lower(value: string): Uint8Array | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return null;
+
+  const out: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const char of normalized) {
+    const digit = BASE32_LOOKUP[char];
+    if (typeof digit !== 'number') return null;
+    buffer = (buffer << 5) | digit;
+    bits += 5;
+    while (bits >= 8) {
+      bits -= 8;
+      out.push((buffer >> bits) & 0xff);
+      buffer &= (1 << bits) - 1;
+    }
+  }
+  if (bits > 0 && (buffer & ((1 << bits) - 1)) !== 0) return null;
+  return Uint8Array.from(out);
+}
+
+function readUvarint(bytes: Uint8Array, offset: number): { value: number; nextOffset: number } | null {
+  let value = 0;
+  let shift = 0;
+  for (let index = offset; index < bytes.length; index += 1) {
+    const byte = bytes[index];
+    value += (byte & 0x7f) * 2 ** shift;
+    if (byte < 0x80) return { value, nextOffset: index + 1 };
+    shift += 7;
+    if (shift > 49) return null;
+  }
+  return null;
+}
+
+function isRawCidV1(value: string): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized.startsWith('b')) return false;
+  const bytes = decodeBase32Lower(normalized.slice(1));
+  if (!bytes?.length) return false;
+
+  const version = readUvarint(bytes, 0);
+  if (!version || version.value !== 1) return false;
+  const codec = readUvarint(bytes, version.nextOffset);
+  if (!codec) return false;
+  const multihashCode = readUvarint(bytes, codec.nextOffset);
+  if (!multihashCode) return false;
+  const multihashLength = readUvarint(bytes, multihashCode.nextOffset);
+  if (!multihashLength || multihashLength.value < 1) return false;
+  return bytes.length === multihashLength.nextOffset + multihashLength.value;
+}
+
+function isRawIpfsCid(value: string): boolean {
+  return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
+}
+
+function normalizeIpfsProtocolUrl(value: string): string {
+  const trimmed = trimTrailingSlashes(String(value || '').trim());
+  if (!trimmed) return '';
+  if (!trimmed.toLowerCase().startsWith(IPFS_PROTOCOL)) return trimmed;
+  const withoutProtocol = trimmed.slice(IPFS_PROTOCOL.length).replace(/^ipfs\//i, '');
+  return `${IPFS_PROTOCOL}${withoutProtocol.replace(/^\/+/, '')}`;
+}
+
 export function normalizeDropBase(base: string): string {
-  // Allow callers to pass either `https://.../drops/lsb` or `https://.../drops/lsb/`.
-  return String(base || '').replace(/\/+$/, '');
+  // Accept either `https://...`, `ipfs://...`, or a raw CID like `bafy...`.
+  const trimmed = trimTrailingSlashes(String(base || '').trim());
+  if (!trimmed) return '';
+  if (isRawIpfsCid(trimmed)) return `${IPFS_PROTOCOL}${trimmed}`;
+  return normalizeIpfsProtocolUrl(trimmed);
+}
+
+export function canonicalizeDropAssetUrl(url: string): string {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '';
+
+  const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
+  if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+
+  try {
+    const parsed = new URL(trimmed);
+    const hostMatch = parsed.hostname.match(/^([^./]+)\.ipfs\./i);
+    if (hostMatch?.[1]) {
+      return `${IPFS_PROTOCOL}${hostMatch[1]}${trimTrailingSlashes(parsed.pathname)}${parsed.search}${parsed.hash}`;
+    }
+    const pathMatch = parsed.pathname.match(/^\/ipfs\/([^/]+)(\/.*)?$/i);
+    if (pathMatch?.[1]) {
+      return `${IPFS_PROTOCOL}${pathMatch[1]}${trimTrailingSlashes(pathMatch[2] || '')}${parsed.search}${parsed.hash}`;
+    }
+  } catch {
+    // Non-URL strings should pass through unchanged.
+  }
+
+  return trimmed;
+}
+
+export function resolveDropAssetUrl(url: string): string {
+  const canonical = canonicalizeDropAssetUrl(url);
+  if (!canonical.toLowerCase().startsWith(IPFS_PROTOCOL)) return canonical;
+  const path = canonical.slice(IPFS_PROTOCOL.length).replace(/^\/+/, '');
+  return `${DROP_METADATA_IPFS_GATEWAY}${path}`;
 }
 
 export function normalizeDropId(dropId: string): string {
@@ -130,21 +247,37 @@ function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): Min
   };
 }
 
-export function dropPathsFromBase(dropBase: string): DropPaths {
+export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
+  if (metadataPathFormat === 'legacy') {
+    return {
+      base,
+      collectionJson: `${base}/collection.json`,
+      boxesJsonBase: `${base}/json/boxes/`,
+      figuresJsonBase: `${base}/json/figures/`,
+      receiptsBoxesJsonBase: `${base}/json/receipts/boxes/`,
+      receiptsFiguresJsonBase: `${base}/json/receipts/figures/`,
+    };
+  }
   return {
     base,
     collectionJson: `${base}/collection.json`,
-    boxesJsonBase: `${base}/json/boxes/`,
-    figuresJsonBase: `${base}/json/figures/`,
-    receiptsBoxesJsonBase: `${base}/json/receipts/boxes/`,
-    receiptsFiguresJsonBase: `${base}/json/receipts/figures/`,
+    boxesJsonBase: `${base}/b`,
+    figuresJsonBase: `${base}/f`,
+    receiptsBoxesJsonBase: `${base}/rb`,
+    receiptsFiguresJsonBase: `${base}/rf`,
   };
 }
 
-function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dropId: string }): FunctionsDropConfig {
+function createFunctionsDrop(
+  config: Omit<FunctionsDropConfig, 'dropId' | 'metadataPathFormat'> & {
+    dropId: string;
+    metadataPathFormat?: MetadataPathFormat;
+  },
+): FunctionsDropConfig {
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
+  const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
   return {
@@ -152,6 +285,7 @@ function createFunctionsDrop(config: Omit<FunctionsDropConfig, 'dropId'> & { dro
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
+    metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
@@ -185,8 +319,9 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
-    // Drop metadata base (collection.json + json/* + images/*)
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: "https://assets.mons.link/drops/lsb",
+    metadataPathFormat: "legacy",
 
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
@@ -214,8 +349,9 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     dropFamily: "little_swag_boxes",
     collectionName: "Little Swag Boxes",
 
-    // Drop metadata base (collection.json + json/* + images/*)
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: "https://assets.mons.link/drops/lsb",
+    metadataPathFormat: "legacy",
 
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
@@ -243,8 +379,9 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     dropFamily: "poncho_drifella",
     collectionName: "Poncho Drifella",
 
-    // Drop metadata base (collection.json + json/* + images/*)
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: "https://assets.mons.link/drops/poncho",
+    metadataPathFormat: "legacy",
 
 
     // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)

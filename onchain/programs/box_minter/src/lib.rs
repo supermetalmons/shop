@@ -76,12 +76,12 @@ const MPL_CORE_CPI_SIGNER: Pubkey = Pubkey::new_from_array([
 // Bubblegum v2 mint discriminator: [120, 121, 23, 146, 173, 110, 199, 205]
 const IX_BUBBLEGUM_MINT_V2: [u8; 8] = [120, 121, 23, 146, 173, 110, 199, 205];
 
-// URI path suffixes appended to the configured DROP BASE (`config.uri_base`).
+// URI path prefixes appended to the configured DROP BASE (`config.uri_base`).
 // Kept as `&'static str` so we can avoid allocating derived base Strings on the SBF heap.
-const URI_SUFFIX_BOXES: &str = "/json/boxes/";
-const URI_SUFFIX_FIGURES: &str = "/json/figures/";
-const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
-const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
+const URI_PREFIX_BOXES: &str = "/b";
+const URI_PREFIX_FIGURES: &str = "/f";
+const URI_PREFIX_RECEIPTS_FIGURES: &str = "/rf";
+const URI_PREFIX_RECEIPTS_BOXES: &str = "/rb";
 const RECEIPT_NAME_PREFIX: &str = "receipt · ";
 
 fn hash_leaf(data: &[u8]) -> [u8; 32] {
@@ -107,6 +107,27 @@ fn verify_merkle_proof(leaf: &[u8], proof: &[[u8; 32]], root: [u8; 32]) -> bool 
         node = hash_sorted_pair(node, *sibling);
     }
     node == root
+}
+
+fn validate_metadata_base(drop_base: &str) -> Result<()> {
+    require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
+    require!(
+        drop_base.starts_with("https://")
+            || drop_base.starts_with("http://")
+            || drop_base.starts_with("ipfs://"),
+        BoxMinterError::InvalidMetadataBase
+    );
+    let lower_drop_base = drop_base.to_ascii_lowercase();
+    require!(
+        !lower_drop_base.ends_with(".json")
+            && !lower_drop_base.contains("/json/boxes")
+            && !lower_drop_base.contains("/json/figures")
+            && !lower_drop_base.contains("/json/receipts")
+            && !drop_base.contains('?')
+            && !drop_base.contains('#'),
+        BoxMinterError::InvalidMetadataBase
+    );
+    Ok(())
 }
 
 struct MintBoxesInnerAccounts<'info> {
@@ -174,7 +195,7 @@ fn new_mint_box_asset_buffers<'info>(
     accounts: &MintBoxesInnerAccounts<'info>,
 ) -> MintBoxAssetBuffers {
     let drop_base = cfg.uri_base.as_str();
-    let max_uri_len: usize = drop_base.len() + URI_SUFFIX_BOXES.len() + 16;
+    let max_uri_len: usize = drop_base.len() + URI_PREFIX_BOXES.len() + 16;
     let cfg_ai = cfg.to_account_info();
 
     let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
@@ -309,7 +330,7 @@ fn mint_one_box_asset<'info>(
 
     buffers.uri_buf.clear();
     buffers.uri_buf.push_str(cfg.uri_base.as_str());
-    buffers.uri_buf.push_str(URI_SUFFIX_BOXES);
+    buffers.uri_buf.push_str(URI_PREFIX_BOXES);
     write!(&mut buffers.uri_buf, "{}", metadata_id)
         .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
     buffers.uri_buf.push_str(".json");
@@ -664,26 +685,10 @@ pub mod box_minter {
             has_any_non_zero_byte(args.drop_seed.as_ref()),
             BoxMinterError::InvalidDropSeed
         );
-        // Canonical config: `uri_base` is the DROP BASE (not `/json/boxes/` and not a `.json` file).
-        // Example: `https://assets.mons.link/drops/lsb`
+        // Canonical config: `uri_base` is the DROP BASE (not a legacy `/json/...` prefix and not a `.json` file).
+        // Example: `https://assets.mons.link/drops/lsb` or `ipfs://bafy...`
         let drop_base = args.uri_base.trim_end_matches('/');
-        require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
-        require!(
-            !drop_base.ends_with(".json"),
-            BoxMinterError::InvalidMetadataBase
-        );
-        require!(
-            !drop_base.contains("/json/boxes"),
-            BoxMinterError::InvalidMetadataBase
-        );
-        require!(
-            !drop_base.contains("/json/figures"),
-            BoxMinterError::InvalidMetadataBase
-        );
-        require!(
-            !drop_base.contains("/json/receipts"),
-            BoxMinterError::InvalidMetadataBase
-        );
+        validate_metadata_base(drop_base)?;
         if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
             require!(
                 args.items_per_box == 0,
@@ -1100,7 +1105,7 @@ pub mod box_minter {
             ctx.accounts.payer.key(),
             cfg.core_collection,
             drop_base,
-            URI_SUFFIX_BOXES,
+            URI_PREFIX_BOXES,
             None,
         )?;
 
@@ -1408,7 +1413,7 @@ pub mod box_minter {
             cfg.admin,
             cfg.core_collection,
             drop_base,
-            URI_SUFFIX_BOXES,
+            URI_PREFIX_BOXES,
             None,
         )?;
 
@@ -1473,7 +1478,7 @@ pub mod box_minter {
         // IMPORTANT: MPL-Core only supports moving an asset into a collection via `UpdateV2`
         // (UpdateV1 cannot add/remove/change collection).
         let mut name_buf = String::with_capacity(32);
-        let mut uri_buf = String::with_capacity(drop_base.len() + URI_SUFFIX_FIGURES.len() + 16);
+        let mut uri_buf = String::with_capacity(drop_base.len() + URI_PREFIX_FIGURES.len() + 16);
 
         let mut update_ix = anchor_lang::solana_program::instruction::Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
@@ -1554,7 +1559,7 @@ pub mod box_minter {
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_SUFFIX_FIGURES);
+            uri_buf.push_str(URI_PREFIX_FIGURES);
             write!(&mut uri_buf, "{}", dude_id)
                 .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
@@ -2052,9 +2057,9 @@ pub mod box_minter {
         let mut name_buf = String::with_capacity(48);
         let mut uri_buf = String::with_capacity(
             drop_base.len()
-                + URI_SUFFIX_RECEIPTS_BOXES
+                + URI_PREFIX_RECEIPTS_BOXES
                     .len()
-                    .max(URI_SUFFIX_RECEIPTS_FIGURES.len())
+                    .max(URI_PREFIX_RECEIPTS_FIGURES.len())
                 + 16,
         );
 
@@ -2115,7 +2120,7 @@ pub mod box_minter {
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_SUFFIX_RECEIPTS_BOXES);
+            uri_buf.push_str(URI_PREFIX_RECEIPTS_BOXES);
             write!(&mut uri_buf, "{}", *box_id)
                 .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
@@ -2129,7 +2134,7 @@ pub mod box_minter {
 
             uri_buf.clear();
             uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_SUFFIX_RECEIPTS_FIGURES);
+            uri_buf.push_str(URI_PREFIX_RECEIPTS_FIGURES);
             write!(&mut uri_buf, "{}", *dude_id)
                 .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
             uri_buf.push_str(".json");
@@ -3131,6 +3136,88 @@ mod tests {
         let mut cfg = test_size_variant_cfg();
         cfg.mint_variant_next_ids[2] = 35;
         assert!(cfg.next_variant_metadata_id(2).is_err());
+    }
+
+    #[test]
+    fn compact_uri_parser_accepts_current_asset_shapes() {
+        let drop_base = "ipfs://bafycompactdrop";
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                format!("{drop_base}/b12.json").as_bytes(),
+                drop_base,
+                URI_PREFIX_BOXES,
+            ),
+            Some(12)
+        );
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                format!("{drop_base}/f34.json").as_bytes(),
+                drop_base,
+                URI_PREFIX_FIGURES,
+            ),
+            Some(34)
+        );
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                format!("{drop_base}/rb56.json").as_bytes(),
+                drop_base,
+                URI_PREFIX_RECEIPTS_BOXES,
+            ),
+            Some(56)
+        );
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                format!("{drop_base}/rf78.json").as_bytes(),
+                drop_base,
+                URI_PREFIX_RECEIPTS_FIGURES,
+            ),
+            Some(78)
+        );
+    }
+
+    #[test]
+    fn compact_uri_parser_rejects_legacy_uri_shape() {
+        let drop_base = "https://assets.example.com/drops/legacy";
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                format!("{drop_base}/json/boxes/12.json").as_bytes(),
+                drop_base,
+                URI_PREFIX_BOXES,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn metadata_base_validation_accepts_canonical_bases() {
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb").is_ok());
+        assert!(validate_metadata_base("http://localhost:3000/drops/lsb").is_ok());
+        assert!(validate_metadata_base("ipfs://bafycompactdrop").is_ok());
+    }
+
+    #[test]
+    fn metadata_base_validation_rejects_legacy_prefixes_and_json_files() {
+        assert!(validate_metadata_base("banana").is_err());
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/boxes").is_err());
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/figures").is_err());
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/receipts").is_err());
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/collection.json").is_err());
+    }
+
+    #[test]
+    fn metadata_base_validation_rejects_query_strings_and_fragments() {
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb?filename=drop").is_err());
+        assert!(validate_metadata_base("https://assets.example.com/drops/lsb#collection").is_err());
+        assert!(validate_metadata_base("ipfs://bafycompactdrop?filename=drop").is_err());
+        assert!(validate_metadata_base("ipfs://bafycompactdrop#collection").is_err());
+    }
+
+    #[test]
+    fn metadata_base_validation_accepts_roots_with_compact_like_terminal_segments() {
+        assert!(validate_metadata_base("https://assets.example.com/drops/b").is_ok());
+        assert!(validate_metadata_base("https://assets.example.com/drops/f").is_ok());
+        assert!(validate_metadata_base("ipfs://bafycompactdrop/rb").is_ok());
+        assert!(validate_metadata_base("ipfs://bafycompactdrop/rf").is_ok());
     }
 
     #[test]

@@ -9,14 +9,17 @@ import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig
 import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
   defaultFrontendFigureMediaForDropFamily,
+  normalizeDropBase,
   readFrontendDropRegistry,
   readFunctionsDropRegistry,
+  resolveDropAssetUrl,
   requireDropFamily,
   writeFrontendDeploymentRegistryFile,
   writeFunctionsDeploymentRegistryFile,
   type DropFamily,
   type FrontendDropConfigSerialized,
   type FunctionsDropConfigSerialized,
+  type MetadataPathFormat,
   type MintSelectionConfigSerialized,
 } from './shared/deploymentRegistry.ts';
 import {
@@ -195,11 +198,6 @@ function registerTempKeypairCleanup(filePath: string) {
     cleanup();
     process.exit(143);
   });
-}
-
-function normalizeDropBase(base: string): string {
-  // Drop base should be stable and never end with `/`.
-  return (base || '').trim().replace(/\/+$/, '');
 }
 
 function normalizeDropId(value: string | undefined): string {
@@ -554,11 +552,12 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
   expected: PreparedCollectionMetadata;
 }) {
   const collectionJsonUrl = `${args.metadataBase}/collection.json`;
+  const collectionJsonFetchUrl = resolveDropAssetUrl(collectionJsonUrl);
   let response: Response;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
-    response = await fetch(collectionJsonUrl, {
+    response = await fetch(collectionJsonFetchUrl, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -567,6 +566,7 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
     throw new Error(
       `Failed to fetch collection metadata JSON for preflight validation.\n` +
         `- url: ${collectionJsonUrl}\n` +
+        `- fetch url: ${collectionJsonFetchUrl}\n` +
         `- error: ${errorMessage(err)}`,
     );
   } finally {
@@ -577,6 +577,7 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
     throw new Error(
       `Failed to fetch collection metadata JSON for preflight validation.\n` +
         `- url: ${collectionJsonUrl}\n` +
+        `- fetch url: ${collectionJsonFetchUrl}\n` +
         `- http status: ${response.status} ${response.statusText}`,
     );
   }
@@ -588,6 +589,7 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
     throw new Error(
       `Invalid JSON at collection metadata URL.\n` +
         `- url: ${collectionJsonUrl}\n` +
+        `- fetch url: ${collectionJsonFetchUrl}\n` +
         `- error: ${errorMessage(err)}`,
     );
   }
@@ -633,6 +635,7 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
     throw new Error(
       `collection.json preflight validation failed.\n` +
         `- url: ${collectionJsonUrl}\n` +
+        `- fetch url: ${collectionJsonFetchUrl}\n` +
         mismatches.map((line) => `- ${line}`).join('\n') +
         `\n` +
         `Fix ${getActiveNewDropConfigPath()} or the collection.json content before deploying.`,
@@ -799,6 +802,7 @@ async function writeFrontendDeploymentConfig(args: {
   dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
+  metadataPathFormat: MetadataPathFormat;
   mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
   priceSol: number;
@@ -834,6 +838,7 @@ async function writeFrontendDeploymentConfig(args: {
     dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
+    metadataPathFormat: args.metadataPathFormat,
     ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
     ...(figureMedia ? { figureMedia } : {}),
     treasury: args.treasury,
@@ -862,6 +867,7 @@ async function writeFunctionsDeploymentConfig(args: {
   dropFamily: DropFamily;
   collectionName: string;
   metadataBase: string;
+  metadataPathFormat: MetadataPathFormat;
   mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
   priceSol: number;
@@ -898,6 +904,7 @@ async function writeFunctionsDeploymentConfig(args: {
     dropFamily,
     collectionName,
     metadataBase: normalizeDropBase(args.metadataBase),
+    metadataPathFormat: args.metadataPathFormat,
     ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
@@ -1491,6 +1498,66 @@ async function assertLegacySingletonConfigAbsentForSharedProgramReuse(args: {
   );
 }
 
+async function assertProgramReuseMatchesMetadataPathFormat(args: {
+  root: string;
+  solanaCluster: string;
+  dropId: string;
+  programId: string;
+  desiredMetadataPathFormat: MetadataPathFormat;
+}): Promise<void> {
+  const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
+  const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
+  const [frontendRegistry, functionsRegistry] = await Promise.all([
+    readFrontendDropRegistry(frontendPath),
+    readFunctionsDropRegistry(functionsPath),
+  ]);
+
+  const matches = [
+    ...Object.values(frontendRegistry.drops).map((drop) => ({ source: 'frontend', filePath: frontendPath, drop })),
+    ...Object.values(functionsRegistry.drops).map((drop) => ({ source: 'functions', filePath: functionsPath, drop })),
+  ].filter(
+    ({ drop }) =>
+      drop.dropId !== args.dropId &&
+      drop.solanaCluster === args.solanaCluster &&
+      drop.boxMinterProgramId === args.programId,
+  );
+
+  if (!matches.length) return;
+
+  const formatsByDropId = new Map<string, Set<MetadataPathFormat>>();
+  matches.forEach(({ drop }) => {
+    const next = formatsByDropId.get(drop.dropId) || new Set<MetadataPathFormat>();
+    next.add(drop.metadataPathFormat);
+    formatsByDropId.set(drop.dropId, next);
+  });
+
+  const inconsistentDrops = Array.from(formatsByDropId.entries()).filter(([, formats]) => formats.size > 1);
+  if (inconsistentDrops.length) {
+    throw new Error(
+      `Deployment registry metadata path formats are inconsistent for program ${args.programId} on ${args.solanaCluster}.\n` +
+        inconsistentDrops.map(([dropId, formats]) => `- ${dropId}: ${Array.from(formats).sort().join(', ')}`).join('\n') +
+        `\n` +
+        `Fix src/config/deployment.ts and functions/src/config/deployment.ts before reusing this program id.`,
+    );
+  }
+
+  const mismatches = matches.filter(({ drop }) => drop.metadataPathFormat !== args.desiredMetadataPathFormat);
+  if (!mismatches.length) return;
+
+  throw new Error(
+    `Cannot reuse program id ${args.programId} for ${args.dropId} on ${args.solanaCluster}.\n` +
+      `This deploy would write the ${args.desiredMetadataPathFormat} metadata layout, but the registry already maps that program id to a different layout:\n` +
+      mismatches
+        .map(
+          ({ drop, source, filePath }) =>
+            `- ${drop.dropId}: ${drop.metadataPathFormat} (${source}: ${path.relative(args.root, filePath)})`,
+        )
+        .join('\n') +
+      `\n` +
+      `Fix: set NEW_DROP.deploy.reuseProgramId=false in ${getActiveNewDropConfigPath()} to start a fresh compact-format lineage.`,
+  );
+}
+
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
 const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
 // Anchor instruction discriminator: sha256("global:set_treasury")[0..8]
@@ -1514,7 +1581,7 @@ function buildInitializeIx(args: {
   mintSelection?: MintSelectionConfigSerialized;
   dropSeed: Buffer;
   /**
-   * Drop base URL (canonical), e.g. `https://assets.example.com/drops/your-drop`.
+   * Canonical drop base, e.g. `https://assets.example.com/drops/your-drop` or `ipfs://bafy...`.
    *
    * The on-chain program derives per-asset JSON URIs from this base.
    */
@@ -1960,6 +2027,7 @@ async function main() {
   setActiveNewDropConfigPath(root, configPath);
   const deployCfg = newDropConfig.deploy;
   const dropCfg = newDropConfig.onchain;
+  const metadataPathFormat: MetadataPathFormat = 'compact';
   const dropId = normalizeDropId(requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId'));
   const dropFamily = requireDropFamily(dropCfg.dropFamily, 'NEW_DROP.onchain.dropFamily');
   const dropSeed = deriveDropSeed(dropId);
@@ -2051,6 +2119,13 @@ async function main() {
       connection,
       programId: preflightProgramPk,
       programIdString: preflightProgramId,
+    });
+    await assertProgramReuseMatchesMetadataPathFormat({
+      root,
+      solanaCluster: cluster,
+      dropId,
+      programId: preflightProgramId,
+      desiredMetadataPathFormat: metadataPathFormat,
     });
   }
   const preflightConfigPda = boxMinterConfigPda(preflightProgramPk, dropSeed);
@@ -2202,10 +2277,10 @@ async function main() {
     figureNamePrefix: dropCfg.figureNamePrefix,
     symbol: dropCfg.symbol,
     // Canonical drop base. The on-chain program derives:
-    // - boxes   : `${metadataBase}/json/boxes/{id}.json`
-    // - figures : `${metadataBase}/json/figures/{id}.json`
-    // - receipts: `${metadataBase}/json/receipts/{kind}/{id}.json`
-    // (The program also supports legacy configs where the stored value is already `${base}/json/boxes/`.)
+    // - boxes   : `${metadataBase}/b{id}.json`
+    // - figures : `${metadataBase}/f{id}.json`
+    // - receipts: `${metadataBase}/rb{id}.json` and `${metadataBase}/rf{id}.json`
+    // Existing legacy drops stay on their current shared-program lineage.
     metadataBase: requiredDropMetadataBase,
     mintSelection: prepareMintSelectionConfig(dropCfg),
   };
@@ -2380,6 +2455,7 @@ async function main() {
     dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
+    metadataPathFormat,
     mintSelection: boxMinterConfig.mintSelection,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
@@ -2403,6 +2479,7 @@ async function main() {
     dropFamily,
     collectionName: collectionMetadata.name,
     metadataBase: requiredDropMetadataBase,
+    metadataPathFormat,
     mintSelection: boxMinterConfig.mintSelection,
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),

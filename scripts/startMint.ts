@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import { clusterApiUrl, Connection, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
+import { normalizeDropBase } from './shared/deploymentRegistry.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -108,10 +109,6 @@ async function resolveFrontendDropConfig(args: {
 
 function boxMinterConfigPda(programId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0];
-}
-
-function normalizeDropBase(base: unknown): string {
-  return String(base || '').replace(/\/+$/, '');
 }
 
 function configuredBoxMinterConfigPda(programId: PublicKey, configured: unknown): PublicKey {
