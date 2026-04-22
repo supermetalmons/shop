@@ -12,7 +12,7 @@ export const NEW_DROP = defineNewDropConfig({
     reuseProgramId: true,
   },
   onchain: {
-    dropId: 'poncho_drifella_devnet_x3',
+    dropId: 'poncho_drifella_devnet',
     dropFamily: 'poncho_drifella',
     metadataBase: 'https://assets.mons.link/drops/poncho',
     collectionMetadata: {

@@ -395,57 +395,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: "CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA",
     collectionMint: "4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6",
   }),
-  "lsw_cobalt_figure_hoodie_26_devnet_x5": createFrontendDrop({
-    solanaCluster: "devnet",
-    dropId: "lsw_cobalt_figure_hoodie_26_devnet_x5",
-    dropFamily: "lsw_cobalt_figure_hoodie",
-    collectionName: "Little Swag Hoodies",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/hoodie",
-    mintSelection: {
-      kind: "size",
-      options: [
-        {
-          key: "L",
-          label: "L",
-          startId: 1,
-          endId: 15,
-        },
-        {
-          key: "XL",
-          label: "XL",
-          startId: 16,
-          endId: 30,
-        },
-        {
-          key: "2XL",
-          label: "2XL",
-          startId: 31,
-          endId: 34,
-        },
-      ],
-    },
-
-
-    // Drop config (kept in sync with on-chain config; useful for UI defaults)
-    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 1,
-    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
-    maxSupply: 34,
-    itemsPerBox: 0,
-    maxPerTx: 15,
-    namePrefix: "hoodie",
-    figureNamePrefix: "hoodie",
-    symbol: "hoodie",
-
-    // On-chain ids
-    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
-    boxMinterConfigPda: "FMbuoNU1JrG4MK1xbDxQQKGpXUjoVfdvB21oGAX4vieq",
-    collectionMint: "7fwErGrQyvGq5NzwQYbhPuJarQ4VtJ1ruzETtr71LvMp",
-  }),
   "poncho_drifella": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
@@ -473,34 +422,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     // On-chain ids
     boxMinterProgramId: "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A",
     collectionMint: "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH",
-  }),
-  "poncho_drifella_devnet_x3": createFrontendDrop({
-    solanaCluster: "devnet",
-    dropId: "poncho_drifella_devnet_x3",
-    dropFamily: "poncho_drifella",
-    collectionName: "Poncho Drifella",
-
-    // Drop metadata base (collection.json + json/* + images/*)
-    metadataBase: "https://assets.mons.link/drops/poncho",
-
-
-    // Drop config (kept in sync with on-chain config; useful for UI defaults)
-    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
-    priceSol: 0.069,
-    discountPriceSol: 0.042,
-    discountMintsPerWallet: 3,
-    discountMerkleRoot: "57a899219adfcf52baa508f4093ab40338326957ea322d51efc60b678292727d",
-    maxSupply: 207,
-    itemsPerBox: 1,
-    maxPerTx: 15,
-    namePrefix: "pack",
-    figureNamePrefix: "card",
-    symbol: "poncho",
-
-    // On-chain ids
-    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
-    boxMinterConfigPda: "HwkwxXbcdFqHMiSt9P7nkQbFbvPsbymRDvqQCm9ZB37v",
-    collectionMint: "J814HrGHAMxCxDJT3kKxVrQtNkt1Z7KEstc689AzbwmA",
   }),
 };
 // END AUTO-GENERATED FRONTEND DROP REGISTRY

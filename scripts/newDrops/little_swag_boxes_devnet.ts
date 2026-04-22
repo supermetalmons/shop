@@ -12,7 +12,7 @@ export const NEW_DROP = defineNewDropConfig({
     reuseProgramId: true,
   },
   onchain: {
-    dropId: 'little_swag_boxes_devnet_on_shared',
+    dropId: 'little_swag_boxes_devnet',
     dropFamily: 'little_swag_boxes',
     metadataBase: 'https://assets.mons.link/drops/lsb',
     collectionMetadata: {

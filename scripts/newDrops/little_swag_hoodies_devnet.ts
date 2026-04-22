@@ -9,10 +9,10 @@ export const NEW_DROP = defineNewDropConfig({
   deploy: {
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
-    reuseProgramId: true,
+    reuseProgramId: false,
   },
   onchain: {
-    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x5',
+    dropId: 'little_swag_hoodies_devnet',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     mintSelection: {
@@ -29,7 +29,7 @@ export const NEW_DROP = defineNewDropConfig({
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/lsw_hoodie.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_hoodies.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
