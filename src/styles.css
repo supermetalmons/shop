@@ -1239,7 +1239,30 @@ button.no-focus-style:focus-visible {
   border-radius: var(--radius);
   padding: 0;
   overflow: hidden;
+  position: relative;
   transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.inventory__size-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  z-index: 2;
+  color: #5c5c5e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .inventory__size-badge {
+    color: #b5b5b9;
+  }
 }
 
 .inventory__item--box .inventory__media {

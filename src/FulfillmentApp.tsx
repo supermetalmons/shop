@@ -15,7 +15,7 @@ import {
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
 import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
-import { dropAssetLabel, dropAssetReference } from './lib/dropLabels';
+import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './lib/dropLabels';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, normalizeDropId, type FigureMediaConfig, type FrontendDeploymentConfig } from './config/deployment';
@@ -342,9 +342,7 @@ function renderBoxTiles(args: {
   return (
     <div className="figure-grid">
       {boxIds.map((boxId, index) => {
-        const sizeLabel = labelSource.mintSelection?.kind === 'size'
-          ? labelSource.mintSelection.options.find((option) => boxId >= option.startId && boxId <= option.endId)?.label
-          : undefined;
+        const sizeLabel = dropMintSelectionLabel(labelSource, boxId);
         const label = sizeLabel || dropAssetReference(labelSource, 'box', boxId);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">

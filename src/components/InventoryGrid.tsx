@@ -1,7 +1,7 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react';
 import { InventoryItem } from '../types';
 import { getFrontendDrop } from '../config/deployment';
-import { dropAssetCount } from '../lib/dropLabels';
+import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 
@@ -124,6 +124,7 @@ export function InventoryGrid({
         const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
         const hasFooter = Boolean(item.assignedDudes?.length);
         const canInteract = canSelect || revealEnabled;
+        const sizeLabel = dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId);
         const handleClick = canSelect
           ? () => onToggle(item.id)
           : revealEnabled
@@ -172,6 +173,11 @@ export function InventoryGrid({
             <div className="inventory__media">
               <InventoryMedia item={item} />
             </div>
+            {sizeLabel && isSelected ? (
+              <span className="inventory__size-badge" aria-label={`Size ${sizeLabel}`}>
+                {sizeLabel}
+              </span>
+            ) : null}
             {hasFooter ? (
               <div className="inventory__body">
                 {!isPendingReveal && item.assignedDudes?.length ? (

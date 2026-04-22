@@ -1,6 +1,7 @@
 import type { FrontendDeploymentConfig } from '../config/deployment';
 
 type DropLabelSource = Partial<Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix'>> | null | undefined;
+type DropMintSelectionSource = Partial<Pick<FrontendDeploymentConfig, 'mintSelection'>> | null | undefined;
 type DropAssetKind = 'box' | 'figure';
 
 function capitalize(value: string): string {
@@ -74,4 +75,21 @@ export function dropOpenVerb(source: DropLabelSource): string {
 
 export function dropOpenGerund(source: DropLabelSource): string {
   return usesUnboxAction(source) ? 'unboxing' : 'opening';
+}
+
+/**
+ * For drops with a `size` mint selection, resolves the size label that owns the
+ * given asset id (boxId or dudeId — they share the same id space within a drop).
+ * Returns `undefined` when the drop has no size variants or the id falls outside
+ * any configured range.
+ */
+export function dropMintSelectionLabel(
+  source: DropMintSelectionSource,
+  reference: number | string | null | undefined,
+): string | undefined {
+  const selection = source?.mintSelection;
+  if (selection?.kind !== 'size') return undefined;
+  const id = Math.floor(Number(reference));
+  if (!Number.isFinite(id) || id < 1) return undefined;
+  return selection.options.find((option) => id >= option.startId && id <= option.endId)?.label;
 }
