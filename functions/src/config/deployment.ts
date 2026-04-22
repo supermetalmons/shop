@@ -237,6 +237,59 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
   }),
+  "lsw_cobalt_figure_hoodie_26_devnet_x5": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "lsw_cobalt_figure_hoodie_26_devnet_x5",
+    dropFamily: "lsw_cobalt_figure_hoodie",
+    collectionName: "Little Swag Hoodies",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/hoodie",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
+    maxSupply: 34,
+    itemsPerBox: 0,
+    maxPerTx: 15,
+    namePrefix: "hoodie",
+    figureNamePrefix: "hoodie",
+    symbol: "hoodie",
+
+    // On-chain ids
+    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
+    boxMinterConfigPda: "FMbuoNU1JrG4MK1xbDxQQKGpXUjoVfdvB21oGAX4vieq",
+    collectionMint: "7fwErGrQyvGq5NzwQYbhPuJarQ4VtJ1ruzETtr71LvMp",
+    receiptsMerkleTree: "GhpuF7JjFNVP8bLkXWnwSh5M3n6pBgMbyNrpv7Bt5mGv",
+    deliveryLookupTable: "A51EpfUA2yfZvEtz97SJwJhndiFJ5qDKMM3sQPYnYGoy",
+  }),
   "poncho_drifella": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
@@ -265,6 +318,36 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     collectionMint: "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH",
     receiptsMerkleTree: "5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow",
     deliveryLookupTable: "4j1YHm1iwmYDZegY5CxJUYqBcxtpPy7UBkSUfRfz6W8c",
+  }),
+  "poncho_drifella_devnet_x3": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "poncho_drifella_devnet_x3",
+    dropFamily: "poncho_drifella",
+    collectionName: "Poncho Drifella",
+
+    // Drop metadata base (collection.json + json/* + images/*)
+    metadataBase: "https://assets.mons.link/drops/poncho",
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 3,
+    discountMerkleRoot: "57a899219adfcf52baa508f4093ab40338326957ea322d51efc60b678292727d",
+    maxSupply: 207,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: "pack",
+    figureNamePrefix: "card",
+    symbol: "poncho",
+
+    // On-chain ids
+    boxMinterProgramId: "J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W",
+    boxMinterConfigPda: "HwkwxXbcdFqHMiSt9P7nkQbFbvPsbymRDvqQCm9ZB37v",
+    collectionMint: "J814HrGHAMxCxDJT3kKxVrQtNkt1Z7KEstc689AzbwmA",
+    receiptsMerkleTree: "HieEpfPUJwZTarBZ3vr3h68m4hAoWHJ3gbUXao2a3pnT",
+    deliveryLookupTable: "GRrpRibXdgUYtegauuCzk2NZDSMMWPfHQxPFMR8XddLG",
   }),
 };
 // END AUTO-GENERATED FUNCTIONS DROP REGISTRY
