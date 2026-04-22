@@ -12,7 +12,7 @@ export const NEW_DROP = defineNewDropConfig({
     reuseProgramId: true,
   },
   onchain: {
-    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x3',
+    dropId: 'lsw_cobalt_figure_hoodie_26_devnet_x4',
     dropFamily: 'lsw_cobalt_figure_hoodie',
     metadataBase: 'https://assets.mons.link/drops/hoodie',
     mintSelection: {
@@ -24,8 +24,8 @@ export const NEW_DROP = defineNewDropConfig({
       ],
     },
     collectionMetadata: {
-      name: 'lsw cobalt figure hoodie 26',
-      description: 'little swag world hoodie - redeem physical on mons.shop',
+      name: 'Little Swag Hoodie',
+      description: '',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
