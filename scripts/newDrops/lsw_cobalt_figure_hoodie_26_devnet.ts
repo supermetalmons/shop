@@ -25,7 +25,7 @@ export const NEW_DROP = defineNewDropConfig({
     },
     collectionMetadata: {
       name: 'lsw cobalt figure hoodie 26',
-      description: 'little swag world hoodie · redeem physical on mons.shop',
+      description: 'little swag world hoodie - redeem physical on mons.shop',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
