@@ -24,8 +24,8 @@ export const NEW_DROP = defineNewDropConfig({
       ],
     },
     collectionMetadata: {
-      name: 'Little Swag Hoodie',
-      description: '',
+      name: 'Little Swag Hoodies',
+      description: 'lsw cobalt figure hoodie · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
       image: 'https://assets.mons.link/drops/hoodie/hoodie.webp',
     },
