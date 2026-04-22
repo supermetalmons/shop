@@ -73,15 +73,17 @@ export function DropsPanel({ showHoodieOnMain = false }: DropsPanelProps) {
     items.push({
       key: hoodieDrop.dropId,
       image: hoodieImage,
-      alt: 'lsw cobalt figure hoodie 26',
-      label: 'lsw cobalt figure hoodie 26',
+      alt: 'Little Swag Hoodies',
+      label: 'Little Swag Hoodies',
       path: dropPath(hoodieDrop.dropId),
     });
   }
 
+  const gridClassName = `drops-panel__grid${items.length > 1 ? ' drops-panel__grid--compact' : ''}`;
+
   return (
     <section className="card drops-panel">
-      <div className="drops-panel__grid">
+      <div className={gridClassName}>
         {items.map((item, index) => (
           <DropPanelCard
             key={item.key}
