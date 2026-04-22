@@ -14,7 +14,7 @@ import {
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
 } from './lib/ponchoDrifellaReveal';
-import { getFrontendDrop } from './config/deployment';
+import { isDropFamily, listFrontendDrops } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
 import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
@@ -24,7 +24,15 @@ import { navigate } from './navigation';
 const REVEAL_NOTE_OFFSET = 28;
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
-const WIP_DROP = getFrontendDrop('poncho_drifella_devnet');
+const WIP_DROP = (() => {
+  const devnetPonchoDrop = listFrontendDrops().find(
+    (drop) => drop.solanaCluster === 'devnet' && isDropFamily(drop, 'poncho_drifella'),
+  );
+  if (!devnetPonchoDrop) {
+    throw new Error('Missing devnet poncho_drifella frontend drop config');
+  }
+  return devnetPonchoDrop;
+})();
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
