@@ -6,6 +6,13 @@ import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallba
 import type { MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 
+type MintPanelTerminalAction = {
+  statusText: string;
+  buttonText?: string;
+  href?: string;
+  onClick?: () => void;
+};
+
 interface MintPanelProps {
   stats?: MintStats;
   onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
@@ -28,6 +35,7 @@ interface MintPanelProps {
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
   successfulMintToken?: number;
+  terminalAction?: MintPanelTerminalAction;
 }
 
 /**
@@ -159,6 +167,7 @@ export function MintPanel({
   mintSelection,
   showSizeInfo,
   successfulMintToken = 0,
+  terminalAction,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -329,6 +338,15 @@ export function MintPanel({
     discountLabel || `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`;
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc;
+  const terminalState =
+    terminalAction ||
+    (soldOut
+      ? {
+          statusText: 'Minted out',
+          buttonText: secondaryHref ? 'Secondary' : undefined,
+          href: secondaryHref,
+        }
+      : null);
 
   return (
     <section className="card mint-panel">
@@ -370,23 +388,25 @@ export function MintPanel({
           ))}
         </div>
       </div>
-      {soldOut ? (
+      {terminalState ? (
         <div className="mint-panel__footer mint-panel__footer--soldout">
           <div className="mint-panel__info">
-          <div className="mint-panel__price">{mintTitle}</div>
-            <div
-              className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
-              aria-hidden={!remainingReady}
-            >
-            Minted out
-            </div>
+            <div className="mint-panel__price">{mintTitle}</div>
+            <div className="mint-panel__remaining">{terminalState.statusText}</div>
           </div>
-          {secondaryHref ? (
+          {terminalState.buttonText && (terminalState.href || terminalState.onClick) ? (
             <div className="mint-panel__cta">
-              <a className="mint-panel__secondary" href={secondaryHref} target="_blank" rel="noreferrer">
-                <span className="mint-panel__secondary-text">Secondary</span>
-                <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
-              </a>
+              {terminalState.href ? (
+                <a className="mint-panel__secondary" href={terminalState.href} target="_blank" rel="noreferrer">
+                  <span className="mint-panel__secondary-text">{terminalState.buttonText}</span>
+                  <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
+                </a>
+              ) : (
+                <button type="button" className="mint-panel__secondary" onClick={terminalState.onClick}>
+                  <span className="mint-panel__secondary-text">{terminalState.buttonText}</span>
+                  <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
+                </button>
+              )}
             </div>
           ) : null}
         </div>

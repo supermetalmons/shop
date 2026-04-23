@@ -8,7 +8,7 @@ import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { getBuildInfo } from './lib/buildInfo';
 import { WalletContextProvider } from './wallet/WalletContext';
 import { type SolanaCluster, listFrontendDrops } from './config/deployment';
-import { resolveFrontendDropByPath } from './lib/dropConfig';
+import { resolveFrontendDropByPath, resolveUpcomingDropRouteByPath } from './lib/dropConfig';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -51,6 +51,7 @@ const resolveCurrentPath = (): string => {
     normalizedPath === canonicalFulfillmentPath ||
     normalizedPath === '/wip' ||
     drifPaths.has(normalizedPath) ||
+    resolveUpcomingDropRouteByPath(normalizedPath) ||
     resolveFrontendDropByPath(normalizedPath)
   ) {
     return normalizedPath;
@@ -90,6 +91,7 @@ function RoutedContent({ path }: RoutedContentProps) {
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
   const routeDrop = resolveFrontendDropByPath(path);
+  const upcomingRoute = resolveUpcomingDropRouteByPath(path);
 
   if (isDrifRoute) {
     return (
@@ -104,7 +106,9 @@ function RoutedContent({ path }: RoutedContentProps) {
   }
 
   return (
-    <WalletContextProvider cluster={routeDrop?.solanaCluster || NEUTRAL_WALLET_CLUSTER}>
+    <WalletContextProvider
+      cluster={routeDrop?.solanaCluster || upcomingRoute?.solanaCluster || NEUTRAL_WALLET_CLUSTER}
+    >
       <App currentPath={isWipRoute ? '/' : path} />
       {isWipRoute ? (
         <React.Suspense fallback={null}>

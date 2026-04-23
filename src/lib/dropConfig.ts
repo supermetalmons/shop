@@ -1,6 +1,9 @@
 import { clusterApiUrl } from '@solana/web3.js';
 import {
   FRONTEND_DROPS,
+  isDropFamily,
+  normalizeDropId,
+  type DropFamily,
   type FrontendDropConfig,
   type SolanaCluster,
   getFrontendDrop,
@@ -16,6 +19,30 @@ export function dropPath(dropId: string): string {
   return `/${String(dropId || '').trim()}`;
 }
 
+export type UpcomingDropRouteConfig = {
+  path: string;
+  dropFamily: DropFamily;
+  solanaCluster: SolanaCluster;
+  label: string;
+  title: string;
+  notifyPath: string;
+  previewDropId?: string;
+  boxNamePrefix?: string;
+};
+
+const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
+  {
+    path: '/little_swag_hoodies',
+    dropFamily: 'little_swag_hoodies',
+    solanaCluster: 'mainnet-beta',
+    label: 'Little Swag Hoodies',
+    title: 'Little Swag Hoodies',
+    notifyPath: '/notify_me',
+    previewDropId: 'little_swag_hoodies_devnet',
+    boxNamePrefix: 'hoodie',
+  },
+];
+
 export function listFrontendDrops(): FrontendDropConfig[] {
   return Object.keys(FRONTEND_DROPS)
     .sort((a, b) => a.localeCompare(b))
@@ -26,12 +53,47 @@ export function listFrontendDropIds(): string[] {
   return listFrontendDrops().map((drop) => drop.dropId);
 }
 
-export function resolveFrontendDropByPath(pathname: string): FrontendDropConfig | null {
+export function listUpcomingDropRoutes(): UpcomingDropRouteConfig[] {
+  return [...UPCOMING_DROP_ROUTES];
+}
+
+export function resolveUpcomingDropRouteByPath(pathname: string): UpcomingDropRouteConfig | null {
+  const normalizedPath = normalizePathname(pathname);
+  return UPCOMING_DROP_ROUTES.find((route) => normalizePathname(route.path) === normalizedPath) || null;
+}
+
+export function resolveUpcomingRouteDrop(
+  route: UpcomingDropRouteConfig | null | undefined,
+  drops: readonly FrontendDropConfig[] = listFrontendDrops(),
+): FrontendDropConfig | null {
+  if (!route) return null;
+  return (
+    drops.find((drop) => drop.solanaCluster === route.solanaCluster && isDropFamily(drop, route.dropFamily)) || null
+  );
+}
+
+function resolveFrontendDropById(dropId: string, drops?: readonly FrontendDropConfig[]): FrontendDropConfig | null {
+  const normalizedDropId = normalizeDropId(dropId);
+  if (!normalizedDropId) return null;
+  if (drops) {
+    return drops.find((drop) => drop.dropId === normalizedDropId) || null;
+  }
+  return getFrontendDrop(normalizedDropId) || null;
+}
+
+export function resolveFrontendDropByPath(
+  pathname: string,
+  options?: { drops?: readonly FrontendDropConfig[] },
+): FrontendDropConfig | null {
   const normalizedPath = normalizePathname(pathname);
   if (normalizedPath === '/') return null;
 
   const candidate = normalizedPath.slice(1);
-  return getFrontendDrop(candidate) || null;
+  const exactDrop = resolveFrontendDropById(candidate, options?.drops);
+  if (exactDrop) return exactDrop;
+
+  const upcomingRoute = resolveUpcomingDropRouteByPath(normalizedPath);
+  return resolveUpcomingRouteDrop(upcomingRoute, options?.drops);
 }
 
 export function heliusRpcUrlForCluster(cluster: SolanaCluster): string | null {

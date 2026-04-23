@@ -102,6 +102,7 @@ import {
   dropPath,
   listFrontendDrops,
   resolveFrontendDropByPath,
+  resolveUpcomingDropRouteByPath,
   rpcEndpointForCluster,
 } from './lib/dropConfig';
 import { ADMIN_WALLETS, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
@@ -605,6 +606,10 @@ function App({ currentPath }: AppProps) {
     [currentPath],
   );
   const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
+  const upcomingDropRoute = useMemo(
+    () => resolveUpcomingDropRouteByPath(normalizedCurrentPath),
+    [normalizedCurrentPath],
+  );
   const allDrops = useMemo(() => listFrontendDrops(), []);
   const adminMenuDrops = useMemo(
     () => allDrops.filter((drop) => !['little_swag_boxes', 'poncho_drifella'].includes(drop.dropId)),
@@ -1019,6 +1024,15 @@ function App({ currentPath }: AppProps) {
   );
   const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
   const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
+  const upcomingDropContent = useMemo(
+    () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
+    [upcomingDropRoute?.previewDropId],
+  );
+  const upcomingMintPreviewImage =
+    upcomingDropContent?.mintPanel.previewImageUrl || upcomingDropContent?.box.previewImageUrl;
+  const upcomingMintPreviewAspectRatio = upcomingDropContent?.mintPanel.previewImageUrl
+    ? upcomingDropContent.mintPanel.aspectRatio
+    : upcomingDropContent?.box.aspectRatio || 1;
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
@@ -4214,7 +4228,25 @@ function App({ currentPath }: AppProps) {
         ) : null}
       </header>
 
-      {!routeDrop ? (
+      {!routeDrop && upcomingDropRoute ? (
+        <MintPanel
+          onMint={() => undefined}
+          busy={false}
+          title={upcomingDropRoute.title}
+          boxImageSrc={upcomingMintPreviewImage}
+          boxAspectRatio={upcomingMintPreviewAspectRatio}
+          boxNamePrefix={upcomingDropRoute.boxNamePrefix}
+          priceSol={0}
+          discountPriceSol={0}
+          maxSupply={1}
+          maxPerTx={1}
+          terminalAction={{
+            statusText: 'Soon',
+            buttonText: 'Notify me',
+            onClick: () => navigate(upcomingDropRoute.notifyPath),
+          }}
+        />
+      ) : !routeDrop ? (
         <DropsPanel />
       ) : (
         <MintPanel

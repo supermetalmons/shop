@@ -1,15 +1,22 @@
-import { isDropFamily } from '../config/deployment';
 import { navigate } from '../navigation';
 import { resolveDropContent } from '../lib/dropContent';
-import { dropPath, listFrontendDrops } from '../lib/dropConfig';
+import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../lib/dropConfig';
 
 const lsbContent = resolveDropContent('little_swag_boxes');
 const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
 const lsbImage = lsbBase ? `${lsbBase}/default.webp` : undefined;
 const ponchoImage = resolveDropContent('poncho_drifella').box.previewImageUrl;
-const hoodieDrops = listFrontendDrops().filter((drop) => isDropFamily(drop, 'little_swag_hoodies'));
-const hoodieDrop = hoodieDrops.find((drop) => drop.solanaCluster === 'mainnet-beta') ?? hoodieDrops[0];
-const hoodieImage = hoodieDrop ? resolveDropContent(hoodieDrop.dropId).box.previewImageUrl : undefined;
+const upcomingDropItems = listUpcomingDropRoutes().map((route) => {
+  const liveDrop = resolveUpcomingRouteDrop(route);
+  const previewDropId = liveDrop?.dropId || route.previewDropId;
+  return {
+    key: `upcoming:${route.path}`,
+    image: previewDropId ? resolveDropContent(previewDropId).box.previewImageUrl : undefined,
+    alt: route.label,
+    label: route.label,
+    path: route.path,
+  };
+});
 
 type DropPanelItem = {
   key: string;
@@ -64,16 +71,8 @@ export function DropsPanel() {
       label: 'Poncho Drifella',
       path: dropPath('poncho_drifella'),
     },
+    ...upcomingDropItems,
   ];
-  if (hoodieDrop) {
-    items.push({
-      key: hoodieDrop.dropId,
-      image: hoodieImage,
-      alt: 'Little Swag Hoodies',
-      label: 'Little Swag Hoodies',
-      path: dropPath(hoodieDrop.dropId),
-    });
-  }
 
   const gridClassName = `drops-panel__grid${items.length > 1 ? ' drops-panel__grid--compact' : ''}`;
 
