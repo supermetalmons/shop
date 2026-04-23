@@ -9,6 +9,7 @@ import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
+import { NotifyOverlay } from './components/NotifyOverlay';
 import { ClaimForm } from './components/ClaimForm';
 import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
@@ -610,6 +611,10 @@ function App({ currentPath }: AppProps) {
     () => resolveUpcomingDropRouteByPath(normalizedCurrentPath),
     [normalizedCurrentPath],
   );
+  const [notifyOverlayOpen, setNotifyOverlayOpen] = useState(false);
+  useEffect(() => {
+    if (!upcomingDropRoute) setNotifyOverlayOpen(false);
+  }, [upcomingDropRoute]);
   const allDrops = useMemo(() => listFrontendDrops(), []);
   const adminMenuDrops = useMemo(
     () => allDrops.filter((drop) => !['little_swag_boxes', 'poncho_drifella'].includes(drop.dropId)),
@@ -4243,7 +4248,7 @@ function App({ currentPath }: AppProps) {
           terminalAction={{
             statusText: 'Soon',
             buttonText: 'Notify me',
-            onClick: () => navigate(upcomingDropRoute.notifyPath),
+            onClick: () => setNotifyOverlayOpen(true),
           }}
         />
       ) : !routeDrop ? (
@@ -4500,6 +4505,9 @@ function App({ currentPath }: AppProps) {
             </button>
           </div>
         </div>
+      ) : null}
+      {upcomingDropRoute ? (
+        <NotifyOverlay open={notifyOverlayOpen} onClose={() => setNotifyOverlayOpen(false)} />
       ) : null}
     </div>
   );
