@@ -11,10 +11,6 @@ const hoodieDrops = listFrontendDrops().filter((drop) => isDropFamily(drop, 'lit
 const hoodieDrop = hoodieDrops.find((drop) => drop.solanaCluster === 'mainnet-beta') ?? hoodieDrops[0];
 const hoodieImage = hoodieDrop ? resolveDropContent(hoodieDrop.dropId).box.previewImageUrl : undefined;
 
-type DropsPanelProps = {
-  showHoodieOnMain?: boolean;
-};
-
 type DropPanelItem = {
   key: string;
   image?: string;
@@ -52,7 +48,7 @@ function DropPanelCard({ item, isOrphan }: { item: DropPanelItem; isOrphan?: boo
   );
 }
 
-export function DropsPanel({ showHoodieOnMain = false }: DropsPanelProps) {
+export function DropsPanel() {
   const items: DropPanelItem[] = [
     {
       key: 'little_swag_boxes',
@@ -69,7 +65,7 @@ export function DropsPanel({ showHoodieOnMain = false }: DropsPanelProps) {
       path: dropPath('poncho_drifella'),
     },
   ];
-  if (showHoodieOnMain && hoodieDrop) {
+  if (hoodieDrop) {
     items.push({
       key: hoodieDrop.dropId,
       image: hoodieImage,

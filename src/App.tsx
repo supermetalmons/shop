@@ -116,7 +116,6 @@ const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQ
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
-const SHOW_HOODIE_ON_MAIN_STORAGE_KEY = 'monsShowHoodieOnMain';
 
 function pickRandomSoundUrl(soundUrls: readonly string[]) {
   return soundUrls[Math.floor(Math.random() * soundUrls.length)] || soundUrls[0]!;
@@ -223,28 +222,6 @@ function persistRecentReveals(wallet: string, ids: string[]) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage?.setItem(recentRevealKey(wallet), JSON.stringify(ids));
-  } catch {
-    // ignore storage failures
-  }
-}
-
-function loadShowHoodieOnMain(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage?.getItem(SHOW_HOODIE_ON_MAIN_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function persistShowHoodieOnMain(show: boolean) {
-  if (typeof window === 'undefined') return;
-  try {
-    if (show) {
-      window.localStorage?.setItem(SHOW_HOODIE_ON_MAIN_STORAGE_KEY, '1');
-    } else {
-      window.localStorage?.removeItem(SHOW_HOODIE_ON_MAIN_STORAGE_KEY);
-    }
   } catch {
     // ignore storage failures
   }
@@ -815,7 +792,6 @@ function App({ currentPath }: AppProps) {
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
-  const [showHoodieOnMain, setShowHoodieOnMain] = useState(() => loadShowHoodieOnMain());
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner, {
     includeDevnet: isAdminWallet,
@@ -1115,10 +1091,6 @@ function App({ currentPath }: AppProps) {
       document.removeEventListener('mousedown', onPointerDown);
     };
   }, [settingsOpen]);
-
-  useEffect(() => {
-    persistShowHoodieOnMain(showHoodieOnMain);
-  }, [showHoodieOnMain]);
 
   useEffect(() => {
     connectedWalletRef.current = connectedWallet || null;
@@ -4181,16 +4153,6 @@ function App({ currentPath }: AppProps) {
                       ))}
                   </select>
                 ) : null}
-                <label className="top__submenu-toggle">
-                  <input
-                    type="checkbox"
-                    checked={showHoodieOnMain}
-                    onChange={(evt) => {
-                      setShowHoodieOnMain(evt.target.checked);
-                    }}
-                  />
-                  <span>hoodie on main</span>
-                </label>
                 <button
                   type="button"
                   className="link small top__submenu-nav"
@@ -4253,7 +4215,7 @@ function App({ currentPath }: AppProps) {
       </header>
 
       {!routeDrop ? (
-        <DropsPanel showHoodieOnMain={showHoodieOnMain} />
+        <DropsPanel />
       ) : (
         <MintPanel
           stats={effectiveMintStats}
