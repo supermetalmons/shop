@@ -4,6 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import {
   assertMplCoreCollectionHasUpdateDelegates,
   decodeMplCoreCollectionUpdateDelegates,
+  formatFreshProgramKeypairNotice,
 } from '../scripts/deploy-all-onchain.ts';
 
 function u8(value: number): Buffer {
@@ -131,4 +132,19 @@ test('assertMplCoreCollectionHasUpdateDelegates rejects externally controlled Up
       }),
     /UpdateDelegate plugin authority mismatch/,
   );
+});
+
+test('formatFreshProgramKeypairNotice warns to back up non-git fresh shared program keypair', () => {
+  const notice = formatFreshProgramKeypairNotice({
+    programId: 'Program1111111111111111111111111111111111111',
+    programKeypairPath: 'onchain/target/deploy/box_minter-keypair.json',
+    backupPath: 'onchain/target/deploy/box_minter-keypair.bak.json',
+  });
+
+  assert.match(notice, /FRESH SHARED PROGRAM KEYPAIR CREATED/);
+  assert.match(notice, /Program1111111111111111111111111111111111111/);
+  assert.match(notice, /Keypair path: .*onchain\/target\/deploy\/box_minter-keypair\.json/);
+  assert.match(notice, /Back up this keypair file immediately/);
+  assert.match(notice, /not tracked by git/);
+  assert.match(notice, /Previous keypair backup: .*onchain\/target\/deploy\/box_minter-keypair\.bak\.json/);
 });

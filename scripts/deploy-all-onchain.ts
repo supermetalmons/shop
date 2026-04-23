@@ -2088,6 +2088,31 @@ function writeFreshProgramKeypair(programKeypairPath: string, kp: Keypair): { ba
   return { backupPath };
 }
 
+export function formatFreshProgramKeypairNotice(args: {
+  programId: string;
+  programKeypairPath: string;
+  backupPath?: string;
+}): string {
+  const lines = [
+    '',
+    '================================================================================',
+    'IMPORTANT: FRESH SHARED PROGRAM KEYPAIR CREATED',
+    '================================================================================',
+    `Program id:   ${args.programId}`,
+    `Keypair path: ${path.resolve(args.programKeypairPath)}`,
+    '',
+    'Back up this keypair file immediately. It is not tracked by git, and losing it means',
+    'this shared program id cannot be upgraded or reused later.',
+  ];
+
+  if (args.backupPath) {
+    lines.push('', `Previous keypair backup: ${path.resolve(args.backupPath)}`);
+  }
+
+  lines.push('================================================================================', '');
+  return lines.join('\n');
+}
+
 function cargoLockHasPackage(onchainDir: string, name: string, version: string): boolean {
   const lockPath = path.join(onchainDir, 'Cargo.lock');
   if (!existsSync(lockPath)) return false;
@@ -2290,9 +2315,13 @@ async function main() {
   });
   if (freshProgramKeypair) {
     const { backupPath } = writeFreshProgramKeypair(programKeypair, freshProgramKeypair);
-    console.log('Generated fresh program id:', expectedProgramId);
-    console.log('Program keypair:', programKeypair);
-    if (backupPath) console.log('Backed up previous program keypair to:', backupPath);
+    console.log(
+      formatFreshProgramKeypairNotice({
+        programId: expectedProgramId!,
+        programKeypairPath: programKeypair,
+        backupPath,
+      }),
+    );
   }
 
   const hasSolanaCargo = canRunSolanaCargo();
