@@ -48,6 +48,8 @@ const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRL
 const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 // NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
+const MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY = 2;
+
 // ---------------------------------------------------------------------------
 // Edit scripts/newDrops/<dropId>.ts to change deploy + drop behavior.
 // This script requires the target dropId so it can load that config file.
@@ -981,7 +983,7 @@ function encodeUmiArray(items: Buffer[]): Buffer {
 
 // MPL-Core plugin encoding helpers (Umi dataEnum + option layouts).
 // We need BubblegumV2 + UpdateDelegate so Bubblegum can mint cNFT receipts into this collection
-// even though the collection update authority is a PDA (box_minter config PDA).
+// while the deployer/admin wallet remains the root collection update authority for marketplace verification.
 function mplCoreBasePluginAuthorityAddress(address: PublicKey): Buffer {
   // BasePluginAuthority::Address enum index = 3 (None=0, Owner=1, UpdateAuthority=2, Address=3)
   return Buffer.concat([u8(3), address.toBuffer()]);
@@ -1042,9 +1044,9 @@ function mplCorePluginAuthorityPairBubblegumV2(): Buffer {
 }
 
 function mplCorePluginAuthorityPairUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
-  // Let Bubblegum mint by letting our deploy/admin key be an UpdateDelegate.
-  // We keep the plugin authority as None => UpdateAuthority (the collection update authority, i.e. the config PDA).
-  // Bubblegum’s own checks will pass as long as `collection_authority` is in `additionalDelegates`.
+  // Let the program config PDA mint/update collection assets while the deployer/admin key remains
+  // marketplace-verifiable as the root collection update authority.
+  // Bubblegum’s own checks will pass as long as the admin/cosigner collection_authority is in `additionalDelegates`.
   return Buffer.concat([mplCorePluginUpdateDelegate(additionalDelegates), borshOption(null)]);
 }
 
@@ -1065,6 +1067,7 @@ const IX_MPL_CORE_CREATE_COLLECTION_V2 = 21;
 function buildCreateMplCoreCollectionV2Ix(args: {
   collection: PublicKey;
   updateAuthority: PublicKey;
+  updateDelegates: PublicKey[];
   payer: PublicKey;
   systemProgram: PublicKey;
   name: string;
@@ -1076,14 +1079,14 @@ function buildCreateMplCoreCollectionV2Ix(args: {
     encodeUmiArray([
       // Collection-level royalties to the same treasury used for primary mint payments.
       // IMPORTANT: we set the *plugin authority* to the deployer key so this script can later
-      // update royalties if the on-chain payment treasury is changed (update authority is a PDA).
+      // update royalties if the on-chain payment treasury is changed.
       mplCorePluginAuthorityPairRoyalties({
         basisPoints: args.royaltiesBps,
         creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
         authority: args.payer,
       }),
       mplCorePluginAuthorityPairBubblegumV2(),
-      mplCorePluginAuthorityPairUpdateDelegate([args.payer]),
+      mplCorePluginAuthorityPairUpdateDelegate(uniquePubkeys(args.updateDelegates)),
     ]),
   );
   const externalAdaptersOpt = borshOption(encodeUmiArray([]));
@@ -1220,31 +1223,51 @@ function readBorshString(buf: Buffer, offset: number): { value: string; offset: 
   return { value: buf.subarray(start, end).toString('utf8'), offset: end };
 }
 
-function decodeMplCoreCollectionRoyalties(data: Buffer): {
-  basisPoints: number;
-  creators: { address: PublicKey; percentage: number }[];
-  ruleSetKind: number;
+function canRead(buf: Buffer, offset: number, length: number): boolean {
+  return Number.isInteger(offset) && Number.isInteger(length) && offset >= 0 && length >= 0 && offset + length <= buf.length;
+}
+
+function skipBorshString(buf: Buffer, offset: number): number | null {
+  if (!canRead(buf, offset, 4)) return null;
+  const len = buf.readUInt32LE(offset);
+  const end = offset + 4 + len;
+  if (!canRead(buf, offset + 4, len)) return null;
+  return end;
+}
+
+type MplCoreCollectionPluginRecord = {
+  pluginType: number;
   authorityKind: number;
   authorityAddress?: PublicKey;
-} | null {
+  offset: number;
+};
+
+function readMplCoreCollectionPluginRecords(data: Buffer): MplCoreCollectionPluginRecord[] | null {
   let o = 0;
+  if (!canRead(data, o, 1)) return null;
   const key = data[o];
   o += 1;
   if (key !== 5) return null; // Not a CollectionV1 account.
 
   // updateAuthority pubkey
+  if (!canRead(data, o, 32)) return null;
   o += 32;
   // name + uri
-  o = readBorshString(data, o).offset;
-  o = readBorshString(data, o).offset;
+  const afterName = skipBorshString(data, o);
+  if (afterName == null) return null;
+  o = afterName;
+  const afterUri = skipBorshString(data, o);
+  if (afterUri == null) return null;
+  o = afterUri;
   // numMinted + currentSize
-  o += 4;
-  o += 4;
+  if (!canRead(data, o, 8)) return null;
+  o += 8;
 
   // No plugins section.
   if (o >= data.length) return null;
 
   // PluginHeaderV1 (key=3, pluginRegistryOffset=u64)
+  if (!canRead(data, o, 9)) return null;
   const pluginHeaderKey = data[o];
   o += 1;
   if (pluginHeaderKey !== 3) return null;
@@ -1253,62 +1276,153 @@ function decodeMplCoreCollectionRoyalties(data: Buffer): {
 
   // PluginRegistryV1 (key=4)
   let r = pluginRegistryOffset;
+  if (!canRead(data, r, 5)) return null;
   const regKey = data[r];
   r += 1;
   if (regKey !== 4) return null;
   const registryLen = data.readUInt32LE(r);
   r += 4;
 
-  let royaltiesPluginOffset: number | null = null;
-  let authorityKind = 0;
-  let authorityAddress: PublicKey | undefined;
-
-  // RegistryRecord[]: pluginType(u8) + authority(BasePluginAuthority) + offset(u64)
+  const records: MplCoreCollectionPluginRecord[] = [];
   for (let i = 0; i < registryLen; i++) {
+    if (!canRead(data, r, 2)) return null;
     const pluginType = data[r];
     r += 1;
 
-    const authKind = data[r];
+    const authorityKind = data[r];
     r += 1;
-    if (authKind === 3) {
-      const pk = new PublicKey(data.subarray(r, r + 32));
+    let authorityAddress: PublicKey | undefined;
+    if (authorityKind === 3) {
+      if (!canRead(data, r, 32)) return null;
+      authorityAddress = new PublicKey(data.subarray(r, r + 32));
       r += 32;
-      if (pluginType === 0) authorityAddress = pk;
+    } else if (authorityKind < 0 || authorityKind > 3) {
+      return null;
     }
 
-    const off = Number(data.readBigUInt64LE(r));
+    if (!canRead(data, r, 8)) return null;
+    const offset = Number(data.readBigUInt64LE(r));
     r += 8;
+    if (!Number.isFinite(offset) || offset < 0 || offset >= data.length) return null;
 
-    if (pluginType === 0) {
-      royaltiesPluginOffset = off;
-      authorityKind = authKind;
-    }
+    records.push({ pluginType, authorityKind, authorityAddress, offset });
   }
 
-  if (royaltiesPluginOffset == null || !Number.isFinite(royaltiesPluginOffset) || royaltiesPluginOffset < 0 || royaltiesPluginOffset >= data.length)
-    return null;
+  return records;
+}
 
-  let p = royaltiesPluginOffset;
+function decodeMplCoreCollectionRoyalties(data: Buffer): {
+  basisPoints: number;
+  creators: { address: PublicKey; percentage: number }[];
+  ruleSetKind: number;
+  authorityKind: number;
+  authorityAddress?: PublicKey;
+} | null {
+  const records = readMplCoreCollectionPluginRecords(data);
+  const royaltiesRecord = records?.find((record) => record.pluginType === 0);
+  if (!royaltiesRecord) return null;
+
+  let p = royaltiesRecord.offset;
+  if (!canRead(data, p, 1)) return null;
   const pluginVariant = data[p];
   p += 1;
   // Plugin variant must match Royalties (0).
   if (pluginVariant !== 0) return null;
 
+  if (!canRead(data, p, 6)) return null;
   const basisPoints = data.readUInt16LE(p);
   p += 2;
   const creatorsLen = data.readUInt32LE(p);
   p += 4;
   const creators: { address: PublicKey; percentage: number }[] = [];
   for (let i = 0; i < creatorsLen; i++) {
+    if (!canRead(data, p, 33)) return null;
     const address = new PublicKey(data.subarray(p, p + 32));
     p += 32;
     const percentage = data[p];
     p += 1;
     creators.push({ address, percentage });
   }
+  if (!canRead(data, p, 1)) return null;
   const ruleSetKind = data[p];
 
-  return { basisPoints, creators, ruleSetKind, authorityKind, authorityAddress };
+  return {
+    basisPoints,
+    creators,
+    ruleSetKind,
+    authorityKind: royaltiesRecord.authorityKind,
+    authorityAddress: royaltiesRecord.authorityAddress,
+  };
+}
+
+export function decodeMplCoreCollectionUpdateDelegates(data: Buffer): {
+  delegates: PublicKey[];
+  authorityKind: number;
+  authorityAddress?: PublicKey;
+} | null {
+  const records = readMplCoreCollectionPluginRecords(data);
+  const updateDelegateRecord = records?.find((record) => record.pluginType === 4);
+  if (!updateDelegateRecord) return null;
+
+  let p = updateDelegateRecord.offset;
+  if (!canRead(data, p, 5)) return null;
+  const pluginVariant = data[p];
+  p += 1;
+  // Plugin variant must match UpdateDelegate (4).
+  if (pluginVariant !== 4) return null;
+
+  const delegateLen = data.readUInt32LE(p);
+  p += 4;
+  const delegates: PublicKey[] = [];
+  for (let i = 0; i < delegateLen; i++) {
+    if (!canRead(data, p, 32)) return null;
+    delegates.push(new PublicKey(data.subarray(p, p + 32)));
+    p += 32;
+  }
+
+  return {
+    delegates,
+    authorityKind: updateDelegateRecord.authorityKind,
+    authorityAddress: updateDelegateRecord.authorityAddress,
+  };
+}
+
+export function assertMplCoreCollectionHasUpdateDelegates(args: {
+  data: Buffer;
+  collection: PublicKey | string;
+  requiredDelegates: PublicKey[];
+}) {
+  const collection = typeof args.collection === 'string' ? args.collection : args.collection.toBase58();
+  const updateDelegate = decodeMplCoreCollectionUpdateDelegates(args.data);
+  if (!updateDelegate) {
+    throw new Error(`Missing/undecodable UpdateDelegate plugin on core collection: ${collection}`);
+  }
+  if (updateDelegate.authorityKind !== MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY) {
+    const actualAuthority =
+      updateDelegate.authorityKind === 3 && updateDelegate.authorityAddress
+        ? `Address(${updateDelegate.authorityAddress.toBase58()})`
+        : `kind=${updateDelegate.authorityKind}`;
+    throw new Error(
+      `Core collection UpdateDelegate plugin authority mismatch.\n` +
+        `Collection: ${collection}\n` +
+        `Expected authority: UpdateAuthority\n` +
+        `Actual authority  : ${actualAuthority}\n` +
+        `Fix: recreate the collection through ${getActiveNewDropConfigPath()}, or update the collection UpdateDelegate plugin authority to UpdateAuthority before pinning it.`,
+    );
+  }
+
+  const missing = uniquePubkeys(args.requiredDelegates).filter(
+    (required) => !updateDelegate.delegates.some((actual) => actual.equals(required)),
+  );
+  if (!missing.length) return updateDelegate;
+
+  throw new Error(
+    `Core collection UpdateDelegate missing required delegate(s).\n` +
+      `Collection: ${collection}\n` +
+      `Expected delegates: ${uniquePubkeys(args.requiredDelegates).map((delegate) => delegate.toBase58()).join(', ')}\n` +
+      `Actual delegates  : ${updateDelegate.delegates.map((delegate) => delegate.toBase58()).join(', ') || '(none)'}\n` +
+      `Missing delegates : ${missing.map((delegate) => delegate.toBase58()).join(', ')}`,
+  );
 }
 
 async function assertMplCoreCollectionRoyalties(args: {
@@ -1348,6 +1462,27 @@ async function assertMplCoreCollectionRoyalties(args: {
   console.log(`  basisPoints: ${royalties.basisPoints}`);
   console.log(`  recipient : ${treasury.toBase58()} (100%)`);
   console.log(`  ruleSet   : ${royalties.ruleSetKind === 0 ? 'None' : `kind=${royalties.ruleSetKind}`}`);
+}
+
+async function assertMplCoreCollectionUpdateDelegates(args: {
+  connection: Connection;
+  coreCollection: PublicKey;
+  requiredDelegates: PublicKey[];
+}) {
+  const { connection, coreCollection, requiredDelegates } = args;
+  const info = await retryRpcRead(`getAccountInfo(core collection update delegates ${coreCollection.toBase58()})`, () =>
+    connection.getAccountInfo(coreCollection, { commitment: 'confirmed' }),
+  );
+  if (!info?.data) throw new Error(`Missing core collection account: ${coreCollection.toBase58()}`);
+
+  const updateDelegate = assertMplCoreCollectionHasUpdateDelegates({
+    data: Buffer.from(info.data),
+    collection: coreCollection,
+    requiredDelegates,
+  });
+
+  console.log('\n✅ Core collection UpdateDelegate verified');
+  console.log(`  delegates: ${updateDelegate.delegates.map((delegate) => delegate.toBase58()).join(', ')}`);
 }
 
 async function ensureMplCoreCollectionRoyalties(args: {
@@ -2294,9 +2429,12 @@ async function main() {
   const itemsPerBox = Number(boxMinterConfig.itemsPerBox);
   const maxPerTx = Number(boxMinterConfig.maxPerTx);
   // 2) Create or reuse an MPL-Core collection (uncompressed).
-  // IMPORTANT: for the on-chain program to mint into the collection, the collection update authority
-  // must be the program config PDA.
+  // IMPORTANT: root collection update authority stays with the deployer/admin wallet for marketplace
+  // verification. The program config PDA must be an UpdateDelegate so the on-chain program can mint
+  // and update collection assets through PDA-signed MPL-Core CPIs.
   const coreCollection = deployCfg.coreCollectionPubkey ? new PublicKey(deployCfg.coreCollectionPubkey) : undefined;
+  const collectionUpdateAuthority = payer.publicKey;
+  const requiredCollectionUpdateDelegates = uniquePubkeys([configPda, payer.publicKey]);
 
   const coreCollectionConfig = {
     name: collectionMetadata.name,
@@ -2308,25 +2446,35 @@ async function main() {
     resolvedCoreCollection = coreCollection;
     await assertMplCoreCollection(connection, resolvedCoreCollection);
     const updateAuthority = await getMplCoreCollectionUpdateAuthority(connection, resolvedCoreCollection);
-    if (!updateAuthority.equals(configPda)) {
+    if (!updateAuthority.equals(collectionUpdateAuthority)) {
       throw new Error(
         `NEW_DROP.deploy.coreCollectionPubkey is not configured for this deployment.\n` +
           `Collection: ${resolvedCoreCollection.toBase58()}\n` +
-          `Expected update authority (program config PDA): ${configPda.toBase58()}\n` +
+          `Expected update authority (deployer/admin): ${collectionUpdateAuthority.toBase58()}\n` +
           `Actual update authority: ${updateAuthority.toBase58()}\n` +
           `\n` +
-          `Fix: unset NEW_DROP.deploy.coreCollectionPubkey in ${getActiveNewDropConfigPath()} to auto-create one, or transfer collection update authority to the config PDA.`,
+          `Fix: unset NEW_DROP.deploy.coreCollectionPubkey in ${getActiveNewDropConfigPath()} to auto-create one, or transfer collection update authority to the deployer/admin wallet.`,
       );
     }
+    await assertMplCoreCollectionUpdateDelegates({
+      connection,
+      coreCollection: resolvedCoreCollection,
+      requiredDelegates: requiredCollectionUpdateDelegates,
+    });
     console.log('\n[2/3] Using existing MPL-Core collection…');
     console.log('  core collection:', resolvedCoreCollection.toBase58());
-    console.log('  collection update authority (config PDA):', configPda.toBase58());
+    console.log('  collection update authority (deployer/admin):', collectionUpdateAuthority.toBase58());
+    console.log(
+      '  required UpdateDelegate entries:',
+      requiredCollectionUpdateDelegates.map((delegate) => delegate.toBase58()).join(', '),
+    );
   } else {
     console.log('\n[2/3] Creating MPL-Core collection (uncompressed)…');
     const collection = Keypair.generate();
     const createCollectionIx = buildCreateMplCoreCollectionV2Ix({
       collection: collection.publicKey,
-      updateAuthority: configPda,
+      updateAuthority: collectionUpdateAuthority,
+      updateDelegates: requiredCollectionUpdateDelegates,
       payer: payer.publicKey,
       systemProgram: SystemProgram.programId,
       name: coreCollectionConfig.name,
@@ -2349,9 +2497,27 @@ async function main() {
     });
     console.log('✅ Collection created:', sig);
     console.log('  Collection:', collection.publicKey.toBase58());
-    console.log('  Collection update authority (program config PDA):', configPda.toBase58());
+    console.log('  Collection update authority (deployer/admin):', collectionUpdateAuthority.toBase58());
+    console.log(
+      '  UpdateDelegate entries:',
+      requiredCollectionUpdateDelegates.map((delegate) => delegate.toBase58()).join(', '),
+    );
     resolvedCoreCollection = collection.publicKey;
     await assertMplCoreCollection(connection, resolvedCoreCollection);
+    const updateAuthority = await getMplCoreCollectionUpdateAuthority(connection, resolvedCoreCollection);
+    if (!updateAuthority.equals(collectionUpdateAuthority)) {
+      throw new Error(
+        `Fresh MPL-Core collection update authority mismatch.\n` +
+          `Collection: ${resolvedCoreCollection.toBase58()}\n` +
+          `Expected update authority (deployer/admin): ${collectionUpdateAuthority.toBase58()}\n` +
+          `Actual update authority: ${updateAuthority.toBase58()}`,
+      );
+    }
+    await assertMplCoreCollectionUpdateDelegates({
+      connection,
+      coreCollection: resolvedCoreCollection,
+      requiredDelegates: requiredCollectionUpdateDelegates,
+    });
   }
 
   // If we are using a pre-existing collection (NEW_DROP.deploy.coreCollectionPubkey), enforce royalties here.
@@ -2507,7 +2673,14 @@ async function main() {
 
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
+}
+
+if (isDirectRun()) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
