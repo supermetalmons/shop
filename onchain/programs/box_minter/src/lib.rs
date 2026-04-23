@@ -4,7 +4,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
 use solana_sha256_hasher::hashv;
 
-declare_id!("yWau7hJqM4eakL9eTtievAVnB5xB5vPrNhCwmSgRWr3");
+declare_id!("BDCLsYMfh9JiijWhbmMN3ETGR9njUrGosDqVvh78RZYe");
 
 /// The only signer allowed to run `initialize()`.
 ///
