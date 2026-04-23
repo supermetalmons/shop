@@ -709,7 +709,7 @@ function App({ currentPath }: AppProps) {
   const canOpenBoxesForDropId = useCallback(
     (dropId?: string) => {
       const dropConfig = getDropConfig(dropId);
-      if (isDropFamily(dropConfig, 'lsw_cobalt_figure_hoodie')) return false;
+      if (isDropFamily(dropConfig, 'little_swag_hoodies')) return false;
       return !isDirectDeliveryItemsPerBox(dropConfig?.itemsPerBox);
     },
     [getDropConfig],
@@ -4275,7 +4275,7 @@ function App({ currentPath }: AppProps) {
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
           mintSelection={routeDrop.mintSelection}
-          showSizeInfo={isDropFamily(routeDrop.dropId, 'lsw_cobalt_figure_hoodie') && routeDrop.mintSelection?.kind === 'size'}
+          showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
           successfulMintToken={successfulMintToken}
         />
       )}

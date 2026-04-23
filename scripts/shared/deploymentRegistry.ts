@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FigureMediaConfigSerialized = {
@@ -308,7 +308,7 @@ function asDropFamily(value: unknown): DropFamily | undefined {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (
     normalized === 'little_swag_boxes' ||
-    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'default'
   ) {
@@ -321,7 +321,7 @@ export function requireDropFamily(value: string, label: string): DropFamily {
   const normalized = asDropFamily(value);
   if (normalized) return normalized;
   throw new Error(
-    `Invalid ${label}: ${value} (expected default, little_swag_boxes, lsw_cobalt_figure_hoodie, or poncho_drifella)`,
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, or poncho_drifella)`,
   );
 }
 
@@ -720,7 +720,7 @@ export function renderFrontendDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
@@ -933,7 +933,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   const normalized = String(value ?? '').trim().toLowerCase();
   if (
     normalized === 'little_swag_boxes' ||
-    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'default'
   ) {
@@ -1170,7 +1170,7 @@ export function renderFunctionsDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type MintSelectionOption = {
@@ -1371,7 +1371,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   const normalized = String(value ?? '').trim().toLowerCase();
   if (
     normalized === 'little_swag_boxes' ||
-    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'default'
   ) {

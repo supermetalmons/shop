@@ -10,7 +10,7 @@
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'lsw_cobalt_figure_hoodie';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FunctionsDropConfig = {
@@ -199,9 +199,7 @@ export function normalizeDropId(dropId: string): string {
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
-  lsw_cobalt_figure_hoodie_26_draft: 'lsw_cobalt_figure_hoodie',
   poncho_drifella: 'poncho_drifella',
-  poncho_drifella_draft: 'poncho_drifella',
 };
 
 export function defaultDropFamilyForDropId(dropId: string): DropFamily {
@@ -213,7 +211,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   const normalized = String(value ?? '').trim().toLowerCase();
   if (
     normalized === 'little_swag_boxes' ||
-    normalized === 'lsw_cobalt_figure_hoodie' ||
+    normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'default'
   ) {

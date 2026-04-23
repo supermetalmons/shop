@@ -7,7 +7,7 @@ const lsbContent = resolveDropContent('little_swag_boxes');
 const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
 const lsbImage = lsbBase ? `${lsbBase}/default.webp` : undefined;
 const ponchoImage = resolveDropContent('poncho_drifella').box.previewImageUrl;
-const hoodieDrops = listFrontendDrops().filter((drop) => isDropFamily(drop, 'lsw_cobalt_figure_hoodie'));
+const hoodieDrops = listFrontendDrops().filter((drop) => isDropFamily(drop, 'little_swag_hoodies'));
 const hoodieDrop = hoodieDrops.find((drop) => drop.solanaCluster === 'mainnet-beta') ?? hoodieDrops[0];
 const hoodieImage = hoodieDrop ? resolveDropContent(hoodieDrop.dropId).box.previewImageUrl : undefined;
 

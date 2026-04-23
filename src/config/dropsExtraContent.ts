@@ -75,7 +75,7 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
   },
 };
-const LSW_COBALT_FIGURE_HOODIE_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     previewImageUrl: HOODIE_CLEAN_IMAGE_URL,
     aspectRatio: HOODIE_CLEAN_IMAGE_ASPECT_RATIO,
@@ -101,8 +101,8 @@ export function getDropExtraContentOverride(dropId?: string): DropExtraContentOv
   return DROPS_EXTRA_CONTENT[normalizedDropId] || (
     isDropFamily(normalizedDropId, 'poncho_drifella')
       ? PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT
-      : isDropFamily(normalizedDropId, 'lsw_cobalt_figure_hoodie')
-        ? LSW_COBALT_FIGURE_HOODIE_FAMILY_EXTRA_CONTENT
+      : isDropFamily(normalizedDropId, 'little_swag_hoodies')
+        ? LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT
         : undefined
   );
 }

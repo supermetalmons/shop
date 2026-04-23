@@ -13,7 +13,7 @@ export const NEW_DROP = defineNewDropConfig({
   },
   onchain: {
     dropId: 'little_swag_hoodies_devnet',
-    dropFamily: 'lsw_cobalt_figure_hoodie',
+    dropFamily: 'little_swag_hoodies',
     metadataBase: 'bafybeieggyaqco2zvapsbba5dmg4uln5tae42geifrrwggg3dypdv25hg4',
     mintSelection: {
       kind: 'size',
