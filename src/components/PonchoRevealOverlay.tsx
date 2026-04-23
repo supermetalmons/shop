@@ -419,6 +419,7 @@ export function PonchoRevealOverlay({
                     card={card}
                     interactive={playerState.cardInteractive}
                     onImageReadyChange={handleCardImageReadyChange}
+                    wakeOnInteractiveUnlock={false}
                   />
                 </div>
               </div>

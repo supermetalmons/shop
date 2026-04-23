@@ -6,11 +6,13 @@ export default function WipInteractiveCard({
   interactive = true,
   loadingImageSrc,
   onImageReadyChange,
+  wakeOnInteractiveUnlock = true,
 }: {
   card: DrifCardConfig;
   interactive?: boolean;
   loadingImageSrc?: string;
   onImageReadyChange?: (ready: boolean) => void;
+  wakeOnInteractiveUnlock?: boolean;
 }) {
   return (
     <DrifEffectCard
@@ -20,7 +22,7 @@ export default function WipInteractiveCard({
       loadingImageSrc={loadingImageSrc}
       onImageReadyChange={onImageReadyChange}
       disableGlow
-      enableInteractiveUnlockWake
+      enableInteractiveUnlockWake={wakeOnInteractiveUnlock}
       interactive={interactive}
       imageLoading="eager"
     />
