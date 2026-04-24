@@ -495,6 +495,8 @@ const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
 const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
+const LITTLE_SWAG_HOODIES_DELIVERY_BASE_LAMPORTS = 250_000_000;
+const LITTLE_SWAG_HOODIES_DELIVERY_EXTRA_LAMPORTS = 150_000_000;
 const MAX_DELIVERY_ITEMS = 32;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
@@ -507,9 +509,13 @@ const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
 );
 const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * MAX_CONFIGURED_ITEMS_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
-const MAX_DELIVERY_LAMPORTS =
+const MAX_GENERIC_DELIVERY_LAMPORTS =
   INTL_DELIVERY_BASE_LAMPORTS +
   Math.max(0, MAX_DELIVERY_FIGURES - MAX_CONFIGURED_ITEMS_PER_BOX) * INTL_DELIVERY_EXTRA_LAMPORTS;
+const MAX_HOODIE_DELIVERY_LAMPORTS =
+  LITTLE_SWAG_HOODIES_DELIVERY_BASE_LAMPORTS +
+  Math.max(0, MAX_DELIVERY_ITEMS - 1) * LITTLE_SWAG_HOODIES_DELIVERY_EXTRA_LAMPORTS;
+const MAX_DELIVERY_LAMPORTS = Math.max(MAX_GENERIC_DELIVERY_LAMPORTS, MAX_HOODIE_DELIVERY_LAMPORTS);
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
@@ -2481,6 +2487,10 @@ function calculateDeliveryLamports(
 ): number {
   const figureCount = countDeliveryFigures(items, itemsPerBox);
   if (figureCount <= 0) return 0;
+  if (dropFamily === 'little_swag_hoodies') {
+    const extraFigures = Math.max(0, figureCount - 1);
+    return LITTLE_SWAG_HOODIES_DELIVERY_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_HOODIES_DELIVERY_EXTRA_LAMPORTS;
+  }
   const normalized = normalizeCountryCode(countryCode);
   if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
   const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);

@@ -7,6 +7,8 @@ const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
 const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
+const LITTLE_SWAG_HOODIES_DELIVERY_BASE_LAMPORTS = 250_000_000;
+const LITTLE_SWAG_HOODIES_DELIVERY_EXTRA_LAMPORTS = 150_000_000;
 
 export function isDirectDeliveryItemsPerBox(itemsPerBox?: number): boolean {
   const parsed = Number(itemsPerBox);
@@ -52,6 +54,10 @@ export function calculateDeliveryLamports(
   const normalized = normalizeCountryCode(countryCode);
   const figureCount = countDeliveryFigures(items, itemsPerBox);
   if (figureCount <= 0) return 0;
+  if (dropFamily === 'little_swag_hoodies') {
+    const extraFigures = Math.max(0, figureCount - 1);
+    return LITTLE_SWAG_HOODIES_DELIVERY_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_HOODIES_DELIVERY_EXTRA_LAMPORTS;
+  }
   if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
   const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
   return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;

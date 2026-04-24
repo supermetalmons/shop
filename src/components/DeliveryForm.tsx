@@ -57,7 +57,9 @@ export function DeliveryForm({
   const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, unitsPerBox);
   const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
   let shippingNote = `International delivery: 0.25 SOL up to ${unitsPerBox} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
-  if (selectedCountryCode === 'US') {
+  if (dropFamily === 'little_swag_hoodies') {
+    shippingNote = `Delivery: 0.25 SOL for the first ${singleDeliveryUnitLabel}. 0.15 SOL each additional ${singleDeliveryUnitLabel}.`;
+  } else if (selectedCountryCode === 'US') {
     if (directDelivery) {
       shippingNote = 'Free US shipping';
     } else if (dropFamily === 'little_swag_boxes') {
