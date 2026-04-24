@@ -14,7 +14,7 @@ export const NEW_DROP = defineNewDropConfig({
   onchain: {
     dropId: 'little_swag_hoodies_devnet',
     dropFamily: 'little_swag_hoodies',
-    metadataBase: 'bafybeieggyaqco2zvapsbba5dmg4uln5tae42geifrrwggg3dypdv25hg4',
+    metadataBase: 'bafybeid5fkhvxxtvajnyeq3brvmepadmqyvmlt7wwifrwfgzzdhurzcmpy',
     mintSelection: {
       kind: 'size',
       options: [
@@ -27,7 +27,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Little Swag Hoodies',
       description: 'lsw cobalt blue hoodie · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'ipfs://bafybeiegstwuc3a6qzcztylkrchlgrrd46ibakoplmupqgsy473wcdo5gy/hoodie.webp',
+      image: 'ipfs://bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/hoodie.webp',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_hoodies.csv',
     receiptsTree: {
