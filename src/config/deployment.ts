@@ -529,6 +529,58 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterProgramId: "CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA",
     collectionMint: "4sdm8HbtoiV3JejDkMXxGZtiCumMHyovWyjA3SLWErG6",
   }),
+  "little_swag_hoodies_devnet": createFrontendDrop({
+    solanaCluster: "devnet",
+    dropId: "little_swag_hoodies_devnet",
+    dropFamily: "little_swag_hoodies",
+    collectionName: "Little Swag Hoodies",
+
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
+    metadataBase: "ipfs://bafybeid5fkhvxxtvajnyeq3brvmepadmqyvmlt7wwifrwfgzzdhurzcmpy",
+    metadataPathFormat: "compact",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
+
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
+    maxSupply: 34,
+    itemsPerBox: 0,
+    maxPerTx: 15,
+    namePrefix: "hoodie",
+    figureNamePrefix: "hoodie",
+    symbol: "hoodie",
+
+    // On-chain ids
+    boxMinterProgramId: "8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6",
+    boxMinterConfigPda: "J78XFzZ4ZZ4ykYVYofEDPD8yPc5TZxDeDrM7dikwNMZn",
+    collectionMint: "DTDkHsCGJfBAnXqR5YPbsbzegnPSF5FUh4g3ckH5hV3w",
+  }),
   "poncho_drifella": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",

@@ -371,6 +371,60 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     receiptsMerkleTree: "2C64cbdnyASftaTdVFYYudn94g274QZ1wv283ocRQaTT",
     deliveryLookupTable: "8JhdJPGjsgAaBdBH3sQChwtmuwUBeWxnpcCRPT4Hph9A",
   }),
+  "little_swag_hoodies_devnet": createFunctionsDrop({
+    solanaCluster: "devnet",
+    dropId: "little_swag_hoodies_devnet",
+    dropFamily: "little_swag_hoodies",
+    collectionName: "Little Swag Hoodies",
+
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
+    metadataBase: "ipfs://bafybeid5fkhvxxtvajnyeq3brvmepadmqyvmlt7wwifrwfgzzdhurzcmpy",
+    metadataPathFormat: "compact",
+    mintSelection: {
+      kind: "size",
+      options: [
+        {
+          key: "L",
+          label: "L",
+          startId: 1,
+          endId: 15,
+        },
+        {
+          key: "XL",
+          label: "XL",
+          startId: 16,
+          endId: 30,
+        },
+        {
+          key: "2XL",
+          label: "2XL",
+          startId: 31,
+          endId: 34,
+        },
+      ],
+    },
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
+    maxSupply: 34,
+    itemsPerBox: 0,
+    maxPerTx: 15,
+    namePrefix: "hoodie",
+    figureNamePrefix: "hoodie",
+    symbol: "hoodie",
+
+    // On-chain ids
+    boxMinterProgramId: "8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6",
+    boxMinterConfigPda: "J78XFzZ4ZZ4ykYVYofEDPD8yPc5TZxDeDrM7dikwNMZn",
+    collectionMint: "DTDkHsCGJfBAnXqR5YPbsbzegnPSF5FUh4g3ckH5hV3w",
+    receiptsMerkleTree: "3JycJA4eKp611yDqCf2ZTAQwRaV7u57WAaMRWLEDd1ak",
+    deliveryLookupTable: "6poyGyRRoTy1dY9qC1vo6iXy9yH7ya4SRaBZQgBxPKB6",
+  }),
   "poncho_drifella": createFunctionsDrop({
     solanaCluster: "mainnet-beta",
     dropId: "poncho_drifella",
