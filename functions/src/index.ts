@@ -1724,14 +1724,14 @@ function bubblegumBurnV2Ix(args: {
   });
 }
 
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN =
+const LEGACY_FIXED_ITEMS_PER_BOX = 3;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS =
   8 + // discriminator
   32 * 3 +
   8 +
   8 +
   32 +
   4 +
-  1 +
   1 +
   4 +
   4 +
@@ -1742,6 +1742,12 @@ const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN =
   96 +
   1 +
   1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS = BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS + 1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT = BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS + 1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT + 4 + 12;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * 3 * 3;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED = BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
 
 type DecodedBoxMinterConfig = {
   admin: PublicKey;
@@ -1810,11 +1816,11 @@ function decodeOptionalTrailingDropSeed(data: Buffer, offset: number): Buffer | 
 
 function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterConfig {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (buf.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN) {
+  if (buf.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
     throw new HttpsError(
       'failed-precondition',
-      'Box minter config uses an older schema. Re-run deploy-all-onchain for a fresh configurable-items deployment.',
-      { expectedMinBytes: BOX_MINTER_CONFIG_ACCOUNT_SIZE_MIN, actualBytes: buf.length },
+      'Box minter config data is truncated.',
+      { expectedMinBytes: BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS, actualBytes: buf.length },
     );
   }
 
@@ -1832,8 +1838,11 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   o += 4;
   const maxPerTx = buf.readUInt8(o);
   o += 1;
-  const itemsPerBox = buf.readUInt8(o);
-  o += 1;
+  let itemsPerBox = LEGACY_FIXED_ITEMS_PER_BOX;
+  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
+    itemsPerBox = buf.readUInt8(o);
+    o += 1;
+  }
   o += 4; // minted
   o = readBorshString(buf, o).next;
   o = readBorshString(buf, o).next;
@@ -1841,13 +1850,16 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   o = uriBase.next;
   o += 1; // started
   o += 1; // bump
-  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(buf[o]);
-  o += 1;
-  if (o + 4 <= buf.length) {
+  let discountMintsPerWallet = 1;
+  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT) {
+    discountMintsPerWallet = normalizeDiscountMintsPerWallet(buf[o]);
+    o += 1;
+  }
+  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX) {
     o = readBorshString(buf, o).next; // figureNamePrefix
   }
-  const mintVariantBytes = 1 + 4 * 3 * 3;
-  if (o < buf.length) {
+  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS) {
+    const mintVariantBytes = 1 + 4 * 3 * 3;
     if (o + mintVariantBytes > buf.length) {
       throw new HttpsError('failed-precondition', 'Box minter config variant data is truncated');
     }
@@ -1856,7 +1868,8 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     o = readU32Tuple(buf, o).next;
     o = readU32Tuple(buf, o).next;
   }
-  const dropSeed = decodeOptionalTrailingDropSeed(buf, o);
+  const dropSeed =
+    buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED ? decodeOptionalTrailingDropSeed(buf, o) : undefined;
 
   if (!Number.isFinite(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
     throw new HttpsError('failed-precondition', 'On-chain config has invalid itemsPerBox', { itemsPerBox });

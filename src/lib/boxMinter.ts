@@ -23,6 +23,30 @@ const MINT_VARIANT_KIND_SIZE = 1;
 const MINT_VARIANT_OPTION_COUNT = 3;
 const MINT_COMPUTE_UNIT_LIMIT = 1_400_000;
 const SIZE_SELECTION_REQUIRED_ERROR = 'This drop requires a size selection before minting';
+const LEGACY_FIXED_ITEMS_PER_BOX = 3;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS =
+  8 + // discriminator
+  32 * 3 +
+  8 +
+  8 +
+  32 +
+  4 +
+  1 +
+  4 +
+  4 +
+  8 +
+  4 +
+  10 +
+  4 +
+  96 +
+  1 +
+  1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS = BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS + 1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT = BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS + 1;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT + 4 + 12;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
+const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED = BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -372,26 +396,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     }
   }
 
-  const expectedMinLen =
-    8 + // discriminator
-    32 * 3 +
-    8 +
-    8 +
-    32 +
-    4 +
-    1 +
-    1 +
-    4 +
-    4 +
-    8 +
-    4 +
-    10 +
-    4 +
-    96 +
-    1 +
-    1;
-  if (data.length < expectedMinLen) {
-    throw new Error('Unsupported box minter config schema. Re-run deploy-all-onchain for a fresh configurable-items deployment.');
+  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
+    throw new Error('Unsupported box minter config schema. Config data is truncated.');
   }
 
   // Layout matches `onchain/programs/box_minter/src/lib.rs` BoxMinterConfig.
@@ -413,8 +419,11 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 4;
   const maxPerTx = data[o];
   o += 1;
-  const itemsPerBox = data[o];
-  o += 1;
+  let itemsPerBox = LEGACY_FIXED_ITEMS_PER_BOX;
+  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
+    itemsPerBox = data[o];
+    o += 1;
+  }
   if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_CONFIGURED_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
     throw new Error(`Invalid on-chain itemsPerBox: ${itemsPerBox} (expected ${MIN_CONFIGURED_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
   }
@@ -431,10 +440,13 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   o += 1;
   const bump = data[o] ?? 0;
   o += 1;
-  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
-  o += 1;
+  let discountMintsPerWallet = 1;
+  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT) {
+    discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
+    o += 1;
+  }
   let figureNamePrefix = 'figure';
-  if (o + 4 <= data.length) {
+  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX) {
     const decoded = readBorshString(data, o);
     figureNamePrefix = decoded.value;
     o = decoded.next;
@@ -443,8 +455,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   let mintVariantStartIds: [number, number, number] = [0, 0, 0];
   let mintVariantEndIds: [number, number, number] = [0, 0, 0];
   let mintVariantNextIds: [number, number, number] = [0, 0, 0];
-  const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
-  if (o < data.length) {
+  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS) {
+    const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
     if (o + mintVariantBytes > data.length) {
       throw new Error('Unsupported box minter config schema. Variant mint data is truncated.');
     }
@@ -460,7 +472,8 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     mintVariantNextIds = nextIds.value;
     o = nextIds.next;
   }
-  const dropSeed = decodeOptionalTrailingDropSeed(data, o);
+  const dropSeed =
+    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED ? decodeOptionalTrailingDropSeed(data, o) : undefined;
 
   return {
     pubkey,

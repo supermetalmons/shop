@@ -10,6 +10,7 @@ import {
 } from '../src/lib/boxMinter.ts';
 
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
+const LEGACY_FIXED_ITEMS_CONFIG_SIZE = 289;
 
 function u32LE(value: number): Buffer {
   const buf = Buffer.alloc(4);
@@ -67,6 +68,34 @@ function encodeConfigAccount(dropSeed?: Uint8Array): Buffer {
   ]);
 }
 
+function padToAccountSize(data: Buffer, size: number): Buffer {
+  assert.ok(data.length <= size, `fixture exceeds account size: ${data.length} > ${size}`);
+  return Buffer.concat([data, Buffer.alloc(size - data.length)]);
+}
+
+function encodeLegacyFixedItemsConfigAccount(): Buffer {
+  return padToAccountSize(
+    Buffer.concat([
+      Buffer.from(ACCOUNT_BOX_MINTER_CONFIG),
+      pubkey(1).toBuffer(),
+      pubkey(2).toBuffer(),
+      pubkey(3).toBuffer(),
+      u64LE(1_000_000n),
+      u64LE(500_000n),
+      Buffer.alloc(32, 9),
+      u32LE(333),
+      Buffer.from([15]),
+      u32LE(7),
+      borshString('box'),
+      borshString('box'),
+      borshString('https://assets.example.com/drops/lsb/json/boxes/'),
+      Buffer.from([1]),
+      Buffer.from([254]),
+    ]),
+    LEGACY_FIXED_ITEMS_CONFIG_SIZE,
+  );
+}
+
 function withZeroPadding(data: Buffer, paddingBytes = 64): Buffer {
   return Buffer.concat([data, Buffer.alloc(Math.max(0, paddingBytes))]);
 }
@@ -79,6 +108,20 @@ test('decodeBoxMinterConfigAccount handles legacy and v2 schemas', () => {
   const dropSeed = Uint8Array.from({ length: 32 }, (_, index) => (index + 17) & 0xff);
   const v2 = decodeBoxMinterConfigAccount(accountPubkey, withZeroPadding(encodeConfigAccount(dropSeed)));
   assert.deepEqual(Array.from(v2.dropSeed || []), Array.from(dropSeed));
+});
+
+test('decodeBoxMinterConfigAccount handles pre-items fixed-3 legacy schema', () => {
+  const legacy = decodeBoxMinterConfigAccount(pubkey(100), encodeLegacyFixedItemsConfigAccount());
+  assert.equal(legacy.itemsPerBox, 3);
+  assert.equal(legacy.discountMintsPerWallet, 1);
+  assert.equal(legacy.figureNamePrefix, 'figure');
+  assert.equal(legacy.minted, 7);
+  assert.equal(legacy.maxSupply, 333);
+  assert.equal(legacy.maxPerTx, 15);
+  assert.equal(legacy.namePrefix, 'box');
+  assert.equal(legacy.uriBase, 'https://assets.example.com/drops/lsb/json/boxes/');
+  assert.equal(legacy.dropSeed, undefined);
+  assert.equal(legacy.mintVariantKind, 0);
 });
 
 test('boxMinterConfigPda uses drop seed when provided', () => {
