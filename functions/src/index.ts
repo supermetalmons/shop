@@ -427,7 +427,7 @@ const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
   },
   {
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'little_swag_hoodies_devnet'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
   },
 ];
 
