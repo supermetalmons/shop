@@ -3,7 +3,7 @@ export const ADMIN_WALLETS = new Set<string>([
 ]);
 
 export const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>([
-  ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ['little_swag_boxes', 'poncho_drifella']],
+  ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies']],
   ['AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', ['poncho_drifella']],
   ['kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx', ['little_swag_boxes', 'poncho_drifella']],
 ]);
