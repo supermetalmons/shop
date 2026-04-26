@@ -406,7 +406,7 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
   },
   {
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: ['little_swag_boxes', 'poncho_drifella'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
   },
 ].forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
   try {
