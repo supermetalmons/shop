@@ -2737,7 +2737,7 @@ function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): st
     .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
     .join('');
   return [
-    '<p>A shipment order is ready to ship.</p>',
+    '<p>New order received.</p>',
     '<ul>',
     details,
     '</ul>',
