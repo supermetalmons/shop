@@ -1,5 +1,6 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldPath, FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -17,6 +18,7 @@ import {
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
+import type { Resend as ResendClient } from 'resend';
 import { createHash, randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
@@ -37,6 +39,7 @@ import {
 const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
+const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -394,8 +397,26 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
   return { uid, wallet: normalizeWallet(wallet) };
 }
 
-const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
-[
+type ShipperFulfillmentAccessConfig = {
+  wallet: string;
+  dropIds: string[];
+};
+
+type ShipperReadyToShipNotificationConfig = {
+  dropIds: string[];
+  emails: string[];
+};
+
+const SHIPPER_EMAIL_SCHEMA = z.string().email().max(254);
+
+function normalizeShipperEmail(rawEmail: unknown): string | null {
+  if (typeof rawEmail !== 'string') return null;
+  const email = rawEmail.trim().toLowerCase();
+  if (!email || !SHIPPER_EMAIL_SCHEMA.safeParse(email).success) return null;
+  return email;
+}
+
+const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
   {
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
@@ -406,9 +427,20 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
   },
   {
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'little_swag_hoodies_devnet'],
   },
-].forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
+];
+
+const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
+  {
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'little_swag_hoodies_devnet'],
+    emails: ['ivan@ivan.lol'],
+  },
+];
+
+const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
+const SHIPPER_READY_EMAILS_BY_DROP_ID = new Map<string, Set<string>>();
+SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
   try {
     const wallet = new PublicKey(rawWallet).toBase58();
     const normalizedDropIds = SHIPPER_DROP_IDS_BY_WALLET.get(wallet) || new Set<string>();
@@ -422,6 +454,36 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
     SHIPPER_DROP_IDS_BY_WALLET.set(wallet, normalizedDropIds);
   } catch (err) {
     console.error('[mons/functions] invalid shipper fulfillment access config', { rawWallet, rawDropIds, error: summarizeError(err) });
+  }
+});
+SHIPPER_READY_TO_SHIP_NOTIFICATIONS.forEach(({ dropIds: rawDropIds, emails: rawEmails }) => {
+  try {
+    const emails = rawEmails
+      .map((rawEmail) => {
+        const email = normalizeShipperEmail(rawEmail);
+        if (!email) {
+          console.error('[mons/functions] invalid shipper ready-to-ship notification email', { rawEmail });
+        }
+        return email;
+      })
+      .filter((email): email is string => Boolean(email));
+    if (!emails.length) return;
+
+    rawDropIds.forEach((rawDropId) => {
+      const dropId = normalizeDropId(rawDropId);
+      if (!DROP_RUNTIMES[dropId]) {
+        throw new Error(`Unsupported shipper ready-to-ship notification dropId: ${dropId}`);
+      }
+      const emailsForDrop = SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || new Set<string>();
+      emails.forEach((email) => emailsForDrop.add(email));
+      SHIPPER_READY_EMAILS_BY_DROP_ID.set(dropId, emailsForDrop);
+    });
+  } catch (err) {
+    console.error('[mons/functions] invalid shipper ready-to-ship notification config', {
+      rawDropIds,
+      rawEmails,
+      error: summarizeError(err),
+    });
   }
 });
 
@@ -805,7 +867,11 @@ function summarizeError(err: unknown) {
   }
   if (err instanceof Error) {
     const stack = typeof err.stack === 'string' ? err.stack.slice(0, 4000) : undefined;
-    return { kind: err.name, message: err.message, ...(stack ? { stack } : {}) };
+    const retryableEmailError =
+      err.name === 'RetryableShipperReadyEmailError' && typeof anyErr.reason === 'string'
+        ? { reason: anyErr.reason, ...(anyErr.details !== undefined ? { details: anyErr.details } : {}) }
+        : {};
+    return { kind: err.name, message: err.message, ...retryableEmailError, ...(stack ? { stack } : {}) };
   }
   return { kind: typeof err, message: String(err) };
 }
@@ -2543,6 +2609,407 @@ function toMillisMaybe(value: any): number | undefined {
   if (value instanceof Date) return value.getTime();
   return undefined;
 }
+
+const SHIPPER_READY_NOTIFICATION_DOC_ID = 'shipper-ready-to-ship';
+const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
+const FULFILLMENT_APP_URL = 'https://mons.shop/fullfillment';
+const SHIPPER_READY_FROM_EMAIL = 'notifications@mons.academy';
+
+type ShipperReadyOrderSummary = {
+  itemCount: number;
+  boxCount: number;
+  dudeCount: number;
+};
+
+type ShipperReadyToShipEmailMessage = {
+  idempotencyKey: string;
+  recipients: string[];
+  dropId: string;
+  dropName: string;
+  deliveryId: number;
+  owner: string;
+  processedAt?: number;
+  items: ShipperReadyOrderSummary;
+  fulfillmentUrl: string;
+};
+
+type ShipperReadyEmailDetail = {
+  label: string;
+  value: string;
+};
+
+type ShipperReadyNotificationReservation =
+  | { reserved: true; reason: 'reserved' }
+  | { reserved: false; reason: 'already_completed' }
+  | { reserved: false; reason: 'send_in_progress'; leaseExpiresAt: number };
+
+type ShipperReadyToShipEmailResult =
+  | { status: 'sent'; provider: string; messageId?: string }
+  | { status: 'failed_permanent'; provider: string; reason: string; providerError: ResendErrorSummary };
+
+type ResendErrorSummary = {
+  name: string;
+  message: string;
+  statusCode: number | null;
+};
+
+const RETRYABLE_RESEND_ERROR_NAMES = new Set([
+  'application_error',
+  'concurrent_idempotent_requests',
+  'daily_quota_exceeded',
+  'internal_server_error',
+  'monthly_quota_exceeded',
+  'rate_limit_exceeded',
+]);
+
+class RetryableShipperReadyEmailError extends Error {
+  readonly reason: string;
+  readonly details?: unknown;
+
+  constructor(message: string, reason: string, details?: unknown) {
+    super(message);
+    this.name = 'RetryableShipperReadyEmailError';
+    this.reason = reason;
+    this.details = details;
+  }
+}
+
+function summarizeShipperReadyOrderItems(order: any): ShipperReadyOrderSummary {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  let boxCount = 0;
+  let dudeCount = 0;
+  for (const item of items) {
+    if (item?.kind === 'box') {
+      boxCount += 1;
+    } else if (item?.kind === 'dude') {
+      dudeCount += 1;
+    }
+  }
+  return {
+    itemCount: items.length,
+    boxCount,
+    dudeCount,
+  };
+}
+
+function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): string {
+  const url = new URL(FULFILLMENT_APP_URL);
+  url.searchParams.set('dropId', dropId);
+  url.searchParams.set('deliveryId', String(deliveryId));
+  return url.toString();
+}
+
+function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): ShipperReadyEmailDetail[] {
+  const processedAt = message.processedAt ? new Date(message.processedAt).toISOString() : 'unknown';
+  return [
+    { label: 'Drop', value: `${message.dropName} (${message.dropId})` },
+    { label: 'Delivery ID', value: String(message.deliveryId) },
+    { label: 'Owner', value: message.owner || 'unknown' },
+    {
+      label: 'Items',
+      value: `${message.items.itemCount} total (${message.items.boxCount} boxes, ${message.items.dudeCount} figures)`,
+    },
+    { label: 'Processed at', value: processedAt },
+  ];
+}
+
+function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
+  const details = shipperReadyEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
+  return [
+    'A shipment order is ready to ship.',
+    '',
+    ...details,
+    '',
+    `Open fulfillment: ${message.fulfillmentUrl}`,
+  ].join('\n');
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
+  const details = shipperReadyEmailDetails(message)
+    .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
+    .join('');
+  return [
+    '<p>A shipment order is ready to ship.</p>',
+    '<ul>',
+    details,
+    '</ul>',
+    `<p><a href="${escapeHtml(message.fulfillmentUrl)}">Open fulfillment</a></p>`,
+    `<p>${escapeHtml(message.fulfillmentUrl)}</p>`,
+  ].join('');
+}
+
+let cachedResend: ResendClient | null = null;
+
+function resendApiKey(): string {
+  const envValue = (process.env.RESEND_API_KEY || '').trim();
+  if (envValue) return envValue;
+  try {
+    return (RESEND_API_KEY.value() || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function resendClient(): Promise<ResendClient | null> {
+  if (cachedResend) return cachedResend;
+  const apiKey = resendApiKey();
+  if (!apiKey) return null;
+  const { Resend } = await import('resend');
+  cachedResend = new Resend(apiKey);
+  return cachedResend;
+}
+
+function summarizeResendError(error: any): ResendErrorSummary {
+  const name = typeof error?.name === 'string' && error.name ? error.name : 'unknown_resend_error';
+  const message = typeof error?.message === 'string' && error.message ? error.message : 'Unknown Resend error';
+  const statusCode = typeof error?.statusCode === 'number' && Number.isFinite(error.statusCode) ? error.statusCode : null;
+  return { name, message, statusCode };
+}
+
+function isRetryableResendError(error: ResendErrorSummary): boolean {
+  if (RETRYABLE_RESEND_ERROR_NAMES.has(error.name)) return true;
+  if (error.name !== 'unknown_resend_error') return false;
+  if (error.statusCode === 408 || error.statusCode === 409 || error.statusCode === 429) return true;
+  return Boolean(error.statusCode && error.statusCode >= 500);
+}
+
+async function sendShipperReadyToShipEmail(
+  message: ShipperReadyToShipEmailMessage,
+): Promise<ShipperReadyToShipEmailResult> {
+  const resend = await resendClient();
+  if (!resend) {
+    throw new RetryableShipperReadyEmailError(
+      'RESEND_API_KEY is not configured for shipper ready-to-ship email',
+      'resend_api_key_not_configured',
+      { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
+    );
+  }
+
+  const subject = `New Order — ${message.dropName}`;
+  const text = buildShipperReadyEmailText(message);
+  const html = buildShipperReadyEmailHtml(message);
+  const result = await resend.emails.send(
+    {
+      from: SHIPPER_READY_FROM_EMAIL,
+      to: message.recipients,
+      subject,
+      text,
+      html,
+    },
+    { idempotencyKey: message.idempotencyKey },
+  );
+
+  if (result.error) {
+    const providerError = summarizeResendError(result.error);
+    if (isRetryableResendError(providerError)) {
+      throw new RetryableShipperReadyEmailError(
+        `resend shipper ready email failed: ${providerError.message}`,
+        'resend_retryable_error',
+        providerError,
+      );
+    }
+    return {
+      status: 'failed_permanent',
+      provider: 'resend',
+      reason: `resend_${providerError.name}`,
+      providerError,
+    };
+  }
+
+  return { status: 'sent', provider: 'resend', ...(result.data?.id ? { messageId: result.data.id } : {}) };
+}
+
+export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
+  {
+    document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
+    secrets: [RESEND_API_KEY],
+    retry: true,
+  },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+    if (beforeSnap.get('status') === 'ready_to_ship' || afterSnap.get('status') !== 'ready_to_ship') return;
+    const after = afterSnap.data() as any;
+
+    let dropId: string;
+    let dropName: string;
+    try {
+      dropId = requireDropId(event.params.dropId);
+      const dropRuntime = getDropRuntime(dropId);
+      dropName = dropRuntime.config.collectionName || dropId;
+    } catch (err) {
+      logger.warn('notifyShippersOnDeliveryReadyToShip:invalidDrop', {
+        dropId: event.params.dropId,
+        error: summarizeError(err),
+      });
+      return;
+    }
+
+    const recipients = Array.from(SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || []).sort();
+    if (!recipients.length) return;
+
+    const deliveryDocId = String(event.params.deliveryId || '').trim();
+    const deliveryId = Number(after.deliveryId ?? deliveryDocId);
+    if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
+      logger.warn('notifyShippersOnDeliveryReadyToShip:invalidDeliveryId', { dropId, deliveryDocId });
+      return;
+    }
+
+    const orderRef = afterSnap.ref;
+    const notificationRef = orderRef.collection('notifications').doc(SHIPPER_READY_NOTIFICATION_DOC_ID);
+    const idempotencyKey = `${dropId}:${deliveryDocId || deliveryId}:ready_to_ship`;
+    const nowMs = Date.now();
+
+    const reservation = await db.runTransaction<ShipperReadyNotificationReservation>(async (tx) => {
+      const snap = await tx.get(notificationRef);
+      const existing = snap.exists ? (snap.data() as any) : null;
+      const existingStatus = typeof existing?.status === 'string' ? existing.status : '';
+      if (
+        existing?.sentAt ||
+        existingStatus === 'sent' ||
+        existingStatus === 'skipped' ||
+        existingStatus === 'failed_permanent'
+      ) {
+        return { reserved: false, reason: 'already_completed' };
+      }
+
+      const leaseExpiresAt = toMillisMaybe(existing?.leaseExpiresAt) || 0;
+      if (existingStatus === 'sending' && leaseExpiresAt > nowMs) {
+        return { reserved: false, reason: 'send_in_progress', leaseExpiresAt };
+      }
+
+      tx.set(
+        notificationRef,
+        {
+          type: 'shipper_ready_to_ship',
+          status: 'sending',
+          dropId,
+          deliveryId,
+          deliveryDocId: deliveryDocId || String(deliveryId),
+          orderPath: orderRef.path,
+          recipients,
+          recipientCount: recipients.length,
+          idempotencyKey,
+          attempts: FieldValue.increment(1),
+          lastAttemptAt: FieldValue.serverTimestamp(),
+          leaseExpiresAt: Timestamp.fromMillis(nowMs + SHIPPER_READY_NOTIFICATION_LEASE_MS),
+          failedAt: FieldValue.delete(),
+          skippedAt: FieldValue.delete(),
+          skipReason: FieldValue.delete(),
+          lastError: FieldValue.delete(),
+        },
+        { merge: true },
+      );
+
+      return { reserved: true, reason: 'reserved' };
+    });
+
+    if (!reservation.reserved) {
+      logger.info('notifyShippersOnDeliveryReadyToShip:reservedElsewhere', {
+        dropId,
+        deliveryId,
+        reason: reservation.reason,
+        ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
+      });
+      if (reservation.reason === 'send_in_progress') {
+        throw new RetryableShipperReadyEmailError(
+          'shipper ready-to-ship notification send lease is still active',
+          'notification_send_in_progress',
+          { dropId, deliveryId, leaseExpiresAt: reservation.leaseExpiresAt },
+        );
+      }
+      return;
+    }
+
+    const message: ShipperReadyToShipEmailMessage = {
+      idempotencyKey,
+      recipients,
+      dropId,
+      dropName,
+      deliveryId,
+      owner: typeof after.owner === 'string' ? after.owner : '',
+      processedAt: toMillisMaybe(after.processedAt),
+      items: summarizeShipperReadyOrderItems(after),
+      fulfillmentUrl: fulfillmentAppUrlForOrder(dropId, deliveryId),
+    };
+
+    try {
+      const result = await sendShipperReadyToShipEmail(message);
+      if (result.status === 'sent') {
+        await notificationRef.set(
+          {
+            status: 'sent',
+            sentAt: FieldValue.serverTimestamp(),
+            transport: {
+              provider: result.provider,
+              ...(result.messageId ? { messageId: result.messageId } : {}),
+            },
+            leaseExpiresAt: FieldValue.delete(),
+            failedAt: FieldValue.delete(),
+            skippedAt: FieldValue.delete(),
+            skipReason: FieldValue.delete(),
+            lastError: FieldValue.delete(),
+          },
+          { merge: true },
+        );
+      } else {
+        await notificationRef.set(
+          {
+            status: 'failed_permanent',
+            failedAt: FieldValue.serverTimestamp(),
+            failureReason: result.reason,
+            transport: {
+              provider: result.provider,
+              error: result.providerError,
+            },
+            leaseExpiresAt: FieldValue.delete(),
+            skippedAt: FieldValue.delete(),
+            skipReason: FieldValue.delete(),
+            lastError: result.providerError,
+          },
+          { merge: true },
+        );
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const errorSummary = summarizeError(err);
+      logger.error('notifyShippersOnDeliveryReadyToShip:failed', error, {
+        dropId,
+        deliveryId,
+        error: errorSummary,
+      });
+      await notificationRef
+        .set(
+          {
+            status: 'failed',
+            failedAt: FieldValue.serverTimestamp(),
+            lastError: errorSummary,
+            leaseExpiresAt: FieldValue.delete(),
+          },
+          { merge: true },
+        )
+        .catch((writeErr) => {
+          const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
+          logger.error('notifyShippersOnDeliveryReadyToShip:failureWriteFailed', writeError, {
+            dropId,
+            deliveryId,
+            error: summarizeError(writeErr),
+          });
+        });
+      throw err;
+    }
+  },
+);
 
 function dropIdFromDeliveryOrderPath(path: string): string | null {
   const parts = String(path || '').split('/');
