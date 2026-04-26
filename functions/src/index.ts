@@ -2742,7 +2742,6 @@ function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): st
     details,
     '</ul>',
     `<p><a href="${escapeHtml(message.fulfillmentUrl)}">Open fulfillment</a></p>`,
-    `<p>${escapeHtml(message.fulfillmentUrl)}</p>`,
   ].join('');
 }
 
