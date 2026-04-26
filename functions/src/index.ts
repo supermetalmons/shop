@@ -2702,21 +2702,20 @@ function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): string {
 function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): ShipperReadyEmailDetail[] {
   const processedAt = message.processedAt ? new Date(message.processedAt).toISOString() : 'unknown';
   return [
-    { label: 'Drop', value: `${message.dropName} (${message.dropId})` },
+    { label: 'Drop', value: `${message.dropName}` },
     { label: 'Delivery ID', value: String(message.deliveryId) },
     { label: 'Owner', value: message.owner || 'unknown' },
     {
       label: 'Items',
-      value: `${message.items.itemCount} total (${message.items.boxCount} boxes, ${message.items.dudeCount} figures)`,
-    },
-    { label: 'Processed at', value: processedAt },
+      value: `${message.items.itemCount} total`,
+    }
   ];
 }
 
 function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
   const details = shipperReadyEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
   return [
-    'A shipment order is ready to ship.',
+    'New order received.',
     '',
     ...details,
     '',
