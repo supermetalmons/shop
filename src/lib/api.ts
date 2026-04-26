@@ -837,7 +837,7 @@ export async function listFulfillmentOrders(args: {
   cursor?: FulfillmentOrdersCursor | null;
   dropId: string;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }> {
-  return callFunction<
+  const resp = await callFunction<
     { limit?: number; cursor?: FulfillmentOrdersCursor | null; dropId: string },
     { orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }
   >('listFulfillmentOrders', {
@@ -845,6 +845,13 @@ export async function listFulfillmentOrders(args: {
     cursor: args.cursor || undefined,
     dropId: args.dropId,
   });
+  return {
+    ...resp,
+    orders: (Array.isArray(resp.orders) ? resp.orders : []).map((order) => ({
+      ...order,
+      dropId: order.dropId || args.dropId,
+    })),
+  };
 }
 
 export async function updateFulfillmentStatus(

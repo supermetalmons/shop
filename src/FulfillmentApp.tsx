@@ -68,16 +68,36 @@ type FulfillmentOrderGroup = {
   collapseSharedContact: boolean;
 };
 
-function fulfillmentOrderGroupKey(order: FulfillmentOrder): string {
-  const owner = typeof order.owner === 'string' ? order.owner.trim() : '';
-  return owner ? `owner:${owner}` : `delivery:${order.deliveryId}`;
+type FulfillmentOrdersCursorByDropId = Record<string, FulfillmentOrdersCursor | null>;
+
+function fulfillmentOrderKey(order: Pick<FulfillmentOrder, 'dropId' | 'deliveryId'>): string {
+  return `${order.dropId}:${order.deliveryId}`;
 }
 
-function dedupeOrdersByDeliveryId(orders: FulfillmentOrder[], existingDeliveryIds?: Set<number>): FulfillmentOrder[] {
-  const seen = existingDeliveryIds ? new Set(existingDeliveryIds) : new Set<number>();
+function fulfillmentOrderGroupKey(order: FulfillmentOrder): string {
+  const owner = typeof order.owner === 'string' ? order.owner.trim() : '';
+  return owner ? `owner:${owner}` : `delivery:${fulfillmentOrderKey(order)}`;
+}
+
+function fulfillmentOrderSortValue(order: FulfillmentOrder): number {
+  return order.processedAt || order.createdAt || 0;
+}
+
+function sortFulfillmentOrders(orders: FulfillmentOrder[]): FulfillmentOrder[] {
+  return [...orders].sort(
+    (a, b) =>
+      fulfillmentOrderSortValue(b) - fulfillmentOrderSortValue(a) ||
+      a.dropId.localeCompare(b.dropId) ||
+      b.deliveryId - a.deliveryId,
+  );
+}
+
+function dedupeOrdersByKey(orders: FulfillmentOrder[], existingOrderKeys?: Set<string>): FulfillmentOrder[] {
+  const seen = existingOrderKeys ? new Set(existingOrderKeys) : new Set<string>();
   return orders.filter((order) => {
-    if (seen.has(order.deliveryId)) return false;
-    seen.add(order.deliveryId);
+    const key = fulfillmentOrderKey(order);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -379,15 +399,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const allowedDropIdsSet = new Set(allowedDropIds);
     return allDrops.filter((drop) => allowedDropIdsSet.has(drop.dropId));
   }, [allowedDropIds, allDrops]);
+  const dropById = useMemo(() => new Map(visibleDrops.map((drop) => [drop.dropId, drop])), [visibleDrops]);
   const selectedDrop = useMemo(
     () => visibleDrops.find((drop) => drop.dropId === selectedDropId) || null,
     [visibleDrops, selectedDropId],
   );
+  const selectedDrops = useMemo(() => {
+    if (selectedDrop) return [selectedDrop];
+    if (!selectedDropId) return visibleDrops;
+    return [];
+  }, [selectedDrop, selectedDropId, visibleDrops]);
+  const selectedDropIds = useMemo(() => selectedDrops.map((drop) => drop.dropId), [selectedDrops]);
   const isLittleSwagBoxesDrop = normalizeDropId(selectedDrop?.dropId || '') === LITTLE_SWAG_BOXES_DROP_ID;
-  const isDirectDeliveryDrop = isDirectDeliveryItemsPerBox(selectedDrop?.itemsPerBox);
-  const selectedDropContent = useMemo(() => resolveDropContent(selectedDrop || undefined), [selectedDrop]);
-  const boxPreviewImage = selectedDrop ? normalizeBoxDisplayImage(selectedDrop.dropId) : undefined;
-  const figureMediaBase = selectedDropContent.figures.fulfillmentMediaBaseUrl;
+  const selectedDropContent = useMemo(() => (selectedDrop ? resolveDropContent(selectedDrop) : null), [selectedDrop]);
+  const figureMediaBase = selectedDropContent?.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
@@ -399,8 +424,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     (walletReadyState === WalletReadyState.Installed || walletReadyState === WalletReadyState.Loadable);
 
   const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
-  const [orderPageDeliveryIds, setOrderPageDeliveryIds] = useState<number[][]>([]);
-  const [cursor, setCursor] = useState<FulfillmentOrdersCursor | null>(null);
+  const [orderPageKeys, setOrderPageKeys] = useState<string[][]>([]);
+  const [cursorsByDropId, setCursorsByDropId] = useState<FulfillmentOrdersCursorByDropId>({});
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -408,11 +433,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>(
     DEFAULT_ORDER_VISIBILITY_FILTER,
   );
-  const [statusEdits, setStatusEdits] = useState<Record<number, FulfillmentStatus | ''>>({});
-  const [statusSaving, setStatusSaving] = useState<Record<number, boolean>>({});
+  const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
+  const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
-  const [activeUpdateOrderId, setActiveUpdateOrderId] = useState<number | null>(null);
+  const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authLoadingSeenRef = useRef(false);
@@ -474,8 +499,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setStatusEdits((prev) => {
       const next = { ...prev };
       incoming.forEach((order) => {
-        if (!(order.deliveryId in next)) {
-          next[order.deliveryId] = normalizeFulfillmentStatus(order.fulfillmentStatus);
+        const key = fulfillmentOrderKey(order);
+        if (!(key in next)) {
+          next[key] = normalizeFulfillmentStatus(order.fulfillmentStatus);
         }
       });
       return next;
@@ -483,18 +509,18 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, []);
 
   const loadInitial = useCallback(async () => {
-    if (!hasFulfillmentAccess || !signedIn || !selectedDrop) {
+    if (!hasFulfillmentAccess || !signedIn || !selectedDropIds.length) {
       orderRequestEpochRef.current += 1;
       setLoading(false);
       setLoadingMore(false);
       setOrdersError(null);
       setHasMore(false);
-      setCursor(null);
+      setCursorsByDropId({});
       setOrders([]);
-      setOrderPageDeliveryIds([]);
+      setOrderPageKeys([]);
       setStatusEdits({});
       setStatusSaving({});
-      setActiveUpdateOrderId(null);
+      setActiveUpdateOrderKey(null);
       return;
     }
     const requestEpoch = orderRequestEpochRef.current + 1;
@@ -503,25 +529,34 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setLoadingMore(false);
     setOrdersError(null);
     setHasMore(true);
-    setCursor(null);
+    setCursorsByDropId({});
     setOrders([]);
-    setOrderPageDeliveryIds([]);
+    setOrderPageKeys([]);
     setStatusEdits({});
     setStatusSaving({});
-    setActiveUpdateOrderId(null);
+    setActiveUpdateOrderKey(null);
     try {
-      const resp = await listFulfillmentOrders({
-        limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
-        cursor: null,
-        dropId: selectedDrop.dropId,
-      });
+      const responses = await Promise.all(
+        selectedDropIds.map(async (dropId) => {
+          const resp = await listFulfillmentOrders({
+            limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
+            cursor: null,
+            dropId,
+          });
+          return { dropId, orders: Array.isArray(resp.orders) ? resp.orders : [], nextCursor: resp.nextCursor || null };
+        }),
+      );
       if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextOrders = dedupeOrdersByDeliveryId(Array.isArray(resp.orders) ? resp.orders : []);
+      const nextCursors = responses.reduce<FulfillmentOrdersCursorByDropId>((acc, resp) => {
+        acc[resp.dropId] = resp.nextCursor;
+        return acc;
+      }, {});
+      const nextOrders = sortFulfillmentOrders(dedupeOrdersByKey(responses.flatMap((resp) => resp.orders)));
       setOrders(nextOrders);
-      setOrderPageDeliveryIds(nextOrders.length ? [nextOrders.map((order) => order.deliveryId)] : []);
+      setOrderPageKeys(nextOrders.length ? [nextOrders.map((order) => fulfillmentOrderKey(order))] : []);
       mergeStatusEdits(nextOrders);
-      setCursor(resp.nextCursor || null);
-      setHasMore(Boolean(resp.nextCursor));
+      setCursorsByDropId(nextCursors);
+      setHasMore(Object.values(nextCursors).some(Boolean));
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -531,29 +566,48 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoading(false);
       }
     }
-  }, [hasFulfillmentAccess, signedIn, mergeStatusEdits, selectedDrop]);
+  }, [hasFulfillmentAccess, signedIn, selectedDropIds, mergeStatusEdits]);
 
   const loadMore = useCallback(async () => {
-    if (!hasFulfillmentAccess || !signedIn || !selectedDrop || loadingMore || loading || !hasMore) return;
+    if (!hasFulfillmentAccess || !signedIn || !selectedDropIds.length || loadingMore || loading || !hasMore) return;
+    const dropIdsWithMore = selectedDropIds.filter((dropId) => cursorsByDropId[dropId]);
+    if (!dropIdsWithMore.length) {
+      setHasMore(false);
+      return;
+    }
     const requestEpoch = orderRequestEpochRef.current;
-    const existingDeliveryIds = new Set(orders.map((order) => order.deliveryId));
+    const existingOrderKeys = new Set(orders.map((order) => fulfillmentOrderKey(order)));
     setLoadingMore(true);
     setOrdersError(null);
     try {
-      const resp = await listFulfillmentOrders({
-        limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
-        cursor,
-        dropId: selectedDrop.dropId,
-      });
+      const responses = await Promise.all(
+        dropIdsWithMore.map(async (dropId) => {
+          const resp = await listFulfillmentOrders({
+            limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
+            cursor: cursorsByDropId[dropId],
+            dropId,
+          });
+          return { dropId, orders: Array.isArray(resp.orders) ? resp.orders : [], nextCursor: resp.nextCursor || null };
+        }),
+      );
       if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextOrders = dedupeOrdersByDeliveryId(Array.isArray(resp.orders) ? resp.orders : [], existingDeliveryIds);
+      const nextCursors = { ...cursorsByDropId };
+      responses.forEach((resp) => {
+        nextCursors[resp.dropId] = resp.nextCursor;
+      });
+      const nextOrders = sortFulfillmentOrders(
+        dedupeOrdersByKey(
+          responses.flatMap((resp) => resp.orders),
+          existingOrderKeys,
+        ),
+      );
       if (nextOrders.length) {
         setOrders((prev) => prev.concat(nextOrders));
-        setOrderPageDeliveryIds((prev) => prev.concat([nextOrders.map((order) => order.deliveryId)]));
+        setOrderPageKeys((prev) => prev.concat([nextOrders.map((order) => fulfillmentOrderKey(order))]));
         mergeStatusEdits(nextOrders);
       }
-      setCursor(resp.nextCursor || null);
-      setHasMore(Boolean(resp.nextCursor));
+      setCursorsByDropId(nextCursors);
+      setHasMore(Object.values(nextCursors).some(Boolean));
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -563,7 +617,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setLoadingMore(false);
       }
     }
-  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadingMore, loading, hasMore, cursor, mergeStatusEdits, orders]);
+  }, [
+    hasFulfillmentAccess,
+    signedIn,
+    selectedDropIds,
+    loadingMore,
+    loading,
+    hasMore,
+    cursorsByDropId,
+    mergeStatusEdits,
+    orders,
+  ]);
 
   useEffect(() => {
     void loadInitial();
@@ -585,18 +649,18 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     [orderVisibilityFilter, orders],
   );
 
-  const orderByDeliveryId = useMemo(() => new Map(orders.map((order) => [order.deliveryId, order] as const)), [orders]);
-  const displayedOrderIds = useMemo(() => new Set(displayedOrders.map((order) => order.deliveryId)), [displayedOrders]);
+  const orderByKey = useMemo(() => new Map(orders.map((order) => [fulfillmentOrderKey(order), order] as const)), [orders]);
+  const displayedOrderKeys = useMemo(() => new Set(displayedOrders.map((order) => fulfillmentOrderKey(order))), [displayedOrders]);
 
   const groupedOrders = useMemo(() => {
     const groups: FulfillmentOrderGroup[] = [];
-    orderPageDeliveryIds.forEach((pageDeliveryIds, pageIndex) => {
+    orderPageKeys.forEach((pageOrderKeys, pageIndex) => {
       const visibleGroups = new Map<string, FulfillmentOrder[]>();
-      pageDeliveryIds.forEach((deliveryId) => {
-        const order = orderByDeliveryId.get(deliveryId);
+      pageOrderKeys.forEach((orderKey) => {
+        const order = orderByKey.get(orderKey);
         if (!order) return;
         const groupKey = fulfillmentOrderGroupKey(order);
-        if (!displayedOrderIds.has(deliveryId)) return;
+        if (!displayedOrderKeys.has(orderKey)) return;
         const visibleGroupOrders = visibleGroups.get(groupKey);
         if (visibleGroupOrders) {
           visibleGroupOrders.push(order);
@@ -614,10 +678,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       });
     });
     return groups;
-  }, [displayedOrderIds, orderByDeliveryId, orderPageDeliveryIds]);
+  }, [displayedOrderKeys, orderByKey, orderPageKeys]);
 
   const allDuplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop || !orders.length) return [];
+    if (!isLittleSwagBoxesDrop || !selectedDrop || !selectedDropContent || !orders.length) return [];
     return summarizeDuplicateFigures({
       orders,
       previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
@@ -628,11 +692,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     orders,
     selectedDrop,
     selectedDrop?.figureMedia,
-    selectedDropContent.figures.fulfillmentPreviewMode,
+    selectedDropContent,
+    selectedDropContent?.figures.fulfillmentPreviewMode,
   ]);
 
   const duplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop || orderVisibilityFilter !== 'not_shipped') return [];
+    if (!isLittleSwagBoxesDrop || !selectedDrop || !selectedDropContent || orderVisibilityFilter !== 'not_shipped') return [];
     if (!displayedOrders.length || !allDuplicateFigures.length) return [];
 
     const remainingDuplicates = summarizeDuplicateFigures({
@@ -659,7 +724,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     orderVisibilityFilter,
     selectedDrop,
     selectedDrop?.figureMedia,
-    selectedDropContent.figures.fulfillmentPreviewMode,
+    selectedDropContent,
+    selectedDropContent?.figures.fulfillmentPreviewMode,
   ]);
 
   const duplicateFigureByFigureId = useMemo(
@@ -668,55 +734,50 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   );
 
   const fulfillmentFigureMetadataTargets = useMemo(() => {
-    if (!selectedDrop) return [];
-    const shouldUseMetadataFallback = selectedDropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
     const targets = new Map<string, { dropId: string; figureId: number }>();
+    const addFigureTarget = (drop: FrontendDeploymentConfig, figureId: number) => {
+      const dropContent = resolveDropContent(drop);
+      const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
+      if (!shouldUseMetadataFallback) {
+        const hasMappedMedia = Boolean(
+          dropContent.figures.fulfillmentMediaBaseUrl && getMediaIdForFigureId(figureId, drop.figureMedia),
+        );
+        if (hasMappedMedia) return;
+      }
+      const key = figureMetadataCacheKey(drop.dropId, figureId);
+      const cached = figureMetadataByKey[key] || getCachedFigureMetadata(drop.dropId, figureId);
+      if (figureMetadataHasImage(cached)) return;
+      targets.set(key, { dropId: drop.dropId, figureId });
+    };
+
     displayedOrders.forEach((order) => {
+      const drop = dropById.get(order.dropId);
+      if (!drop) return;
       listOrderFigureIds(order).forEach((figureId) => {
         const normalizedFigureId = Math.floor(Number(figureId));
         if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
-        if (!shouldUseMetadataFallback) {
-          const hasMappedMedia = Boolean(
-            figureMediaBase && getMediaIdForFigureId(normalizedFigureId, selectedDrop.figureMedia),
-          );
-          if (hasMappedMedia) return;
-        }
-        const key = figureMetadataCacheKey(selectedDrop.dropId, normalizedFigureId);
-        const cached = figureMetadataByKey[key] || getCachedFigureMetadata(selectedDrop.dropId, normalizedFigureId);
-        if (figureMetadataHasImage(cached)) return;
-        targets.set(key, { dropId: selectedDrop.dropId, figureId: normalizedFigureId });
+        addFigureTarget(drop, normalizedFigureId);
       });
     });
-    if (isLittleSwagBoxesDrop) {
+    if (isLittleSwagBoxesDrop && selectedDrop) {
       duplicateFigures.forEach(({ figureId }) => {
         const normalizedFigureId = Math.floor(Number(figureId));
         if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
-        if (!shouldUseMetadataFallback) {
-          const hasMappedMedia = Boolean(
-            figureMediaBase && getMediaIdForFigureId(normalizedFigureId, selectedDrop.figureMedia),
-          );
-          if (hasMappedMedia) return;
-        }
-        const key = figureMetadataCacheKey(selectedDrop.dropId, normalizedFigureId);
-        const cached = figureMetadataByKey[key] || getCachedFigureMetadata(selectedDrop.dropId, normalizedFigureId);
-        if (figureMetadataHasImage(cached)) return;
-        targets.set(key, { dropId: selectedDrop.dropId, figureId: normalizedFigureId });
+        addFigureTarget(selectedDrop, normalizedFigureId);
       });
     }
     return Array.from(targets.values());
   }, [
     duplicateFigures,
     displayedOrders,
-    figureMediaBase,
+    dropById,
     figureMetadataByKey,
     isLittleSwagBoxesDrop,
-    selectedDrop?.dropId,
-    selectedDrop?.figureMedia,
-    selectedDropContent.figures.fulfillmentPreviewMode,
+    selectedDrop,
   ]);
 
   useEffect(() => {
-    if (!selectedDrop || !fulfillmentFigureMetadataTargets.length) return;
+    if (!fulfillmentFigureMetadataTargets.length) return;
     let cancelled = false;
     const fetchMetadata = async () => {
       try {
@@ -724,7 +785,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         if (cancelled || !records.length) return;
         mergeLoadedFigureMetadata(records);
       } catch (err) {
-        console.warn('[mons] failed to load fulfillment figure metadata', { dropId: selectedDrop.dropId, error: err });
+        console.warn('[mons] failed to load fulfillment figure metadata', { error: err });
       }
     };
 
@@ -737,11 +798,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata, selectedDrop]);
+  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
 
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !hasFulfillmentAccess || !signedIn || !selectedDrop) return;
+    if (!node || !hasFulfillmentAccess || !signedIn || !selectedDropIds.length) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
@@ -752,25 +813,26 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasFulfillmentAccess, signedIn, selectedDrop, loadMore]);
+  }, [hasFulfillmentAccess, signedIn, selectedDropIds, loadMore]);
 
   const handleSaveStatus = useCallback(
-    async (deliveryId: number) => {
-      if (!hasFulfillmentAccess || !signedIn || !selectedDrop) return false;
+    async (orderToUpdate: FulfillmentOrder) => {
+      if (!hasFulfillmentAccess || !signedIn) return false;
       const requestEpoch = orderRequestEpochRef.current;
-      setStatusSaving((prev) => ({ ...prev, [deliveryId]: true }));
+      const key = fulfillmentOrderKey(orderToUpdate);
+      setStatusSaving((prev) => ({ ...prev, [key]: true }));
       setOrdersError(null);
       try {
-        const nextStatus = normalizeFulfillmentStatus(statusEdits[deliveryId]);
-        const resp = await updateFulfillmentStatus(deliveryId, nextStatus, selectedDrop.dropId);
+        const nextStatus = normalizeFulfillmentStatus(statusEdits[key]);
+        const resp = await updateFulfillmentStatus(orderToUpdate.deliveryId, nextStatus, orderToUpdate.dropId);
         if (orderRequestEpochRef.current !== requestEpoch) return false;
         const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
         setOrders((prev) =>
           prev.map((order) =>
-            order.deliveryId === deliveryId ? { ...order, fulfillmentStatus: normalized || undefined } : order,
+            fulfillmentOrderKey(order) === key ? { ...order, fulfillmentStatus: normalized || undefined } : order,
           ),
         );
-        setStatusEdits((prev) => ({ ...prev, [deliveryId]: normalized }));
+        setStatusEdits((prev) => ({ ...prev, [key]: normalized }));
         return true;
       } catch (err) {
         if (orderRequestEpochRef.current !== requestEpoch) return false;
@@ -779,57 +841,60 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         return false;
       } finally {
         if (orderRequestEpochRef.current === requestEpoch) {
-          setStatusSaving((prev) => ({ ...prev, [deliveryId]: false }));
+          setStatusSaving((prev) => ({ ...prev, [key]: false }));
         }
       }
     },
-    [hasFulfillmentAccess, signedIn, selectedDrop, statusEdits],
+    [hasFulfillmentAccess, signedIn, statusEdits],
   );
 
   const statusDirty = useMemo(() => {
-    const dirty = new Set<number>();
+    const dirty = new Set<string>();
     orders.forEach((order) => {
+      const key = fulfillmentOrderKey(order);
       const current = normalizeFulfillmentStatus(order.fulfillmentStatus);
-      const edited = statusEdits[order.deliveryId] ?? '';
-      if (current !== edited) dirty.add(order.deliveryId);
+      const edited = statusEdits[key] ?? '';
+      if (current !== edited) dirty.add(key);
     });
     return dirty;
   }, [orders, statusEdits]);
 
   const activeUpdateOrder = useMemo(
-    () => orders.find((order) => order.deliveryId === activeUpdateOrderId) ?? null,
-    [activeUpdateOrderId, orders],
+    () => orders.find((order) => fulfillmentOrderKey(order) === activeUpdateOrderKey) ?? null,
+    [activeUpdateOrderKey, orders],
   );
+  const activeUpdateOrderKeyResolved = activeUpdateOrder ? fulfillmentOrderKey(activeUpdateOrder) : '';
   const activeUpdateText = activeUpdateOrder
-    ? statusEdits[activeUpdateOrder.deliveryId] ?? normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus)
+    ? statusEdits[activeUpdateOrderKeyResolved] ?? normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus)
     : '';
-  const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrder.deliveryId) : false;
-  const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrder.deliveryId]) : false;
+  const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
+  const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
 
-  const handleOpenUpdateModal = useCallback((deliveryId: number) => {
-    setActiveUpdateOrderId(deliveryId);
+  const handleOpenUpdateModal = useCallback((orderKey: string) => {
+    setActiveUpdateOrderKey(orderKey);
   }, []);
 
   const handleCancelUpdate = useCallback(() => {
     if (!activeUpdateOrder) {
-      setActiveUpdateOrderId(null);
+      setActiveUpdateOrderKey(null);
       return;
     }
+    const key = fulfillmentOrderKey(activeUpdateOrder);
     setStatusEdits((prev) => ({
       ...prev,
-      [activeUpdateOrder.deliveryId]: normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus),
+      [key]: normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus),
     }));
-    setActiveUpdateOrderId(null);
+    setActiveUpdateOrderKey(null);
   }, [activeUpdateOrder]);
 
   const handleSaveActiveUpdate = useCallback(async () => {
     if (!activeUpdateOrder) return;
     if (!activeUpdateDirty) {
-      setActiveUpdateOrderId(null);
+      setActiveUpdateOrderKey(null);
       return;
     }
-    const ok = await handleSaveStatus(activeUpdateOrder.deliveryId);
-    if (ok) setActiveUpdateOrderId(null);
+    const ok = await handleSaveStatus(activeUpdateOrder);
+    if (ok) setActiveUpdateOrderKey(null);
   }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus]);
 
   const handleSolanaSignIn = useCallback(() => {
@@ -865,11 +930,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     order: FulfillmentOrder,
     options?: { showEmail?: boolean; showFullAddress?: boolean },
   ) => {
-    if (!selectedDrop) return null;
+    const orderDrop = dropById.get(order.dropId);
+    if (!orderDrop) return null;
+    const orderKey = fulfillmentOrderKey(order);
+    const orderDropContent = resolveDropContent(orderDrop);
+    const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
+    const orderBoxPreviewImage = normalizeBoxDisplayImage(orderDrop.dropId);
+    const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
     const showEmail = options?.showEmail ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
-      <div key={`${selectedDrop.dropId}:${order.deliveryId}`} className="fulfillment-order-section">
+      <div key={orderKey} className="fulfillment-order-section">
         <div className="card__head">
           <div>
             <div className="card__title">Order {order.deliveryId}</div>
@@ -886,7 +957,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             <button
               type="button"
               className="link small no-focus-style"
-              onClick={() => handleOpenUpdateModal(order.deliveryId)}
+              onClick={() => handleOpenUpdateModal(orderKey)}
             >
               {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}
             </button>
@@ -910,41 +981,41 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           ) : null}
 
           {order.boxes.length ? (
-            isDirectDeliveryDrop ? (
+            orderIsDirectDeliveryDrop ? (
               renderBoxTiles({
                 boxIds: order.boxes.map((box) => box.boxId),
-                keyPrefix: `${order.deliveryId}:box`,
-                labelSource: selectedDrop,
-                previewSrc: boxPreviewImage,
+                keyPrefix: `${orderKey}:box`,
+                labelSource: orderDrop,
+                previewSrc: orderBoxPreviewImage,
               })
             ) : (
               <div className="grid">
                 {order.boxes.map((box) => (
-                  <div key={`${order.deliveryId}:${box.boxId}`} className="card subtle box-contents">
+                  <div key={`${orderKey}:${box.boxId}`} className="card subtle box-contents">
                     <div className="card__title">
                       {box.claimCode ? (
                         <>
-                          {dropAssetLabel(selectedDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                          {dropAssetLabel(orderDrop, 'box', 1, { capitalize: true })} Secret{' '}
                           <span className="fulfillment-secret-code">{box.claimCode}</span>
                         </>
                       ) : (
-                        dropAssetReference(selectedDrop, 'box', box.boxId, { capitalize: true })
+                        dropAssetReference(orderDrop, 'box', box.boxId, { capitalize: true })
                       )}
                     </div>
                     {!box.claimCode ? (
                       <div className="muted small">Secret code unavailable</div>
                     ) : !box.dudeIds.length ? (
-                      <div className="muted small">Assigned {dropAssetLabel(selectedDrop, 'figure', 2)} pending</div>
+                      <div className="muted small">Assigned {dropAssetLabel(orderDrop, 'figure', 2)} pending</div>
                     ) : null}
                     {box.dudeIds.length ? (
                       renderFigureTiles({
-                        dropId: selectedDrop.dropId,
+                        dropId: orderDrop.dropId,
                         figureIds: box.dudeIds,
-                        keyPrefix: `${order.deliveryId}:${box.boxId}`,
-                        figureNamePrefix: selectedDrop.figureNamePrefix,
-                        previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                        figureMediaBase,
-                        figureMedia: selectedDrop.figureMedia,
+                        keyPrefix: `${orderKey}:${box.boxId}`,
+                        figureNamePrefix: orderDrop.figureNamePrefix,
+                        previewMode: orderDropContent.figures.fulfillmentPreviewMode,
+                        figureMediaBase: orderFigureMediaBase,
+                        figureMedia: orderDrop.figureMedia,
                         figureMetadataByKey,
                         onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
                       })
@@ -957,13 +1028,13 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
           {order.looseDudes.length
             ? renderFigureTiles({
-                dropId: selectedDrop.dropId,
+                dropId: orderDrop.dropId,
                 figureIds: order.looseDudes,
-                keyPrefix: `${order.deliveryId}:dude`,
-                figureNamePrefix: selectedDrop.figureNamePrefix,
-                previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                figureMediaBase,
-                figureMedia: selectedDrop.figureMedia,
+                keyPrefix: `${orderKey}:dude`,
+                figureNamePrefix: orderDrop.figureNamePrefix,
+                previewMode: orderDropContent.figures.fulfillmentPreviewMode,
+                figureMediaBase: orderFigureMediaBase,
+                figureMedia: orderDrop.figureMedia,
                 figureMetadataByKey,
                 onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
               })
@@ -1025,14 +1096,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   onSelectedDropIdChange(evt.target.value);
                 }}
               >
-                <option value="">Select a drop</option>
+                <option value="">All drops</option>
                 {visibleDrops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
                     {drop.dropId}
                   </option>
                 ))}
               </select>
-              {selectedDrop ? (
+              {selectedDropIds.length ? (
                 <select
                   id="fulfillment-orders-filter-picker"
                   className="fulfillment-drop-picker fulfillment-orders-filter-picker"
@@ -1050,11 +1121,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 </select>
               ) : null}
             </div>
-            {selectedDrop && loading && !hasVisibleOrderCards ? <div className="muted small">Loading orders…</div> : null}
-            {selectedDrop && ordersError ? <div className="error">{ordersError}</div> : null}
-            {selectedDrop && hasVisibleOrderCards ? (
+            {selectedDropIds.length && loading && !hasVisibleOrderCards ? <div className="muted small">Loading orders…</div> : null}
+            {selectedDropIds.length && ordersError ? <div className="error">{ordersError}</div> : null}
+            {selectedDropIds.length && hasVisibleOrderCards ? (
               <div className="order-list">
-                {duplicateFigures.length ? (
+                {selectedDrop && selectedDropContent && duplicateFigures.length ? (
                   <div key={`${selectedDrop.dropId}:duplicates`} className="card subtle">
                     <div className="card__head">
                       <div className="card__title">New Duplicates</div>
@@ -1082,7 +1153,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 ) : null}
                 {groupedOrders.map((group) => (
                   <div
-                    key={`${selectedDrop.dropId}:${group.pageIndex}:${group.groupKey}`}
+                    key={`${group.pageIndex}:${group.groupKey}`}
                     className="card subtle fulfillment-order-group"
                   >
                     {group.orders.map((order, index) =>
@@ -1094,7 +1165,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   </div>
                 ))}
               </div>
-            ) : selectedDrop && loading ? null : selectedDrop ? (
+            ) : selectedDropIds.length && loading ? null : selectedDropIds.length ? (
               <div className="muted small">
                 {orderVisibilityFilter === 'all'
                   ? 'No orders.'
@@ -1104,14 +1175,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               </div>
             ) : null}
 
-            {selectedDrop && loadingMore ? <div className="muted small">Loading more…</div> : null}
+            {selectedDropIds.length && loadingMore ? <div className="muted small">Loading more…</div> : null}
             <div ref={sentinelRef} />
           </section>
         )
       ) : null}
 
       <Modal
-        open={activeUpdateOrderId !== null}
+        open={activeUpdateOrderKey !== null}
         title={activeUpdateOrder ? `Order ${activeUpdateOrder.deliveryId}` : 'Order'}
         onClose={handleCancelUpdate}
         showCloseButton={false}
@@ -1123,7 +1194,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             onChange={(evt) => {
               if (!activeUpdateOrder) return;
               const nextStatus = normalizeFulfillmentStatus(evt.target.value);
-              setStatusEdits((prev) => ({ ...prev, [activeUpdateOrder.deliveryId]: nextStatus }));
+              setStatusEdits((prev) => ({ ...prev, [fulfillmentOrderKey(activeUpdateOrder)]: nextStatus }));
             }}
             aria-label="Fulfillment status"
           >

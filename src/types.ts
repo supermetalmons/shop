@@ -131,6 +131,7 @@ export interface FulfillmentOrderBox {
 }
 
 export interface FulfillmentOrder {
+  dropId: string;
   deliveryId: number;
   owner: string;
   status: string;
