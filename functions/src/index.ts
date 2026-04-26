@@ -433,7 +433,7 @@ const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
 
 const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
   {
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'little_swag_hoodies_devnet'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
     emails: ['ivan@ivan.lol', 'supermetalxbosch@gmail.com'],
   },
 ];
