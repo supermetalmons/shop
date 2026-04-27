@@ -410,9 +410,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     return [];
   }, [selectedDrop, selectedDropId, visibleDrops]);
   const selectedDropIds = useMemo(() => selectedDrops.map((drop) => drop.dropId), [selectedDrops]);
-  const isLittleSwagBoxesDrop = normalizeDropId(selectedDrop?.dropId || '') === LITTLE_SWAG_BOXES_DROP_ID;
-  const selectedDropContent = useMemo(() => (selectedDrop ? resolveDropContent(selectedDrop) : null), [selectedDrop]);
-  const figureMediaBase = selectedDropContent?.figures.fulfillmentMediaBaseUrl;
+  const duplicateDrop = useMemo(
+    () => selectedDrops.find((drop) => normalizeDropId(drop.dropId) === LITTLE_SWAG_BOXES_DROP_ID) || null,
+    [selectedDrops],
+  );
+  const duplicateDropContent = useMemo(() => (duplicateDrop ? resolveDropContent(duplicateDrop) : null), [duplicateDrop]);
+  const duplicateFigureMediaBase = duplicateDropContent?.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
@@ -680,30 +683,39 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     return groups;
   }, [displayedOrderKeys, orderByKey, orderPageKeys]);
 
+  const duplicateDropOrders = useMemo(() => {
+    if (!duplicateDrop) return [];
+    return orders.filter((order) => normalizeDropId(order.dropId) === LITTLE_SWAG_BOXES_DROP_ID);
+  }, [duplicateDrop, orders]);
+
+  const displayedDuplicateDropOrders = useMemo(() => {
+    if (!duplicateDrop) return [];
+    return displayedOrders.filter((order) => normalizeDropId(order.dropId) === LITTLE_SWAG_BOXES_DROP_ID);
+  }, [displayedOrders, duplicateDrop]);
+
   const allDuplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop || !selectedDropContent || !orders.length) return [];
+    if (!duplicateDrop || !duplicateDropContent || !duplicateDropOrders.length) return [];
     return summarizeDuplicateFigures({
-      orders,
-      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-      figureMedia: selectedDrop.figureMedia,
+      orders: duplicateDropOrders,
+      previewMode: duplicateDropContent.figures.fulfillmentPreviewMode,
+      figureMedia: duplicateDrop.figureMedia,
     });
   }, [
-    isLittleSwagBoxesDrop,
-    orders,
-    selectedDrop,
-    selectedDrop?.figureMedia,
-    selectedDropContent,
-    selectedDropContent?.figures.fulfillmentPreviewMode,
+    duplicateDrop,
+    duplicateDrop?.figureMedia,
+    duplicateDropContent,
+    duplicateDropContent?.figures.fulfillmentPreviewMode,
+    duplicateDropOrders,
   ]);
 
   const duplicateFigures = useMemo(() => {
-    if (!isLittleSwagBoxesDrop || !selectedDrop || !selectedDropContent || orderVisibilityFilter !== 'not_shipped') return [];
-    if (!displayedOrders.length || !allDuplicateFigures.length) return [];
+    if (!duplicateDrop || !duplicateDropContent || orderVisibilityFilter !== 'not_shipped') return [];
+    if (!displayedDuplicateDropOrders.length || !allDuplicateFigures.length) return [];
 
     const remainingDuplicates = summarizeDuplicateFigures({
-      orders: displayedOrders,
-      previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-      figureMedia: selectedDrop.figureMedia,
+      orders: displayedDuplicateDropOrders,
+      previewMode: duplicateDropContent.figures.fulfillmentPreviewMode,
+      figureMedia: duplicateDrop.figureMedia,
       minimumCount: 1,
     });
     const remainingCountByGroupKey = new Map(remainingDuplicates.map((entry) => [entry.groupKey, entry.count]));
@@ -719,13 +731,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       .filter((entry): entry is DuplicateFigureSummary => Boolean(entry));
   }, [
     allDuplicateFigures,
-    displayedOrders,
-    isLittleSwagBoxesDrop,
+    displayedDuplicateDropOrders,
+    duplicateDrop,
+    duplicateDrop?.figureMedia,
+    duplicateDropContent,
+    duplicateDropContent?.figures.fulfillmentPreviewMode,
     orderVisibilityFilter,
-    selectedDrop,
-    selectedDrop?.figureMedia,
-    selectedDropContent,
-    selectedDropContent?.figures.fulfillmentPreviewMode,
   ]);
 
   const duplicateFigureByFigureId = useMemo(
@@ -759,11 +770,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         addFigureTarget(drop, normalizedFigureId);
       });
     });
-    if (isLittleSwagBoxesDrop && selectedDrop) {
+    if (duplicateDrop) {
       duplicateFigures.forEach(({ figureId }) => {
         const normalizedFigureId = Math.floor(Number(figureId));
         if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
-        addFigureTarget(selectedDrop, normalizedFigureId);
+        addFigureTarget(duplicateDrop, normalizedFigureId);
       });
     }
     return Array.from(targets.values());
@@ -771,9 +782,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     duplicateFigures,
     displayedOrders,
     dropById,
+    duplicateDrop,
     figureMetadataByKey,
-    isLittleSwagBoxesDrop,
-    selectedDrop,
   ]);
 
   useEffect(() => {
@@ -1125,20 +1135,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             {selectedDropIds.length && ordersError ? <div className="error">{ordersError}</div> : null}
             {selectedDropIds.length && hasVisibleOrderCards ? (
               <div className="order-list">
-                {selectedDrop && selectedDropContent && duplicateFigures.length ? (
-                  <div key={`${selectedDrop.dropId}:duplicates`} className="card subtle">
+                {duplicateDrop && duplicateDropContent && duplicateFigures.length ? (
+                  <div key={`${duplicateDrop.dropId}:duplicates`} className="card subtle">
                     <div className="card__head">
                       <div className="card__title">New Duplicates</div>
                     </div>
                     <div className="order-items">
                       {renderFigureTiles({
-                        dropId: selectedDrop.dropId,
+                        dropId: duplicateDrop.dropId,
                         figureIds: duplicateFigures.map((entry) => entry.figureId),
                         keyPrefix: 'duplicates',
-                        figureNamePrefix: selectedDrop.figureNamePrefix,
-                        previewMode: selectedDropContent.figures.fulfillmentPreviewMode,
-                        figureMediaBase,
-                        figureMedia: selectedDrop.figureMedia,
+                        figureNamePrefix: duplicateDrop.figureNamePrefix,
+                        previewMode: duplicateDropContent.figures.fulfillmentPreviewMode,
+                        figureMediaBase: duplicateFigureMediaBase,
+                        figureMedia: duplicateDrop.figureMedia,
                         figureMetadataByKey,
                         onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
                         labelOverride: ({ figureId, mediaId }) => {
