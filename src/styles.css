@@ -232,7 +232,7 @@ header.top {
 
 .brand h1 {
   margin: 0;
-  font-size: clamp(32px, 8.5vw, 48px);
+  font-size: 48px;
   font-weight: 800;
   letter-spacing: -0.02em;
   display: flex;
@@ -244,9 +244,9 @@ header.top {
   -webkit-user-select: none;
 }
 
-@supports (font-size: 1cqw) {
+@container (max-width: 470px) {
   .brand h1 {
-    font-size: clamp(32px, 9cqw, 48px);
+    font-size: clamp(40px, calc((100cqw - 20px) / 8.35), 48px);
   }
 }
 
