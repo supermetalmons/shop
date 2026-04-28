@@ -75,7 +75,6 @@ header.top {
   justify-content: space-between;
   gap: 16px;
   position: relative;
-  container-type: inline-size;
 }
 
 .top__actions {
@@ -244,9 +243,15 @@ header.top {
   -webkit-user-select: none;
 }
 
-@container (max-width: 470px) {
+@media (max-width: 360px) {
   .brand h1 {
-    font-size: clamp(40px, calc((100cqw - 20px) / 8.35), 48px);
+    font-size: 44px;
+  }
+}
+
+@media (max-width: 320px) {
+  .brand h1 {
+    font-size: 40px;
   }
 }
 
