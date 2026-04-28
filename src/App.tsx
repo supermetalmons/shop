@@ -4404,12 +4404,12 @@ function App({ currentPath }: AppProps) {
 
       {receiptItems.length && shipmentsContentVisible ? (
         <section className="card">
-          <div className="card__head">
+          <div className="card__head receipts-card__head">
             <div className="card__title">Receipts</div>
             <div className="card__actions">
               <button
                 type="button"
-                className="ghost"
+                className="receipts-card__code-button"
                 onClick={() => {
                   if (blockViewerModeAction()) return;
                   setClaimOpen(true);

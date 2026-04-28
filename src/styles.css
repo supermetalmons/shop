@@ -3045,6 +3045,23 @@ button.order-status-option:hover:not(:disabled) {
   gap: 16px;
 }
 
+.receipts-card__head {
+  align-items: baseline;
+}
+
+button.receipts-card__code-button {
+  background: transparent;
+  border-radius: 0;
+  color: var(--accent);
+  line-height: 1;
+  padding: 0;
+}
+
+button.receipts-card__code-button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent-hover);
+}
+
 .card__actions {
   display: flex;
   align-items: center;
