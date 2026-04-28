@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -24,6 +24,9 @@ import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
+const BOX_CONTENTS_FIGURE_WIDTH = 130;
+const BOX_CONTENTS_FIGURE_GAP = 12;
+const BOX_CONTENTS_HORIZONTAL_CHROME = 54;
 const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
@@ -90,6 +93,12 @@ function sortFulfillmentOrders(orders: FulfillmentOrder[]): FulfillmentOrder[] {
       a.dropId.localeCompare(b.dropId) ||
       b.deliveryId - a.deliveryId,
   );
+}
+
+function getBoxContentsStyle(itemCount: number): CSSProperties {
+  const columns = Math.max(1, Math.min(itemCount, 3));
+  const contentWidth = columns * BOX_CONTENTS_FIGURE_WIDTH + Math.max(0, columns - 1) * BOX_CONTENTS_FIGURE_GAP;
+  return { width: `min(100%, ${contentWidth + BOX_CONTENTS_HORIZONTAL_CHROME}px)` };
 }
 
 function dedupeOrdersByKey(orders: FulfillmentOrder[], existingOrderKeys?: Set<string>): FulfillmentOrder[] {
@@ -999,9 +1008,13 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 previewSrc: orderBoxPreviewImage,
               })
             ) : (
-              <div className="grid">
+              <div className="box-contents-list">
                 {order.boxes.map((box) => (
-                  <div key={`${orderKey}:${box.boxId}`} className="card subtle box-contents">
+                  <div
+                    key={`${orderKey}:${box.boxId}`}
+                    className="card subtle box-contents"
+                    style={getBoxContentsStyle(box.dudeIds.length)}
+                  >
                     <div className="card__title">
                       {box.claimCode ? (
                         <>

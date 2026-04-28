@@ -1230,6 +1230,29 @@ button.no-focus-style:focus-visible {
   }
 }
 
+@media (max-width: 720px) {
+  .inventory:not(.inventory--receipts) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .inventory--receipts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(2px, 1.5vw, 6px);
+  }
+
+  .inventory--receipts .inventory__media {
+    padding: clamp(2px, 1.5vw, 6px);
+  }
+
+  .inventory--receipts .inventory__item--receipt .inventory__image,
+  .inventory--receipts .inventory__item--receipt .inventory__media > .placeholder {
+    width: 100%;
+    height: 100%;
+  }
+}
+
 .inventory__item {
   aspect-ratio: 1 / 1;
   display: flex;
@@ -2107,6 +2130,9 @@ button.inventory__open:focus-visible {
 
 .fulfillment-orders-toolbar {
   align-items: center;
+  flex-wrap: nowrap;
+  width: 100%;
+  gap: clamp(6px, 2vw, 12px);
 }
 
 .fulfillment-drop-picker {
@@ -2121,6 +2147,18 @@ button.inventory__open:focus-visible {
   background-size: 10px 6px;
 }
 
+.fulfillment-orders-toolbar > .fulfillment-drop-picker {
+  min-width: 0;
+  padding-left: clamp(10px, 3vw, 14px);
+  padding-right: clamp(30px, 7vw, 44px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fulfillment-orders-toolbar > .fulfillment-drop-picker:not(.fulfillment-orders-filter-picker) {
+  flex: 1 1 0;
+}
+
 .fulfillment-drop-picker:focus,
 .fulfillment-drop-picker:focus-visible {
   outline: none;
@@ -2128,6 +2166,7 @@ button.inventory__open:focus-visible {
 }
 
 .fulfillment-orders-filter-picker {
+  flex: 0 1 auto;
   margin-left: auto;
 }
 
@@ -2189,14 +2228,14 @@ button.inventory__open:focus-visible {
   color: var(--muted);
 }
 
-.shipment-item-grid {
+.figure-grid.shipment-item-grid {
   gap: 8px;
   width: 100%;
   margin-top: 10px;
 }
 
-.shipment-item-tile {
-  flex: 0 0 clamp(28px, 6vw, 36px);
+.figure-tile.shipment-item-tile {
+  flex: 0 0 130px;
   gap: 0;
 }
 
@@ -2214,6 +2253,43 @@ button.inventory__open:focus-visible {
   background: transparent;
   padding: 0;
   border-radius: 0;
+}
+
+@media (max-width: 640px) {
+  .shipments-card {
+    gap: 12px;
+  }
+
+  .shipments-card .delivery-list {
+    gap: 10px;
+  }
+
+  .shipments-card .delivery-row {
+    padding: 8px 0;
+  }
+
+  .shipments-card .delivery-row > .card__head {
+    gap: 8px;
+  }
+
+  .shipments-card .delivery-status {
+    flex: 0 0 auto;
+    max-width: 45%;
+    text-align: right;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .figure-grid.shipment-item-grid {
+    gap: 6px;
+    margin-top: 8px;
+    max-width: 376px;
+  }
+
+  .figure-tile.shipment-item-tile {
+    flex: 0 1 calc((100% - 24px) / 5);
+    max-width: 72px;
+  }
 }
 
 .mono {
@@ -2349,12 +2425,26 @@ button.order-status-option:hover:not(:disabled) {
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.08));
 }
 
+.box-contents-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  max-width: 100%;
+}
+
 .card.subtle.box-contents {
   border: 3px dashed var(--fg);
   justify-self: start;
   align-self: start;
-  width: fit-content;
+  align-items: flex-start;
+  width: max-content;
   max-width: 100%;
+}
+
+.card.subtle.box-contents .figure-grid {
+  align-self: flex-start;
+  width: auto;
 }
 
 .fulfillment-secret-code {
@@ -2386,6 +2476,42 @@ button.order-status-option:hover:not(:disabled) {
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .order-items {
+    width: 100%;
+    gap: 12px;
+  }
+
+  .order-items > .grid {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .order-items > .box-contents-list {
+    gap: 12px;
+  }
+
+  .order-items .figure-grid {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .order-items .figure-tile {
+    flex: 0 1 clamp(0px, calc((100% - 16px) / 3), 130px);
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .order-items .figure-image {
+    padding: 4px;
+  }
+
+  .order-items .card.subtle.box-contents .figure-tile {
+    flex: 0 0 clamp(88px, 25vw, 130px);
+  }
 }
 
 .checkbox {

@@ -4361,7 +4361,7 @@ function App({ currentPath }: AppProps) {
       </Modal>
 
       {activeError ? <div className="error">{activeError}</div> : null}
-      <section className="card">
+      <section className="card shipments-card">
         <div className="card__head">
           <div className="card__title">Shipments</div>
         </div>
