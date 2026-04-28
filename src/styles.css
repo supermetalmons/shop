@@ -885,9 +885,7 @@ header.top {
   .drops-panel__grid--compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
 
-@container (min-width: 281px) and (max-width: 555.98px) {
   .drops-panel__drop--orphan {
     grid-column: 1 / -1;
     justify-self: center;
@@ -986,6 +984,12 @@ header.top {
   .drops-panel__grid--compact,
   .drops-panel__grid {
     grid-template-columns: 1fr;
+  }
+
+  .drops-panel__drop--orphan {
+    grid-column: auto;
+    justify-self: stretch;
+    width: 100%;
   }
 }
 
