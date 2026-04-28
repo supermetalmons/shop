@@ -903,7 +903,7 @@ header.top {
 }
 
 .drops-panel__image-wrap {
-  height: clamp(140px, 26vh, 300px);
+  height: clamp(128px, 28cqw, 190px);
   width: 100%;
   display: flex;
   align-items: center;
