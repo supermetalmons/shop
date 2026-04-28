@@ -75,6 +75,7 @@ header.top {
   justify-content: space-between;
   gap: 16px;
   position: relative;
+  container-type: inline-size;
 }
 
 .top__actions {
@@ -231,19 +232,27 @@ header.top {
 
 .brand h1 {
   margin: 0;
-  font-size: 48px;
+  font-size: clamp(32px, 8.5vw, 48px);
   font-weight: 800;
   letter-spacing: -0.02em;
   display: flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
+  white-space: nowrap;
   user-select: none;
   -webkit-user-select: none;
 }
 
+@supports (font-size: 1cqw) {
+  .brand h1 {
+    font-size: clamp(32px, 9cqw, 48px);
+  }
+}
+
 .brand-icon {
-  width: 57px;
-  height: 57px;
+  width: 1.1875em;
+  height: 1.1875em;
   margin-top: 2px;
   user-select: none;
   -webkit-user-select: none;
