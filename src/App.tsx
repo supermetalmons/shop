@@ -120,6 +120,14 @@ const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 
+type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
+type ReceiptViewerImage = {
+  key: string;
+  name: string;
+  image?: string;
+};
+type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-count'?: string };
+
 function pickRandomSoundUrl(soundUrls: readonly string[]) {
   return soundUrls[Math.floor(Math.random() * soundUrls.length)] || soundUrls[0]!;
 }
@@ -324,29 +332,64 @@ function normalizeClaimedReceiptIds(ids: number[] | undefined): number[] {
   return Array.from(normalized);
 }
 
-function findClaimedReceiptItem(
+function findFirstNewClaimedReceipt(
   items: readonly InventoryItem[],
   dropId: string,
-  claimedFigureIds: readonly number[],
   previousReceiptIds: ReadonlySet<string>,
   burnedReceiptId?: string,
 ): InventoryItem | undefined {
+  for (const item of items) {
+    if (item.kind !== 'certificate' || item.dropId !== dropId) continue;
+    if (item.id !== burnedReceiptId && !previousReceiptIds.has(item.id)) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+function findClaimedReceiptsByFigureId(items: readonly InventoryItem[], dropId: string): Map<number, InventoryItem> {
   const receiptByFigureId = new Map<number, InventoryItem>();
-  let firstNewReceipt: InventoryItem | undefined;
   items.forEach((item) => {
     if (item.kind !== 'certificate' || item.dropId !== dropId) return;
     if (typeof item.dudeId === 'number' && !receiptByFigureId.has(item.dudeId)) {
       receiptByFigureId.set(item.dudeId, item);
     }
-    if (!firstNewReceipt && item.id !== burnedReceiptId && !previousReceiptIds.has(item.id)) {
-      firstNewReceipt = item;
-    }
   });
-  for (const figureId of claimedFigureIds) {
-    const match = receiptByFigureId.get(figureId);
-    if (match) return match;
+  return receiptByFigureId;
+}
+
+function buildClaimedReceiptPreviewItems(
+  snapshot: readonly InventoryItem[],
+  dropId: string,
+  claimedFigureIds: readonly number[],
+  previousReceiptIds: ReadonlySet<string>,
+  burnedReceiptId?: string,
+  fallbackImages?: ReadonlyMap<number, string>,
+): ReceiptViewerSource[] {
+  if (!claimedFigureIds.length) {
+    const item = findFirstNewClaimedReceipt(snapshot, dropId, previousReceiptIds, burnedReceiptId);
+    return item ? [{ id: item.id, dropId: item.dropId, name: item.name, image: item.image }] : [];
   }
-  return firstNewReceipt;
+
+  const receiptByFigureId = findClaimedReceiptsByFigureId(snapshot, dropId);
+  return claimedFigureIds.map((figureId) => {
+    const item = receiptByFigureId.get(figureId);
+    const fallbackImage = fallbackImages?.get(figureId);
+    if (item) {
+      return {
+        id: item.id,
+        dropId: item.dropId,
+        name: item.name,
+        image: item.image || fallbackImage,
+      };
+    }
+    return {
+      id: `claimed-receipt-${dropId}-${figureId}`,
+      dropId,
+      name: dropAssetReference(getFrontendDrop(dropId), 'figure', figureId),
+      image: fallbackImage,
+    };
+  });
 }
 
 async function loadClaimedReceiptImage(dropId: string, figureId: number): Promise<string | undefined> {
@@ -519,6 +562,7 @@ type RevealOverlayState = {
   revealedIds?: number[];
   viewerMode?: 'poncho-card' | 'receipt-image';
   imageViewerSize?: ImageViewerSize;
+  receiptImages?: ReceiptViewerImage[];
   viewerFigureId?: number;
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
@@ -529,6 +573,7 @@ type ReceiptImageViewerOverlayProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
+  images?: readonly ReceiptViewerImage[];
   imageSrc?: string;
   alt: string;
   viewerSize?: ImageViewerSize;
@@ -540,12 +585,20 @@ function ReceiptImageViewerOverlay({
   overlayStyle,
   active,
   closing,
+  images,
   imageSrc,
   alt,
   viewerSize = 'receipt',
   onDismiss,
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
+  const receiptImages = images?.length ? images : [{ key: 'receipt-image', name: alt, image: imageSrc }];
+  const multiReceiptClass = receiptImages.length > 1 ? ' receipt-viewer-overlay__image-shell--multi' : '';
+  const imageShellStyle: ReceiptViewerImageShellStyle | undefined =
+    receiptImages.length > 1
+      ? { '--receipt-viewer-count': String(receiptImages.length) }
+      : undefined;
+
   return (
     <div
       className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
@@ -557,22 +610,26 @@ function ReceiptImageViewerOverlay({
     >
       <div className="reveal-overlay__backdrop" />
       <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
-        <div className="receipt-viewer-overlay__image-shell">
-          {imageSrc ? (
-            <>
-              <img
-                src={imageSrc}
-                alt={alt}
-                className="receipt-viewer-overlay__image"
-                draggable={false}
-                onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-              />
-              <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden aria-hidden="true" />
-            </>
-          ) : (
-            <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" aria-hidden="true" />
-          )}
+        <div className={`receipt-viewer-overlay__image-shell${multiReceiptClass}`} style={imageShellStyle}>
+          {receiptImages.map((receiptImage, index) => (
+            <div className="receipt-viewer-overlay__image-frame" key={`${receiptImage.key}:${index}`}>
+              {receiptImage.image ? (
+                <>
+                  <img
+                    src={receiptImage.image}
+                    alt={receiptImage.name || alt}
+                    className="receipt-viewer-overlay__image"
+                    draggable={false}
+                    onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                    onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                  />
+                  <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden aria-hidden="true" />
+                </>
+              ) : (
+                <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" aria-hidden="true" />
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -3502,19 +3559,26 @@ function App({ currentPath }: AppProps) {
   ]);
 
   const openImageViewer = useCallback((
-    item: Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>,
+    item: ReceiptViewerSource,
     originRect?: DOMRect | null,
     options?: {
       aspectRatio?: number;
       size?: ImageViewerSize;
       unavailableMessage?: string;
       inventorySnapshot?: InventoryItem[];
+      overlayId?: string;
+      overlayName?: string;
+      receiptImages?: ReceiptViewerImage[];
+      allowMissingImage?: boolean;
     },
   ) => {
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
-    if (!item.image) {
+    const missingImage = options?.receiptImages?.length
+      ? options.receiptImages.some((receiptImage) => !receiptImage.image)
+      : !item.image;
+    if (!options?.allowMissingImage && missingImage) {
       showToast(options?.unavailableMessage || 'Image unavailable');
       return false;
     }
@@ -3523,8 +3587,8 @@ function App({ currentPath }: AppProps) {
       options?.aspectRatio && Number.isFinite(options.aspectRatio) && options.aspectRatio > 0
         ? options.aspectRatio
         : originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
-        ? originRect.width / originRect.height
-        : 1;
+          ? originRect.width / originRect.height
+          : 1;
     const targetRect = calcReceiptViewerTargetRect(window.innerWidth, window.innerHeight, aspectRatio, options?.size);
     const resolvedOriginRect = originRect
       ? calcAspectLockedViewerOriginRect(originRect, targetRect)
@@ -3535,9 +3599,9 @@ function App({ currentPath }: AppProps) {
     setInventorySnapshot(options?.inventorySnapshot ?? inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     presentRevealOverlay({
-      id: item.id,
+      id: options?.overlayId || item.id,
       dropId: item.dropId,
-      name: item.name,
+      name: options?.overlayName || item.name,
       image: item.image,
       originRect: toOverlayRect(resolvedOriginRect),
       targetRect,
@@ -3547,6 +3611,7 @@ function App({ currentPath }: AppProps) {
       revealedIds: undefined,
       viewerMode: 'receipt-image',
       imageViewerSize: options?.size || 'receipt',
+      receiptImages: options?.receiptImages,
       viewerFigureId: undefined,
       hasRevealAttempted: true,
       autoOpening: false,
@@ -3564,17 +3629,43 @@ function App({ currentPath }: AppProps) {
     startOpenLoading,
   ]);
 
+  const openReceiptImageViewerGroup = useCallback((
+    items: readonly ReceiptViewerSource[],
+    originRect?: DOMRect | null,
+    options?: { inventorySnapshot?: InventoryItem[]; allowPlaceholders?: boolean },
+  ) => {
+    const receiptImages = items.filter((item) => item.id && item.dropId);
+    const firstReceipt = receiptImages[0];
+    if (!firstReceipt) return false;
+
+    const singleAspectRatio =
+      originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
+        ? originRect.width / originRect.height
+        : 1;
+    return openImageViewer(firstReceipt, originRect, {
+      aspectRatio: singleAspectRatio * receiptImages.length,
+      size: 'receipt',
+      unavailableMessage: 'Receipt image unavailable',
+      inventorySnapshot: options?.inventorySnapshot,
+      overlayId: receiptImages.length === 1
+        ? firstReceipt.id
+        : `claimed-receipts-${firstReceipt.dropId}-${receiptImages.map((item) => item.id).join('-')}`,
+      overlayName: receiptImages.length === 1 ? firstReceipt.name : 'Claimed receipts',
+      receiptImages: receiptImages.map((item) => ({ key: item.id, name: item.name, image: item.image })),
+      allowMissingImage: options?.allowPlaceholders,
+    });
+  }, [openImageViewer]);
+
   const openReceiptImageViewer = useCallback((
     item: InventoryItem,
     originRect?: DOMRect | null,
     options?: { inventorySnapshot?: InventoryItem[] },
   ) => {
     if (item.kind !== 'certificate') return false;
-    return openImageViewer(item, originRect, {
-      unavailableMessage: 'Receipt image unavailable',
+    return openReceiptImageViewerGroup([item], originRect, {
       inventorySnapshot: options?.inventorySnapshot,
     });
-  }, [openImageViewer]);
+  }, [openReceiptImageViewerGroup]);
 
   const handleViewSelectedPonchoCard = useCallback(() => {
     if (!selectedPonchoFigure) return;
@@ -3759,38 +3850,52 @@ function App({ currentPath }: AppProps) {
     closeClaimModal();
 
     let opened = false;
-    const openClaimedReceipt = (item: InventoryItem | undefined, snapshot: InventoryItem[]) => {
-      if (opened || revealOverlayRef.current || !item?.image) return;
-      opened = openReceiptImageViewer(item, null, { inventorySnapshot: snapshot });
+    const openClaimedReceiptPreview = (
+      previewItems: readonly ReceiptViewerSource[],
+      snapshot: InventoryItem[],
+      options?: { allowPlaceholders?: boolean },
+    ) => {
+      if (opened || revealOverlayRef.current) return;
+      if (!previewItems.length) return;
+      if (!options?.allowPlaceholders && previewItems.some((item) => !item.image)) return;
+      opened = openReceiptImageViewerGroup(previewItems, null, {
+        inventorySnapshot: snapshot,
+        allowPlaceholders: options?.allowPlaceholders,
+      });
     };
 
-    const viewerReceipt = findClaimedReceiptItem(
+    const initialPreviewItems = buildClaimedReceiptPreviewItems(
       inventory,
       claimDrop.dropId,
       claimedFigureIds,
       previousReceiptIds,
       resp.certificateId,
     );
-    openClaimedReceipt(viewerReceipt, inventory);
+    openClaimedReceiptPreview(initialPreviewItems, inventory);
 
-    const fallbackFigureId = viewerReceipt?.dudeId || claimedFigureIds[0];
-    if (!viewerReceipt?.image && fallbackFigureId) {
-      void loadClaimedReceiptImage(claimDrop.dropId, fallbackFigureId)
-        .then((image) => {
-          if (!image) return;
-          openClaimedReceipt(
-            viewerReceipt
-              ? { ...viewerReceipt, image }
-              : {
-                  id: `claimed-receipt-${claimDrop.dropId}-${fallbackFigureId}`,
-                  dropId: claimDrop.dropId,
-                  name: figureReferenceForDropId(claimDrop.dropId, fallbackFigureId),
-                  kind: 'certificate',
-                  image,
-                  dudeId: fallbackFigureId,
-                  status: 'pending',
-                },
+    const missingFallbackFigureIds = claimedFigureIds.filter((_, index) => !initialPreviewItems[index]?.image);
+    if (missingFallbackFigureIds.length && !opened) {
+      void Promise.all(
+        missingFallbackFigureIds.map(async (figureId): Promise<[number, string | undefined]> => [
+          figureId,
+          await loadClaimedReceiptImage(claimDrop.dropId, figureId),
+        ]),
+      )
+        .then((entries) => {
+          const fallbackImages = new Map(
+            entries.filter((entry): entry is [number, string] => Boolean(entry[1])),
+          );
+          openClaimedReceiptPreview(
+            buildClaimedReceiptPreviewItems(
+              inventory,
+              claimDrop.dropId,
+              claimedFigureIds,
+              previousReceiptIds,
+              resp.certificateId,
+              fallbackImages,
+            ),
             inventory,
+            { allowPlaceholders: true },
           );
         })
         .catch(() => undefined);
@@ -3799,14 +3904,16 @@ function App({ currentPath }: AppProps) {
     void refetchInventory()
       .then((result) => {
         const refreshedInventory = result.data ?? inventory;
-        const refreshedReceipt = findClaimedReceiptItem(
+        openClaimedReceiptPreview(
+          buildClaimedReceiptPreviewItems(
+            refreshedInventory,
+            claimDrop.dropId,
+            claimedFigureIds,
+            previousReceiptIds,
+            resp.certificateId,
+          ),
           refreshedInventory,
-          claimDrop.dropId,
-          claimedFigureIds,
-          previousReceiptIds,
-          resp.certificateId,
         );
-        openClaimedReceipt(refreshedReceipt, refreshedInventory);
       })
       .catch((err) => {
         console.warn('[mons] failed to refresh inventory after claim', err);
@@ -4411,6 +4518,7 @@ function App({ currentPath }: AppProps) {
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
+        images={revealOverlay.receiptImages}
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
         viewerSize={revealOverlay.imageViewerSize}
