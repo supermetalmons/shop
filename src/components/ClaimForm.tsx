@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -9,6 +9,7 @@ type ClaimFormResult = {
 interface ClaimFormProps {
   onClaim: (payload: { code: string }) => Promise<ClaimFormResult | void>;
   onSuccess?: () => void;
+  onDismiss?: () => void;
   mode?: 'card' | 'modal';
   showTitle?: boolean;
   itemsPerBox?: number;
@@ -33,6 +34,7 @@ function normalizeItemsPerBoxCount(value: number | undefined, fallback = 1): num
 export function ClaimForm({
   onClaim,
   onSuccess,
+  onDismiss,
   mode = 'card',
   showTitle = true,
   itemsPerBox,
@@ -46,6 +48,20 @@ export function ClaimForm({
   const figuresPerBox = normalizeItemsPerBoxCount(itemsPerBox);
   const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
   const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, 'figure');
+
+  useEffect(() => {
+    if (!onDismiss) return;
+
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape' && !loading) {
+        evt.preventDefault();
+        onDismiss();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [loading, onDismiss]);
 
   const buildSuccessMessage = (args: ClaimFormResult) => {
     const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);

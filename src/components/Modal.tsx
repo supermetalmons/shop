@@ -5,15 +5,19 @@ interface ModalProps {
   title: string;
   onClose: () => void;
   showCloseButton?: boolean;
+  closeOnEscape?: boolean;
   children: ReactNode;
 }
 
-export function Modal({ open, title, onClose, showCloseButton = true, children }: ModalProps) {
+export function Modal({ open, title, onClose, showCloseButton = true, closeOnEscape = true, children }: ModalProps) {
   useEffect(() => {
     if (!open) return;
 
     const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') onClose();
+      if (evt.key === 'Escape' && closeOnEscape) {
+        evt.preventDefault();
+        onClose();
+      }
     };
 
     document.addEventListener('keydown', onKeyDown);
@@ -23,7 +27,7 @@ export function Modal({ open, title, onClose, showCloseButton = true, children }
       document.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = '';
     };
-  }, [open, onClose]);
+  }, [closeOnEscape, open, onClose]);
 
   if (!open) return null;
 
@@ -49,4 +53,3 @@ export function Modal({ open, title, onClose, showCloseButton = true, children }
     </div>
   );
 }
-

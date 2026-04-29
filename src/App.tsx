@@ -3574,6 +3574,9 @@ function App({ currentPath }: AppProps) {
       : 'hidden';
   const shipmentsContentVisible =
     shipmentsReady && (deliveryOrders.length > 0 || shipmentsEmptyStateVisibility === 'visible');
+  const closeClaimModal = useCallback(() => {
+    setClaimOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!inventoryReadyForShipments) {
@@ -4348,10 +4351,11 @@ function App({ currentPath }: AppProps) {
         </div>
       </Modal>
 
-      <Modal open={claimOpen} title="Secret Code" onClose={() => setClaimOpen(false)}>
+      <Modal open={claimOpen} title="Secret Code" onClose={closeClaimModal} closeOnEscape={false}>
         <ClaimForm
           onClaim={handleClaim}
-          onSuccess={() => setClaimOpen(false)}
+          onSuccess={closeClaimModal}
+          onDismiss={closeClaimModal}
           mode="modal"
           showTitle={false}
           itemsPerBox={routeDrop?.itemsPerBox}
