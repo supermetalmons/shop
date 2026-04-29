@@ -53,6 +53,7 @@ import {
   joinDropAssetUrl,
   mintPanelPreviewAspectRatio,
   mintPanelPreviewImage,
+  normalizeCertificateDisplayImage,
   normalizeBoxDisplayImage,
   resolveDropContent,
 } from './lib/dropContent';
@@ -97,7 +98,7 @@ import {
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
 } from './types';
-import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily } from './config/deployment';
+import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily, resolveDropAssetUrl } from './config/deployment';
 import { getNormalizedPathname, navigate } from './navigation';
 import {
   dropPath,
@@ -311,6 +312,56 @@ function displayOrderStatus(order: DeliveryOrderSummary): string {
   const fulfillmentStatus = typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
   if (fulfillmentStatus) return fulfillmentStatus;
   return formatOrderStatus(order.status === 'ready_to_ship' ? 'Preparing' : order.status);
+}
+
+function normalizeClaimedReceiptIds(ids: number[] | undefined): number[] {
+  if (!Array.isArray(ids)) return [];
+  const normalized = new Set<number>();
+  ids.forEach((id) => {
+    const figureId = Math.floor(Number(id));
+    if (Number.isFinite(figureId) && figureId > 0) normalized.add(figureId);
+  });
+  return Array.from(normalized);
+}
+
+function findClaimedReceiptItem(
+  items: readonly InventoryItem[],
+  dropId: string,
+  claimedFigureIds: readonly number[],
+  previousReceiptIds: ReadonlySet<string>,
+  burnedReceiptId?: string,
+): InventoryItem | undefined {
+  const receiptByFigureId = new Map<number, InventoryItem>();
+  let firstNewReceipt: InventoryItem | undefined;
+  items.forEach((item) => {
+    if (item.kind !== 'certificate' || item.dropId !== dropId) return;
+    if (typeof item.dudeId === 'number' && !receiptByFigureId.has(item.dudeId)) {
+      receiptByFigureId.set(item.dudeId, item);
+    }
+    if (!firstNewReceipt && item.id !== burnedReceiptId && !previousReceiptIds.has(item.id)) {
+      firstNewReceipt = item;
+    }
+  });
+  for (const figureId of claimedFigureIds) {
+    const match = receiptByFigureId.get(figureId);
+    if (match) return match;
+  }
+  return firstNewReceipt;
+}
+
+async function loadClaimedReceiptImage(dropId: string, figureId: number): Promise<string | undefined> {
+  const drop = getFrontendDrop(dropId);
+  if (!drop) return undefined;
+  const metadataUrl = resolveDropAssetUrl(`${drop.paths.receiptsFiguresJsonBase}${figureId}.json`);
+  if (!metadataUrl) return undefined;
+  try {
+    const resp = await fetch(metadataUrl);
+    if (!resp.ok) return undefined;
+    const metadata = (await resp.json()) as { image?: unknown };
+    return normalizeCertificateDisplayImage(dropId, typeof metadata.image === 'string' ? metadata.image : undefined);
+  } catch {
+    return undefined;
+  }
 }
 
 function FigureTileImage(props: {
@@ -3453,7 +3504,12 @@ function App({ currentPath }: AppProps) {
   const openImageViewer = useCallback((
     item: Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>,
     originRect?: DOMRect | null,
-    options?: { aspectRatio?: number; size?: ImageViewerSize; unavailableMessage?: string },
+    options?: {
+      aspectRatio?: number;
+      size?: ImageViewerSize;
+      unavailableMessage?: string;
+      inventorySnapshot?: InventoryItem[];
+    },
   ) => {
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
@@ -3476,7 +3532,7 @@ function App({ currentPath }: AppProps) {
 
     resetPonchoRevealDismissState();
     clearRevealOverlayCloseTimeout();
-    setInventorySnapshot(inventory);
+    setInventorySnapshot(options?.inventorySnapshot ?? inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     presentRevealOverlay({
       id: item.id,
@@ -3508,9 +3564,16 @@ function App({ currentPath }: AppProps) {
     startOpenLoading,
   ]);
 
-  const openReceiptImageViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
+  const openReceiptImageViewer = useCallback((
+    item: InventoryItem,
+    originRect?: DOMRect | null,
+    options?: { inventorySnapshot?: InventoryItem[] },
+  ) => {
     if (item.kind !== 'certificate') return false;
-    return openImageViewer(item, originRect, { unavailableMessage: 'Receipt image unavailable' });
+    return openImageViewer(item, originRect, {
+      unavailableMessage: 'Receipt image unavailable',
+      inventorySnapshot: options?.inventorySnapshot,
+    });
   }, [openImageViewer]);
 
   const handleViewSelectedPonchoCard = useCallback(() => {
@@ -3669,6 +3732,7 @@ function App({ currentPath }: AppProps) {
   const handleClaim = async ({ code }: { code: string }) => {
     if (blockViewerModeAction()) return;
     if (!publicKey) throw new Error('Connect wallet to claim');
+    const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
     // Ensure wallet session exists for authenticated callable.
     if (!isSignedInWallet) {
       await signIn();
@@ -3677,9 +3741,8 @@ function App({ currentPath }: AppProps) {
     let resp = await requestTx();
     let claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
     let claimConnection = getDropConnection(claimDrop.dropId);
-    let sig: string;
     try {
-      sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
+      await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
         signAndSendPreparedViaConnection(tx, claimConnection),
       );
     } catch (err) {
@@ -3688,12 +3751,67 @@ function App({ currentPath }: AppProps) {
       resp = await requestTx();
       claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
       claimConnection = getDropConnection(claimDrop.dropId);
-      sig = await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
+      await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
         signAndSendPreparedViaConnection(tx, claimConnection),
       );
     }
-    showToast(`Claimed certificates · ${sig}`);
-    await refetchInventory();
+    const claimedFigureIds = normalizeClaimedReceiptIds(resp.certificates);
+    closeClaimModal();
+
+    let opened = false;
+    const openClaimedReceipt = (item: InventoryItem | undefined, snapshot: InventoryItem[]) => {
+      if (opened || revealOverlayRef.current || !item?.image) return;
+      opened = openReceiptImageViewer(item, null, { inventorySnapshot: snapshot });
+    };
+
+    const viewerReceipt = findClaimedReceiptItem(
+      inventory,
+      claimDrop.dropId,
+      claimedFigureIds,
+      previousReceiptIds,
+      resp.certificateId,
+    );
+    openClaimedReceipt(viewerReceipt, inventory);
+
+    const fallbackFigureId = viewerReceipt?.dudeId || claimedFigureIds[0];
+    if (!viewerReceipt?.image && fallbackFigureId) {
+      void loadClaimedReceiptImage(claimDrop.dropId, fallbackFigureId)
+        .then((image) => {
+          if (!image) return;
+          openClaimedReceipt(
+            viewerReceipt
+              ? { ...viewerReceipt, image }
+              : {
+                  id: `claimed-receipt-${claimDrop.dropId}-${fallbackFigureId}`,
+                  dropId: claimDrop.dropId,
+                  name: figureReferenceForDropId(claimDrop.dropId, fallbackFigureId),
+                  kind: 'certificate',
+                  image,
+                  dudeId: fallbackFigureId,
+                  status: 'pending',
+                },
+            inventory,
+          );
+        })
+        .catch(() => undefined);
+    }
+
+    void refetchInventory()
+      .then((result) => {
+        const refreshedInventory = result.data ?? inventory;
+        const refreshedReceipt = findClaimedReceiptItem(
+          refreshedInventory,
+          claimDrop.dropId,
+          claimedFigureIds,
+          previousReceiptIds,
+          resp.certificateId,
+        );
+        openClaimedReceipt(refreshedReceipt, refreshedInventory);
+      })
+      .catch((err) => {
+        console.warn('[mons] failed to refresh inventory after claim', err);
+      });
+
     return {
       itemsPerBox: claimDrop.itemsPerBox,
       boxNamePrefix: claimDrop.namePrefix,

@@ -1116,6 +1116,10 @@ label {
   box-shadow: none;
 }
 
+.claim-form button:disabled {
+  cursor: pointer;
+}
+
 input,
 select,
 textarea {

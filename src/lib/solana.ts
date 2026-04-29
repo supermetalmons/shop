@@ -1,5 +1,5 @@
 import bs58 from 'bs58';
-import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction, type SignatureStatus } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 
 function unwrapTxErrorMessage(err: unknown): string {
@@ -53,6 +53,13 @@ type WaitForConditionOptions = {
 const ALREADY_PROCESSED_RECOVERY_WAIT: WaitForConditionOptions = {
   attempts: 15,
   delayMs: 1_000,
+};
+
+// Keep post-submit confirmation bounded and explicit. This is one status RPC call
+// per interval for a single active transaction, plus one history lookup at the end.
+const SUBMITTED_SIGNATURE_WAIT: WaitForConditionOptions = {
+  attempts: 20,
+  delayMs: 500,
 };
 
 async function waitForCondition(check: () => Promise<boolean>, opts: WaitForConditionOptions = {}): Promise<boolean> {
@@ -138,15 +145,62 @@ function extractSignatureCandidate(value: unknown, seen = new Set<unknown>(), de
   return null;
 }
 
-async function waitForProcessedSignature(
+function describeSignatureStatusError(err: unknown): string {
+  if (!err) return 'Unknown transaction error';
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+async function getSignatureStatusValue(
+  connection: Connection,
+  signature: string,
+  searchTransactionHistory: boolean,
+): Promise<SignatureStatus | null> {
+  const status = await connection.getSignatureStatus(signature, { searchTransactionHistory });
+  return status.value ?? null;
+}
+
+function isConfirmedSignatureStatus(status: SignatureStatus | null): boolean {
+  if (!status || status.err) return false;
+  return (
+    status.confirmationStatus === 'confirmed' ||
+    status.confirmationStatus === 'finalized' ||
+    status.confirmations === null ||
+    (typeof status.confirmations === 'number' && status.confirmations > 0)
+  );
+}
+
+function assertSignatureStatusSucceeded(status: SignatureStatus | null) {
+  if (status?.err) {
+    throw new Error(`Transaction failed: ${describeSignatureStatusError(status.err)}`);
+  }
+}
+
+async function waitForSuccessfulSignature(
   connection: Connection,
   signature: string,
   opts: WaitForConditionOptions = {},
 ): Promise<boolean> {
-  return waitForCondition(async () => {
-    const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-    return !!status.value && status.value.err == null;
-  }, opts);
+  const attempts = Math.max(1, Math.floor(opts.attempts ?? 6));
+  const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const status = await getSignatureStatusValue(connection, signature, false).catch(() => null);
+    assertSignatureStatusSucceeded(status);
+    if (isConfirmedSignatureStatus(status)) return true;
+
+    if (attempt < attempts - 1 && delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+
+  const historicalStatus = await getSignatureStatusValue(connection, signature, true).catch(() => null);
+  assertSignatureStatusSucceeded(historicalStatus);
+  return isConfirmedSignatureStatus(historicalStatus);
 }
 
 export async function recoverAlreadyProcessedSignature(
@@ -157,7 +211,7 @@ export async function recoverAlreadyProcessedSignature(
   if (!isAlreadyProcessedError(err)) return null;
   const signature = (tx ? extractTransactionSignature(tx) : null) || extractSignatureCandidate(err);
   if (!signature) return null;
-  const confirmed = await waitForProcessedSignature(connection, signature, ALREADY_PROCESSED_RECOVERY_WAIT);
+  const confirmed = await waitForSuccessfulSignature(connection, signature, ALREADY_PROCESSED_RECOVERY_WAIT);
   if (!confirmed) return null;
   console.warn('[mons/solana] transaction was already processed; treating existing signature as success', {
     signature,
@@ -244,13 +298,16 @@ export async function sendPreparedTransaction(
 
   try {
     const signature = await signer(tx);
-    // Confirm by signature to avoid mismatched blockhash strategy (backend pre-signs v0 txs).
-    await connection.confirmTransaction(signature, 'confirmed');
+    const submitted = await waitForSuccessfulSignature(connection, signature, SUBMITTED_SIGNATURE_WAIT);
+    if (!submitted) {
+      throw new Error(
+        `Transaction was submitted, but confirmation timed out (${signature}). It may still complete; wait a moment before retrying.`,
+      );
+    }
     return signature;
   } catch (err) {
     const recoveredSignature = await recoverAlreadyProcessedSignature(tx, connection, err);
     if (recoveredSignature) {
-      await connection.confirmTransaction(recoveredSignature, 'confirmed');
       return recoveredSignature;
     }
     const logs = await extractSendTransactionLogs(err);
