@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -41,6 +41,7 @@ export function ClaimForm({
   boxNamePrefix,
   figureNamePrefix,
 }: ClaimFormProps) {
+  const codeInputRef = useRef<HTMLInputElement | null>(null);
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +63,10 @@ export function ClaimForm({
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [loading, onDismiss]);
+
+  useLayoutEffect(() => {
+    codeInputRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const buildSuccessMessage = (args: ClaimFormResult) => {
     const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);
@@ -100,6 +105,8 @@ export function ClaimForm({
       {showTitle ? <div className="card__title">Secret Code</div> : null}
       <label>
         <input
+          ref={codeInputRef}
+          autoFocus
           value={code}
           onChange={(e) => setCode(e.target.value)}
           placeholder="10 digits"
