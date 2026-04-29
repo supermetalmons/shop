@@ -86,9 +86,8 @@ export function ClaimForm({
         <input
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="10 digit code"
+          placeholder="10 digits"
           inputMode="numeric"
-          autoComplete="one-time-code"
           pattern="[0-9]{10}"
           maxLength={10}
           required
@@ -97,7 +96,7 @@ export function ClaimForm({
       {error ? <div className="error">{error}</div> : null}
       {success ? <div className="success">{success}</div> : null}
       <button type="submit" disabled={loading}>
-        {loading ? 'Submitting…' : 'Claim receipts'}
+        {loading ? 'Sending…' : 'Claim'}
       </button>
     </form>
   );
