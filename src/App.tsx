@@ -872,7 +872,7 @@ type AppProps = {
 
 function App({ currentPath }: AppProps) {
   const wallet = useWallet();
-  const { setVisible } = useWalletModal();
+  const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
   const normalizedCurrentPath = useMemo(
     () => (currentPath ? currentPath : getNormalizedPathname()),
@@ -1213,6 +1213,7 @@ function App({ currentPath }: AppProps) {
   const [authReady, setAuthReady] = useState(false);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [shipmentsReady, setShipmentsReady] = useState(false);
+  const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
@@ -1478,6 +1479,22 @@ function App({ currentPath }: AppProps) {
     signInPromiseRef.current = promise;
     return promise;
   };
+
+  useEffect(() => {
+    if (!pendingShipmentsSignIn || !publicKey) return;
+    if (isSignedInWallet) {
+      setPendingShipmentsSignIn(false);
+      return;
+    }
+    if (!authReady || authLoading) return;
+    setPendingShipmentsSignIn(false);
+    void ensureSignedIn();
+  }, [authLoading, authReady, isSignedInWallet, pendingShipmentsSignIn, publicKey]);
+
+  useEffect(() => {
+    if (!pendingShipmentsSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    setPendingShipmentsSignIn(false);
+  }, [pendingShipmentsSignIn, publicKey, wallet.connecting, walletModalVisible]);
 
   const runDeliveryRecovery = useCallback(
     async (request: RecoverDeliveryOrdersArgs = {}) => {
@@ -3896,16 +3913,12 @@ function App({ currentPath }: AppProps) {
 
   const handleSignInForShipments = async () => {
     if (!publicKey) {
+      setPendingShipmentsSignIn(true);
       setVisible(true);
       return;
     }
     if (authLoading) return;
-    try {
-      await signIn();
-    } catch (err) {
-      if (isUserRejectedError(err)) return;
-      showToast(err instanceof Error ? err.message : 'Failed to sign in');
-    }
+    await ensureSignedIn();
   };
 
   const handleClaim = async ({ code }: { code: string }) => {
@@ -4045,7 +4058,12 @@ function App({ currentPath }: AppProps) {
         : 'No shipments yet.'
       : (
         <span className="shipments-signin">
-          <button type="button" className="link" onClick={handleSignInForShipments} disabled={authLoading}>
+          <button
+            type="button"
+            className="link"
+            onClick={handleSignInForShipments}
+            disabled={authLoading || pendingShipmentsSignIn}
+          >
             Sign in
           </button>
           <span>to view your shipments.</span>
