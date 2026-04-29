@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type TransitionEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type TransitionEvent } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
@@ -465,12 +465,64 @@ type RevealOverlayState = {
   frame: number;
   advanceClicks: number;
   revealedIds?: number[];
-  viewerMode?: 'poncho-card';
+  viewerMode?: 'poncho-card' | 'receipt-image';
   viewerFigureId?: number;
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
   autoMode?: 'normal' | 'fast';
 };
+
+type ReceiptImageViewerOverlayProps = {
+  overlayStyle?: CSSProperties;
+  active: boolean;
+  closing: boolean;
+  imageSrc?: string;
+  alt: string;
+  onDismiss?: () => void;
+  onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
+};
+
+function ReceiptImageViewerOverlay({
+  overlayStyle,
+  active,
+  closing,
+  imageSrc,
+  alt,
+  onDismiss,
+  onTransitionEnd,
+}: ReceiptImageViewerOverlayProps) {
+  return (
+    <div
+      className={`reveal-overlay receipt-viewer-overlay reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      role="presentation"
+      style={overlayStyle}
+      onClick={onDismiss}
+      onContextMenu={(evt) => evt.preventDefault()}
+      onDragStart={(evt) => evt.preventDefault()}
+    >
+      <div className="reveal-overlay__backdrop" />
+      <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
+        <div className="receipt-viewer-overlay__image-shell">
+          {imageSrc ? (
+            <>
+              <img
+                src={imageSrc}
+                alt={alt}
+                className="receipt-viewer-overlay__image"
+                draggable={false}
+                onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+              />
+              <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden aria-hidden="true" />
+            </>
+          ) : (
+            <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" aria-hidden="true" />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function toOverlayRect(rect: DOMRect): OverlayRect {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
@@ -503,6 +555,24 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, asp
   return {
     left: Math.round((viewportWidth - width) / 2),
     top: Math.max(16, Math.round((viewportHeight - height) / 2) - lift),
+    width,
+    height,
+  };
+}
+
+function calcReceiptViewerTargetRect(viewportWidth: number, viewportHeight: number, aspectRatio: number): OverlayRect {
+  const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const maxWidth = Math.min(viewportWidth * 0.84, 620);
+  const maxHeight = Math.min(viewportHeight * 0.78, 760);
+  let width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * safeAspectRatio)));
+  let height = Math.max(1, Math.floor(width / safeAspectRatio));
+  if (height > maxHeight) {
+    height = Math.max(1, Math.floor(maxHeight));
+    width = Math.max(1, Math.floor(height * safeAspectRatio));
+  }
+  return {
+    left: Math.round((viewportWidth - width) / 2),
+    top: Math.max(16, Math.round((viewportHeight - height) / 2)),
     width,
     height,
   };
@@ -2114,7 +2184,11 @@ function App({ currentPath }: AppProps) {
   useEffect(() => {
     if (!revealOverlay) return;
     const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') closeRevealOverlay();
+      if (evt.key !== 'Escape') return;
+      if (revealOverlayRef.current?.viewerMode === 'receipt-image') {
+        evt.preventDefault();
+      }
+      closeRevealOverlay();
     };
     document.addEventListener('keydown', onKeyDown);
     document.body.style.overflow = 'hidden';
@@ -2139,6 +2213,12 @@ function App({ currentPath }: AppProps) {
               ? calcPonchoDrifellaAbsoluteCardRect(
                   calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
                 )
+              : prev.viewerMode === 'receipt-image'
+                ? calcReceiptViewerTargetRect(
+                    window.innerWidth,
+                    window.innerHeight,
+                    prev.targetRect.width / Math.max(1, prev.targetRect.height),
+                  )
               : calcRevealTargetRectForDrop(
                   window.innerWidth,
                   window.innerHeight,
@@ -2365,6 +2445,7 @@ function App({ currentPath }: AppProps) {
   ]);
   useEffect(() => {
     if (!revealOverlay) return;
+    if (revealOverlay.viewerMode === 'receipt-image') return;
     preloadPonchoRevealPackAssetsForDropId(revealOverlay.dropId);
     if (!dropRevealIsAnimated(revealOverlay.dropId)) return;
     preloadBoxFrames(
@@ -3136,7 +3217,7 @@ function App({ currentPath }: AppProps) {
 
   const handleRevealOverlayBackdropClick = () => {
     if (!revealOverlay || revealOverlayClosing) return;
-    if (revealOverlay.viewerMode === 'poncho-card') {
+    if (revealOverlay.viewerMode === 'poncho-card' || revealOverlay.viewerMode === 'receipt-image') {
       closeRevealOverlay();
       return;
     }
@@ -3336,6 +3417,58 @@ function App({ currentPath }: AppProps) {
     presentRevealOverlay,
     resetPonchoRevealDismissState,
     revealLoading,
+    startOpenLoading,
+  ]);
+
+  const openReceiptImageViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
+    if (item.kind !== 'certificate') return false;
+    if (revealOverlayRef.current || revealLoading) return false;
+    if (startOpenLoading) return false;
+    if (typeof window === 'undefined') return false;
+    if (!item.image) {
+      showToast('Receipt image unavailable');
+      return false;
+    }
+
+    const aspectRatio =
+      originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
+        ? originRect.width / originRect.height
+        : 1;
+    const targetRect = calcReceiptViewerTargetRect(window.innerWidth, window.innerHeight, aspectRatio);
+    const resolvedOriginRect = originRect
+      ? calcAspectLockedViewerOriginRect(originRect, targetRect)
+      : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
+
+    resetPonchoRevealDismissState();
+    clearRevealOverlayCloseTimeout();
+    setInventorySnapshot(inventory);
+    setPendingOpenSnapshot(pendingOpenBoxes);
+    presentRevealOverlay({
+      id: item.id,
+      dropId: item.dropId,
+      name: item.name,
+      image: item.image,
+      originRect: toOverlayRect(resolvedOriginRect),
+      targetRect,
+      phase: 'revealed',
+      frame: 1,
+      advanceClicks: 0,
+      revealedIds: undefined,
+      viewerMode: 'receipt-image',
+      viewerFigureId: undefined,
+      hasRevealAttempted: true,
+      autoOpening: false,
+      autoMode: undefined,
+    });
+    return true;
+  }, [
+    clearRevealOverlayCloseTimeout,
+    inventory,
+    pendingOpenBoxes,
+    presentRevealOverlay,
+    resetPonchoRevealDismissState,
+    revealLoading,
+    showToast,
     startOpenLoading,
   ]);
 
@@ -3764,9 +3897,11 @@ function App({ currentPath }: AppProps) {
     return getPonchoDrifellaCardByFigureId(revealOverlay.revealedIds[0]);
   }, [revealOverlay?.revealedIds]);
   const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
+  const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
   const revealOverlayUsesPonchoRenderer = Boolean(
     revealOverlay &&
       !revealOverlayUsesPonchoViewer &&
+      !revealOverlayUsesReceiptImage &&
       revealOverlayContent.reveal.renderer === 'poncho_drifella' &&
       (!revealOverlay.revealedIds?.length || (revealOverlay.revealedIds.length === 1 && ponchoRevealCard)),
   );
@@ -4059,6 +4194,16 @@ function App({ currentPath }: AppProps) {
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />
+    ) : revealOverlayUsesReceiptImage ? (
+      <ReceiptImageViewerOverlay
+        overlayStyle={revealOverlayStyle}
+        active={revealOverlayActive}
+        closing={revealOverlayClosing}
+        imageSrc={revealOverlay.image}
+        alt={revealOverlay.name}
+        onDismiss={handleRevealOverlayBackdropClick}
+        onTransitionEnd={handleRevealOverlayTransitionEnd}
+      />
     ) : revealOverlayUsesPonchoRenderer ? (
       <PonchoInventoryRevealOverlay
         mode="inventory-unbox"
@@ -4282,7 +4427,7 @@ function App({ currentPath }: AppProps) {
         />
       )}
 
-	      <section className="card">
+	      <section className="card inventory-card">
 	        <div className="card__title">Inventory</div>
 		        <InventoryGrid
 		          items={inventoryItems}
@@ -4407,7 +4552,7 @@ function App({ currentPath }: AppProps) {
       </section>
 
       {receiptItems.length && shipmentsContentVisible ? (
-        <section className="card">
+        <section className="card receipts-card">
           <div className="card__head receipts-card__head">
             <div className="card__title">Receipts</div>
             <div className="card__actions">
@@ -4423,7 +4568,13 @@ function App({ currentPath }: AppProps) {
               </button>
             </div>
           </div>
-          <InventoryGrid items={receiptItems} selected={selected} onToggle={toggleSelected} className="inventory--receipts" />
+          <InventoryGrid
+            items={receiptItems}
+            selected={selected}
+            onToggle={toggleSelected}
+            onViewItem={openReceiptImageViewer}
+            className="inventory--receipts"
+          />
         </section>
       ) : null}
 

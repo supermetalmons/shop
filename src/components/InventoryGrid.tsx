@@ -13,6 +13,7 @@ interface InventoryGridProps {
   className?: string;
   pendingRevealIds?: Set<string>;
   onReveal?: (id: string, rect: DOMRect) => void;
+  onViewItem?: (item: InventoryItem, rect: DOMRect) => void;
   canRevealItem?: (item: InventoryItem) => boolean;
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
@@ -20,7 +21,6 @@ interface InventoryGridProps {
 }
 
 function InventoryMedia({ item }: { item: InventoryItem }) {
-  const isReceipt = item.kind === 'certificate';
   const isFigure = item.kind === 'dude';
   const [figureImageFailed, setFigureImageFailed] = useState(false);
 
@@ -92,6 +92,7 @@ export function InventoryGrid({
   className,
   pendingRevealIds,
   onReveal,
+  onViewItem,
   canRevealItem,
   revealLoadingId,
   revealDisabled,
@@ -122,8 +123,9 @@ export function InventoryGrid({
         const canReveal = Boolean(isPendingReveal && onReveal && (canRevealItem ? canRevealItem(item) : true));
         const isRevealing = revealLoadingId === item.id;
         const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
+        const viewEnabled = Boolean(!canSelect && !revealEnabled && onViewItem);
         const hasFooter = Boolean(item.assignedDudes?.length);
-        const canInteract = canSelect || revealEnabled;
+        const canInteract = canSelect || revealEnabled || viewEnabled;
         const sizeLabel = dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId);
         const handleClick = canSelect
           ? () => onToggle(item.id)
@@ -131,6 +133,10 @@ export function InventoryGrid({
             ? (evt: MouseEvent<HTMLElement>) => {
                 onReveal?.(item.id, getRevealRect(evt.currentTarget));
               }
+            : viewEnabled
+              ? (evt: MouseEvent<HTMLElement>) => {
+                  onViewItem?.(item, getRevealRect(evt.currentTarget));
+                }
             : undefined;
         return (
           <article
@@ -141,6 +147,7 @@ export function InventoryGrid({
               item.kind === 'box' ? 'inventory__item--box' : '',
               canSelect ? 'inventory__item--selectable' : '',
               revealEnabled ? 'inventory__item--revealable' : '',
+              viewEnabled ? 'inventory__item--viewable' : '',
               isSelected ? 'inventory__item--selected' : '',
               hasFooter ? 'inventory__item--hasFooter' : '',
               isPendingReveal ? 'inventory__item--pending' : '',
@@ -155,8 +162,9 @@ export function InventoryGrid({
             draggable={false}
             onDragStart={(evt) => evt.preventDefault()}
             aria-pressed={canSelect ? isSelected : undefined}
+            aria-label={viewEnabled ? `View ${item.name}` : undefined}
             onKeyDown={
-              canSelect || revealEnabled
+              canSelect || revealEnabled || viewEnabled
                 ? (e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
@@ -164,6 +172,8 @@ export function InventoryGrid({
                         onToggle(item.id);
                       } else if (revealEnabled && onReveal) {
                         onReveal(item.id, getRevealRect(e.currentTarget as HTMLElement));
+                      } else if (viewEnabled && onViewItem) {
+                        onViewItem(item, getRevealRect(e.currentTarget as HTMLElement));
                       }
                     }
                   }

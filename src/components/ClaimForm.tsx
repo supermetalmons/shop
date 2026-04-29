@@ -96,7 +96,7 @@ export function ClaimForm({
   };
 
   return (
-    <form className={mode === 'card' ? 'card' : 'modal-form'} onSubmit={submit}>
+    <form className={`${mode === 'card' ? 'card' : 'modal-form'} claim-form`} onSubmit={submit}>
       {showTitle ? <div className="card__title">Secret Code</div> : null}
       <label>
         <input
