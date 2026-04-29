@@ -2247,7 +2247,7 @@ button.inventory__open:focus-visible {
   gap: 16px;
 }
 
-.fulfillment-orders-toolbar {
+.row.fulfillment-orders-toolbar {
   align-items: center;
   flex-wrap: nowrap;
   width: 100%;
@@ -2267,15 +2267,20 @@ button.inventory__open:focus-visible {
 }
 
 .fulfillment-orders-toolbar > .fulfillment-drop-picker {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
   min-width: 0;
+  field-sizing: content;
   padding-left: clamp(10px, 3vw, 14px);
   padding-right: clamp(30px, 7vw, 44px);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fulfillment-orders-toolbar > .fulfillment-drop-picker:not(.fulfillment-orders-filter-picker) {
-  flex: 1 1 0;
+  max-width: min(100%, 420px);
 }
 
 .fulfillment-drop-picker:focus,
@@ -2285,7 +2290,7 @@ button.inventory__open:focus-visible {
 }
 
 .fulfillment-orders-filter-picker {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   margin-left: auto;
 }
 
