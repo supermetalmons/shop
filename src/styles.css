@@ -1439,8 +1439,12 @@ button.no-focus-style:focus-visible {
 .reveal-overlay {
   position: fixed;
   inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
   z-index: 1110;
   pointer-events: auto;
+  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -1465,11 +1469,8 @@ button.no-focus-style:focus-visible {
 }
 
 .reveal-overlay__backdrop {
-  position: fixed;
-  top: calc(-1 * env(safe-area-inset-top, 0px));
-  right: calc(-1 * env(safe-area-inset-right, 0px));
-  bottom: calc(-1 * env(safe-area-inset-bottom, 0px));
-  left: calc(-1 * env(safe-area-inset-left, 0px));
+  position: absolute;
+  inset: 0;
   background: rgba(8, 8, 8, 0.32);
   backdrop-filter: blur(18px) saturate(1.05);
   -webkit-backdrop-filter: blur(18px) saturate(1.05);
