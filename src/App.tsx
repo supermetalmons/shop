@@ -127,6 +127,15 @@ type ReceiptViewerImage = {
   image?: string;
 };
 type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-count'?: string };
+type OverlayViewport = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
+const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
 
 function pickRandomSoundUrl(soundUrls: readonly string[]) {
   return soundUrls[Math.floor(Math.random() * soundUrls.length)] || soundUrls[0]!;
@@ -705,6 +714,62 @@ function calcReceiptViewerTargetRect(
   };
 }
 
+function getOverlayViewport(): OverlayViewport {
+  if (typeof window === 'undefined') return { left: 0, top: 0, width: 1, height: 1 };
+  const visualViewport = window.visualViewport;
+  if (!visualViewport) {
+    return {
+      left: 0,
+      top: 0,
+      width: Math.max(1, window.innerWidth),
+      height: Math.max(1, window.innerHeight),
+    };
+  }
+  return {
+    left: Number.isFinite(visualViewport.offsetLeft) ? visualViewport.offsetLeft : 0,
+    top: Number.isFinite(visualViewport.offsetTop) ? visualViewport.offsetTop : 0,
+    width: Math.max(1, visualViewport.width),
+    height: Math.max(1, visualViewport.height),
+  };
+}
+
+function offsetOverlayRectForViewport(rect: OverlayRect, viewport: OverlayViewport): OverlayRect {
+  return {
+    ...rect,
+    left: Math.round(rect.left + viewport.left),
+    top: Math.round(rect.top + viewport.top),
+  };
+}
+
+function calcPonchoDrifellaRevealTargetRectInViewport(viewport = getOverlayViewport()): OverlayRect {
+  return offsetOverlayRectForViewport(
+    calcPonchoDrifellaRevealTargetRect(viewport.width, viewport.height),
+    viewport,
+  );
+}
+
+function calcReceiptViewerTargetRectInViewport(
+  aspectRatio: number,
+  size: ImageViewerSize = 'receipt',
+  viewport = getOverlayViewport(),
+): OverlayRect {
+  return offsetOverlayRectForViewport(
+    calcReceiptViewerTargetRect(viewport.width, viewport.height, aspectRatio, size),
+    viewport,
+  );
+}
+
+function calcRevealTargetRectForDropInViewport(
+  dropId: string | undefined,
+  aspectRatio: number,
+  viewport = getOverlayViewport(),
+): OverlayRect {
+  return offsetOverlayRectForViewport(
+    calcRevealTargetRectForDrop(viewport.width, viewport.height, dropId, aspectRatio),
+    viewport,
+  );
+}
+
 function getRenderedImagePreview(root: HTMLElement, fallback?: string): { src?: string; aspectRatio?: number } {
   const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden])');
   const src = String(image?.currentSrc || image?.src || '').trim();
@@ -1165,6 +1230,7 @@ function App({ currentPath }: AppProps) {
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
+  const revealOverlayOpen = Boolean(revealOverlay);
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
@@ -1951,9 +2017,7 @@ function App({ currentPath }: AppProps) {
     preloadBoxFrames(1, revealClickMaxForDropId(overlayDropId), overlayDropId);
     preloadBoxFrames(revealAutoplayStartForDropId(overlayDropId), revealFrameCountForDropId(overlayDropId), overlayDropId);
     const originRect = toOverlayRect(rect);
-    const targetRect = calcRevealTargetRectForDrop(
-      window.innerWidth,
-      window.innerHeight,
+    const targetRect = calcRevealTargetRectForDropInViewport(
       overlayDropId,
       boxAspectRatioForDropId(overlayDropId),
     );
@@ -2319,24 +2383,47 @@ function App({ currentPath }: AppProps) {
   }, [revealFrameCountForDropId, revealMediaStartForDropId, revealOverlay, revealOverlayClosing]);
 
   useEffect(() => {
-    if (!revealOverlay) return;
+    if (!revealOverlayOpen) return;
     const onKeyDown = (evt: KeyboardEvent) => {
+      if ((evt.metaKey || evt.ctrlKey) && OVERLAY_ZOOM_SHORTCUT_KEYS.has(evt.key)) {
+        evt.preventDefault();
+        return;
+      }
       if (evt.key !== 'Escape') return;
       if (revealOverlayRef.current?.viewerMode === 'receipt-image') {
         evt.preventDefault();
       }
       closeRevealOverlay();
     };
+    const html = document.documentElement;
+    const body = document.body;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    const preventDefault = (evt: Event) => evt.preventDefault();
+    const nonPassiveOptions = { passive: false } as AddEventListenerOptions;
+
     document.addEventListener('keydown', onKeyDown);
-    document.body.style.overflow = 'hidden';
+    OVERLAY_BLOCKED_EVENTS.forEach((eventName) => {
+      document.addEventListener(eventName, preventDefault, nonPassiveOptions);
+    });
+    html.classList.add('overlay-scroll-lock');
+    body.classList.add('overlay-scroll-lock');
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = '';
+      OVERLAY_BLOCKED_EVENTS.forEach((eventName) => {
+        document.removeEventListener(eventName, preventDefault, nonPassiveOptions);
+      });
+      html.classList.remove('overlay-scroll-lock');
+      body.classList.remove('overlay-scroll-lock');
+      html.style.overflow = previousHtmlOverflow;
+      body.style.overflow = previousBodyOverflow;
     };
-  }, [revealOverlay, closeRevealOverlay]);
+  }, [revealOverlayOpen, closeRevealOverlay]);
 
   useEffect(() => {
-    if (!revealOverlay) return;
+    if (!revealOverlayOpen) return;
     const updateTargetRect = () => {
       if (revealOverlayResizeRafRef.current) {
         cancelAnimationFrame(revealOverlayResizeRafRef.current);
@@ -2345,23 +2432,22 @@ function App({ currentPath }: AppProps) {
         revealOverlayResizeRafRef.current = null;
         setRevealOverlay((prev) => {
           if (!prev) return prev;
+          const viewport = getOverlayViewport();
           const nextTarget =
             prev.viewerMode === 'poncho-card'
               ? calcPonchoDrifellaAbsoluteCardRect(
-                  calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
+                  calcPonchoDrifellaRevealTargetRectInViewport(viewport),
                 )
               : prev.viewerMode === 'receipt-image'
-                ? calcReceiptViewerTargetRect(
-                    window.innerWidth,
-                    window.innerHeight,
+                ? calcReceiptViewerTargetRectInViewport(
                     prev.targetRect.width / Math.max(1, prev.targetRect.height),
                     prev.imageViewerSize,
+                    viewport,
                   )
-              : calcRevealTargetRectForDrop(
-                  window.innerWidth,
-                  window.innerHeight,
+              : calcRevealTargetRectForDropInViewport(
                   prev.dropId,
                   boxAspectRatioForDropId(prev.dropId),
+                  viewport,
                 );
           if (
             prev.targetRect.left === nextTarget.left &&
@@ -2377,15 +2463,19 @@ function App({ currentPath }: AppProps) {
     };
     window.addEventListener('resize', updateTargetRect);
     window.addEventListener('orientationchange', updateTargetRect);
+    window.visualViewport?.addEventListener('resize', updateTargetRect);
+    window.visualViewport?.addEventListener('scroll', updateTargetRect);
     return () => {
       window.removeEventListener('resize', updateTargetRect);
       window.removeEventListener('orientationchange', updateTargetRect);
+      window.visualViewport?.removeEventListener('resize', updateTargetRect);
+      window.visualViewport?.removeEventListener('scroll', updateTargetRect);
       if (revealOverlayResizeRafRef.current) {
         cancelAnimationFrame(revealOverlayResizeRafRef.current);
         revealOverlayResizeRafRef.current = null;
       }
     };
-  }, [boxAspectRatioForDropId, revealOverlay]);
+  }, [boxAspectRatioForDropId, revealOverlayOpen]);
 
   useEffect(() => {
     authLoadingSeenRef.current = false;
@@ -3404,9 +3494,7 @@ function App({ currentPath }: AppProps) {
       preloadBoxFrames(revealAutoplayStartForDropId(box.dropId), revealFrameCountForDropId(box.dropId), box.dropId);
       if (typeof window === 'undefined') return;
       const originRect = findInventoryRect(box.id);
-      const fallbackTarget = calcRevealTargetRectForDrop(
-        window.innerWidth,
-        window.innerHeight,
+      const fallbackTarget = calcRevealTargetRectForDropInViewport(
         box.dropId,
         boxAspectRatioForDropId(box.dropId),
       );
@@ -3517,7 +3605,7 @@ function App({ currentPath }: AppProps) {
     setPendingOpenSnapshot(pendingOpenBoxes);
 
     const targetRect = calcPonchoDrifellaAbsoluteCardRect(
-      calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight),
+      calcPonchoDrifellaRevealTargetRectInViewport(),
     );
     const resolvedOriginRect = originRect
       ? calcAspectLockedViewerOriginRect(originRect, targetRect)
@@ -3589,7 +3677,7 @@ function App({ currentPath }: AppProps) {
         : originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
           ? originRect.width / originRect.height
           : 1;
-    const targetRect = calcReceiptViewerTargetRect(window.innerWidth, window.innerHeight, aspectRatio, options?.size);
+    const targetRect = calcReceiptViewerTargetRectInViewport(aspectRatio, options?.size);
     const resolvedOriginRect = originRect
       ? calcAspectLockedViewerOriginRect(originRect, targetRect)
       : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);

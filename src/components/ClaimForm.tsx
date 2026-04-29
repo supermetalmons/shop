@@ -31,6 +31,11 @@ function normalizeItemsPerBoxCount(value: number | undefined, fallback = 1): num
   return Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : fallback;
 }
 
+function shouldAutoFocusClaimCodeInput(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return !window.matchMedia('(pointer: coarse)').matches;
+}
+
 export function ClaimForm({
   onClaim,
   onSuccess,
@@ -42,6 +47,7 @@ export function ClaimForm({
   figureNamePrefix,
 }: ClaimFormProps) {
   const codeInputRef = useRef<HTMLInputElement | null>(null);
+  const shouldAutoFocusCodeInput = shouldAutoFocusClaimCodeInput();
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +71,9 @@ export function ClaimForm({
   }, [loading, onDismiss]);
 
   useLayoutEffect(() => {
+    if (!shouldAutoFocusCodeInput) return;
     codeInputRef.current?.focus({ preventScroll: true });
-  }, []);
+  }, [shouldAutoFocusCodeInput]);
 
   const buildSuccessMessage = (args: ClaimFormResult) => {
     const normalizedBoxReceiptWord = resolveReceiptWord(args.boxNamePrefix, defaultBoxReceiptWord);
@@ -83,6 +90,9 @@ export function ClaimForm({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!shouldAutoFocusCodeInput) {
+      codeInputRef.current?.blur();
+    }
     setLoading(true);
     setError(null);
     setSuccess(null);
@@ -106,7 +116,7 @@ export function ClaimForm({
       <label>
         <input
           ref={codeInputRef}
-          autoFocus
+          autoFocus={shouldAutoFocusCodeInput}
           value={code}
           onChange={(e) => setCode(e.target.value)}
           placeholder="10 digits"
