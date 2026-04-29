@@ -414,6 +414,7 @@ const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
 type RevealOverlayPhase = 'preparing' | 'ready' | 'revealed';
+type ImageViewerSize = 'receipt' | 'shipment' | 'shipment-figure';
 
 type LocalPendingReveal = {
   id: string;
@@ -466,6 +467,7 @@ type RevealOverlayState = {
   advanceClicks: number;
   revealedIds?: number[];
   viewerMode?: 'poncho-card' | 'receipt-image';
+  imageViewerSize?: ImageViewerSize;
   viewerFigureId?: number;
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
@@ -478,6 +480,7 @@ type ReceiptImageViewerOverlayProps = {
   closing: boolean;
   imageSrc?: string;
   alt: string;
+  viewerSize?: ImageViewerSize;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
@@ -488,12 +491,13 @@ function ReceiptImageViewerOverlay({
   closing,
   imageSrc,
   alt,
+  viewerSize = 'receipt',
   onDismiss,
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
   return (
     <div
-      className={`reveal-overlay receipt-viewer-overlay reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyle}
       onClick={onDismiss}
@@ -560,10 +564,25 @@ function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, asp
   };
 }
 
-function calcReceiptViewerTargetRect(viewportWidth: number, viewportHeight: number, aspectRatio: number): OverlayRect {
+function calcReceiptViewerTargetRect(
+  viewportWidth: number,
+  viewportHeight: number,
+  aspectRatio: number,
+  size: ImageViewerSize = 'receipt',
+): OverlayRect {
   const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
-  const maxWidth = Math.min(viewportWidth * 0.84, 620);
-  const maxHeight = Math.min(viewportHeight * 0.78, 760);
+  const maxWidth =
+    size === 'shipment-figure'
+      ? Math.min(viewportWidth * 0.86, 760)
+      : size === 'shipment'
+        ? Math.min(viewportWidth * 0.82, 640)
+        : Math.min(viewportWidth * 0.84, 620);
+  const maxHeight =
+    size === 'shipment-figure'
+      ? Math.min(viewportHeight * 0.72, 660)
+      : size === 'shipment'
+        ? Math.min(viewportHeight * 0.72, 640)
+        : Math.min(viewportHeight * 0.78, 760);
   let width = Math.max(1, Math.floor(Math.min(maxWidth, maxHeight * safeAspectRatio)));
   let height = Math.max(1, Math.floor(width / safeAspectRatio));
   if (height > maxHeight) {
@@ -576,6 +595,16 @@ function calcReceiptViewerTargetRect(viewportWidth: number, viewportHeight: numb
     width,
     height,
   };
+}
+
+function getRenderedImagePreview(root: HTMLElement, fallback?: string): { src?: string; aspectRatio?: number } {
+  const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden])');
+  const src = String(image?.currentSrc || image?.src || '').trim();
+  const naturalAspectRatio =
+    image && image.naturalWidth > 0 && image.naturalHeight > 0
+      ? image.naturalWidth / image.naturalHeight
+      : undefined;
+  return { src: src || fallback, aspectRatio: naturalAspectRatio };
 }
 
 function calcRevealTargetRectForDrop(
@@ -2218,6 +2247,7 @@ function App({ currentPath }: AppProps) {
                     window.innerWidth,
                     window.innerHeight,
                     prev.targetRect.width / Math.max(1, prev.targetRect.height),
+                    prev.imageViewerSize,
                   )
               : calcRevealTargetRectForDrop(
                   window.innerWidth,
@@ -3420,21 +3450,26 @@ function App({ currentPath }: AppProps) {
     startOpenLoading,
   ]);
 
-  const openReceiptImageViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
-    if (item.kind !== 'certificate') return false;
+  const openImageViewer = useCallback((
+    item: Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>,
+    originRect?: DOMRect | null,
+    options?: { aspectRatio?: number; size?: ImageViewerSize; unavailableMessage?: string },
+  ) => {
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
     if (!item.image) {
-      showToast('Receipt image unavailable');
+      showToast(options?.unavailableMessage || 'Image unavailable');
       return false;
     }
 
     const aspectRatio =
-      originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
+      options?.aspectRatio && Number.isFinite(options.aspectRatio) && options.aspectRatio > 0
+        ? options.aspectRatio
+        : originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
         ? originRect.width / originRect.height
         : 1;
-    const targetRect = calcReceiptViewerTargetRect(window.innerWidth, window.innerHeight, aspectRatio);
+    const targetRect = calcReceiptViewerTargetRect(window.innerWidth, window.innerHeight, aspectRatio, options?.size);
     const resolvedOriginRect = originRect
       ? calcAspectLockedViewerOriginRect(originRect, targetRect)
       : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
@@ -3455,6 +3490,7 @@ function App({ currentPath }: AppProps) {
       advanceClicks: 0,
       revealedIds: undefined,
       viewerMode: 'receipt-image',
+      imageViewerSize: options?.size || 'receipt',
       viewerFigureId: undefined,
       hasRevealAttempted: true,
       autoOpening: false,
@@ -3471,6 +3507,11 @@ function App({ currentPath }: AppProps) {
     showToast,
     startOpenLoading,
   ]);
+
+  const openReceiptImageViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
+    if (item.kind !== 'certificate') return false;
+    return openImageViewer(item, originRect, { unavailableMessage: 'Receipt image unavailable' });
+  }, [openImageViewer]);
 
   const handleViewSelectedPonchoCard = useCallback(() => {
     if (!selectedPonchoFigure) return;
@@ -3744,14 +3785,46 @@ function App({ currentPath }: AppProps) {
         <div className="figure-grid shipment-item-grid">
           {order.items.map((item, index) => {
             const label = dropAssetReference(dropConfig, item.kind === 'box' ? 'box' : 'figure', item.refId);
+            const previewId = `shipment:${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`;
             if (item.kind === 'box') {
               const boxImage = normalizeBoxDisplayImage(order.dropId);
               return (
                 <div
-                  key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
-                  className="figure-tile shipment-item-tile"
+                  key={previewId}
+                  className="figure-tile shipment-item-tile shipment-item-tile--interactive"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View ${label}`}
                   draggable={false}
                   onDragStart={(evt) => evt.preventDefault()}
+                  onClick={(evt) => {
+                    const originRect = getInventoryRevealRect(evt.currentTarget);
+                    const previewImage = getRenderedImagePreview(evt.currentTarget, boxImage);
+                    openImageViewer(
+                      { id: previewId, dropId: order.dropId, name: label, image: previewImage.src },
+                      originRect,
+                      {
+                        aspectRatio: previewImage.aspectRatio,
+                        size: 'shipment',
+                        unavailableMessage: 'Shipment image unavailable',
+                      },
+                    );
+                  }}
+                  onKeyDown={(evt) => {
+                    if (evt.key !== 'Enter' && evt.key !== ' ') return;
+                    evt.preventDefault();
+                    const originRect = getInventoryRevealRect(evt.currentTarget);
+                    const previewImage = getRenderedImagePreview(evt.currentTarget, boxImage);
+                    openImageViewer(
+                      { id: previewId, dropId: order.dropId, name: label, image: previewImage.src },
+                      originRect,
+                      {
+                        aspectRatio: previewImage.aspectRatio,
+                        size: 'shipment',
+                        unavailableMessage: 'Shipment image unavailable',
+                      },
+                    );
+                  }}
                 >
                   {boxImage ? (
                     <img
@@ -3775,46 +3848,67 @@ function App({ currentPath }: AppProps) {
             const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
             const canViewPonchoCard = isPonchoFamily && Boolean(getPonchoDrifellaCardByFigureId(item.refId));
+            const previewImage = primarySrc || fallbackSrc;
 
             return (
               <div
-                key={`${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`}
-                className={`figure-tile shipment-item-tile${canViewPonchoCard ? ' shipment-item-tile--interactive' : ''}`}
-                role={canViewPonchoCard ? 'button' : undefined}
-                tabIndex={canViewPonchoCard ? 0 : undefined}
-                aria-label={canViewPonchoCard ? `View ${label}` : undefined}
+                key={previewId}
+                className="figure-tile shipment-item-tile shipment-item-tile--interactive"
+                role="button"
+                tabIndex={0}
+                aria-label={`View ${label}`}
                 draggable={false}
                 onDragStart={(evt) => evt.preventDefault()}
-                onClick={
-                  canViewPonchoCard
-                    ? (evt) => {
-                        openPonchoCardViewer({
-                          overlayId: `shipment:${order.dropId}:${order.deliveryId}:${item.refId}:${index}`,
-                          dropId: order.dropId,
-                          name: label,
-                          image: primarySrc || fallbackSrc,
-                          figureId: item.refId,
-                          originRect: getInventoryRevealRect(evt.currentTarget),
-                        });
-                      }
-                    : undefined
-                }
-                onKeyDown={
-                  canViewPonchoCard
-                    ? (evt) => {
-                        if (evt.key !== 'Enter' && evt.key !== ' ') return;
-                        evt.preventDefault();
-                        openPonchoCardViewer({
-                          overlayId: `shipment:${order.dropId}:${order.deliveryId}:${item.refId}:${index}`,
-                          dropId: order.dropId,
-                          name: label,
-                          image: primarySrc || fallbackSrc,
-                          figureId: item.refId,
-                          originRect: getInventoryRevealRect(evt.currentTarget),
-                        });
-                      }
-                    : undefined
-                }
+                onClick={(evt) => {
+                  const originRect = getInventoryRevealRect(evt.currentTarget);
+                  const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
+                  if (canViewPonchoCard) {
+                    openPonchoCardViewer({
+                      overlayId: previewId,
+                      dropId: order.dropId,
+                      name: label,
+                      image: renderedPreviewImage.src,
+                      figureId: item.refId,
+                      originRect,
+                    });
+                    return;
+                  }
+                  openImageViewer(
+                    { id: previewId, dropId: order.dropId, name: label, image: renderedPreviewImage.src },
+                    originRect,
+                    {
+                      aspectRatio: renderedPreviewImage.aspectRatio,
+                      size: 'shipment-figure',
+                      unavailableMessage: 'Shipment image unavailable',
+                    },
+                  );
+                }}
+                onKeyDown={(evt) => {
+                  if (evt.key !== 'Enter' && evt.key !== ' ') return;
+                  evt.preventDefault();
+                  const originRect = getInventoryRevealRect(evt.currentTarget);
+                  const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
+                  if (canViewPonchoCard) {
+                    openPonchoCardViewer({
+                      overlayId: previewId,
+                      dropId: order.dropId,
+                      name: label,
+                      image: renderedPreviewImage.src,
+                      figureId: item.refId,
+                      originRect,
+                    });
+                    return;
+                  }
+                  openImageViewer(
+                    { id: previewId, dropId: order.dropId, name: label, image: renderedPreviewImage.src },
+                    originRect,
+                    {
+                      aspectRatio: renderedPreviewImage.aspectRatio,
+                      size: 'shipment-figure',
+                      unavailableMessage: 'Shipment image unavailable',
+                    },
+                  );
+                }}
               >
                 <FigureTileImage
                   dropId={order.dropId}
@@ -3830,7 +3924,7 @@ function App({ currentPath }: AppProps) {
         </div>
       );
     },
-    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, openPonchoCardViewer, requireKnownDropConfig],
+    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, openImageViewer, openPonchoCardViewer, requireKnownDropConfig],
   );
 
   const revealOverlayStyle = revealOverlay
@@ -4201,6 +4295,7 @@ function App({ currentPath }: AppProps) {
         closing={revealOverlayClosing}
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
+        viewerSize={revealOverlay.imageViewerSize}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />

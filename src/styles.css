@@ -1873,6 +1873,16 @@ body.wip-scroll-lock #root {
   filter: drop-shadow(0 22px 34px rgba(0, 0, 0, 0.38));
 }
 
+.receipt-viewer-overlay--shipment .receipt-viewer-overlay__image-shell {
+  box-sizing: border-box;
+  padding: clamp(8px, 2vmin, 24px);
+}
+
+.receipt-viewer-overlay--shipment-figure .receipt-viewer-overlay__image-shell {
+  box-sizing: border-box;
+  padding: clamp(10px, 2.5vmin, 28px);
+}
+
 .receipt-viewer-overlay__image {
   width: 100%;
   height: 100%;
