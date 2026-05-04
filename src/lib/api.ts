@@ -832,6 +832,39 @@ export async function removeAddress(addressId: string): Promise<{ id: string; re
   return callFunction<{ addressId: string }, { id: string; removed?: boolean }>('removeAddress', { addressId });
 }
 
+type TestStripeCheckoutSessionRequest = {
+  dropId: string;
+  quantity?: number;
+  variantKey?: string;
+  returnUrl?: string;
+};
+
+type TestStripeCheckoutSessionResponse = {
+  id: string;
+  url: string;
+};
+
+export async function createTestStripeCheckoutSession(
+  args: TestStripeCheckoutSessionRequest,
+): Promise<TestStripeCheckoutSessionResponse> {
+  const payload: TestStripeCheckoutSessionRequest = {
+    dropId: args.dropId,
+  };
+  if (typeof args.quantity === 'number' && Number.isFinite(args.quantity)) {
+    payload.quantity = Math.floor(args.quantity);
+  }
+  if (typeof args.variantKey === 'string' && args.variantKey.trim()) {
+    payload.variantKey = args.variantKey.trim();
+  }
+  if (typeof args.returnUrl === 'string' && args.returnUrl.trim()) {
+    payload.returnUrl = args.returnUrl.trim();
+  }
+  return callFunction<TestStripeCheckoutSessionRequest, TestStripeCheckoutSessionResponse>(
+    'createTestStripeCheckoutSession',
+    payload,
+  );
+}
+
 export async function listFulfillmentOrders(args: {
   limit?: number;
   cursor?: FulfillmentOrdersCursor | null;

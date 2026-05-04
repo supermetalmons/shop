@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
+import { FaChevronRight, FaCircleQuestion, FaCreditCard } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
@@ -32,6 +32,9 @@ interface MintPanelProps {
   discountMaxQuantity?: number;
   onDiscountClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
   discountBusy?: boolean;
+  onStripePaymentClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
+  stripePaymentVisible?: boolean;
+  stripePaymentBusy?: boolean;
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
   successfulMintToken?: number;
@@ -164,6 +167,9 @@ export function MintPanel({
   discountMaxQuantity,
   onDiscountClick,
   discountBusy,
+  onStripePaymentClick,
+  stripePaymentVisible,
+  stripePaymentBusy,
   mintSelection,
   showSizeInfo,
   successfulMintToken = 0,
@@ -195,11 +201,13 @@ export function MintPanel({
   // button back into the blink selector and re-triggers the animation.
   const [isBlinking, setIsBlinking] = useState(false);
   const [discountSubmitPending, setDiscountSubmitPending] = useState(false);
+  const [stripePaymentSubmitPending, setStripePaymentSubmitPending] = useState(false);
   const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
   const sizeInfoRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const controlsBusy = busy || discountSubmitPending;
+  const stripePaymentPending = Boolean(stripePaymentBusy) || stripePaymentSubmitPending;
+  const controlsBusy = busy || discountSubmitPending || stripePaymentPending;
 
   useEffect(() => {
     if (showSizeSelector) setQuantity(1);
@@ -318,6 +326,24 @@ export function MintPanel({
     }
   };
 
+  const handleStripePaymentClick = async () => {
+    if (!onStripePaymentClick || stripePaymentPending) return;
+    if (showSizeSelector && !selectedSize) {
+      setSizeBlinkToken((prev) => prev + 1);
+      return;
+    }
+    if (quantity < 1 || quantity > maxSelectable) return;
+    setStripePaymentSubmitPending(true);
+    try {
+      await onStripePaymentClick(quantity, selectedSize || undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
+      if (onError) onError(message);
+    } finally {
+      setStripePaymentSubmitPending(false);
+    }
+  };
+
   const soldOut = remaining <= 0;
   const layout = useMemo(
     () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxAspectRatio || BOX_ASPECT_RATIO),
@@ -334,8 +360,12 @@ export function MintPanel({
       : undefined;
   const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
   const showDiscountButton = Boolean(discountVisible) && !soldOut && !exceedsDiscountAllowance;
+  const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick) && !soldOut;
   const discountText =
     discountLabel || `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`;
+  const ctaStackClassName = showStripePaymentButton
+    ? 'mint-panel__cta-stack mint-panel__cta-stack--with-payment'
+    : 'mint-panel__cta-stack';
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc;
   const terminalState =
@@ -535,7 +565,7 @@ export function MintPanel({
             ) : null}
           </form>
           <div className="mint-panel__cta">
-            <div className="mint-panel__cta-stack">
+            <div className={ctaStackClassName}>
               <button
                 type="submit"
                 form={formId}
@@ -551,6 +581,26 @@ export function MintPanel({
                   </>
                 )}
               </button>
+              {showStripePaymentButton ? (
+                <button
+                  type="button"
+                  className={stripePaymentPending ? 'mint-panel__stripe mint-panel__stripe--busy' : 'mint-panel__stripe'}
+                  onClick={() => {
+                    void handleStripePaymentClick();
+                  }}
+                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
+                >
+                  {stripePaymentPending ? (
+                    <span className="mint-panel__stripe-text">Opening Stripe…</span>
+                  ) : (
+                    <>
+                      <FaCreditCard className="mint-panel__stripe-icon" aria-hidden="true" focusable="false" size={14} />
+                      <span className="mint-panel__stripe-text">Pay with Stripe</span>
+                      <span className="mint-panel__stripe-badge">Test</span>
+                    </>
+                  )}
+                </button>
+              ) : null}
               {showDiscountButton ? (
                 <button
                   type="button"

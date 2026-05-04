@@ -45,6 +45,9 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
 - `COSIGNER_SECRET` (Firebase Functions secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
   - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
+- `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; used by devnet test Checkout Sessions)
+  - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`
+- `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
 
 Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
 

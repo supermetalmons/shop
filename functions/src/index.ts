@@ -40,6 +40,8 @@ const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
+const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -691,6 +693,203 @@ function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
     throw new HttpsError('invalid-argument', details || 'Invalid request payload');
   }
   return parsed.data;
+}
+
+type StripeCheckoutSessionResponse = {
+  id: string;
+  url: string;
+};
+
+class StripeRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'StripeRequestError';
+    this.status = status;
+  }
+}
+
+function secretParamValueMaybe(secret: { value: () => string }): string {
+  try {
+    return (secret.value() || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function envOrSecretValue(envName: string, secret: { value: () => string }): string {
+  return (process.env[envName] || '').trim() || secretParamValueMaybe(secret);
+}
+
+function stripeApiKeys(): string[] {
+  const values = [
+    envOrSecretValue('STRIPE_RESTRICTED_KEY', STRIPE_RESTRICTED_KEY),
+    envOrSecretValue('STRIPE_SECRET_KEY', STRIPE_SECRET_KEY),
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function stripeCheckoutUnitAmountCents(): number {
+  const parsed = Math.floor(Number(process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS));
+  if (Number.isFinite(parsed) && parsed >= 50 && parsed <= 99_999_999) return parsed;
+  return 100;
+}
+
+const STRIPE_SHIPPING_ALLOWED_COUNTRIES = [
+  'AR',
+  'AM',
+  'AU',
+  'AT',
+  'BE',
+  'BR',
+  'BG',
+  'CA',
+  'CL',
+  'CN',
+  'CO',
+  'CR',
+  'HR',
+  'CY',
+  'CZ',
+  'DK',
+  'DO',
+  'EG',
+  'EE',
+  'FI',
+  'FR',
+  'DE',
+  'GR',
+  'HK',
+  'HU',
+  'IS',
+  'IN',
+  'ID',
+  'IE',
+  'IL',
+  'IT',
+  'JP',
+  'KE',
+  'LV',
+  'LT',
+  'LU',
+  'MY',
+  'MX',
+  'MA',
+  'NL',
+  'NZ',
+  'NG',
+  'NO',
+  'PK',
+  'PE',
+  'PH',
+  'PL',
+  'PT',
+  'RO',
+  'SA',
+  'SG',
+  'SK',
+  'SI',
+  'ZA',
+  'KR',
+  'ES',
+  'SE',
+  'CH',
+  'TW',
+  'TH',
+  'TR',
+  'UA',
+  'AE',
+  'GB',
+  'US',
+  'VN',
+];
+
+function appendStripeShippingCollectionParams(params: URLSearchParams): void {
+  STRIPE_SHIPPING_ALLOWED_COUNTRIES.forEach((country, index) => {
+    params.set(`shipping_address_collection[allowed_countries][${index}]`, country);
+  });
+  params.set('phone_number_collection[enabled]', 'true');
+}
+
+function requestOrigin(request: CallableReq<any>): string {
+  const rawOrigin = request.rawRequest?.headers?.origin;
+  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  return typeof origin === 'string' ? origin.trim() : '';
+}
+
+function checkoutReturnUrl(request: CallableReq<any>, rawReturnUrl: string | undefined, status: 'success' | 'cancel'): string {
+  const origin = requestOrigin(request);
+  const candidate = String(rawReturnUrl || origin || 'https://mons.shop').trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new HttpsError('invalid-argument', 'Invalid returnUrl');
+  }
+
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new HttpsError('invalid-argument', 'returnUrl must be an http(s) URL');
+  }
+  if (origin) {
+    let parsedOrigin: URL;
+    try {
+      parsedOrigin = new URL(origin);
+    } catch {
+      throw new HttpsError('invalid-argument', 'Invalid request origin');
+    }
+    if (parsed.origin !== parsedOrigin.origin) {
+      throw new HttpsError('invalid-argument', 'returnUrl origin mismatch');
+    }
+  }
+
+  parsed.searchParams.set('stripe_checkout', status);
+  parsed.searchParams.delete('session_id');
+  if (status === 'success') {
+    parsed.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+  }
+  return parsed.toString().replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
+}
+
+function normalizeStripeVariantKey(dropRuntime: DropRuntime, variantKey: string | undefined): string | undefined {
+  const value = String(variantKey || '').trim();
+  if (!value) return undefined;
+  const selection = dropRuntime.config.mintSelection;
+  if (selection?.kind === 'size') {
+    const option = selection.options.find((entry) => entry.key === value);
+    if (!option) throw new HttpsError('invalid-argument', 'Invalid variantKey');
+    return option.key;
+  }
+  return value.slice(0, 64);
+}
+
+function stripeCheckoutProductName(dropRuntime: DropRuntime, variantKey?: string): string {
+  const collectionName = dropRuntime.config.collectionName || dropRuntime.dropId;
+  const itemName = dropRuntime.config.namePrefix || 'item';
+  const variantSuffix = variantKey ? ` ${variantKey}` : '';
+  return `${collectionName} test ${itemName}${variantSuffix}`.slice(0, 200);
+}
+
+async function createStripeCheckoutSession(params: URLSearchParams, apiKey: string): Promise<StripeCheckoutSessionResponse> {
+  const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: params.toString(),
+  });
+  const body = await resp.json().catch(() => null) as any;
+  if (!resp.ok) {
+    const message = typeof body?.error?.message === 'string' ? body.error.message : `Stripe request failed (${resp.status})`;
+    throw new StripeRequestError(message, resp.status);
+  }
+  if (typeof body?.id !== 'string' || typeof body?.url !== 'string') {
+    throw new StripeRequestError('Stripe response did not include a checkout URL', resp.status);
+  }
+  return { id: body.id, url: body.url };
 }
 
 type ParsedSolanaSignInMessage = {
@@ -2748,13 +2947,7 @@ function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): st
 let cachedResend: ResendClient | null = null;
 
 function resendApiKey(): string {
-  const envValue = (process.env.RESEND_API_KEY || '').trim();
-  if (envValue) return envValue;
-  try {
-    return (RESEND_API_KEY.value() || '').trim();
-  } catch {
-    return '';
-  }
+  return envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY);
 }
 
 async function resendClient(): Promise<ResendClient | null> {
@@ -3867,6 +4060,76 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   await addressRef.delete();
   return { id: addressId, removed: true };
 });
+
+export const createTestStripeCheckoutSession = onCallAuthed(
+  'createTestStripeCheckoutSession',
+  async (request, uid) => {
+    const schema = z.object({
+      dropId: z.string().min(1).max(64),
+      quantity: z.number().int().min(1).max(15).optional(),
+      variantKey: z.string().min(1).max(64).optional(),
+      returnUrl: z.string().url().max(2048).optional(),
+    });
+    const { dropId: requestDropId, quantity: rawQuantity = 1, variantKey: rawVariantKey, returnUrl } = parseRequest(
+      schema,
+      request.data,
+    );
+    const dropId = requireDropId(requestDropId);
+    const dropRuntime = getDropRuntime(dropId);
+    if (dropRuntime.cluster !== 'devnet') {
+      throw new HttpsError('failed-precondition', 'Stripe test checkout is only enabled for devnet drops.');
+    }
+    const maxPerCheckout = Math.max(1, Math.floor(Number(dropRuntime.config.maxPerTx) || 1));
+    if (rawQuantity > maxPerCheckout) {
+      throw new HttpsError('invalid-argument', `Quantity exceeds max per checkout (${maxPerCheckout})`);
+    }
+
+    const apiKeys = stripeApiKeys();
+    if (!apiKeys.length) {
+      throw new HttpsError('failed-precondition', 'Stripe test key is not configured.');
+    }
+
+    const quantity = Math.max(1, Math.floor(rawQuantity));
+    const variantKey = normalizeStripeVariantKey(dropRuntime, rawVariantKey);
+    const successUrl = checkoutReturnUrl(request, returnUrl, 'success');
+    const cancelUrl = checkoutReturnUrl(request, returnUrl, 'cancel');
+    const unitAmount = stripeCheckoutUnitAmountCents();
+    const sessionParams = new URLSearchParams();
+    sessionParams.set('mode', 'payment');
+    sessionParams.set('success_url', successUrl);
+    sessionParams.set('cancel_url', cancelUrl);
+    sessionParams.set('client_reference_id', `${uid}:${dropId}:${Date.now()}`.slice(0, 200));
+    sessionParams.set('line_items[0][quantity]', String(quantity));
+    sessionParams.set('line_items[0][price_data][currency]', 'usd');
+    sessionParams.set('line_items[0][price_data][unit_amount]', String(unitAmount));
+    sessionParams.set('line_items[0][price_data][product_data][name]', stripeCheckoutProductName(dropRuntime, variantKey));
+    appendStripeShippingCollectionParams(sessionParams);
+    sessionParams.set('metadata[dropId]', dropId);
+    sessionParams.set('metadata[uid]', uid);
+    sessionParams.set('metadata[placeholder]', 'devnet_direct_delivery');
+    sessionParams.set('metadata[quantity]', String(quantity));
+    if (variantKey) sessionParams.set('metadata[variantKey]', variantKey);
+
+    let lastStripeError: StripeRequestError | null = null;
+    for (const apiKey of apiKeys) {
+      try {
+        return await createStripeCheckoutSession(sessionParams, apiKey);
+      } catch (err) {
+        if (err instanceof StripeRequestError && (err.status === 401 || err.status === 403)) {
+          lastStripeError = err;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw new HttpsError(
+      'failed-precondition',
+      lastStripeError?.message || 'Stripe test key is not authorized to create Checkout Sessions.',
+    );
+  },
+  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY] },
+);
 
 export const listFulfillmentOrders = onCallLogged(
   'listFulfillmentOrders',

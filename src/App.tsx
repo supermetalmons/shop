@@ -16,6 +16,7 @@ import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
+  createTestStripeCheckoutSession,
   getProfile,
   listDeliveryOrderOwners,
   recoverMyDeliveryOrders,
@@ -1191,6 +1192,7 @@ function App({ currentPath }: AppProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
+  const [stripePaymentLoading, setStripePaymentLoading] = useState(false);
   // A confirmed mint should reset MintPanel controls immediately even if the
   // stats/inventory refresh that follows takes longer or fails.
   const [successfulMintToken, setSuccessfulMintToken] = useState(0);
@@ -3254,6 +3256,32 @@ function App({ currentPath }: AppProps) {
     }
   };
 
+  const handleTestStripePayment = async (quantity: number, variantKey?: string) => {
+    if (blockViewerModeAction()) return;
+    const mintDrop = requireRouteDrop('Stripe test payment');
+    if (mintDrop.solanaCluster !== 'devnet') {
+      showToast('Stripe test payment is only available for devnet drops');
+      return;
+    }
+    if (stripePaymentLoading) return;
+
+    setStripePaymentLoading(true);
+    try {
+      const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
+      const { url } = await createTestStripeCheckoutSession({
+        dropId: mintDrop.dropId,
+        quantity,
+        variantKey,
+        returnUrl,
+      });
+      window.location.assign(url);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to start Stripe payment');
+    } finally {
+      setStripePaymentLoading(false);
+    }
+  };
+
   const handleStartOpenBox = async (item: InventoryItem) => {
     if (blockViewerModeAction()) return;
     if (!canOpenBoxesForDropId(item.dropId)) {
@@ -4848,6 +4876,9 @@ function App({ currentPath }: AppProps) {
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
+          onStripePaymentClick={handleTestStripePayment}
+          stripePaymentVisible={routeDrop.solanaCluster === 'devnet'}
+          stripePaymentBusy={stripePaymentLoading}
           mintSelection={routeDrop.mintSelection}
           showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
           successfulMintToken={successfulMintToken}
