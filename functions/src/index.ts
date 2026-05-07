@@ -5167,6 +5167,7 @@ export async function retryIssueReceiptsForDeliveryOrder(
       'receiptRecovery.lastPreparedProbeAt': FieldValue.delete(),
       'receiptRecovery.preparedProbeCount': FieldValue.delete(),
       'receiptRecovery.nextPreparedProbeAt': FieldValue.delete(),
+      'receiptRecovery.status': FieldValue.delete(),
     })
     .catch(() => {
       // Ignore cleanup races; prepared-order probing is operational only.
@@ -5455,6 +5456,7 @@ export async function retryIssueReceiptsForDeliveryOrder(
     'receiptRecovery.lastPreparedProbeAt': FieldValue.delete(),
     'receiptRecovery.preparedProbeCount': FieldValue.delete(),
     'receiptRecovery.nextPreparedProbeAt': FieldValue.delete(),
+    'receiptRecovery.status': FieldValue.delete(),
   }).catch(() => {
     // Ignore cleanup races; recovery metadata is operational only.
   });

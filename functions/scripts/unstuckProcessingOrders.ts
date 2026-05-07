@@ -5,6 +5,7 @@ import {
   hasConfirmedDeliveryRecordForDeliveryOrder,
   retryIssueReceiptsForDeliveryOrder,
 } from '../lib/index.js';
+import { FUNCTIONS_DROPS } from '../lib/config/deployment.js';
 
 type Args = {
   dropId?: string;
@@ -36,13 +37,19 @@ type RetryPlan =
       signatureSource: 'delivery_pda';
     };
 
-const RECOVERABLE_STATUSES = ['processing', 'prepared'] as const;
+const RECOVERABLE_STATUSES = ['processing', 'prepared', 'prepared_abandoned'] as const;
 const RECOVERABLE_STATUS_SET = new Set<string>(RECOVERABLE_STATUSES);
+const STATUS_SORT_RANK = new Map<string, number>([
+  ['processing', 0],
+  ['prepared_abandoned', 1],
+  ['prepared', 2],
+]);
+const KNOWN_DROP_IDS = new Set(Object.keys(FUNCTIONS_DROPS));
 
 function usage(): string {
   return [
     'Retry `issueReceipts` for Firestore delivery orders that are stuck in `processing`,',
-    'or still `prepared` even though their delivery transaction already landed on-chain.',
+    '`prepared`, or `prepared_abandoned` even though their delivery transaction already landed on-chain.',
     '',
     'Usage:',
     '  npm run unstuck-processing-orders',
@@ -87,7 +94,7 @@ function parseArgs(argv: string[]): Args {
     if (arg === '--drop-id') {
       const value = argv[i + 1];
       if (!value) fail(`Missing value for ${arg}\n\n${usage()}`);
-      args.dropId = value.trim().toLowerCase();
+      args.dropId = normalizeDropIdArg(value);
       i += 1;
       continue;
     }
@@ -116,6 +123,23 @@ function parseArgs(argv: string[]): Args {
   }
 
   return args;
+}
+
+function normalizeDropIdArg(value: string): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function dropIdSearchIds(dropId: string | undefined): string[] {
+  const normalized = normalizeDropIdArg(dropId || '');
+  if (!normalized) return [];
+
+  const candidates = [normalized];
+  const underscoreAlias = normalized.replace(/-/g, '_');
+  if (underscoreAlias !== normalized && KNOWN_DROP_IDS.has(underscoreAlias)) {
+    candidates.push(underscoreAlias);
+  }
+
+  return [...new Set(candidates)];
 }
 
 function toIsoMaybe(value: unknown): string | undefined {
@@ -181,7 +205,7 @@ function buildCandidate(doc: { id: string; ref: { path: string }; data(): any })
     signature: typeof data.deliverySignature === 'string' ? data.deliverySignature : '',
     deliveryPda: typeof data.deliveryPda === 'string' && data.deliveryPda.trim() ? data.deliveryPda : undefined,
     itemIds: Array.isArray(data.itemIds) ? data.itemIds.filter((id: unknown): id is string => typeof id === 'string' && !!id) : [],
-    status: typeof data.status === 'string' ? data.status : '',
+    status: deliveryOrderStatus(data),
     createdAt: toIsoMaybe(data.createdAt),
     processingAt: toIsoMaybe(data.processingAt),
   };
@@ -189,8 +213,9 @@ function buildCandidate(doc: { id: string; ref: { path: string }; data(): any })
 
 function sortCandidates(a: DeliveryOrderCandidate, b: DeliveryOrderCandidate): number {
   if (a.status !== b.status) {
-    if (a.status === 'processing') return -1;
-    if (b.status === 'processing') return 1;
+    const aRank = STATUS_SORT_RANK.get(a.status) ?? Number.MAX_SAFE_INTEGER;
+    const bRank = STATUS_SORT_RANK.get(b.status) ?? Number.MAX_SAFE_INTEGER;
+    if (aRank !== bRank) return aRank - bRank;
   }
   const aTime = Date.parse(a.processingAt || a.createdAt || '') || 0;
   const bTime = Date.parse(b.processingAt || b.createdAt || '') || 0;
@@ -198,24 +223,49 @@ function sortCandidates(a: DeliveryOrderCandidate, b: DeliveryOrderCandidate): n
   return a.docPath.localeCompare(b.docPath);
 }
 
+function deliveryOrderStatus(data: any): string {
+  if (typeof data?.status === 'string' && data.status.trim()) return data.status.trim();
+  if (typeof data?.receiptRecovery?.status === 'string' && data.receiptRecovery.status.trim()) {
+    return data.receiptRecovery.status.trim();
+  }
+  return '';
+}
+
+function isRecoverableDoc(doc: { data(): any }): boolean {
+  return RECOVERABLE_STATUS_SET.has(deliveryOrderStatus(doc.data() || {}));
+}
+
+function uniqueDocsByPath<T extends { ref: { path: string } }>(docs: T[]): T[] {
+  const byPath = new Map<string, T>();
+  for (const doc of docs) {
+    if (!byPath.has(doc.ref.path)) byPath.set(doc.ref.path, doc);
+  }
+  return [...byPath.values()];
+}
+
 async function loadDocsForRecoverableStatuses(query: FirebaseFirestore.Query) {
-  const snaps = await Promise.all(RECOVERABLE_STATUSES.map((status) => query.where('status', '==', status).get()));
-  return snaps.flatMap((snap) => snap.docs);
+  const snaps = await Promise.all(
+    RECOVERABLE_STATUSES.flatMap((status) => [
+      query.where('status', '==', status).get(),
+      query.where('receiptRecovery.status', '==', status).get(),
+    ]),
+  );
+  return uniqueDocsByPath(snaps.flatMap((snap) => snap.docs)).filter(isRecoverableDoc);
 }
 
 async function loadMatchingDocs(args: Args) {
   const app = getApps()[0] || initializeApp();
   const db = getFirestore(app);
+  const dropIds = dropIdSearchIds(args.dropId);
 
-  if (args.dropId && args.deliveryId != null) {
-    const doc = await db.doc(`drops/${args.dropId}/deliveryOrders/${args.deliveryId}`).get();
-    if (!doc.exists) return [];
-    const status = doc.get('status');
-    return RECOVERABLE_STATUS_SET.has(String(status || '')) ? [doc] : [];
+  if (dropIds.length && args.deliveryId != null) {
+    const docs = await Promise.all(dropIds.map((dropId) => db.doc(`drops/${dropId}/deliveryOrders/${args.deliveryId}`).get()));
+    return uniqueDocsByPath(docs.filter((doc) => doc.exists && isRecoverableDoc(doc)));
   }
 
-  if (args.dropId) {
-    return loadDocsForRecoverableStatuses(db.collection(`drops/${args.dropId}/deliveryOrders`));
+  if (dropIds.length) {
+    const docs = await Promise.all(dropIds.map((dropId) => loadDocsForRecoverableStatuses(db.collection(`drops/${dropId}/deliveryOrders`))));
+    return uniqueDocsByPath(docs.flat());
   }
 
   return loadDocsForRecoverableStatuses(db.collectionGroup('deliveryOrders'));
@@ -231,7 +281,7 @@ async function buildRetryPlan(candidate: DeliveryOrderCandidate): Promise<RetryP
     };
   }
 
-  if (candidate.status !== 'prepared') return null;
+  if (candidate.status !== 'prepared' && candidate.status !== 'prepared_abandoned') return null;
 
   const hasDeliveryRecord = await hasConfirmedDeliveryRecordForDeliveryOrder({
     dropId: candidate.dropId,
@@ -268,7 +318,7 @@ async function main() {
   const limited = args.limit ? candidates.slice(0, args.limit) : candidates;
 
   if (!limited.length) {
-    console.log('No delivery orders in prepared/processing status matched the requested scope.');
+    console.log('No delivery orders in processing/prepared/prepared_abandoned status matched the requested scope.');
     return;
   }
 
