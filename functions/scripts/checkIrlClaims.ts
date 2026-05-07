@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, type QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
 import { PublicKey } from '@solana/web3.js';
-import { requireFunctionsDrop, type SolanaCluster } from '../src/config/deployment.ts';
+import { normalizeDropId, requireFunctionsDrop, type SolanaCluster } from '../src/config/deployment.ts';
 import {
   boxIdFromMetadataUri,
   dudeIdFromMetadataUri,
@@ -143,6 +143,7 @@ function parseArgs(argv: string[]): Args {
 
 const args = parseArgs(process.argv.slice(2));
 const dropConfig = requireFunctionsDrop(args.dropId);
+const selectedDropId = dropConfig.dropId;
 const cluster = dropConfig.solanaCluster;
 const collectionMint = dropConfig.collectionMint;
 const HELIUS_RPC_BASE = heliusRpcBaseForCluster(cluster);
@@ -260,6 +261,14 @@ function normalizeWalletMaybe(wallet: unknown): string | undefined {
 
 function normalizeIrlClaimCode(value: string): string {
   return String(value || '').replace(/\D/g, '');
+}
+
+function claimMatchesSelectedDrop(claim: ClaimRecord): boolean {
+  return claim.dropId === selectedDropId;
+}
+
+function limitClaims(claims: ClaimRecord[], limit: number | undefined): ClaimRecord[] {
+  return typeof limit === 'number' ? claims.slice(0, limit) : claims;
 }
 
 function getAssetKind(asset: DasAsset): 'box' | 'dude' | 'certificate' | null {
@@ -429,7 +438,7 @@ function timestampToIso(value: unknown): string | undefined {
 
 function parseClaimData(data: any, docId: string): ClaimRecord | null {
   const code = normalizeIrlClaimCode(typeof data?.code === 'string' ? data.code : docId);
-  const dropId = typeof data?.dropId === 'string' && data.dropId.trim() ? data.dropId.trim() : undefined;
+  const dropId = typeof data?.dropId === 'string' && data.dropId.trim() ? normalizeDropId(data.dropId) : undefined;
   const owner = normalizeWalletMaybe(data?.owner);
   const boxId = Math.floor(Number(data?.boxId));
   const boxAssetId = typeof data?.boxAssetId === 'string' ? data.boxAssetId.trim() : '';
@@ -573,7 +582,7 @@ async function loadClaimsViaRest(args: Args): Promise<ClaimRecord[]> {
   if (args.code) {
     const json = await firestoreRest(`claimCodes/${encodeURIComponent(args.code)}`);
     const parsed = decodeFirestoreDocument(json);
-    return parsed ? [parsed] : [];
+    return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
   }
 
   const claims: ClaimRecord[] = [];
@@ -586,13 +595,13 @@ async function loadClaimsViaRest(args: Args): Promise<ClaimRecord[]> {
     const docs = Array.isArray(json?.documents) ? json.documents : [];
     for (const doc of docs) {
       const parsed = decodeFirestoreDocument(doc);
-      if (parsed) claims.push(parsed);
+      if (parsed && claimMatchesSelectedDrop(parsed)) claims.push(parsed);
     }
     pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
   } while (pageToken);
 
   claims.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  return typeof args.limit === 'number' ? claims.slice(0, args.limit) : claims;
+  return limitClaims(claims, args.limit);
 }
 
 async function loadClaims(args: Args): Promise<ClaimRecord[]> {
@@ -603,7 +612,7 @@ async function loadClaims(args: Args): Promise<ClaimRecord[]> {
       const snap = await db.doc(`claimCodes/${args.code}`).get();
       if (!snap.exists) return [];
       const parsed = parseClaimDoc(snap as QueryDocumentSnapshot);
-      return parsed ? [parsed] : [];
+      return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!looksLikeFirestorePermissionError(message)) throw err;
@@ -614,10 +623,10 @@ async function loadClaims(args: Args): Promise<ClaimRecord[]> {
   try {
     const app = initializeApp({ projectId: PROJECT_ID });
     const db = getFirestore(app);
-    const snap = await db.collection('claimCodes').get();
+    const snap = await db.collection('claimCodes').where('dropId', '==', selectedDropId).get();
     const claims = snap.docs.map(parseClaimDoc).filter(Boolean) as ClaimRecord[];
     claims.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    return typeof args.limit === 'number' ? claims.slice(0, args.limit) : claims;
+    return limitClaims(claims, args.limit);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!looksLikeFirestorePermissionError(message)) throw err;
@@ -741,8 +750,9 @@ function summarize(results: ClaimInspection[]) {
   };
 }
 
-function printText(results: ClaimInspection[]) {
+function printText(results: ClaimInspection[], dropId: string) {
   const summary = summarize(results);
+  console.log(`Drop: ${dropId}`);
   console.log(`Checked ${summary.total} claim code(s).`);
   console.log(
     `claimed ${summary.claimed} | unclaimed ${summary.unclaimed} | transferred ${summary.transferred} | inconclusive ${summary.inconclusive}`,
@@ -751,7 +761,6 @@ function printText(results: ClaimInspection[]) {
 
   for (const result of results) {
     console.log(`Code: ${result.code}`);
-    if (result.dropId) console.log(`Drop: ${result.dropId}`);
     console.log(`Status: ${result.status}`);
     console.log(`Claim owner: ${result.owner}`);
     console.log(`Box id: ${result.boxId}`);
@@ -790,9 +799,11 @@ async function main() {
   const claims = await loadClaims(args);
 
   if (!claims.length) {
-    const message = args.code ? `No claim doc found for code ${args.code}.` : 'No claim docs found.';
+    const message = args.code
+      ? `No claim doc found for code ${args.code} in drop ${selectedDropId}.`
+      : `No claim docs found for drop ${selectedDropId}.`;
     if (args.json) {
-      console.log(JSON.stringify({ summary: summarize([]), results: [], message }, null, 2));
+      console.log(JSON.stringify({ dropId: selectedDropId, summary: summarize([]), results: [], message }, null, 2));
     } else {
       console.log(message);
     }
@@ -801,11 +812,11 @@ async function main() {
 
   const results = await inspectClaims(claims);
   if (args.json) {
-    console.log(JSON.stringify({ summary: summarize(results), results }, null, 2));
+    console.log(JSON.stringify({ dropId: selectedDropId, summary: summarize(results), results }, null, 2));
     return;
   }
 
-  printText(results);
+  printText(results, selectedDropId);
 }
 
 main().catch((err) => {
