@@ -66,3 +66,7 @@ Everything else is committed in `functions/src/config/deployment.ts` (auto-updat
     - `functions/src/config/deployment.ts` (cloud functions)
   - Prints remaining required config keys (does **not** print `COSIGNER_SECRET`).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).
+- Upgrade an existing box minter program:
+  - `npm run upgrade-onchain -- <dropId>` builds the program for the deployed program id in `src/config/deployment.ts`, verifies the current upgrade authority, prompts for that private key, deploys the upgrade, then dumps the deployed binary to verify its hash.
+  - Rehearse with the devnet drop id first, for example `npm run upgrade-onchain -- little_swag_hoodies_devnet`, then run the corresponding mainnet drop id.
+  - Use `--dry-run` to build and compare hashes without prompting or sending transactions.

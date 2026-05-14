@@ -16,6 +16,7 @@
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy:firebaseNewDrops": "firebase deploy --only functions:listFulfillmentOrders,functions:updateFulfillmentStatus,functions:updateFulfillmentInternalStatus,functions:revealDudes,functions:prepareDeliveryTx,functions:issueReceipts,functions:recoverMyDeliveryOrders,functions:prepareIrlClaimTx,functions:notifyShippersOnDeliveryReadyToShip",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
+    "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
     "export_collection_files": "node --experimental-strip-types scripts/exportCollectionFiles.ts",
     "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts"
