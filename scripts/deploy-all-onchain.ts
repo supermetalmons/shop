@@ -408,16 +408,17 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
     itemsPerBox,
     itemsPerBoxLabel: args.itemsPerBoxLabel,
   });
-  // Receipts are minted as one "box receipt" + one "figure receipt" per revealed figure.
-  const receiptsPerBox = 1 + itemsPerBox;
-  const requiredLeaves = maxSupply * receiptsPerBox;
+  // Receipts are minted as one item/box receipt plus one figure receipt per revealed figure.
+  // Direct-delivery drops have itemsPerBox=0, so each supply unit needs exactly one receipt leaf.
+  const receiptLeavesPerSupplyUnit = 1 + itemsPerBox;
+  const requiredLeaves = maxSupply * receiptLeavesPerSupplyUnit;
   const treeCapacity = 2 ** args.tree.maxDepth;
   if (treeCapacity < requiredLeaves) {
     throw new Error(
       `NEW_DROP.onchain.receiptsTree is too small for this drop.\n` +
         `- max supply source                       : ${args.maxSupplyLabel}\n` +
         `- itemsPerBox source                      : ${args.itemsPerBoxLabel}\n` +
-        `- required leaves (maxSupply * ${receiptsPerBox}) : ${requiredLeaves}\n` +
+        `- required leaves (maxSupply * ${receiptLeavesPerSupplyUnit}) : ${requiredLeaves}\n` +
         `- configured capacity (2^maxDepth)               : ${treeCapacity}\n` +
         `\n` +
         `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in ${getActiveNewDropConfigPath()}.`,
@@ -1978,7 +1979,7 @@ async function ensureDeliveryLookupTable(args: {
 // ---------------------------------------------------------------------------
 // Receipt cNFT Merkle tree sizing (Bubblegum v2).
 //
-// This tree ONLY stores *compressed receipt NFTs* minted via `box_minter::mint_receipts`.
+// This tree ONLY stores *compressed receipt NFTs* minted by the box minter receipt instructions.
 // The uncompressed MPL-Core assets (boxes + revealed figures) are NOT stored in this tree.
 //
 // Sizing is configured in the selected NEW_DROP.onchain.receiptsTree config and validated

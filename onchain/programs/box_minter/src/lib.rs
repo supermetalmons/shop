@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
@@ -32,6 +33,7 @@ const MINT_VARIANT_KIND_SIZE: u8 = 1;
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
 const SEED_DELIVERY: &[u8] = b"delivery";
+const SEED_ADMIN_ORDER: &[u8] = b"admin_order";
 // Pending (two-step) box open flow.
 const SEED_PENDING_OPEN: &[u8] = b"open";
 const SEED_PENDING_DUDE_ASSET: &[u8] = b"pdude";
@@ -154,12 +156,32 @@ impl<'info> MintBoxesInnerAccounts<'info> {
             system_program,
         }
     }
+
+    fn from_mint_boxes(accounts: &MintBoxes<'info>) -> Self {
+        Self::new(
+            accounts.payer.to_account_info(),
+            accounts.treasury.to_account_info(),
+            accounts.core_collection.to_account_info(),
+            accounts.mpl_core_program.to_account_info(),
+            accounts.system_program.to_account_info(),
+        )
+    }
+
+    fn from_discounted_box(accounts: &MintDiscountedBox<'info>) -> Self {
+        Self::new(
+            accounts.payer.to_account_info(),
+            accounts.treasury.to_account_info(),
+            accounts.core_collection.to_account_info(),
+            accounts.mpl_core_program.to_account_info(),
+            accounts.system_program.to_account_info(),
+        )
+    }
 }
 
 struct MintBoxAssetBuffers {
     name_buf: String,
     uri_buf: String,
-    create_ix: anchor_lang::solana_program::instruction::Instruction,
+    create_ix: Instruction,
 }
 
 fn charge_mint_payment<'info>(
@@ -198,7 +220,7 @@ fn new_mint_box_asset_buffers<'info>(
     let max_uri_len: usize = drop_base.len() + URI_PREFIX_BOXES.len() + 16;
     let cfg_ai = cfg.to_account_info();
 
-    let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+    let mut create_ix = Instruction {
         program_id: MPL_CORE_PROGRAM_ID,
         accounts: Vec::with_capacity(8),
         data: Vec::with_capacity(
@@ -211,49 +233,29 @@ fn new_mint_box_asset_buffers<'info>(
     };
     create_ix
         .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-            Pubkey::default(),
-            true,
-        )); // asset (placeholder)
+        .push(AccountMeta::new(Pubkey::default(), true)); // asset (placeholder)
     create_ix
         .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-            accounts.core_collection.key(),
-            false,
-        )); // collection
-    create_ix.accounts.push(
-        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(cfg_ai.key(), true),
-    ); // authority
+        .push(AccountMeta::new(accounts.core_collection.key(), false)); // collection
     create_ix
         .accounts
-        .push(anchor_lang::solana_program::instruction::AccountMeta::new(
-            accounts.payer.key(),
-            true,
-        )); // payer
-    create_ix.accounts.push(
-        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            accounts.payer.key(),
-            false,
-        ),
-    ); // owner
-    create_ix.accounts.push(
-        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            MPL_CORE_PROGRAM_ID,
-            false,
-        ),
-    ); // update_authority: None (placeholder)
-    create_ix.accounts.push(
-        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            accounts.system_program.key(),
-            false,
-        ),
-    ); // system_program
-    create_ix.accounts.push(
-        anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-            MPL_CORE_PROGRAM_ID,
-            false,
-        ),
-    ); // log_wrapper: None (placeholder)
+        .push(AccountMeta::new_readonly(cfg_ai.key(), true)); // authority
+    create_ix
+        .accounts
+        .push(AccountMeta::new(accounts.payer.key(), true)); // payer
+    create_ix
+        .accounts
+        .push(AccountMeta::new_readonly(accounts.payer.key(), false)); // owner
+    create_ix
+        .accounts
+        .push(AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false)); // update_authority: None (placeholder)
+    create_ix.accounts.push(AccountMeta::new_readonly(
+        accounts.system_program.key(),
+        false,
+    )); // system_program
+    create_ix
+        .accounts
+        .push(AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false)); // log_wrapper: None (placeholder)
 
     MintBoxAssetBuffers {
         name_buf: String::with_capacity(BoxMinterConfig::MAX_NAME_PREFIX + 12),
@@ -475,14 +477,7 @@ fn mint_variant_box_inner<'info>(
         BoxMinterError::MintVariantSelectionRequired
     );
 
-    let new_total = cfg
-        .minted
-        .checked_add(1)
-        .ok_or(BoxMinterError::MathOverflow)?;
-    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
-
-    let variant_slot = cfg.variant_slot(variant_index)?;
-    let metadata_id = cfg.next_variant_metadata_id(variant_slot)?;
+    let metadata_id = reserve_variant_metadata_ids(&mut *cfg, variant_index, 1)?;
     charge_mint_payment(accounts, unit_price_lamports, 1)?;
 
     let mut buffers = new_mint_box_asset_buffers(cfg, accounts);
@@ -498,10 +493,6 @@ fn mint_variant_box_inner<'info>(
         &mut buffers,
     )?;
 
-    cfg.minted = new_total;
-    cfg.mint_variant_next_ids[variant_slot] = metadata_id
-        .checked_add(1)
-        .ok_or(BoxMinterError::MathOverflow)?;
     Ok(())
 }
 
@@ -525,70 +516,19 @@ fn load_or_create_discount_record<'info>(
         &discount_bump_bytes,
     ];
 
-    let record = if discount_ai.lamports() == 0 {
-        let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
-        let create_discount_ix = anchor_lang::solana_program::system_instruction::create_account(
-            &payer_key,
-            &discount_ai.key(),
-            rent_lamports,
-            DiscountMintRecord::SPACE as u64,
+    let record = if discount_ai.lamports() == 0
+        || *discount_ai.owner == anchor_lang::solana_program::system_program::ID
+    {
+        create_or_reclaim_empty_pda_account(
+            &discount_ai,
+            &payer_ai,
+            &system_program,
+            DiscountMintRecord::SPACE,
             program_id,
-        );
-        invoke_signed(
-            &create_discount_ix,
-            &[
-                payer_ai.clone(),
-                discount_ai.clone(),
-                system_program.clone(),
-            ],
-            &[discount_seeds],
+            discount_seeds,
+            BoxMinterError::InvalidDiscountRecord,
+            BoxMinterError::InvalidDiscountRecord,
         )?;
-        DiscountMintRecord {
-            payer: payer_key,
-            minted: 0,
-            bump: discount_bump,
-        }
-    } else if *discount_ai.owner == anchor_lang::solana_program::system_program::ID {
-        require!(
-            discount_ai.data_len() == 0,
-            BoxMinterError::InvalidDiscountRecord
-        );
-        let rent_lamports = Rent::get()?.minimum_balance(DiscountMintRecord::SPACE);
-        if discount_ai.lamports() < rent_lamports {
-            let diff = rent_lamports - discount_ai.lamports();
-            let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
-                &payer_key,
-                &discount_ai.key(),
-                diff,
-            );
-            invoke(
-                &topup_ix,
-                &[
-                    payer_ai.clone(),
-                    discount_ai.clone(),
-                    system_program.clone(),
-                ],
-            )?;
-        }
-
-        let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
-            &discount_ai.key(),
-            DiscountMintRecord::SPACE as u64,
-        );
-        invoke_signed(
-            &allocate_ix,
-            &[discount_ai.clone(), system_program.clone()],
-            &[discount_seeds],
-        )?;
-
-        let assign_ix =
-            anchor_lang::solana_program::system_instruction::assign(&discount_ai.key(), program_id);
-        invoke_signed(
-            &assign_ix,
-            &[discount_ai.clone(), system_program.clone()],
-            &[discount_seeds],
-        )?;
-
         DiscountMintRecord {
             payer: payer_key,
             minted: 0,
@@ -613,6 +553,459 @@ fn load_or_create_discount_record<'info>(
     };
 
     Ok((record, discount_bump))
+}
+
+/// Creates a PDA account or reclaims a pre-funded system-owned PDA stub.
+///
+/// Callers must validate the PDA address before calling; this helper only handles account creation
+/// and rejects already-initialized accounts.
+fn create_or_reclaim_empty_pda_account<'info>(
+    account: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    space: usize,
+    program_id: &Pubkey,
+    signer_seeds: &[&[u8]],
+    invalid_pda_error: BoxMinterError,
+    already_exists_error: BoxMinterError,
+) -> Result<()> {
+    let current_lamports = account.lamports();
+
+    if current_lamports == 0 {
+        let rent_lamports = Rent::get()?.minimum_balance(space);
+        let create_ix = anchor_lang::solana_program::system_instruction::create_account(
+            &payer.key(),
+            &account.key(),
+            rent_lamports,
+            space as u64,
+            program_id,
+        );
+        invoke_signed(
+            &create_ix,
+            &[payer.clone(), account.clone(), system_program.clone()],
+            &[signer_seeds],
+        )?;
+        return Ok(());
+    }
+
+    if !account.data_is_empty() {
+        return Err(anchor_lang::error::Error::from(already_exists_error));
+    }
+    require_keys_eq!(
+        *account.owner,
+        anchor_lang::solana_program::system_program::ID,
+        invalid_pda_error
+    );
+
+    let rent_lamports = Rent::get()?.minimum_balance(space);
+    if current_lamports < rent_lamports {
+        let diff = rent_lamports - current_lamports;
+        let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
+            &payer.key(),
+            &account.key(),
+            diff,
+        );
+        invoke(
+            &topup_ix,
+            &[payer.clone(), account.clone(), system_program.clone()],
+        )?;
+    }
+
+    let allocate_ix =
+        anchor_lang::solana_program::system_instruction::allocate(&account.key(), space as u64);
+    invoke_signed(
+        &allocate_ix,
+        &[account.clone(), system_program.clone()],
+        &[signer_seeds],
+    )?;
+
+    let assign_ix =
+        anchor_lang::solana_program::system_instruction::assign(&account.key(), program_id);
+    invoke_signed(
+        &assign_ix,
+        &[account.clone(), system_program.clone()],
+        &[signer_seeds],
+    )?;
+    Ok(())
+}
+
+struct ReceiptMintAccounts<'info> {
+    cosigner: AccountInfo<'info>,
+    leaf_recipient: AccountInfo<'info>,
+    merkle_tree: AccountInfo<'info>,
+    tree_config: AccountInfo<'info>,
+    core_collection: AccountInfo<'info>,
+    bubblegum_program: AccountInfo<'info>,
+    log_wrapper: AccountInfo<'info>,
+    compression_program: AccountInfo<'info>,
+    mpl_core_program: AccountInfo<'info>,
+    mpl_core_cpi_signer: AccountInfo<'info>,
+    system_program: AccountInfo<'info>,
+}
+
+struct ReceiptMintCpi<'info> {
+    ix: Instruction,
+    account_infos: [AccountInfo<'info>; 14],
+}
+
+impl<'info> ReceiptMintAccounts<'info> {
+    fn from_admin_delivery(accounts: &AdminDeliverVariantOrder<'info>) -> Self {
+        Self {
+            cosigner: accounts.cosigner.to_account_info(),
+            leaf_recipient: accounts.receipt_owner.to_account_info(),
+            merkle_tree: accounts.merkle_tree.to_account_info(),
+            tree_config: accounts.tree_config.to_account_info(),
+            core_collection: accounts.core_collection.to_account_info(),
+            bubblegum_program: accounts.bubblegum_program.to_account_info(),
+            log_wrapper: accounts.log_wrapper.to_account_info(),
+            compression_program: accounts.compression_program.to_account_info(),
+            mpl_core_program: accounts.mpl_core_program.to_account_info(),
+            mpl_core_cpi_signer: accounts.mpl_core_cpi_signer.to_account_info(),
+            system_program: accounts.system_program.to_account_info(),
+        }
+    }
+
+    fn from_mint_receipts(accounts: &MintReceipts<'info>) -> Self {
+        Self {
+            cosigner: accounts.cosigner.to_account_info(),
+            leaf_recipient: accounts.user.to_account_info(),
+            merkle_tree: accounts.merkle_tree.to_account_info(),
+            tree_config: accounts.tree_config.to_account_info(),
+            core_collection: accounts.core_collection.to_account_info(),
+            bubblegum_program: accounts.bubblegum_program.to_account_info(),
+            log_wrapper: accounts.log_wrapper.to_account_info(),
+            compression_program: accounts.compression_program.to_account_info(),
+            mpl_core_program: accounts.mpl_core_program.to_account_info(),
+            mpl_core_cpi_signer: accounts.mpl_core_cpi_signer.to_account_info(),
+            system_program: accounts.system_program.to_account_info(),
+        }
+    }
+}
+
+fn validate_receipt_mint_accounts(accounts: &ReceiptMintAccounts<'_>) -> Result<()> {
+    require_keys_eq!(
+        accounts.bubblegum_program.key(),
+        BUBBLEGUM_PROGRAM_ID,
+        BoxMinterError::InvalidBubblegumProgram
+    );
+    require_keys_eq!(
+        accounts.log_wrapper.key(),
+        MPL_NOOP_PROGRAM_ID,
+        BoxMinterError::InvalidMplNoopProgram
+    );
+    require_keys_eq!(
+        accounts.compression_program.key(),
+        MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+        BoxMinterError::InvalidCompressionProgram
+    );
+    require_keys_eq!(
+        accounts.mpl_core_program.key(),
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidMplCoreProgram
+    );
+    require_keys_eq!(
+        accounts.mpl_core_cpi_signer.key(),
+        MPL_CORE_CPI_SIGNER,
+        BoxMinterError::InvalidMplCoreCpiSigner
+    );
+    require_keys_eq!(
+        *accounts.merkle_tree.owner,
+        MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+        BoxMinterError::InvalidReceiptsMerkleTree
+    );
+    let (expected_tree_config, _) = Pubkey::find_program_address(
+        &[accounts.merkle_tree.key().as_ref()],
+        &BUBBLEGUM_PROGRAM_ID,
+    );
+    require_keys_eq!(
+        accounts.tree_config.key(),
+        expected_tree_config,
+        BoxMinterError::InvalidReceiptsTreeConfig
+    );
+    Ok(())
+}
+
+fn new_receipt_mint_ix(accounts: &ReceiptMintAccounts<'_>) -> Instruction {
+    Instruction {
+        program_id: BUBBLEGUM_PROGRAM_ID,
+        accounts: vec![
+            // mintV2 accounts order (kinobi):
+            // 0 treeConfig (writable)
+            AccountMeta::new(accounts.tree_config.key(), false),
+            // 1 payer (writable signer)
+            AccountMeta::new(accounts.cosigner.key(), true),
+            // 2 treeCreatorOrDelegate (signer)
+            AccountMeta::new_readonly(accounts.cosigner.key(), true),
+            // 3 collectionAuthority (signer)
+            AccountMeta::new_readonly(accounts.cosigner.key(), true),
+            // 4 leafOwner
+            AccountMeta::new_readonly(accounts.leaf_recipient.key(), false),
+            // 5 leafDelegate
+            AccountMeta::new_readonly(accounts.leaf_recipient.key(), false),
+            // 6 merkleTree (writable)
+            AccountMeta::new(accounts.merkle_tree.key(), false),
+            // 7 coreCollection (writable)
+            AccountMeta::new(accounts.core_collection.key(), false),
+            // 8 mplCoreCpiSigner
+            AccountMeta::new_readonly(accounts.mpl_core_cpi_signer.key(), false),
+            // 9 logWrapper
+            AccountMeta::new_readonly(accounts.log_wrapper.key(), false),
+            // 10 compressionProgram
+            AccountMeta::new_readonly(accounts.compression_program.key(), false),
+            // 11 mplCoreProgram
+            AccountMeta::new_readonly(accounts.mpl_core_program.key(), false),
+            // 12 systemProgram
+            AccountMeta::new_readonly(accounts.system_program.key(), false),
+        ],
+        data: Vec::with_capacity(256),
+    }
+}
+
+fn new_receipt_mint_cpi<'info>(accounts: &ReceiptMintAccounts<'info>) -> ReceiptMintCpi<'info> {
+    ReceiptMintCpi {
+        ix: new_receipt_mint_ix(accounts),
+        // Matches the AccountMeta order in new_receipt_mint_ix; Bubblegum's program account is
+        // appended for CPI invocation.
+        account_infos: [
+            accounts.tree_config.clone(),
+            accounts.cosigner.clone(),
+            accounts.cosigner.clone(),
+            accounts.cosigner.clone(),
+            accounts.leaf_recipient.clone(),
+            accounts.leaf_recipient.clone(),
+            accounts.merkle_tree.clone(),
+            accounts.core_collection.clone(),
+            accounts.mpl_core_cpi_signer.clone(),
+            accounts.log_wrapper.clone(),
+            accounts.compression_program.clone(),
+            accounts.mpl_core_program.clone(),
+            accounts.system_program.clone(),
+            accounts.bubblegum_program.clone(),
+        ],
+    }
+}
+
+fn write_receipt_mint_data(
+    data: &mut Vec<u8>,
+    core_collection: Pubkey,
+    name: &str,
+    uri: &str,
+) -> Result<()> {
+    data.clear();
+    // MetadataArgsV2 (borsh):
+    // name, symbol, uri, sellerFeeBasisPoints(u16), primarySaleHappened(bool), isMutable(bool),
+    // tokenStandard: Option<TokenStandard> (Some(NonFungible=0)),
+    // creators: Vec<Creator> (empty),
+    // collection: Option<Pubkey> (Some(coreCollection))
+    data.extend_from_slice(&IX_BUBBLEGUM_MINT_V2);
+    borsh_push_string(data, name)?;
+    borsh_push_string(data, "")?;
+    borsh_push_string(data, uri)?;
+    data.extend_from_slice(&(0u16).to_le_bytes()); // sellerFeeBasisPoints
+    data.push(0u8); // primarySaleHappened=false
+    data.push(1u8); // isMutable=true
+    data.push(1u8); // tokenStandard: Some
+    data.push(0u8); // NonFungible enum index
+    data.extend_from_slice(&(0u32).to_le_bytes()); // creators vec len=0
+    data.push(1u8); // collection: Some
+    data.extend_from_slice(core_collection.as_ref());
+    data.push(0u8); // assetData: None
+    data.push(0u8); // assetDataSchema: None
+    Ok(())
+}
+
+fn invoke_receipt_mint_v2<'info>(
+    cpi: &mut ReceiptMintCpi<'info>,
+    core_collection: Pubkey,
+    name: &str,
+    uri: &str,
+) -> Result<()> {
+    write_receipt_mint_data(&mut cpi.ix.data, core_collection, name, uri)?;
+    // CPI: include the program account at the end (like SystemProgram CPIs).
+    invoke(&cpi.ix, &cpi.account_infos)?;
+    Ok(())
+}
+
+fn build_receipt_name_and_uri(
+    name_buf: &mut String,
+    uri_buf: &mut String,
+    drop_base: &str,
+    label: &str,
+    uri_prefix: &str,
+    id: impl core::fmt::Display + Copy,
+) -> Result<()> {
+    name_buf.clear();
+    name_buf.push_str(RECEIPT_NAME_PREFIX);
+    append_label_and_id(name_buf, label, id)?;
+
+    uri_buf.clear();
+    uri_buf.push_str(drop_base);
+    uri_buf.push_str(uri_prefix);
+    write!(uri_buf, "{}", id).map_err(|_| error!(BoxMinterError::SerializationFailed))?;
+    uri_buf.push_str(".json");
+    Ok(())
+}
+
+fn mint_admin_order_receipt_cnfts<'info>(
+    cfg: &BoxMinterConfig,
+    accounts: &ReceiptMintAccounts<'info>,
+    first_metadata_id: u32,
+    quantity: u8,
+) -> Result<()> {
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    let last_metadata_id = first_metadata_id
+        .checked_add(u32::from(quantity) - 1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(
+        first_metadata_id >= 1 && last_metadata_id <= cfg.max_supply,
+        BoxMinterError::InvalidAssetMetadata
+    );
+
+    let drop_base = cfg.uri_base.as_str();
+    let mut name_buf = String::with_capacity(48);
+    let mut uri_buf = String::with_capacity(drop_base.len() + URI_PREFIX_RECEIPTS_BOXES.len() + 16);
+    let mut mint_cpi = new_receipt_mint_cpi(accounts);
+
+    for metadata_id in first_metadata_id..=last_metadata_id {
+        build_receipt_name_and_uri(
+            &mut name_buf,
+            &mut uri_buf,
+            drop_base,
+            &cfg.name_prefix,
+            URI_PREFIX_RECEIPTS_BOXES,
+            metadata_id,
+        )?;
+        invoke_receipt_mint_v2(&mut mint_cpi, cfg.core_collection, &name_buf, &uri_buf)?;
+    }
+
+    Ok(())
+}
+
+fn validate_admin_order_hash(order_hash: &[u8; 32]) -> Result<()> {
+    require!(
+        has_any_non_zero_byte(order_hash.as_ref()),
+        BoxMinterError::InvalidAdminOrder
+    );
+    Ok(())
+}
+
+fn admin_order_is_valid_retry(
+    record: &AdminDeliveryOrderRecord,
+    args: &AdminDeliverVariantOrderArgs,
+    effective_variant_index: u8,
+    receipt_owner: Pubkey,
+    order_bump: u8,
+) -> bool {
+    record.order_hash == args.order_hash
+        && record.variant_index == effective_variant_index
+        && record.quantity == args.quantity
+        && record.receipt_owner == receipt_owner
+        && record.bump == order_bump
+        && record.quantity >= 1
+        && record.first_metadata_id >= 1
+}
+
+fn deserialize_admin_order_record(
+    account: &AccountInfo<'_>,
+    program_id: &Pubkey,
+) -> Result<AdminDeliveryOrderRecord> {
+    require_keys_eq!(
+        *account.owner,
+        *program_id,
+        BoxMinterError::InvalidAdminOrder
+    );
+    let data = account.try_borrow_data()?;
+    let mut data: &[u8] = &data;
+    AdminDeliveryOrderRecord::try_deserialize(&mut data)
+        .map_err(|_| error!(BoxMinterError::InvalidAdminOrder))
+}
+
+fn validate_admin_order_pda(
+    program_id: &Pubkey,
+    config_key: &Pubkey,
+    order_hash: &[u8; 32],
+    admin_order_key: Pubkey,
+) -> Result<u8> {
+    let (expected_order, canonical_bump) = Pubkey::find_program_address(
+        &[SEED_ADMIN_ORDER, config_key.as_ref(), order_hash.as_ref()],
+        program_id,
+    );
+    require_keys_eq!(
+        admin_order_key,
+        expected_order,
+        BoxMinterError::InvalidAdminOrderPda
+    );
+    Ok(canonical_bump)
+}
+
+fn reserve_variant_metadata_ids(
+    cfg: &mut BoxMinterConfig,
+    variant_index: u8,
+    quantity: u8,
+) -> Result<u32> {
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    let new_total = cfg
+        .minted
+        .checked_add(u32::from(quantity))
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
+
+    let variant_slot = cfg.variant_slot(variant_index)?;
+    let first_metadata_id = cfg.next_variant_metadata_id(variant_slot)?;
+    let last_metadata_id = first_metadata_id
+        .checked_add(u32::from(quantity) - 1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(
+        last_metadata_id <= cfg.mint_variant_end_ids[variant_slot],
+        BoxMinterError::MintVariantUnavailable
+    );
+
+    cfg.minted = new_total;
+    cfg.mint_variant_next_ids[variant_slot] = last_metadata_id
+        .checked_add(1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    Ok(first_metadata_id)
+}
+
+fn reserve_standard_metadata_ids(cfg: &mut BoxMinterConfig, quantity: u8) -> Result<u32> {
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    let first_metadata_id = cfg
+        .minted
+        .checked_add(1)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    let new_total = cfg
+        .minted
+        .checked_add(u32::from(quantity))
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
+
+    cfg.minted = new_total;
+    Ok(first_metadata_id)
+}
+
+fn admin_delivery_effective_variant_index(cfg: &BoxMinterConfig, variant_index: u8) -> u8 {
+    if cfg.requires_variant_selection() {
+        variant_index
+    } else {
+        0
+    }
+}
+
+fn reserve_admin_delivery_metadata_ids(
+    cfg: &mut BoxMinterConfig,
+    variant_index: u8,
+    quantity: u8,
+) -> Result<u32> {
+    require!(quantity >= 1, BoxMinterError::InvalidQuantity);
+    require!(cfg.started, BoxMinterError::MintNotStarted);
+    let max_qty = cfg.max_per_tx.min(MAX_SAFE_MINTS_PER_TX);
+    require!(quantity <= max_qty, BoxMinterError::InvalidQuantity);
+
+    if cfg.requires_variant_selection() {
+        reserve_variant_metadata_ids(cfg, variant_index, quantity)
+    } else {
+        reserve_standard_metadata_ids(cfg, quantity)
+    }
 }
 
 #[program]
@@ -794,13 +1187,7 @@ pub mod box_minter {
         // Passed in from the client to avoid `find_program_address` compute inside the program.
         box_bumps: Vec<u8>,
     ) -> Result<()> {
-        let accounts = MintBoxesInnerAccounts::new(
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.treasury.to_account_info(),
-            ctx.accounts.core_collection.to_account_info(),
-            ctx.accounts.mpl_core_program.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        );
+        let accounts = MintBoxesInnerAccounts::from_mint_boxes(&ctx.accounts);
         let unit_price_lamports = ctx.accounts.config.price_lamports;
         mint_standard_boxes_inner(
             &mut ctx.accounts.config,
@@ -820,13 +1207,7 @@ pub mod box_minter {
         mint_id: u64,
         box_bump: u8,
     ) -> Result<()> {
-        let accounts = MintBoxesInnerAccounts::new(
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.treasury.to_account_info(),
-            ctx.accounts.core_collection.to_account_info(),
-            ctx.accounts.mpl_core_program.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        );
+        let accounts = MintBoxesInnerAccounts::from_mint_boxes(&ctx.accounts);
         let unit_price_lamports = ctx.accounts.config.price_lamports;
         mint_variant_box_inner(
             &mut ctx.accounts.config,
@@ -880,13 +1261,7 @@ pub mod box_minter {
             BoxMinterError::DiscountAllowanceExceeded
         );
 
-        let accounts = MintBoxesInnerAccounts::new(
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.treasury.to_account_info(),
-            ctx.accounts.core_collection.to_account_info(),
-            ctx.accounts.mpl_core_program.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        );
+        let accounts = MintBoxesInnerAccounts::from_discounted_box(&ctx.accounts);
         mint_standard_boxes_inner(
             &mut ctx.accounts.config,
             &accounts,
@@ -942,13 +1317,7 @@ pub mod box_minter {
             BoxMinterError::DiscountAllowanceExceeded
         );
 
-        let accounts = MintBoxesInnerAccounts::new(
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.treasury.to_account_info(),
-            ctx.accounts.core_collection.to_account_info(),
-            ctx.accounts.mpl_core_program.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        );
+        let accounts = MintBoxesInnerAccounts::from_discounted_box(&ctx.accounts);
         mint_variant_box_inner(
             &mut ctx.accounts.config,
             &accounts,
@@ -998,9 +1367,6 @@ pub mod box_minter {
         //   (system-owned, data_len=0) has historically been version-sensitive.
         // - Starting an open twice for the same box must fail.
         let pending_ai = ctx.accounts.pending.to_account_info();
-        if !pending_ai.data_is_empty() {
-            return err!(BoxMinterError::PendingAlreadyExists);
-        }
 
         // Create (or reclaim) the pending record PDA.
         //
@@ -1008,83 +1374,19 @@ pub mod box_minter {
         // `system_instruction::create_account` fail ("account already in use"). Since this is a PDA,
         // we can sign for it and reclaim it via `allocate` + `assign`.
         let pending_space: usize = PendingOpenBox::space(cfg.items_per_box);
-        let rent_lamports = Rent::get()?.minimum_balance(pending_space);
         let pending_bump: u8 = ctx.bumps.pending;
         let box_asset_key = ctx.accounts.box_asset.key();
         let pending_seeds: &[&[u8]] = &[SEED_PENDING_OPEN, box_asset_key.as_ref(), &[pending_bump]];
-        if pending_ai.lamports() == 0 {
-            let create_pending_ix = anchor_lang::solana_program::system_instruction::create_account(
-                &ctx.accounts.payer.key(),
-                &ctx.accounts.pending.key(),
-                rent_lamports,
-                pending_space as u64,
-                ctx.program_id,
-            );
-            invoke_signed(
-                &create_pending_ix,
-                &[
-                    ctx.accounts.payer.to_account_info(),
-                    pending_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[pending_seeds],
-            )?;
-        } else {
-            // Reclaim pre-funded PDA stub (system-owned, unallocated).
-            require_keys_eq!(
-                *pending_ai.owner,
-                anchor_lang::solana_program::system_program::ID,
-                BoxMinterError::InvalidPendingRecord
-            );
-            require!(
-                pending_ai.data_len() == 0,
-                BoxMinterError::PendingAlreadyExists
-            );
-
-            // Ensure rent exemption for the allocated size.
-            if pending_ai.lamports() < rent_lamports {
-                let diff = rent_lamports - pending_ai.lamports();
-                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
-                    &ctx.accounts.payer.key(),
-                    &ctx.accounts.pending.key(),
-                    diff,
-                );
-                invoke(
-                    &topup_ix,
-                    &[
-                        ctx.accounts.payer.to_account_info(),
-                        pending_ai.clone(),
-                        ctx.accounts.system_program.to_account_info(),
-                    ],
-                )?;
-            }
-
-            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
-                &ctx.accounts.pending.key(),
-                pending_space as u64,
-            );
-            invoke_signed(
-                &allocate_ix,
-                &[
-                    pending_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[pending_seeds],
-            )?;
-
-            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
-                &ctx.accounts.pending.key(),
-                ctx.program_id,
-            );
-            invoke_signed(
-                &assign_ix,
-                &[
-                    pending_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[pending_seeds],
-            )?;
-        }
+        create_or_reclaim_empty_pda_account(
+            &pending_ai,
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            pending_space,
+            ctx.program_id,
+            pending_seeds,
+            BoxMinterError::InvalidPendingRecord,
+            BoxMinterError::PendingAlreadyExists,
+        )?;
 
         // Post-conditions: at this point the pending PDA must be a properly sized, program-owned
         // account ready for serialization.
@@ -1132,32 +1434,17 @@ pub mod box_minter {
             &cfg_bump_bytes,
         ];
 
-        let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+        let transfer_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(box_asset.key(), false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    core_collection.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    payer.key(),
-                    true,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    vault.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
+                AccountMeta::new(box_asset.key(), false),
+                AccountMeta::new_readonly(core_collection.key(), false),
+                AccountMeta::new(payer.key(), true),
+                AccountMeta::new_readonly(payer.key(), true),
+                AccountMeta::new_readonly(vault.key(), false),
+                AccountMeta::new_readonly(system_program.key(), false),
+                AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1183,43 +1470,25 @@ pub mod box_minter {
         let pending_key = ctx.accounts.pending.key();
         let mut dudes: Vec<Pubkey> = Vec::with_capacity(items_per_box);
 
-        let mut create_ix = anchor_lang::solana_program::instruction::Instruction {
+        let mut create_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // 0 asset (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new(Pubkey::default(), true),
+                AccountMeta::new(Pubkey::default(), true),
                 // 1 collection: None => placeholder = program id (must be readonly when absent)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    MPL_CORE_PROGRAM_ID,
-                    false,
-                ),
+                AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
                 // 2 authority (signer): config PDA
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cfg_ai.key(),
-                    true,
-                ),
+                AccountMeta::new_readonly(cfg_ai.key(), true),
                 // 3 payer (signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
+                AccountMeta::new(payer.key(), true),
                 // 4 owner: vault/admin (not signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    vault.key(),
-                    false,
-                ),
+                AccountMeta::new_readonly(vault.key(), false),
                 // 5 update authority: config PDA (not signer account meta)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cfg_ai.key(),
-                    false,
-                ),
+                AccountMeta::new_readonly(cfg_ai.key(), false),
                 // 6 system program
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
+                AccountMeta::new_readonly(system_program.key(), false),
                 // 7 log wrapper: None => placeholder = program id
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    MPL_CORE_PROGRAM_ID,
-                    false,
-                ),
+                AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
             ],
             data: Vec::with_capacity(32),
         };
@@ -1431,31 +1700,16 @@ pub mod box_minter {
         ];
 
         // 1) Burn the box (reclaim rent to the admin payer).
-        let burn_ix = anchor_lang::solana_program::instruction::Instruction {
+        let burn_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    ctx.accounts.box_asset.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    core_collection.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cosigner.key(),
-                    true,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
+                AccountMeta::new(ctx.accounts.box_asset.key(), false),
+                AccountMeta::new(core_collection.key(), false),
+                AccountMeta::new(cosigner.key(), true),
+                AccountMeta::new_readonly(cosigner.key(), true),
+                AccountMeta::new_readonly(system_program.key(), false),
+                AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
             // BurnV1 discriminator=12, compression_proof=None (0)
             data: vec![12u8, 0u8],
@@ -1480,73 +1734,37 @@ pub mod box_minter {
         let mut name_buf = String::with_capacity(32);
         let mut uri_buf = String::with_capacity(drop_base.len() + URI_PREFIX_FIGURES.len() + 16);
 
-        let mut update_ix = anchor_lang::solana_program::instruction::Instruction {
+        let mut update_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // UpdateV2 accounts:
                 //   asset, collection (optional), payer, authority, new_collection (optional), system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    Pubkey::default(),
-                    false,
-                ), // asset placeholder
+                AccountMeta::new(Pubkey::default(), false), // asset placeholder
                 // collection: None (placeholder)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    MPL_CORE_PROGRAM_ID,
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cfg_ai.key(),
-                    true,
-                ), // authority (config PDA)
+                AccountMeta::new_readonly(MPL_CORE_PROGRAM_ID, false),
+                AccountMeta::new(cosigner.key(), true),
+                AccountMeta::new_readonly(cfg_ai.key(), true), // authority (config PDA)
                 // new_collection: core collection (writable; mpl-core increments size)
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    core_collection.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
+                AccountMeta::new(core_collection.key(), false),
+                AccountMeta::new_readonly(system_program.key(), false),
+                AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
             data: Vec::with_capacity(128),
         };
 
         // 3) Transfer dudes to the user.
         let user_ai = ctx.accounts.user.to_account_info();
-        let mut transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+        let mut transfer_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    Pubkey::default(),
-                    false,
-                ), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    core_collection.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cosigner.key(),
-                    true,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    user_ai.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
+                AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                AccountMeta::new_readonly(core_collection.key(), false),
+                AccountMeta::new(cosigner.key(), true),
+                AccountMeta::new_readonly(cosigner.key(), true),
+                AccountMeta::new_readonly(user_ai.key(), false),
+                AccountMeta::new_readonly(system_program.key(), false),
+                AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1680,17 +1898,12 @@ pub mod box_minter {
             BoxMinterError::InvalidDeliveryPda
         );
         let delivery_ai = ctx.accounts.delivery.to_account_info();
-        if !delivery_ai.data_is_empty() {
-            return err!(BoxMinterError::DeliveryAlreadyExists);
-        }
-
         // Create (or reclaim) the tiny on-chain delivery record (presence == paid order).
         //
         // Note: a PDA can be "pre-funded", creating a system-owned stub account that makes
         // `system_instruction::create_account` fail ("account already in use"). Since this is a PDA,
         // we can sign for it and reclaim it via `allocate` + `assign`.
         let delivery_space: usize = DeliveryRecord::SPACE;
-        let rent_lamports = Rent::get()?.minimum_balance(delivery_space);
         let delivery_bump_bytes = [args.delivery_bump];
         let delivery_seeds: &[&[u8]] = &[
             SEED_DELIVERY,
@@ -1698,80 +1911,16 @@ pub mod box_minter {
             &delivery_id_bytes,
             &delivery_bump_bytes,
         ];
-        if delivery_ai.lamports() == 0 {
-            let create_delivery_ix =
-                anchor_lang::solana_program::system_instruction::create_account(
-                    &ctx.accounts.payer.key(),
-                    &ctx.accounts.delivery.key(),
-                    rent_lamports,
-                    delivery_space as u64,
-                    ctx.program_id,
-                );
-            invoke_signed(
-                &create_delivery_ix,
-                &[
-                    ctx.accounts.payer.to_account_info(),
-                    delivery_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[delivery_seeds],
-            )?;
-        } else {
-            // Reclaim pre-funded PDA stub (system-owned, unallocated).
-            require_keys_eq!(
-                *delivery_ai.owner,
-                anchor_lang::solana_program::system_program::ID,
-                BoxMinterError::InvalidDeliveryPda
-            );
-            require!(
-                delivery_ai.data_len() == 0,
-                BoxMinterError::DeliveryAlreadyExists
-            );
-
-            // Ensure rent exemption for the allocated size.
-            if delivery_ai.lamports() < rent_lamports {
-                let diff = rent_lamports - delivery_ai.lamports();
-                let topup_ix = anchor_lang::solana_program::system_instruction::transfer(
-                    &ctx.accounts.payer.key(),
-                    &ctx.accounts.delivery.key(),
-                    diff,
-                );
-                invoke(
-                    &topup_ix,
-                    &[
-                        ctx.accounts.payer.to_account_info(),
-                        delivery_ai.clone(),
-                        ctx.accounts.system_program.to_account_info(),
-                    ],
-                )?;
-            }
-
-            let allocate_ix = anchor_lang::solana_program::system_instruction::allocate(
-                &ctx.accounts.delivery.key(),
-                delivery_space as u64,
-            );
-            invoke_signed(
-                &allocate_ix,
-                &[
-                    delivery_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[delivery_seeds],
-            )?;
-
-            let assign_ix = anchor_lang::solana_program::system_instruction::assign(
-                &ctx.accounts.delivery.key(),
-                ctx.program_id,
-            );
-            invoke_signed(
-                &assign_ix,
-                &[
-                    delivery_ai.clone(),
-                    ctx.accounts.system_program.to_account_info(),
-                ],
-                &[delivery_seeds],
-            )?;
-        }
+        create_or_reclaim_empty_pda_account(
+            &delivery_ai,
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            delivery_space,
+            ctx.program_id,
+            delivery_seeds,
+            BoxMinterError::InvalidDeliveryPda,
+            BoxMinterError::DeliveryAlreadyExists,
+        )?;
 
         let record = DeliveryRecord {
             payer: ctx.accounts.payer.key(),
@@ -1806,35 +1955,17 @@ pub mod box_minter {
         let system_program = ctx.accounts.system_program.to_account_info();
         let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
 
-        let mut transfer_ix = anchor_lang::solana_program::instruction::Instruction {
+        let mut transfer_ix = Instruction {
             program_id: MPL_CORE_PROGRAM_ID,
             accounts: vec![
                 // asset, collection, payer, authority, new_owner, system_program, log_wrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    Pubkey::default(),
-                    false,
-                ), // asset placeholder
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    core_collection.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new(payer.key(), true),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    payer.key(),
-                    true,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    vault.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
+                AccountMeta::new(Pubkey::default(), false), // asset placeholder
+                AccountMeta::new_readonly(core_collection.key(), false),
+                AccountMeta::new(payer.key(), true),
+                AccountMeta::new_readonly(payer.key(), true),
+                AccountMeta::new_readonly(vault.key(), false),
+                AccountMeta::new_readonly(system_program.key(), false),
+                AccountMeta::new_readonly(log_wrapper.key(), false),
             ],
             // TransferV1 discriminator=14, compression_proof=None (0)
             data: vec![14u8, 0u8],
@@ -1867,6 +1998,94 @@ pub mod box_minter {
         Ok(())
     }
 
+    /// Admin-only off-chain order fulfillment for drops.
+    ///
+    /// This reserves a contiguous run of variant metadata ids, creates an idempotency PDA keyed by
+    /// the off-chain order hash, and mints the matching receipt cNFTs to the recipient wallet.
+    /// For non-variant drops, `variant_index` is ignored and the order record stores `0`.
+    /// Exact retries of a fulfilled order are accepted as no-ops.
+    pub fn admin_deliver_variant_order(
+        ctx: Context<AdminDeliverVariantOrder>,
+        args: AdminDeliverVariantOrderArgs,
+    ) -> Result<()> {
+        validate_admin_order_hash(&args.order_hash)?;
+        require!(args.quantity >= 1, BoxMinterError::InvalidQuantity);
+
+        let config_key = ctx.accounts.config.key();
+        let order_bump = validate_admin_order_pda(
+            ctx.program_id,
+            &config_key,
+            &args.order_hash,
+            ctx.accounts.admin_order.key(),
+        )?;
+        let order_bump_bytes = [order_bump];
+        let order_seeds: &[&[u8]] = &[
+            SEED_ADMIN_ORDER,
+            config_key.as_ref(),
+            args.order_hash.as_ref(),
+            &order_bump_bytes,
+        ];
+
+        let order_ai = ctx.accounts.admin_order.to_account_info();
+        let receipt_owner = ctx.accounts.receipt_owner.key();
+        let effective_variant_index =
+            admin_delivery_effective_variant_index(&ctx.accounts.config, args.variant_index);
+        require!(
+            receipt_owner != Pubkey::default(),
+            BoxMinterError::InvalidReceiptOwner
+        );
+        if !order_ai.data_is_empty() {
+            let existing = deserialize_admin_order_record(&order_ai, ctx.program_id)?;
+            require!(
+                admin_order_is_valid_retry(
+                    &existing,
+                    &args,
+                    effective_variant_index,
+                    receipt_owner,
+                    order_bump,
+                ),
+                BoxMinterError::AdminOrderAlreadyExists
+            );
+            return Ok(());
+        }
+        let receipt_accounts = ReceiptMintAccounts::from_admin_delivery(&ctx.accounts);
+        validate_receipt_mint_accounts(&receipt_accounts)?;
+
+        let first_metadata_id = reserve_admin_delivery_metadata_ids(
+            &mut *ctx.accounts.config,
+            effective_variant_index,
+            args.quantity,
+        )?;
+
+        create_or_reclaim_empty_pda_account(
+            &order_ai,
+            &ctx.accounts.cosigner.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+            AdminDeliveryOrderRecord::SPACE,
+            ctx.program_id,
+            order_seeds,
+            BoxMinterError::InvalidAdminOrderPda,
+            BoxMinterError::AdminOrderAlreadyExists,
+        )?;
+
+        let record = AdminDeliveryOrderRecord {
+            order_hash: args.order_hash,
+            variant_index: effective_variant_index,
+            quantity: args.quantity,
+            first_metadata_id,
+            receipt_owner,
+            created_slot: Clock::get()?.slot,
+            bump: order_bump,
+        };
+        record.try_serialize(&mut &mut order_ai.data.borrow_mut()[..])?;
+        mint_admin_order_receipt_cnfts(
+            &ctx.accounts.config,
+            &receipt_accounts,
+            first_metadata_id,
+            args.quantity,
+        )
+    }
+
     /// Mint compressed (Bubblegum v2) receipt cNFTs into the receipts tree, admin/cosigner-only.
     ///
     /// This is used by:
@@ -1883,32 +2102,6 @@ pub mod box_minter {
             ctx.accounts.cosigner.key(),
             cfg.admin,
             BoxMinterError::InvalidCosigner
-        );
-
-        require_keys_eq!(
-            ctx.accounts.bubblegum_program.key(),
-            BUBBLEGUM_PROGRAM_ID,
-            BoxMinterError::InvalidBubblegumProgram
-        );
-        require_keys_eq!(
-            ctx.accounts.log_wrapper.key(),
-            MPL_NOOP_PROGRAM_ID,
-            BoxMinterError::InvalidMplNoopProgram
-        );
-        require_keys_eq!(
-            ctx.accounts.compression_program.key(),
-            MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-            BoxMinterError::InvalidCompressionProgram
-        );
-        require_keys_eq!(
-            ctx.accounts.mpl_core_program.key(),
-            MPL_CORE_PROGRAM_ID,
-            BoxMinterError::InvalidMplCoreProgram
-        );
-        require_keys_eq!(
-            ctx.accounts.mpl_core_cpi_signer.key(),
-            MPL_CORE_CPI_SIGNER,
-            BoxMinterError::InvalidMplCoreCpiSigner
         );
 
         let box_ids = args.box_ids;
@@ -1953,106 +2146,11 @@ pub mod box_minter {
             }
         }
 
-        // Validate receipts tree + treeConfig PDA.
-        require_keys_eq!(
-            *ctx.accounts.merkle_tree.to_account_info().owner,
-            MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-            BoxMinterError::InvalidReceiptsMerkleTree
-        );
-        let (expected_tree_config, _) = Pubkey::find_program_address(
-            &[ctx.accounts.merkle_tree.key().as_ref()],
-            &BUBBLEGUM_PROGRAM_ID,
-        );
-        require_keys_eq!(
-            ctx.accounts.tree_config.key(),
-            expected_tree_config,
-            BoxMinterError::InvalidReceiptsTreeConfig
-        );
+        let receipt_accounts = ReceiptMintAccounts::from_mint_receipts(&ctx.accounts);
+        validate_receipt_mint_accounts(&receipt_accounts)?;
 
         let drop_base = cfg.uri_base.as_str();
-
-        // Build constant accounts once; only metadata bytes change per mint.
-        let cosigner = ctx.accounts.cosigner.to_account_info();
-        let user_ai = ctx.accounts.user.to_account_info();
-        let merkle_tree = ctx.accounts.merkle_tree.to_account_info();
-        let tree_config = ctx.accounts.tree_config.to_account_info();
-        let core_collection = ctx.accounts.core_collection.to_account_info();
-        let mpl_core_cpi_signer = ctx.accounts.mpl_core_cpi_signer.to_account_info();
-        let log_wrapper = ctx.accounts.log_wrapper.to_account_info();
-        let compression_program = ctx.accounts.compression_program.to_account_info();
-        let mpl_core_program = ctx.accounts.mpl_core_program.to_account_info();
-        let system_program = ctx.accounts.system_program.to_account_info();
-        let bubblegum_program = ctx.accounts.bubblegum_program.to_account_info();
-
-        let mut mint_ix = anchor_lang::solana_program::instruction::Instruction {
-            program_id: BUBBLEGUM_PROGRAM_ID,
-            accounts: vec![
-                // mintV2 accounts order (kinobi):
-                // 0 treeConfig (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    tree_config.key(),
-                    false,
-                ),
-                // 1 payer (writable signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new(cosigner.key(), true),
-                // 2 treeCreatorOrDelegate (signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cosigner.key(),
-                    true,
-                ),
-                // 3 collectionAuthority (signer)
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    cosigner.key(),
-                    true,
-                ),
-                // 4 leafOwner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    user_ai.key(),
-                    false,
-                ),
-                // 5 leafDelegate
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    user_ai.key(),
-                    false,
-                ),
-                // 6 merkleTree (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    merkle_tree.key(),
-                    false,
-                ),
-                // 7 coreCollection (writable)
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    core_collection.key(),
-                    false,
-                ),
-                // 8 mplCoreCpiSigner
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    mpl_core_cpi_signer.key(),
-                    false,
-                ),
-                // 9 logWrapper
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    log_wrapper.key(),
-                    false,
-                ),
-                // 10 compressionProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    compression_program.key(),
-                    false,
-                ),
-                // 11 mplCoreProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    mpl_core_program.key(),
-                    false,
-                ),
-                // 12 systemProgram
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    system_program.key(),
-                    false,
-                ),
-            ],
-            data: Vec::with_capacity(256),
-        };
+        let mut mint_cpi = new_receipt_mint_cpi(&receipt_accounts);
 
         let mut name_buf = String::with_capacity(48);
         let mut uri_buf = String::with_capacity(
@@ -2063,82 +2161,28 @@ pub mod box_minter {
                 + 16,
         );
 
-        // Helper closure to build + invoke a Bubblegum mintV2 for the current name/uri buffers.
-        let mut mint_one = |name: &str, uri: &str| -> Result<()> {
-            mint_ix.data.clear();
-            mint_ix.data.extend_from_slice(&IX_BUBBLEGUM_MINT_V2);
-            // MetadataArgsV2 (borsh):
-            // name, symbol, uri, sellerFeeBasisPoints(u16), primarySaleHappened(bool), isMutable(bool),
-            // tokenStandard: Option<TokenStandard> (Some(NonFungible=0)),
-            // creators: Vec<Creator> (empty),
-            // collection: Option<Pubkey> (Some(coreCollection))
-            borsh_push_string(&mut mint_ix.data, name)?;
-            borsh_push_string(&mut mint_ix.data, "")?;
-            borsh_push_string(&mut mint_ix.data, uri)?;
-            mint_ix.data.extend_from_slice(&(0u16).to_le_bytes()); // sellerFeeBasisPoints
-            mint_ix.data.push(0u8); // primarySaleHappened=false
-            mint_ix.data.push(1u8); // isMutable=true
-            mint_ix.data.push(1u8); // tokenStandard: Some
-            mint_ix.data.push(0u8); // NonFungible enum index
-            mint_ix.data.extend_from_slice(&(0u32).to_le_bytes()); // creators vec len=0
-            mint_ix.data.push(1u8); // collection: Some
-            mint_ix
-                .data
-                .extend_from_slice(core_collection.key().as_ref());
-            // assetData: None
-            mint_ix.data.push(0u8);
-            // assetDataSchema: None
-            mint_ix.data.push(0u8);
-
-            // CPI: include the program account at the end (like SystemProgram CPIs).
-            invoke(
-                &mint_ix,
-                &[
-                    tree_config.clone(),
-                    cosigner.clone(),
-                    cosigner.clone(),
-                    cosigner.clone(),
-                    user_ai.clone(),
-                    user_ai.clone(),
-                    merkle_tree.clone(),
-                    core_collection.clone(),
-                    mpl_core_cpi_signer.clone(),
-                    log_wrapper.clone(),
-                    compression_program.clone(),
-                    mpl_core_program.clone(),
-                    system_program.clone(),
-                    bubblegum_program.clone(),
-                ],
-            )?;
-            Ok(())
-        };
-
         for box_id in box_ids.iter() {
-            name_buf.clear();
-            name_buf.push_str(RECEIPT_NAME_PREFIX);
-            append_label_and_id(&mut name_buf, &cfg.name_prefix, *box_id)?;
-
-            uri_buf.clear();
-            uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_PREFIX_RECEIPTS_BOXES);
-            write!(&mut uri_buf, "{}", *box_id)
-                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-            uri_buf.push_str(".json");
-            mint_one(&name_buf, &uri_buf)?;
+            build_receipt_name_and_uri(
+                &mut name_buf,
+                &mut uri_buf,
+                drop_base,
+                &cfg.name_prefix,
+                URI_PREFIX_RECEIPTS_BOXES,
+                *box_id,
+            )?;
+            invoke_receipt_mint_v2(&mut mint_cpi, cfg.core_collection, &name_buf, &uri_buf)?;
         }
 
         for dude_id in dude_ids.iter() {
-            name_buf.clear();
-            name_buf.push_str(RECEIPT_NAME_PREFIX);
-            append_label_and_id(&mut name_buf, &cfg.figure_name_prefix, *dude_id)?;
-
-            uri_buf.clear();
-            uri_buf.push_str(drop_base);
-            uri_buf.push_str(URI_PREFIX_RECEIPTS_FIGURES);
-            write!(&mut uri_buf, "{}", *dude_id)
-                .map_err(|_| error!(BoxMinterError::SerializationFailed))?;
-            uri_buf.push_str(".json");
-            mint_one(&name_buf, &uri_buf)?;
+            build_receipt_name_and_uri(
+                &mut name_buf,
+                &mut uri_buf,
+                drop_base,
+                &cfg.figure_name_prefix,
+                URI_PREFIX_RECEIPTS_FIGURES,
+                *dude_id,
+            )?;
+            invoke_receipt_mint_v2(&mut mint_cpi, cfg.core_collection, &name_buf, &uri_buf)?;
         }
 
         Ok(())
@@ -2188,6 +2232,14 @@ pub struct CloseDeliveryArgs {
 pub struct MintReceiptsArgs {
     pub box_ids: Vec<u32>,
     pub dude_ids: Vec<u16>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct AdminDeliverVariantOrderArgs {
+    pub order_hash: [u8; 32],
+    /// Ignored for non-variant drops.
+    pub variant_index: u8,
+    pub quantity: u8,
 }
 
 #[account]
@@ -2243,6 +2295,28 @@ impl DeliveryRecord {
         + 32 // payer
         + 8 // delivery_fee_lamports
         + 2; // item_count
+}
+
+#[account]
+pub struct AdminDeliveryOrderRecord {
+    pub order_hash: [u8; 32],
+    pub variant_index: u8,
+    pub quantity: u8,
+    pub first_metadata_id: u32,
+    pub receipt_owner: Pubkey,
+    pub created_slot: u64,
+    pub bump: u8,
+}
+
+impl AdminDeliveryOrderRecord {
+    pub const SPACE: usize = 8 // anchor account discriminator
+        + 32 // order_hash
+        + 1 // variant_index
+        + 1 // quantity
+        + 4 // first_metadata_id
+        + 32 // receipt_owner
+        + 8 // created_slot
+        + 1; // bump
 }
 
 impl BoxMinterConfig {
@@ -2406,7 +2480,10 @@ fn decode_pending_open_box_account(data: &[u8]) -> Result<PendingOpenBoxDecoded>
     let dudes_end = o
         .checked_add(dude_bytes)
         .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
-    require!(dudes_end <= data.len(), BoxMinterError::InvalidPendingRecord);
+    require!(
+        dudes_end <= data.len(),
+        BoxMinterError::InvalidPendingRecord
+    );
 
     let mut dudes = Vec::with_capacity(dude_count);
     for _ in 0..dude_count {
@@ -2416,7 +2493,9 @@ fn decode_pending_open_box_account(data: &[u8]) -> Result<PendingOpenBoxDecoded>
 
     let created_slot = read_u64_le(data, o)?;
     o += 8;
-    let bump = *data.get(o).ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
+    let bump = *data
+        .get(o)
+        .ok_or(error!(BoxMinterError::InvalidPendingRecord))?;
     o += 1;
 
     let config = if o == data.len() {
@@ -2530,6 +2609,8 @@ pub struct MintDiscountedBox<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    /// CHECK: Discount mint record PDA. The handler creates it on demand or loads the existing
+    /// program-owned record after validating the PDA seeds above.
     #[account(
         mut,
         seeds = [SEED_DISCOUNT_MINT, config.key().as_ref(), payer.key().as_ref()],
@@ -2690,6 +2771,58 @@ pub struct CloseDelivery<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AdminDeliverVariantOrder<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
+    pub config: Account<'info, BoxMinterConfig>,
+
+    /// Cloud-held signer (must match config.admin); pays for and authorizes the receipt mints.
+    #[account(mut, address = config.admin @ BoxMinterError::InvalidCosigner)]
+    pub cosigner: Signer<'info>,
+
+    /// CHECK: Buyer/admin wallet that receives the receipt cNFTs. The handler rejects the default
+    /// pubkey; Bubblegum only needs this account's key as leaf owner/delegate.
+    pub receipt_owner: UncheckedAccount<'info>,
+
+    /// CHECK: Admin order PDA for `[SEED_ADMIN_ORDER, config, order_hash]`. The handler validates
+    /// the canonical PDA/bump, then creates it only if it is uninitialized or a system-owned stub.
+    #[account(mut)]
+    pub admin_order: UncheckedAccount<'info>,
+
+    /// CHECK: Receipt cNFT Merkle tree (owned by MPL account compression program).
+    #[account(mut)]
+    pub merkle_tree: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum tree config PDA for `merkle_tree`.
+    #[account(mut)]
+    pub tree_config: UncheckedAccount<'info>,
+
+    /// CHECK: MPL-Core collection. Must match config.core_collection.
+    #[account(mut, address = config.core_collection)]
+    pub core_collection: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Bubblegum program.
+    pub bubblegum_program: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Noop program (Bubblegum v2 log wrapper).
+    #[account(address = MPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Account Compression program.
+    #[account(address = MPL_ACCOUNT_COMPRESSION_PROGRAM_ID)]
+    pub compression_program: UncheckedAccount<'info>,
+
+    /// CHECK: Metaplex Core program.
+    #[account(address = MPL_CORE_PROGRAM_ID)]
+    pub mpl_core_program: UncheckedAccount<'info>,
+
+    /// CHECK: Bubblegum -> MPL-Core CPI signer.
+    #[account(address = MPL_CORE_CPI_SIGNER)]
+    pub mpl_core_cpi_signer: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct MintReceipts<'info> {
     #[account(seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump)]
     pub config: Account<'info, BoxMinterConfig>,
@@ -2698,7 +2831,7 @@ pub struct MintReceipts<'info> {
     #[account(mut)]
     pub cosigner: Signer<'info>,
 
-    /// CHECK: User who will receive the dude receipt cNFTs.
+    /// CHECK: User who will receive the receipt cNFTs.
     pub user: UncheckedAccount<'info>,
 
     /// CHECK: Receipt cNFT Merkle tree (owned by MPL account compression program).
@@ -3067,6 +3200,14 @@ pub enum BoxMinterError {
     OpeningDisabled,
     #[msg("Invalid drop seed")]
     InvalidDropSeed,
+    #[msg("Invalid admin order PDA")]
+    InvalidAdminOrderPda,
+    #[msg("Admin order already exists")]
+    AdminOrderAlreadyExists,
+    #[msg("Invalid admin order")]
+    InvalidAdminOrder,
+    #[msg("Invalid receipt owner")]
+    InvalidReceiptOwner,
 }
 
 #[cfg(test)]
@@ -3088,7 +3229,7 @@ mod tests {
             name_prefix: "hoodie".to_string(),
             symbol: "hoodie".to_string(),
             uri_base: "https://assets.mons.link/drops/hoodie".to_string(),
-            started: false,
+            started: true,
             bump: 0,
             discount_mints_per_wallet: 1,
             figure_name_prefix: "hoodie".to_string(),
@@ -3098,6 +3239,16 @@ mod tests {
             mint_variant_next_ids: [1, 16, 31],
             drop_seed: [7u8; 32],
         }
+    }
+
+    fn test_standard_cfg() -> BoxMinterConfig {
+        let mut cfg = test_size_variant_cfg();
+        cfg.items_per_box = 2;
+        cfg.mint_variant_kind = MINT_VARIANT_KIND_NONE;
+        cfg.mint_variant_start_ids = [0; MINT_VARIANT_OPTION_COUNT];
+        cfg.mint_variant_end_ids = [0; MINT_VARIANT_OPTION_COUNT];
+        cfg.mint_variant_next_ids = [0; MINT_VARIANT_OPTION_COUNT];
+        cfg
     }
 
     #[test]
@@ -3136,6 +3287,221 @@ mod tests {
         let mut cfg = test_size_variant_cfg();
         cfg.mint_variant_next_ids[2] = 35;
         assert!(cfg.next_variant_metadata_id(2).is_err());
+    }
+
+    #[test]
+    fn admin_order_hash_must_be_nonzero() {
+        assert!(validate_admin_order_hash(&[0u8; 32]).is_err());
+        assert!(validate_admin_order_hash(&[9u8; 32]).is_ok());
+    }
+
+    #[test]
+    fn admin_order_pda_returns_canonical_bump() {
+        let program_id = Pubkey::new_unique();
+        let config = Pubkey::new_unique();
+        let order_hash = [9u8; 32];
+        let (canonical_order, canonical_bump) = Pubkey::find_program_address(
+            &[SEED_ADMIN_ORDER, config.as_ref(), order_hash.as_ref()],
+            &program_id,
+        );
+
+        assert_eq!(
+            validate_admin_order_pda(&program_id, &config, &order_hash, canonical_order).unwrap(),
+            canonical_bump
+        );
+
+        assert!(
+            validate_admin_order_pda(&program_id, &config, &order_hash, Pubkey::new_unique())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn admin_order_match_accepts_only_exact_retry() {
+        let receipt_owner = Pubkey::new_unique();
+        let args = AdminDeliverVariantOrderArgs {
+            order_hash: [9u8; 32],
+            variant_index: 1,
+            quantity: 2,
+        };
+        let record = AdminDeliveryOrderRecord {
+            order_hash: args.order_hash,
+            variant_index: args.variant_index,
+            quantity: args.quantity,
+            first_metadata_id: 16,
+            receipt_owner,
+            created_slot: 42,
+            bump: 251,
+        };
+
+        assert!(admin_order_is_valid_retry(
+            &record,
+            &args,
+            args.variant_index,
+            receipt_owner,
+            251
+        ));
+
+        let mut wrong_args = args.clone();
+        wrong_args.variant_index = 2;
+        assert!(!admin_order_is_valid_retry(
+            &record,
+            &wrong_args,
+            wrong_args.variant_index,
+            receipt_owner,
+            251
+        ));
+
+        wrong_args = args.clone();
+        wrong_args.quantity = 1;
+        assert!(!admin_order_is_valid_retry(
+            &record,
+            &wrong_args,
+            args.variant_index,
+            receipt_owner,
+            251
+        ));
+
+        wrong_args = args.clone();
+        wrong_args.order_hash = [8u8; 32];
+        assert!(!admin_order_is_valid_retry(
+            &record,
+            &wrong_args,
+            args.variant_index,
+            receipt_owner,
+            251
+        ));
+        assert!(!admin_order_is_valid_retry(
+            &record,
+            &args,
+            args.variant_index,
+            Pubkey::new_unique(),
+            251
+        ));
+        assert!(!admin_order_is_valid_retry(
+            &record,
+            &args,
+            args.variant_index,
+            receipt_owner,
+            250
+        ));
+
+        let invalid_record = AdminDeliveryOrderRecord {
+            first_metadata_id: 0,
+            ..record
+        };
+        assert!(!admin_order_is_valid_retry(
+            &invalid_record,
+            &args,
+            args.variant_index,
+            receipt_owner,
+            251
+        ));
+
+        let zero_quantity_args = AdminDeliverVariantOrderArgs {
+            order_hash: [7u8; 32],
+            variant_index: 1,
+            quantity: 0,
+        };
+        let zero_quantity_record = AdminDeliveryOrderRecord {
+            order_hash: zero_quantity_args.order_hash,
+            variant_index: zero_quantity_args.variant_index,
+            quantity: zero_quantity_args.quantity,
+            first_metadata_id: 16,
+            receipt_owner,
+            created_slot: 42,
+            bump: 251,
+        };
+        assert!(!admin_order_is_valid_retry(
+            &zero_quantity_record,
+            &zero_quantity_args,
+            zero_quantity_args.variant_index,
+            receipt_owner,
+            251
+        ));
+    }
+
+    #[test]
+    fn admin_order_retry_uses_normalized_variant_for_non_variant_drop() {
+        let receipt_owner = Pubkey::new_unique();
+        let args = AdminDeliverVariantOrderArgs {
+            order_hash: [9u8; 32],
+            variant_index: 2,
+            quantity: 1,
+        };
+        let record = AdminDeliveryOrderRecord {
+            order_hash: args.order_hash,
+            variant_index: 0,
+            quantity: args.quantity,
+            first_metadata_id: 7,
+            receipt_owner,
+            created_slot: 42,
+            bump: 251,
+        };
+
+        assert!(admin_order_is_valid_retry(
+            &record,
+            &args,
+            0,
+            receipt_owner,
+            251
+        ));
+    }
+
+    #[test]
+    fn admin_variant_delivery_reserves_next_size_id() {
+        let mut cfg = test_size_variant_cfg();
+
+        let id = reserve_admin_delivery_metadata_ids(&mut cfg, 1, 2).unwrap();
+
+        assert_eq!(id, 16);
+        assert_eq!(cfg.minted, 2);
+        assert_eq!(cfg.mint_variant_next_ids, [1, 18, 31]);
+    }
+
+    #[test]
+    fn admin_variant_delivery_rejects_sold_out_variant() {
+        let mut cfg = test_size_variant_cfg();
+        cfg.mint_variant_next_ids[0] = 15;
+
+        assert!(reserve_admin_delivery_metadata_ids(&mut cfg, 0, 2).is_err());
+        assert_eq!(cfg.minted, 0);
+        assert_eq!(cfg.mint_variant_next_ids[0], 15);
+    }
+
+    #[test]
+    fn admin_variant_delivery_requires_valid_quantity() {
+        let mut cfg = test_size_variant_cfg();
+        assert!(reserve_admin_delivery_metadata_ids(&mut cfg, 0, 0).is_err());
+
+        cfg.max_per_tx = 1;
+        assert!(reserve_admin_delivery_metadata_ids(&mut cfg, 0, 2).is_err());
+
+        let mut boxed_variant_cfg = test_size_variant_cfg();
+        boxed_variant_cfg.items_per_box = 1;
+        assert!(reserve_admin_delivery_metadata_ids(&mut boxed_variant_cfg, 0, 1).is_ok());
+    }
+
+    #[test]
+    fn admin_delivery_reserves_standard_ids_for_non_variant_drop() {
+        let mut cfg = test_standard_cfg();
+        cfg.minted = 4;
+
+        let id = reserve_admin_delivery_metadata_ids(&mut cfg, 2, 3).unwrap();
+
+        assert_eq!(id, 5);
+        assert_eq!(cfg.minted, 7);
+        assert_eq!(cfg.mint_variant_next_ids, [0; MINT_VARIANT_OPTION_COUNT]);
+    }
+
+    #[test]
+    fn admin_variant_delivery_requires_started_drop() {
+        let mut cfg = test_size_variant_cfg();
+        cfg.started = false;
+
+        assert!(reserve_admin_delivery_metadata_ids(&mut cfg, 1, 2).is_err());
+        assert_eq!(cfg.minted, 0);
+        assert_eq!(cfg.mint_variant_next_ids, [1, 16, 31]);
     }
 
     #[test]
@@ -3199,14 +3565,22 @@ mod tests {
     fn metadata_base_validation_rejects_legacy_prefixes_and_json_files() {
         assert!(validate_metadata_base("banana").is_err());
         assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/boxes").is_err());
-        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/figures").is_err());
-        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/json/receipts").is_err());
-        assert!(validate_metadata_base("https://assets.example.com/drops/lsb/collection.json").is_err());
+        assert!(
+            validate_metadata_base("https://assets.example.com/drops/lsb/json/figures").is_err()
+        );
+        assert!(
+            validate_metadata_base("https://assets.example.com/drops/lsb/json/receipts").is_err()
+        );
+        assert!(
+            validate_metadata_base("https://assets.example.com/drops/lsb/collection.json").is_err()
+        );
     }
 
     #[test]
     fn metadata_base_validation_rejects_query_strings_and_fragments() {
-        assert!(validate_metadata_base("https://assets.example.com/drops/lsb?filename=drop").is_err());
+        assert!(
+            validate_metadata_base("https://assets.example.com/drops/lsb?filename=drop").is_err()
+        );
         assert!(validate_metadata_base("https://assets.example.com/drops/lsb#collection").is_err());
         assert!(validate_metadata_base("ipfs://bafycompactdrop?filename=drop").is_err());
         assert!(validate_metadata_base("ipfs://bafycompactdrop#collection").is_err());
@@ -3273,7 +3647,10 @@ mod tests {
 
     #[test]
     fn pending_open_space_includes_config_pubkey() {
-        assert_eq!(PendingOpenBox::space(2), 8 + 32 + 32 + 4 + 32 * 2 + 8 + 1 + 32);
+        assert_eq!(
+            PendingOpenBox::space(2),
+            8 + 32 + 32 + 4 + 32 * 2 + 8 + 1 + 32
+        );
     }
 
     #[test]
