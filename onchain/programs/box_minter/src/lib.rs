@@ -132,6 +132,19 @@ fn validate_metadata_base(drop_base: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_mint_prices(price_lamports: u64, discount_price_lamports: u64) -> Result<()> {
+    require!(price_lamports > 0, BoxMinterError::InvalidPrice);
+    require!(
+        discount_price_lamports > 0,
+        BoxMinterError::InvalidDiscountPrice
+    );
+    require!(
+        discount_price_lamports <= price_lamports,
+        BoxMinterError::InvalidDiscountPrice
+    );
+    Ok(())
+}
+
 struct MintBoxesInnerAccounts<'info> {
     payer: AccountInfo<'info>,
     treasury: AccountInfo<'info>,
@@ -1035,15 +1048,7 @@ pub mod box_minter {
             max_figure_id <= u16::MAX as u64,
             BoxMinterError::InvalidItemsPerBox
         );
-        require!(args.price_lamports > 0, BoxMinterError::InvalidPrice);
-        require!(
-            args.discount_price_lamports > 0,
-            BoxMinterError::InvalidDiscountPrice
-        );
-        require!(
-            args.discount_price_lamports <= args.price_lamports,
-            BoxMinterError::InvalidDiscountPrice
-        );
+        validate_mint_prices(args.price_lamports, args.discount_price_lamports)?;
         require!(
             args.mint_variant_kind == MINT_VARIANT_KIND_NONE
                 || args.mint_variant_kind == MINT_VARIANT_KIND_SIZE,
@@ -1168,6 +1173,19 @@ pub mod box_minter {
     pub fn set_treasury(ctx: Context<SetTreasury>, treasury: Pubkey) -> Result<()> {
         let cfg = &mut ctx.accounts.config;
         cfg.treasury = treasury;
+        Ok(())
+    }
+
+    pub fn set_mint_prices(
+        ctx: Context<SetMintPrices>,
+        price_lamports: u64,
+        discount_price_lamports: u64,
+    ) -> Result<()> {
+        validate_mint_prices(price_lamports, discount_price_lamports)?;
+
+        let cfg = &mut ctx.accounts.config;
+        cfg.price_lamports = price_lamports;
+        cfg.discount_price_lamports = discount_price_lamports;
         Ok(())
     }
 
@@ -2573,6 +2591,13 @@ pub struct SetTreasury<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetMintPrices<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct StartMint<'info> {
     #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
@@ -3249,6 +3274,15 @@ mod tests {
         cfg.mint_variant_end_ids = [0; MINT_VARIANT_OPTION_COUNT];
         cfg.mint_variant_next_ids = [0; MINT_VARIANT_OPTION_COUNT];
         cfg
+    }
+
+    #[test]
+    fn mint_price_validation_rejects_zero_or_inverted_discount() {
+        assert!(validate_mint_prices(1, 1).is_ok());
+        assert!(validate_mint_prices(2, 1).is_ok());
+        assert!(validate_mint_prices(0, 1).is_err());
+        assert!(validate_mint_prices(1, 0).is_err());
+        assert!(validate_mint_prices(1, 2).is_err());
     }
 
     #[test]
