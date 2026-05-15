@@ -47,9 +47,17 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
 - `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; used by devnet test Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`
+- `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe endpoint signing secret for `stripeWebhook`)
+  - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
+- `STRIPE_RETURN_URL_ALLOWED_ORIGINS` (optional comma/space-separated http(s) origins for Stripe success/cancel return URLs beyond `https://mons.shop`, `https://*.mons.shop`, and localhost; useful for preview hosts)
+- `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
+  - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
+  - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
 
 Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
+
+Stripe test Checkout only performs a pre-payment availability check; it intentionally does not reserve on-chain supply before payment. If supply sells out before webhook fulfillment, the fulfillment queue/session is marked failed with `manualRefundReviewRequired` and the Stripe `sessionId`/`stripeCheckoutSessionId` can be used for a manual refund in Stripe.
 
 ### On-chain + address helpers
 - Deploy box minter (program + MPL Core collection + config):

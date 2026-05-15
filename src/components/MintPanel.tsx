@@ -32,7 +32,7 @@ interface MintPanelProps {
   discountMaxQuantity?: number;
   onDiscountClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
   discountBusy?: boolean;
-  onStripePaymentClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
+  onStripePaymentClick?: (variantKey?: string) => void | Promise<void>;
   stripePaymentVisible?: boolean;
   stripePaymentBusy?: boolean;
   mintSelection?: MintSelectionConfig;
@@ -52,6 +52,7 @@ type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: num
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const LAMPORTS_PER_SOL_UI = 1_000_000_000;
+const STRIPE_CHECKOUT_QUANTITY = 1;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -332,10 +333,10 @@ export function MintPanel({
       setSizeBlinkToken((prev) => prev + 1);
       return;
     }
-    if (quantity < 1 || quantity > maxSelectable) return;
+    if (quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported) return;
     setStripePaymentSubmitPending(true);
     try {
-      await onStripePaymentClick(quantity, selectedSize || undefined);
+      await onStripePaymentClick(selectedSize || undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
       if (onError) onError(message);
@@ -361,6 +362,7 @@ export function MintPanel({
   const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
   const showDiscountButton = Boolean(discountVisible) && !soldOut && !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick) && !soldOut;
+  const stripePaymentQuantitySupported = quantity === STRIPE_CHECKOUT_QUANTITY;
   const discountText =
     discountLabel || `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`;
   const ctaStackClassName = showStripePaymentButton
@@ -588,7 +590,8 @@ export function MintPanel({
                   onClick={() => {
                     void handleStripePaymentClick();
                   }}
-                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
+                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported}
+                  title={stripePaymentQuantitySupported ? undefined : 'Stripe checkout supports one item at a time'}
                 >
                   {stripePaymentPending ? (
                     <span className="mint-panel__stripe-text">Opening Stripe…</span>

@@ -834,7 +834,6 @@ export async function removeAddress(addressId: string): Promise<{ id: string; re
 
 type TestStripeCheckoutSessionRequest = {
   dropId: string;
-  quantity?: number;
   variantKey?: string;
   returnUrl?: string;
 };
@@ -850,9 +849,6 @@ export async function createTestStripeCheckoutSession(
   const payload: TestStripeCheckoutSessionRequest = {
     dropId: args.dropId,
   };
-  if (typeof args.quantity === 'number' && Number.isFinite(args.quantity)) {
-    payload.quantity = Math.floor(args.quantity);
-  }
   if (typeof args.variantKey === 'string' && args.variantKey.trim()) {
     payload.variantKey = args.variantKey.trim();
   }

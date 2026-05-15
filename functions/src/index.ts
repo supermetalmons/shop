@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldPath, FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
-import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
-import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
+import { onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onCall, onRequest, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
 import {
@@ -18,6 +18,7 @@ import {
 import bs58 from 'bs58';
 import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
+import type Stripe from 'stripe';
 import type { Resend as ResendClient } from 'resend';
 import { createHash, randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
@@ -33,6 +34,31 @@ import {
   metadataKindFromUri,
   selectMetadataUri,
 } from './dropMetadataUri.js';
+import {
+  dropBoxAssignmentPath,
+  dropDeliveryOrderPath,
+  dropDeliveryOrdersCollectionPath,
+  dropDudeAssignmentPath,
+  dropDudePoolPath,
+} from './dropPaths.js';
+import { normalizeCountryCode } from './normalizers.js';
+import {
+  resolveMintSelectionVariantIndex,
+  shouldProcessStripeCheckoutFulfillmentWrite,
+} from './stripeCheckout/contract.js';
+import { parseRequest } from './request.js';
+import {
+  createTestStripeCheckoutSessionForRequest,
+  handleStripeWebhookEvent,
+  processStripeCheckoutFulfillmentDocument,
+  requireStripeCheckoutSessionId,
+  stripeWebhookRawBody,
+  stripeWebhookSignature,
+  type StripeCheckoutFlowDeps,
+  type StripeCheckoutOnchainConfig,
+} from './stripeCheckout/service.js';
+import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
+import { toMillisMaybe } from './time.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -42,6 +68,7 @@ const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
+const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -342,30 +369,6 @@ function requireDropId(rawDropId: unknown): string {
   const dropId = normalizeDropId(rawDropId);
   if (!DROP_RUNTIMES[dropId]) throw new HttpsError('invalid-argument', `Unsupported dropId: ${dropId}`);
   return dropId;
-}
-
-function dropRootPath(dropId: string): string {
-  return `drops/${dropId}`;
-}
-
-function dropBoxAssignmentPath(dropId: string, boxAssetId: string): string {
-  return `${dropRootPath(dropId)}/boxAssignments/${boxAssetId}`;
-}
-
-function dropDudeAssignmentPath(dropId: string, dudeId: number): string {
-  return `${dropRootPath(dropId)}/dudeAssignments/${dudeId}`;
-}
-
-function dropDudePoolPath(dropId: string): string {
-  return `${dropRootPath(dropId)}/meta/dudePool`;
-}
-
-function dropDeliveryOrdersCollectionPath(dropId: string): string {
-  return `${dropRootPath(dropId)}/deliveryOrders`;
-}
-
-function dropDeliveryOrderPath(dropId: string, deliveryId: number): string {
-  return `${dropDeliveryOrdersCollectionPath(dropId)}/${deliveryId}`;
 }
 
 function normalizeWallet(wallet: string): string {
@@ -679,35 +682,36 @@ function decryptAddressPayload(payload: string): string | null {
   }
 }
 
+function encryptAddressPayloadForFulfillment(plaintext: string): { encrypted: string; hint: string } | null {
+  try {
+    const messageText = String(plaintext || '').trim();
+    if (!messageText) return null;
+    const secret = addressDecryptKeyMaybe();
+    if (!secret) {
+      throw new HttpsError('unavailable', 'ADDRESS_DECRYPTION_SECRET is not configured for Stripe fulfillment');
+    }
+    const recipient = nacl.box.keyPair.fromSecretKey(secret).publicKey;
+    const ephemeral = nacl.box.keyPair();
+    const nonce = nacl.randomBytes(nacl.box.nonceLength);
+    const message = new TextEncoder().encode(messageText);
+    const cipher = nacl.box(message, nonce, recipient, ephemeral.secretKey);
+    const encrypted = [nonce, ephemeral.publicKey, cipher]
+      .map((arr) => Buffer.from(arr).toString('base64'))
+      .join('.');
+    const hint = messageText.slice(0, 1) + '...' + messageText.slice(-2);
+    return { encrypted, hint };
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    console.warn('[mons/functions] failed to encrypt webhook shipping address', summarizeError(err));
+    throw new HttpsError('unavailable', 'Stripe checkout shipping address could not be encrypted', {
+      error: summarizeError(err),
+    });
+  }
+}
+
 function ensureAuthorityKeys() {
   // Prepared transactions require a server-side cosigner signature.
   cosigner();
-}
-
-function parseRequest<T>(schema: z.ZodType<T>, data: unknown): T {
-  const parsed = schema.safeParse(data);
-  if (!parsed.success) {
-    const details = parsed.error.issues
-      .map((issue) => `${issue.path.join('.') || 'request'}: ${issue.message}`)
-      .join('; ');
-    throw new HttpsError('invalid-argument', details || 'Invalid request payload');
-  }
-  return parsed.data;
-}
-
-type StripeCheckoutSessionResponse = {
-  id: string;
-  url: string;
-};
-
-class StripeRequestError extends Error {
-  status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = 'StripeRequestError';
-    this.status = status;
-  }
 }
 
 function secretParamValueMaybe(secret: { value: () => string }): string {
@@ -732,164 +736,10 @@ function stripeApiKeys(): string[] {
   return Array.from(new Set(values));
 }
 
-function stripeCheckoutUnitAmountCents(): number {
-  const parsed = Math.floor(Number(process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS));
-  if (Number.isFinite(parsed) && parsed >= 50 && parsed <= 99_999_999) return parsed;
-  return 100;
-}
-
-const STRIPE_SHIPPING_ALLOWED_COUNTRIES = [
-  'AR',
-  'AM',
-  'AU',
-  'AT',
-  'BE',
-  'BR',
-  'BG',
-  'CA',
-  'CL',
-  'CN',
-  'CO',
-  'CR',
-  'HR',
-  'CY',
-  'CZ',
-  'DK',
-  'DO',
-  'EG',
-  'EE',
-  'FI',
-  'FR',
-  'DE',
-  'GR',
-  'HK',
-  'HU',
-  'IS',
-  'IN',
-  'ID',
-  'IE',
-  'IL',
-  'IT',
-  'JP',
-  'KE',
-  'LV',
-  'LT',
-  'LU',
-  'MY',
-  'MX',
-  'MA',
-  'NL',
-  'NZ',
-  'NG',
-  'NO',
-  'PK',
-  'PE',
-  'PH',
-  'PL',
-  'PT',
-  'RO',
-  'SA',
-  'SG',
-  'SK',
-  'SI',
-  'ZA',
-  'KR',
-  'ES',
-  'SE',
-  'CH',
-  'TW',
-  'TH',
-  'TR',
-  'UA',
-  'AE',
-  'GB',
-  'US',
-  'VN',
-];
-
-function appendStripeShippingCollectionParams(params: URLSearchParams): void {
-  STRIPE_SHIPPING_ALLOWED_COUNTRIES.forEach((country, index) => {
-    params.set(`shipping_address_collection[allowed_countries][${index}]`, country);
-  });
-  params.set('phone_number_collection[enabled]', 'true');
-}
-
-function requestOrigin(request: CallableReq<any>): string {
-  const rawOrigin = request.rawRequest?.headers?.origin;
-  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  return typeof origin === 'string' ? origin.trim() : '';
-}
-
-function checkoutReturnUrl(request: CallableReq<any>, rawReturnUrl: string | undefined, status: 'success' | 'cancel'): string {
-  const origin = requestOrigin(request);
-  const candidate = String(rawReturnUrl || origin || 'https://mons.shop').trim();
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    throw new HttpsError('invalid-argument', 'Invalid returnUrl');
-  }
-
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new HttpsError('invalid-argument', 'returnUrl must be an http(s) URL');
-  }
-  if (origin) {
-    let parsedOrigin: URL;
-    try {
-      parsedOrigin = new URL(origin);
-    } catch {
-      throw new HttpsError('invalid-argument', 'Invalid request origin');
-    }
-    if (parsed.origin !== parsedOrigin.origin) {
-      throw new HttpsError('invalid-argument', 'returnUrl origin mismatch');
-    }
-  }
-
-  parsed.searchParams.set('stripe_checkout', status);
-  parsed.searchParams.delete('session_id');
-  if (status === 'success') {
-    parsed.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
-  }
-  return parsed.toString().replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
-}
-
-function normalizeStripeVariantKey(dropRuntime: DropRuntime, variantKey: string | undefined): string | undefined {
-  const value = String(variantKey || '').trim();
-  if (!value) return undefined;
-  const selection = dropRuntime.config.mintSelection;
-  if (selection?.kind === 'size') {
-    const option = selection.options.find((entry) => entry.key === value);
-    if (!option) throw new HttpsError('invalid-argument', 'Invalid variantKey');
-    return option.key;
-  }
-  return value.slice(0, 64);
-}
-
-function stripeCheckoutProductName(dropRuntime: DropRuntime, variantKey?: string): string {
-  const collectionName = dropRuntime.config.collectionName || dropRuntime.dropId;
-  const itemName = dropRuntime.config.namePrefix || 'item';
-  const variantSuffix = variantKey ? ` ${variantKey}` : '';
-  return `${collectionName} test ${itemName}${variantSuffix}`.slice(0, 200);
-}
-
-async function createStripeCheckoutSession(params: URLSearchParams, apiKey: string): Promise<StripeCheckoutSessionResponse> {
-  const resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: params.toString(),
-  });
-  const body = await resp.json().catch(() => null) as any;
-  if (!resp.ok) {
-    const message = typeof body?.error?.message === 'string' ? body.error.message : `Stripe request failed (${resp.status})`;
-    throw new StripeRequestError(message, resp.status);
-  }
-  if (typeof body?.id !== 'string' || typeof body?.url !== 'string') {
-    throw new StripeRequestError('Stripe response did not include a checkout URL', resp.status);
-  }
-  return { id: body.id, url: body.url };
+function stripeWebhookEndpointSecret(): string {
+  const secret = envOrSecretValue('STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET);
+  if (!secret) throw new HttpsError('failed-precondition', 'Stripe webhook secret is not configured.');
+  return secret;
 }
 
 type ParsedSolanaSignInMessage = {
@@ -1161,6 +1011,21 @@ function txErrLogs(err: unknown): string[] {
   return Array.isArray(logs) ? logs.map((l) => String(l)) : [];
 }
 
+function transactionPreflightError(label: string, signature: string, err: unknown, logs: string[]): HttpsError {
+  const message = txErrMessage(err);
+  let code: 'aborted' | 'failed-precondition' | 'unavailable' = 'failed-precondition';
+  if (looksLikeBlockhashError(message) || looksLikeAccountInUseError(message, logs)) {
+    code = 'aborted';
+  } else if (looksLikeRateLimitOrRpcError(message)) {
+    code = 'unavailable';
+  }
+  return new HttpsError(code, `${label} transaction preflight failed`, {
+    signature,
+    lastError: message,
+    lastLogs: logs.slice(0, 80),
+  });
+}
+
 function looksLikeComputeLimitError(message: string, logs: string[]) {
   const haystack = `${message}\n${logs.join('\n')}`.toLowerCase();
   return (
@@ -1276,7 +1141,7 @@ async function sendAndConfirmSignedTx(
   if (sendErr) {
     const logs = txErrLogs(sendErr);
     // If preflight simulation produced logs, we can treat it as a deterministic failure (not "maybe submitted").
-    if (logs.length) throw sendErr;
+    if (logs.length) throw transactionPreflightError(label, sig, sendErr, logs);
 
     // Unclear if it was submitted; wait briefly for it to land anyway.
     const maybe = await waitForSignature(conn, sig, { timeoutMs: 12_000, pollMs: TX_CONFIRM_POLL_MS });
@@ -1314,12 +1179,15 @@ function assertConfiguredPublicKey(key: PublicKey, label: string) {
 }
 
 const ONCHAIN_CONFIG_CHECK_TTL_MS = 5 * 60 * 1000;
-const onchainConfigCheckByDrop = new Map<string, { lastCheckedMs: number; ok: boolean }>();
+type OnchainConfigCheck =
+  | { lastCheckedMs: number; ok: false }
+  | { lastCheckedMs: number; ok: true; config: DecodedBoxMinterConfig };
+const onchainConfigCheckByDrop = new Map<string, OnchainConfigCheck>();
 
-async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) {
+async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false): Promise<DecodedBoxMinterConfig> {
   const now = Date.now();
   const cached = onchainConfigCheckByDrop.get(dropRuntime.dropId);
-  if (!force && cached?.ok && now - cached.lastCheckedMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return;
+  if (!force && cached?.ok && now - cached.lastCheckedMs < ONCHAIN_CONFIG_CHECK_TTL_MS) return cached.config;
   onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: false });
 
   ensureAuthorityKeys();
@@ -1427,7 +1295,8 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false) 
     );
   }
 
-  onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true });
+  onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true, config: decoded });
+  return decoded;
 }
 
 function parseSignature(sig: number[] | string) {
@@ -2010,9 +1879,14 @@ const BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS =
 const BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS = BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS + 1;
 const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT = BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS + 1;
 const BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT + 4 + 12;
+const MINT_VARIANT_KIND_NONE = 0;
+const MINT_VARIANT_KIND_SIZE = 1;
+const MINT_VARIANT_OPTION_COUNT = 3;
 const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
-  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * 3 * 3;
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
 const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED = BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
+
+type MintVariantTuple = [number, number, number];
 
 type DecodedBoxMinterConfig = {
   admin: PublicKey;
@@ -2021,7 +1895,13 @@ type DecodedBoxMinterConfig = {
   maxSupply: number;
   maxPerTx: number;
   itemsPerBox: number;
+  minted: number;
+  started: boolean;
   discountMintsPerWallet: number;
+  mintVariantKind: number;
+  mintVariantStartIds: MintVariantTuple;
+  mintVariantEndIds: MintVariantTuple;
+  mintVariantNextIds: MintVariantTuple;
   uriBase: string;
   dropSeed?: Buffer;
 };
@@ -2045,12 +1925,14 @@ function readBorshString(data: Buffer, offset: number): { value: string; next: n
   return { value: data.subarray(start, end).toString('utf8'), next: end };
 }
 
-function readU32Tuple(data: Buffer, offset: number): { next: number } {
+function readU32Tuple(data: Buffer, offset: number): { value: MintVariantTuple; next: number } {
+  const value: MintVariantTuple = [0, 0, 0];
   let next = offset;
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < MINT_VARIANT_OPTION_COUNT; i += 1) {
+    value[i] = data.readUInt32LE(next);
     next += 4;
   }
-  return { next };
+  return { value, next };
 }
 
 function hasAnyNonZeroByte(data: Uint8Array): boolean {
@@ -2108,12 +1990,14 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     itemsPerBox = buf.readUInt8(o);
     o += 1;
   }
-  o += 4; // minted
+  const minted = buf.readUInt32LE(o);
+  o += 4;
   o = readBorshString(buf, o).next;
   o = readBorshString(buf, o).next;
   const uriBase = readBorshString(buf, o);
   o = uriBase.next;
-  o += 1; // started
+  const started = Boolean(buf[o]);
+  o += 1;
   o += 1; // bump
   let discountMintsPerWallet = 1;
   if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT) {
@@ -2123,15 +2007,26 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX) {
     o = readBorshString(buf, o).next; // figureNamePrefix
   }
+  let mintVariantKind = MINT_VARIANT_KIND_NONE;
+  let mintVariantStartIds: MintVariantTuple = [0, 0, 0];
+  let mintVariantEndIds: MintVariantTuple = [0, 0, 0];
+  let mintVariantNextIds: MintVariantTuple = [0, 0, 0];
   if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS) {
-    const mintVariantBytes = 1 + 4 * 3 * 3;
+    const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
     if (o + mintVariantBytes > buf.length) {
       throw new HttpsError('failed-precondition', 'Box minter config variant data is truncated');
     }
-    o += 1; // mintVariantKind
-    o = readU32Tuple(buf, o).next;
-    o = readU32Tuple(buf, o).next;
-    o = readU32Tuple(buf, o).next;
+    mintVariantKind = buf[o] ?? MINT_VARIANT_KIND_NONE;
+    o += 1;
+    const startIds = readU32Tuple(buf, o);
+    mintVariantStartIds = startIds.value;
+    o = startIds.next;
+    const endIds = readU32Tuple(buf, o);
+    mintVariantEndIds = endIds.value;
+    o = endIds.next;
+    const nextIds = readU32Tuple(buf, o);
+    mintVariantNextIds = nextIds.value;
+    o = nextIds.next;
   }
   const dropSeed =
     buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED ? decodeOptionalTrailingDropSeed(buf, o) : undefined;
@@ -2147,7 +2042,13 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     maxSupply,
     maxPerTx,
     itemsPerBox,
+    minted,
+    started,
     discountMintsPerWallet,
+    mintVariantKind,
+    mintVariantStartIds,
+    mintVariantEndIds,
+    mintVariantNextIds,
     uriBase: uriBase.value,
     ...(dropSeed ? { dropSeed } : {}),
   };
@@ -2172,6 +2073,118 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
     );
   }
   return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
+}
+
+function requireStripeCheckoutVariantAvailable(params: {
+  dropRuntime: DropRuntime;
+  cfg: DecodedBoxMinterConfig;
+  variantKey: string;
+}): void {
+  const { dropRuntime, cfg, variantKey } = params;
+  if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox)) {
+    throw new HttpsError('failed-precondition', 'Stripe checkout is only available for direct-delivery drops.');
+  }
+  if (!cfg.started) {
+    throw new HttpsError('failed-precondition', 'Mint has not started.');
+  }
+  if (cfg.mintVariantKind !== MINT_VARIANT_KIND_SIZE) {
+    throw new HttpsError('failed-precondition', 'Stripe checkout requires on-chain size variant minting.');
+  }
+
+  let variantIndex: number;
+  try {
+    variantIndex = resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
+  }
+  if (variantIndex < 0 || variantIndex >= MINT_VARIANT_OPTION_COUNT) {
+    throw new HttpsError('invalid-argument', 'Invalid size variant.');
+  }
+
+  const option = dropRuntime.config.mintSelection?.options?.[variantIndex];
+  const startId = cfg.mintVariantStartIds[variantIndex];
+  const endId = cfg.mintVariantEndIds[variantIndex];
+  if (!option || option.startId !== startId || option.endId !== endId) {
+    throw new HttpsError('failed-precondition', 'Drop mint selection is out of sync with on-chain variant ranges.');
+  }
+  if (cfg.minted + 1 > cfg.maxSupply) {
+    throw new HttpsError('failed-precondition', 'Mint is sold out.');
+  }
+
+  const nextId = cfg.mintVariantNextIds[variantIndex];
+  if (nextId < startId) {
+    throw new HttpsError('failed-precondition', 'On-chain size variant state is invalid.');
+  }
+  if (nextId > endId) {
+    throw new HttpsError('failed-precondition', 'Selected size is sold out.');
+  }
+}
+
+function requireStripeCheckoutFulfillmentPrerequisites(cfg: DecodedBoxMinterConfig): void {
+  let signer: Keypair;
+  try {
+    signer = cosigner();
+  } catch (err) {
+    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment', {
+      error: summarizeError(err),
+    });
+  }
+  if (!signer.publicKey.equals(cfg.admin)) {
+    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
+      expectedAdmin: cfg.admin.toBase58(),
+      cosigner: signer.publicKey.toBase58(),
+    });
+  }
+  if (!addressDecryptKeyMaybe()) {
+    throw new HttpsError(
+      'failed-precondition',
+      'ADDRESS_DECRYPTION_SECRET is not configured correctly for Stripe checkout fulfillment',
+    );
+  }
+}
+
+function requireStripeCheckoutCollectionMatchesConfig(
+  dropRuntime: DropRuntime,
+  cfg: DecodedBoxMinterConfig,
+  code: 'failed-precondition' | 'unavailable' = 'failed-precondition',
+): void {
+  if (dropRuntime.collectionMint.equals(cfg.coreCollection)) return;
+  throw new HttpsError(code, 'COLLECTION_MINT does not match on-chain config', {
+    configured: dropRuntime.collectionMint.toBase58(),
+    onchain: cfg.coreCollection.toBase58(),
+    dropId: dropRuntime.dropId,
+  });
+}
+
+function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBoxMinterConfig & StripeCheckoutOnchainConfig> {
+  return {
+    requireDropId,
+    getDropRuntime,
+    connection,
+    fetchCheckoutConfig: fetchDecodedBoxMinterConfigAccount,
+    ensureOnchainCoreConfig,
+    requireStripeCheckoutVariantAvailable,
+    requireStripeCheckoutFulfillmentPrerequisites,
+    requireStripeCheckoutCollectionMatchesConfig,
+    cosigner,
+    encryptAddress: encryptAddressPayloadForFulfillment,
+    normalizeCountryCode,
+    buildTx,
+    sendAndConfirmSignedTx,
+    withTimeout,
+    isAlreadyExistsError: isGrpcAlreadyExists,
+    summarizeError,
+    programs: {
+      bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
+      mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
+      mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+      mplCoreProgramId: MPL_CORE_PROGRAM_ID,
+      mplCoreCpiSigner: MPL_CORE_CPI_SIGNER,
+    },
+    rpcTimeoutMs: RPC_TIMEOUT_MS,
+    txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
+    txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+  };
 }
 
 function encodeFinalizeOpenBoxArgs(dudeIds: number[], dropRuntime: DropRuntime): Buffer {
@@ -2727,17 +2740,6 @@ async function getDeliveryLookupTable(conn: Connection, dropRuntime: DropRuntime
   return [lut];
 }
 
-function normalizeCountryCode(country?: string) {
-  const normalized = (country || '').trim().toUpperCase();
-  if (!normalized) return '';
-  if (normalized.length === 2) return normalized;
-  const compact = normalized.replace(/[\s._-]/g, '');
-  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA' || compact === 'USA' || compact === 'US') {
-    return 'US';
-  }
-  return '';
-}
-
 function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBox: number): number {
   const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   return items.reduce((total, item) => total + (item.kind === 'box' ? deliveryUnitsPerBox : 1), 0);
@@ -2800,14 +2802,6 @@ type DeliveryOrderSummary = {
 type DeliveryOrderOwnersCursor = {
   path: string;
 };
-
-function toMillisMaybe(value: any): number | undefined {
-  if (!value) return undefined;
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value.toMillis === 'function') return value.toMillis();
-  if (value instanceof Date) return value.getTime();
-  return undefined;
-}
 
 const SHIPPER_READY_NOTIFICATION_DOC_ID = 'shipper-ready-to-ship';
 const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
@@ -3303,6 +3297,7 @@ function parseDeliveryOrderOwnersCursor(rawCursor: unknown): DeliveryOrderOwners
 type FulfillmentOrderAddress = {
   label?: string;
   email?: string;
+  phone?: string;
   country?: string;
   countryCode?: string;
   hint?: string;
@@ -3318,6 +3313,7 @@ type FulfillmentOrderBox = {
 };
 
 type FulfillmentOrder = {
+  dropId: string;
   deliveryId: number;
   owner: string;
   status: string;
@@ -3334,7 +3330,7 @@ type FulfillmentOrder = {
 function toFulfillmentOrder(
   docId: string,
   order: any,
-  options: { canViewSensitiveAddress: boolean },
+  options: { canViewSensitiveAddress: boolean; dropId: string },
 ): FulfillmentOrder | null {
   const deliveryIdRaw = order?.deliveryId ?? docId;
   const deliveryId = Number(deliveryIdRaw);
@@ -3345,8 +3341,10 @@ function toFulfillmentOrder(
   const addressSnapshot = order?.addressSnapshot || {};
   const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
   const rawEmail = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email : undefined;
+  const rawPhone = typeof addressSnapshot?.phone === 'string' ? addressSnapshot.phone.trim() || undefined : undefined;
   let full: string | null = null;
   let email = rawEmail;
+  let phone = rawPhone;
   let encryptedPayload = encrypted || undefined;
   if (options.canViewSensitiveAddress) {
     if (encrypted) {
@@ -3354,12 +3352,15 @@ function toFulfillmentOrder(
     }
   } else {
     full = encrypted ? '***' : null;
+    email = undefined;
+    phone = undefined;
     encryptedPayload = undefined;
   }
 
   const address: FulfillmentOrderAddress = {
     label: typeof addressSnapshot?.label === 'string' ? addressSnapshot.label : undefined,
     email,
+    phone,
     country: typeof addressSnapshot?.country === 'string' ? addressSnapshot.country : undefined,
     countryCode: typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
     hint: typeof addressSnapshot?.hint === 'string' ? addressSnapshot.hint : undefined,
@@ -3409,6 +3410,7 @@ function toFulfillmentOrder(
     .sort((a, b) => a.boxId - b.boxId);
 
   return {
+    dropId: options.dropId,
     deliveryId,
     owner,
     status,
@@ -4061,74 +4063,128 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   return { id: addressId, removed: true };
 });
 
+export const stripeWebhook = onRequest(
+  { secrets: [STRIPE_WEBHOOK_SECRET] },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).send('Method not allowed');
+      return;
+    }
+
+    let webhookSecret: string;
+    try {
+      webhookSecret = stripeWebhookEndpointSecret();
+    } catch (err) {
+      logger.error('stripeWebhook:notConfigured', err instanceof Error ? err : new Error(String(err)), {
+        error: summarizeError(err),
+      });
+      res.status(500).send('Stripe webhook is not configured');
+      return;
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = await constructStripeWebhookEvent(stripeWebhookRawBody(req), stripeWebhookSignature(req), webhookSecret);
+    } catch (err) {
+      logger.warn('stripeWebhook:signatureRejected', { error: summarizeError(err) });
+      res.status(400).send('Invalid Stripe webhook signature');
+      return;
+    }
+
+    try {
+      const result = await handleStripeWebhookEvent({
+        db,
+        event,
+        requireDropId,
+        getDropRuntime,
+      });
+      logger.info('stripeWebhook:handled', {
+        eventId: event.id,
+        sessionId: 'sessionId' in result ? result.sessionId || null : null,
+        dropId: 'dropId' in result ? result.dropId || null : null,
+        deliveryId: 'deliveryId' in result ? result.deliveryId || null : null,
+        queued: result.queued === true,
+        reason: 'reason' in result ? result.reason || null : null,
+        ignored: result.ignored === true,
+        awaitingPayment: 'awaitingPayment' in result && result.awaitingPayment === true,
+      });
+      res.json({ received: true, ...result });
+    } catch (err) {
+      logger.error('stripeWebhook:error', err instanceof Error ? err : new Error(String(err)), {
+        eventId: event.id,
+        error: summarizeError(err),
+      });
+      res.status(500).json({ received: true, error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+export const processStripeCheckoutFulfillment = onDocumentWritten(
+  {
+    document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
+    secrets: [STRIPE_SECRET_KEY, STRIPE_RESTRICTED_KEY, COSIGNER_SECRET, ADDRESS_DECRYPTION_SECRET],
+    retry: true,
+  },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const checkoutSnap = event.data?.after;
+    if (!checkoutSnap?.exists) return;
+    if (
+      !shouldProcessStripeCheckoutFulfillmentWrite({
+        beforeStatus: beforeSnap?.exists ? beforeSnap.get('status') : undefined,
+        afterStatus: checkoutSnap.get('status'),
+      })
+    ) {
+      return;
+    }
+
+    const dropId = requireDropId(event.params.dropId);
+    const sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
+    const checkoutRef = checkoutSnap.ref;
+    const result = await processStripeCheckoutFulfillmentDocument({
+      db,
+      dropId,
+      sessionId,
+      checkoutRef,
+      apiKeys: stripeApiKeys(),
+      deps: stripeCheckoutFlowDeps(),
+    });
+    if (result.status === 'ignored') {
+      logger.info('processStripeCheckoutFulfillment:notProcessed', {
+        dropId,
+        sessionId,
+        reason: result.reason,
+      });
+      return;
+    }
+    if (result.status === 'fulfilled') {
+      logger.info('processStripeCheckoutFulfillment:fulfilled', {
+        dropId: result.dropId || dropId,
+        sessionId,
+        deliveryId: result.deliveryId || null,
+        metadataId: result.metadataId || null,
+      });
+      return;
+    }
+    logger.warn('processStripeCheckoutFulfillment:manualReviewRequired', {
+      dropId,
+      sessionId,
+      error: result.error,
+    });
+  },
+);
+
 export const createTestStripeCheckoutSession = onCallAuthed(
   'createTestStripeCheckoutSession',
-  async (request, uid) => {
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      quantity: z.number().int().min(1).max(15).optional(),
-      variantKey: z.string().min(1).max(64).optional(),
-      returnUrl: z.string().url().max(2048).optional(),
-    });
-    const { dropId: requestDropId, quantity: rawQuantity = 1, variantKey: rawVariantKey, returnUrl } = parseRequest(
-      schema,
-      request.data,
-    );
-    const dropId = requireDropId(requestDropId);
-    const dropRuntime = getDropRuntime(dropId);
-    if (dropRuntime.cluster !== 'devnet') {
-      throw new HttpsError('failed-precondition', 'Stripe test checkout is only enabled for devnet drops.');
-    }
-    const maxPerCheckout = Math.max(1, Math.floor(Number(dropRuntime.config.maxPerTx) || 1));
-    if (rawQuantity > maxPerCheckout) {
-      throw new HttpsError('invalid-argument', `Quantity exceeds max per checkout (${maxPerCheckout})`);
-    }
-
-    const apiKeys = stripeApiKeys();
-    if (!apiKeys.length) {
-      throw new HttpsError('failed-precondition', 'Stripe test key is not configured.');
-    }
-
-    const quantity = Math.max(1, Math.floor(rawQuantity));
-    const variantKey = normalizeStripeVariantKey(dropRuntime, rawVariantKey);
-    const successUrl = checkoutReturnUrl(request, returnUrl, 'success');
-    const cancelUrl = checkoutReturnUrl(request, returnUrl, 'cancel');
-    const unitAmount = stripeCheckoutUnitAmountCents();
-    const sessionParams = new URLSearchParams();
-    sessionParams.set('mode', 'payment');
-    sessionParams.set('success_url', successUrl);
-    sessionParams.set('cancel_url', cancelUrl);
-    sessionParams.set('client_reference_id', `${uid}:${dropId}:${Date.now()}`.slice(0, 200));
-    sessionParams.set('line_items[0][quantity]', String(quantity));
-    sessionParams.set('line_items[0][price_data][currency]', 'usd');
-    sessionParams.set('line_items[0][price_data][unit_amount]', String(unitAmount));
-    sessionParams.set('line_items[0][price_data][product_data][name]', stripeCheckoutProductName(dropRuntime, variantKey));
-    appendStripeShippingCollectionParams(sessionParams);
-    sessionParams.set('metadata[dropId]', dropId);
-    sessionParams.set('metadata[uid]', uid);
-    sessionParams.set('metadata[placeholder]', 'devnet_direct_delivery');
-    sessionParams.set('metadata[quantity]', String(quantity));
-    if (variantKey) sessionParams.set('metadata[variantKey]', variantKey);
-
-    let lastStripeError: StripeRequestError | null = null;
-    for (const apiKey of apiKeys) {
-      try {
-        return await createStripeCheckoutSession(sessionParams, apiKey);
-      } catch (err) {
-        if (err instanceof StripeRequestError && (err.status === 401 || err.status === 403)) {
-          lastStripeError = err;
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    throw new HttpsError(
-      'failed-precondition',
-      lastStripeError?.message || 'Stripe test key is not authorized to create Checkout Sessions.',
-    );
-  },
-  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY] },
+  async (request, uid) =>
+    createTestStripeCheckoutSessionForRequest({
+      db,
+      request,
+      uid,
+      apiKeys: stripeApiKeys(),
+      deps: stripeCheckoutFlowDeps(),
+    }),
+  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY, COSIGNER_SECRET, ADDRESS_DECRYPTION_SECRET] },
 );
 
 export const listFulfillmentOrders = onCallLogged(
@@ -4169,7 +4225,12 @@ export const listFulfillmentOrders = onCallLogged(
     const hasMore = snap.docs.length > limit;
     const pageDocs = hasMore ? snap.docs.slice(0, limit) : snap.docs;
     const orders = pageDocs
-      .map((doc) => toFulfillmentOrder(doc.id, doc.data(), { canViewSensitiveAddress: allowSensitiveAddressView }))
+      .map((doc) =>
+        toFulfillmentOrder(doc.id, doc.data(), {
+          canViewSensitiveAddress: allowSensitiveAddressView,
+          dropId,
+        }),
+      )
       .filter((entry): entry is FulfillmentOrder => Boolean(entry));
 
     const last = hasMore ? pageDocs[pageDocs.length - 1] : null;

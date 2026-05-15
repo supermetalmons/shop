@@ -3256,7 +3256,7 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleTestStripePayment = async (quantity: number, variantKey?: string) => {
+  const handleTestStripePayment = async (variantKey?: string) => {
     if (blockViewerModeAction()) return;
     const mintDrop = requireRouteDrop('Stripe test payment');
     if (mintDrop.solanaCluster !== 'devnet') {
@@ -3270,7 +3270,6 @@ function App({ currentPath }: AppProps) {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
       const { url } = await createTestStripeCheckoutSession({
         dropId: mintDrop.dropId,
-        quantity,
         variantKey,
         returnUrl,
       });
@@ -4877,7 +4876,11 @@ function App({ currentPath }: AppProps) {
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
           onStripePaymentClick={handleTestStripePayment}
-          stripePaymentVisible={routeDrop.solanaCluster === 'devnet'}
+          stripePaymentVisible={
+            routeDrop.solanaCluster === 'devnet' &&
+            isDirectDeliveryItemsPerBox(routeDrop.itemsPerBox) &&
+            routeDrop.mintSelection?.kind === 'size'
+          }
           stripePaymentBusy={stripePaymentLoading}
           mintSelection={routeDrop.mintSelection}
           showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}

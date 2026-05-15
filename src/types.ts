@@ -116,6 +116,7 @@ export interface RecoverDeliveryOrdersResult {
 export interface FulfillmentOrderAddress {
   label?: string;
   email?: string;
+  phone?: string;
   country?: string;
   countryCode?: string;
   hint?: string;

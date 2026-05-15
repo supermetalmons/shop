@@ -947,7 +947,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   const renderFulfillmentOrderSection = (
     order: FulfillmentOrder,
-    options?: { showEmail?: boolean; showFullAddress?: boolean },
+    options?: { showContactInfo?: boolean; showFullAddress?: boolean },
   ) => {
     const orderDrop = dropById.get(order.dropId);
     if (!orderDrop) return null;
@@ -956,7 +956,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
     const orderBoxPreviewImage = normalizeBoxDisplayImage(orderDrop.dropId);
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
-    const showEmail = options?.showEmail ?? true;
+    const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
       <div key={orderKey} className="fulfillment-order-section">
@@ -964,8 +964,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           <div>
             <div className="card__title">Order {order.deliveryId}</div>
             <div className="muted small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
-            {showEmail && order.address.full !== '***' && order.address.email ? (
+            {showContactInfo && order.address.full !== '***' && order.address.email ? (
               <div className="muted small">{order.address.email}</div>
+            ) : null}
+            {showContactInfo && order.address.full !== '***' && order.address.phone ? (
+              <div className="muted small">{order.address.phone}</div>
             ) : null}
           </div>
           <div className="order-update">
@@ -1181,7 +1184,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   >
                     {group.orders.map((order, index) =>
                       renderFulfillmentOrderSection(order, {
-                        showEmail: !group.collapseSharedContact || index === 0,
+                        showContactInfo: !group.collapseSharedContact || index === 0,
                         showFullAddress: !group.collapseSharedContact || index === 0,
                       }),
                     )}
