@@ -43,6 +43,7 @@ import {
 } from './dropPaths.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
+  isStripeOffchainFulfillmentSession,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
 } from './stripeCheckout/contract.js';
@@ -69,6 +70,7 @@ const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
+const STRIPE_WEBHOOK_SECRET_DEVNET = defineSecret('STRIPE_WEBHOOK_SECRET_DEVNET');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -736,10 +738,84 @@ function stripeApiKeys(): string[] {
   return Array.from(new Set(values));
 }
 
-function stripeWebhookEndpointSecret(): string {
-  const secret = envOrSecretValue('STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET);
-  if (!secret) throw new HttpsError('failed-precondition', 'Stripe webhook secret is not configured.');
-  return secret;
+type StripeWebhookSecretScope = 'devnet' | 'mainnet';
+
+type StripeWebhookEndpointSecret = {
+  envName: 'STRIPE_WEBHOOK_SECRET_DEVNET' | 'STRIPE_WEBHOOK_SECRET';
+  scope: StripeWebhookSecretScope;
+  value: string;
+};
+
+function stripeWebhookEndpointSecrets(): StripeWebhookEndpointSecret[] {
+  const devnetSecret = envOrSecretValue('STRIPE_WEBHOOK_SECRET_DEVNET', STRIPE_WEBHOOK_SECRET_DEVNET);
+  const mainnetSecret = envOrSecretValue('STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET);
+  if (!devnetSecret && !mainnetSecret) {
+    throw new HttpsError('failed-precondition', 'Stripe webhook secret is not configured.');
+  }
+  if (devnetSecret && mainnetSecret && devnetSecret === mainnetSecret) {
+    throw new HttpsError(
+      'failed-precondition',
+      'STRIPE_WEBHOOK_SECRET_DEVNET and STRIPE_WEBHOOK_SECRET must be different.',
+    );
+  }
+
+  return [
+    ...(devnetSecret
+      ? [{ envName: 'STRIPE_WEBHOOK_SECRET_DEVNET' as const, scope: 'devnet' as const, value: devnetSecret }]
+      : []),
+    ...(mainnetSecret
+      ? [{ envName: 'STRIPE_WEBHOOK_SECRET' as const, scope: 'mainnet' as const, value: mainnetSecret }]
+      : []),
+  ];
+}
+
+function stripeWebhookSecretScopeForCluster(cluster: SolanaCluster): StripeWebhookSecretScope {
+  return cluster === 'devnet' ? 'devnet' : 'mainnet';
+}
+
+async function constructStripeWebhookEventFromConfiguredSecrets(
+  rawBody: Buffer,
+  signature: string,
+  endpointSecrets: readonly StripeWebhookEndpointSecret[],
+): Promise<{
+  event: Stripe.Event;
+  verifiedSecretEnvName: StripeWebhookEndpointSecret['envName'];
+  verifiedSecretScope: StripeWebhookSecretScope;
+}> {
+  let lastError: unknown;
+  for (const endpointSecret of endpointSecrets) {
+    try {
+      const event = await constructStripeWebhookEvent(rawBody, signature, endpointSecret.value);
+      return {
+        event,
+        verifiedSecretEnvName: endpointSecret.envName,
+        verifiedSecretScope: endpointSecret.scope,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new HttpsError('invalid-argument', 'Invalid Stripe webhook signature');
+}
+
+function stripeWebhookSecretScopeForEvent(event: Stripe.Event): {
+  dropId: string;
+  cluster: SolanaCluster;
+  expectedSecretScope: StripeWebhookSecretScope;
+} | null {
+  if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.async_payment_succeeded') {
+    return null;
+  }
+  const session = event.data.object as Stripe.Checkout.Session;
+  if (!isStripeOffchainFulfillmentSession(session)) return null;
+
+  const dropId = requireDropId(session.metadata?.dropId);
+  const dropRuntime = getDropRuntime(dropId);
+  return {
+    dropId,
+    cluster: dropRuntime.cluster,
+    expectedSecretScope: stripeWebhookSecretScopeForCluster(dropRuntime.cluster),
+  };
 }
 
 type ParsedSolanaSignInMessage = {
@@ -4064,16 +4140,16 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
 });
 
 export const stripeWebhook = onRequest(
-  { secrets: [STRIPE_WEBHOOK_SECRET] },
+  { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },
   async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).send('Method not allowed');
       return;
     }
 
-    let webhookSecret: string;
+    let endpointSecrets: StripeWebhookEndpointSecret[];
     try {
-      webhookSecret = stripeWebhookEndpointSecret();
+      endpointSecrets = stripeWebhookEndpointSecrets();
     } catch (err) {
       logger.error('stripeWebhook:notConfigured', err instanceof Error ? err : new Error(String(err)), {
         error: summarizeError(err),
@@ -4083,8 +4159,17 @@ export const stripeWebhook = onRequest(
     }
 
     let event: Stripe.Event;
+    let verifiedSecretEnvName: StripeWebhookEndpointSecret['envName'];
+    let verifiedSecretScope: StripeWebhookSecretScope;
     try {
-      event = await constructStripeWebhookEvent(stripeWebhookRawBody(req), stripeWebhookSignature(req), webhookSecret);
+      const verified = await constructStripeWebhookEventFromConfiguredSecrets(
+        stripeWebhookRawBody(req),
+        stripeWebhookSignature(req),
+        endpointSecrets,
+      );
+      event = verified.event;
+      verifiedSecretEnvName = verified.verifiedSecretEnvName;
+      verifiedSecretScope = verified.verifiedSecretScope;
     } catch (err) {
       logger.warn('stripeWebhook:signatureRejected', { error: summarizeError(err) });
       res.status(400).send('Invalid Stripe webhook signature');
@@ -4092,6 +4177,20 @@ export const stripeWebhook = onRequest(
     }
 
     try {
+      const expectedScope = stripeWebhookSecretScopeForEvent(event);
+      if (expectedScope && verifiedSecretScope !== expectedScope.expectedSecretScope) {
+        logger.warn('stripeWebhook:secretScopeRejected', {
+          eventId: event.id,
+          dropId: expectedScope.dropId,
+          cluster: expectedScope.cluster,
+          verifiedSecretEnvName,
+          verifiedSecretScope,
+          expectedSecretScope: expectedScope.expectedSecretScope,
+        });
+        res.status(400).send('Invalid Stripe webhook signature');
+        return;
+      }
+
       const result = await handleStripeWebhookEvent({
         db,
         event,

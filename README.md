@@ -47,7 +47,9 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
 - `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; used by devnet test Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`
-- `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe endpoint signing secret for `stripeWebhook`)
+- `STRIPE_WEBHOOK_SECRET_DEVNET` (Firebase Functions secret or local env; Stripe test-mode endpoint signing secret for devnet drops handled by `stripeWebhook`)
+  - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
+- `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
 - `STRIPE_RETURN_URL_ALLOWED_ORIGINS` (optional comma/space-separated http(s) origins for Stripe success/cancel return URLs beyond `https://mons.shop`, `https://*.mons.shop`, and localhost; useful for preview hosts)
 - `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
