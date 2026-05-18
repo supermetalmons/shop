@@ -15,7 +15,7 @@
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy:functions": "firebase deploy --only functions",
-    "deploy:firebaseNewDrops": "firebase deploy --only functions:listFulfillmentOrders,functions:updateFulfillmentStatus,functions:updateFulfillmentInternalStatus,functions:revealDudes,functions:prepareDeliveryTx,functions:issueReceipts,functions:recoverMyDeliveryOrders,functions:prepareIrlClaimTx,functions:createTestStripeCheckoutSession,functions:stripeWebhook,functions:processStripeCheckoutFulfillment,functions:notifyShippersOnDeliveryReadyToShip",
+    "deploy:firebaseNewDrops": "firebase deploy --only functions:listFulfillmentOrders,functions:updateFulfillmentStatus,functions:updateFulfillmentInternalStatus,functions:revealDudes,functions:prepareDeliveryTx,functions:issueReceipts,functions:recoverMyDeliveryOrders,functions:prepareIrlClaimTx,functions:createStripeCheckoutSession,functions:createTestStripeCheckoutSession,functions:stripeWebhook,functions:processStripeCheckoutFulfillment,functions:notifyShippersOnDeliveryReadyToShip",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",

@@ -35,6 +35,7 @@ interface MintPanelProps {
   onStripePaymentClick?: (variantKey?: string) => void | Promise<void>;
   stripePaymentVisible?: boolean;
   stripePaymentBusy?: boolean;
+  stripePaymentMode?: 'test' | 'live';
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
   successfulMintToken?: number;
@@ -171,6 +172,7 @@ export function MintPanel({
   onStripePaymentClick,
   stripePaymentVisible,
   stripePaymentBusy,
+  stripePaymentMode = 'live',
   mintSelection,
   showSizeInfo,
   successfulMintToken = 0,
@@ -599,7 +601,7 @@ export function MintPanel({
                     <>
                       <FaCreditCard className="mint-panel__stripe-icon" aria-hidden="true" focusable="false" size={14} />
                       <span className="mint-panel__stripe-text">Pay with Stripe</span>
-                      <span className="mint-panel__stripe-badge">Test</span>
+                      {stripePaymentMode === 'test' ? <span className="mint-panel__stripe-badge">Test</span> : null}
                     </>
                   )}
                 </button>

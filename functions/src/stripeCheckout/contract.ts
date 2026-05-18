@@ -81,6 +81,7 @@ export type StripeCheckoutDocumentInput = {
   uid: string;
   variantKey: string;
   unitAmountCents: number;
+  livemode?: boolean;
   createdAt: unknown;
   updatedAt: unknown;
 };
@@ -94,6 +95,7 @@ export type StripeCheckoutDocumentData = {
   uid: string;
   variantKey: string;
   unitAmountCents: number;
+  livemode: boolean;
   status: string;
   deliveryId?: number;
 };
@@ -246,9 +248,11 @@ export function validateStripeCheckoutDocumentData(params: {
   dropId: string;
   variantKey: string;
   sessionId: string;
+  expectedLivemode?: boolean;
   checkout: any;
 }): StripeCheckoutDocumentData {
   const checkout = params.checkout || {};
+  const expectedLivemode = params.expectedLivemode === true;
   const requireString = (value: unknown, expected: string, label: string): void => {
     if (normalizedString(value) !== expected) {
       throw new Error(`App-created Stripe checkout has invalid ${label}`);
@@ -264,7 +268,7 @@ export function validateStripeCheckoutDocumentData(params: {
   if (integerOrNull(checkout.quantity) !== STRIPE_OFFCHAIN_CHECKOUT_QUANTITY) {
     throw new Error('App-created Stripe checkout has invalid quantity');
   }
-  if (checkout.livemode !== false) {
+  if (checkout.livemode !== expectedLivemode) {
     throw new Error('App-created Stripe checkout has invalid mode');
   }
 
@@ -280,12 +284,13 @@ export function validateStripeCheckoutDocumentData(params: {
     uid,
     variantKey: params.variantKey,
     unitAmountCents,
+    livemode: expectedLivemode,
     status: normalizedString(checkout.status),
     ...(deliveryId != null ? { deliveryId } : {}),
   };
 }
 
-export function validateStripeTestCheckoutContract(args: {
+export function validateStripeCheckoutContract(args: {
   session: {
     mode?: unknown;
     payment_status?: unknown;
@@ -297,13 +302,17 @@ export function validateStripeTestCheckoutContract(args: {
   lineItems: StripeCheckoutLineItemsLike;
   expectedUnitAmountCents: number;
   expectedCurrency?: string;
+  expectedLivemode: boolean;
 }): { ignored: true } | { quantity: number; currency: string; unitAmountCents: number } {
   const { session, lineItems } = args;
   if (!isStripeOffchainFulfillmentSession(session)) return { ignored: true };
+  const expectedLivemode = args.expectedLivemode === true;
 
   if (session.mode !== 'payment') throw new Error('Stripe checkout session mode must be payment');
   if (session.payment_status !== 'paid') throw new Error('Stripe checkout session must be paid');
-  if (session.livemode !== false) throw new Error('Stripe checkout session must be test mode');
+  if (session.livemode !== expectedLivemode) {
+    throw new Error(`Stripe checkout session must be ${expectedLivemode ? 'live' : 'test'} mode`);
+  }
 
   if (lineItems.has_more) throw new Error('Stripe checkout has too many line items');
   const data = Array.isArray(lineItems.data) ? lineItems.data : [];
@@ -326,19 +335,25 @@ export function validateStripeTestCheckoutContract(args: {
   }
 
   const expectedUnitAmountCents = nonNegativeIntegerOrNull(args.expectedUnitAmountCents);
-  if (expectedUnitAmountCents == null) throw new Error('Expected Stripe test unit amount is invalid');
+  if (expectedUnitAmountCents == null) throw new Error('Expected Stripe unit amount is invalid');
 
   const unitAmountCents = lineItemUnitAmountCents(item, quantity, session.amount_total);
   if (unitAmountCents !== expectedUnitAmountCents) {
-    throw new Error('Stripe checkout unit amount does not match expected test amount');
+    throw new Error('Stripe checkout unit amount does not match expected amount');
   }
 
   const sessionAmountTotal = nonNegativeIntegerOrNull(session.amount_total);
   if (sessionAmountTotal != null && sessionAmountTotal !== expectedUnitAmountCents * quantity) {
-    throw new Error('Stripe checkout total amount does not match expected test amount');
+    throw new Error('Stripe checkout total amount does not match expected amount');
   }
 
   return { quantity, currency: expectedCurrency, unitAmountCents };
+}
+
+export function validateStripeTestCheckoutContract(
+  args: Omit<Parameters<typeof validateStripeCheckoutContract>[0], 'expectedLivemode'>,
+): { ignored: true } | { quantity: number; currency: string; unitAmountCents: number } {
+  return validateStripeCheckoutContract({ ...args, expectedLivemode: false });
 }
 
 export function buildStripeOffchainAddressSnapshot(args: {
@@ -494,7 +509,7 @@ export function buildStripeCheckoutSessionMetadata(args: {
     dropId: args.dropId,
     uid: args.uid,
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-    placeholder: 'devnet_direct_delivery',
+    placeholder: 'stripe_direct_delivery',
     quantity: String(STRIPE_OFFCHAIN_CHECKOUT_QUANTITY),
     variantKey: args.variantKey,
   };
@@ -513,7 +528,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
     currency: STRIPE_OFFCHAIN_CURRENCY,
     unitAmountCents: args.unitAmountCents,
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-    livemode: false,
+    livemode: args.livemode === true,
     status: STRIPE_CHECKOUT_STATUS.CREATED,
     createdAt: args.createdAt,
     updatedAt: args.updatedAt,

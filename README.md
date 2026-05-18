@@ -45,8 +45,11 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
 - `COSIGNER_SECRET` (Firebase Functions secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
   - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
-- `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; used by devnet test Checkout Sessions)
+- `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; test-mode key used by devnet Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`
+- `STRIPE_RESTRICTED_KEY_LIVE` or `STRIPE_SECRET_KEY_LIVE` (Firebase Functions secret or local env; live-mode key used by mainnet Checkout Sessions)
+  - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY_LIVE`
+  - Optional fallback: `firebase functions:secrets:set STRIPE_SECRET_KEY_LIVE`
 - `STRIPE_WEBHOOK_SECRET_DEVNET` (Firebase Functions secret or local env; Stripe test-mode endpoint signing secret for devnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
 - `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
@@ -56,6 +59,7 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
+- Live Checkout pricing is committed per mainnet drop in `functions/src/config/deployment.ts` as `stripeLiveUnitAmountCents`; publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
 
 Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
 

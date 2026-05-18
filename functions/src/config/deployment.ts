@@ -28,6 +28,7 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -409,6 +410,7 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 2.49,
     discountPriceSol: 1.99,
+    stripeLiveUnitAmountCents: 24900,
     discountMintsPerWallet: 1,
     discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
     maxSupply: 34,

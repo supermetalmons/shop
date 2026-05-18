@@ -49,6 +49,7 @@ import {
 } from './stripeCheckout/contract.js';
 import { parseRequest } from './request.js';
 import {
+  createStripeCheckoutSessionForRequest,
   createTestStripeCheckoutSessionForRequest,
   handleStripeWebhookEvent,
   processStripeCheckoutFulfillmentDocument,
@@ -69,6 +70,8 @@ const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
+const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
+const STRIPE_SECRET_KEY_LIVE = defineSecret('STRIPE_SECRET_KEY_LIVE');
 const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
 const STRIPE_WEBHOOK_SECRET_DEVNET = defineSecret('STRIPE_WEBHOOK_SECRET_DEVNET');
 
@@ -732,6 +735,8 @@ function stripeApiKeys(): string[] {
   const values = [
     envOrSecretValue('STRIPE_RESTRICTED_KEY', STRIPE_RESTRICTED_KEY),
     envOrSecretValue('STRIPE_SECRET_KEY', STRIPE_SECRET_KEY),
+    envOrSecretValue('STRIPE_RESTRICTED_KEY_LIVE', STRIPE_RESTRICTED_KEY_LIVE),
+    envOrSecretValue('STRIPE_SECRET_KEY_LIVE', STRIPE_SECRET_KEY_LIVE),
   ]
     .map((value) => String(value || '').trim())
     .filter(Boolean);
@@ -4221,7 +4226,14 @@ export const stripeWebhook = onRequest(
 export const processStripeCheckoutFulfillment = onDocumentWritten(
   {
     document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
-    secrets: [STRIPE_SECRET_KEY, STRIPE_RESTRICTED_KEY, COSIGNER_SECRET, ADDRESS_DECRYPTION_SECRET],
+    secrets: [
+      STRIPE_SECRET_KEY,
+      STRIPE_RESTRICTED_KEY,
+      STRIPE_SECRET_KEY_LIVE,
+      STRIPE_RESTRICTED_KEY_LIVE,
+      COSIGNER_SECRET,
+      ADDRESS_DECRYPTION_SECRET,
+    ],
     retry: true,
   },
   async (event) => {
@@ -4270,6 +4282,28 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       sessionId,
       error: result.error,
     });
+  },
+);
+
+export const createStripeCheckoutSession = onCallAuthed(
+  'createStripeCheckoutSession',
+  async (request, uid) =>
+    createStripeCheckoutSessionForRequest({
+      db,
+      request,
+      uid,
+      apiKeys: stripeApiKeys(),
+      deps: stripeCheckoutFlowDeps(),
+    }),
+  {
+    secrets: [
+      STRIPE_RESTRICTED_KEY,
+      STRIPE_SECRET_KEY,
+      STRIPE_RESTRICTED_KEY_LIVE,
+      STRIPE_SECRET_KEY_LIVE,
+      COSIGNER_SECRET,
+      ADDRESS_DECRYPTION_SECRET,
+    ],
   },
 );
 

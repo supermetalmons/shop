@@ -16,7 +16,7 @@ import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
-  createTestStripeCheckoutSession,
+  createStripeCheckoutSession,
   getProfile,
   listDeliveryOrderOwners,
   recoverMyDeliveryOrders,
@@ -134,9 +134,16 @@ type OverlayViewport = {
   width: number;
   height: number;
 };
+type StripePaymentMode = 'test' | 'live';
 
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
+
+function stripeCheckoutModeForCluster(cluster: FrontendDeploymentConfig['solanaCluster']): StripePaymentMode | null {
+  if (cluster === 'devnet') return 'test';
+  if (cluster === 'mainnet-beta') return 'live';
+  return null;
+}
 
 function pickRandomSoundUrl(soundUrls: readonly string[]) {
   return soundUrls[Math.floor(Math.random() * soundUrls.length)] || soundUrls[0]!;
@@ -1305,6 +1312,7 @@ function App({ currentPath }: AppProps) {
   );
   const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
   const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
+  const routeStripePaymentMode = routeDrop ? stripeCheckoutModeForCluster(routeDrop.solanaCluster) : null;
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
     [upcomingDropRoute?.previewDropId],
@@ -3256,11 +3264,12 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleTestStripePayment = async (variantKey?: string) => {
+  const handleStripePayment = async (variantKey?: string) => {
     if (blockViewerModeAction()) return;
-    const mintDrop = requireRouteDrop('Stripe test payment');
-    if (mintDrop.solanaCluster !== 'devnet') {
-      showToast('Stripe test payment is only available for devnet drops');
+    const mintDrop = requireRouteDrop('Stripe payment');
+    const stripePaymentMode = stripeCheckoutModeForCluster(mintDrop.solanaCluster);
+    if (!stripePaymentMode) {
+      showToast('Stripe payment is only available for devnet and mainnet drops');
       return;
     }
     if (stripePaymentLoading) return;
@@ -3268,7 +3277,7 @@ function App({ currentPath }: AppProps) {
     setStripePaymentLoading(true);
     try {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
-      const { url } = await createTestStripeCheckoutSession({
+      const { url } = await createStripeCheckoutSession({
         dropId: mintDrop.dropId,
         variantKey,
         returnUrl,
@@ -4875,12 +4884,13 @@ function App({ currentPath }: AppProps) {
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
           onDiscountClick={handleDiscountMint}
           discountBusy={discountMinting || discountChecking || minting || walletBusy}
-          onStripePaymentClick={handleTestStripePayment}
+          onStripePaymentClick={handleStripePayment}
           stripePaymentVisible={
-            routeDrop.solanaCluster === 'devnet' &&
+            Boolean(routeStripePaymentMode) &&
             isDirectDeliveryItemsPerBox(routeDrop.itemsPerBox) &&
             routeDrop.mintSelection?.kind === 'size'
           }
+          stripePaymentMode={routeStripePaymentMode || undefined}
           stripePaymentBusy={stripePaymentLoading}
           mintSelection={routeDrop.mintSelection}
           showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}

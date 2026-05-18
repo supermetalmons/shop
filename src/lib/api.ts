@@ -832,21 +832,20 @@ export async function removeAddress(addressId: string): Promise<{ id: string; re
   return callFunction<{ addressId: string }, { id: string; removed?: boolean }>('removeAddress', { addressId });
 }
 
-type TestStripeCheckoutSessionRequest = {
+type StripeCheckoutSessionRequest = {
   dropId: string;
   variantKey?: string;
   returnUrl?: string;
 };
 
-type TestStripeCheckoutSessionResponse = {
+type StripeCheckoutSessionResponse = {
   id: string;
   url: string;
+  livemode?: boolean;
 };
 
-export async function createTestStripeCheckoutSession(
-  args: TestStripeCheckoutSessionRequest,
-): Promise<TestStripeCheckoutSessionResponse> {
-  const payload: TestStripeCheckoutSessionRequest = {
+function stripeCheckoutSessionPayload(args: StripeCheckoutSessionRequest): StripeCheckoutSessionRequest {
+  const payload: StripeCheckoutSessionRequest = {
     dropId: args.dropId,
   };
   if (typeof args.variantKey === 'string' && args.variantKey.trim()) {
@@ -855,9 +854,20 @@ export async function createTestStripeCheckoutSession(
   if (typeof args.returnUrl === 'string' && args.returnUrl.trim()) {
     payload.returnUrl = args.returnUrl.trim();
   }
-  return callFunction<TestStripeCheckoutSessionRequest, TestStripeCheckoutSessionResponse>(
+  return payload;
+}
+
+export async function createStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
+  return callFunction<StripeCheckoutSessionRequest, StripeCheckoutSessionResponse>(
+    'createStripeCheckoutSession',
+    stripeCheckoutSessionPayload(args),
+  );
+}
+
+export async function createTestStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
+  return callFunction<StripeCheckoutSessionRequest, StripeCheckoutSessionResponse>(
     'createTestStripeCheckoutSession',
-    payload,
+    stripeCheckoutSessionPayload(args),
   );
 }
 

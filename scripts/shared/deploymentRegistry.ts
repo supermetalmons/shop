@@ -51,6 +51,7 @@ export type FrontendDropConfigSerialized = {
 };
 
 export type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
+  stripeLiveUnitAmountCents?: number;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
 };
@@ -88,6 +89,12 @@ function asTrimmedString(value: unknown): string {
 function asFiniteNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function asOptionalStripeUnitAmountCents(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 50 && n <= 99_999_999 ? n : undefined;
 }
 
 const IPFS_PROTOCOL = 'ipfs://';
@@ -487,8 +494,10 @@ function normalizeFunctionsDropForRegistry(raw: unknown): FunctionsDropConfigSer
   const obj = raw as Record<string, unknown>;
   const frontendShape = normalizeFrontendDropForRegistry(raw);
   if (!frontendShape) return undefined;
+  const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
   return {
     ...frontendShape,
+    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     receiptsMerkleTree: asTrimmedString(obj.receiptsMerkleTree),
     deliveryLookupTable: asTrimmedString(obj.deliveryLookupTable),
   };
@@ -658,6 +667,10 @@ ${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMi
 }
 
 function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
+  const stripeLiveUnitAmountCentsLine =
+    drop.stripeLiveUnitAmountCents != null
+      ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
+      : '';
   return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
@@ -673,7 +686,7 @@ ${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
-    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
+${stripeLiveUnitAmountCentsLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -1200,6 +1213,7 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;

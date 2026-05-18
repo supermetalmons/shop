@@ -24,16 +24,20 @@ import {
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
+  validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
   validateStripeTestCheckoutContract,
 } from '../functions/src/stripeCheckout/contract.ts';
 import {
   checkoutReturnUrl,
+  createStripeCheckoutSessionForRequest,
   createTestStripeCheckoutSessionForRequest,
   enqueueStripeCheckoutFulfillment,
   markStripeCheckoutFulfillmentFailed,
   startStripeCheckoutFulfillmentDocument,
+  stripeApiKeyForMode,
   stripeCheckoutShippingParams,
+  stripeCheckoutUnitAmountCentsForDrop,
   stripeTestApiKey,
 } from '../functions/src/stripeCheckout/service.ts';
 
@@ -286,6 +290,51 @@ test('validateStripeTestCheckoutContract accepts a one-item USD test checkout', 
   assert.deepEqual(result, { quantity: 1, currency: STRIPE_OFFCHAIN_CURRENCY, unitAmountCents: 100 });
 });
 
+test('validateStripeCheckoutContract accepts a one-item USD live checkout', () => {
+  const result = validateStripeCheckoutContract({
+    session: {
+      mode: 'payment',
+      payment_status: 'paid',
+      livemode: true,
+      amount_total: 24900,
+      currency: STRIPE_OFFCHAIN_CURRENCY,
+      metadata: {
+        fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+        quantity: '1',
+      },
+    },
+    lineItems: {
+      data: [
+        {
+          quantity: 1,
+          currency: STRIPE_OFFCHAIN_CURRENCY,
+          amount_total: 24900,
+          price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 24900 },
+        },
+      ],
+    },
+    expectedUnitAmountCents: 24900,
+    expectedLivemode: true,
+  });
+
+  assert.deepEqual(result, { quantity: 1, currency: STRIPE_OFFCHAIN_CURRENCY, unitAmountCents: 24900 });
+  assert.throws(
+    () =>
+      validateStripeCheckoutContract({
+        session: {
+          mode: 'payment',
+          payment_status: 'paid',
+          livemode: false,
+          metadata: { fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE },
+        },
+        lineItems: { data: [{ quantity: 1, currency: STRIPE_OFFCHAIN_CURRENCY, amount_total: 24900 }] },
+        expectedUnitAmountCents: 24900,
+        expectedLivemode: true,
+      }),
+    /live mode/,
+  );
+});
+
 test('validateStripeTestCheckoutContract rejects quantity mismatches and multiple line items', () => {
   const session = {
     mode: 'payment',
@@ -410,7 +459,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     dropId: 'little_swag_hoodies_devnet',
     uid: 'anon_uid_123',
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-    placeholder: 'devnet_direct_delivery',
+    placeholder: 'stripe_direct_delivery',
     quantity: '1',
     variantKey: 'XL',
   });
@@ -449,7 +498,39 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       sessionId: 'cs_test_123',
       checkout,
     }),
-    { uid: 'anon_uid_123', variantKey: 'XL', unitAmountCents: 100, status: STRIPE_CHECKOUT_STATUS.CREATED },
+    {
+      uid: 'anon_uid_123',
+      variantKey: 'XL',
+      unitAmountCents: 100,
+      livemode: false,
+      status: STRIPE_CHECKOUT_STATUS.CREATED,
+    },
+  );
+  const liveCheckout = buildStripeCheckoutDocument({
+    dropId: 'little_swag_hoodies',
+    sessionId: 'cs_live_123',
+    uid: 'anon_uid_123',
+    variantKey: 'XL',
+    unitAmountCents: 24900,
+    livemode: true,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  assert.deepEqual(
+    validateStripeCheckoutDocumentData({
+      dropId: 'little_swag_hoodies',
+      variantKey: 'XL',
+      sessionId: 'cs_live_123',
+      expectedLivemode: true,
+      checkout: liveCheckout,
+    }),
+    {
+      uid: 'anon_uid_123',
+      variantKey: 'XL',
+      unitAmountCents: 24900,
+      livemode: true,
+      status: STRIPE_CHECKOUT_STATUS.CREATED,
+    },
   );
   assert.equal(stripeCheckoutOwnerId('anon_uid_123'), 'firebase:anon_uid_123');
   assert.throws(
@@ -478,6 +559,56 @@ test('stripeTestApiKey uses the first configured test key only', () => {
   assert.equal(stripeTestApiKey(['rk_test_restricted', 'sk_test_secret']), 'rk_test_restricted');
   assert.equal(stripeTestApiKey(['', 'sk_live_ignored', 'sk_test_secret']), 'sk_test_secret');
   assert.throws(() => stripeTestApiKey(['', 'sk_live_wrong']), /Stripe test key is not configured/);
+});
+
+test('stripeApiKeyForMode selects only keys matching the requested mode', () => {
+  assert.equal(stripeApiKeyForMode(['sk_live_ignored', 'rk_test_restricted'], 'test'), 'rk_test_restricted');
+  assert.equal(stripeApiKeyForMode(['sk_test_ignored', 'rk_live_restricted'], 'live'), 'rk_live_restricted');
+  assert.throws(() => stripeApiKeyForMode(['sk_test_wrong'], 'live'), /Stripe live key is not configured/);
+  assert.throws(() => stripeApiKeyForMode(['sk_live_wrong'], 'test'), /Stripe test key is not configured/);
+});
+
+test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet live pricing', () => {
+  const previous = process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
+  try {
+    delete process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
+    assert.equal(
+      stripeCheckoutUnitAmountCentsForDrop({
+        cluster: 'devnet',
+        config: {},
+      } as any),
+      100,
+    );
+    process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = '250';
+    assert.equal(
+      stripeCheckoutUnitAmountCentsForDrop({
+        cluster: 'devnet',
+        config: { stripeLiveUnitAmountCents: 24900 },
+      } as any),
+      250,
+    );
+    assert.equal(
+      stripeCheckoutUnitAmountCentsForDrop({
+        cluster: 'mainnet-beta',
+        config: { stripeLiveUnitAmountCents: 24900 },
+      } as any),
+      24900,
+    );
+    assert.throws(
+      () =>
+        stripeCheckoutUnitAmountCentsForDrop({
+          cluster: 'mainnet-beta',
+          config: {},
+        } as any),
+      /Stripe live unit amount is not configured/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
+    } else {
+      process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = previous;
+    }
+  }
 });
 
 test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_pending', async () => {
@@ -534,6 +665,7 @@ test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_p
     getDropRuntime: (id) =>
       ({
         dropId: id,
+        cluster: 'devnet',
         config: {
           mintSelection: {
             kind: 'size',
@@ -601,10 +733,87 @@ test('enqueueStripeCheckoutFulfillment requires the app-created checkout documen
         event: { id: 'evt_123', type: 'checkout.session.completed', data: { object: session } } as any,
         session,
         requireDropId: (raw) => String(raw),
-        getDropRuntime: (id) => ({ dropId: id, config: {} }) as any,
+        getDropRuntime: (id) => ({ dropId: id, cluster: 'devnet', config: {} }) as any,
       }),
     /created by this app/,
   );
+});
+
+test('enqueueStripeCheckoutFulfillment accepts live mainnet app checkout documents', async () => {
+  const dropId = 'little_swag_hoodies';
+  const sessionId = 'cs_live_123';
+  const variantKey = 'XL';
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkout = buildStripeCheckoutDocument({
+    dropId,
+    sessionId,
+    uid: 'anon_uid_123',
+    variantKey,
+    unitAmountCents: 24900,
+    livemode: true,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  const session = {
+    id: sessionId,
+    livemode: true,
+    mode: 'payment',
+    payment_status: 'paid',
+    amount_total: 24900,
+    currency: STRIPE_OFFCHAIN_CURRENCY,
+    metadata: {
+      fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+      dropId,
+      variantKey,
+      quantity: '1',
+    },
+  } as any;
+  const tx = {
+    get: async (ref: any) => {
+      if (ref === checkoutRef) return { exists: true, data: () => checkout };
+      throw new Error(`unexpected ref: ${ref.path}`);
+    },
+    update: (ref: any, data: any) => {
+      updates.push({ ref, data });
+    },
+  };
+  const db = {
+    doc: (path: string) => {
+      if (path === checkoutRef.path) return checkoutRef;
+      throw new Error(`unexpected path: ${path}`);
+    },
+    runTransaction: async (fn: any) => fn(tx),
+  } as any;
+
+  const result = await enqueueStripeCheckoutFulfillment({
+    db,
+    event: { id: 'evt_live_123', type: 'checkout.session.completed', data: { object: session } } as any,
+    session,
+    requireDropId: (raw) => String(raw),
+    getDropRuntime: (id) =>
+      ({
+        dropId: id,
+        cluster: 'mainnet-beta',
+        config: {
+          mintSelection: {
+            kind: 'size',
+            options: [{ key: 'L' }, { key: 'XL' }, { key: '2XL' }],
+          },
+        },
+      }) as any,
+  });
+
+  assert.deepEqual(result, {
+    queued: true,
+    dropId,
+    sessionId,
+    checkoutPath: checkoutRef.path,
+  });
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].ref, checkoutRef);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.equal(updates[0].data.stripeSessionSummary.livemode, true);
 });
 
 test('startStripeCheckoutFulfillmentDocument processes only pending checkout documents', async () => {
@@ -798,6 +1007,54 @@ test('createTestStripeCheckoutSessionForRequest rejects bad returnUrl before con
         deps,
       }),
     /returnUrl origin mismatch/,
+  );
+  assert.equal(configFetches, 0);
+});
+
+test('createStripeCheckoutSessionForRequest rejects mainnet drops without live unit amount before Stripe call', async () => {
+  let configFetches = 0;
+  const deps = {
+    requireDropId: (raw: unknown) => String(raw),
+    getDropRuntime: (dropId: string) =>
+      ({
+        dropId,
+        cluster: 'mainnet-beta',
+        itemsPerBox: 0,
+        receiptsMerkleTreeStr: 'tree',
+        config: {
+          mintSelection: {
+            kind: 'size',
+            options: [{ key: 'L' }, { key: 'XL' }, { key: '2XL' }],
+          },
+        },
+      }) as any,
+    connection: () => ({}),
+    fetchCheckoutConfig: async () => {
+      configFetches += 1;
+      throw new Error('unexpected config fetch');
+    },
+    requireStripeCheckoutVariantAvailable: () => undefined,
+    requireStripeCheckoutCollectionMatchesConfig: () => undefined,
+    requireStripeCheckoutFulfillmentPrerequisites: () => undefined,
+  } as any;
+
+  await assert.rejects(
+    () =>
+      createStripeCheckoutSessionForRequest({
+        db: {} as any,
+        request: {
+          data: {
+            dropId: 'little_swag_hoodies',
+            variantKey: 'XL',
+            returnUrl: 'https://mons.shop/drop',
+          },
+          rawRequest: { headers: {} },
+        } as any,
+        uid: 'anon_uid_123',
+        apiKeys: ['sk_live_secret'],
+        deps,
+      }),
+    /Stripe live unit amount is not configured/,
   );
   assert.equal(configFetches, 0);
 });

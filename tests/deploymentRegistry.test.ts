@@ -91,6 +91,7 @@ test('readFunctionsDropRegistry keeps legacy entries without boxMinterConfigPda'
         treasury: 'Treasury11111111111111111111111111111111',
         priceSol: 1,
         discountPriceSol: 0.5,
+        stripeLiveUnitAmountCents: 24900,
         discountMintsPerWallet: 1,
         discountMerkleRoot: '11'.repeat(32),
         maxSupply: 10,
@@ -109,6 +110,7 @@ test('readFunctionsDropRegistry keeps legacy entries without boxMinterConfigPda'
       const registry = await readFunctionsDropRegistry(filePath);
       assert.equal(registry.drops.legacy_drop.boxMinterConfigPda, undefined);
       assert.equal(registry.drops.legacy_drop.boxMinterProgramId, 'Program1111111111111111111111111111111111');
+      assert.equal(registry.drops.legacy_drop.stripeLiveUnitAmountCents, 24900);
       assert.equal(registry.drops.legacy_drop.metadataPathFormat, 'legacy');
     },
   );
