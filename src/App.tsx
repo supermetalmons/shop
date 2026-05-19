@@ -120,6 +120,8 @@ const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQ
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
+const TOAST_VISIBLE_MS = 1800;
+const TOAST_FADE_MS = 250;
 
 type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
 type ReceiptViewerImage = {
@@ -135,6 +137,9 @@ type OverlayViewport = {
   height: number;
 };
 type StripePaymentMode = 'test' | 'live';
+type StripeCheckoutReturn = {
+  status: 'success' | 'cancel' | 'unverified_success';
+};
 
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
@@ -143,6 +148,21 @@ function stripeCheckoutModeForCluster(cluster: FrontendDeploymentConfig['solanaC
   if (cluster === 'devnet') return 'test';
   if (cluster === 'mainnet-beta') return 'live';
   return null;
+}
+
+function consumeStripeCheckoutReturnFromUrl(): StripeCheckoutReturn | null {
+  if (typeof window === 'undefined') return null;
+  const parsed = new URL(window.location.href);
+  const status = parsed.searchParams.get('stripe_checkout');
+  if (status !== 'success' && status !== 'cancel') return null;
+
+  const sessionId = parsed.searchParams.get('session_id')?.trim() || '';
+  parsed.searchParams.delete('stripe_checkout');
+  parsed.searchParams.delete('session_id');
+  window.history.replaceState(window.history.state, '', `${parsed.pathname}${parsed.search}${parsed.hash}`);
+
+  if (status === 'success' && !sessionId) return { status: 'unverified_success' };
+  return { status };
 }
 
 function pickRandomSoundUrl(soundUrls: readonly string[]) {
@@ -1281,6 +1301,7 @@ function App({ currentPath }: AppProps) {
   const revealOverlayClosingRef = useRef(false);
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
   const ponchoPackDiscardDismissTimeoutRef = useRef<number | null>(null);
+  const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
 
   const boxImageForDropId = useCallback(
     (dropId?: string): string | undefined => {
@@ -1325,9 +1346,7 @@ function App({ currentPath }: AppProps) {
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
-  const TOAST_VISIBLE_MS = 1800;
-  const TOAST_FADE_MS = 250;
-  const showToast = (message: string) => {
+  const showToast = useCallback((message: string) => {
     setToast(message);
     setToastVisible(true);
     if (toastFadeTimeoutRef.current) {
@@ -1342,7 +1361,24 @@ function App({ currentPath }: AppProps) {
     toastClearTimeoutRef.current = setTimeout(() => {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (stripeCheckoutReturnRef.current === undefined) {
+      stripeCheckoutReturnRef.current = consumeStripeCheckoutReturnFromUrl();
+    }
+    const checkoutReturn = stripeCheckoutReturnRef.current;
+    if (!checkoutReturn) return;
+    if (checkoutReturn.status === 'success') {
+      showToast('Stripe checkout completed.');
+      return;
+    }
+    if (checkoutReturn.status === 'unverified_success') {
+      showToast('Stripe checkout completed.');
+      return;
+    }
+    showToast('Stripe checkout canceled.');
+  }, [showToast]);
 
   const blockViewerModeAction = () => {
     if (!isViewerMode) return false;
