@@ -48,6 +48,7 @@ import {
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
 } from './stripeCheckout/contract.js';
+import { shouldNotifyShippersForDeliveryReadyToShipWrite } from './notifications.js';
 import { parseRequest } from './request.js';
 import {
   createStripeCheckoutSessionForRequest,
@@ -3326,7 +3327,7 @@ async function recordEmailNotificationSendFailure(
   );
 }
 
-export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
+export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
   {
     document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
     secrets: [RESEND_API_KEY],
@@ -3335,8 +3336,15 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
   async (event) => {
     const beforeSnap = event.data?.before;
     const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-    if (beforeSnap.get('status') === 'ready_to_ship' || afterSnap.get('status') !== 'ready_to_ship') return;
+    if (!afterSnap?.exists) return;
+    if (
+      !shouldNotifyShippersForDeliveryReadyToShipWrite({
+        before: beforeSnap?.exists ? { status: beforeSnap.get('status') } : null,
+        after: { status: afterSnap.get('status') },
+      })
+    ) {
+      return;
+    }
     const after = afterSnap.data() as any;
 
     let dropId: string;

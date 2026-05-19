@@ -439,6 +439,7 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
   const doc = buildStripeOffchainDeliveryOrderDocument(input);
 
   assert.equal(doc.source, 'stripe_offchain');
+  assert.equal(doc.status, 'ready_to_ship');
   assert.equal(doc.owner, 'firebase:anon_uid_123');
   assert.equal(doc.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_FIREBASE);
   assert.equal(doc.firebaseUid, 'anon_uid_123');
