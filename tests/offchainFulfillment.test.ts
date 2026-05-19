@@ -29,11 +29,16 @@ import {
   validateStripeTestCheckoutContract,
 } from '../functions/src/stripeCheckout/contract.ts';
 import {
+  STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
   checkoutReturnUrl,
+  createOrGetStripeOffchainDeliveryOrder,
   createStripeCheckoutSessionForRequest,
   createTestStripeCheckoutSessionForRequest,
   enqueueStripeCheckoutFulfillment,
+  isRetryableStripeCheckoutFulfillmentError,
   markStripeCheckoutFulfillmentFailed,
+  markStripeCheckoutFulfillmentFulfilled,
+  runStripeCheckoutFulfillmentWithRetry,
   startStripeCheckoutFulfillmentDocument,
   stripeApiKeyForMode,
   stripeCheckoutShippingParams,
@@ -55,6 +60,10 @@ function u64LE(value: bigint): Buffer {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(value, 0);
   return buf;
+}
+
+function timestampLike(ms: number): { toMillis(): number } {
+  return { toMillis: () => ms };
 }
 
 function anchorDiscriminator(namespace: string, name: string): Buffer {
@@ -852,9 +861,143 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
   const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef });
 
   assert.equal(started.started, true);
+  const processingAttemptId = started.started ? started.processingAttemptId : '';
+  assert.match(processingAttemptId, /^[0-9a-z]+:[0-9a-z]+$/);
   assert.equal(updates.length, 1);
   assert.equal(updates[0].ref, checkoutRef);
   assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
+});
+
+test('startStripeCheckoutFulfillmentDocument skips active processing leases', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutSnap = {
+    exists: true,
+    data: () => ({
+      ...buildStripeCheckoutDocument({
+        dropId,
+        sessionId,
+        uid: 'anon_uid_123',
+        variantKey,
+        unitAmountCents: 100,
+        createdAt: 'createdAt',
+        updatedAt: 'updatedAt',
+      }),
+      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+      processingLeaseExpiresAt: timestampLike(nowMs + 1_000),
+      processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1_000),
+    }),
+  };
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return checkoutSnap;
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
+
+  assert.deepEqual(started, { started: false, reason: 'processing' });
+  assert.equal(updates.length, 0);
+});
+
+test('startStripeCheckoutFulfillmentDocument reclaims expired processing leases', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutSnap = {
+    exists: true,
+    data: () => ({
+      ...buildStripeCheckoutDocument({
+        dropId,
+        sessionId,
+        uid: 'anon_uid_123',
+        variantKey,
+        unitAmountCents: 100,
+        createdAt: 'createdAt',
+        updatedAt: 'updatedAt',
+      }),
+      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+      processingLeaseExpiresAt: timestampLike(nowMs - 1),
+    }),
+  };
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return checkoutSnap;
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
+
+  assert.equal(started.started, true);
+  const processingAttemptId = started.started ? started.processingAttemptId : '';
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
+  assert.equal(typeof updates[0].data.processingLeaseExpiresAt?.toMillis, 'function');
+});
+
+test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as stale fallback', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutData = {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      uid: 'anon_uid_123',
+      variantKey,
+      unitAmountCents: 100,
+      createdAt: 'createdAt',
+      updatedAt: 'updatedAt',
+    }),
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1),
+  };
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return { exists: true, data: () => checkoutData };
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
+
+  assert.equal(started.started, true);
+  const processingAttemptId = started.started ? started.processingAttemptId : '';
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
 });
 
 test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout intact', async () => {
@@ -900,7 +1043,7 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
           assert.equal(ref, checkoutRef);
           return {
             exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING }),
+            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
           };
         },
         set: (ref: any, data: any, options: any) => {
@@ -912,6 +1055,7 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
   const result = await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('processing failure'), {
     summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
     sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
+    processingAttemptId: 'attempt_current',
   });
 
   assert.deepEqual(result, { status: 'failed' });
@@ -919,7 +1063,311 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
   assert.equal(sets[0].ref, checkoutRef);
   assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(sets[0].data.manualRefundReviewRequired, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingAttemptId'), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingLeaseExpiresAt'), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'nextFulfillmentRetryAt'), true);
   assert.deepEqual(sets[0].options, { merge: true });
+});
+
+test('markStripeCheckoutFulfillmentFailed ignores stale processing attempts', async () => {
+  const sets: Array<{ ref: any; data: any; options: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return {
+            exists: true,
+            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_new' }),
+          };
+        },
+        set: (ref: any, data: any, options: any) => {
+          sets.push({ ref, data, options });
+        },
+      }),
+  };
+
+  const result = await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('late failure'), {
+    summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
+    sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
+    processingAttemptId: 'attempt_old',
+  });
+
+  assert.deepEqual(result, { status: 'stale_processing_attempt' });
+  assert.equal(sets.length, 0);
+});
+
+test('markStripeCheckoutFulfillmentFulfilled writes only the current processing attempt', async () => {
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return {
+            exists: true,
+            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
+          };
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+    deliveryId: 123,
+    metadataId: 16,
+    receiptTx: 'tx123',
+    processingAttemptId: 'attempt_current',
+  });
+
+  assert.deepEqual(result, { status: 'fulfilled' });
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].ref, checkoutRef);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
+  assert.equal(updates[0].data.deliveryId, 123);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
+});
+
+test('markStripeCheckoutFulfillmentFulfilled ignores stale processing attempts', async () => {
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return {
+            exists: true,
+            data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, processingAttemptId: 'attempt_new' }),
+          };
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+    deliveryId: 123,
+    metadataId: 16,
+    receiptTx: 'tx123',
+    processingAttemptId: 'attempt_old',
+  });
+
+  assert.deepEqual(result, { status: 'stale_processing_attempt' });
+  assert.equal(updates.length, 0);
+});
+
+test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale processing attempts', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const orderHashHex = 'ab'.repeat(32);
+  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_123` } as any;
+  const creates: Array<{ ref: any; data: any }> = [];
+  const updates: Array<{ ref: any; data: any }> = [];
+  const db = {
+    doc: (path: string) => {
+      if (path === markerRef.path) return markerRef;
+      return { path };
+    },
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          if (ref === markerRef) return { exists: false };
+          if (ref === checkoutRef) {
+            return {
+              exists: true,
+              data: () => ({
+                status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+                processingAttemptId: 'attempt_new',
+              }),
+            };
+          }
+          throw new Error(`unexpected ref: ${ref?.path}`);
+        },
+        create: (ref: any, data: any) => {
+          creates.push({ ref, data });
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const result = await createOrGetStripeOffchainDeliveryOrder({
+    db,
+    checkoutRef,
+    isAlreadyExistsError: () => false,
+    processingAttemptId: 'attempt_old',
+    order: {
+      dropId,
+      orderHashHex,
+      owner: 'firebase:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_123',
+      receiptOwner: pubkey(90).toBase58(),
+      metadataId: 16,
+      variantKey: 'XL',
+      stripeSession: { id: 'cs_test_123' },
+      receiptTx: 'tx123',
+      addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+    },
+  });
+
+  assert.deepEqual(result, { checkoutStatus: 'stale_processing_attempt' });
+  assert.equal(creates.length, 0);
+  assert.equal(updates.length, 0);
+});
+
+test('isRetryableStripeCheckoutFulfillmentError classifies transient errors only', () => {
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rpc timeout'), { code: 'unavailable' })), true);
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rate limited'), { statusCode: 429 })), true);
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(new Error('fetch failed: socket hang up')), true);
+  assert.equal(
+    isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('contract mismatch'), { code: 'failed-precondition' })),
+    false,
+  );
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('bad request'), { statusCode: 400 })), false);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', async () => {
+  const updates: any[] = [];
+  const checkoutRef = {
+    update: async (data: any) => {
+      updates.push(data);
+    },
+  } as any;
+  let attempts = 0;
+
+  const result = await runStripeCheckoutFulfillmentWithRetry(
+    async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw Object.assign(new Error('temporary rpc timeout'), { code: 'deadline-exceeded' });
+      }
+      return 'fulfilled';
+    },
+    {
+      checkoutRef,
+      summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
+      retryDelayMs: 0,
+    },
+  );
+
+  assert.equal(result, 'fulfilled');
+  assert.equal(attempts, 2);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].lastRetryableFulfillmentAttempt, 1);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failures', async () => {
+  const updates: any[] = [];
+  const checkoutRef = {
+    update: async (data: any) => {
+      updates.push(data);
+    },
+  } as any;
+  let attempts = 0;
+
+  await assert.rejects(
+    () =>
+      runStripeCheckoutFulfillmentWithRetry(
+        async () => {
+          attempts += 1;
+          throw Object.assign(new Error('Stripe checkout unit amount does not match expected amount'), {
+            code: 'failed-precondition',
+          });
+        },
+        {
+          checkoutRef,
+          summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
+          retryDelayMs: 0,
+        },
+      ),
+    /unit amount/,
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(updates.length, 0);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is stale', async () => {
+  const updates: any[] = [];
+  const checkoutRef = {
+    update: async (data: any) => {
+      updates.push(data);
+    },
+    firestore: {
+      runTransaction: async (fn: any) =>
+        fn({
+          get: async (ref: any) => {
+            assert.equal(ref, checkoutRef);
+            return {
+              exists: true,
+              data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_new' }),
+            };
+          },
+          update: (ref: any, data: any) => {
+            updates.push({ ref, data });
+          },
+        }),
+    },
+  } as any;
+  let attempts = 0;
+
+  await assert.rejects(
+    () =>
+      runStripeCheckoutFulfillmentWithRetry(
+        async () => {
+          attempts += 1;
+          throw Object.assign(new Error('temporary rpc timeout'), { code: 'deadline-exceeded' });
+        },
+        {
+          checkoutRef,
+          summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
+          retryDelayMs: 0,
+          processingAttemptId: 'attempt_old',
+        },
+      ),
+    /no longer owns the processing lease/,
+  );
+
+  assert.equal(attempts, 1);
+  assert.equal(updates.length, 0);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot be verified', async () => {
+  const checkoutRef = {
+    firestore: {
+      runTransaction: async () => {
+        throw new Error('firestore unavailable');
+      },
+    },
+  } as any;
+  let attempts = 0;
+
+  await assert.rejects(
+    () =>
+      runStripeCheckoutFulfillmentWithRetry(
+        async () => {
+          attempts += 1;
+          throw Object.assign(new Error('temporary rpc timeout'), { code: 'deadline-exceeded' });
+        },
+        {
+          checkoutRef,
+          summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
+          retryDelayMs: 0,
+          processingAttemptId: 'attempt_current',
+        },
+      ),
+    /Could not verify Stripe checkout fulfillment processing lease ownership/,
+  );
+
+  assert.equal(attempts, 1);
 });
 
 test('shouldProcessStripeCheckoutFulfillmentWrite accepts only created/failed to pending transitions', () => {

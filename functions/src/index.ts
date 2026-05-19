@@ -43,6 +43,7 @@ import {
 } from './dropPaths.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
+  STRIPE_CHECKOUT_STATUS,
   isStripeOffchainFulfillmentSession,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
@@ -997,10 +998,9 @@ function summarizeError(err: unknown) {
   }
   if (err instanceof Error) {
     const stack = typeof err.stack === 'string' ? err.stack.slice(0, 4000) : undefined;
-    const retryableEmailError =
-      err.name === 'RetryableShipperReadyEmailError' && typeof anyErr.reason === 'string'
-        ? { reason: anyErr.reason, ...(anyErr.details !== undefined ? { details: anyErr.details } : {}) }
-        : {};
+    const retryableEmailError = isRetryableNotificationEmailError(err)
+      ? { reason: err.reason, ...(err.details !== undefined ? { details: err.details } : {}) }
+      : {};
     return { kind: err.name, message: err.message, ...retryableEmailError, ...(stack ? { stack } : {}) };
   }
   return { kind: typeof err, message: String(err) };
@@ -2886,6 +2886,9 @@ type DeliveryOrderOwnersCursor = {
 
 const SHIPPER_READY_NOTIFICATION_DOC_ID = 'shipper-ready-to-ship';
 const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
+const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manual-review';
+const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
+const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 const FULFILLMENT_APP_URL = 'https://mons.shop/fullfillment';
 const SHIPPER_READY_FROM_EMAIL = 'notifications@mons.academy';
 
@@ -2902,22 +2905,40 @@ type ShipperReadyToShipEmailMessage = {
   dropName: string;
   deliveryId: number;
   owner: string;
-  processedAt?: number;
   items: ShipperReadyOrderSummary;
   fulfillmentUrl: string;
 };
 
-type ShipperReadyEmailDetail = {
+type StripeCheckoutManualReviewEmailMessage = {
+  idempotencyKey: string;
+  recipients: string[];
+  dropId: string;
+  dropName: string;
+  sessionId: string;
+  checkoutPath: string;
+  livemode: boolean;
+  variantKey?: string;
+  owner?: string;
+  firebaseUid?: string;
+  manualRefundReviewReason?: string;
+  lastFulfillmentError?: unknown;
+  createdAt?: number;
+  fulfillmentRequestedAt?: number;
+  processingStartedAt?: number;
+  failedAt?: number;
+};
+
+type NotificationEmailDetail = {
   label: string;
   value: string;
 };
 
-type ShipperReadyNotificationReservation =
+type EmailNotificationReservation =
   | { reserved: true; reason: 'reserved' }
   | { reserved: false; reason: 'already_completed' }
   | { reserved: false; reason: 'send_in_progress'; leaseExpiresAt: number };
 
-type ShipperReadyToShipEmailResult =
+type NotificationEmailResult =
   | { status: 'sent'; provider: string; messageId?: string }
   | { status: 'failed_permanent'; provider: string; reason: string; providerError: ResendErrorSummary };
 
@@ -2936,16 +2957,24 @@ const RETRYABLE_RESEND_ERROR_NAMES = new Set([
   'rate_limit_exceeded',
 ]);
 
-class RetryableShipperReadyEmailError extends Error {
+type RetryableNotificationEmailErrorName =
+  | 'RetryableShipperReadyEmailError'
+  | 'RetryableStripeCheckoutManualReviewEmailError';
+
+class RetryableNotificationEmailError extends Error {
   readonly reason: string;
   readonly details?: unknown;
 
-  constructor(message: string, reason: string, details?: unknown) {
+  constructor(name: RetryableNotificationEmailErrorName, message: string, reason: string, details?: unknown) {
     super(message);
-    this.name = 'RetryableShipperReadyEmailError';
+    this.name = name;
     this.reason = reason;
     this.details = details;
   }
+}
+
+function isRetryableNotificationEmailError(err: unknown): err is RetryableNotificationEmailError {
+  return err instanceof RetryableNotificationEmailError && typeof err.reason === 'string';
 }
 
 function summarizeShipperReadyOrderItems(order: any): ShipperReadyOrderSummary {
@@ -2973,8 +3002,7 @@ function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): string {
   return url.toString();
 }
 
-function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): ShipperReadyEmailDetail[] {
-  const processedAt = message.processedAt ? new Date(message.processedAt).toISOString() : 'unknown';
+function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): NotificationEmailDetail[] {
   return [
     { label: 'Drop', value: `${message.dropName}` },
     { label: 'Delivery ID', value: String(message.deliveryId) },
@@ -2982,7 +3010,7 @@ function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): Ship
     {
       label: 'Items',
       value: `${message.items.itemCount} total`,
-    }
+    },
   ];
 }
 
@@ -3050,35 +3078,139 @@ function isRetryableResendError(error: ResendErrorSummary): boolean {
 
 async function sendShipperReadyToShipEmail(
   message: ShipperReadyToShipEmailMessage,
-): Promise<ShipperReadyToShipEmailResult> {
-  const resend = await resendClient();
-  if (!resend) {
-    throw new RetryableShipperReadyEmailError(
-      'RESEND_API_KEY is not configured for shipper ready-to-ship email',
-      'resend_api_key_not_configured',
-      { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
-    );
-  }
-
+): Promise<NotificationEmailResult> {
   const subject = `New Order — ${message.dropName}`;
   const text = buildShipperReadyEmailText(message);
   const html = buildShipperReadyEmailHtml(message);
+  return sendResendNotificationEmail({
+    idempotencyKey: message.idempotencyKey,
+    recipients: message.recipients,
+    subject,
+    text,
+    html,
+    retryableErrorName: 'RetryableShipperReadyEmailError',
+    missingApiKeyMessage: 'RESEND_API_KEY is not configured for shipper ready-to-ship email',
+    missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
+    retryableFailurePrefix: 'resend shipper ready email failed',
+  });
+}
+
+function optionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function timestampEmailValue(value: number | undefined): string {
+  return value ? new Date(value).toISOString() : 'unknown';
+}
+
+function stringifyEmailValue(value: unknown): string {
+  if (value == null) return 'unknown';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function stripeCheckoutManualReviewEmailDetails(message: StripeCheckoutManualReviewEmailMessage): NotificationEmailDetail[] {
+  return [
+    { label: 'Drop', value: message.dropName || message.dropId },
+    { label: 'Drop ID', value: message.dropId },
+    { label: 'Session ID', value: message.sessionId },
+    { label: 'Mode', value: message.livemode ? 'live' : 'test' },
+    { label: 'Variant', value: message.variantKey || 'unknown' },
+    { label: 'Owner', value: message.owner || 'unknown' },
+    { label: 'Firebase UID', value: message.firebaseUid || 'unknown' },
+    { label: 'Review reason', value: message.manualRefundReviewReason || 'unknown' },
+    { label: 'Checkout path', value: message.checkoutPath },
+    { label: 'Created at', value: timestampEmailValue(message.createdAt) },
+    { label: 'Fulfillment requested at', value: timestampEmailValue(message.fulfillmentRequestedAt) },
+    { label: 'Processing started at', value: timestampEmailValue(message.processingStartedAt) },
+    { label: 'Failed at', value: timestampEmailValue(message.failedAt) },
+  ];
+}
+
+function buildStripeCheckoutManualReviewEmailText(message: StripeCheckoutManualReviewEmailMessage): string {
+  const details = stripeCheckoutManualReviewEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
+  return [
+    'Stripe checkout fulfillment needs manual review.',
+    '',
+    ...details,
+    '',
+    'Last fulfillment error:',
+    stringifyEmailValue(message.lastFulfillmentError),
+  ].join('\n');
+}
+
+function buildStripeCheckoutManualReviewEmailHtml(message: StripeCheckoutManualReviewEmailMessage): string {
+  const details = stripeCheckoutManualReviewEmailDetails(message)
+    .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
+    .join('');
+  return [
+    '<p>Stripe checkout fulfillment needs manual review.</p>',
+    '<ul>',
+    details,
+    '</ul>',
+    '<p><strong>Last fulfillment error:</strong></p>',
+    `<pre>${escapeHtml(stringifyEmailValue(message.lastFulfillmentError))}</pre>`,
+  ].join('');
+}
+
+async function sendStripeCheckoutManualReviewEmail(
+  message: StripeCheckoutManualReviewEmailMessage,
+): Promise<NotificationEmailResult> {
+  return sendResendNotificationEmail({
+    idempotencyKey: message.idempotencyKey,
+    recipients: message.recipients,
+    subject: `Stripe Checkout Manual Review — ${message.dropName || message.dropId}`,
+    text: buildStripeCheckoutManualReviewEmailText(message),
+    html: buildStripeCheckoutManualReviewEmailHtml(message),
+    retryableErrorName: 'RetryableStripeCheckoutManualReviewEmailError',
+    missingApiKeyMessage: 'RESEND_API_KEY is not configured for Stripe checkout manual review email',
+    missingApiKeyDetails: { dropId: message.dropId, sessionId: message.sessionId, recipientCount: message.recipients.length },
+    retryableFailurePrefix: 'resend Stripe checkout manual review email failed',
+  });
+}
+
+async function sendResendNotificationEmail(params: {
+  idempotencyKey: string;
+  recipients: string[];
+  subject: string;
+  text: string;
+  html: string;
+  retryableErrorName: RetryableNotificationEmailErrorName;
+  missingApiKeyMessage: string;
+  missingApiKeyDetails: unknown;
+  retryableFailurePrefix: string;
+}): Promise<NotificationEmailResult> {
+  const resend = await resendClient();
+  if (!resend) {
+    throw new RetryableNotificationEmailError(
+      params.retryableErrorName,
+      params.missingApiKeyMessage,
+      'resend_api_key_not_configured',
+      params.missingApiKeyDetails,
+    );
+  }
+
   const result = await resend.emails.send(
     {
       from: SHIPPER_READY_FROM_EMAIL,
-      to: message.recipients,
-      subject,
-      text,
-      html,
+      to: params.recipients,
+      subject: params.subject,
+      text: params.text,
+      html: params.html,
     },
-    { idempotencyKey: message.idempotencyKey },
+    { idempotencyKey: params.idempotencyKey },
   );
 
   if (result.error) {
     const providerError = summarizeResendError(result.error);
     if (isRetryableResendError(providerError)) {
-      throw new RetryableShipperReadyEmailError(
-        `resend shipper ready email failed: ${providerError.message}`,
+      throw new RetryableNotificationEmailError(
+        params.retryableErrorName,
+        `${params.retryableFailurePrefix}: ${providerError.message}`,
         'resend_retryable_error',
         providerError,
       );
@@ -3092,6 +3224,106 @@ async function sendShipperReadyToShipEmail(
   }
 
   return { status: 'sent', provider: 'resend', ...(result.data?.id ? { messageId: result.data.id } : {}) };
+}
+
+async function reserveEmailNotification(params: {
+  notificationRef: FirebaseFirestore.DocumentReference;
+  nowMs: number;
+  leaseMs: number;
+  notification: Record<string, unknown>;
+}): Promise<EmailNotificationReservation> {
+  return db.runTransaction<EmailNotificationReservation>(async (tx) => {
+    const snap = await tx.get(params.notificationRef);
+    const existing = snap.exists ? (snap.data() as any) : null;
+    const existingStatus = typeof existing?.status === 'string' ? existing.status : '';
+    if (
+      existing?.sentAt ||
+      existingStatus === 'sent' ||
+      existingStatus === 'skipped' ||
+      existingStatus === 'failed_permanent'
+    ) {
+      return { reserved: false, reason: 'already_completed' };
+    }
+
+    const leaseExpiresAt = toMillisMaybe(existing?.leaseExpiresAt) || 0;
+    if (existingStatus === 'sending' && leaseExpiresAt > params.nowMs) {
+      return { reserved: false, reason: 'send_in_progress', leaseExpiresAt };
+    }
+
+    tx.set(
+      params.notificationRef,
+      {
+        ...params.notification,
+        attempts: FieldValue.increment(1),
+        lastAttemptAt: FieldValue.serverTimestamp(),
+        leaseExpiresAt: Timestamp.fromMillis(params.nowMs + params.leaseMs),
+        failedAt: FieldValue.delete(),
+        skippedAt: FieldValue.delete(),
+        skipReason: FieldValue.delete(),
+        lastError: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+
+    return { reserved: true, reason: 'reserved' };
+  });
+}
+
+async function recordEmailNotificationSendResult(
+  notificationRef: FirebaseFirestore.DocumentReference,
+  result: NotificationEmailResult,
+): Promise<void> {
+  if (result.status === 'sent') {
+    await notificationRef.set(
+      {
+        status: 'sent',
+        sentAt: FieldValue.serverTimestamp(),
+        transport: {
+          provider: result.provider,
+          ...(result.messageId ? { messageId: result.messageId } : {}),
+        },
+        leaseExpiresAt: FieldValue.delete(),
+        failedAt: FieldValue.delete(),
+        skippedAt: FieldValue.delete(),
+        skipReason: FieldValue.delete(),
+        lastError: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+    return;
+  }
+
+  await notificationRef.set(
+    {
+      status: 'failed_permanent',
+      failedAt: FieldValue.serverTimestamp(),
+      failureReason: result.reason,
+      transport: {
+        provider: result.provider,
+        error: result.providerError,
+      },
+      leaseExpiresAt: FieldValue.delete(),
+      skippedAt: FieldValue.delete(),
+      skipReason: FieldValue.delete(),
+      lastError: result.providerError,
+    },
+    { merge: true },
+  );
+}
+
+async function recordEmailNotificationSendFailure(
+  notificationRef: FirebaseFirestore.DocumentReference,
+  errorSummary: unknown,
+): Promise<void> {
+  await notificationRef.set(
+    {
+      status: 'failed',
+      failedAt: FieldValue.serverTimestamp(),
+      lastError: errorSummary,
+      leaseExpiresAt: FieldValue.delete(),
+    },
+    { merge: true },
+  );
 }
 
 export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
@@ -3136,48 +3368,21 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
     const idempotencyKey = `${dropId}:${deliveryDocId || deliveryId}:ready_to_ship`;
     const nowMs = Date.now();
 
-    const reservation = await db.runTransaction<ShipperReadyNotificationReservation>(async (tx) => {
-      const snap = await tx.get(notificationRef);
-      const existing = snap.exists ? (snap.data() as any) : null;
-      const existingStatus = typeof existing?.status === 'string' ? existing.status : '';
-      if (
-        existing?.sentAt ||
-        existingStatus === 'sent' ||
-        existingStatus === 'skipped' ||
-        existingStatus === 'failed_permanent'
-      ) {
-        return { reserved: false, reason: 'already_completed' };
-      }
-
-      const leaseExpiresAt = toMillisMaybe(existing?.leaseExpiresAt) || 0;
-      if (existingStatus === 'sending' && leaseExpiresAt > nowMs) {
-        return { reserved: false, reason: 'send_in_progress', leaseExpiresAt };
-      }
-
-      tx.set(
-        notificationRef,
-        {
-          type: 'shipper_ready_to_ship',
-          status: 'sending',
-          dropId,
-          deliveryId,
-          deliveryDocId: deliveryDocId || String(deliveryId),
-          orderPath: orderRef.path,
-          recipients,
-          recipientCount: recipients.length,
-          idempotencyKey,
-          attempts: FieldValue.increment(1),
-          lastAttemptAt: FieldValue.serverTimestamp(),
-          leaseExpiresAt: Timestamp.fromMillis(nowMs + SHIPPER_READY_NOTIFICATION_LEASE_MS),
-          failedAt: FieldValue.delete(),
-          skippedAt: FieldValue.delete(),
-          skipReason: FieldValue.delete(),
-          lastError: FieldValue.delete(),
-        },
-        { merge: true },
-      );
-
-      return { reserved: true, reason: 'reserved' };
+    const reservation = await reserveEmailNotification({
+      notificationRef,
+      nowMs,
+      leaseMs: SHIPPER_READY_NOTIFICATION_LEASE_MS,
+      notification: {
+        type: 'shipper_ready_to_ship',
+        status: 'sending',
+        dropId,
+        deliveryId,
+        deliveryDocId: deliveryDocId || String(deliveryId),
+        orderPath: orderRef.path,
+        recipients,
+        recipientCount: recipients.length,
+        idempotencyKey,
+      },
     });
 
     if (!reservation.reserved) {
@@ -3188,7 +3393,8 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
         ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
       });
       if (reservation.reason === 'send_in_progress') {
-        throw new RetryableShipperReadyEmailError(
+        throw new RetryableNotificationEmailError(
+          'RetryableShipperReadyEmailError',
           'shipper ready-to-ship notification send lease is still active',
           'notification_send_in_progress',
           { dropId, deliveryId, leaseExpiresAt: reservation.leaseExpiresAt },
@@ -3204,48 +3410,13 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
       dropName,
       deliveryId,
       owner: typeof after.owner === 'string' ? after.owner : '',
-      processedAt: toMillisMaybe(after.processedAt),
       items: summarizeShipperReadyOrderItems(after),
       fulfillmentUrl: fulfillmentAppUrlForOrder(dropId, deliveryId),
     };
 
     try {
       const result = await sendShipperReadyToShipEmail(message);
-      if (result.status === 'sent') {
-        await notificationRef.set(
-          {
-            status: 'sent',
-            sentAt: FieldValue.serverTimestamp(),
-            transport: {
-              provider: result.provider,
-              ...(result.messageId ? { messageId: result.messageId } : {}),
-            },
-            leaseExpiresAt: FieldValue.delete(),
-            failedAt: FieldValue.delete(),
-            skippedAt: FieldValue.delete(),
-            skipReason: FieldValue.delete(),
-            lastError: FieldValue.delete(),
-          },
-          { merge: true },
-        );
-      } else {
-        await notificationRef.set(
-          {
-            status: 'failed_permanent',
-            failedAt: FieldValue.serverTimestamp(),
-            failureReason: result.reason,
-            transport: {
-              provider: result.provider,
-              error: result.providerError,
-            },
-            leaseExpiresAt: FieldValue.delete(),
-            skippedAt: FieldValue.delete(),
-            skipReason: FieldValue.delete(),
-            lastError: result.providerError,
-          },
-          { merge: true },
-        );
-      }
+      await recordEmailNotificationSendResult(notificationRef, result);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       const errorSummary = summarizeError(err);
@@ -3254,24 +3425,143 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentUpdated(
         deliveryId,
         error: errorSummary,
       });
-      await notificationRef
-        .set(
-          {
-            status: 'failed',
-            failedAt: FieldValue.serverTimestamp(),
-            lastError: errorSummary,
-            leaseExpiresAt: FieldValue.delete(),
-          },
-          { merge: true },
-        )
-        .catch((writeErr) => {
-          const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
-          logger.error('notifyShippersOnDeliveryReadyToShip:failureWriteFailed', writeError, {
-            dropId,
-            deliveryId,
-            error: summarizeError(writeErr),
-          });
+      await recordEmailNotificationSendFailure(notificationRef, errorSummary).catch((writeErr) => {
+        const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
+        logger.error('notifyShippersOnDeliveryReadyToShip:failureWriteFailed', writeError, {
+          dropId,
+          deliveryId,
+          error: summarizeError(writeErr),
         });
+      });
+      throw err;
+    }
+  },
+);
+
+export const notifyStripeCheckoutManualReview = onDocumentUpdated(
+  {
+    document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
+    secrets: [RESEND_API_KEY],
+    retry: true,
+  },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    if (!beforeSnap || !afterSnap) return;
+    if (
+      afterSnap.get('status') !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED ||
+      afterSnap.get('manualRefundReviewRequired') !== true
+    ) {
+      return;
+    }
+    if (
+      beforeSnap.get('status') === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED &&
+      beforeSnap.get('manualRefundReviewRequired') === true
+    ) {
+      return;
+    }
+
+    let dropId: string;
+    let dropName: string;
+    let sessionId: string;
+    try {
+      dropId = requireDropId(event.params.dropId);
+      sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
+      const dropRuntime = getDropRuntime(dropId);
+      dropName = dropRuntime.config.collectionName || dropId;
+    } catch (err) {
+      logger.warn('notifyStripeCheckoutManualReview:invalidParams', {
+        dropId: event.params.dropId,
+        sessionId: event.params.sessionId,
+        error: summarizeError(err),
+      });
+      return;
+    }
+
+    const recipient = normalizeShipperEmail(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
+    if (!recipient) {
+      logger.warn('notifyStripeCheckoutManualReview:invalidRecipient', { email: STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL });
+      return;
+    }
+    const recipients = [recipient];
+    const checkout = afterSnap.data() as any;
+    const checkoutRef = afterSnap.ref;
+    const notificationRef = checkoutRef.collection('notifications').doc(STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID);
+    const idempotencyKey = `${dropId}:${sessionId}:stripe_manual_review`;
+    const nowMs = Date.now();
+
+    const reservation = await reserveEmailNotification({
+      notificationRef,
+      nowMs,
+      leaseMs: STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS,
+      notification: {
+        type: 'stripe_checkout_manual_review',
+        status: 'sending',
+        dropId,
+        sessionId,
+        checkoutPath: checkoutRef.path,
+        recipients,
+        recipientCount: recipients.length,
+        idempotencyKey,
+      },
+    });
+
+    if (!reservation.reserved) {
+      logger.info('notifyStripeCheckoutManualReview:reservedElsewhere', {
+        dropId,
+        sessionId,
+        reason: reservation.reason,
+        ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
+      });
+      if (reservation.reason === 'send_in_progress') {
+        throw new RetryableNotificationEmailError(
+          'RetryableStripeCheckoutManualReviewEmailError',
+          'Stripe checkout manual review notification send lease is still active',
+          'notification_send_in_progress',
+          { dropId, sessionId, leaseExpiresAt: reservation.leaseExpiresAt },
+        );
+      }
+      return;
+    }
+
+    const message: StripeCheckoutManualReviewEmailMessage = {
+      idempotencyKey,
+      recipients,
+      dropId,
+      dropName,
+      sessionId,
+      checkoutPath: checkoutRef.path,
+      livemode: checkout?.livemode === true,
+      variantKey: optionalTrimmedString(checkout?.variantKey),
+      owner: optionalTrimmedString(checkout?.owner),
+      firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
+      manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
+      lastFulfillmentError: checkout?.lastFulfillmentError,
+      createdAt: toMillisMaybe(checkout?.createdAt),
+      fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
+      processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
+      failedAt: toMillisMaybe(checkout?.failedAt),
+    };
+
+    try {
+      const result = await sendStripeCheckoutManualReviewEmail(message);
+      await recordEmailNotificationSendResult(notificationRef, result);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const errorSummary = summarizeError(err);
+      logger.error('notifyStripeCheckoutManualReview:failed', error, {
+        dropId,
+        sessionId,
+        error: errorSummary,
+      });
+      await recordEmailNotificationSendFailure(notificationRef, errorSummary).catch((writeErr) => {
+        const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
+        logger.error('notifyStripeCheckoutManualReview:failureWriteFailed', writeError, {
+          dropId,
+          sessionId,
+          error: summarizeError(writeErr),
+        });
+      });
       throw err;
     }
   },
@@ -4235,6 +4525,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       ADDRESS_DECRYPTION_SECRET,
     ],
     retry: true,
+    timeoutSeconds: 180,
   },
   async (event) => {
     const beforeSnap = event.data?.before;
