@@ -20,6 +20,7 @@ import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
 import { listFrontendDrops, normalizeDropId, type FigureMediaConfig, type FrontendDeploymentConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
+import { findCountryByCode } from './lib/countries';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
@@ -50,6 +51,32 @@ function formatOrderStatus(status: string) {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
   if (!normalized) return 'Unknown';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function formatFulfillmentCountry(country?: string, countryCode?: string) {
+  const countryCodeName = findCountryByCode(countryCode)?.name;
+  if (countryCodeName) return countryCodeName;
+
+  const countryValue = typeof country === 'string' ? country.trim() : '';
+  const countryValueName = findCountryByCode(countryValue)?.name;
+  return countryValueName || countryValue || (typeof countryCode === 'string' ? countryCode.trim().toUpperCase() : '');
+}
+
+function formatFulfillmentAddressText(address: FulfillmentOrder['address']) {
+  const formattedCountry = formatFulfillmentCountry(address.country, address.countryCode);
+  if (address.full === '***') return formattedCountry || '***';
+  if (typeof address.full !== 'string') return '';
+
+  const countryCode = (address.countryCode || address.country || '').trim().toUpperCase();
+  if (!countryCode || !formattedCountry) return address.full;
+
+  const lines = address.full.split('\n');
+  const finalLineIndex = lines.length - 1;
+  if (lines[finalLineIndex]?.trim().toUpperCase() !== countryCode) return address.full;
+
+  const nextLines = [...lines];
+  nextLines[finalLineIndex] = formattedCountry;
+  return nextLines.join('\n');
 }
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
@@ -991,7 +1018,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             <div className="address-lines">
               {order.address.full ? (
                 <div className="address-text">
-                  {order.address.full === '***' ? order.address.country || order.address.countryCode || '***' : order.address.full}
+                  {formatFulfillmentAddressText(order.address)}
                 </div>
               ) : (
                 <>
