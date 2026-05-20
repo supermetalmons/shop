@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type TransitionEvent } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
+import { onAuthStateChanged } from 'firebase/auth';
 import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
@@ -17,6 +18,7 @@ import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import {
   createStripeCheckoutSession,
+  getAnonymousStripeDeliveryHistory,
   getProfile,
   listDeliveryOrderOwners,
   recoverMyDeliveryOrders,
@@ -27,7 +29,15 @@ import {
   saveEncryptedAddress,
   issueReceipts,
 } from './lib/api';
+import { auth } from './lib/firebase';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
+import {
+  completeStripeCheckoutMarker,
+  completedStripeCheckoutMarkerSummaryForFirebaseUid,
+  forgetCompletedStripeCheckoutMarkersForFirebaseUid,
+  loadStripeCheckoutMarkers,
+  rememberStripeCheckoutStarted,
+} from './lib/stripeCheckoutMarkers';
 import {
   buildMintBoxesTxWithAccounts,
   buildMintDiscountedBoxTxWithAccounts,
@@ -137,12 +147,24 @@ type OverlayViewport = {
   height: number;
 };
 type StripePaymentMode = 'test' | 'live';
-type StripeCheckoutReturn = {
-  status: 'success' | 'cancel' | 'unverified_success';
-};
+type StripeCheckoutReturn =
+  | {
+      status: 'success';
+      sessionId: string;
+    }
+  | {
+      status: 'cancel' | 'unverified_success';
+      sessionId?: undefined;
+    };
 
+const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
+const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
+
+function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
+  return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
+}
 
 function stripeCheckoutModeForCluster(cluster: FrontendDeploymentConfig['solanaCluster']): StripePaymentMode | null {
   if (cluster === 'devnet') return 'test';
@@ -162,6 +184,7 @@ function consumeStripeCheckoutReturnFromUrl(): StripeCheckoutReturn | null {
   window.history.replaceState(window.history.state, '', `${parsed.pathname}${parsed.search}${parsed.hash}`);
 
   if (status === 'success' && !sessionId) return { status: 'unverified_success' };
+  if (status === 'success') return { status, sessionId };
   return { status };
 }
 
@@ -1092,6 +1115,7 @@ function App({ currentPath }: AppProps) {
     updateProfile,
     refreshProfile,
   } = useSolanaAuth();
+  const queryClient = useQueryClient();
   const connectedWallet = publicKey?.toBase58();
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
   const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
@@ -1240,9 +1264,43 @@ function App({ currentPath }: AppProps) {
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(() => auth?.currentUser?.uid || null);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [shipmentsReady, setShipmentsReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
+  const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
+  const [stripeCheckoutHistoryNow, setStripeCheckoutHistoryNow] = useState(() => Date.now());
+  const anonymousStripeHistoryCompletion = useMemo(
+    () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
+    [firebaseUid, stripeCheckoutMarkers],
+  );
+  const anonymousStripeHistoryMarkerKey = anonymousStripeHistoryCompletion.markerKey;
+  const hasLocalCompletedStripeCheckout = Boolean(anonymousStripeHistoryMarkerKey);
+  const anonymousStripeHistoryPollUntil = anonymousStripeHistoryCompletion.latestCompletedAt
+    ? anonymousStripeHistoryCompletion.latestCompletedAt + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS
+    : 0;
+  const anonymousStripeHistoryEnabled = !connectedWallet && hasLocalCompletedStripeCheckout;
+  const anonymousStripeHistoryPollActive =
+    anonymousStripeHistoryEnabled &&
+    Boolean(anonymousStripeHistoryPollUntil && stripeCheckoutHistoryNow < anonymousStripeHistoryPollUntil);
+  const {
+    data: anonymousStripeHistoryData,
+    isFetching: anonymousStripeHistoryLoading,
+    error: anonymousStripeHistoryError,
+  } = useQuery({
+    queryKey: anonymousStripeDeliveryHistoryQueryKey(firebaseUid, anonymousStripeHistoryMarkerKey),
+    enabled: anonymousStripeHistoryEnabled,
+    queryFn: getAnonymousStripeDeliveryHistory,
+    refetchInterval: (query) => {
+      if (!anonymousStripeHistoryPollActive || !anonymousStripeHistoryPollUntil) return false;
+      if (Date.now() >= anonymousStripeHistoryPollUntil) return false;
+      if (query.state.error) return false;
+      return STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS;
+    },
+    refetchOnReconnect: anonymousStripeHistoryPollActive,
+    refetchOnWindowFocus: anonymousStripeHistoryPollActive,
+    staleTime: 10_000,
+  });
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
@@ -1302,6 +1360,9 @@ function App({ currentPath }: AppProps) {
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
   const ponchoPackDiscardDismissTimeoutRef = useRef<number | null>(null);
   const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
+  const stripeCheckoutCompletionHandledRef = useRef(false);
+  const stripeCheckoutWalletRefreshStartedRef = useRef(false);
+  const stripeCheckoutReturnWalletRefreshSessionRef = useRef<string | null>(null);
 
   const boxImageForDropId = useCallback(
     (dropId?: string): string | undefined => {
@@ -1364,6 +1425,26 @@ function App({ currentPath }: AppProps) {
   }, []);
 
   useEffect(() => {
+    if (!auth) return;
+    return onAuthStateChanged(auth, (user) => {
+      setFirebaseUid(user?.uid || null);
+    });
+  }, []);
+
+  useEffect(() => {
+    setStripeCheckoutHistoryNow(Date.now());
+    if (!anonymousStripeHistoryPollUntil) return;
+    const remaining = anonymousStripeHistoryPollUntil - Date.now();
+    if (remaining <= 0) return;
+    const timeout = setTimeout(() => {
+      setStripeCheckoutHistoryNow(Date.now());
+    }, remaining);
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [anonymousStripeHistoryPollUntil]);
+
+  useEffect(() => {
     if (stripeCheckoutReturnRef.current === undefined) {
       stripeCheckoutReturnRef.current = consumeStripeCheckoutReturnFromUrl();
     }
@@ -1379,6 +1460,96 @@ function App({ currentPath }: AppProps) {
     }
     showToast('Stripe checkout canceled.');
   }, [showToast]);
+
+  useEffect(() => {
+    if (stripeCheckoutCompletionHandledRef.current || !firebaseUid) return;
+    const checkoutReturn = stripeCheckoutReturnRef.current;
+    if (!checkoutReturn || checkoutReturn.status !== 'success') return;
+    const result = completeStripeCheckoutMarker({
+      sessionId: checkoutReturn.sessionId,
+      firebaseUid,
+      completedAt: Date.now(),
+    });
+    if (result.completed) {
+      stripeCheckoutCompletionHandledRef.current = true;
+      setStripeCheckoutMarkers(result.markers);
+    }
+  }, [firebaseUid]);
+
+  useEffect(() => {
+    stripeCheckoutWalletRefreshStartedRef.current = false;
+  }, [anonymousStripeHistoryMarkerKey, connectedWallet]);
+
+  useEffect(() => {
+    if (stripeCheckoutWalletRefreshStartedRef.current || !connectedWallet || !isSignedInWallet) return;
+    const checkoutReturn = stripeCheckoutReturnRef.current;
+    const checkoutReturnSessionId = checkoutReturn?.status === 'success' ? checkoutReturn.sessionId : '';
+    const hasCheckoutReturn =
+      Boolean(checkoutReturnSessionId) &&
+      stripeCheckoutReturnWalletRefreshSessionRef.current !== checkoutReturnSessionId;
+    if (!hasCheckoutReturn && !hasLocalCompletedStripeCheckout) return;
+
+    connectedWalletRef.current = connectedWallet;
+    stripeCheckoutWalletRefreshStartedRef.current = true;
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const completedMarkerKey = anonymousStripeHistoryMarkerKey;
+    const completedMarkerFirebaseUid = firebaseUid;
+    const stopAt = hasCheckoutReturn
+      ? Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS
+      : anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil
+        ? anonymousStripeHistoryPollUntil
+        : Date.now();
+
+    const refreshUntilSettled = () => {
+      if (cancelled || connectedWalletRef.current !== connectedWallet) return;
+      void refreshProfile({ mergeStripeDeliveryOrders: true })
+        .then((refreshedProfile) => {
+          if (!refreshedProfile || !completedMarkerFirebaseUid) return;
+          const walletStripeSessionIds = (refreshedProfile.orders || [])
+            .map((order) => order.stripeCheckoutSessionId || '')
+            .filter(Boolean);
+          const result = forgetCompletedStripeCheckoutMarkersForFirebaseUid({
+            firebaseUid: completedMarkerFirebaseUid,
+            sessionIds: walletStripeSessionIds,
+          });
+          if (!result.removed) return;
+          setStripeCheckoutMarkers(result.markers);
+          if (completedMarkerKey) {
+            queryClient.removeQueries({
+              queryKey: anonymousStripeDeliveryHistoryQueryKey(completedMarkerFirebaseUid, completedMarkerKey),
+              exact: true,
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn('[mons] failed to refresh profile after Stripe checkout', err);
+        })
+        .finally(() => {
+          if (cancelled || connectedWalletRef.current !== connectedWallet) return;
+          if (hasCheckoutReturn) {
+            stripeCheckoutReturnWalletRefreshSessionRef.current = checkoutReturnSessionId;
+          }
+          if (Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS > stopAt) return;
+          timeout = setTimeout(refreshUntilSettled, STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS);
+        });
+    };
+
+    refreshUntilSettled();
+    return () => {
+      cancelled = true;
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [
+    anonymousStripeHistoryMarkerKey,
+    anonymousStripeHistoryPollUntil,
+    connectedWallet,
+    firebaseUid,
+    hasLocalCompletedStripeCheckout,
+    isSignedInWallet,
+    queryClient,
+    refreshProfile,
+  ]);
 
   const blockViewerModeAction = () => {
     if (!isViewerMode) return false;
@@ -1504,7 +1675,7 @@ function App({ currentPath }: AppProps) {
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
     let promise: Promise<boolean>;
-    promise = signIn()
+    promise = signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined)
       .then((session) => {
         authTokenRef.current = session?.token ?? null;
         authTokenWalletRef.current = session?.token && session.profile?.wallet ? session.profile.wallet : null;
@@ -3313,11 +3484,22 @@ function App({ currentPath }: AppProps) {
     setStripePaymentLoading(true);
     try {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
-      const { url } = await createStripeCheckoutSession({
+      const { id, url } = await createStripeCheckoutSession({
         dropId: mintDrop.dropId,
         variantKey,
         returnUrl,
       });
+      const checkoutFirebaseUid = auth?.currentUser?.uid || firebaseUid;
+      if (checkoutFirebaseUid) {
+        setStripeCheckoutMarkers(
+          rememberStripeCheckoutStarted({
+            sessionId: id,
+            dropId: mintDrop.dropId,
+            firebaseUid: checkoutFirebaseUid,
+            createdAt: Date.now(),
+          }),
+        );
+      }
       window.location.assign(url);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to start Stripe payment');
@@ -3916,7 +4098,9 @@ function App({ currentPath }: AppProps) {
     try {
       const deliveryDrop = requireKnownDropConfig(deliveryDropId, 'delivery selection');
       const deliveryConnection = getDropConnection(deliveryDrop.dropId);
-      const session = isSignedInWallet ? { profile } : await signIn();
+      const session = isSignedInWallet
+        ? { profile }
+        : await signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined);
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
       const base = session?.profile || profile;
@@ -3999,7 +4183,7 @@ function App({ currentPath }: AppProps) {
     const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
     // Ensure wallet session exists for authenticated callable.
     if (!isSignedInWallet) {
-      await signIn();
+      await signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined);
     }
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
@@ -4100,7 +4284,19 @@ function App({ currentPath }: AppProps) {
   };
 
   const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
-  const deliveryOrders = viewedProfile?.orders || [];
+  const anonymousStripeDeliveryOrders = anonymousStripeHistoryData?.orders || [];
+  const anonymousStripeHistoryHasOrders = anonymousStripeDeliveryOrders.length > 0;
+  const anonymousStripeHistoryInitialLoading =
+    anonymousStripeHistoryPollActive && anonymousStripeHistoryLoading && !anonymousStripeHistoryData;
+  const anonymousStripeHistoryVisible =
+    !connectedWallet && (anonymousStripeHistoryPollActive || anonymousStripeHistoryHasOrders);
+  const anonymousStripeHistoryWaitingForFulfillment =
+    anonymousStripeHistoryPollActive &&
+    !anonymousStripeHistoryHasOrders &&
+    !anonymousStripeHistoryError &&
+    (anonymousStripeHistoryInitialLoading ||
+      Boolean(anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil));
+  const deliveryOrders = viewedProfile?.orders || (anonymousStripeHistoryVisible ? anonymousStripeDeliveryOrders : []);
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();
     deliveryOrders.forEach((order) => {
@@ -4123,25 +4319,28 @@ function App({ currentPath }: AppProps) {
     });
     return Array.from(targetsByKey.values());
   }, [deliveryOrders, figureMetadataByKey, getDropContent, requireKnownDropConfig]);
-  const shipmentsEmptyContent = !viewedProfile
-    ? isSignedInWallet && owner
-      ? profileLoadingForView
-        ? 'Loading shipments…'
-        : 'No shipments yet.'
-      : (
-        <span className="shipments-signin">
-          <button
-            type="button"
-            className="link"
-            onClick={handleSignInForShipments}
-            disabled={authLoading || pendingShipmentsSignIn}
-          >
-            Sign in
-          </button>
-          <span>to view your shipments.</span>
-        </span>
-      )
-    : 'No shipments yet.';
+  const shipmentsEmptyContent = (() => {
+    if (viewedProfile) return 'No shipments yet.';
+    if (anonymousStripeHistoryVisible) {
+      if (anonymousStripeHistoryInitialLoading) return 'Loading shipments…';
+      if (anonymousStripeHistoryError) return 'Unable to load shipments.';
+      return anonymousStripeHistoryWaitingForFulfillment ? 'Preparing shipment…' : 'No shipments yet.';
+    }
+    if (isSignedInWallet && owner) return profileLoadingForView ? 'Loading shipments…' : 'No shipments yet.';
+    return (
+      <span className="shipments-signin">
+        <button
+          type="button"
+          className="link"
+          onClick={handleSignInForShipments}
+          disabled={authLoading || pendingShipmentsSignIn}
+        >
+          Sign in
+        </button>
+        <span>to view your shipments.</span>
+      </span>
+    );
+  })();
   const shipmentsEmptyStateVisibility = connectedWallet
     ? authReady
       ? 'visible'
@@ -4731,9 +4930,14 @@ function App({ currentPath }: AppProps) {
   ) : null;
   const ownerPickerValue = owner || '';
   const viewedProfileErrorMessage = viewedProfileError instanceof Error ? viewedProfileError.message : '';
+  const anonymousStripeHistoryErrorMessage =
+    anonymousStripeHistoryError instanceof Error ? anonymousStripeHistoryError.message : '';
   const deliveryOrderOwnersErrorMessage = deliveryOrderOwnersError instanceof Error ? deliveryOrderOwnersError.message : '';
   const canLoadMoreOwners = Boolean(deliveryOrderOwnersHasNextPage);
-  const activeError = authError && !isUserRejectedError(authError) ? authError : viewedProfileErrorMessage;
+  const activeError =
+    authError && !isUserRejectedError(authError)
+      ? authError
+      : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
 
   return (
     <div className="page">

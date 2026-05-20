@@ -7,6 +7,10 @@ import { isRetryableCallableError, retryWithBackoff } from '../lib/callableError
 import { Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
 
+type StripeDeliveryMergeOptions = {
+  mergeStripeDeliveryOrders?: boolean;
+};
+
 function isInvalidSignatureError(err: unknown): boolean {
   const anyErr = err as any;
   const message = typeof anyErr?.message === 'string' ? anyErr.message : '';
@@ -30,14 +34,20 @@ export function useSolanaAuth() {
   const connectedWalletRef = useRef<string | null>(publicKey?.toBase58() || null);
   const connectedRef = useRef<boolean>(connected);
   const authAttemptEpochRef = useRef(0);
-  const loadCurrentSessionProfile = useCallback(async (expectedWallet: string): Promise<{ profile: Profile; token: string | null } | null> => {
-    const { profile } = await getProfile();
-    if (!profile || profile.wallet !== expectedWallet) return null;
-    return {
-      profile,
-      token: (await auth?.currentUser?.getIdToken()) || null,
-    };
-  }, []);
+  const loadCurrentSessionProfile = useCallback(
+    async (
+      expectedWallet: string,
+      options?: StripeDeliveryMergeOptions,
+    ): Promise<{ profile: Profile; token: string | null } | null> => {
+      const { profile } = await getProfile(undefined, options);
+      if (!profile || profile.wallet !== expectedWallet) return null;
+      return {
+        profile,
+        token: (await auth?.currentUser?.getIdToken()) || null,
+      };
+    },
+    [],
+  );
   const clearLocalAuthState = useCallback((options?: { clearSessionWalletChecked?: boolean }) => {
     setState({ profile: null, token: null, loading: false });
     setError(null);
@@ -49,10 +59,10 @@ export function useSolanaAuth() {
   const updateProfile = useCallback((profile: Profile | null) => {
     setState((prev) => ({ ...prev, profile }));
   }, []);
-  const refreshProfile = useCallback(async (): Promise<Profile | null> => {
+  const refreshProfile = useCallback(async (options?: StripeDeliveryMergeOptions): Promise<Profile | null> => {
     if (!auth || !connected || !publicKey) return null;
     const wallet = publicKey.toBase58();
-    const session = await loadCurrentSessionProfile(wallet);
+    const session = await loadCurrentSessionProfile(wallet, options);
     if (!session) return null;
     setState((prev) => ({ ...prev, profile: session.profile, token: session.token || prev.token }));
     setSessionWalletChecked(wallet);
@@ -121,7 +131,7 @@ export function useSolanaAuth() {
     };
   }, [connected, loadCurrentSessionProfile, publicKey, sessionWalletChecked, state.profile?.wallet]);
 
-  const signIn = useCallback(async () => {
+  const signIn = useCallback(async (options?: StripeDeliveryMergeOptions) => {
     if (!auth) throw new Error('Firebase client is not configured');
     if (!publicKey) throw new Error('Connect a wallet first');
     if (!signMessage) throw new Error('Wallet cannot sign messages');
@@ -167,7 +177,7 @@ export function useSolanaAuth() {
       // Retry only the callable (idempotent) step with exponential backoff.
       const { profile } = await retryWithBackoff(
         async () => {
-          const session = await solanaAuth(wallet, message, signature);
+          const session = await solanaAuth(wallet, message, signature, options);
           ensureAttemptCurrent();
           return session;
         },

@@ -964,20 +964,46 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
+  options?: { mergeStripeDeliveryOrders?: boolean },
 ): Promise<{ profile: Profile }> {
-  return callFunction<{ wallet: string; message: string; signature: number[] }, { profile: Profile }>('solanaAuth', {
+  type SolanaAuthRequest = {
+    wallet: string;
+    message: string;
+    signature: number[];
+    mergeStripeDeliveryOrders?: boolean;
+  };
+  const payload: SolanaAuthRequest = {
     wallet,
     message,
     signature: Array.from(signature),
-  });
+  };
+  if (options?.mergeStripeDeliveryOrders) {
+    payload.mergeStripeDeliveryOrders = true;
+  }
+  return callFunction<SolanaAuthRequest, { profile: Profile }>('solanaAuth', payload);
 }
 
-export async function getProfile(ownerWallet?: string): Promise<{ profile: Profile }> {
-  const payload: { ownerWallet?: string } = {};
+type GetProfileRequest = {
+  ownerWallet?: string;
+  mergeStripeDeliveryOrders?: boolean;
+};
+
+export async function getProfile(
+  ownerWallet?: string,
+  options?: { mergeStripeDeliveryOrders?: boolean },
+): Promise<{ profile: Profile }> {
+  const payload: GetProfileRequest = {};
   if (typeof ownerWallet === 'string' && ownerWallet.trim()) {
     payload.ownerWallet = ownerWallet;
   }
-  return callFunction<{ ownerWallet?: string }, { profile: Profile }>('getProfile', payload);
+  if (options?.mergeStripeDeliveryOrders) {
+    payload.mergeStripeDeliveryOrders = true;
+  }
+  return callFunction<GetProfileRequest, { profile: Profile }>('getProfile', payload);
+}
+
+export async function getAnonymousStripeDeliveryHistory(): Promise<{ orders: Profile['orders'] }> {
+  return callFunction<Record<string, never>, { orders: Profile['orders'] }>('getAnonymousStripeDeliveryHistory', {});
 }
 
 export async function listDeliveryOrderOwners(

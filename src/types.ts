@@ -52,6 +52,7 @@ export interface DeliveryOrderSummary {
   dropId: string;
   deliveryId: number;
   status: string;
+  stripeCheckoutSessionId?: string;
   createdAt?: number;
   processingAt?: number;
   processedAt?: number;

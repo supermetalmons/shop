@@ -47,8 +47,10 @@ import {
   isStripeOffchainFulfillmentSession,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
+  stripeCheckoutOwnerId,
 } from './stripeCheckout/contract.js';
 import { shouldNotifyShippersForDeliveryReadyToShipWrite } from './notifications.js';
+import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { parseRequest } from './request.js';
 import {
   createStripeCheckoutSessionForRequest,
@@ -2873,6 +2875,7 @@ type DeliveryOrderSummary = {
   dropId: string;
   deliveryId: number;
   status: string;
+  stripeCheckoutSessionId?: string;
   createdAt?: number;
   processingAt?: number;
   processedAt?: number;
@@ -3606,6 +3609,7 @@ function toDeliveryOrderSummary(docId: string, order: any, docPath: string): Del
     dropId,
     deliveryId,
     status: typeof order?.status === 'string' ? order.status : 'unknown',
+    stripeCheckoutSessionId: optionalTrimmedString(order?.stripeCheckoutSessionId),
     createdAt: toMillisMaybe(order?.createdAt),
     processingAt: toMillisMaybe(order?.processingAt),
     processedAt: toMillisMaybe(order?.processedAt),
@@ -3619,6 +3623,7 @@ const DELIVERY_ORDER_SUMMARY_FIELDS = [
   'dropId',
   'deliveryId',
   'status',
+  'stripeCheckoutSessionId',
   'createdAt',
   'processingAt',
   'processedAt',
@@ -3633,17 +3638,17 @@ function toDeliveryOrderSummaries(docs: Array<{ id: string; data(): any; ref: { 
     .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
 }
 
-async function fetchDeliveryOrderHistory(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
+async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrderSummary[]> {
   const [readySnap, processingSnap] = await Promise.all([
     db
       .collectionGroup('deliveryOrders')
-      .where('owner', '==', ownerWallet)
+      .where('owner', '==', ownerId)
       .where('status', '==', 'ready_to_ship')
       .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
       .get(),
     db
       .collectionGroup('deliveryOrders')
-      .where('owner', '==', ownerWallet)
+      .where('owner', '==', ownerId)
       .where('status', '==', 'processing')
       .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
       .get(),
@@ -4227,13 +4232,31 @@ async function buildProfileResponse(profileWallet: string, profileData: any, inc
   };
 }
 
+async function tryMergeFirebaseStripeDeliveryOrdersToWallet(
+  uid: string,
+  wallet: string,
+  logContext: 'solanaAuth' | 'getProfile',
+): Promise<number> {
+  try {
+    const merged = await mergeFirebaseStripeDeliveryOrdersToWalletInDb(db, uid, wallet);
+    if (merged > 0) {
+      logger.info(`${logContext}:stripeOwnerMerge`, { wallet, merged });
+    }
+    return merged;
+  } catch (err) {
+    logger.warn(`${logContext}:stripeOwnerMergeFailed`, { wallet, error: summarizeError(err) });
+    return 0;
+  }
+}
+
 export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   const schema = z.object({
     wallet: z.string().min(32).max(64),
     message: z.string().min(1).max(1024),
     signature: z.array(z.number().int().min(0).max(255)).length(64),
+    mergeStripeDeliveryOrders: z.boolean().optional(),
   });
-  const { wallet: rawWallet, message, signature } = parseRequest(schema, request.data);
+  const { wallet: rawWallet, message, signature, mergeStripeDeliveryOrders } = parseRequest(schema, request.data);
   const wallet = normalizeWallet(rawWallet);
 
   const statement = parseSolanaSignInMessage(message);
@@ -4274,15 +4297,19 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   const snap = await profileRef.get();
   const profileData = snap.exists ? (snap.data() as any) : {};
   if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
+  if (mergeStripeDeliveryOrders === true) {
+    await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'solanaAuth');
+  }
   return buildProfileResponse(wallet, profileData, true);
 });
 
 export const getProfile = onCallLogged('getProfile', async (request) => {
-  const { wallet } = await requireWalletSession(request);
+  const { uid, wallet } = await requireWalletSession(request);
   const schema = z.object({
     ownerWallet: z.string().optional(),
+    mergeStripeDeliveryOrders: z.boolean().optional(),
   });
-  const { ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
+  const { ownerWallet: rawOwnerWallet, mergeStripeDeliveryOrders } = parseRequest(schema, request.data || {});
 
   let profileWallet = wallet;
   if (typeof rawOwnerWallet === 'string' && rawOwnerWallet.trim()) {
@@ -4299,7 +4326,15 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
   if (!snap.exists && profileWallet === wallet) {
     await profileRef.set({ wallet: profileWallet }, { merge: true });
   }
+  if (profileWallet === wallet && mergeStripeDeliveryOrders === true) {
+    await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'getProfile');
+  }
   return buildProfileResponse(profileWallet, profileData, profileWallet === wallet);
+});
+
+export const getAnonymousStripeDeliveryHistory = onCallAuthed('getAnonymousStripeDeliveryHistory', async (_request, uid) => {
+  const orders = await fetchDeliveryOrderHistory(stripeCheckoutOwnerId(uid));
+  return { orders };
 });
 
 export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {
