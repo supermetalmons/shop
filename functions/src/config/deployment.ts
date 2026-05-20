@@ -28,7 +28,9 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   stripeLiveUnitAmountCents?: number;
+  stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -274,19 +276,28 @@ function createFunctionsDrop(
     metadataPathFormat?: MetadataPathFormat;
   },
 ): FunctionsDropConfig {
+  const {
+    stripeCheckoutEnabled: rawStripeCheckoutEnabled,
+    stripeProductTaxCode: rawStripeProductTaxCode,
+    ...baseConfig
+  } = config;
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
+  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
+  const stripeProductTaxCode = String(rawStripeProductTaxCode || '').trim();
   return {
-    ...config,
+    ...baseConfig,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };
@@ -410,7 +421,6 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 2.49,
     discountPriceSol: 1.99,
-    stripeLiveUnitAmountCents: 24900,
     discountMintsPerWallet: 1,
     discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
     maxSupply: 34,
@@ -465,6 +475,8 @@ export const FUNCTIONS_DROPS: FunctionsDropsMap = {
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.069,
     discountPriceSol: 0.042,
+    stripeCheckoutEnabled: true,
+    stripeProductTaxCode: "txcd_30011000",
     discountMintsPerWallet: 1,
     discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
     maxSupply: 34,

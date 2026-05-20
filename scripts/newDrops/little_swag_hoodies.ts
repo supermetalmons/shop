@@ -38,7 +38,6 @@ export const NEW_DROP = defineNewDropConfig({
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     priceSol: 2.49,
     discountPriceSol: 1.99,
-    stripeLiveUnitAmountCents: 24900,
     discountMintsPerWallet: 1,
     maxSupply: 34,
     itemsPerBox: 0,

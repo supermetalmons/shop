@@ -166,9 +166,11 @@ function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, mark
   return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
 }
 
-function stripeCheckoutModeForCluster(cluster: FrontendDeploymentConfig['solanaCluster']): StripePaymentMode | null {
-  if (cluster === 'devnet') return 'test';
-  if (cluster === 'mainnet-beta') return 'live';
+function stripeCheckoutModeForDrop(drop: FrontendDeploymentConfig | null | undefined): StripePaymentMode | null {
+  if (!drop?.stripeCheckoutEnabled) return null;
+  const { solanaCluster } = drop;
+  if (solanaCluster === 'devnet') return 'test';
+  if (solanaCluster === 'mainnet-beta') return 'live';
   return null;
 }
 
@@ -1394,7 +1396,7 @@ function App({ currentPath }: AppProps) {
   );
   const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
   const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
-  const routeStripePaymentMode = routeDrop ? stripeCheckoutModeForCluster(routeDrop.solanaCluster) : null;
+  const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
     [upcomingDropRoute?.previewDropId],
@@ -3474,9 +3476,9 @@ function App({ currentPath }: AppProps) {
   const handleStripePayment = async (variantKey?: string) => {
     if (blockViewerModeAction()) return;
     const mintDrop = requireRouteDrop('Stripe payment');
-    const stripePaymentMode = stripeCheckoutModeForCluster(mintDrop.solanaCluster);
+    const stripePaymentMode = stripeCheckoutModeForDrop(mintDrop);
     if (!stripePaymentMode) {
-      showToast('Stripe payment is only available for devnet and mainnet drops');
+      showToast('Stripe payment is not enabled for this drop');
       return;
     }
     if (stripePaymentLoading) return;

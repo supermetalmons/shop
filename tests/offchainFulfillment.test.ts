@@ -41,6 +41,7 @@ import {
   runStripeCheckoutFulfillmentWithRetry,
   startStripeCheckoutFulfillmentDocument,
   stripeApiKeyForMode,
+  stripeCheckoutProductTaxCodeForDrop,
   stripeCheckoutShippingParams,
   stripeCheckoutUnitAmountCentsForDrop,
   stripeTestApiKey,
@@ -275,6 +276,8 @@ test('validateStripeTestCheckoutContract accepts a one-item USD test checkout', 
       mode: 'payment',
       payment_status: 'paid',
       livemode: false,
+      automatic_tax: { enabled: true, status: 'complete' },
+      amount_subtotal: 100,
       amount_total: 100,
       currency: STRIPE_OFFCHAIN_CURRENCY,
       metadata: {
@@ -304,7 +307,10 @@ test('validateStripeCheckoutContract accepts a one-item USD live checkout', () =
       mode: 'payment',
       payment_status: 'paid',
       livemode: true,
-      amount_total: 24900,
+      automatic_tax: { enabled: true, status: 'complete' },
+      amount_subtotal: 24900,
+      amount_total: 27042,
+      total_details: { amount_tax: 2142 },
       currency: STRIPE_OFFCHAIN_CURRENCY,
       metadata: {
         fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
@@ -316,7 +322,8 @@ test('validateStripeCheckoutContract accepts a one-item USD live checkout', () =
         {
           quantity: 1,
           currency: STRIPE_OFFCHAIN_CURRENCY,
-          amount_total: 24900,
+          amount_subtotal: 24900,
+          amount_total: 27042,
           price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 24900 },
         },
       ],
@@ -348,6 +355,7 @@ test('validateStripeTestCheckoutContract rejects quantity mismatches and multipl
     mode: 'payment',
     payment_status: 'paid',
     livemode: false,
+    automatic_tax: { enabled: true, status: 'complete' },
     amount_total: 200,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     metadata: {
@@ -388,6 +396,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
     mode: 'payment',
     payment_status: 'paid',
     livemode: false,
+    automatic_tax: { enabled: true, status: 'complete' },
     amount_total: 100,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     metadata: {
@@ -413,6 +422,63 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
         expectedUnitAmountCents: 100,
       }),
     /unit amount does not match/,
+  );
+  assert.throws(
+    () =>
+      validateStripeTestCheckoutContract({
+        session: { ...session, amount_subtotal: 200, amount_total: 200 },
+        lineItems: {
+          data: [
+            {
+              quantity: 1,
+              currency: STRIPE_OFFCHAIN_CURRENCY,
+              amount_subtotal: 200,
+              amount_total: 200,
+              price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 100 },
+            },
+          ],
+        },
+        expectedUnitAmountCents: 100,
+      }),
+    /subtotal amount does not match/,
+  );
+  assert.throws(
+    () =>
+      validateStripeTestCheckoutContract({
+        session: { ...session, amount_subtotal: 100, amount_total: 90 },
+        lineItems: {
+          data: [
+            {
+              quantity: 1,
+              currency: STRIPE_OFFCHAIN_CURRENCY,
+              amount_subtotal: 100,
+              amount_total: 90,
+              price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 100 },
+            },
+          ],
+        },
+        expectedUnitAmountCents: 100,
+      }),
+    /total amount is less than expected subtotal/,
+  );
+  assert.throws(
+    () =>
+      validateStripeTestCheckoutContract({
+        session: { ...session, automatic_tax: { enabled: false, status: 'complete' } },
+        lineItems: {
+          data: [
+            {
+              quantity: 1,
+              currency: STRIPE_OFFCHAIN_CURRENCY,
+              amount_subtotal: 100,
+              amount_total: 100,
+              price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 100 },
+            },
+          ],
+        },
+        expectedUnitAmountCents: 100,
+      }),
+    /automatic tax must be enabled/,
   );
 });
 
@@ -618,6 +684,46 @@ test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet liv
       process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = previous;
     }
   }
+});
+
+test('stripeCheckoutProductTaxCodeForDrop requires explicit checkout enablement and product tax code', () => {
+  assert.equal(
+    stripeCheckoutProductTaxCodeForDrop({
+      config: {
+        stripeCheckoutEnabled: true,
+        stripeProductTaxCode: 'txcd_30011000',
+      },
+    } as any),
+    'txcd_30011000',
+  );
+  assert.throws(
+    () =>
+      stripeCheckoutProductTaxCodeForDrop({
+        config: {
+          stripeProductTaxCode: 'txcd_30011000',
+        },
+      } as any),
+    /not enabled/,
+  );
+  assert.throws(
+    () =>
+      stripeCheckoutProductTaxCodeForDrop({
+        config: {
+          stripeCheckoutEnabled: true,
+        },
+      } as any),
+    /product tax code is not configured/,
+  );
+  assert.throws(
+    () =>
+      stripeCheckoutProductTaxCodeForDrop({
+        config: {
+          stripeCheckoutEnabled: true,
+          stripeProductTaxCode: 'clothing',
+        },
+      } as any),
+    /product tax code is invalid/,
+  );
 });
 
 test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_pending', async () => {
@@ -1459,7 +1565,7 @@ test('createTestStripeCheckoutSessionForRequest rejects bad returnUrl before con
   assert.equal(configFetches, 0);
 });
 
-test('createStripeCheckoutSessionForRequest rejects mainnet drops without live unit amount before Stripe call', async () => {
+test('createStripeCheckoutSessionForRequest rejects drops without explicit Stripe checkout enablement before Stripe call', async () => {
   let configFetches = 0;
   const deps = {
     requireDropId: (raw: unknown) => String(raw),
@@ -1502,7 +1608,7 @@ test('createStripeCheckoutSessionForRequest rejects mainnet drops without live u
         apiKeys: ['sk_live_secret'],
         deps,
       }),
-    /Stripe live unit amount is not configured/,
+    /Stripe checkout is not enabled/,
   );
   assert.equal(configFetches, 0);
 });

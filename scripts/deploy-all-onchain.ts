@@ -821,6 +821,7 @@ async function writeFrontendDeploymentConfig(args: {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -858,6 +859,7 @@ async function writeFrontendDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
+    ...(args.stripeCheckoutEnabled === true ? { stripeCheckoutEnabled: true } : {}),
     discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
     discountMerkleRoot: args.discountMerkleRoot,
     maxSupply: Math.floor(Number(args.maxSupply)),
@@ -886,7 +888,9 @@ async function writeFunctionsDeploymentConfig(args: {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   stripeLiveUnitAmountCents?: number;
+  stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -917,6 +921,7 @@ async function writeFunctionsDeploymentConfig(args: {
     args.stripeLiveUnitAmountCents == null
       ? undefined
       : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
+  const stripeProductTaxCode = trimToUndefined(args.stripeProductTaxCode);
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
@@ -928,7 +933,9 @@ async function writeFunctionsDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
+    ...(args.stripeCheckoutEnabled === true ? { stripeCheckoutEnabled: true } : {}),
     ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
+    ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
     discountMerkleRoot: args.discountMerkleRoot,
     maxSupply: Math.floor(Number(args.maxSupply)),
@@ -2445,7 +2452,9 @@ async function main() {
     treasury: dropCfg.treasury,
     priceSol: dropCfg.priceSol,
     discountPriceSol: dropCfg.discountPriceSol,
+    stripeCheckoutEnabled: dropCfg.stripeCheckoutEnabled,
     stripeLiveUnitAmountCents: dropCfg.stripeLiveUnitAmountCents,
+    stripeProductTaxCode: dropCfg.stripeProductTaxCode,
     discountMintsPerWallet: requireDiscountMintsPerWallet(
       dropCfg.discountMintsPerWallet,
       'NEW_DROP.onchain.discountMintsPerWallet',
@@ -2674,6 +2683,7 @@ async function main() {
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+    stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
     discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),
@@ -2698,7 +2708,9 @@ async function main() {
     treasury: treasury.toBase58(),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+    stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
     stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
+    stripeProductTaxCode: boxMinterConfig.stripeProductTaxCode,
     discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),

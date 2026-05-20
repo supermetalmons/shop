@@ -37,7 +37,9 @@ export type NewDropOnchainConfig = {
   treasury?: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   stripeLiveUnitAmountCents?: number;
+  stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   maxSupply: number;
   itemsPerBox: number;

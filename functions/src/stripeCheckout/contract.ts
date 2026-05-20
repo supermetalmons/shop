@@ -43,6 +43,7 @@ export type StripeFulfillmentAddress = {
 export type StripeCheckoutLineItemLike = {
   quantity?: unknown;
   currency?: unknown;
+  amount_subtotal?: unknown;
   amount_total?: unknown;
   price?: {
     currency?: unknown;
@@ -209,9 +210,20 @@ function integerInRangeOrNull(value: unknown, min: number, max: number): number 
   return numeric != null && numeric >= min && numeric <= max ? numeric : null;
 }
 
-function lineItemUnitAmountCents(item: StripeCheckoutLineItemLike, quantity: number, sessionAmountTotal: unknown): number | null {
+function lineItemUnitAmountCents(
+  item: StripeCheckoutLineItemLike,
+  quantity: number,
+  sessionAmountSubtotal: unknown,
+  sessionAmountTotal: unknown,
+): number | null {
   const directUnit = nonNegativeIntegerOrNull(item.price?.unit_amount);
   if (directUnit != null) return directUnit;
+
+  const itemSubtotal = nonNegativeIntegerOrNull(item.amount_subtotal);
+  if (itemSubtotal != null && quantity > 0 && itemSubtotal % quantity === 0) return itemSubtotal / quantity;
+
+  const sessionSubtotal = nonNegativeIntegerOrNull(sessionAmountSubtotal);
+  if (sessionSubtotal != null && quantity > 0 && sessionSubtotal % quantity === 0) return sessionSubtotal / quantity;
 
   const itemTotal = nonNegativeIntegerOrNull(item.amount_total);
   if (itemTotal != null && quantity > 0 && itemTotal % quantity === 0) return itemTotal / quantity;
@@ -294,6 +306,11 @@ export function validateStripeCheckoutContract(args: {
     mode?: unknown;
     payment_status?: unknown;
     livemode?: unknown;
+    automatic_tax?: {
+      enabled?: unknown;
+      status?: unknown;
+    } | null;
+    amount_subtotal?: unknown;
     amount_total?: unknown;
     currency?: unknown;
     metadata?: Record<string, unknown> | null;
@@ -311,6 +328,13 @@ export function validateStripeCheckoutContract(args: {
   if (session.payment_status !== 'paid') throw new Error('Stripe checkout session must be paid');
   if (session.livemode !== expectedLivemode) {
     throw new Error(`Stripe checkout session must be ${expectedLivemode ? 'live' : 'test'} mode`);
+  }
+  if (session.automatic_tax?.enabled !== true) {
+    throw new Error('Stripe checkout automatic tax must be enabled');
+  }
+  const automaticTaxStatus = normalizedString(session.automatic_tax?.status);
+  if (automaticTaxStatus && automaticTaxStatus !== 'complete') {
+    throw new Error('Stripe checkout automatic tax must be complete');
   }
 
   if (lineItems.has_more) throw new Error('Stripe checkout has too many line items');
@@ -336,14 +360,20 @@ export function validateStripeCheckoutContract(args: {
   const expectedUnitAmountCents = nonNegativeIntegerOrNull(args.expectedUnitAmountCents);
   if (expectedUnitAmountCents == null) throw new Error('Expected Stripe unit amount is invalid');
 
-  const unitAmountCents = lineItemUnitAmountCents(item, quantity, session.amount_total);
+  const unitAmountCents = lineItemUnitAmountCents(item, quantity, session.amount_subtotal, session.amount_total);
   if (unitAmountCents !== expectedUnitAmountCents) {
     throw new Error('Stripe checkout unit amount does not match expected amount');
   }
 
+  const expectedSubtotalCents = expectedUnitAmountCents * quantity;
+  const sessionAmountSubtotal = nonNegativeIntegerOrNull(session.amount_subtotal);
+  if (sessionAmountSubtotal != null && sessionAmountSubtotal !== expectedSubtotalCents) {
+    throw new Error('Stripe checkout subtotal amount does not match expected amount');
+  }
+
   const sessionAmountTotal = nonNegativeIntegerOrNull(session.amount_total);
-  if (sessionAmountTotal != null && sessionAmountTotal !== expectedUnitAmountCents * quantity) {
-    throw new Error('Stripe checkout total amount does not match expected amount');
+  if (sessionAmountTotal != null && sessionAmountTotal < expectedSubtotalCents) {
+    throw new Error('Stripe checkout total amount is less than expected subtotal');
   }
 
   return { quantity, currency: expectedCurrency, unitAmountCents };

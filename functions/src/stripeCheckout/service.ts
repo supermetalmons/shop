@@ -54,7 +54,10 @@ export type StripeCheckoutSessionSnapshot = {
   livemode: boolean;
   mode?: unknown;
   payment_status?: unknown;
+  automatic_tax?: unknown;
+  amount_subtotal?: unknown;
   amount_total?: unknown;
+  total_details?: unknown;
   currency?: unknown;
   metadata?: Record<string, string>;
 };
@@ -154,7 +157,9 @@ export type StripeCheckoutDropRuntime = {
     collectionName?: string;
     namePrefix?: string;
     mintSelection?: MintSelectionConfig;
+    stripeCheckoutEnabled?: boolean;
     stripeLiveUnitAmountCents?: number;
+    stripeProductTaxCode?: string;
   };
 };
 
@@ -420,6 +425,22 @@ function requireStripeUnitAmountCents(value: unknown, label: string): number {
   throw new HttpsError('failed-precondition', `${label} must be an integer from 50 to 99999999.`);
 }
 
+const STRIPE_PRODUCT_TAX_CODE_RE = /^txcd_\d{8}$/;
+
+export function stripeCheckoutProductTaxCodeForDrop(dropRuntime: StripeCheckoutDropRuntime): string {
+  if (dropRuntime.config.stripeCheckoutEnabled !== true) {
+    throw new HttpsError('failed-precondition', 'Stripe checkout is not enabled for this drop.');
+  }
+  const taxCode = String(dropRuntime.config.stripeProductTaxCode || '').trim();
+  if (!taxCode) {
+    throw new HttpsError('failed-precondition', 'Stripe product tax code is not configured for this drop.');
+  }
+  if (!STRIPE_PRODUCT_TAX_CODE_RE.test(taxCode)) {
+    throw new HttpsError('failed-precondition', 'Stripe product tax code is invalid for this drop.');
+  }
+  return taxCode;
+}
+
 export function stripeCheckoutUnitAmountCentsForDrop(dropRuntime: StripeCheckoutDropRuntime): number {
   const mode = stripeApiModeForCluster(dropRuntime.cluster);
   if (mode === 'live') {
@@ -657,7 +678,10 @@ function stripeCheckoutSessionSnapshot(session: Stripe.Checkout.Session): Stripe
   };
   if (session.mode !== undefined) snapshot.mode = session.mode;
   if (session.payment_status !== undefined) snapshot.payment_status = session.payment_status;
+  if (session.automatic_tax !== undefined) snapshot.automatic_tax = session.automatic_tax;
+  if (session.amount_subtotal !== undefined) snapshot.amount_subtotal = session.amount_subtotal;
   if (session.amount_total !== undefined) snapshot.amount_total = session.amount_total;
+  if (session.total_details !== undefined) snapshot.total_details = session.total_details;
   if (session.currency !== undefined) snapshot.currency = session.currency;
   return snapshot;
 }
@@ -1565,14 +1589,15 @@ export async function createStripeCheckoutSessionForRequest<
     throw new HttpsError('failed-precondition', 'Stripe checkout requires a configured receipt cNFT tree.');
   }
 
-  const apiKey = stripeApiKeyForMode(params.apiKeys, mode);
   const variantKey = normalizeStripeVariantKey(dropRuntime, rawVariantKey);
   if (!variantKey) {
     throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
   }
   const successUrl = checkoutReturnUrl(params.request, returnUrl, 'success');
   const cancelUrl = checkoutReturnUrl(params.request, returnUrl, 'cancel');
+  const productTaxCode = stripeCheckoutProductTaxCodeForDrop(dropRuntime);
   const unitAmountCents = stripeCheckoutUnitAmountCentsForDrop(dropRuntime);
+  const apiKey = stripeApiKeyForMode(params.apiKeys, mode);
   const cfg = await deps.fetchCheckoutConfig({
     dropRuntime,
     conn: deps.connection(dropRuntime),
@@ -1586,6 +1611,8 @@ export async function createStripeCheckoutSessionForRequest<
     {
       mode: 'payment',
       payment_method_types: ['card'],
+      automatic_tax: { enabled: true },
+      billing_address_collection: 'auto',
       success_url: successUrl,
       cancel_url: cancelUrl,
       client_reference_id: `${params.uid}:${dropId}:${Date.now()}`.slice(0, 200),
@@ -1595,7 +1622,8 @@ export async function createStripeCheckoutSessionForRequest<
           price_data: {
             currency: STRIPE_OFFCHAIN_CURRENCY,
             unit_amount: unitAmountCents,
-            product_data: { name: stripeCheckoutProductName(dropRuntime, variantKey, mode) },
+            tax_behavior: 'exclusive',
+            product_data: { name: stripeCheckoutProductName(dropRuntime, variantKey, mode), tax_code: productTaxCode },
           },
         },
       ],

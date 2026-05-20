@@ -37,6 +37,7 @@ export type FrontendDropConfigSerialized = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -52,6 +53,7 @@ export type FrontendDropConfigSerialized = {
 
 export type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
   stripeLiveUnitAmountCents?: number;
+  stripeProductTaxCode?: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
 };
@@ -461,6 +463,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
   const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
   const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
+  const stripeCheckoutEnabled = obj.stripeCheckoutEnabled === true;
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
@@ -475,6 +478,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     treasury: asTrimmedString(obj.treasury),
     priceSol: asFiniteNumber(obj.priceSol),
     discountPriceSol: asFiniteNumber(obj.discountPriceSol),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(obj.discountMintsPerWallet),
     discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
     maxSupply: Math.floor(asFiniteNumber(obj.maxSupply)),
@@ -495,9 +499,11 @@ function normalizeFunctionsDropForRegistry(raw: unknown): FunctionsDropConfigSer
   const frontendShape = normalizeFrontendDropForRegistry(raw);
   if (!frontendShape) return undefined;
   const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
+  const stripeProductTaxCode = asTrimmedString(obj.stripeProductTaxCode);
   return {
     ...frontendShape,
     ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
+    ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     receiptsMerkleTree: asTrimmedString(obj.receiptsMerkleTree),
     deliveryLookupTable: asTrimmedString(obj.deliveryLookupTable),
   };
@@ -636,6 +642,7 @@ function renderSharedProgramConfigPdaAssertion(registryName: string, registryLab
 }
 
 function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
+  const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
   return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
@@ -651,7 +658,7 @@ ${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.se
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
-    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
+${stripeCheckoutEnabledLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -667,10 +674,14 @@ ${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMi
 }
 
 function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
+  const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
   const stripeLiveUnitAmountCentsLine =
     drop.stripeLiveUnitAmountCents != null
       ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
       : '';
+  const stripeProductTaxCodeLine = drop.stripeProductTaxCode
+    ? `    stripeProductTaxCode: ${tsStringLiteral(drop.stripeProductTaxCode)},\n`
+    : '';
   return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
@@ -686,7 +697,7 @@ ${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
-${stripeLiveUnitAmountCentsLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
+${stripeCheckoutEnabledLine}${stripeLiveUnitAmountCentsLine}${stripeProductTaxCodeLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -774,6 +785,7 @@ export type FrontendDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -1090,6 +1102,7 @@ function createFrontendDrop(
     metadataPathFormat?: MetadataPathFormat;
   },
 ): FrontendDropConfig {
+  const { stripeCheckoutEnabled: rawStripeCheckoutEnabled, ...baseConfig } = config;
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
@@ -1097,8 +1110,9 @@ function createFrontendDrop(
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
+  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
   return {
-    ...config,
+    ...baseConfig,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
@@ -1109,6 +1123,7 @@ function createFrontendDrop(
     ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase, metadataPathFormat),
   };
@@ -1213,7 +1228,9 @@ export type FunctionsDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   stripeLiveUnitAmountCents?: number;
+  stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -1447,19 +1464,28 @@ function createFunctionsDrop(
     metadataPathFormat?: MetadataPathFormat;
   },
 ): FunctionsDropConfig {
+  const {
+    stripeCheckoutEnabled: rawStripeCheckoutEnabled,
+    stripeProductTaxCode: rawStripeProductTaxCode,
+    ...baseConfig
+  } = config;
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
+  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
+  const stripeProductTaxCode = String(rawStripeProductTaxCode || '').trim();
   return {
-    ...config,
+    ...baseConfig,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
     metadataPathFormat,
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     ...(mintSelection ? { mintSelection } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
   };

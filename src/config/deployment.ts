@@ -52,6 +52,7 @@ export type FrontendDropConfig = {
   treasury: string;
   priceSol: number;
   discountPriceSol: number;
+  stripeCheckoutEnabled?: boolean;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -368,6 +369,7 @@ function createFrontendDrop(
     metadataPathFormat?: MetadataPathFormat;
   },
 ): FrontendDropConfig {
+  const { stripeCheckoutEnabled: rawStripeCheckoutEnabled, ...baseConfig } = config;
   const normalizedDropId = normalizeDropId(config.dropId);
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
@@ -375,8 +377,9 @@ function createFrontendDrop(
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
+  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
   return {
-    ...config,
+    ...baseConfig,
     dropId: normalizedDropId,
     dropFamily: normalizedDropFamily,
     metadataBase: normalizeDropBase(config.metadataBase),
@@ -387,6 +390,7 @@ function createFrontendDrop(
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase, metadataPathFormat),
   };
@@ -619,6 +623,7 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.069,
     discountPriceSol: 0.042,
+    stripeCheckoutEnabled: true,
     discountMintsPerWallet: 1,
     discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
     maxSupply: 34,

@@ -59,7 +59,7 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
-- Live Checkout pricing is committed per mainnet drop in `functions/src/config/deployment.ts` as `stripeLiveUnitAmountCents`; publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
+- Stripe Checkout must be explicitly enabled per drop with `stripeCheckoutEnabled`. Enabled drops must also configure a Stripe product tax code (`stripeProductTaxCode`); live drops additionally require committed `stripeLiveUnitAmountCents`. Publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
 
 Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
 
