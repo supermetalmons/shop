@@ -38,7 +38,6 @@ export type StripeFulfillmentAddress = {
   country?: string;
   countryCode?: string;
   email?: string;
-  phone?: string;
 };
 
 export type StripeCheckoutLineItemLike = {
@@ -373,7 +372,6 @@ export function buildStripeOffchainAddressSnapshot(args: {
 
   return {
     ...(parsed.email ? { email: parsed.email } : {}),
-    ...(parsed.phone ? { phone: parsed.phone } : {}),
     country: parsed.country || countryCode,
     countryCode,
     encrypted: encrypted.encrypted,
@@ -554,12 +552,10 @@ export function stripeFulfillmentAddressFromSession(session: any): StripeFulfill
   if (!formatted) return null;
 
   const email = normalizedString(customer?.email || session?.customer_email);
-  const phone = normalizedString(shipping?.phone || customer?.phone || session?.customer_phone);
   return {
     formatted,
     country: countryCode || undefined,
     countryCode: countryCode || undefined,
     email: email || undefined,
-    phone: phone || undefined,
   };
 }

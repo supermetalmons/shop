@@ -133,7 +133,7 @@ test('decodeAdminDeliveryOrderRecord decodes the Anchor account layout', () => {
   assert.equal(decoded.bump, 255);
 });
 
-test('stripeFulfillmentAddressFromSession formats shipping details without wallet data', () => {
+test('stripeFulfillmentAddressFromSession formats shipping details without phone data', () => {
   const address = stripeFulfillmentAddressFromSession({
     customer_details: { email: 'buyer@example.com', phone: '+15551234567' },
     shipping_details: {
@@ -150,7 +150,7 @@ test('stripeFulfillmentAddressFromSession formats shipping details without walle
   });
 
   assert.equal(address?.email, 'buyer@example.com');
-  assert.equal(address?.phone, '+15551234567');
+  assert.equal(address && 'phone' in address, false);
   assert.equal(address?.countryCode, 'US');
   assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS');
 });
@@ -174,7 +174,7 @@ test('stripeFulfillmentAddressFromSession reads Stripe v22 collected shipping de
   });
 
   assert.equal(address?.email, 'buyer@example.com');
-  assert.equal(address?.phone, '+15551234567');
+  assert.equal(address && 'phone' in address, false);
   assert.equal(address?.countryCode, 'US');
   assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS');
 });
@@ -200,7 +200,7 @@ test('stripeFulfillmentAddressFromSession returns null when address is missing',
 
 test('buildStripeOffchainAddressSnapshot requires a parsed and encrypted address', () => {
   const validSession = {
-    customer_details: { email: 'buyer@example.com', phone: '+15551234567' },
+    customer_details: { email: 'buyer@example.com' },
     shipping_details: {
       name: 'Buyer Name',
       address: {
@@ -220,7 +220,6 @@ test('buildStripeOffchainAddressSnapshot requires a parsed and encrypted address
     }),
     {
       email: 'buyer@example.com',
-      phone: '+15551234567',
       country: 'US',
       countryCode: 'US',
       encrypted: 'cipher',
@@ -245,9 +244,9 @@ test('buildStripeOffchainAddressSnapshot requires a parsed and encrypted address
   );
 });
 
-test('stripeCheckoutShippingParams preserves phone collection for shippers', () => {
+test('stripeCheckoutShippingParams does not request phone numbers', () => {
   const params = stripeCheckoutShippingParams();
-  assert.deepEqual(params.phone_number_collection, { enabled: true });
+  assert.equal('phone_number_collection' in params, false);
   assert.ok(params.shipping_address_collection?.allowed_countries.includes('US'));
 });
 

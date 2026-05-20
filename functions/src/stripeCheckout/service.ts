@@ -516,10 +516,9 @@ const STRIPE_SHIPPING_ALLOWED_COUNTRIES = [
 
 export function stripeCheckoutShippingParams(): Pick<
   Stripe.Checkout.SessionCreateParams,
-  'phone_number_collection' | 'shipping_address_collection'
+  'shipping_address_collection'
 > {
   return {
-    phone_number_collection: { enabled: true },
     shipping_address_collection: {
       allowed_countries: [...STRIPE_SHIPPING_ALLOWED_COUNTRIES],
     },
