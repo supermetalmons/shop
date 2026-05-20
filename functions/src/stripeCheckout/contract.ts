@@ -10,6 +10,7 @@ export const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
+export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
 
@@ -396,6 +397,9 @@ export function buildStripeOffchainAddressSnapshot(args: {
   const normalize = args.normalizeCountryCode || normalizeCountryCode;
   const countryCode = normalize(parsed.countryCode || parsed.country);
   if (!countryCode) throw new Error('Stripe checkout shipping address country is invalid');
+  if (countryCode !== STRIPE_CHECKOUT_SHIPPING_COUNTRY) {
+    throw new Error('Stripe checkout shipping address must be in the US');
+  }
 
   const encrypted = args.encryptAddress(parsed.formatted);
   if (!encrypted) throw new Error('Stripe checkout shipping address could not be encrypted');

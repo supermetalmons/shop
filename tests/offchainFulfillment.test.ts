@@ -6,6 +6,7 @@ import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
@@ -199,7 +200,7 @@ test('stripeFulfillmentAddressFromSession returns null when address is missing',
   );
 });
 
-test('buildStripeOffchainAddressSnapshot requires a parsed and encrypted address', () => {
+test('buildStripeOffchainAddressSnapshot accepts US shipping addresses', () => {
   const validSession = {
     customer_details: { email: 'buyer@example.com' },
     shipping_details: {
@@ -245,10 +246,33 @@ test('buildStripeOffchainAddressSnapshot requires a parsed and encrypted address
   );
 });
 
+test('buildStripeOffchainAddressSnapshot rejects non-US shipping addresses', () => {
+  assert.throws(
+    () =>
+      buildStripeOffchainAddressSnapshot({
+        session: {
+          customer_details: { email: 'buyer@example.com' },
+          shipping_details: {
+            name: 'Buyer Name',
+            address: {
+              line1: '1 King St',
+              city: 'Toronto',
+              state: 'ON',
+              postal_code: 'M5H 1A1',
+              country: 'CA',
+            },
+          },
+        },
+        encryptAddress: () => ({ encrypted: 'cipher', hint: 'B...CA' }),
+      }),
+    /must be in the US/,
+  );
+});
+
 test('stripeCheckoutShippingParams does not request phone numbers', () => {
   const params = stripeCheckoutShippingParams();
   assert.equal('phone_number_collection' in params, false);
-  assert.ok(params.shipping_address_collection?.allowed_countries.includes('US'));
+  assert.deepEqual(params.shipping_address_collection?.allowed_countries, [STRIPE_CHECKOUT_SHIPPING_COUNTRY]);
 });
 
 test('isStripeOffchainFulfillmentSession only accepts the app fulfillment mode', () => {
