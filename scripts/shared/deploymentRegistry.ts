@@ -340,7 +340,21 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   return defaultDropFamilyForDropId(dropId || '');
 }
 
-const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
+export type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+
+export type SecondaryMarketplaceLink = {
+  key: SecondaryMarketplaceKey;
+  label: string;
+  href: string;
+};
+
+const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
+  little_swag_boxes: 'https://magiceden.io/marketplace/little_swag_boxes',
+  poncho_drifella: 'https://magiceden.io/marketplace/poncho_drifella',
+};
+
+const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
+  little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
@@ -349,10 +363,24 @@ const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
 };
 
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
+  return secondaryMarketplaceLinksForDropId(dropId).find((link) => link.key === 'tensor')?.href;
+}
+
+export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
   const normalizedDropId = normalizeDropId(dropId);
-  const overrideHref = SECONDARY_MARKET_HREF_OVERRIDES[normalizedDropId];
-  if (overrideHref) return overrideHref;
-  return normalizedDropId ? `https://www.tensor.trade/trade/${normalizedDropId}` : undefined;
+  if (!normalizedDropId) return [];
+  return [
+    {
+      key: 'magiceden',
+      label: 'Magic Eden',
+      href: MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || `https://magiceden.io/marketplace/${normalizedDropId}`,
+    },
+    {
+      key: 'tensor',
+      label: 'Tensor',
+      href: TENSOR_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || `https://www.tensor.trade/trade/${normalizedDropId}`,
+    },
+  ];
 }
 
 function defaultFrontendForceSoldOutForDropId(dropId: string): boolean {
@@ -809,6 +837,14 @@ export type FrontendDeploymentConfig = FrontendDropConfig;
 
 export type FrontendDropsMap = Record<string, FrontendDropConfig>;
 
+export type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+
+export type SecondaryMarketplaceLink = {
+  key: SecondaryMarketplaceKey;
+  label: string;
+  href: string;
+};
+
 export type DropPaths = {
   /** Normalized drop base (no trailing slash). */
   base: string;
@@ -972,7 +1008,13 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-const SECONDARY_MARKET_HREF_OVERRIDES: Record<string, string> = {
+const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
+  little_swag_boxes: 'https://magiceden.io/marketplace/little_swag_boxes',
+  poncho_drifella: 'https://magiceden.io/marketplace/poncho_drifella',
+};
+
+const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
+  little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
@@ -987,10 +1029,24 @@ function normalizeDiscountMintsPerWallet(value: unknown): number {
 }
 
 function defaultSecondaryMarketHref(dropId: string): string | undefined {
+  return secondaryMarketplaceLinksForDropId(dropId).find((link) => link.key === 'tensor')?.href;
+}
+
+export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
   const normalizedDropId = normalizeDropId(dropId);
-  const overrideHref = SECONDARY_MARKET_HREF_OVERRIDES[normalizedDropId];
-  if (overrideHref) return overrideHref;
-  return normalizedDropId ? \`https://www.tensor.trade/trade/\${normalizedDropId}\` : undefined;
+  if (!normalizedDropId) return [];
+  return [
+    {
+      key: 'magiceden',
+      label: 'Magic Eden',
+      href: MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || \`https://magiceden.io/marketplace/\${normalizedDropId}\`,
+    },
+    {
+      key: 'tensor',
+      label: 'Tensor',
+      href: TENSOR_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || \`https://www.tensor.trade/trade/\${normalizedDropId}\`,
+    },
+  ];
 }
 
 function defaultForceSoldOutForDropId(dropId: string): boolean {

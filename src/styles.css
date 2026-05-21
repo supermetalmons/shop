@@ -881,6 +881,8 @@ header.top {
   align-items: center;
   column-gap: 12px;
   text-align: left;
+  font-size: 14px;
+  line-height: normal;
   background: var(--accent);
   color: #ffffff;
   border: none;
@@ -907,6 +909,26 @@ header.top {
 
 .mint-panel__secondary:hover .mint-panel__secondary-icon {
   transform: translateX(1px);
+}
+
+.mint-panel__terminal-buttons {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+}
+
+.mint-panel__terminal-buttons--split {
+  width: fit-content;
+  display: grid;
+  grid-template-columns: 167px 135px;
+  gap: 14px;
+}
+
+.mint-panel__terminal-buttons--split .mint-panel__secondary {
+  width: 100%;
+  min-width: 0;
+  padding-right: 16px;
+  padding-left: 16px;
 }
 
 .mint-panel__submit-text {
@@ -996,6 +1018,14 @@ header.top {
 
   .mint-panel__cta-stack {
     width: 100%;
+  }
+
+  .mint-panel__terminal-buttons {
+    width: 100%;
+  }
+
+  .mint-panel__terminal-buttons--split {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .mint-panel__discount {

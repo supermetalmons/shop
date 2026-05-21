@@ -3,14 +3,22 @@ import { FaChevronRight, FaCircleQuestion, FaCreditCard } from 'react-icons/fa6'
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
-import type { MintSelectionConfig } from '../config/deployment';
+import { secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
+
+type MintPanelTerminalButton = {
+  key?: string;
+  buttonText: string;
+  href?: string;
+  onClick?: () => void;
+};
 
 type MintPanelTerminalAction = {
   statusText: string;
   buttonText?: string;
   href?: string;
   onClick?: () => void;
+  buttons?: MintPanelTerminalButton[];
 };
 
 interface MintPanelProps {
@@ -22,11 +30,11 @@ interface MintPanelProps {
   boxImageSrc?: string;
   boxAspectRatio?: number;
   boxNamePrefix?: string;
+  dropId?: string;
   priceSol: number;
   discountPriceSol: number;
   maxSupply: number;
   maxPerTx: number;
-  secondaryHref?: string;
   discountVisible?: boolean;
   discountLabel?: string;
   discountMaxQuantity?: number;
@@ -159,11 +167,11 @@ export function MintPanel({
   boxImageSrc,
   boxAspectRatio,
   boxNamePrefix,
+  dropId,
   priceSol,
   discountPriceSol,
   maxSupply,
   maxPerTx,
-  secondaryHref,
   discountVisible,
   discountLabel,
   discountMaxQuantity,
@@ -372,15 +380,41 @@ export function MintPanel({
     : 'mint-panel__cta-stack';
   const mintTitle = title || 'Little Swag Boxes';
   const mintBoxImageSrc = boxImageSrc;
+  const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
+    return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
+      key: link.key,
+      buttonText: link.label,
+      href: link.href,
+    }));
+  }, [dropId]);
+  const isDefaultSoldOutState = soldOut && !terminalAction;
   const terminalState =
     terminalAction ||
     (soldOut
       ? {
           statusText: 'Minted out',
-          buttonText: secondaryHref ? 'Secondary' : undefined,
-          href: secondaryHref,
+          buttons: soldOutButtons,
         }
       : null);
+  const terminalButtons = (
+    terminalState
+      ? terminalState.buttons ||
+        (terminalState.buttonText && (terminalState.href || terminalState.onClick)
+          ? [
+              {
+                key: 'primary',
+                buttonText: terminalState.buttonText,
+                href: terminalState.href,
+                onClick: terminalState.onClick,
+              },
+            ]
+          : [])
+      : []
+  ).filter((button) => button.href || button.onClick);
+  const terminalFooterClassName = isDefaultSoldOutState
+    ? 'mint-panel__footer mint-panel__footer--soldout mint-panel__footer--marketplaces'
+    : 'mint-panel__footer mint-panel__footer--soldout';
+  const splitTerminalButtons = terminalButtons.length > 1;
 
   return (
     <section className="mint-panel">
@@ -423,24 +457,39 @@ export function MintPanel({
         </div>
       </div>
       {terminalState ? (
-        <div className="mint-panel__footer mint-panel__footer--soldout">
+        <div className={terminalFooterClassName}>
           <div className="mint-panel__info">
             <div className="mint-panel__price">{mintTitle}</div>
             <div className="mint-panel__remaining">{terminalState.statusText}</div>
           </div>
-          {terminalState.buttonText && (terminalState.href || terminalState.onClick) ? (
+          {terminalButtons.length ? (
             <div className="mint-panel__cta">
-              {terminalState.href ? (
-                <a className="mint-panel__secondary" href={terminalState.href} target="_blank" rel="noreferrer">
-                  <span className="mint-panel__secondary-text">{terminalState.buttonText}</span>
-                  <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
-                </a>
-              ) : (
-                <button type="button" className="mint-panel__secondary" onClick={terminalState.onClick}>
-                  <span className="mint-panel__secondary-text">{terminalState.buttonText}</span>
-                  <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
-                </button>
-              )}
+              <div
+                className={
+                  splitTerminalButtons
+                    ? 'mint-panel__terminal-buttons mint-panel__terminal-buttons--split'
+                    : 'mint-panel__terminal-buttons'
+                }
+              >
+                {terminalButtons.map((button, index) => {
+                  const key = button.key || `${button.buttonText}-${index}`;
+                  if (button.href) {
+                    return (
+                      <a key={key} className="mint-panel__secondary" href={button.href} target="_blank" rel="noreferrer">
+                        <span className="mint-panel__secondary-text">{button.buttonText}</span>
+                        <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
+                      </a>
+                    );
+                  }
+                  if (!button.onClick) return null;
+                  return (
+                    <button key={key} type="button" className="mint-panel__secondary" onClick={button.onClick}>
+                      <span className="mint-panel__secondary-text">{button.buttonText}</span>
+                      <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           ) : null}
         </div>

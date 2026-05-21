@@ -5116,11 +5116,11 @@ function App({ currentPath }: AppProps) {
           boxImageSrc={mintPreviewImage}
           boxAspectRatio={mintPreviewAspectRatio}
           boxNamePrefix={routeDrop.namePrefix}
+          dropId={routeDrop.dropId}
           priceSol={routeDrop.priceSol}
           discountPriceSol={routeDrop.discountPriceSol}
           maxSupply={routeDrop.maxSupply}
           maxPerTx={routeDrop.maxPerTx}
-          secondaryHref={routeDrop.secondaryMarketHref}
           discountVisible={discountCtaState.visible}
           discountLabel={discountCtaState.label}
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
