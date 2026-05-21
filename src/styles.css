@@ -6,6 +6,7 @@
   --card: #ffffff;
   --surface: #f5f5f7;
   --border: rgba(0, 0, 0, 0.06);
+  --section-divider: var(--border);
   --accent: #0071e3;
   --accent-hover: #0077ed;
   --accent-tint: rgba(0, 113, 227, 0.12);
@@ -21,13 +22,14 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000000;
+    --bg: #131313;
     --bg-secondary: #1d1d1f;
     --fg: #f5f5f7;
     --muted: #86868b;
     --card: #1d1d1f;
     --surface: #2d2d2d;
     --border: rgba(255, 255, 255, 0.08);
+    --section-divider: rgba(255, 255, 255, 0.045);
     --accent: #2997ff;
     --accent-hover: #4dabff;
     --accent-tint: rgba(41, 151, 255, 0.16);
@@ -95,7 +97,7 @@ body.wip-scroll-lock #root {
 .app-section {
   width: 100%;
   padding-top: 24px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--section-divider);
   display: flex;
   flex-direction: column;
   gap: 16px;
