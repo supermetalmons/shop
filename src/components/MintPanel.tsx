@@ -383,7 +383,7 @@ export function MintPanel({
       : null);
 
   return (
-    <section className="card mint-panel">
+    <section className="mint-panel">
       <div className="mint-panel__preview">
         <div
           ref={previewRef}

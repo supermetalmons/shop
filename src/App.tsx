@@ -5140,41 +5140,43 @@ function App({ currentPath }: AppProps) {
         />
       )}
 
-	      <section className="card inventory-card">
-	        <div className="card__title">Inventory</div>
-		        <InventoryGrid
-		          items={inventoryItems}
-		          selected={selected}
-		          onToggle={toggleSelected}
-		          pendingRevealIds={pendingRevealIds}
-              canRevealItem={(item) => canOpenBoxesForDropId(item.dropId)}
-		          onReveal={async (id, rect) => {
-                if (blockViewerModeAction()) return;
-		            if (!publicKey) {
-		              setVisible(true);
-		              return;
-		            }
-                const revealItem = inventoryIndex.get(id);
-                const revealDropId = revealItem?.dropId || routeDrop?.dropId;
-                if (!revealDropId) return;
-                if (!canOpenBoxesForDropId(revealDropId)) return;
-		            preloadRevealSounds(revealDropId);
-		            preloadPonchoRevealPackAssetsForDropId(revealDropId);
-		            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
-		            preloadBoxFrames(revealAutoplayStartForDropId(revealDropId), revealFrameCountForDropId(revealDropId), revealDropId);
-		            const refreshedRect = findInventoryRect(id);
-		            openRevealOverlay(id, refreshedRect || rect);
-		            const signedIn = await ensureSignedIn();
-		            if (!signedIn) {
-		              if (revealOverlayRef.current?.id === id) {
-		                closeRevealOverlay();
-		              }
-		            }
-		          }}
-		          revealLoadingId={revealLoading}
-		          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
-		          emptyStateVisibility={inventoryEmptyStateVisibility}
-		        />
+      <section className="app-section inventory-section">
+        <div className="app-section__head">
+          <div className="app-section__title">Inventory</div>
+        </div>
+        <InventoryGrid
+          items={inventoryItems}
+          selected={selected}
+          onToggle={toggleSelected}
+          pendingRevealIds={pendingRevealIds}
+          canRevealItem={(item) => canOpenBoxesForDropId(item.dropId)}
+          onReveal={async (id, rect) => {
+            if (blockViewerModeAction()) return;
+            if (!publicKey) {
+              setVisible(true);
+              return;
+            }
+            const revealItem = inventoryIndex.get(id);
+            const revealDropId = revealItem?.dropId || routeDrop?.dropId;
+            if (!revealDropId) return;
+            if (!canOpenBoxesForDropId(revealDropId)) return;
+            preloadRevealSounds(revealDropId);
+            preloadPonchoRevealPackAssetsForDropId(revealDropId);
+            preloadBoxFrames(1, revealClickMaxForDropId(revealDropId), revealDropId);
+            preloadBoxFrames(revealAutoplayStartForDropId(revealDropId), revealFrameCountForDropId(revealDropId), revealDropId);
+            const refreshedRect = findInventoryRect(id);
+            openRevealOverlay(id, refreshedRect || rect);
+            const signedIn = await ensureSignedIn();
+            if (!signedIn) {
+              if (revealOverlayRef.current?.id === id) {
+                closeRevealOverlay();
+              }
+            }
+          }}
+          revealLoadingId={revealLoading}
+          revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
+          emptyStateVisibility={inventoryEmptyStateVisibility}
+        />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
 
@@ -5223,9 +5225,9 @@ function App({ currentPath }: AppProps) {
       </Modal>
 
       {activeError ? <div className="error">{activeError}</div> : null}
-      <section className="card shipments-card">
-        <div className="card__head">
-          <div className="card__title">Shipments</div>
+      <section className="app-section shipments-section">
+        <div className="app-section__head">
+          <div className="app-section__title">Shipments</div>
         </div>
         {shipmentsReady ? (
           deliveryOrders.length ? (
@@ -5233,9 +5235,9 @@ function App({ currentPath }: AppProps) {
             {deliveryOrders.map((order) => {
               return (
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
-                  <div className="card__head">
+                  <div className="delivery-row__head">
                     <div>
-                      <div className="card__title">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
+                      <div className="delivery-row__title">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                       <div className="muted small">{formatOrderDate(order)}</div>
                     </div>
                     <div className="delivery-status">{displayOrderStatus(order)}</div>
@@ -5265,13 +5267,13 @@ function App({ currentPath }: AppProps) {
       </section>
 
       {receiptItems.length && shipmentsContentVisible ? (
-        <section className="card receipts-card">
-          <div className="card__head receipts-card__head">
-            <div className="card__title">Receipts</div>
-            <div className="card__actions">
+        <section className="app-section receipts-section">
+          <div className="app-section__head receipts-section__head">
+            <div className="app-section__title">Receipts</div>
+            <div className="app-section__actions">
               <button
                 type="button"
-                className="receipts-card__code-button"
+                className="receipts-section__code-button"
                 onClick={() => {
                   if (blockViewerModeAction()) return;
                   setClaimOpen(true);

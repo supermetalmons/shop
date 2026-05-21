@@ -77,7 +77,7 @@ export function DropsPanel() {
   const gridClassName = `drops-panel__grid${items.length > 1 ? ' drops-panel__grid--compact' : ''}`;
 
   return (
-    <section className="card drops-panel">
+    <section className="drops-panel">
       <div className={gridClassName}>
         {items.map((item, index) => (
           <DropPanelCard
