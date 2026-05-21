@@ -129,6 +129,8 @@ export interface FulfillmentOrderBox {
   boxId: number;
   assetId?: string;
   claimCode?: string;
+  receiptClaimCode?: string;
+  receiptClaimStatus?: string;
   dudeIds: number[];
 }
 

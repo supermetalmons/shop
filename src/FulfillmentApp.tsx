@@ -393,13 +393,15 @@ function renderBoxTiles(args: {
   keyPrefix: string;
   labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
   previewSrc?: string;
+  secretCodeByBoxId?: ReadonlyMap<number, string>;
 }) {
-  const { boxIds, keyPrefix, labelSource, previewSrc } = args;
+  const { boxIds, keyPrefix, labelSource, previewSrc, secretCodeByBoxId } = args;
   return (
     <div className="figure-grid">
       {boxIds.map((boxId, index) => {
         const sizeLabel = dropMintSelectionLabel(labelSource, boxId);
         const label = sizeLabel || dropAssetReference(labelSource, 'box', boxId);
+        const secretCode = secretCodeByBoxId?.get(boxId);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
             {previewSrc ? (
@@ -408,6 +410,12 @@ function renderBoxTiles(args: {
               <div className="figure-image figure-image--placeholder" aria-hidden="true" />
             )}
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
+            {secretCode ? (
+              <div className="muted small">
+                {dropAssetLabel(labelSource, 'box', 1, { capitalize: true })} Secret{' '}
+                <span className="fulfillment-secret-code">{secretCode}</span>
+              </div>
+            ) : null}
           </div>
         );
       })}
@@ -1036,6 +1044,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 keyPrefix: `${orderKey}:box`,
                 labelSource: orderDrop,
                 previewSrc: orderBoxPreviewImage,
+                secretCodeByBoxId: new Map(
+                  order.boxes
+                    .filter((box) => box.receiptClaimCode)
+                    .map((box) => [box.boxId, box.receiptClaimCode as string]),
+                ),
               })
             ) : (
               <div className="box-contents-list">

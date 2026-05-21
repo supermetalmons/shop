@@ -11,6 +11,7 @@ import {
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
   STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   buildStripeCheckoutDocument,
   buildStripeCheckoutSessionMetadata,
   buildStripeOffchainDeliveryOrderDocument,
@@ -19,7 +20,10 @@ import {
   decodeAdminDeliveryOrderRecord,
   deriveAdminOrderPda,
   encodeAdminDeliverVariantOrderArgs,
+  generateStripeReceiptClaimCode,
   isStripeOffchainFulfillmentSession,
+  normalizeStripeReceiptClaimCode,
+  requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
   stripeCheckoutOwnerId,
@@ -47,6 +51,8 @@ import {
   stripeCheckoutUnitAmountCentsForDrop,
   stripeTestApiKey,
 } from '../functions/src/stripeCheckout/service.ts';
+import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
+import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from '../functions/src/bubblegum.ts';
 
 function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
@@ -80,6 +86,65 @@ test('stripeCheckoutSessionOrderHash is stable and livemode-scoped', () => {
   assert.equal(testHash.length, 32);
   assert.deepEqual(testHash, repeatHash);
   assert.notDeepEqual(testHash, liveHash);
+});
+
+test('Stripe receipt claim codes use canonical letters-dash-digits format', () => {
+  const code = generateStripeReceiptClaimCode();
+  assert.match(code, /^[A-Z]{6}-\d{10}$/);
+  assert.equal(normalizeStripeReceiptClaimCode('  abcdef-0123456789  '), 'ABCDEF-0123456789');
+  assert.equal(requireStripeReceiptClaimCode('abcdef-0123456789'), 'ABCDEF-0123456789');
+  assert.throws(() => requireStripeReceiptClaimCode('ABCDEF0123456789'), /Invalid Stripe receipt claim code/);
+});
+
+test('IRL claim code normalization rejects Stripe-formatted alphabetic codes', () => {
+  assert.equal(normalizeIrlClaimCode('123-456 7890'), '1234567890');
+  assert.equal(normalizeIrlClaimCode('ABCDEF-0123456789'), '');
+  assert.equal(IRL_CLAIM_CODE_DIGITS, 10);
+});
+
+test('Bubblegum transferV2 helper uses expected discriminator and account order', () => {
+  const payer = pubkey(1);
+  const authority = pubkey(2);
+  const leafOwner = pubkey(3);
+  const leafDelegate = pubkey(4);
+  const newLeafOwner = pubkey(5);
+  const merkleTree = pubkey(6);
+  const coreCollection = pubkey(7);
+  const proof = [pubkey(8), pubkey(9)];
+  const ix = bubblegumTransferV2Ix({
+    bubblegumProgramId: pubkey(20),
+    mplNoopProgramId: pubkey(21),
+    mplAccountCompressionProgramId: pubkey(22),
+    treeConfig: pubkey(23),
+    payer,
+    authority,
+    leafOwner,
+    leafDelegate,
+    newLeafOwner,
+    merkleTree,
+    coreCollection,
+    root: Buffer.alloc(32, 1),
+    dataHash: Buffer.alloc(32, 2),
+    creatorHash: Buffer.alloc(32, 3),
+    assetDataHash: Buffer.alloc(32, 4),
+    flags: 1,
+    nonce: 12,
+    index: 12,
+    proof,
+  });
+
+  assert.deepEqual(ix.data.subarray(0, 8), IX_BUBBLEGUM_TRANSFER_V2);
+  assert.equal(ix.keys[1].pubkey.toBase58(), payer.toBase58());
+  assert.equal(ix.keys[1].isSigner, true);
+  assert.equal(ix.keys[2].pubkey.toBase58(), authority.toBase58());
+  assert.equal(ix.keys[2].isSigner, true);
+  assert.equal(ix.keys[3].pubkey.toBase58(), leafOwner.toBase58());
+  assert.equal(ix.keys[4].pubkey.toBase58(), leafDelegate.toBase58());
+  assert.equal(ix.keys[5].pubkey.toBase58(), newLeafOwner.toBase58());
+  assert.equal(ix.keys[6].pubkey.toBase58(), merkleTree.toBase58());
+  assert.equal(ix.keys[7].pubkey.toBase58(), coreCollection.toBase58());
+  assert.equal(ix.keys.at(-2)?.pubkey.toBase58(), proof[0].toBase58());
+  assert.equal(ix.keys.at(-1)?.pubkey.toBase58(), proof[1].toBase58());
 });
 
 test('admin order PDA and instruction args use the on-chain seed and discriminator', () => {
@@ -524,6 +589,7 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
     },
     receiptTx: 'tx123',
     addressSnapshot: { encrypted: 'cipher', hint: 'B...US', countryCode: 'US' },
+    stripeReceiptClaim: { code: 'ABCDEF-0123456789', status: 'unclaimed' },
   };
   const doc = buildStripeOffchainDeliveryOrderDocument(input);
 
@@ -536,6 +602,12 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
   assert.deepEqual(doc.items, [{ kind: 'box', refId: 16, variantKey: 'XL' }]);
   assert.equal(doc.receiptsMinted, 1);
   assert.deepEqual(doc.receiptTxs, ['tx123']);
+  assert.deepEqual(doc.stripeReceiptClaim, {
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    code: 'ABCDEF-0123456789',
+    boxId: 16,
+    status: 'unclaimed',
+  });
   assert.equal(doc.stripeCheckoutSessionId, 'cs_test_123');
   assert.equal(doc.stripePaymentIntentId, 'pi_123');
   assert.deepEqual(buildStripeOffchainOrderMarkerDocument(input), {
@@ -550,7 +622,90 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
     offchainOrderHash: 'ab'.repeat(32),
     stripeCheckoutSessionId: 'cs_test_123',
     receiptTx: 'tx123',
+    stripeReceiptClaimCode: 'ABCDEF-0123456789',
   });
+});
+
+test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code atomically', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const orderHashHex = 'cd'.repeat(32);
+  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_456` } as any;
+  const creates: Array<{ ref: any; data: any }> = [];
+  const updates: Array<{ ref: any; data: any }> = [];
+  const db = {
+    doc: (path: string) => {
+      if (path === markerRef.path) return markerRef;
+      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
+      if (path.startsWith('claimCodes/')) return { path };
+      return { path };
+    },
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          if (ref === markerRef) return { exists: false };
+          if (ref === checkoutRef) {
+            return {
+              exists: true,
+              data: () => ({
+                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+                processingAttemptId: 'attempt_current',
+              }),
+            };
+          }
+          if (String(ref?.path || '').startsWith('claimCodes/')) return { exists: false };
+          throw new Error(`unexpected ref: ${ref?.path}`);
+        },
+        create: (ref: any, data: any) => {
+          creates.push({ ref, data });
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const result = await createOrGetStripeOffchainDeliveryOrder({
+    db,
+    checkoutRef,
+    isAlreadyExistsError: () => false,
+    processingAttemptId: 'attempt_current',
+    order: {
+      dropId,
+      orderHashHex,
+      owner: 'firebase:anon_uid_456',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_456',
+      receiptOwner: pubkey(91).toBase58(),
+      metadataId: 16,
+      variantKey: 'XL',
+      stripeSession: { id: 'cs_test_456' },
+      receiptTx: 'tx456',
+      addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+    },
+  });
+
+  assert.equal(result.checkoutStatus, 'fulfilled');
+  assert.equal(creates.length, 3);
+  const orderCreate = creates.find((entry) => String(entry.ref.path).startsWith(`drops/${dropId}/deliveryOrders/`));
+  const markerCreate = creates.find((entry) => entry.ref === markerRef);
+  const claimCreate = creates.find((entry) => String(entry.ref.path).startsWith('claimCodes/'));
+  assert.ok(orderCreate);
+  assert.ok(markerCreate);
+  assert.ok(claimCreate);
+  assert.match(claimCreate.data.code, /^[A-Z]{6}-\d{10}$/);
+  assert.equal(claimCreate.data.namespace, STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE);
+  assert.equal(claimCreate.data.status, 'unclaimed');
+  assert.equal(claimCreate.data.boxId, 16);
+  assert.equal(claimCreate.data.deliveryId, result.deliveryId);
+  assert.deepEqual(orderCreate.data.stripeReceiptClaim, {
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    code: claimCreate.data.code,
+    boxId: 16,
+    status: 'unclaimed',
+  });
+  assert.equal(markerCreate.data.stripeReceiptClaimCode, claimCreate.data.code);
+  assert.equal(updates.length, 1);
 });
 
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {

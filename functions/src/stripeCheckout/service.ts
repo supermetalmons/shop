@@ -23,6 +23,7 @@ import {
   decodeAdminDeliveryOrderRecord,
   deriveAdminOrderPda,
   encodeAdminDeliverVariantOrderArgs,
+  generateStripeReceiptClaimCode,
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutReturnUrl,
   resolveMintSelectionVariantIndex,
@@ -31,6 +32,8 @@ import {
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
   STRIPE_OFFCHAIN_CURRENCY,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+  requireStripeReceiptClaimCode,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
   validateStripeCheckoutContract,
@@ -331,6 +334,13 @@ class StripeCheckoutProcessingAttemptOwnershipCheckError extends Error {
     super('Could not verify Stripe checkout fulfillment processing lease ownership');
     this.name = 'StripeCheckoutProcessingAttemptOwnershipCheckError';
     this.cause = cause;
+  }
+}
+
+class StripeReceiptClaimCodeCollisionError extends Error {
+  constructor() {
+    super('Generated Stripe receipt claim code already exists');
+    this.name = 'StripeReceiptClaimCodeCollisionError';
   }
 }
 
@@ -841,10 +851,14 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
   const { dropId, orderHashHex } = order;
   const markerRef = db.doc(`${dropRootPath(dropId)}/offchainOrders/${orderHashHex}`);
   const MAX_DELIVERY_ID_ATTEMPTS = 16;
+  const MAX_CLAIM_CODE_ATTEMPTS = 40;
+  const maxAttempts = MAX_DELIVERY_ID_ATTEMPTS * MAX_CLAIM_CODE_ATTEMPTS;
 
-  for (let attempt = 0; attempt < MAX_DELIVERY_ID_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const candidate = randomInt(1, 2 ** 31);
     const orderRef = db.doc(dropDeliveryOrderPath(dropId, candidate));
+    const claimCode = generateStripeReceiptClaimCode();
+    const claimRef = db.doc(`claimCodes/${claimCode}`);
 
     try {
       const result = await db.runTransaction(async (tx) => {
@@ -880,7 +894,15 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
           return deliveryId ? { deliveryId, checkoutStatus } : { checkoutStatus };
         }
 
-        const deliveryOrder = { ...order, deliveryId: candidate };
+        const claimSnap = await tx.get(claimRef);
+        if (claimSnap.exists) throw new StripeReceiptClaimCodeCollisionError();
+
+        const canonicalClaimCode = requireStripeReceiptClaimCode(claimCode);
+        const deliveryOrder = {
+          ...order,
+          deliveryId: candidate,
+          stripeReceiptClaim: { code: canonicalClaimCode, status: 'unclaimed' },
+        };
         tx.create(orderRef, {
           ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
           processedAt: FieldValue.serverTimestamp(),
@@ -888,6 +910,23 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
         });
         tx.create(markerRef, {
           ...buildStripeOffchainOrderMarkerDocument(deliveryOrder),
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        tx.create(claimRef, {
+          version: 1,
+          namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+          code: canonicalClaimCode,
+          dropId,
+          deliveryId: candidate,
+          owner: order.owner,
+          ...(order.ownerKind ? { ownerKind: order.ownerKind } : {}),
+          ...(order.firebaseUid ? { firebaseUid: order.firebaseUid } : {}),
+          receiptOwner: order.receiptOwner,
+          boxId: order.metadataId,
+          variantKey: order.variantKey,
+          offchainOrderHash: order.orderHashHex,
+          stripeCheckoutSessionId: order.stripeSession.id,
+          status: 'unclaimed',
           createdAt: FieldValue.serverTimestamp(),
         });
         if (checkoutStatus === 'fulfilled') {
@@ -904,12 +943,13 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
       });
       return result;
     } catch (err) {
+      if (err instanceof StripeReceiptClaimCodeCollisionError) continue;
       if (params.isAlreadyExistsError(err)) continue;
       throw err;
     }
   }
 
-  throw new HttpsError('unavailable', 'Failed to allocate off-chain delivery id (try again)');
+  throw new HttpsError('unavailable', 'Failed to allocate off-chain delivery id or receipt claim code (try again)');
 }
 
 async function fetchAdminDeliveryOrderRecord(params: {

@@ -1,5 +1,5 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldPath, FieldValue, Timestamp, getFirestore } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, Timestamp, getFirestore, type DocumentReference } from 'firebase-admin/firestore';
 import { onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onCall, onRequest, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
@@ -44,11 +44,15 @@ import {
 import { normalizeCountryCode } from './normalizers.js';
 import {
   STRIPE_CHECKOUT_STATUS,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   isStripeOffchainFulfillmentSession,
+  normalizeStripeReceiptClaimCode,
+  requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
   stripeCheckoutOwnerId,
 } from './stripeCheckout/contract.js';
+import { bubblegumTransferV2Ix } from './bubblegum.js';
 import { shouldNotifyShippersForDeliveryReadyToShipWrite } from './notifications.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { parseRequest } from './request.js';
@@ -65,6 +69,7 @@ import {
 } from './stripeCheckout/service.js';
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
 import { toMillisMaybe } from './time.js';
+import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -579,6 +584,7 @@ const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS = [30_000, 2 * 60 * 1000, 10 * 60 * 1000] as const;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
+const STRIPE_RECEIPT_CLAIM_PROCESSING_LEASE_MS = 90_000;
 const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
   1,
   ...Object.values(DROP_RUNTIMES).map((runtime) => normalizeDeliveryUnitsPerBox(runtime.itemsPerBox)),
@@ -1475,6 +1481,76 @@ async function heliusRpc<T>(dropRuntime: DropRuntime, method: string, params: an
   return json.result as T;
 }
 
+const HELIUS_ASSETS_PAGE_LIMIT = 1000;
+const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
+
+function heliusSearchAssetsParams(owner: string, page: number, grouping?: readonly [string, string]) {
+  const params: any = {
+    ownerAddress: owner,
+    page,
+    limit: HELIUS_ASSETS_PAGE_LIMIT,
+    displayOptions: {
+      showCollectionMetadata: true,
+      showUnverifiedCollections: true,
+    },
+  };
+  if (grouping) params.grouping = grouping;
+  return params;
+}
+
+function heliusSearchAssetsItems(result: any): any[] {
+  return Array.isArray(result?.items) ? result.items : [];
+}
+
+function heliusSearchAssetsHasNextPage(result: any, page: number, items: any[]): boolean {
+  if (!items.length) return false;
+  const responseLimit = Number(result?.limit);
+  const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : HELIUS_ASSETS_PAGE_LIMIT;
+  if (items.length < limit) return false;
+  const total = Number(result?.total);
+  const resultPage = Number(result?.page ?? page);
+  if (Number.isFinite(total) && total >= 0 && Number.isFinite(limit) && limit > 0 && Number.isFinite(resultPage)) {
+    return resultPage * limit < total;
+  }
+  return true;
+}
+
+async function findOwnedAssetByPredicate(params: {
+  owner: string;
+  dropRuntime: DropRuntime;
+  matches: (asset: any) => boolean;
+  grouping?: readonly [string, string];
+  label: string;
+}): Promise<{ asset: any | null; sawItems: boolean }> {
+  let sawItems = false;
+  for (let page = 1; page <= HELIUS_ASSETS_MAX_SEARCH_PAGES; page += 1) {
+    const result = await heliusRpc<any>(
+      params.dropRuntime,
+      'searchAssets',
+      heliusSearchAssetsParams(params.owner, page, params.grouping),
+      params.label,
+    );
+    const items = heliusSearchAssetsItems(result);
+    sawItems ||= items.length > 0;
+
+    const match = items.find(params.matches);
+    if (match) return { asset: match, sawItems };
+    if (!heliusSearchAssetsHasNextPage(result, page, items)) return { asset: null, sawItems };
+  }
+
+  logger.warn('Helius searchAssets page cap reached while finding asset', {
+    owner: params.owner,
+    dropId: params.dropRuntime.dropId,
+    collection: params.dropRuntime.collectionMintStr || null,
+    grouped: Boolean(params.grouping),
+    maxPages: HELIUS_ASSETS_MAX_SEARCH_PAGES,
+  });
+  throw new HttpsError('unavailable', 'Too many assets to search for receipt; try again or contact support.', {
+    dropId: params.dropRuntime.dropId,
+    maxPages: HELIUS_ASSETS_MAX_SEARCH_PAGES,
+  });
+}
+
 async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
   // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
   // (assets returned by the API use objects like { group_key, group_value }).
@@ -1482,20 +1558,10 @@ async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
   // NOTE: Newly minted assets can briefly miss collection-group indexing on devnet.
   // We first try the collection-group query (fast/small), then fall back to an ungrouped query
   // and filter locally by explicit collection identity from the asset payload.
-  const baseParams = {
-    ownerAddress: owner,
-    page: 1,
-    limit: 1000,
-    displayOptions: {
-      showCollectionMetadata: true,
-      showUnverifiedCollections: true,
-    },
-  };
-
   if (dropRuntime.collectionMintStr) {
     const grouping = ['collection', dropRuntime.collectionMintStr] as const;
-    const grouped = await heliusRpc<any>(dropRuntime, 'searchAssets', { ...baseParams, grouping }, 'Helius assets error');
-    const items = Array.isArray(grouped?.items) ? grouped.items : [];
+    const grouped = await heliusRpc<any>(dropRuntime, 'searchAssets', heliusSearchAssetsParams(owner, 1, grouping), 'Helius assets error');
+    const items = heliusSearchAssetsItems(grouped);
     if (items.length) return items;
     logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
       owner,
@@ -1504,8 +1570,8 @@ async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
     });
   }
 
-  const result = await heliusRpc<any>(dropRuntime, 'searchAssets', baseParams, 'Helius assets error');
-  return Array.isArray(result?.items) ? result.items : [];
+  const result = await heliusRpc<any>(dropRuntime, 'searchAssets', heliusSearchAssetsParams(owner, 1), 'Helius assets error');
+  return heliusSearchAssetsItems(result);
 }
 
 function looksBurntOrClosedInHelius(asset: any): boolean {
@@ -2592,7 +2658,6 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
   throw new HttpsError('unavailable', 'Failed to assign dudes (try again)', { boxAssetId });
 }
 
-const IRL_CLAIM_CODE_DIGITS = 10;
 const IRL_CLAIM_CODE_NAMESPACE = 'irl_v2';
 
 function generateIrlClaimCode(): string {
@@ -2600,11 +2665,6 @@ function generateIrlClaimCode(): string {
   const max = 10 ** IRL_CLAIM_CODE_DIGITS;
   const n = randomInt(0, max);
   return String(n).padStart(IRL_CLAIM_CODE_DIGITS, '0');
-}
-
-function normalizeIrlClaimCode(code: string): string {
-  // Accept common human formatting (spaces, dashes); store/use digits only.
-  return String(code || '').replace(/\D/g, '');
 }
 
 function normalizeDropIdMaybe(rawDropId: unknown): string | null {
@@ -3693,6 +3753,8 @@ type FulfillmentOrderBox = {
   boxId: number;
   assetId?: string;
   claimCode?: string;
+  receiptClaimCode?: string;
+  receiptClaimStatus?: string;
   dudeIds: number[];
 };
 
@@ -3781,13 +3843,22 @@ function toFulfillmentOrder(
     });
   }
 
+  const stripeReceiptClaim = order?.stripeReceiptClaim || {};
+  const stripeReceiptClaimBoxId = Math.floor(Number(stripeReceiptClaim?.boxId));
+  const stripeReceiptClaimCode =
+    typeof stripeReceiptClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(stripeReceiptClaim.code) : undefined;
+  const stripeReceiptClaimStatus = typeof stripeReceiptClaim?.status === 'string' ? stripeReceiptClaim.status : undefined;
+
   const boxes: FulfillmentOrderBox[] = boxItems
     .map((item) => {
       const claim = claimsByBoxId.get(item.refId);
+      const receiptClaimMatchesBox = Number.isFinite(stripeReceiptClaimBoxId) && stripeReceiptClaimBoxId === item.refId;
       return {
         boxId: item.refId,
         assetId: item.assetId || claim?.boxAssetId,
         claimCode: claim?.code,
+        ...(receiptClaimMatchesBox && stripeReceiptClaimCode ? { receiptClaimCode: stripeReceiptClaimCode } : {}),
+        ...(receiptClaimMatchesBox && stripeReceiptClaimStatus ? { receiptClaimStatus: stripeReceiptClaimStatus } : {}),
         dudeIds: Array.isArray(claim?.dudeIds) ? claim.dudeIds : [],
       };
     })
@@ -6312,6 +6383,489 @@ export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', a
     results,
   } satisfies RecoverMyDeliveryOrdersResult;
 });
+
+type StripeReceiptClaimStart =
+  | {
+      status: 'already_claimed';
+      dropId: string;
+      deliveryId: number;
+      boxId: number;
+      receiptTxs: string[];
+    }
+  | {
+      status: 'started';
+      dropId: string;
+      deliveryId: number;
+      boxId: number;
+      attemptId: string;
+      orderRef: DocumentReference;
+    };
+
+function normalizeReceiptTxs(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((tx): tx is string => typeof tx === 'string' && !!tx.trim()) : [];
+}
+
+function requireStripeReceiptClaimCodeForRequest(rawCode: unknown): string {
+  try {
+    return requireStripeReceiptClaimCode(rawCode);
+  } catch {
+    throw new HttpsError('invalid-argument', 'Invalid Stripe receipt claim code');
+  }
+}
+
+function requirePositiveBoxId(rawBoxId: unknown): number {
+  const boxId = Math.floor(Number(rawBoxId));
+  if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) {
+    throw new HttpsError('failed-precondition', 'Claim code is missing a valid box id');
+  }
+  return boxId;
+}
+
+function stripeReceiptClaimAttemptId(nowMs: number): string {
+  return `${nowMs.toString(36)}:${randomInt(0, 2 ** 32).toString(36)}`;
+}
+
+async function startStripeReceiptClaim(params: {
+  claimRef: DocumentReference;
+  code: string;
+  recipientWallet: string;
+  attemptId: string;
+  nowMs: number;
+}): Promise<StripeReceiptClaimStart> {
+  const leaseExpiresAt = Timestamp.fromMillis(params.nowMs + STRIPE_RECEIPT_CLAIM_PROCESSING_LEASE_MS);
+
+  return db.runTransaction(async (tx) => {
+    const claimSnap = await tx.get(params.claimRef);
+    if (!claimSnap.exists) {
+      throw new HttpsError('not-found', 'Invalid Stripe receipt claim code');
+    }
+
+    const claim = claimSnap.data() as any;
+    if (claim?.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE) {
+      throw new HttpsError('not-found', 'Invalid Stripe receipt claim code');
+    }
+    if (typeof claim?.code === 'string' && normalizeStripeReceiptClaimCode(claim.code) !== params.code) {
+      throw new HttpsError('failed-precondition', 'Claim code record is inconsistent');
+    }
+
+    const dropId = requireDropId(claim?.dropId);
+    const deliveryId = requirePositiveDeliveryId(claim?.deliveryId);
+    const boxId = requirePositiveBoxId(claim?.boxId);
+    const status = typeof claim?.status === 'string' ? claim.status : 'unclaimed';
+    const claimedRecipient = typeof claim?.recipient === 'string' ? claim.recipient : '';
+    const receiptTxs = normalizeReceiptTxs(claim?.receiptTxs);
+
+    if (status === 'claimed') {
+      if (claimedRecipient === params.recipientWallet) {
+        return { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs };
+      }
+      throw new HttpsError('failed-precondition', 'This Stripe receipt claim code has already been used');
+    }
+
+    const processingLeaseExpiresAt = toMillisMaybe(claim?.processingLeaseExpiresAt) ?? 0;
+    if (status === 'processing' && processingLeaseExpiresAt > params.nowMs) {
+      throw new HttpsError('aborted', 'This Stripe receipt claim code is already being processed');
+    }
+
+    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists) {
+      throw new HttpsError('not-found', 'Stripe delivery order not found');
+    }
+    const order = orderSnap.data() as any;
+    if (order?.source !== 'stripe_offchain') {
+      throw new HttpsError('failed-precondition', 'Claim code is not for a Stripe receipt order');
+    }
+    const orderClaim = order?.stripeReceiptClaim || {};
+    if (typeof orderClaim?.code === 'string' && normalizeStripeReceiptClaimCode(orderClaim.code) !== params.code) {
+      throw new HttpsError('failed-precondition', 'Stripe delivery order claim code mismatch');
+    }
+    const orderBoxId = Math.floor(Number(orderClaim?.boxId ?? order?.items?.[0]?.refId));
+    if (Number.isFinite(orderBoxId) && orderBoxId > 0 && orderBoxId !== boxId) {
+      throw new HttpsError('failed-precondition', 'Stripe delivery order box id mismatch');
+    }
+
+    tx.set(
+      params.claimRef,
+      {
+        status: 'processing',
+        recipient: params.recipientWallet,
+        processingAttemptId: params.attemptId,
+        processingStartedAt: FieldValue.serverTimestamp(),
+        processingLeaseExpiresAt: leaseExpiresAt,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    tx.set(
+      orderRef,
+      {
+        dropId,
+        stripeReceiptClaim: {
+          namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+          code: params.code,
+          boxId,
+          status: 'processing',
+          recipient: params.recipientWallet,
+          processingStartedAt: FieldValue.serverTimestamp(),
+          processingLeaseExpiresAt: leaseExpiresAt,
+        },
+      },
+      { merge: true },
+    );
+
+    return { status: 'started' as const, dropId, deliveryId, boxId, attemptId: params.attemptId, orderRef };
+  });
+}
+
+async function clearStripeReceiptClaimProcessing(params: {
+  claimRef: DocumentReference;
+  orderRef: DocumentReference;
+  code: string;
+  boxId: number;
+  recipientWallet: string;
+  attemptId: string;
+  err: unknown;
+}): Promise<void> {
+  await db
+    .runTransaction(async (tx) => {
+      const claimSnap = await tx.get(params.claimRef);
+      const claim = claimSnap.exists ? (claimSnap.data() as any) : null;
+      if (claim?.processingAttemptId !== params.attemptId || claim?.status !== 'processing') return;
+      const lastError = summarizeError(params.err);
+      tx.set(
+        params.claimRef,
+        {
+          status: 'unclaimed',
+          lastClaimError: lastError,
+          lastClaimErrorAt: FieldValue.serverTimestamp(),
+          processingAttemptId: FieldValue.delete(),
+          processingStartedAt: FieldValue.delete(),
+          processingLeaseExpiresAt: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      tx.update(params.orderRef, {
+        'stripeReceiptClaim.namespace': STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+        'stripeReceiptClaim.code': params.code,
+        'stripeReceiptClaim.boxId': params.boxId,
+        'stripeReceiptClaim.status': 'unclaimed',
+        'stripeReceiptClaim.recipient': FieldValue.delete(),
+        'stripeReceiptClaim.processingStartedAt': FieldValue.delete(),
+        'stripeReceiptClaim.processingLeaseExpiresAt': FieldValue.delete(),
+        'stripeReceiptClaim.lastClaimError': lastError,
+      });
+    })
+    .catch((cleanupErr) => {
+      logger.warn('claimStripeReceipt:cleanup_failed', {
+        codeHash: hashForLog(params.code),
+        recipient: params.recipientWallet,
+        error: summarizeError(cleanupErr),
+      });
+    });
+}
+
+async function finalizeStripeReceiptClaim(params: {
+  claimRef: DocumentReference;
+  orderRef: DocumentReference;
+  code: string;
+  dropId: string;
+  deliveryId: number;
+  boxId: number;
+  recipientWallet: string;
+  attemptId: string;
+  receiptTx: string | null;
+}): Promise<string[]> {
+  return db.runTransaction(async (tx) => {
+    const claimSnap = await tx.get(params.claimRef);
+    const claim = claimSnap.exists ? (claimSnap.data() as any) : null;
+    if (!claim) throw new HttpsError('not-found', 'Stripe receipt claim code not found');
+
+    const existingTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    if (claim?.status === 'claimed') {
+      if (claim?.recipient !== params.recipientWallet) {
+        throw new HttpsError('failed-precondition', 'This Stripe receipt claim code has already been used');
+      }
+      return existingTxs;
+    }
+    if (claim?.processingAttemptId !== params.attemptId) {
+      throw new HttpsError('aborted', 'Stripe receipt claim processing lease changed');
+    }
+
+    const receiptTxs = params.receiptTx ? [...new Set([...existingTxs, params.receiptTx])] : existingTxs;
+    const claimedAt = FieldValue.serverTimestamp();
+    tx.set(
+      params.claimRef,
+      {
+        status: 'claimed',
+        recipient: params.recipientWallet,
+        receiptTxs,
+        claimedAt,
+        processingAttemptId: FieldValue.delete(),
+        processingStartedAt: FieldValue.delete(),
+        processingLeaseExpiresAt: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+    tx.update(params.orderRef, {
+      dropId: params.dropId,
+      'stripeReceiptClaim.namespace': STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+      'stripeReceiptClaim.code': params.code,
+      'stripeReceiptClaim.boxId': params.boxId,
+      'stripeReceiptClaim.status': 'claimed',
+      'stripeReceiptClaim.recipient': params.recipientWallet,
+      'stripeReceiptClaim.receiptTxs': receiptTxs,
+      'stripeReceiptClaim.claimedAt': claimedAt,
+      'stripeReceiptClaim.processingStartedAt': FieldValue.delete(),
+      'stripeReceiptClaim.processingLeaseExpiresAt': FieldValue.delete(),
+    });
+    return receiptTxs;
+  });
+}
+
+function stripeReceiptAssetMatches(asset: any, dropRuntime: DropRuntime, boxId: number, ownerWallet: string): boolean {
+  if (looksBurntOrClosedInHelius(asset)) return false;
+  if (asset?.ownership?.owner !== ownerWallet) return false;
+  if (getAssetKind(asset) !== 'certificate') return false;
+  if (!assetMatchesRequestedDrop(asset, dropRuntime)) return false;
+  return String(getBoxIdFromAsset(asset) || '') === String(boxId);
+}
+
+async function findStripeReceiptAssetOwnedBy(ownerWallet: string, dropRuntime: DropRuntime, boxId: number): Promise<any | null> {
+  const matches = (asset: any) => stripeReceiptAssetMatches(asset, dropRuntime, boxId, ownerWallet);
+  if (dropRuntime.collectionMintStr) {
+    const grouping = ['collection', dropRuntime.collectionMintStr] as const;
+    const grouped = await findOwnedAssetByPredicate({
+      owner: ownerWallet,
+      dropRuntime,
+      matches,
+      grouping,
+      label: 'Helius receipt assets error',
+    });
+    if (grouped.asset) return grouped.asset;
+    if (grouped.sawItems) return null;
+
+    logger.warn('Helius searchAssets returned 0 items for receipt collection grouping; falling back to ungrouped search', {
+      owner: ownerWallet,
+      collection: dropRuntime.collectionMintStr,
+      dropId: dropRuntime.dropId,
+    });
+  }
+
+  const ungrouped = await findOwnedAssetByPredicate({
+    owner: ownerWallet,
+    dropRuntime,
+    matches,
+    label: 'Helius receipt assets error',
+  });
+  return ungrouped.asset;
+}
+
+function parseCompressedReceiptProof(params: {
+  asset: any;
+  proof: any;
+  dropRuntime: DropRuntime;
+  expectedOwner: string;
+}) {
+  const compression = params.asset?.compression || {};
+  const proofPath: string[] = Array.isArray(params.proof?.proof) ? params.proof.proof : [];
+  const treeId = String(params.proof?.tree_id ?? params.proof?.treeId ?? '');
+  const rootStr = String(params.proof?.root || '');
+  if (!treeId || !rootStr) {
+    throw new HttpsError('failed-precondition', 'Unable to fetch receipt proof for transfer');
+  }
+  const merkleTree = new PublicKey(treeId);
+  if (!merkleTree.equals(params.dropRuntime.receiptsMerkleTree)) {
+    throw new HttpsError('failed-precondition', 'Receipt does not belong to the configured receipts tree', {
+      receiptTree: merkleTree.toBase58(),
+      receiptsTree: params.dropRuntime.receiptsMerkleTree.toBase58(),
+      dropId: params.dropRuntime.dropId,
+    });
+  }
+
+  const nonce = Number(compression?.leaf_id ?? compression?.leafId);
+  if (!Number.isFinite(nonce) || nonce < 0) {
+    throw new HttpsError('failed-precondition', 'Unable to parse receipt leaf id');
+  }
+  const index = Math.floor(nonce);
+  if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
+    throw new HttpsError('failed-precondition', 'Receipt leaf index out of range');
+  }
+
+  return {
+    merkleTree,
+    root: bs58Bytes32(rootStr, 'assetProof.root'),
+    dataHash: bs58Bytes32(String(compression?.data_hash || compression?.dataHash || ''), 'asset.compression.data_hash'),
+    creatorHash: bs58Bytes32(String(compression?.creator_hash || compression?.creatorHash || ''), 'asset.compression.creator_hash'),
+    assetDataHash:
+      compression?.asset_data_hash || compression?.assetDataHash
+        ? bs58Bytes32(String(compression?.asset_data_hash || compression?.assetDataHash), 'asset.compression.asset_data_hash')
+        : null,
+    flags: compression?.flags == null ? null : Number(compression.flags),
+    nonce,
+    index,
+    proofAccounts: proofPath.map((p) => new PublicKey(p)),
+    leafOwner: new PublicKey(String(params.asset?.ownership?.owner || params.expectedOwner)),
+    leafDelegate: new PublicKey(String(params.asset?.ownership?.delegate || params.asset?.ownership?.owner || params.expectedOwner)),
+  };
+}
+
+export const claimStripeReceipt = onCallLogged(
+  'claimStripeReceipt',
+  async (request) => {
+    const schema = z.object({
+      recipient: z.string(),
+      code: z.string(),
+    });
+    const { recipient, code: rawCode } = parseRequest(schema, request.data);
+    const recipientWallet = normalizeWallet(recipient);
+    const recipientPk = new PublicKey(recipientWallet);
+    const code = requireStripeReceiptClaimCodeForRequest(rawCode);
+    const claimRef = db.doc(`claimCodes/${code}`);
+    const nowMs = Date.now();
+    const attemptId = stripeReceiptClaimAttemptId(nowMs);
+
+    let startedClaim: Extract<StripeReceiptClaimStart, { status: 'started' }> | null = null;
+    try {
+      const started = await startStripeReceiptClaim({
+        claimRef,
+        code,
+        recipientWallet,
+        attemptId,
+        nowMs,
+      });
+      if (started.status === 'already_claimed') {
+        return {
+          processed: true,
+          dropId: started.dropId,
+          deliveryId: started.deliveryId,
+          receiptsTransferred: 1,
+          receiptTxs: started.receiptTxs,
+        };
+      }
+      startedClaim = started;
+
+      const dropRuntime = getDropRuntime(started.dropId);
+      const cfg = await ensureOnchainCoreConfig(dropRuntime, true);
+      if (!dropRuntime.receiptsMerkleTreeStr) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
+          { dropId: started.dropId },
+        );
+      }
+
+      const conn = connection(dropRuntime);
+      const signer = cosigner();
+      if (!signer.publicKey.equals(cfg.admin)) {
+        throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
+          expectedAdmin: cfg.admin.toBase58(),
+          cosigner: signer.publicKey.toBase58(),
+        });
+      }
+      assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
+      if (!dropRuntime.collectionMint.equals(cfg.coreCollection)) {
+        throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
+          configured: dropRuntime.collectionMint.toBase58(),
+          onchain: cfg.coreCollection.toBase58(),
+          dropId: started.dropId,
+        });
+      }
+
+      const adminWallet = signer.publicKey.toBase58();
+      const adminReceipt = await findStripeReceiptAssetOwnedBy(adminWallet, dropRuntime, started.boxId);
+      if (!adminReceipt) {
+        const recipientReceipt = await findStripeReceiptAssetOwnedBy(recipientWallet, dropRuntime, started.boxId);
+        if (recipientReceipt) {
+          const receiptTxs = await finalizeStripeReceiptClaim({
+            claimRef,
+            orderRef: started.orderRef,
+            code,
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            boxId: started.boxId,
+            recipientWallet,
+            attemptId,
+            receiptTx: null,
+          });
+          return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
+        }
+        throw new HttpsError('failed-precondition', 'Matching admin-owned Stripe receipt not found');
+      }
+
+      const receiptId = String(adminReceipt.id || '');
+      if (!receiptId) throw new HttpsError('failed-precondition', 'Matching Stripe receipt is missing an asset id');
+      const proof = await fetchAssetProof(receiptId, dropRuntime);
+      const proofContext = parseCompressedReceiptProof({
+        asset: adminReceipt,
+        proof,
+        dropRuntime,
+        expectedOwner: adminWallet,
+      });
+
+      const transferIx = bubblegumTransferV2Ix({
+        bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
+        mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
+        mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+        treeConfig: deriveTreeConfigPda(proofContext.merkleTree),
+        payer: signer.publicKey,
+        authority: signer.publicKey,
+        leafOwner: proofContext.leafOwner,
+        leafDelegate: proofContext.leafDelegate,
+        newLeafOwner: recipientPk,
+        merkleTree: proofContext.merkleTree,
+        coreCollection: cfg.coreCollection,
+        root: proofContext.root,
+        dataHash: proofContext.dataHash,
+        creatorHash: proofContext.creatorHash,
+        assetDataHash: proofContext.assetDataHash,
+        flags: proofContext.flags,
+        nonce: proofContext.nonce,
+        index: proofContext.index,
+        proof: proofContext.proofAccounts,
+      });
+      const { blockhash } = await withTimeout(
+        conn.getLatestBlockhash('confirmed'),
+        RPC_TIMEOUT_MS,
+        'getLatestBlockhash:claimStripeReceipt',
+      );
+      const tx = buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), transferIx], signer.publicKey, blockhash, [signer]);
+      const receiptTx = await sendAndConfirmSignedTx(conn, tx, 'claimStripeReceipt', {
+        sendTimeoutMs: TX_SEND_TIMEOUT_MS,
+        confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+      });
+      const receiptTxs = await finalizeStripeReceiptClaim({
+        claimRef,
+        orderRef: started.orderRef,
+        code,
+        dropId: started.dropId,
+        deliveryId: started.deliveryId,
+        boxId: started.boxId,
+        recipientWallet,
+        attemptId,
+        receiptTx,
+      });
+
+      return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
+    } catch (err) {
+      if (startedClaim) {
+        await clearStripeReceiptClaimProcessing({
+          claimRef,
+          orderRef: startedClaim.orderRef,
+          code,
+          boxId: startedClaim.boxId,
+          recipientWallet,
+          attemptId,
+          err,
+        });
+      }
+      throw err;
+    }
+  },
+  { secrets: [COSIGNER_SECRET] },
+);
 
 export const prepareIrlClaimTx = onCallLogged(
   'prepareIrlClaimTx',

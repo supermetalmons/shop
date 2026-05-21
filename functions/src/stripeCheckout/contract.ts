@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomInt } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
 import type { MintSelectionConfig } from '../config/deployment.js';
 import { normalizeCountryCode } from '../normalizers.js';
@@ -12,6 +12,7 @@ export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
+export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
 export const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
 
 export const STRIPE_CHECKOUT_STATUS = {
@@ -74,6 +75,10 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
   };
   receiptTx: string | null;
   addressSnapshot: Record<string, unknown>;
+  stripeReceiptClaim?: {
+    code: string;
+    status?: string;
+  };
 };
 
 export type StripeCheckoutDocumentInput = {
@@ -103,6 +108,30 @@ export type StripeCheckoutDocumentData = {
 
 function normalizedString(value: unknown): string {
   return String(value || '').trim();
+}
+
+const STRIPE_RECEIPT_CLAIM_CODE_RE = /^[A-Z]{6}-\d{10}$/;
+const STRIPE_RECEIPT_CLAIM_CODE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const STRIPE_RECEIPT_CLAIM_DIGIT_MAX = 10 ** 10;
+
+export function generateStripeReceiptClaimCode(): string {
+  let prefix = '';
+  for (let index = 0; index < 6; index += 1) {
+    prefix += STRIPE_RECEIPT_CLAIM_CODE_LETTERS[randomInt(0, STRIPE_RECEIPT_CLAIM_CODE_LETTERS.length)];
+  }
+  return `${prefix}-${String(randomInt(0, STRIPE_RECEIPT_CLAIM_DIGIT_MAX)).padStart(10, '0')}`;
+}
+
+export function normalizeStripeReceiptClaimCode(code: unknown): string {
+  return normalizedString(code).toUpperCase();
+}
+
+export function requireStripeReceiptClaimCode(code: unknown): string {
+  const normalized = normalizeStripeReceiptClaimCode(code);
+  if (!STRIPE_RECEIPT_CLAIM_CODE_RE.test(normalized)) {
+    throw new Error('Invalid Stripe receipt claim code');
+  }
+  return normalized;
 }
 
 function normalizedHttpOrigin(value: unknown): string {
@@ -493,6 +522,15 @@ export function decodeAdminDeliveryOrderRecord(data: Buffer | Uint8Array): Decod
 }
 
 export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+  const stripeReceiptClaim = args.stripeReceiptClaim
+    ? {
+        namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+        code: requireStripeReceiptClaimCode(args.stripeReceiptClaim.code),
+        boxId: args.metadataId,
+        status: normalizedString(args.stripeReceiptClaim.status) || 'unclaimed',
+      }
+    : undefined;
+
   return {
     dropId: args.dropId,
     source: 'stripe_offchain',
@@ -513,10 +551,15 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
     ...(typeof args.stripeSession.customer === 'string' ? { stripeCustomerId: args.stripeSession.customer } : {}),
     receiptsMinted: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
     receiptTxs: args.receiptTx ? [args.receiptTx] : [],
+    ...(stripeReceiptClaim ? { stripeReceiptClaim } : {}),
   };
 }
 
 export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+  const stripeReceiptClaimCode = args.stripeReceiptClaim?.code
+    ? requireStripeReceiptClaimCode(args.stripeReceiptClaim.code)
+    : undefined;
+
   return {
     dropId: args.dropId,
     deliveryId: args.deliveryId,
@@ -529,6 +572,7 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
     offchainOrderHash: args.orderHashHex,
     stripeCheckoutSessionId: args.stripeSession.id,
     receiptTx: args.receiptTx,
+    ...(stripeReceiptClaimCode ? { stripeReceiptClaimCode } : {}),
   };
 }
 
