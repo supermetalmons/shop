@@ -835,6 +835,7 @@ export async function removeAddress(addressId: string): Promise<{ id: string; re
 type StripeCheckoutSessionRequest = {
   dropId: string;
   variantKey?: string;
+  quantity?: number;
   returnUrl?: string;
 };
 
@@ -844,12 +845,24 @@ type StripeCheckoutSessionResponse = {
   livemode?: boolean;
 };
 
+function stripeCheckoutRequestQuantity(quantity: StripeCheckoutSessionRequest['quantity']): number | undefined {
+  if (quantity === undefined) return undefined;
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    throw new Error('Stripe checkout quantity must be a positive integer');
+  }
+  return quantity;
+}
+
 function stripeCheckoutSessionPayload(args: StripeCheckoutSessionRequest): StripeCheckoutSessionRequest {
   const payload: StripeCheckoutSessionRequest = {
     dropId: args.dropId,
   };
   if (typeof args.variantKey === 'string' && args.variantKey.trim()) {
     payload.variantKey = args.variantKey.trim();
+  }
+  const quantity = stripeCheckoutRequestQuantity(args.quantity);
+  if (quantity !== undefined) {
+    payload.quantity = quantity;
   }
   if (typeof args.returnUrl === 'string' && args.returnUrl.trim()) {
     payload.returnUrl = args.returnUrl.trim();

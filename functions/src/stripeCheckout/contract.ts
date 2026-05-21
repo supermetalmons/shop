@@ -10,6 +10,7 @@ export const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
+export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 10;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
@@ -65,7 +66,8 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
   ownerKind?: string;
   firebaseUid?: string;
   receiptOwner: string;
-  metadataId: number;
+  metadataId?: number;
+  metadataIds?: number[];
   variantKey: string;
   orderHashHex: string;
   stripeSession: {
@@ -77,8 +79,14 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
   addressSnapshot: Record<string, unknown>;
   stripeReceiptClaim?: {
     code: string;
+    boxId?: number;
     status?: string;
   };
+  stripeReceiptClaims?: Array<{
+    code: string;
+    boxId: number;
+    status?: string;
+  }>;
 };
 
 export type StripeCheckoutDocumentInput = {
@@ -87,6 +95,7 @@ export type StripeCheckoutDocumentInput = {
   uid: string;
   variantKey: string;
   unitAmountCents: number;
+  quantity?: number;
   livemode?: boolean;
   createdAt: unknown;
   updatedAt: unknown;
@@ -100,6 +109,7 @@ export type StripeAddressEncryptionResult = {
 export type StripeCheckoutDocumentData = {
   uid: string;
   variantKey: string;
+  quantity: number;
   unitAmountCents: number;
   livemode: boolean;
   status: string;
@@ -132,6 +142,10 @@ export function requireStripeReceiptClaimCode(code: unknown): string {
     throw new Error('Invalid Stripe receipt claim code');
   }
   return normalized;
+}
+
+export function stripeReceiptClaimBoxMapKey(boxId: number): string {
+  return `box_${boxId}`;
 }
 
 function normalizedHttpOrigin(value: unknown): string {
@@ -240,6 +254,15 @@ function integerInRangeOrNull(value: unknown, min: number, max: number): number 
   return numeric != null && numeric >= min && numeric <= max ? numeric : null;
 }
 
+export function normalizeStripeCheckoutQuantity(value: unknown): number {
+  if (value === undefined || value === null || value === '') return STRIPE_OFFCHAIN_CHECKOUT_QUANTITY;
+  const quantity = integerInRangeOrNull(value, 1, STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY);
+  if (quantity == null) {
+    throw new Error(`Stripe checkout quantity must be an integer from 1 to ${STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY}`);
+  }
+  return quantity;
+}
+
 function lineItemUnitAmountCents(
   item: StripeCheckoutLineItemLike,
   quantity: number,
@@ -306,7 +329,10 @@ export function validateStripeCheckoutDocumentData(params: {
   requireString(checkout.variantKey, params.variantKey, 'variant key');
   requireString(checkout.currency, STRIPE_OFFCHAIN_CURRENCY, 'currency');
 
-  if (integerOrNull(checkout.quantity) !== STRIPE_OFFCHAIN_CHECKOUT_QUANTITY) {
+  let quantity: number;
+  try {
+    quantity = normalizeStripeCheckoutQuantity(checkout.quantity);
+  } catch {
     throw new Error('App-created Stripe checkout has invalid quantity');
   }
   if (checkout.livemode !== expectedLivemode) {
@@ -324,6 +350,7 @@ export function validateStripeCheckoutDocumentData(params: {
   return {
     uid,
     variantKey: params.variantKey,
+    quantity,
     unitAmountCents,
     livemode: expectedLivemode,
     status: normalizedString(checkout.status),
@@ -347,12 +374,14 @@ export function validateStripeCheckoutContract(args: {
   };
   lineItems: StripeCheckoutLineItemsLike;
   expectedUnitAmountCents: number;
+  expectedQuantity?: number;
   expectedCurrency?: string;
   expectedLivemode: boolean;
 }): { ignored: true } | { quantity: number; currency: string; unitAmountCents: number } {
   const { session, lineItems } = args;
   if (!isStripeOffchainFulfillmentSession(session)) return { ignored: true };
   const expectedLivemode = args.expectedLivemode === true;
+  const expectedQuantity = normalizeStripeCheckoutQuantity(args.expectedQuantity);
 
   if (session.mode !== 'payment') throw new Error('Stripe checkout session mode must be payment');
   if (session.payment_status !== 'paid') throw new Error('Stripe checkout session must be paid');
@@ -372,12 +401,12 @@ export function validateStripeCheckoutContract(args: {
   if (data.length !== 1) throw new Error('Stripe checkout must have exactly one line item');
 
   const item = data[0];
-  const quantity = positiveIntegerOrNull(item.quantity) || 0;
+  const quantity = integerInRangeOrNull(item.quantity, 1, STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY) || 0;
   const metadataQuantity = positiveIntegerOrNull(session.metadata?.quantity);
   if (metadataQuantity != null && metadataQuantity !== quantity) {
     throw new Error('Stripe checkout quantity metadata does not match line item quantity');
   }
-  if (quantity !== STRIPE_OFFCHAIN_CHECKOUT_QUANTITY) throw new Error('Stripe checkout must have quantity 1');
+  if (quantity !== expectedQuantity) throw new Error('Stripe checkout quantity does not match expected quantity');
 
   const expectedCurrency = normalizedCurrency(args.expectedCurrency || STRIPE_OFFCHAIN_CURRENCY);
   const itemCurrency = normalizedCurrency(item.currency || item.price?.currency);
@@ -521,15 +550,81 @@ export function decodeAdminDeliveryOrderRecord(data: Buffer | Uint8Array): Decod
   return { orderHash, variantIndex, quantity, firstMetadataId, receiptOwner, createdSlot, bump };
 }
 
+function normalizeStripeMetadataId(value: unknown): number {
+  const metadataId = integerInRangeOrNull(value, 1, 0xffff_ffff);
+  if (metadataId == null) throw new Error('Stripe off-chain order metadata id is invalid');
+  return metadataId;
+}
+
+function normalizeStripeMetadataIds(args: Pick<StripeOffchainDeliveryOrderDocumentInput, 'metadataId' | 'metadataIds'>): number[] {
+  const rawIds = Array.isArray(args.metadataIds) && args.metadataIds.length ? args.metadataIds : [args.metadataId];
+  const metadataIds = rawIds.map((metadataId) => normalizeStripeMetadataId(metadataId));
+  if (!metadataIds.length) throw new Error('Stripe off-chain order is missing metadata ids');
+  if (metadataIds.length > STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY) {
+    throw new Error(`Stripe off-chain order has too many metadata ids`);
+  }
+  if (new Set(metadataIds).size !== metadataIds.length) {
+    throw new Error('Stripe off-chain order has duplicate metadata ids');
+  }
+  return metadataIds;
+}
+
+type RawStripeReceiptClaim = { code: string; boxId?: number; status?: string };
+
+function rawStripeReceiptClaims(
+  args: Pick<StripeOffchainDeliveryOrderDocumentInput, 'stripeReceiptClaim' | 'stripeReceiptClaims'>,
+  metadataIds: number[],
+): RawStripeReceiptClaim[] {
+  if (Array.isArray(args.stripeReceiptClaims) && args.stripeReceiptClaims.length) {
+    return args.stripeReceiptClaims;
+  }
+  if (!args.stripeReceiptClaim) return [];
+  return [
+    {
+      ...args.stripeReceiptClaim,
+      boxId: args.stripeReceiptClaim.boxId ?? metadataIds[0],
+    },
+  ];
+}
+
+function normalizeStripeReceiptClaims(
+  args: Pick<StripeOffchainDeliveryOrderDocumentInput, 'metadataId' | 'metadataIds' | 'stripeReceiptClaim' | 'stripeReceiptClaims'>,
+  metadataIds: number[],
+): Array<{ namespace: string; code: string; boxId: number; status: string }> {
+  const rawClaims = rawStripeReceiptClaims(args, metadataIds);
+  const claims = rawClaims.map((claim) => ({
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    code: requireStripeReceiptClaimCode(claim.code),
+    boxId: normalizeStripeMetadataId(claim.boxId),
+    status: normalizedString(claim.status) || 'unclaimed',
+  }));
+  if (!claims.length) return [];
+  const metadataIdSet = new Set(metadataIds);
+  claims.forEach((claim) => {
+    if (!metadataIdSet.has(claim.boxId)) {
+      throw new Error('Stripe receipt claim box id does not match order metadata ids');
+    }
+  });
+  if (new Set(claims.map((claim) => claim.boxId)).size !== claims.length) {
+    throw new Error('Stripe receipt claims contain duplicate box ids');
+  }
+  if (new Set(claims.map((claim) => claim.code)).size !== claims.length) {
+    throw new Error('Stripe receipt claims contain duplicate codes');
+  }
+  return claims;
+}
+
+function buildStripeReceiptClaimsByBoxId(
+  claims: Array<{ namespace: string; code: string; boxId: number; status: string }>,
+): Record<string, { namespace: string; code: string; boxId: number; status: string }> {
+  return Object.fromEntries(claims.map((claim) => [stripeReceiptClaimBoxMapKey(claim.boxId), claim]));
+}
+
 export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
-  const stripeReceiptClaim = args.stripeReceiptClaim
-    ? {
-        namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-        code: requireStripeReceiptClaimCode(args.stripeReceiptClaim.code),
-        boxId: args.metadataId,
-        status: normalizedString(args.stripeReceiptClaim.status) || 'unclaimed',
-      }
-    : undefined;
+  const metadataIds = normalizeStripeMetadataIds(args);
+  const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
+  const stripeReceiptClaimsByBoxId = buildStripeReceiptClaimsByBoxId(stripeReceiptClaims);
+  const legacyStripeReceiptClaim = stripeReceiptClaims.length === 1 ? stripeReceiptClaims[0] : undefined;
 
   return {
     dropId: args.dropId,
@@ -541,24 +636,31 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
     receiptOwner: args.receiptOwner,
     addressSnapshot: args.addressSnapshot,
     itemIds: [],
-    items: [{ kind: 'box', refId: args.metadataId, variantKey: args.variantKey }],
+    items: metadataIds.map((metadataId) => ({ kind: 'box', refId: metadataId, variantKey: args.variantKey })),
     deliveryId: args.deliveryId,
+    quantity: metadataIds.length,
+    metadataIds,
+    ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
     offchainOrderHash: args.orderHashHex,
     stripeCheckoutSessionId: args.stripeSession.id,
     ...(typeof args.stripeSession.payment_intent === 'string'
       ? { stripePaymentIntentId: args.stripeSession.payment_intent }
       : {}),
     ...(typeof args.stripeSession.customer === 'string' ? { stripeCustomerId: args.stripeSession.customer } : {}),
-    receiptsMinted: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+    receiptsMinted: metadataIds.length,
     receiptTxs: args.receiptTx ? [args.receiptTx] : [],
-    ...(stripeReceiptClaim ? { stripeReceiptClaim } : {}),
+    ...(stripeReceiptClaims.length ? { stripeReceiptClaimsByBoxId } : {}),
+    ...(legacyStripeReceiptClaim ? { stripeReceiptClaim: legacyStripeReceiptClaim } : {}),
   };
 }
 
 export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
-  const stripeReceiptClaimCode = args.stripeReceiptClaim?.code
-    ? requireStripeReceiptClaimCode(args.stripeReceiptClaim.code)
-    : undefined;
+  const metadataIds = normalizeStripeMetadataIds(args);
+  const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
+  const stripeReceiptClaimCodesByBoxId = Object.fromEntries(
+    stripeReceiptClaims.map((claim) => [stripeReceiptClaimBoxMapKey(claim.boxId), claim.code]),
+  );
+  const legacyStripeReceiptClaim = stripeReceiptClaims.length === 1 ? stripeReceiptClaims[0] : undefined;
 
   return {
     dropId: args.dropId,
@@ -567,12 +669,16 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
     ...(args.ownerKind ? { ownerKind: args.ownerKind } : {}),
     ...(args.firebaseUid ? { firebaseUid: args.firebaseUid } : {}),
     receiptOwner: args.receiptOwner,
-    metadataId: args.metadataId,
+    quantity: metadataIds.length,
+    firstMetadataId: metadataIds[0],
+    metadataIds,
+    ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
     variantKey: args.variantKey,
     offchainOrderHash: args.orderHashHex,
     stripeCheckoutSessionId: args.stripeSession.id,
     receiptTx: args.receiptTx,
-    ...(stripeReceiptClaimCode ? { stripeReceiptClaimCode } : {}),
+    ...(stripeReceiptClaims.length ? { stripeReceiptClaimCodesByBoxId } : {}),
+    ...(legacyStripeReceiptClaim ? { stripeReceiptClaimCode: legacyStripeReceiptClaim.code } : {}),
   };
 }
 
@@ -580,18 +686,21 @@ export function buildStripeCheckoutSessionMetadata(args: {
   dropId: string;
   uid: string;
   variantKey: string;
+  quantity?: number;
 }): Record<string, string> {
+  const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   return {
     dropId: args.dropId,
     uid: args.uid,
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
     placeholder: 'stripe_direct_delivery',
-    quantity: String(STRIPE_OFFCHAIN_CHECKOUT_QUANTITY),
+    quantity: String(quantity),
     variantKey: args.variantKey,
   };
 }
 
 export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
+  const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   return {
     sessionId: args.sessionId,
     dropId: args.dropId,
@@ -600,7 +709,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
     firebaseUid: args.uid,
     variantKey: args.variantKey,
-    quantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+    quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     unitAmountCents: args.unitAmountCents,
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,

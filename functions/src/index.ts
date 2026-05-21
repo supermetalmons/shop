@@ -46,10 +46,12 @@ import {
   STRIPE_CHECKOUT_STATUS,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   isStripeOffchainFulfillmentSession,
+  normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
+  stripeReceiptClaimBoxMapKey,
   stripeCheckoutOwnerId,
 } from './stripeCheckout/contract.js';
 import { bubblegumTransferV2Ix } from './bubblegum.js';
@@ -2229,8 +2231,15 @@ function requireStripeCheckoutVariantAvailable(params: {
   dropRuntime: DropRuntime;
   cfg: DecodedBoxMinterConfig;
   variantKey: string;
+  quantity: number;
 }): void {
   const { dropRuntime, cfg, variantKey } = params;
+  let quantity: number;
+  try {
+    quantity = normalizeStripeCheckoutQuantity(params.quantity);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : 'Stripe checkout quantity is invalid.');
+  }
   if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox)) {
     throw new HttpsError('failed-precondition', 'Stripe checkout is only available for direct-delivery drops.');
   }
@@ -2257,7 +2266,7 @@ function requireStripeCheckoutVariantAvailable(params: {
   if (!option || option.startId !== startId || option.endId !== endId) {
     throw new HttpsError('failed-precondition', 'Drop mint selection is out of sync with on-chain variant ranges.');
   }
-  if (cfg.minted + 1 > cfg.maxSupply) {
+  if (cfg.minted + quantity > cfg.maxSupply) {
     throw new HttpsError('failed-precondition', 'Mint is sold out.');
   }
 
@@ -2265,7 +2274,7 @@ function requireStripeCheckoutVariantAvailable(params: {
   if (nextId < startId) {
     throw new HttpsError('failed-precondition', 'On-chain size variant state is invalid.');
   }
-  if (nextId > endId) {
+  if (nextId > endId || nextId + quantity - 1 > endId) {
     throw new HttpsError('failed-precondition', 'Selected size is sold out.');
   }
 }
@@ -3843,22 +3852,18 @@ function toFulfillmentOrder(
     });
   }
 
-  const stripeReceiptClaim = order?.stripeReceiptClaim || {};
-  const stripeReceiptClaimBoxId = Math.floor(Number(stripeReceiptClaim?.boxId));
-  const stripeReceiptClaimCode =
-    typeof stripeReceiptClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(stripeReceiptClaim.code) : undefined;
-  const stripeReceiptClaimStatus = typeof stripeReceiptClaim?.status === 'string' ? stripeReceiptClaim.status : undefined;
+  const stripeReceiptClaimsByBoxId = collectStripeReceiptClaimsByBoxId(order);
 
   const boxes: FulfillmentOrderBox[] = boxItems
     .map((item) => {
       const claim = claimsByBoxId.get(item.refId);
-      const receiptClaimMatchesBox = Number.isFinite(stripeReceiptClaimBoxId) && stripeReceiptClaimBoxId === item.refId;
+      const receiptClaim = stripeReceiptClaimsByBoxId.get(item.refId);
       return {
         boxId: item.refId,
         assetId: item.assetId || claim?.boxAssetId,
         claimCode: claim?.code,
-        ...(receiptClaimMatchesBox && stripeReceiptClaimCode ? { receiptClaimCode: stripeReceiptClaimCode } : {}),
-        ...(receiptClaimMatchesBox && stripeReceiptClaimStatus ? { receiptClaimStatus: stripeReceiptClaimStatus } : {}),
+        ...(receiptClaim?.code ? { receiptClaimCode: receiptClaim.code } : {}),
+        ...(receiptClaim?.status ? { receiptClaimStatus: receiptClaim.status } : {}),
         dudeIds: Array.isArray(claim?.dudeIds) ? claim.dudeIds : [],
       };
     })
@@ -4679,6 +4684,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
         sessionId,
         deliveryId: result.deliveryId || null,
         metadataId: result.metadataId || null,
+        metadataIds: result.metadataIds || null,
       });
       return;
     }
@@ -6399,6 +6405,8 @@ type StripeReceiptClaimStart =
       boxId: number;
       attemptId: string;
       orderRef: DocumentReference;
+      updatePluralOrderClaim: boolean;
+      updateSingularOrderClaim: boolean;
     };
 
 function normalizeReceiptTxs(raw: unknown): string[] {
@@ -6423,6 +6431,210 @@ function requirePositiveBoxId(rawBoxId: unknown): number {
 
 function stripeReceiptClaimAttemptId(nowMs: number): string {
   return `${nowMs.toString(36)}:${randomInt(0, 2 ** 32).toString(36)}`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function stripeReceiptClaimCodeMaybe(rawClaim: any): string {
+  return typeof rawClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(rawClaim.code) : '';
+}
+
+type StripeReceiptClaimSummary = { code?: string; status?: string };
+
+function stripeReceiptClaimSummary(rawClaim: any): StripeReceiptClaimSummary {
+  const code = stripeReceiptClaimCodeMaybe(rawClaim);
+  const status = typeof rawClaim?.status === 'string' ? rawClaim.status : undefined;
+  return { ...(code ? { code } : {}), ...(status ? { status } : {}) };
+}
+
+function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
+  const claimsByBoxId = new Map<number, StripeReceiptClaimSummary>();
+  const addClaim = (rawBoxId: unknown, rawClaim: any) => {
+    const boxId = Math.floor(Number(rawBoxId));
+    if (!Number.isFinite(boxId) || boxId <= 0 || claimsByBoxId.has(boxId)) return;
+    claimsByBoxId.set(boxId, stripeReceiptClaimSummary(rawClaim));
+  };
+
+  const claimsByBoxIdRaw = order?.stripeReceiptClaimsByBoxId;
+  if (isPlainObject(claimsByBoxIdRaw)) {
+    Object.entries(claimsByBoxIdRaw).forEach(([rawBoxId, rawClaim]) => {
+      addClaim((rawClaim as any)?.boxId ?? rawBoxId, rawClaim);
+    });
+  }
+  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
+  claims.forEach((rawClaim: any) => addClaim(rawClaim?.boxId, rawClaim));
+  if (order?.stripeReceiptClaim) {
+    addClaim(order.stripeReceiptClaim.boxId, order.stripeReceiptClaim);
+  }
+  return claimsByBoxId;
+}
+
+function orderStripeReceiptClaimByBoxId(order: any, boxId: number): any | null {
+  const byBoxId = order?.stripeReceiptClaimsByBoxId;
+  if (isPlainObject(byBoxId)) {
+    const claim = byBoxId[stripeReceiptClaimBoxMapKey(boxId)] || byBoxId[String(boxId)];
+    if (isPlainObject(claim)) return claim;
+  }
+
+  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
+  return claims.find((claim: any) => Math.floor(Number(claim?.boxId)) === boxId) || null;
+}
+
+function hasPluralStripeReceiptClaims(order: any): boolean {
+  const byBoxId = order?.stripeReceiptClaimsByBoxId;
+  if (isPlainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
+  return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
+}
+
+function resolveStripeReceiptClaimOrderTarget(params: {
+  order: any;
+  code: string;
+  boxId: number;
+}): { updatePluralOrderClaim: boolean; updateSingularOrderClaim: boolean } {
+  const pluralClaim = orderStripeReceiptClaimByBoxId(params.order, params.boxId);
+  if (pluralClaim) {
+    const pluralCode = stripeReceiptClaimCodeMaybe(pluralClaim);
+    if (pluralCode && pluralCode !== params.code) {
+      throw new HttpsError('failed-precondition', 'Stripe delivery order claim code mismatch');
+    }
+    const singularClaim = params.order?.stripeReceiptClaim || {};
+    const singularCode = stripeReceiptClaimCodeMaybe(singularClaim);
+    const singularBoxId = Math.floor(Number(singularClaim?.boxId));
+    return {
+      updatePluralOrderClaim: true,
+      updateSingularOrderClaim:
+        singularCode === params.code || (!singularCode && Number.isFinite(singularBoxId) && singularBoxId === params.boxId),
+    };
+  }
+
+  if (hasPluralStripeReceiptClaims(params.order)) {
+    throw new HttpsError('failed-precondition', 'Stripe delivery order claim code mismatch');
+  }
+
+  const singularClaim = params.order?.stripeReceiptClaim || {};
+  const singularCode = stripeReceiptClaimCodeMaybe(singularClaim);
+  if (singularCode && singularCode !== params.code) {
+    throw new HttpsError('failed-precondition', 'Stripe delivery order claim code mismatch');
+  }
+  const orderBoxId = Math.floor(Number(singularClaim?.boxId ?? params.order?.items?.[0]?.refId));
+  if (Number.isFinite(orderBoxId) && orderBoxId > 0 && orderBoxId !== params.boxId) {
+    throw new HttpsError('failed-precondition', 'Stripe delivery order box id mismatch');
+  }
+  return { updatePluralOrderClaim: false, updateSingularOrderClaim: true };
+}
+
+function stripeReceiptClaimOrderFieldUpdate(params: {
+  code: string;
+  boxId: number;
+  status: 'processing' | 'unclaimed' | 'claimed';
+  fields: Record<string, unknown>;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
+}): Record<string, unknown> {
+  const update: Record<string, unknown> = {};
+  const claim = {
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    code: params.code,
+    boxId: params.boxId,
+    status: params.status,
+    ...params.fields,
+  };
+  const assignClaimFields = (prefix: string) => {
+    Object.entries(claim).forEach(([field, value]) => {
+      update[`${prefix}.${field}`] = value;
+    });
+  };
+
+  if (params.updatePluralOrderClaim) {
+    assignClaimFields(`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(params.boxId)}`);
+  }
+  if (params.updateSingularOrderClaim) {
+    assignClaimFields('stripeReceiptClaim');
+  }
+  return update;
+}
+
+function stripeReceiptClaimProcessingOrderUpdate(params: {
+  dropId: string;
+  code: string;
+  boxId: number;
+  recipientWallet: string;
+  leaseExpiresAt: Timestamp;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
+}): Record<string, unknown> {
+  return {
+    dropId: params.dropId,
+    ...stripeReceiptClaimOrderFieldUpdate({
+      code: params.code,
+      boxId: params.boxId,
+      status: 'processing',
+      fields: {
+        recipient: params.recipientWallet,
+        processingStartedAt: FieldValue.serverTimestamp(),
+        processingLeaseExpiresAt: params.leaseExpiresAt,
+      },
+      updatePluralOrderClaim: params.updatePluralOrderClaim,
+      updateSingularOrderClaim: params.updateSingularOrderClaim,
+    }),
+  };
+}
+
+function stripeReceiptClaimClearOrderUpdate(params: {
+  dropId?: string;
+  code: string;
+  boxId: number;
+  lastError: unknown;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
+}): Record<string, unknown> {
+  return {
+    ...(params.dropId ? { dropId: params.dropId } : {}),
+    ...stripeReceiptClaimOrderFieldUpdate({
+      code: params.code,
+      boxId: params.boxId,
+      status: 'unclaimed',
+      fields: {
+        recipient: FieldValue.delete(),
+        processingStartedAt: FieldValue.delete(),
+        processingLeaseExpiresAt: FieldValue.delete(),
+        lastClaimError: params.lastError,
+      },
+      updatePluralOrderClaim: params.updatePluralOrderClaim,
+      updateSingularOrderClaim: params.updateSingularOrderClaim,
+    }),
+  };
+}
+
+function stripeReceiptClaimFinalOrderUpdate(params: {
+  dropId: string;
+  code: string;
+  boxId: number;
+  recipientWallet: string;
+  receiptTxs: string[];
+  claimedAt: FieldValue;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
+}): Record<string, unknown> {
+  return {
+    dropId: params.dropId,
+    ...stripeReceiptClaimOrderFieldUpdate({
+      code: params.code,
+      boxId: params.boxId,
+      status: 'claimed',
+      fields: {
+        recipient: params.recipientWallet,
+        receiptTxs: params.receiptTxs,
+        claimedAt: params.claimedAt,
+        processingStartedAt: FieldValue.delete(),
+        processingLeaseExpiresAt: FieldValue.delete(),
+      },
+      updatePluralOrderClaim: params.updatePluralOrderClaim,
+      updateSingularOrderClaim: params.updateSingularOrderClaim,
+    }),
+  };
 }
 
 async function startStripeReceiptClaim(params: {
@@ -6476,14 +6688,7 @@ async function startStripeReceiptClaim(params: {
     if (order?.source !== 'stripe_offchain') {
       throw new HttpsError('failed-precondition', 'Claim code is not for a Stripe receipt order');
     }
-    const orderClaim = order?.stripeReceiptClaim || {};
-    if (typeof orderClaim?.code === 'string' && normalizeStripeReceiptClaimCode(orderClaim.code) !== params.code) {
-      throw new HttpsError('failed-precondition', 'Stripe delivery order claim code mismatch');
-    }
-    const orderBoxId = Math.floor(Number(orderClaim?.boxId ?? order?.items?.[0]?.refId));
-    if (Number.isFinite(orderBoxId) && orderBoxId > 0 && orderBoxId !== boxId) {
-      throw new HttpsError('failed-precondition', 'Stripe delivery order box id mismatch');
-    }
+    const orderClaimTarget = resolveStripeReceiptClaimOrderTarget({ order, code: params.code, boxId });
 
     tx.set(
       params.claimRef,
@@ -6497,24 +6702,19 @@ async function startStripeReceiptClaim(params: {
       },
       { merge: true },
     );
-    tx.set(
+    tx.update(
       orderRef,
-      {
+      stripeReceiptClaimProcessingOrderUpdate({
         dropId,
-        stripeReceiptClaim: {
-          namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-          code: params.code,
-          boxId,
-          status: 'processing',
-          recipient: params.recipientWallet,
-          processingStartedAt: FieldValue.serverTimestamp(),
-          processingLeaseExpiresAt: leaseExpiresAt,
-        },
-      },
-      { merge: true },
+        code: params.code,
+        boxId,
+        recipientWallet: params.recipientWallet,
+        leaseExpiresAt,
+        ...orderClaimTarget,
+      }),
     );
 
-    return { status: 'started' as const, dropId, deliveryId, boxId, attemptId: params.attemptId, orderRef };
+    return { status: 'started' as const, dropId, deliveryId, boxId, attemptId: params.attemptId, orderRef, ...orderClaimTarget };
   });
 }
 
@@ -6526,6 +6726,8 @@ async function clearStripeReceiptClaimProcessing(params: {
   recipientWallet: string;
   attemptId: string;
   err: unknown;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
 }): Promise<void> {
   await db
     .runTransaction(async (tx) => {
@@ -6546,16 +6748,16 @@ async function clearStripeReceiptClaimProcessing(params: {
         },
         { merge: true },
       );
-      tx.update(params.orderRef, {
-        'stripeReceiptClaim.namespace': STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-        'stripeReceiptClaim.code': params.code,
-        'stripeReceiptClaim.boxId': params.boxId,
-        'stripeReceiptClaim.status': 'unclaimed',
-        'stripeReceiptClaim.recipient': FieldValue.delete(),
-        'stripeReceiptClaim.processingStartedAt': FieldValue.delete(),
-        'stripeReceiptClaim.processingLeaseExpiresAt': FieldValue.delete(),
-        'stripeReceiptClaim.lastClaimError': lastError,
-      });
+      tx.update(
+        params.orderRef,
+        stripeReceiptClaimClearOrderUpdate({
+          code: params.code,
+          boxId: params.boxId,
+          lastError,
+          updatePluralOrderClaim: params.updatePluralOrderClaim,
+          updateSingularOrderClaim: params.updateSingularOrderClaim,
+        }),
+      );
     })
     .catch((cleanupErr) => {
       logger.warn('claimStripeReceipt:cleanup_failed', {
@@ -6576,6 +6778,8 @@ async function finalizeStripeReceiptClaim(params: {
   recipientWallet: string;
   attemptId: string;
   receiptTx: string | null;
+  updatePluralOrderClaim: boolean;
+  updateSingularOrderClaim: boolean;
 }): Promise<string[]> {
   return db.runTransaction(async (tx) => {
     const claimSnap = await tx.get(params.claimRef);
@@ -6609,18 +6813,19 @@ async function finalizeStripeReceiptClaim(params: {
       },
       { merge: true },
     );
-    tx.update(params.orderRef, {
-      dropId: params.dropId,
-      'stripeReceiptClaim.namespace': STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-      'stripeReceiptClaim.code': params.code,
-      'stripeReceiptClaim.boxId': params.boxId,
-      'stripeReceiptClaim.status': 'claimed',
-      'stripeReceiptClaim.recipient': params.recipientWallet,
-      'stripeReceiptClaim.receiptTxs': receiptTxs,
-      'stripeReceiptClaim.claimedAt': claimedAt,
-      'stripeReceiptClaim.processingStartedAt': FieldValue.delete(),
-      'stripeReceiptClaim.processingLeaseExpiresAt': FieldValue.delete(),
-    });
+    tx.update(
+      params.orderRef,
+      stripeReceiptClaimFinalOrderUpdate({
+        dropId: params.dropId,
+        code: params.code,
+        boxId: params.boxId,
+        recipientWallet: params.recipientWallet,
+        receiptTxs,
+        claimedAt,
+        updatePluralOrderClaim: params.updatePluralOrderClaim,
+        updateSingularOrderClaim: params.updateSingularOrderClaim,
+      }),
+    );
     return receiptTxs;
   });
 }
@@ -6789,6 +6994,8 @@ export const claimStripeReceipt = onCallLogged(
             recipientWallet,
             attemptId,
             receiptTx: null,
+            updatePluralOrderClaim: started.updatePluralOrderClaim,
+            updateSingularOrderClaim: started.updateSingularOrderClaim,
           });
           return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
         }
@@ -6846,6 +7053,8 @@ export const claimStripeReceipt = onCallLogged(
         recipientWallet,
         attemptId,
         receiptTx,
+        updatePluralOrderClaim: started.updatePluralOrderClaim,
+        updateSingularOrderClaim: started.updateSingularOrderClaim,
       });
 
       return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
@@ -6859,6 +7068,8 @@ export const claimStripeReceipt = onCallLogged(
           recipientWallet,
           attemptId,
           err,
+          updatePluralOrderClaim: startedClaim.updatePluralOrderClaim,
+          updateSingularOrderClaim: startedClaim.updateSingularOrderClaim,
         });
       }
       throw err;

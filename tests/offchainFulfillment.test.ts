@@ -439,6 +439,74 @@ test('validateStripeCheckoutContract accepts a one-item USD live checkout', () =
   );
 });
 
+test('validateStripeCheckoutContract accepts multi-item checkout quantity when expected', () => {
+  const result = validateStripeCheckoutContract({
+    session: {
+      mode: 'payment',
+      payment_status: 'paid',
+      livemode: true,
+      automatic_tax: { enabled: true, status: 'complete' },
+      amount_subtotal: 74700,
+      amount_total: 81126,
+      total_details: { amount_tax: 6426 },
+      currency: STRIPE_OFFCHAIN_CURRENCY,
+      metadata: {
+        fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+        quantity: '3',
+      },
+    },
+    lineItems: {
+      data: [
+        {
+          quantity: 3,
+          currency: STRIPE_OFFCHAIN_CURRENCY,
+          amount_subtotal: 74700,
+          amount_total: 81126,
+          price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 24900 },
+        },
+      ],
+    },
+    expectedUnitAmountCents: 24900,
+    expectedQuantity: 3,
+    expectedLivemode: true,
+  });
+
+  assert.deepEqual(result, { quantity: 3, currency: STRIPE_OFFCHAIN_CURRENCY, unitAmountCents: 24900 });
+  assert.throws(
+    () =>
+      validateStripeCheckoutContract({
+        session: {
+          mode: 'payment',
+          payment_status: 'paid',
+          livemode: true,
+          automatic_tax: { enabled: true, status: 'complete' },
+          amount_subtotal: 74700,
+          amount_total: 74700,
+          currency: STRIPE_OFFCHAIN_CURRENCY,
+          metadata: {
+            fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+            quantity: '3',
+          },
+        },
+        lineItems: {
+          data: [
+            {
+              quantity: 3,
+              currency: STRIPE_OFFCHAIN_CURRENCY,
+              amount_subtotal: 74700,
+              amount_total: 74700,
+              price: { currency: STRIPE_OFFCHAIN_CURRENCY, unit_amount: 24900 },
+            },
+          ],
+        },
+        expectedUnitAmountCents: 24900,
+        expectedQuantity: 2,
+        expectedLivemode: true,
+      }),
+    /quantity does not match expected quantity/,
+  );
+});
+
 test('validateStripeTestCheckoutContract rejects quantity mismatches and multiple line items', () => {
   const session = {
     mode: 'payment',
@@ -599,6 +667,9 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
   assert.equal(doc.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_FIREBASE);
   assert.equal(doc.firebaseUid, 'anon_uid_123');
   assert.equal(doc.receiptOwner, pubkey(90).toBase58());
+  assert.equal(doc.quantity, 1);
+  assert.deepEqual(doc.metadataIds, [16]);
+  assert.equal(doc.metadataId, 16);
   assert.deepEqual(doc.items, [{ kind: 'box', refId: 16, variantKey: 'XL' }]);
   assert.equal(doc.receiptsMinted, 1);
   assert.deepEqual(doc.receiptTxs, ['tx123']);
@@ -607,6 +678,15 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
     code: 'ABCDEF-0123456789',
     boxId: 16,
     status: 'unclaimed',
+  });
+  assert.equal('stripeReceiptClaims' in doc, false);
+  assert.deepEqual(doc.stripeReceiptClaimsByBoxId, {
+    box_16: {
+      namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+      code: 'ABCDEF-0123456789',
+      boxId: 16,
+      status: 'unclaimed',
+    },
   });
   assert.equal(doc.stripeCheckoutSessionId, 'cs_test_123');
   assert.equal(doc.stripePaymentIntentId, 'pi_123');
@@ -617,13 +697,70 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
     firebaseUid: 'anon_uid_123',
     receiptOwner: pubkey(90).toBase58(),
+    quantity: 1,
+    firstMetadataId: 16,
+    metadataIds: [16],
     metadataId: 16,
     variantKey: 'XL',
     offchainOrderHash: 'ab'.repeat(32),
     stripeCheckoutSessionId: 'cs_test_123',
     receiptTx: 'tx123',
+    stripeReceiptClaimCodesByBoxId: { box_16: 'ABCDEF-0123456789' },
     stripeReceiptClaimCode: 'ABCDEF-0123456789',
   });
+});
+
+test('buildStripeOffchainDeliveryOrderDocument shapes multi-item receipt claims', () => {
+  const input = {
+    dropId: 'little_swag_hoodies_devnet',
+    deliveryId: 456,
+    owner: 'firebase:anon_uid_456',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+    firebaseUid: 'anon_uid_456',
+    receiptOwner: pubkey(91).toBase58(),
+    metadataIds: [16, 17, 18],
+    variantKey: 'XL',
+    orderHashHex: 'cd'.repeat(32),
+    stripeSession: { id: 'cs_test_456' },
+    receiptTx: 'tx456',
+    addressSnapshot: { encrypted: 'cipher', hint: 'B...US', countryCode: 'US' },
+    stripeReceiptClaims: [
+      { code: 'ABCDEF-0123456789', boxId: 16, status: 'unclaimed' },
+      { code: 'GHIJKL-0123456789', boxId: 17, status: 'unclaimed' },
+      { code: 'MNOPQR-0123456789', boxId: 18, status: 'unclaimed' },
+    ],
+  };
+
+  const doc = buildStripeOffchainDeliveryOrderDocument(input);
+  assert.equal(doc.quantity, 3);
+  assert.deepEqual(doc.metadataIds, [16, 17, 18]);
+  assert.equal('metadataId' in doc, false);
+  assert.deepEqual(doc.items, [
+    { kind: 'box', refId: 16, variantKey: 'XL' },
+    { kind: 'box', refId: 17, variantKey: 'XL' },
+    { kind: 'box', refId: 18, variantKey: 'XL' },
+  ]);
+  assert.equal(doc.receiptsMinted, 3);
+  assert.equal('stripeReceiptClaim' in doc, false);
+  assert.equal('stripeReceiptClaims' in doc, false);
+  assert.deepEqual(doc.stripeReceiptClaimsByBoxId, {
+    box_16: { namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE, code: 'ABCDEF-0123456789', boxId: 16, status: 'unclaimed' },
+    box_17: { namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE, code: 'GHIJKL-0123456789', boxId: 17, status: 'unclaimed' },
+    box_18: { namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE, code: 'MNOPQR-0123456789', boxId: 18, status: 'unclaimed' },
+  });
+
+  const marker = buildStripeOffchainOrderMarkerDocument(input);
+  assert.equal(marker.quantity, 3);
+  assert.equal(marker.firstMetadataId, 16);
+  assert.deepEqual(marker.metadataIds, [16, 17, 18]);
+  assert.deepEqual(marker.stripeReceiptClaimCodesByBoxId, {
+    box_16: 'ABCDEF-0123456789',
+    box_17: 'GHIJKL-0123456789',
+    box_18: 'MNOPQR-0123456789',
+  });
+  assert.equal('metadataId' in marker, false);
+  assert.equal('stripeReceiptClaims' in marker, false);
+  assert.equal('stripeReceiptClaimCode' in marker, false);
 });
 
 test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code atomically', async () => {
@@ -708,6 +845,95 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.equal(updates.length, 1);
 });
 
+test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async () => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const orderHashHex = 'ef'.repeat(32);
+  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_multi` } as any;
+  const creates: Array<{ ref: any; data: any }> = [];
+  const updates: Array<{ ref: any; data: any }> = [];
+  const db = {
+    doc: (path: string) => {
+      if (path === markerRef.path) return markerRef;
+      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
+      if (path.startsWith('claimCodes/')) return { path };
+      return { path };
+    },
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          if (ref === markerRef) return { exists: false };
+          if (ref === checkoutRef) {
+            return {
+              exists: true,
+              data: () => ({
+                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+                processingAttemptId: 'attempt_current',
+              }),
+            };
+          }
+          if (String(ref?.path || '').startsWith('claimCodes/')) return { exists: false };
+          throw new Error(`unexpected ref: ${ref?.path}`);
+        },
+        create: (ref: any, data: any) => {
+          creates.push({ ref, data });
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const result = await createOrGetStripeOffchainDeliveryOrder({
+    db,
+    checkoutRef,
+    isAlreadyExistsError: () => false,
+    processingAttemptId: 'attempt_current',
+    order: {
+      dropId,
+      orderHashHex,
+      owner: 'firebase:anon_uid_multi',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_multi',
+      receiptOwner: pubkey(92).toBase58(),
+      metadataId: 16,
+      metadataIds: [16, 17, 18],
+      variantKey: 'XL',
+      stripeSession: { id: 'cs_test_multi' },
+      receiptTx: 'txmulti',
+      addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+    },
+  });
+
+  assert.equal(result.checkoutStatus, 'fulfilled');
+  assert.equal(creates.length, 5);
+  const orderCreate = creates.find((entry) => String(entry.ref.path).startsWith(`drops/${dropId}/deliveryOrders/`));
+  const markerCreate = creates.find((entry) => entry.ref === markerRef);
+  const claimCreates = creates.filter((entry) => String(entry.ref.path).startsWith('claimCodes/'));
+  assert.ok(orderCreate);
+  assert.ok(markerCreate);
+  assert.equal(claimCreates.length, 3);
+  assert.deepEqual(claimCreates.map((entry) => entry.data.boxId).sort((a, b) => a - b), [16, 17, 18]);
+  assert.equal(new Set(claimCreates.map((entry) => entry.data.code)).size, 3);
+  assert.deepEqual(orderCreate.data.items, [
+    { kind: 'box', refId: 16, variantKey: 'XL' },
+    { kind: 'box', refId: 17, variantKey: 'XL' },
+    { kind: 'box', refId: 18, variantKey: 'XL' },
+  ]);
+  assert.equal(orderCreate.data.receiptsMinted, 3);
+  assert.equal('stripeReceiptClaims' in orderCreate.data, false);
+  assert.deepEqual(Object.keys(orderCreate.data.stripeReceiptClaimsByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
+  assert.equal(markerCreate.data.quantity, 3);
+  assert.deepEqual(markerCreate.data.metadataIds, [16, 17, 18]);
+  assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
+  assert.equal('stripeReceiptClaims' in markerCreate.data, false);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
+  assert.notEqual(updates[0].data.metadataId, 16);
+  assert.equal(updates[0].data.quantity, 3);
+});
+
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {
   assert.deepEqual(buildStripeCheckoutSessionMetadata({ dropId: 'little_swag_hoodies_devnet', uid: 'anon_uid_123', variantKey: 'XL' }), {
     dropId: 'little_swag_hoodies_devnet',
@@ -717,6 +943,17 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     quantity: '1',
     variantKey: 'XL',
   });
+  assert.deepEqual(
+    buildStripeCheckoutSessionMetadata({ dropId: 'little_swag_hoodies_devnet', uid: 'anon_uid_123', variantKey: 'XL', quantity: 3 }),
+    {
+      dropId: 'little_swag_hoodies_devnet',
+      uid: 'anon_uid_123',
+      fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+      placeholder: 'stripe_direct_delivery',
+      quantity: '3',
+      variantKey: 'XL',
+    },
+  );
 
   const checkout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies_devnet',
@@ -755,6 +992,33 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     {
       uid: 'anon_uid_123',
       variantKey: 'XL',
+      quantity: 1,
+      unitAmountCents: 100,
+      livemode: false,
+      status: STRIPE_CHECKOUT_STATUS.CREATED,
+    },
+  );
+  const multiCheckout = buildStripeCheckoutDocument({
+    dropId: 'little_swag_hoodies_devnet',
+    sessionId: 'cs_test_multi',
+    uid: 'anon_uid_123',
+    variantKey: 'XL',
+    quantity: 3,
+    unitAmountCents: 100,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  assert.deepEqual(
+    validateStripeCheckoutDocumentData({
+      dropId: 'little_swag_hoodies_devnet',
+      variantKey: 'XL',
+      sessionId: 'cs_test_multi',
+      checkout: multiCheckout,
+    }),
+    {
+      uid: 'anon_uid_123',
+      variantKey: 'XL',
+      quantity: 3,
       unitAmountCents: 100,
       livemode: false,
       status: STRIPE_CHECKOUT_STATUS.CREATED,
@@ -781,6 +1045,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     {
       uid: 'anon_uid_123',
       variantKey: 'XL',
+      quantity: 1,
       unitAmountCents: 24900,
       livemode: true,
       status: STRIPE_CHECKOUT_STATUS.CREATED,
@@ -1415,6 +1680,40 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
   assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
   assert.equal(updates[0].data.deliveryId, 123);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
+});
+
+test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for multi-item checkout docs', async () => {
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return {
+            exists: true,
+            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
+          };
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+    deliveryId: 123,
+    metadataIds: [16, 17, 18],
+    receiptTx: 'tx123',
+    processingAttemptId: 'attempt_current',
+  });
+
+  assert.deepEqual(result, { status: 'fulfilled' });
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
+  assert.equal(updates[0].data.quantity, 3);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
+  assert.notEqual(updates[0].data.metadataId, 16);
 });
 
 test('markStripeCheckoutFulfillmentFulfilled ignores stale processing attempts', async () => {

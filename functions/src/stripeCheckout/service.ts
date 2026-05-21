@@ -26,11 +26,11 @@ import {
   generateStripeReceiptClaimCode,
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutReturnUrl,
+  normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
-  STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   requireStripeReceiptClaimCode,
@@ -133,6 +133,7 @@ export type StripeCheckoutFulfillmentProcessResult =
       sessionId: string;
       deliveryId?: number;
       metadataId?: number;
+      metadataIds?: number[];
       receiptTx?: string | null;
     }
   | {
@@ -196,6 +197,7 @@ export type StripeCheckoutFlowDeps<
     dropRuntime: Runtime;
     cfg: Config;
     variantKey: string;
+    quantity: number;
   }) => void;
   requireStripeCheckoutFulfillmentPrerequisites: (cfg: Config) => void;
   requireStripeCheckoutCollectionMatchesConfig: (
@@ -227,7 +229,12 @@ export type StripeCheckoutFlowDeps<
   txConfirmTimeoutMs: number;
 };
 
-type StripeOffchainDeliveryOrderMarker = { deliveryId: number; metadataId?: number; receiptTx?: string | null };
+type StripeOffchainDeliveryOrderMarker = {
+  deliveryId: number;
+  metadataId?: number;
+  metadataIds?: number[];
+  receiptTx?: string | null;
+};
 type StripeOffchainDeliveryOrderDraft = Omit<StripeOffchainDeliveryOrderDocumentInput, 'deliveryId'>;
 type StripeOffchainDeliveryOrderResult =
   | { checkoutStatus: 'fulfilled'; deliveryId: number }
@@ -730,13 +737,16 @@ function stripeCheckoutFulfillmentClearUpdate(): Record<string, unknown> {
 function stripeCheckoutFulfilledUpdate(params: {
   deliveryId: number;
   metadataId?: number;
+  metadataIds?: number[];
   receiptTx?: string | null;
 }): Record<string, unknown> {
-  const metadataId = Math.floor(Number(params.metadataId));
+  const metadataIds = normalizedMetadataIds(params.metadataIds, params.metadataId);
+  const metadataId = metadataIds.length === 1 ? metadataIds[0] : undefined;
   return {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
     deliveryId: params.deliveryId,
-    ...(Number.isFinite(metadataId) && metadataId > 0 ? { metadataId } : {}),
+    ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: FieldValue.delete() } : {}),
+    ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
     ...(typeof params.receiptTx === 'string' || params.receiptTx === null ? { receiptTx: params.receiptTx } : {}),
     fulfilledAt: FieldValue.serverTimestamp(),
     ...stripeCheckoutFulfillmentClearUpdate(),
@@ -775,6 +785,7 @@ export async function markStripeCheckoutFulfillmentFulfilled(
   params: {
     deliveryId: number;
     metadataId?: number;
+    metadataIds?: number[];
     receiptTx?: string | null;
     processingAttemptId?: string;
   },
@@ -813,6 +824,20 @@ function positiveInteger(value: unknown): number | undefined {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
 }
 
+function normalizedPositiveIntegers(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((candidate) => Math.floor(Number(candidate)))
+    .filter((candidate) => Number.isFinite(candidate) && candidate > 0 && candidate <= 0xffff_ffff);
+}
+
+function normalizedMetadataIds(metadataIds: unknown, metadataId: unknown): number[] {
+  const explicitMetadataIds = normalizedPositiveIntegers(metadataIds);
+  if (explicitMetadataIds.length) return explicitMetadataIds;
+  const legacyMetadataId = positiveInteger(metadataId);
+  return legacyMetadataId ? [legacyMetadataId] : [];
+}
+
 function receiptTxMaybe(value: unknown): string | null | undefined {
   if (typeof value === 'string') return value;
   if (value === null) return null;
@@ -822,11 +847,13 @@ function receiptTxMaybe(value: unknown): string | null | undefined {
 function readStripeOffchainDeliveryOrderMarker(marker: { get(fieldPath: string): unknown }): StripeOffchainDeliveryOrderMarker | null {
   const deliveryId = Math.floor(Number(marker.get('deliveryId')));
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) return null;
-  const metadataId = Math.floor(Number(marker.get('metadataId')));
+  const metadataId = positiveInteger(marker.get('metadataId'));
+  const metadataIds = normalizedMetadataIds(marker.get('metadataIds'), metadataId);
   const receiptTx = receiptTxMaybe(marker.get('receiptTx'));
   return {
     deliveryId,
-    ...(Number.isFinite(metadataId) && metadataId > 0 ? { metadataId } : {}),
+    ...(metadataId ? { metadataId } : {}),
+    ...(metadataIds.length ? { metadataIds } : {}),
     ...(typeof receiptTx === 'string' || receiptTx === null ? { receiptTx } : {}),
   };
 }
@@ -840,6 +867,15 @@ async function fetchStripeOffchainDeliveryOrderMarker(params: {
   return marker.exists ? readStripeOffchainDeliveryOrderMarker(marker) : null;
 }
 
+function generateUniqueStripeReceiptClaimCodes(quantity: number): string[] {
+  const normalizedQuantity = normalizeStripeCheckoutQuantity(quantity);
+  const codes = new Set<string>();
+  while (codes.size < normalizedQuantity) {
+    codes.add(requireStripeReceiptClaimCode(generateStripeReceiptClaimCode()));
+  }
+  return [...codes];
+}
+
 export async function createOrGetStripeOffchainDeliveryOrder(params: {
   db: Firestore;
   order: StripeOffchainDeliveryOrderDraft;
@@ -849,6 +885,8 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
 }): Promise<StripeOffchainDeliveryOrderResult> {
   const { db, order, checkoutRef } = params;
   const { dropId, orderHashHex } = order;
+  const metadataIds = normalizedMetadataIds(order.metadataIds, order.metadataId);
+  const quantity = normalizeStripeCheckoutQuantity(metadataIds.length);
   const markerRef = db.doc(`${dropRootPath(dropId)}/offchainOrders/${orderHashHex}`);
   const MAX_DELIVERY_ID_ATTEMPTS = 16;
   const MAX_CLAIM_CODE_ATTEMPTS = 40;
@@ -857,8 +895,8 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const candidate = randomInt(1, 2 ** 31);
     const orderRef = db.doc(dropDeliveryOrderPath(dropId, candidate));
-    const claimCode = generateStripeReceiptClaimCode();
-    const claimRef = db.doc(`claimCodes/${claimCode}`);
+    const claimCodes = generateUniqueStripeReceiptClaimCodes(quantity);
+    const claimRefs = claimCodes.map((claimCode) => db.doc(`claimCodes/${claimCode}`));
 
     try {
       const result = await db.runTransaction(async (tx) => {
@@ -878,6 +916,7 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
                 stripeCheckoutFulfilledUpdate({
                   deliveryId: existingOrder.deliveryId,
                   metadataId: existingOrder.metadataId,
+                  metadataIds: existingOrder.metadataIds,
                   receiptTx: existingOrder.receiptTx,
                 }),
               );
@@ -894,14 +933,19 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
           return deliveryId ? { deliveryId, checkoutStatus } : { checkoutStatus };
         }
 
-        const claimSnap = await tx.get(claimRef);
-        if (claimSnap.exists) throw new StripeReceiptClaimCodeCollisionError();
+        const claimSnaps = await Promise.all(claimRefs.map((claimRef) => tx.get(claimRef)));
+        if (claimSnaps.some((claimSnap) => claimSnap.exists)) throw new StripeReceiptClaimCodeCollisionError();
 
-        const canonicalClaimCode = requireStripeReceiptClaimCode(claimCode);
+        const stripeReceiptClaims = metadataIds.map((boxId, index) => ({
+          code: requireStripeReceiptClaimCode(claimCodes[index]),
+          boxId,
+          status: 'unclaimed',
+        }));
         const deliveryOrder = {
           ...order,
           deliveryId: candidate,
-          stripeReceiptClaim: { code: canonicalClaimCode, status: 'unclaimed' },
+          metadataIds,
+          stripeReceiptClaims,
         };
         tx.create(orderRef, {
           ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
@@ -912,29 +956,32 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
           ...buildStripeOffchainOrderMarkerDocument(deliveryOrder),
           createdAt: FieldValue.serverTimestamp(),
         });
-        tx.create(claimRef, {
-          version: 1,
-          namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-          code: canonicalClaimCode,
-          dropId,
-          deliveryId: candidate,
-          owner: order.owner,
-          ...(order.ownerKind ? { ownerKind: order.ownerKind } : {}),
-          ...(order.firebaseUid ? { firebaseUid: order.firebaseUid } : {}),
-          receiptOwner: order.receiptOwner,
-          boxId: order.metadataId,
-          variantKey: order.variantKey,
-          offchainOrderHash: order.orderHashHex,
-          stripeCheckoutSessionId: order.stripeSession.id,
-          status: 'unclaimed',
-          createdAt: FieldValue.serverTimestamp(),
+        stripeReceiptClaims.forEach((claim, index) => {
+          tx.create(claimRefs[index], {
+            version: 1,
+            namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+            code: claim.code,
+            dropId,
+            deliveryId: candidate,
+            owner: order.owner,
+            ...(order.ownerKind ? { ownerKind: order.ownerKind } : {}),
+            ...(order.firebaseUid ? { firebaseUid: order.firebaseUid } : {}),
+            receiptOwner: order.receiptOwner,
+            boxId: claim.boxId,
+            variantKey: order.variantKey,
+            offchainOrderHash: order.orderHashHex,
+            stripeCheckoutSessionId: order.stripeSession.id,
+            status: 'unclaimed',
+            createdAt: FieldValue.serverTimestamp(),
+          });
         });
         if (checkoutStatus === 'fulfilled') {
           tx.update(
             checkoutRef,
             stripeCheckoutFulfilledUpdate({
               deliveryId: candidate,
-              metadataId: order.metadataId,
+              ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
+              metadataIds,
               receiptTx: order.receiptTx,
             }),
           );
@@ -992,6 +1039,7 @@ async function fulfillStripeCheckoutSession<
   dropId: string;
   deliveryId?: number;
   metadataId?: number;
+  metadataIds?: number[];
   receiptTx?: string | null;
 }> {
   const { db, session, stripe, checkout, deps } = params;
@@ -1050,6 +1098,7 @@ async function fulfillStripeCheckoutSession<
     const markResult = await markStripeCheckoutFulfillmentFulfilled(checkout.ref, {
       deliveryId: existingOrder.deliveryId,
       metadataId: existingOrder.metadataId,
+      metadataIds: existingOrder.metadataIds,
       receiptTx: existingOrder.receiptTx,
       processingAttemptId: params.processingAttemptId,
     });
@@ -1060,6 +1109,7 @@ async function fulfillStripeCheckoutSession<
       dropId,
       deliveryId: existingOrder.deliveryId,
       metadataId: existingOrder.metadataId,
+      metadataIds: existingOrder.metadataIds,
       receiptTx: existingOrder.receiptTx ?? null,
     };
   }
@@ -1070,6 +1120,7 @@ async function fulfillStripeCheckoutSession<
       session,
       lineItems,
       expectedUnitAmountCents: checkout.unitAmountCents,
+      expectedQuantity: checkout.quantity,
       expectedCurrency: STRIPE_OFFCHAIN_CURRENCY,
       expectedLivemode,
     });
@@ -1128,7 +1179,7 @@ async function fulfillStripeCheckoutSession<
       data: encodeAdminDeliverVariantOrderArgs({
         orderHash,
         variantIndex,
-        quantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+        quantity: checkout.quantity,
       }),
     });
     const { blockhash } = await deps.withTimeout(
@@ -1181,11 +1232,11 @@ async function fulfillStripeCheckoutSession<
       actualVariantIndex: record.variantIndex,
     });
   }
-  if (record.quantity !== STRIPE_OFFCHAIN_CHECKOUT_QUANTITY) {
+  if (record.quantity !== checkout.quantity) {
     throw new HttpsError('failed-precondition', 'Admin order record quantity mismatch', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
-      expectedQuantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+      expectedQuantity: checkout.quantity,
       actualQuantity: record.quantity,
     });
   }
@@ -1213,6 +1264,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   const metadataId = record.firstMetadataId;
+  const metadataIds = Array.from({ length: checkout.quantity }, (_, index) => metadataId + index);
 
   const order = await createOrGetStripeOffchainDeliveryOrder({
     db,
@@ -1224,6 +1276,7 @@ async function fulfillStripeCheckoutSession<
       firebaseUid: checkout.uid,
       receiptOwner: receiptOwner.toBase58(),
       metadataId,
+      metadataIds,
       variantKey,
       stripeSession: session,
       receiptTx,
@@ -1241,6 +1294,7 @@ async function fulfillStripeCheckoutSession<
     dropId,
     ...(order.deliveryId ? { deliveryId: order.deliveryId } : {}),
     metadataId,
+    metadataIds,
     receiptTx,
   };
 }
@@ -1538,11 +1592,13 @@ export async function createStripeCheckoutSessionForRequest<
   const schema = z.object({
     dropId: z.string().min(1).max(64),
     variantKey: z.string().min(1).max(64).optional(),
+    quantity: z.union([z.number(), z.string()]).optional(),
     returnUrl: z.string().url().max(2048).optional(),
   });
   const {
     dropId: requestDropId,
     variantKey: rawVariantKey,
+    quantity: rawQuantity,
     returnUrl,
   } = parseRequest(schema, params.request.data);
   const { deps } = params;
@@ -1567,6 +1623,12 @@ export async function createStripeCheckoutSessionForRequest<
   if (!variantKey) {
     throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
   }
+  let quantity: number;
+  try {
+    quantity = normalizeStripeCheckoutQuantity(rawQuantity);
+  } catch (err) {
+    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
+  }
   const successUrl = checkoutReturnUrl(params.request, returnUrl, 'success');
   const cancelUrl = checkoutReturnUrl(params.request, returnUrl, 'cancel');
   const productTaxCode = stripeCheckoutProductTaxCodeForDrop(dropRuntime);
@@ -1577,7 +1639,7 @@ export async function createStripeCheckoutSessionForRequest<
     conn: deps.connection(dropRuntime),
     context: 'getAccountInfo:boxMinterConfig:stripeCheckout',
   });
-  deps.requireStripeCheckoutVariantAvailable({ dropRuntime, cfg, variantKey });
+  deps.requireStripeCheckoutVariantAvailable({ dropRuntime, cfg, variantKey, quantity });
   deps.requireStripeCheckoutCollectionMatchesConfig(dropRuntime, cfg);
   deps.requireStripeCheckoutFulfillmentPrerequisites(cfg);
 
@@ -1592,7 +1654,7 @@ export async function createStripeCheckoutSessionForRequest<
       client_reference_id: `${params.uid}:${dropId}:${Date.now()}`.slice(0, 200),
       line_items: [
         {
-          quantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+          quantity,
           price_data: {
             currency: STRIPE_OFFCHAIN_CURRENCY,
             unit_amount: unitAmountCents,
@@ -1601,7 +1663,7 @@ export async function createStripeCheckoutSessionForRequest<
           },
         },
       ],
-      metadata: buildStripeCheckoutSessionMetadata({ dropId, uid: params.uid, variantKey }),
+      metadata: buildStripeCheckoutSessionMetadata({ dropId, uid: params.uid, variantKey, quantity }),
       ...stripeCheckoutShippingParams(),
     },
     apiKey,
@@ -1614,6 +1676,7 @@ export async function createStripeCheckoutSessionForRequest<
       uid: params.uid,
       variantKey,
       unitAmountCents,
+      quantity,
       livemode: session.livemode,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
