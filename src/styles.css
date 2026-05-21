@@ -493,8 +493,8 @@ header.top {
   min-width: 48px;
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: rgba(0, 0, 0, 0.045);
   color: var(--fg);
   font-size: 13px;
   font-weight: 600;
@@ -504,19 +504,23 @@ header.top {
 }
 
 .mint-panel__size:hover:not(:disabled):not(.mint-panel__size--selected) {
-  background: #ececef;
+  background: rgba(0, 0, 0, 0.075);
 }
 
 @media (prefers-color-scheme: dark) {
+  .mint-panel__size {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
   .mint-panel__size:hover:not(:disabled):not(.mint-panel__size--selected) {
-    background: #3a3a3c;
+    background: rgba(255, 255, 255, 0.12);
   }
 }
 
 .mint-panel__size--selected,
 .mint-panel__size--selected:hover:not(:disabled) {
   background: var(--mint-size-accent);
-  border-color: var(--mint-size-accent);
+  border-color: transparent;
   color: #ffffff;
 }
 
