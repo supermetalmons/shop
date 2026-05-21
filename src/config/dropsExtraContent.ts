@@ -52,12 +52,18 @@ export type DropExtraContentOverride = {
 };
 
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
+const PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL = '/Poncho_Drifella/pack/tight.webp';
+const PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO = 637 / 1092;
 const HOODIE_CLEAN_IMAGE_URL = 'https://bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4.ipfs.dweb.link/hoodie_clean.webp';
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 877;
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     previewImageUrl: '/Poncho_Drifella/pack/initial.webp',
     aspectRatio: 1,
+  },
+  mintPanel: {
+    previewImageUrl: PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL,
+    aspectRatio: PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO,
   },
   reveal: {
     mode: 'animated',

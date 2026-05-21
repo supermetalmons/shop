@@ -1,11 +1,9 @@
 import { navigate } from '../navigation';
-import { resolveDropContent } from '../lib/dropContent';
+import { mintPanelPreviewImage, resolveDropContent } from '../lib/dropContent';
 import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../lib/dropConfig';
 
-const lsbContent = resolveDropContent('little_swag_boxes');
-const lsbBase = lsbContent.box.previewImageUrl?.replace(/\/[^/]+$/, '');
-const lsbImage = lsbBase ? `${lsbBase}/default.webp` : undefined;
-const ponchoImage = resolveDropContent('poncho_drifella').box.previewImageUrl;
+const lsbImage = mintPanelPreviewImage('little_swag_boxes');
+const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const upcomingDropItems = listUpcomingDropRoutes().map((route) => {
   const liveDrop = resolveUpcomingRouteDrop(route);
   const previewDropId = liveDrop?.dropId || route.previewDropId;
@@ -24,6 +22,7 @@ type DropPanelItem = {
   alt: string;
   label: string;
   path: string;
+  previewScale?: number;
 };
 
 function DropPanelCard({ item, isOrphan }: { item: DropPanelItem; isOrphan?: boolean }) {
@@ -35,6 +34,7 @@ function DropPanelCard({ item, isOrphan }: { item: DropPanelItem; isOrphan?: boo
             className="drops-panel__image"
             src={item.image}
             alt={item.alt}
+            style={item.previewScale ? { transform: `scale(${item.previewScale})` } : undefined}
             draggable={false}
             onDragStart={(evt) => evt.preventDefault()}
           />
@@ -70,6 +70,7 @@ export function DropsPanel() {
       alt: 'Poncho Drifella',
       label: 'Poncho Drifella',
       path: dropPath('poncho_drifella'),
+      previewScale: 0.92,
     },
     ...upcomingDropItems,
   ];
