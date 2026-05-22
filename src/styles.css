@@ -850,6 +850,7 @@ header.top.top--with-admin {
 .mint-panel__submit {
   width: auto;
   min-width: 200px;
+  min-height: 40px;
   padding: 12px 22px;
   display: grid;
   grid-template-columns: 1fr auto;
@@ -861,6 +862,7 @@ header.top.top--with-admin {
 .mint-panel__stripe {
   width: 100%;
   min-width: 200px;
+  min-height: 40px;
   padding: 12px 22px;
   display: grid;
   grid-template-columns: 1fr auto;
@@ -895,16 +897,14 @@ header.top.top--with-admin {
   gap: 7px;
   font-size: 14px;
   font-weight: 600;
-}
-
-.mint-panel__stripe-icon {
-  flex: 0 0 auto;
+  line-height: 1;
 }
 
 .mint-panel__stripe-price {
   justify-self: end;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1;
   opacity: 0.85;
   font-variant-numeric: tabular-nums;
 }
@@ -971,11 +971,13 @@ header.top.top--with-admin {
 .mint-panel__submit-text {
   font-size: 14px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .mint-panel__submit-price {
   font-size: 12px;
   font-weight: 500;
+  line-height: 1;
   opacity: 0.85;
   font-variant-numeric: tabular-nums;
   justify-self: end;

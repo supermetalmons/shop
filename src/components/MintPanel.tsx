@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight, FaCircleQuestion, FaCreditCard } from 'react-icons/fa6';
+import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
@@ -625,6 +625,28 @@ export function MintPanel({
           </form>
           <div className="mint-panel__cta">
             <div className={ctaStackClassName}>
+              {showStripePaymentButton ? (
+                <button
+                  type="button"
+                  className={stripePaymentPending ? 'mint-panel__stripe mint-panel__stripe--busy' : 'mint-panel__stripe'}
+                  onClick={() => {
+                    void handleStripePaymentClick();
+                  }}
+                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported}
+                  title={stripePaymentQuantitySupported ? undefined : 'Stripe checkout supports one item at a time'}
+                >
+                  {stripePaymentPending ? (
+                    <span className="mint-panel__stripe-text">Opening Stripe…</span>
+                  ) : (
+                    <>
+                      <span className="mint-panel__stripe-text">
+                        <span>Pay with card</span>
+                      </span>
+                      <span className="mint-panel__stripe-price">{stripePaymentDisplayPriceLabel}</span>
+                    </>
+                  )}
+                </button>
+              ) : null}
               <button
                 type="submit"
                 form={formId}
@@ -649,29 +671,6 @@ export function MintPanel({
                   </>
                 )}
               </button>
-              {showStripePaymentButton ? (
-                <button
-                  type="button"
-                  className={stripePaymentPending ? 'mint-panel__stripe mint-panel__stripe--busy' : 'mint-panel__stripe'}
-                  onClick={() => {
-                    void handleStripePaymentClick();
-                  }}
-                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported}
-                  title={stripePaymentQuantitySupported ? undefined : 'Stripe checkout supports one item at a time'}
-                >
-                  {stripePaymentPending ? (
-                    <span className="mint-panel__stripe-text">Opening Stripe…</span>
-                  ) : (
-                    <>
-                      <span className="mint-panel__stripe-text">
-                        <FaCreditCard className="mint-panel__stripe-icon" aria-hidden="true" focusable="false" size={14} />
-                        <span>Pay with card</span>
-                      </span>
-                      <span className="mint-panel__stripe-price">{stripePaymentDisplayPriceLabel}</span>
-                    </>
-                  )}
-                </button>
-              ) : null}
             </div>
           </div>
         </div>
