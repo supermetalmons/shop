@@ -53,6 +53,7 @@ export type FrontendDropConfig = {
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  envPrefix: ['VITE_', 'STRIPE_TEST_UNIT_AMOUNT_CENTS'],
   // Vite 7 externalizes Node built-ins by default. We need the npm `buffer` polyfill
   // for Solana web3.js and our client code.
   resolve: {

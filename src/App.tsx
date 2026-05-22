@@ -159,6 +159,9 @@ type StripeCheckoutReturn =
 
 const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
+const STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT = 100;
+const STRIPE_UNIT_AMOUNT_CENTS_MIN = 50;
+const STRIPE_UNIT_AMOUNT_CENTS_MAX = 99_999_999;
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
 
@@ -172,6 +175,40 @@ function stripeCheckoutModeForDrop(drop: FrontendDeploymentConfig | null | undef
   if (solanaCluster === 'devnet') return 'test';
   if (solanaCluster === 'mainnet-beta') return 'live';
   return null;
+}
+
+function normalizeStripeUnitAmountCents(value: unknown): number | null {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < STRIPE_UNIT_AMOUNT_CENTS_MIN || parsed > STRIPE_UNIT_AMOUNT_CENTS_MAX) return null;
+  return parsed;
+}
+
+function stripeTestUnitAmountCents(): number {
+  const configuredAmountCents =
+    import.meta.env.STRIPE_TEST_UNIT_AMOUNT_CENTS ?? import.meta.env.VITE_STRIPE_TEST_UNIT_AMOUNT_CENTS;
+  return (
+    normalizeStripeUnitAmountCents(configuredAmountCents) ||
+    STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT
+  );
+}
+
+function stripeCheckoutPriceLabelForDrop(
+  drop: FrontendDeploymentConfig | null | undefined,
+  mode: StripePaymentMode | null,
+): string | undefined {
+  if (!drop || !mode) return undefined;
+  const unitAmountCents =
+    mode === 'test'
+      ? stripeTestUnitAmountCents()
+      : normalizeStripeUnitAmountCents(drop.stripeLiveUnitAmountCents);
+  if (unitAmountCents == null) return undefined;
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(unitAmountCents / 100);
 }
 
 function consumeStripeCheckoutReturnFromUrl(): StripeCheckoutReturn | null {
@@ -1400,6 +1437,7 @@ function App({ currentPath }: AppProps) {
   const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
   const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
   const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
+  const routeStripePaymentPriceLabel = stripeCheckoutPriceLabelForDrop(routeDrop, routeStripePaymentMode);
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
     [upcomingDropRoute?.previewDropId],
@@ -5182,11 +5220,12 @@ function App({ currentPath }: AppProps) {
           onStripePaymentClick={handleStripePayment}
           stripePaymentVisible={
             Boolean(routeStripePaymentMode) &&
+            Boolean(routeStripePaymentPriceLabel) &&
             isDirectDeliveryItemsPerBox(routeDrop.itemsPerBox) &&
             routeDrop.mintSelection?.kind === 'size'
           }
-          stripePaymentMode={routeStripePaymentMode || undefined}
           stripePaymentBusy={stripePaymentLoading}
+          stripePaymentPriceLabel={routeStripePaymentPriceLabel}
           mintSelection={routeDrop.mintSelection}
           showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
           successfulMintToken={successfulMintToken}

@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight, FaCircleQuestion, FaCreditCard } from 'react-icons/fa6';
+import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
@@ -42,7 +42,7 @@ interface MintPanelProps {
   onStripePaymentClick?: (variantKey?: string) => void | Promise<void>;
   stripePaymentVisible?: boolean;
   stripePaymentBusy?: boolean;
-  stripePaymentMode?: 'test' | 'live';
+  stripePaymentPriceLabel?: string;
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
   successfulMintToken?: number;
@@ -178,7 +178,7 @@ export function MintPanel({
   onStripePaymentClick,
   stripePaymentVisible,
   stripePaymentBusy,
-  stripePaymentMode = 'live',
+  stripePaymentPriceLabel,
   mintSelection,
   showSizeInfo,
   successfulMintToken = 0,
@@ -310,6 +310,7 @@ export function MintPanel({
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const totalDiscountPriceLabel = formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
+  const stripePaymentDisplayPriceLabel = stripePaymentPriceLabel?.trim();
   const formId = 'mint-form';
   const normalizedDiscountMaxQuantity =
     Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) >= 0
@@ -319,7 +320,7 @@ export function MintPanel({
   const hasDiscountAllowance = normalizedDiscountMaxQuantity === undefined || normalizedDiscountMaxQuantity > 0;
   const useDiscountMint =
     Boolean(discountAvailable && onDiscountMint) && !soldOut && hasDiscountAllowance && !exceedsDiscountAllowance;
-  const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick) && !soldOut;
+  const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick && stripePaymentDisplayPriceLabel) && !soldOut;
   const stripePaymentQuantitySupported = quantity === STRIPE_CHECKOUT_QUANTITY;
   const submitBusy = busy || discountSubmitPending || (useDiscountMint && Boolean(discountBusy));
   const controlsBusy = submitBusy || stripePaymentPending;
@@ -662,9 +663,8 @@ export function MintPanel({
                     <span className="mint-panel__stripe-text">Opening Stripe…</span>
                   ) : (
                     <>
-                      <FaCreditCard className="mint-panel__stripe-icon" aria-hidden="true" focusable="false" size={14} />
-                      <span className="mint-panel__stripe-text">Pay with Stripe</span>
-                      {stripePaymentMode === 'test' ? <span className="mint-panel__stripe-badge">Test</span> : null}
+                      <span className="mint-panel__stripe-text">Pay with card</span>
+                      <span className="mint-panel__stripe-price">{stripePaymentDisplayPriceLabel}</span>
                     </>
                   )}
                 </button>

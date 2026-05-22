@@ -38,6 +38,7 @@ export type FrontendDropConfigSerialized = {
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -492,6 +493,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
   const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
   const stripeCheckoutEnabled = obj.stripeCheckoutEnabled === true;
+  const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
   return {
     solanaCluster: asTrimmedString(obj.solanaCluster),
     dropId,
@@ -507,6 +509,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     priceSol: asFiniteNumber(obj.priceSol),
     discountPriceSol: asFiniteNumber(obj.discountPriceSol),
     ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(obj.discountMintsPerWallet),
     discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
     maxSupply: Math.floor(asFiniteNumber(obj.maxSupply)),
@@ -671,6 +674,10 @@ function renderSharedProgramConfigPdaAssertion(registryName: string, registryLab
 
 function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
   const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
+  const stripeLiveUnitAmountCentsLine =
+    drop.stripeLiveUnitAmountCents != null
+      ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
+      : '';
   return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
     dropId: ${tsStringLiteral(drop.dropId)},
@@ -686,7 +693,7 @@ ${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.se
     treasury: ${tsStringLiteral(drop.treasury)},
     priceSol: ${Number(drop.priceSol)},
     discountPriceSol: ${Number(drop.discountPriceSol)},
-${stripeCheckoutEnabledLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
+${stripeCheckoutEnabledLine}${stripeLiveUnitAmountCentsLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
     discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
     maxSupply: ${Math.floor(Number(drop.maxSupply))},
     itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
@@ -814,6 +821,7 @@ export type FrontendDropConfig = {
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
