@@ -880,6 +880,8 @@ function isUserRejectedError(err: unknown): boolean {
     message.includes('rejected the request') ||
     message.includes('rejected the transaction') ||
     message.includes('user denied') ||
+    message === 'canceled' ||
+    message === 'cancelled' ||
     message.includes('request was rejected') ||
     message.includes('transaction was rejected')
   );
@@ -1270,6 +1272,8 @@ function App({ currentPath }: AppProps) {
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [shipmentsReady, setShipmentsReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
+  const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
+  const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
   const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
   const [stripeCheckoutHistoryNow, setStripeCheckoutHistoryNow] = useState(() => Date.now());
   const anonymousStripeHistoryCompletion = useMemo(
@@ -1714,6 +1718,46 @@ function App({ currentPath }: AppProps) {
     if (!pendingShipmentsSignIn || walletModalVisible || publicKey || wallet.connecting) return;
     setPendingShipmentsSignIn(false);
   }, [pendingShipmentsSignIn, publicKey, wallet.connecting, walletModalVisible]);
+
+  useEffect(() => {
+    if (!pendingHeaderWalletSignIn || !publicKey) return;
+    if (isSignedInWallet) {
+      setPendingHeaderWalletSignIn(false);
+      return;
+    }
+    if (!authReady || authLoading) return;
+    setPendingHeaderWalletSignIn(false);
+    void ensureSignedIn();
+  }, [authLoading, authReady, isSignedInWallet, pendingHeaderWalletSignIn, publicKey]);
+
+  useEffect(() => {
+    if (!pendingHeaderWalletSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    setPendingHeaderWalletSignIn(false);
+  }, [pendingHeaderWalletSignIn, publicKey, wallet.connecting, walletModalVisible]);
+
+  useEffect(() => {
+    if (isSignedInWallet) {
+      setHeaderWalletButtonRevealed(false);
+      return;
+    }
+    if (pendingHeaderWalletSignIn) {
+      setHeaderWalletButtonRevealed(true);
+      return;
+    }
+    if (connectedWallet) {
+      if (authReady && !authLoading) setHeaderWalletButtonRevealed(true);
+      return;
+    }
+    if (walletIdleReady && !walletBusy) setHeaderWalletButtonRevealed(true);
+  }, [
+    authLoading,
+    authReady,
+    connectedWallet,
+    isSignedInWallet,
+    pendingHeaderWalletSignIn,
+    walletBusy,
+    walletIdleReady,
+  ]);
 
   const runDeliveryRecovery = useCallback(
     async (request: RecoverDeliveryOrdersArgs = {}) => {
@@ -4179,6 +4223,16 @@ function App({ currentPath }: AppProps) {
     await ensureSignedIn();
   };
 
+  const handleHeaderWalletSignIn = async () => {
+    if (authLoading || walletBusy || pendingHeaderWalletSignIn) return;
+    if (!publicKey) {
+      setPendingHeaderWalletSignIn(true);
+      setVisible(true);
+      return;
+    }
+    await ensureSignedIn();
+  };
+
   const handleClaim = async ({ code }: { code: string }) => {
     if (blockViewerModeAction()) return;
     if (!publicKey) throw new Error('Connect wallet to claim');
@@ -4940,6 +4994,7 @@ function App({ currentPath }: AppProps) {
     authError && !isUserRejectedError(authError)
       ? authError
       : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
+  const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
 
   return (
     <div className="page">
@@ -4970,120 +5025,134 @@ function App({ currentPath }: AppProps) {
             </h1>
           </a>
         </div>
-        {canUseAdminMenu ? (
-          <div className="top__actions" ref={settingsRef}>
+        <div className="top__right">
+          {showHeaderWalletButton ? (
             <button
               type="button"
-              className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
-              onClick={() => setSettingsOpen((prev) => !prev)}
-              aria-label="App menu"
-              aria-haspopup="menu"
-              aria-expanded={settingsOpen}
+              className="top__wallet-button secondary-light"
+              onClick={handleHeaderWalletSignIn}
+              aria-label={publicKey ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana'}
             >
-              <FaTableCellsLarge aria-hidden />
+              <span>Connect Wallet</span>
             </button>
-            {settingsOpen ? (
-              <div className="top__submenu" role="menu" aria-label="App menu">
-                {canUseAdminViewer && !ownerPickerOpened ? (
+          ) : (
+            <div className="top__wallet-spacer" aria-hidden="true" />
+          )}
+          {canUseAdminMenu ? (
+            <div className="top__actions" ref={settingsRef}>
+              <button
+                type="button"
+                className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
+                onClick={() => setSettingsOpen((prev) => !prev)}
+                aria-label="App menu"
+                aria-haspopup="menu"
+                aria-expanded={settingsOpen}
+              >
+                <FaTableCellsLarge aria-hidden />
+              </button>
+              {settingsOpen ? (
+                <div className="top__submenu" role="menu" aria-label="App menu">
+                  {canUseAdminViewer && !ownerPickerOpened ? (
+                    <button
+                      type="button"
+                      className="link small top__submenu-nav"
+                      aria-expanded={ownerPickerOpened}
+                      onClick={() => {
+                        setOwnerPickerOpened(true);
+                      }}
+                    >
+                      override address
+                    </button>
+                  ) : null}
+                  {canUseAdminViewer && ownerPickerOpened ? (
+                    <select
+                      id="admin-owner-picker"
+                      aria-label="Viewer owner"
+                      value={ownerPickerValue}
+                      onChange={(evt) => {
+                        const value = evt.target.value.trim();
+                        if (!connectedWallet || !value || value === connectedWallet) {
+                          setAdminViewedOwner(null);
+                          return;
+                        }
+                        setAdminViewedOwner(value);
+                      }}
+                    >
+                      {connectedWallet ? (
+                        <option value={connectedWallet}>{connectedWallet}</option>
+                      ) : null}
+                      {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
+                        <option value={adminViewedOwner}>{adminViewedOwner}</option>
+                      ) : null}
+                      {deliveryOrderOwners
+                        .filter((entry) => entry !== connectedWallet)
+                        .map((entry) => (
+                          <option key={entry} value={entry}>
+                            {entry}
+                          </option>
+                        ))}
+                    </select>
+                  ) : null}
                   <button
                     type="button"
                     className="link small top__submenu-nav"
-                    aria-expanded={ownerPickerOpened}
                     onClick={() => {
-                      setOwnerPickerOpened(true);
+                      navigate('/ff');
                     }}
                   >
-                    override address
+                    {adminMenuLabel('/fullfillment')}
                   </button>
-                ) : null}
-                {canUseAdminViewer && ownerPickerOpened ? (
-                  <select
-                    id="admin-owner-picker"
-                    aria-label="Viewer owner"
-                    value={ownerPickerValue}
-                    onChange={(evt) => {
-                      const value = evt.target.value.trim();
-                      if (!connectedWallet || !value || value === connectedWallet) {
-                        setAdminViewedOwner(null);
-                        return;
-                      }
-                      setAdminViewedOwner(value);
-                    }}
-                  >
-                    {connectedWallet ? (
-                      <option value={connectedWallet}>{connectedWallet}</option>
-                    ) : null}
-                    {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
-                      <option value={adminViewedOwner}>{adminViewedOwner}</option>
-                    ) : null}
-                    {deliveryOrderOwners
-                      .filter((entry) => entry !== connectedWallet)
-                      .map((entry) => (
-                        <option key={entry} value={entry}>
-                          {entry}
-                        </option>
-                      ))}
-                  </select>
-                ) : null}
-                <button
-                  type="button"
-                  className="link small top__submenu-nav"
-                  onClick={() => {
-                    navigate('/ff');
-                  }}
-                >
-                  {adminMenuLabel('/fullfillment')}
-                </button>
-                <button
-                  type="button"
-                  className="link small top__submenu-nav"
-                  onClick={() => {
-                    navigate('/wip');
-                  }}
-                >
-                  {adminMenuLabel('/wip')}
-                </button>
-                <button
-                  type="button"
-                  className="link small top__submenu-nav"
-                  onClick={() => {
-                    navigate('/notify_me');
-                  }}
-                >
-                  {adminMenuLabel('/notify_me')}
-                </button>
-                {adminMenuDrops.map((drop) => (
                   <button
-                    key={drop.dropId}
                     type="button"
                     className="link small top__submenu-nav"
                     onClick={() => {
-                      navigate(dropPath(drop.dropId));
+                      navigate('/wip');
                     }}
                   >
-                    {adminMenuLabel(dropPath(drop.dropId))}
+                    {adminMenuLabel('/wip')}
                   </button>
-                ))}
-                {canUseAdminViewer && canLoadMoreOwners ? (
                   <button
                     type="button"
-                    className="link small top__submenu-more"
-                    disabled={deliveryOrderOwnersLoadingMore}
+                    className="link small top__submenu-nav"
                     onClick={() => {
-                      void fetchNextDeliveryOrderOwners();
+                      navigate('/notify_me');
                     }}
                   >
-                    {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
+                    {adminMenuLabel('/notify_me')}
                   </button>
-                ) : null}
-                {canUseAdminViewer && deliveryOrderOwnersErrorMessage ? (
-                  <div className="error small">{deliveryOrderOwnersErrorMessage}</div>
-                ) : null}
-                <div className="muted small top__build-info">{BUILD_INFO}</div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+                  {adminMenuDrops.map((drop) => (
+                    <button
+                      key={drop.dropId}
+                      type="button"
+                      className="link small top__submenu-nav"
+                      onClick={() => {
+                        navigate(dropPath(drop.dropId));
+                      }}
+                    >
+                      {adminMenuLabel(dropPath(drop.dropId))}
+                    </button>
+                  ))}
+                  {canUseAdminViewer && canLoadMoreOwners ? (
+                    <button
+                      type="button"
+                      className="link small top__submenu-more"
+                      disabled={deliveryOrderOwnersLoadingMore}
+                      onClick={() => {
+                        void fetchNextDeliveryOrderOwners();
+                      }}
+                    >
+                      {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
+                    </button>
+                  ) : null}
+                  {canUseAdminViewer && deliveryOrderOwnersErrorMessage ? (
+                    <div className="error small">{deliveryOrderOwnersErrorMessage}</div>
+                  ) : null}
+                  <div className="muted small top__build-info">{BUILD_INFO}</div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </header>
 
       {!routeDrop && upcomingDropRoute ? (
