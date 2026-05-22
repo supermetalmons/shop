@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
+import { FaChevronRight, FaCircleQuestion, FaCreditCard } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
@@ -663,7 +663,10 @@ export function MintPanel({
                     <span className="mint-panel__stripe-text">Opening Stripe…</span>
                   ) : (
                     <>
-                      <span className="mint-panel__stripe-text">Pay with card</span>
+                      <span className="mint-panel__stripe-text">
+                        <FaCreditCard className="mint-panel__stripe-icon" aria-hidden="true" focusable="false" size={14} />
+                        <span>Pay with card</span>
+                      </span>
                       <span className="mint-panel__stripe-price">{stripePaymentDisplayPriceLabel}</span>
                     </>
                   )}
