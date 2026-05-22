@@ -128,8 +128,12 @@ body.wip-scroll-lock #root {
 }
 
 header.top {
-  --top-gap: clamp(8px, 3vw, 16px);
-  --top-wallet-width: clamp(110px, 24vw, 118px);
+  --top-gap: clamp(6px, 3vw, 16px);
+  --top-wallet-width: clamp(100px, 31vw, 132px);
+  --top-wallet-font-size: clamp(11.5px, 3.1vw, 13px);
+  --top-wallet-padding-x: clamp(7px, 2.5vw, 10px);
+  --top-wallet-padding-y: clamp(6px, 1.8vw, 7px);
+  --top-wallet-min-height: clamp(30px, 8vw, 34px);
   --top-settings-width: 24px;
   --top-actions-gap: 8px;
   --top-side-reserve: var(--top-wallet-width);
@@ -159,21 +163,20 @@ header.top.top--with-admin {
 }
 
 .top__wallet-button {
-  min-height: 34px;
-  padding: 7px 10px;
+  min-height: var(--top-wallet-min-height);
+  padding: var(--top-wallet-padding-y) var(--top-wallet-padding-x);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--top-wallet-font-size);
   font-weight: 600;
 }
 
 .top__wallet-button span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .top__wallet-spacer {
@@ -343,15 +346,15 @@ header.top.top--with-admin {
 .brand h1 {
   margin: 0;
   font-size: clamp(
-    18px,
+    12px,
     min(
       10vw,
-      calc((100vw - clamp(32px, 8vw, 96px) - var(--top-side-reserve) - var(--top-gap) - 4px) / 6.4)
+      calc((100vw - clamp(32px, 8vw, 96px) - var(--top-side-reserve) - var(--top-gap) - 8px) / 6.4)
     ),
     48px
   );
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -379,11 +382,9 @@ header.top.top--with-admin {
   header.top {
     --top-wallet-width: 106px;
     --top-gap: 8px;
-  }
-
-  .top__wallet-button {
-    padding: 8px;
-    font-size: 12px;
+    --top-wallet-font-size: 12px;
+    --top-wallet-padding-x: 8px;
+    --top-wallet-padding-y: 7px;
   }
 }
 
@@ -391,11 +392,9 @@ header.top.top--with-admin {
   header.top {
     --top-wallet-width: 100px;
     --top-gap: 6px;
-  }
-
-  .top__wallet-button {
-    padding: 8px 7px;
-    font-size: 11.5px;
+    --top-wallet-font-size: 11.5px;
+    --top-wallet-padding-x: 7px;
+    --top-wallet-padding-y: 7px;
   }
 }
 
