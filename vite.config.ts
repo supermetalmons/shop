@@ -15,6 +15,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['.trycloudflare.com'],
   },
   build: {
     outDir: 'dist',

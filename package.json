@@ -5,6 +5,7 @@
   "description": "mons.shop – physically redeemable nft drops",
   "scripts": {
     "dev": "vite",
+    "remotely": "node scripts/remotely.cjs",
     "build": "vite build",
     "preview": "vite preview",
     "repo-clean": "bash ./scripts/repo-clean.sh",
