@@ -1501,7 +1501,6 @@ function App({ currentPath }: AppProps) {
       showToast('Stripe checkout completed.');
       return;
     }
-    showToast('Stripe checkout canceled.');
   }, [showToast]);
 
   useEffect(() => {

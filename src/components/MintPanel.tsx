@@ -636,7 +636,17 @@ export function MintPanel({
                   title={stripePaymentQuantitySupported ? undefined : 'Stripe checkout supports one item at a time'}
                 >
                   {stripePaymentPending ? (
-                    <span className="mint-panel__stripe-text">Opening Stripe…</span>
+                    <>
+                      <span className="mint-panel__stripe-text mint-panel__stripe-text--busy">
+                        <span className="mint-panel__stripe-text-anchor" aria-hidden="true">
+                          Pay with card
+                        </span>
+                        <span className="mint-panel__stripe-text-busy">Opening Stripe…</span>
+                      </span>
+                      <span className="mint-panel__stripe-price mint-panel__stripe-price--placeholder" aria-hidden="true">
+                        {stripePaymentDisplayPriceLabel}
+                      </span>
+                    </>
                   ) : (
                     <>
                       <span className="mint-panel__stripe-text">
