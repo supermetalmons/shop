@@ -1254,7 +1254,6 @@ function App({ currentPath }: AppProps) {
   const [discountEligible, setDiscountEligible] = useState(false);
   const [discountRemainingCount, setDiscountRemainingCount] = useState(0);
   const [discountChecking, setDiscountChecking] = useState(false);
-  const [guestDiscountReady, setGuestDiscountReady] = useState(false);
   const [startOpenLoading, setStartOpenLoading] = useState<string | null>(null);
   const [revealLoading, setRevealLoading] = useState<string | null>(null);
   const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
@@ -3273,22 +3272,8 @@ function App({ currentPath }: AppProps) {
     return !effectiveMintStats || effectiveMintStats.remaining <= 0;
   }, [effectiveMintStats]);
 
-  useEffect(() => {
-    if (publicKey || mintedOut || walletBusy) {
-      setGuestDiscountReady(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setGuestDiscountReady(true), 300);
-    return () => window.clearTimeout(timer);
-  }, [mintedOut, publicKey, walletBusy]);
-
-  const discountCtaState = useMemo(() => {
-    if (mintedOut) return { visible: false, label: '' };
-    if (walletBusy) return { visible: false, label: '' };
-    if (!publicKey) return { visible: guestDiscountReady, label: 'Connect wallet' };
-    if (discountChecking) return { visible: false, label: '' };
-    return { visible: discountEligible, label: '' };
-  }, [discountChecking, discountEligible, guestDiscountReady, mintedOut, publicKey, walletBusy]);
+  const discountAvailable =
+    Boolean(publicKey) && !mintedOut && !walletBusy && !discountChecking && discountEligible && discountRemainingCount > 0;
 
   useEffect(() => {
     if (!routeDrop || !routeConnection || !publicKey || mintedOut) {
@@ -5190,11 +5175,10 @@ function App({ currentPath }: AppProps) {
           discountPriceSol={routeDrop.discountPriceSol}
           maxSupply={routeDrop.maxSupply}
           maxPerTx={routeDrop.maxPerTx}
-          discountVisible={discountCtaState.visible}
-          discountLabel={discountCtaState.label}
+          discountAvailable={discountAvailable}
           discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
-          onDiscountClick={handleDiscountMint}
-          discountBusy={discountMinting || discountChecking || minting || walletBusy}
+          onDiscountMint={handleDiscountMint}
+          discountBusy={discountMinting || minting || walletBusy}
           onStripePaymentClick={handleStripePayment}
           stripePaymentVisible={
             Boolean(routeStripePaymentMode) &&

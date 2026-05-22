@@ -35,10 +35,9 @@ interface MintPanelProps {
   discountPriceSol: number;
   maxSupply: number;
   maxPerTx: number;
-  discountVisible?: boolean;
-  discountLabel?: string;
+  discountAvailable?: boolean;
   discountMaxQuantity?: number;
-  onDiscountClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
+  onDiscountMint?: (quantity: number, variantKey?: string) => void | Promise<void>;
   discountBusy?: boolean;
   onStripePaymentClick?: (variantKey?: string) => void | Promise<void>;
   stripePaymentVisible?: boolean;
@@ -172,10 +171,9 @@ export function MintPanel({
   discountPriceSol,
   maxSupply,
   maxPerTx,
-  discountVisible,
-  discountLabel,
+  discountAvailable,
   discountMaxQuantity,
-  onDiscountClick,
+  onDiscountMint,
   discountBusy,
   onStripePaymentClick,
   stripePaymentVisible,
@@ -218,7 +216,6 @@ export function MintPanel({
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const stripePaymentPending = Boolean(stripePaymentBusy) || stripePaymentSubmitPending;
-  const controlsBusy = busy || discountSubmitPending || stripePaymentPending;
 
   useEffect(() => {
     if (showSizeSelector) setQuantity(1);
@@ -303,58 +300,6 @@ export function MintPanel({
     return () => ro.disconnect();
   }, []);
 
-  const handleMint = async (evt: FormEvent) => {
-    evt.preventDefault();
-    if (discountSubmitPending) return;
-    if (showSizeSelector && !selectedSize) {
-      setSizeBlinkToken((prev) => prev + 1);
-      return;
-    }
-    if (quantity < 1 || quantity > maxSelectablePerTx) return;
-    try {
-      await onMint(quantity, selectedSize || undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to mint';
-      if (onError) onError(message);
-    }
-  };
-
-  const handleDiscountClick = async () => {
-    if (discountSubmitPending) return;
-    if (showSizeSelector && !selectedSize) {
-      setSizeBlinkToken((prev) => prev + 1);
-      return;
-    }
-    if (!onDiscountClick || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance) return;
-    setDiscountSubmitPending(true);
-    try {
-      await onDiscountClick(quantity, selectedSize || undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to mint';
-      if (onError) onError(message);
-    } finally {
-      setDiscountSubmitPending(false);
-    }
-  };
-
-  const handleStripePaymentClick = async () => {
-    if (!onStripePaymentClick || stripePaymentPending) return;
-    if (showSizeSelector && !selectedSize) {
-      setSizeBlinkToken((prev) => prev + 1);
-      return;
-    }
-    if (quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported) return;
-    setStripePaymentSubmitPending(true);
-    try {
-      await onStripePaymentClick(selectedSize || undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
-      if (onError) onError(message);
-    } finally {
-      setStripePaymentSubmitPending(false);
-    }
-  };
-
   const soldOut = remaining <= 0;
   const layout = useMemo(
     () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxAspectRatio || BOX_ASPECT_RATIO),
@@ -364,17 +309,28 @@ export function MintPanel({
   const unitPriceLamports = solAmountToLamports(priceSol, priceSol);
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
+  const totalDiscountPriceLabel = formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const formId = 'mint-form';
   const normalizedDiscountMaxQuantity =
-    Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) > 0
-      ? Math.floor(Number(discountMaxQuantity))
+    Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) >= 0
+      ? Math.max(0, Math.floor(Number(discountMaxQuantity)))
       : undefined;
   const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
-  const showDiscountButton = Boolean(discountVisible) && !soldOut && !exceedsDiscountAllowance;
+  const hasDiscountAllowance = normalizedDiscountMaxQuantity === undefined || normalizedDiscountMaxQuantity > 0;
+  const useDiscountMint =
+    Boolean(discountAvailable && onDiscountMint) && !soldOut && hasDiscountAllowance && !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick) && !soldOut;
   const stripePaymentQuantitySupported = quantity === STRIPE_CHECKOUT_QUANTITY;
-  const discountText =
-    discountLabel || `Mint ${quantityLabel} for ${formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI)} SOL`;
+  const submitBusy = busy || discountSubmitPending || (useDiscountMint && Boolean(discountBusy));
+  const controlsBusy = submitBusy || stripePaymentPending;
+  const submitClassName = submitBusy
+    ? 'mint-panel__submit mint-panel__submit--busy'
+    : useDiscountMint
+      ? 'mint-panel__submit mint-panel__submit--discounted'
+      : 'mint-panel__submit';
+  const submitAriaLabel = useDiscountMint
+    ? `Mint with discount for ${totalDiscountPriceLabel} SOL. Regular price ${totalPriceLabel} SOL.`
+    : undefined;
   const ctaStackClassName = showStripePaymentButton
     ? 'mint-panel__cta-stack mint-panel__cta-stack--with-payment'
     : 'mint-panel__cta-stack';
@@ -415,6 +371,55 @@ export function MintPanel({
     ? 'mint-panel__footer mint-panel__footer--soldout mint-panel__footer--marketplaces'
     : 'mint-panel__footer mint-panel__footer--soldout';
   const splitTerminalButtons = terminalButtons.length > 1;
+
+  const handleMint = async (evt: FormEvent) => {
+    evt.preventDefault();
+    if (controlsBusy) return;
+    if (showSizeSelector && !selectedSize) {
+      setSizeBlinkToken((prev) => prev + 1);
+      return;
+    }
+    if (quantity < 1 || quantity > maxSelectable) return;
+
+    if (useDiscountMint) {
+      if (!onDiscountMint) return;
+      setDiscountSubmitPending(true);
+      try {
+        await onDiscountMint(quantity, selectedSize || undefined);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to mint';
+        if (onError) onError(message);
+      } finally {
+        setDiscountSubmitPending(false);
+      }
+      return;
+    }
+
+    try {
+      await onMint(quantity, selectedSize || undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to mint';
+      if (onError) onError(message);
+    }
+  };
+
+  const handleStripePaymentClick = async () => {
+    if (!onStripePaymentClick || stripePaymentPending) return;
+    if (showSizeSelector && !selectedSize) {
+      setSizeBlinkToken((prev) => prev + 1);
+      return;
+    }
+    if (quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported) return;
+    setStripePaymentSubmitPending(true);
+    try {
+      await onStripePaymentClick(selectedSize || undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
+      if (onError) onError(message);
+    } finally {
+      setStripePaymentSubmitPending(false);
+    }
+  };
 
   return (
     <section className="mint-panel">
@@ -622,15 +627,24 @@ export function MintPanel({
               <button
                 type="submit"
                 form={formId}
-                className={busy ? 'mint-panel__submit mint-panel__submit--busy' : 'mint-panel__submit'}
+                className={submitClassName}
                 disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
+                aria-label={submitAriaLabel}
               >
-                {busy ? (
+                {submitBusy ? (
                   <span className="mint-panel__submit-text">Minting…</span>
                 ) : (
                   <>
                     <span className="mint-panel__submit-text">Mint</span>
-                    <span className="mint-panel__submit-price">{totalPriceLabel} SOL</span>
+                    {useDiscountMint ? (
+                      <span className="mint-panel__submit-price mint-panel__submit-price--discounted" aria-hidden="true">
+                        <span className="mint-panel__submit-price-old">{totalPriceLabel}</span>
+                        <span className="mint-panel__submit-price-new">{totalDiscountPriceLabel}</span>
+                        <span className="mint-panel__submit-price-currency">SOL</span>
+                      </span>
+                    ) : (
+                      <span className="mint-panel__submit-price">{totalPriceLabel} SOL</span>
+                    )}
                   </>
                 )}
               </button>
@@ -653,18 +667,6 @@ export function MintPanel({
                       {stripePaymentMode === 'test' ? <span className="mint-panel__stripe-badge">Test</span> : null}
                     </>
                   )}
-                </button>
-              ) : null}
-              {showDiscountButton ? (
-                <button
-                  type="button"
-                  className="mint-panel__discount ghost"
-                  onClick={() => {
-                    void handleDiscountClick();
-                  }}
-                  disabled={discountBusy || discountSubmitPending || quantity < 1 || quantity > maxSelectable || exceedsDiscountAllowance}
-                >
-                  <span className="mint-panel__discount-text">{discountText}</span>
                 </button>
               ) : null}
             </div>
