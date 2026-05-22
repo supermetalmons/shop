@@ -745,10 +745,10 @@ function envOrSecretValue(envName: string, secret: { value: () => string }): str
 
 function stripeApiKeys(): string[] {
   const values = [
-    envOrSecretValue('STRIPE_RESTRICTED_KEY', STRIPE_RESTRICTED_KEY),
     envOrSecretValue('STRIPE_SECRET_KEY', STRIPE_SECRET_KEY),
-    envOrSecretValue('STRIPE_RESTRICTED_KEY_LIVE', STRIPE_RESTRICTED_KEY_LIVE),
+    envOrSecretValue('STRIPE_RESTRICTED_KEY', STRIPE_RESTRICTED_KEY),
     envOrSecretValue('STRIPE_SECRET_KEY_LIVE', STRIPE_SECRET_KEY_LIVE),
+    envOrSecretValue('STRIPE_RESTRICTED_KEY_LIVE', STRIPE_RESTRICTED_KEY_LIVE),
   ]
     .map((value) => String(value || '').trim())
     .filter(Boolean);

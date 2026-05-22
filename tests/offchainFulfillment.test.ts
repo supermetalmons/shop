@@ -47,6 +47,7 @@ import {
   startStripeCheckoutFulfillmentDocument,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
+  stripeCheckoutProductName,
   stripeCheckoutProductTaxCodeForDrop,
   stripeCheckoutShippingParams,
   stripeCheckoutUnitAmountCentsForDrop,
@@ -1097,6 +1098,31 @@ test('stripeApiKeysForMode preserves matching fallback keys', () => {
     'rk_test_restricted',
     'sk_test_fallback',
   ]);
+});
+
+test('stripeCheckoutProductName uses a singular, non-duplicated item label', () => {
+  assert.equal(
+    stripeCheckoutProductName(
+      {
+        dropId: 'little_swag_hoodies',
+        config: { collectionName: 'Little Swag Hoodies', namePrefix: 'hoodie' },
+      } as any,
+      'L',
+      'live',
+    ),
+    'Little Swag Hoodie L',
+  );
+  assert.equal(
+    stripeCheckoutProductName(
+      {
+        dropId: 'little_swag_hoodies_devnet',
+        config: { collectionName: 'Little Swag Hoodies', namePrefix: 'hoodie' },
+      } as any,
+      'XL',
+      'test',
+    ),
+    'test Little Swag Hoodie XL',
+  );
 });
 
 test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet live pricing', () => {

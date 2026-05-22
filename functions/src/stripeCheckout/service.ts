@@ -557,12 +557,41 @@ function normalizeStripeVariantKey(
   return value.slice(0, 64);
 }
 
-function stripeCheckoutProductName(dropRuntime: StripeCheckoutDropRuntime, variantKey: string | undefined, mode: StripeApiMode): string {
-  const collectionName = dropRuntime.config.collectionName || dropRuntime.dropId;
-  const itemName = dropRuntime.config.namePrefix || 'item';
+function itemNameWithCollectionCasing(itemName: string, collectionSuffix: string): string {
+  if (!collectionSuffix || collectionSuffix[0] !== collectionSuffix[0].toUpperCase()) return itemName;
+  return `${itemName.slice(0, 1).toUpperCase()}${itemName.slice(1)}`;
+}
+
+function stripeCheckoutBaseProductName(dropRuntime: StripeCheckoutDropRuntime): string {
+  const collectionName = String(dropRuntime.config.collectionName || dropRuntime.dropId).trim();
+  const itemName = String(dropRuntime.config.namePrefix || 'item').trim();
+  if (!itemName) return collectionName;
+
+  const normalizedCollection = collectionName.toLowerCase();
+  const normalizedItemName = itemName.toLowerCase();
+  const pluralSuffixes = [
+    `${normalizedItemName}s`,
+    ...(normalizedItemName.endsWith('y') ? [`${normalizedItemName.slice(0, -1)}ies`] : []),
+  ];
+  for (const suffix of pluralSuffixes) {
+    if (!normalizedCollection.endsWith(suffix)) continue;
+    const collectionSuffix = collectionName.slice(collectionName.length - suffix.length);
+    const singularItemName = itemNameWithCollectionCasing(itemName, collectionSuffix);
+    return `${collectionName.slice(0, collectionName.length - suffix.length)}${singularItemName}`.trim();
+  }
+  if (normalizedCollection.endsWith(normalizedItemName)) return collectionName;
+  return `${collectionName} ${itemName}`;
+}
+
+export function stripeCheckoutProductName(
+  dropRuntime: StripeCheckoutDropRuntime,
+  variantKey: string | undefined,
+  mode: StripeApiMode,
+): string {
+  const baseName = stripeCheckoutBaseProductName(dropRuntime);
   const variantSuffix = variantKey ? ` ${variantKey}` : '';
   const modePrefix = mode === 'test' ? 'test ' : '';
-  return `${collectionName} ${modePrefix}${itemName}${variantSuffix}`.slice(0, 200);
+  return `${modePrefix}${baseName}${variantSuffix}`.slice(0, 200);
 }
 
 async function createStripeCheckoutSession(
