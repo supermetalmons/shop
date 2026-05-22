@@ -600,6 +600,8 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 2.49,
     discountPriceSol: 1.99,
+    stripeCheckoutEnabled: true,
+    stripeLiveUnitAmountCents: 21900,
     discountMintsPerWallet: 1,
     discountMerkleRoot: "e35a4009c844dcb102d8f21a5b3c7f38842bf3224006b547e68be0dca9ba1871",
     maxSupply: 34,

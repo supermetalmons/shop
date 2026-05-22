@@ -32,6 +32,8 @@ import {
   metadataKindFromUri as functionsMetadataKindFromUri,
   selectMetadataUri as functionsSelectMetadataUri,
 } from '../functions/src/dropMetadataUri.ts';
+import { FRONTEND_DROPS } from '../src/config/deployment.ts';
+import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
 
 const VALID_IPFS_CID = 'bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku';
 
@@ -45,6 +47,17 @@ async function withTempModule(source: string, run: (filePath: string) => Promise
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => {
+  const frontendDrop = FRONTEND_DROPS.little_swag_hoodies;
+  const functionsDrop = FUNCTIONS_DROPS.little_swag_hoodies;
+
+  assert.equal(frontendDrop.stripeCheckoutEnabled, true);
+  assert.equal(frontendDrop.stripeLiveUnitAmountCents, 21900);
+  assert.equal(functionsDrop.stripeCheckoutEnabled, true);
+  assert.equal(functionsDrop.stripeLiveUnitAmountCents, 21900);
+  assert.equal(functionsDrop.stripeProductTaxCode, 'txcd_30011000');
+});
 
 test('readFrontendDropRegistry preserves explicit boxMinterConfigPda', async () => {
   await withTempModule(
