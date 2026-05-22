@@ -44,7 +44,14 @@ import {
   type StripeOffchainDeliveryOrderDocumentInput,
 } from './contract.js';
 import { parseRequest } from '../request.js';
-import { isStripeApiKeyForMode, stripeClientForKey, type StripeApiMode } from './client.js';
+import {
+  isStripeApiKeyForMode,
+  isStripeCredentialError,
+  stripeApiKeyKindForLog,
+  stripeClientForKey,
+  stripeCredentialErrorSummary,
+  type StripeApiMode,
+} from './client.js';
 import { toMillisMaybe } from '../time.js';
 
 export type StripeCheckoutSessionResponse = {
@@ -425,10 +432,16 @@ export function stripeTestApiKey(apiKeys: readonly string[]): string {
   return stripeApiKeyForMode(apiKeys, 'test');
 }
 
+export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApiMode): string[] {
+  const keys = Array.from(
+    new Set(apiKeys.map((value) => String(value || '').trim()).filter((value) => isStripeApiKeyForMode(value, mode))),
+  );
+  if (keys.length === 0) throw new HttpsError('failed-precondition', `Stripe ${mode} key is not configured.`);
+  return keys;
+}
+
 export function stripeApiKeyForMode(apiKeys: readonly string[], mode: StripeApiMode): string {
-  const key = apiKeys.map((value) => String(value || '').trim()).find((value) => isStripeApiKeyForMode(value, mode));
-  if (!key) throw new HttpsError('failed-precondition', `Stripe ${mode} key is not configured.`);
-  return key;
+  return stripeApiKeysForMode(apiKeys, mode)[0];
 }
 
 function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
@@ -554,18 +567,32 @@ function stripeCheckoutProductName(dropRuntime: StripeCheckoutDropRuntime, varia
 
 async function createStripeCheckoutSession(
   params: Stripe.Checkout.SessionCreateParams,
-  apiKey: string,
+  apiKeys: readonly string[],
   mode: StripeApiMode,
 ): Promise<StripeCheckoutSessionResponse> {
-  const stripe = await stripeClientForKey(apiKey, mode);
-  const session = await stripe.checkout.sessions.create(params);
-  if (typeof session.id !== 'string' || typeof session.url !== 'string') {
-    throw new HttpsError('unavailable', 'Stripe response did not include a checkout URL');
+  const keys = stripeApiKeysForMode(apiKeys, mode);
+  let lastCredentialError: unknown;
+  for (const apiKey of keys) {
+    try {
+      const stripe = await stripeClientForKey(apiKey, mode);
+      const session = await stripe.checkout.sessions.create(params);
+      if (typeof session.id !== 'string' || typeof session.url !== 'string') {
+        throw new HttpsError('unavailable', 'Stripe response did not include a checkout URL');
+      }
+      if (Boolean(session.livemode) !== (mode === 'live')) {
+        throw new HttpsError('failed-precondition', 'Stripe response mode does not match the configured drop mode');
+      }
+      return { id: session.id, url: session.url, livemode: Boolean(session.livemode) };
+    } catch (err) {
+      if (!isStripeCredentialError(err)) throw err;
+      lastCredentialError = err;
+    }
   }
-  if (Boolean(session.livemode) !== (mode === 'live')) {
-    throw new HttpsError('failed-precondition', 'Stripe response mode does not match the configured drop mode');
-  }
-  return { id: session.id, url: session.url, livemode: Boolean(session.livemode) };
+  throw new HttpsError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
+    mode,
+    configuredKeyKinds: keys.map(stripeApiKeyKindForLog),
+    stripeError: stripeCredentialErrorSummary(lastCredentialError),
+  });
 }
 
 async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Checkout.Session) {
@@ -573,13 +600,27 @@ async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Chec
   return stripe.checkout.sessions.listLineItems(session.id, { limit: 10, expand: ['data.price'] });
 }
 
-async function fetchStripeCheckoutSession(sessionId: string, apiKey: string, mode: StripeApiMode): Promise<{
+async function fetchStripeCheckoutSession(sessionId: string, apiKeys: readonly string[], mode: StripeApiMode): Promise<{
   session: Stripe.Checkout.Session;
   stripe: Stripe;
 }> {
   const normalizedSessionId = requireStripeCheckoutSessionId(sessionId);
-  const stripe = await stripeClientForKey(apiKey, mode);
-  return { session: await stripe.checkout.sessions.retrieve(normalizedSessionId), stripe };
+  const keys = stripeApiKeysForMode(apiKeys, mode);
+  let lastCredentialError: unknown;
+  for (const apiKey of keys) {
+    try {
+      const stripe = await stripeClientForKey(apiKey, mode);
+      return { session: await stripe.checkout.sessions.retrieve(normalizedSessionId), stripe };
+    } catch (err) {
+      if (!isStripeCredentialError(err)) throw err;
+      lastCredentialError = err;
+    }
+  }
+  throw new HttpsError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
+    mode,
+    configuredKeyKinds: keys.map(stripeApiKeyKindForLog),
+    stripeError: stripeCredentialErrorSummary(lastCredentialError),
+  });
 }
 
 export function stripeWebhookRawBody(req: any): Buffer {
@@ -1532,12 +1573,11 @@ export async function processStripeCheckoutFulfillmentDocument<
   }
 
   try {
-    const apiKey = stripeApiKeyForMode(params.apiKeys, mode);
     let checkoutSessionResult: Awaited<ReturnType<typeof fetchStripeCheckoutSession>> | undefined;
     const result = await runStripeCheckoutFulfillmentWithRetry(
       async () => {
         if (!checkoutSessionResult) {
-          checkoutSessionResult = await fetchStripeCheckoutSession(sessionId, apiKey, mode);
+          checkoutSessionResult = await fetchStripeCheckoutSession(sessionId, params.apiKeys, mode);
         }
         const { session, stripe } = checkoutSessionResult;
         return fulfillStripeCheckoutSession({
@@ -1633,7 +1673,6 @@ export async function createStripeCheckoutSessionForRequest<
   const cancelUrl = checkoutReturnUrl(params.request, returnUrl, 'cancel');
   const productTaxCode = stripeCheckoutProductTaxCodeForDrop(dropRuntime);
   const unitAmountCents = stripeCheckoutUnitAmountCentsForDrop(dropRuntime);
-  const apiKey = stripeApiKeyForMode(params.apiKeys, mode);
   const cfg = await deps.fetchCheckoutConfig({
     dropRuntime,
     conn: deps.connection(dropRuntime),
@@ -1666,7 +1705,7 @@ export async function createStripeCheckoutSessionForRequest<
       metadata: buildStripeCheckoutSessionMetadata({ dropId, uid: params.uid, variantKey, quantity }),
       ...stripeCheckoutShippingParams(),
     },
-    apiKey,
+    params.apiKeys,
     mode,
   );
   await params.db.doc(stripeCheckoutPath(dropId, session.id)).set(

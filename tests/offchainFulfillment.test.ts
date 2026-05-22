@@ -45,6 +45,7 @@ import {
   markStripeCheckoutFulfillmentFulfilled,
   runStripeCheckoutFulfillmentWithRetry,
   startStripeCheckoutFulfillmentDocument,
+  stripeApiKeysForMode,
   stripeApiKeyForMode,
   stripeCheckoutProductTaxCodeForDrop,
   stripeCheckoutShippingParams,
@@ -1085,6 +1086,17 @@ test('stripeApiKeyForMode selects only keys matching the requested mode', () => 
   assert.equal(stripeApiKeyForMode(['sk_test_ignored', 'rk_live_restricted'], 'live'), 'rk_live_restricted');
   assert.throws(() => stripeApiKeyForMode(['sk_test_wrong'], 'live'), /Stripe live key is not configured/);
   assert.throws(() => stripeApiKeyForMode(['sk_live_wrong'], 'test'), /Stripe test key is not configured/);
+});
+
+test('stripeApiKeysForMode preserves matching fallback keys', () => {
+  assert.deepEqual(stripeApiKeysForMode(['rk_live_primary', 'sk_live_fallback', 'rk_live_primary'], 'live'), [
+    'rk_live_primary',
+    'sk_live_fallback',
+  ]);
+  assert.deepEqual(stripeApiKeysForMode(['sk_live_ignored', 'rk_test_restricted', 'sk_test_fallback'], 'test'), [
+    'rk_test_restricted',
+    'sk_test_fallback',
+  ]);
 });
 
 test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet live pricing', () => {

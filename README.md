@@ -50,6 +50,7 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
 - `STRIPE_RESTRICTED_KEY_LIVE` or `STRIPE_SECRET_KEY_LIVE` (Firebase Functions secret or local env; live-mode key used by mainnet Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY_LIVE`
   - Optional fallback: `firebase functions:secrets:set STRIPE_SECRET_KEY_LIVE`
+  - If both are configured, Checkout tries the restricted live key first and falls back to the secret live key only when Stripe rejects the restricted key for authentication/permission reasons. Use a Dashboard-created restricted key with Checkout Session permissions; Stripe CLI restricted keys can expire.
 - `STRIPE_WEBHOOK_SECRET_DEVNET` (Firebase Functions secret or local env; Stripe test-mode endpoint signing secret for devnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
 - `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
