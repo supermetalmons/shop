@@ -5027,7 +5027,7 @@ function App({ currentPath }: AppProps) {
         </div>
       ) : null}
       {revealOverlayNode}
-      <header className={`top${canUseAdminMenu ? ' top--with-admin' : ''}`}>
+      <header className="top">
         <div className="brand">
           <a
             href="/"

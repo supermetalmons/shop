@@ -144,11 +144,8 @@ header.top {
   position: relative;
 }
 
-header.top.top--with-admin {
-  --top-side-reserve: calc(var(--top-wallet-width) + var(--top-settings-width) + var(--top-actions-gap));
-}
-
 .top__right {
+  position: relative;
   min-width: var(--top-side-reserve);
   display: inline-flex;
   align-items: center;
@@ -180,21 +177,24 @@ header.top.top--with-admin {
 }
 
 .top__wallet-spacer {
-  height: 1px;
+  height: var(--top-wallet-min-height);
   visibility: hidden;
   pointer-events: none;
 }
 
 .top__actions {
-  position: relative;
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 2;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
 }
 
 .top__settings {
   width: var(--top-settings-width);
-  min-height: 40px;
+  min-height: var(--top-wallet-min-height);
   padding: 0;
   display: inline-flex;
   align-items: center;
