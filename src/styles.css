@@ -528,7 +528,11 @@ header.top.top--with-admin {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
   gap: 24px;
-  padding: 6px 0 22px;
+  padding: 6px 0 8px;
+}
+
+.mint-panel + .app-section {
+  margin-top: -10px;
 }
 
 .mint-panel__info {
@@ -1028,7 +1032,11 @@ header.top.top--with-admin {
     grid-template-columns: 1fr;
     align-items: start;
     gap: 12px;
-    padding-bottom: 12px;
+    padding-bottom: 0;
+  }
+
+  .mint-panel + .app-section {
+    margin-top: 0;
   }
 
   .mint-panel__preview {
