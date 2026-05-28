@@ -89,11 +89,46 @@ body.wip-scroll-lock #root {
 
 .page {
   --page-gap: 26px;
+  position: relative;
+  isolation: isolate;
   max-width: 980px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--page-gap);
+}
+
+.drop-page-frame,
+.app-section,
+.toast {
+  position: relative;
+  z-index: 1;
+}
+
+.drop-cards-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.drop-cards-backdrop__card {
+  position: absolute;
+  left: var(--drop-card-x);
+  top: var(--drop-card-y);
+  width: clamp(44px, var(--drop-card-size), 132px);
+  height: auto;
+  display: block;
+  border-radius: clamp(6px, 0.75vmin, 10px);
+  opacity: var(--drop-card-opacity);
+  filter: blur(var(--drop-card-blur)) saturate(0.92);
+  transform: translate(-50%, -50%) rotate(var(--drop-card-rotate));
+  transform-origin: center;
+  -webkit-user-drag: none;
 }
 
 .drop-page-frame {

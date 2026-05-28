@@ -132,7 +132,21 @@ const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
+const DROP_CARD_BACKDROP_COUNT = 30;
+const DROP_CARD_BACKDROP_COLUMNS = 6;
+const DROP_CARD_BACKDROP_ROWS = 5;
 
+type DropCardBackdropConfig = {
+  baseUrl: string;
+  maxId: number;
+  allowRepeats?: boolean;
+  srcForId?: (baseUrl: string, id: number) => string;
+  sizeBase?: number;
+  sizeRange?: number;
+  opacityBase?: number;
+  opacityRange?: number;
+  rotateRange?: number;
+};
 type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
 type ReceiptViewerImage = {
   key: string;
@@ -146,6 +160,16 @@ type OverlayViewport = {
   width: number;
   height: number;
 };
+type DropCardBackdropItem = {
+  id: number;
+  src: string;
+  x: number;
+  y: number;
+  size: number;
+  opacity: number;
+  rotate: number;
+  blur: number;
+};
 type StripePaymentMode = 'test' | 'live';
 type StripeCheckoutReturn =
   | {
@@ -156,6 +180,102 @@ type StripeCheckoutReturn =
       status: 'cancel' | 'unverified_success';
       sessionId?: undefined;
     };
+
+function shuffleWithRandom<T>(items: T[], random: () => number): T[] {
+  const next = items.slice();
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
+function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBackdropItem[] {
+  const random = Math.random;
+  const sizeBase = config.sizeBase ?? 7.5;
+  const sizeRange = config.sizeRange ?? 4.5;
+  const opacityBase = config.opacityBase ?? 0.07;
+  const opacityRange = config.opacityRange ?? 0.1;
+  const rotateRange = config.rotateRange ?? 26;
+  const ids = config.allowRepeats
+    ? Array.from({ length: DROP_CARD_BACKDROP_COUNT }, () => Math.floor(random() * config.maxId) + 1)
+    : shuffleWithRandom(
+        Array.from({ length: config.maxId }, (_, index) => index + 1),
+        random,
+      ).slice(0, DROP_CARD_BACKDROP_COUNT);
+  const cells = shuffleWithRandom(
+    Array.from({ length: DROP_CARD_BACKDROP_COUNT }, (_, index) => ({
+      col: index % DROP_CARD_BACKDROP_COLUMNS,
+      row: Math.floor(index / DROP_CARD_BACKDROP_COLUMNS),
+    })),
+    random,
+  );
+
+  return ids.map((id, index) => {
+    const cell = cells[index];
+    const xJitter = (random() - 0.5) * 6;
+    const yJitter = (random() - 0.5) * 8;
+    const depth = random();
+
+    return {
+      id,
+      src: config.srcForId ? config.srcForId(config.baseUrl, id) : `${config.baseUrl}/${id}.webp`,
+      x: ((cell.col + 0.5) / DROP_CARD_BACKDROP_COLUMNS) * 100 + xJitter,
+      y: ((cell.row + 0.5) / DROP_CARD_BACKDROP_ROWS) * 100 + yJitter,
+      size: sizeBase + depth * sizeRange,
+      opacity: opacityBase + depth * opacityRange,
+      rotate: (random() - 0.5) * rotateRange,
+      blur: depth < 0.35 ? 0.3 : 0,
+    };
+  });
+}
+
+const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
+  baseUrl: 'https://assets.mons.link/drops/poncho/items/clean',
+  maxId: 207,
+};
+const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
+  baseUrl: 'https://assets.mons.link/drops/hoodie/ipfs/images',
+  maxId: 8,
+  allowRepeats: true,
+  srcForId: (baseUrl, id) => `${baseUrl}/receipt_${id}.webp`,
+};
+const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
+  baseUrl: 'https://assets.mons.link/drops/lsb/figures/clean',
+  maxId: 333,
+  sizeBase: 5.2,
+  sizeRange: 3.2,
+  opacityBase: 0.22,
+  opacityRange: 0.14,
+  rotateRange: 0,
+};
+
+function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
+  return (
+    <div className="drop-cards-backdrop" aria-hidden="true">
+      {items.map((item, index) => (
+        <img
+          key={`${item.id}-${index}`}
+          className="drop-cards-backdrop__card"
+          src={item.src}
+          alt=""
+          draggable={false}
+          decoding="async"
+          style={
+            {
+              '--drop-card-x': `${item.x}%`,
+              '--drop-card-y': `${item.y}%`,
+              '--drop-card-size': `${item.size}vmin`,
+              '--drop-card-opacity': item.opacity,
+              '--drop-card-rotate': `${item.rotate}deg`,
+              '--drop-card-blur': `${item.blur}px`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
+  );
+}
 
 const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
@@ -5019,9 +5139,22 @@ function App({ currentPath }: AppProps) {
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
   const primaryFrameClassName =
     routeDrop || upcomingDropRoute ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
+  const dropCardBackdropItems = useMemo(() => {
+    if (!routeDrop) return null;
+    if (isDropFamily(routeDrop, 'poncho_drifella')) {
+      return createDropCardBackdropItems(PONCHO_DROP_CARD_BACKDROP_CONFIG);
+    }
+    if (isDropFamily(routeDrop, 'little_swag_hoodies')) {
+      return createDropCardBackdropItems(HOODIE_DROP_CARD_BACKDROP_CONFIG);
+    }
+    return createDropCardBackdropItems(
+      LSB_DROP_CARD_BACKDROP_CONFIG,
+    );
+  }, [routeDrop]);
 
   return (
     <div className="page">
+      {dropCardBackdropItems ? <DropCardsBackdrop items={dropCardBackdropItems} /> : null}
       {toast ? (
         <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
           {toast}
