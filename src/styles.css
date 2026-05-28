@@ -476,13 +476,14 @@ header.top {
 }
 
 .mint-panel__price {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   color: var(--fg);
 }
 
 .mint-panel__remaining {
-  font-size: 13px;
+  font-size: 16px;
   color: var(--muted);
   opacity: 1;
   transition: opacity 220ms ease;
@@ -860,8 +861,8 @@ header.top {
 }
 
 .mint-panel__cta-stack--with-payment {
-  --mint-panel-action-font-size: 14px;
-  --mint-panel-action-price-font-size: 12px;
+  --mint-panel-action-font-size: 18px;
+  --mint-panel-action-price-font-size: 16px;
   --mint-panel-action-padding-x: 16px;
   --mint-panel-action-column-gap: 8px;
   --mint-panel-action-price-gap: 5px;
@@ -888,8 +889,8 @@ header.top {
 .mint-panel__submit {
   width: auto;
   min-width: 200px;
-  min-height: 40px;
-  padding: 12px 22px;
+  min-height: 48px;
+  padding: 14px 28px;
   display: grid;
   grid-template-columns: 1fr auto;
   column-gap: 16px;
@@ -899,8 +900,8 @@ header.top {
 .mint-panel__stripe {
   width: 100%;
   min-width: 200px;
-  min-height: 40px;
-  padding: 12px 22px;
+  min-height: 48px;
+  padding: 14px 28px;
   display: grid;
   grid-template-columns: 1fr auto;
   column-gap: 16px;
@@ -938,8 +939,9 @@ header.top {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -963,7 +965,7 @@ header.top {
   align-self: baseline;
   min-width: 0;
   justify-self: end;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 500;
   line-height: 1;
   opacity: 0.85;
@@ -978,7 +980,8 @@ header.top {
 .mint-panel__secondary {
   width: auto;
   min-width: 200px;
-  padding: 12px 22px;
+  min-height: 48px;
+  padding: 14px 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -999,8 +1002,9 @@ header.top {
 }
 
 .mint-panel__secondary-text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 .mint-panel__terminal-buttons {
@@ -1019,15 +1023,16 @@ header.top {
 .mint-panel__terminal-buttons--split .mint-panel__secondary {
   width: 100%;
   min-width: 0;
-  padding-right: 16px;
-  padding-left: 16px;
+  padding-right: 24px;
+  padding-left: 24px;
 }
 
 .mint-panel__submit-text {
   align-self: baseline;
   min-width: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -1035,7 +1040,7 @@ header.top {
 .mint-panel__submit-price {
   align-self: baseline;
   min-width: 0;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 500;
   line-height: 1;
   opacity: 0.85;
@@ -1055,7 +1060,7 @@ header.top {
 }
 
 .mint-panel__submit-price-old {
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 500;
   opacity: 0.62;
   text-decoration: line-through;
@@ -1063,12 +1068,12 @@ header.top {
 }
 
 .mint-panel__submit-price-new {
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .mint-panel__submit-price-currency {
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 500;
   opacity: 0.82;
 }
@@ -1113,7 +1118,7 @@ header.top {
 
   .mint-panel__remaining {
     white-space: nowrap;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 400;
   }
 
@@ -1236,8 +1241,8 @@ header.top {
 
 @media (max-width: 360px) {
   .mint-panel__cta-stack--with-payment {
-    --mint-panel-action-font-size: clamp(9.5px, 3vw, 12px);
-    --mint-panel-action-price-font-size: clamp(9px, 2.85vw, 11px);
+    --mint-panel-action-font-size: clamp(11px, 4.8vw, 18px);
+    --mint-panel-action-price-font-size: clamp(10px, 4.2vw, 16px);
     --mint-panel-action-padding-x: clamp(5px, 2.2vw, 8px);
     --mint-panel-action-column-gap: clamp(3px, 1.5vw, 5px);
     --mint-panel-action-price-gap: clamp(2px, 1vw, 4px);
@@ -1255,8 +1260,8 @@ header.top {
 
 @media (max-width: 560px) and (min-width: 361px) {
   .mint-panel__cta-stack--with-payment {
-    --mint-panel-action-font-size: clamp(12px, 2.65vw, 14px);
-    --mint-panel-action-price-font-size: clamp(10.5px, 2.35vw, 12px);
+    --mint-panel-action-font-size: clamp(13px, 4.2vw, 18px);
+    --mint-panel-action-price-font-size: clamp(12px, 3.6vw, 16px);
     --mint-panel-action-padding-x: clamp(12px, 3.2vw, 16px);
     --mint-panel-action-column-gap: clamp(8px, 2vw, 12px);
     --mint-panel-action-price-gap: clamp(3px, 1.2vw, 5px);
@@ -1345,7 +1350,8 @@ header.top {
 }
 
 .drops-panel__link {
-  padding: 10px 18px;
+  max-width: 100%;
+  padding: 14px 36px;
   text-align: center;
   white-space: nowrap;
   background: var(--accent);
@@ -1363,8 +1369,9 @@ header.top {
 }
 
 .drops-panel__link-text {
-  font-size: clamp(11px, 2.8vw, 14px);
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 @media (max-width: 480px) {
@@ -1377,7 +1384,7 @@ header.top {
   }
 
   .drops-panel__link {
-    padding: 8px 14px;
+    padding: 12px 22px;
   }
 
 }
@@ -1397,7 +1404,7 @@ header.top {
 
   .drops-panel__grid--compact .drops-panel__link {
     width: 100%;
-    padding: 8px 10px;
+    padding: 12px 12px;
   }
 }
 
