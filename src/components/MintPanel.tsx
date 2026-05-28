@@ -1,5 +1,5 @@
 import { FormEvent, Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { FaChevronRight, FaCircleQuestion } from 'react-icons/fa6';
+import { FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
@@ -59,6 +59,7 @@ const REMAINING_OVERRIDE: number | null = null;
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+const BOX_MAX_RELATIVE_HEIGHT = 0.777;
 const LAMPORTS_PER_SOL_UI = 1_000_000_000;
 const STRIPE_CHECKOUT_QUANTITY = 1;
 
@@ -108,7 +109,7 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
 
   // Let the preview container height dictate the maximum box size so the image can
   // actually fill the available space (especially for low quantities).
-  const maxHeight = safeHeight;
+  const maxHeight = Math.max(1, Math.floor(safeHeight * BOX_MAX_RELATIVE_HEIGHT));
   let best: BoxPreviewLayout = { height: 1, width: Math.max(1, Math.floor(BOX_ASPECT_RATIO)), gapX: 8, gapY: 8, cols: 1 };
 
   for (let cols = 1; cols <= safeCount; cols += 1) {
@@ -288,9 +289,13 @@ export function MintPanel({
     if (!el || typeof ResizeObserver === 'undefined') return;
 
     const update = () => {
-      // Use client size to avoid sub-pixel rounding surprises.
-      const width = el.clientWidth;
-      const height = el.clientHeight;
+      // Measure the stable preview slot, not the grid whose item size we write back.
+      // This avoids a ResizeObserver feedback loop where the preview shrinks itself.
+      const style = window.getComputedStyle(el);
+      const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const width = Math.max(0, Math.floor(el.clientWidth - paddingX));
+      const height = Math.max(0, Math.floor(el.clientHeight - paddingY));
       setPreviewBounds((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     };
 
@@ -424,9 +429,8 @@ export function MintPanel({
 
   return (
     <section className="mint-panel">
-      <div className="mint-panel__preview">
+      <div ref={previewRef} className="mint-panel__preview">
         <div
-          ref={previewRef}
           className="mint-panel__boxes"
           style={{
             ['--box-width' as never]: `${layout.width}px`,
@@ -483,7 +487,6 @@ export function MintPanel({
                     return (
                       <a key={key} className="mint-panel__secondary" href={button.href} target="_blank" rel="noreferrer">
                         <span className="mint-panel__secondary-text">{button.buttonText}</span>
-                        <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
                       </a>
                     );
                   }
@@ -491,7 +494,6 @@ export function MintPanel({
                   return (
                     <button key={key} type="button" className="mint-panel__secondary" onClick={button.onClick}>
                       <span className="mint-panel__secondary-text">{button.buttonText}</span>
-                      <FaChevronRight className="mint-panel__secondary-icon" aria-hidden="true" focusable="false" size={14} />
                     </button>
                   );
                 })}
