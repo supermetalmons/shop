@@ -5162,7 +5162,7 @@ function App({ currentPath }: AppProps) {
       ) : null}
       {revealOverlayNode}
       <div className={primaryFrameClassName}>
-        <header className="top">
+        <header className="top top--fixed">
           <div className="brand">
             <a
               href="/"
@@ -5172,6 +5172,7 @@ function App({ currentPath }: AppProps) {
               onClick={(evt) => {
                 evt.preventDefault();
                 navigate('/');
+                window.scrollTo({ top: 0, left: 0 });
               }}
               onDragStart={(evt) => {
                 evt.preventDefault();
@@ -5308,6 +5309,32 @@ function App({ currentPath }: AppProps) {
                     <div className="muted small top__build-info">{BUILD_INFO}</div>
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+          </div>
+        </header>
+        <header className="top top--spacer" aria-hidden="true">
+          <div className="brand">
+            <a href="/" className="brand__home-link" draggable={false} tabIndex={-1}>
+              <h1>
+                <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
+                <span>mons.shop</span>
+              </h1>
+            </a>
+          </div>
+          <div className="top__right">
+            {showHeaderWalletButton ? (
+              <button type="button" className="top__wallet-button secondary-light" tabIndex={-1}>
+                <span>Connect Wallet</span>
+              </button>
+            ) : (
+              <div className="top__wallet-spacer" aria-hidden="true" />
+            )}
+            {canUseAdminMenu ? (
+              <div className="top__actions">
+                <button type="button" className="top__settings" tabIndex={-1}>
+                  <FaTableCellsLarge aria-hidden />
+                </button>
               </div>
             ) : null}
           </div>
