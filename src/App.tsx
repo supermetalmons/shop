@@ -249,8 +249,6 @@ const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   maxId: 333,
   sizeBase: 5.2,
   sizeRange: 3.2,
-  opacityBase: 0.22,
-  opacityRange: 0.14,
   rotateRange: 0,
 };
 
