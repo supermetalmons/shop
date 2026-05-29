@@ -1607,14 +1607,22 @@ button.soft:hover:not(:disabled) {
 }
 
 button.secondary-light {
-  background: rgba(0, 0, 0, 0.045);
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--bg) 95.5%, #000 4.5%) 92%,
+    transparent 8%
+  );
   color: var(--fg);
   border: none;
   border-radius: 980px;
 }
 
 button.secondary-light:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.075);
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--bg) 92.5%, #000 7.5%) 90%,
+    transparent 10%
+  );
 }
 
 button.quiet {
@@ -1669,11 +1677,19 @@ button.no-focus-style:focus-visible {
   }
 
   button.secondary-light {
-    background: rgba(255, 255, 255, 0.09);
+    background: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--bg) 91%, #fff 9%) 92%,
+      transparent 8%
+    );
   }
 
   button.secondary-light:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.14);
+    background: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--bg) 86%, #fff 14%) 90%,
+      transparent 10%
+    );
   }
 }
 
