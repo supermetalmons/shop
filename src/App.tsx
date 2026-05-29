@@ -231,7 +231,7 @@ function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBa
 }
 
 const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://assets.mons.link/drops/poncho/items/clean',
+  baseUrl: '/backdrops/poncho_drifella',
   maxId: 207,
 };
 const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
@@ -245,7 +245,7 @@ const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   rotateRange: 0,
 };
 const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://assets.mons.link/drops/lsb/figures/clean',
+  baseUrl: '/backdrops/little_swag_boxes',
   maxId: 333,
   sizeBase: 5.2,
   sizeRange: 3.2,
