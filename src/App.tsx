@@ -240,8 +240,6 @@ const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   allowRepeats: true,
   sizeBase: 5.2,
   sizeRange: 3.2,
-  opacityBase: 0.22,
-  opacityRange: 0.1,
   rotateRange: 0,
 };
 const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
