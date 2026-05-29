@@ -16,6 +16,7 @@ import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { useDropPageCompactScroll } from './hooks/useDropPageCompactScroll';
 import {
   createStripeCheckoutSession,
   getAnonymousStripeDeliveryHistory,
@@ -5137,8 +5138,15 @@ function App({ currentPath }: AppProps) {
       ? authError
       : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
-  const primaryFrameClassName =
-    routeDrop || upcomingDropRoute ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
+  const dropPageFrameActive = Boolean(routeDrop || upcomingDropRoute);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const dropPageFrameRef = useRef<HTMLDivElement | null>(null);
+  const primaryFrameClassName = dropPageFrameActive ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
+  useDropPageCompactScroll({
+    active: dropPageFrameActive,
+    pageRef,
+    frameRef: dropPageFrameRef,
+  });
   const dropCardBackdropItems = useMemo(() => {
     if (!routeDrop) return null;
     if (isDropFamily(routeDrop, 'poncho_drifella')) {
@@ -5153,7 +5161,7 @@ function App({ currentPath }: AppProps) {
   }, [routeDrop]);
 
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       {dropCardBackdropItems ? <DropCardsBackdrop items={dropCardBackdropItems} /> : null}
       {toast ? (
         <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
@@ -5161,7 +5169,7 @@ function App({ currentPath }: AppProps) {
         </div>
       ) : null}
       {revealOverlayNode}
-      <div className={primaryFrameClassName}>
+      <div className={primaryFrameClassName} ref={dropPageFrameRef}>
         <header className="top top--fixed">
           <div className="brand">
             <a

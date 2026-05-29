@@ -111,10 +111,12 @@ body.wip-scroll-lock #root {
   inset: 0;
   z-index: 0;
   overflow: hidden;
+  opacity: var(--drop-backdrop-opacity, 1);
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  will-change: opacity;
 }
 
 .drop-cards-backdrop__card {
@@ -141,16 +143,27 @@ body.wip-scroll-lock #root {
 }
 
 .drop-page-frame--active {
-  height: calc(100vh - var(--page-padding-top));
-  height: calc(100svh - var(--page-padding-top));
-  min-height: calc(100vh - var(--page-padding-top));
-  min-height: calc(100svh - var(--page-padding-top));
-  padding-bottom: var(--page-padding-top);
+  height: var(--drop-frame-height, calc(100vh - var(--page-padding-top)));
+  height: var(--drop-frame-height, calc(100svh - var(--page-padding-top)));
+  min-height: var(--drop-frame-height, calc(100vh - var(--page-padding-top)));
+  min-height: var(--drop-frame-height, calc(100svh - var(--page-padding-top)));
+  padding-bottom: var(--drop-frame-padding-bottom, var(--page-padding-top));
 }
 
 .drop-page-frame--active > .mint-panel {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.drop-page-frame--measuring-compact {
+  height: auto !important;
+  min-height: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.drop-page-frame--measuring-compact > .mint-panel {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
 }
 
 .app-section {
@@ -561,11 +574,22 @@ header.top--spacer {
   flex: 1 1 auto;
   height: auto;
   min-height: clamp(280px, 38vh, 390px);
-  padding-bottom: clamp(28px, 4svh, 48px);
+  padding-bottom: var(--drop-preview-padding-bottom, clamp(28px, 4svh, 48px));
+}
+
+.drop-page-frame--measuring-compact > .mint-panel .mint-panel__preview {
+  flex: 0 0 auto !important;
+  height: clamp(280px, 38vh, 390px) !important;
+  min-height: 0 !important;
+  padding-bottom: clamp(8px, 1.5vw, 14px) !important;
 }
 
 .drop-page-frame--active > .mint-panel .mint-panel__boxes {
-  transform: translateY(calc(-1 * clamp(12px, 2svh, 24px)));
+  transform: translateY(var(--drop-boxes-translate-y, calc(-1 * clamp(12px, 2svh, 24px))));
+}
+
+.drop-page-frame--measuring-compact > .mint-panel .mint-panel__boxes {
+  transform: none !important;
 }
 
 .mint-panel__boxes {
@@ -1176,6 +1200,11 @@ header.top--spacer {
 
   .drop-page-frame--active > .mint-panel .mint-panel__preview {
     min-height: clamp(220px, 32vh, 300px);
+  }
+
+  .drop-page-frame--measuring-compact > .mint-panel .mint-panel__preview {
+    height: clamp(220px, 32vh, 300px) !important;
+    padding-bottom: clamp(10px, 2vw, 16px) !important;
   }
 
   .mint-panel__info {
