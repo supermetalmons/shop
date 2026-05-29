@@ -235,10 +235,14 @@ const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   maxId: 207,
 };
 const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://assets.mons.link/drops/hoodie/ipfs/images',
-  maxId: 8,
+  baseUrl: '/hoodie',
+  maxId: 7,
   allowRepeats: true,
-  srcForId: (baseUrl, id) => `${baseUrl}/receipt_${id}.webp`,
+  sizeBase: 5.2,
+  sizeRange: 3.2,
+  opacityBase: 0.22,
+  opacityRange: 0.1,
+  rotateRange: 0,
 };
 const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   baseUrl: 'https://assets.mons.link/drops/lsb/figures/clean',
