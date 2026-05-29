@@ -640,7 +640,11 @@ header.top {
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid transparent;
-  background: rgba(0, 0, 0, 0.045);
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--bg) 95.31%, #000 4.69%) 96%,
+    transparent 4%
+  );
   color: var(--fg);
   font-size: 13px;
   font-weight: 600;
@@ -650,16 +654,28 @@ header.top {
 }
 
 .mint-panel__size:hover:not(:disabled):not(.mint-panel__size--selected) {
-  background: rgba(0, 0, 0, 0.075);
+  background: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--bg) 91.94%, #000 8.06%) 93%,
+    transparent 7%
+  );
 }
 
 @media (prefers-color-scheme: dark) {
   .mint-panel__size {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--bg) 91.67%, #fff 8.33%) 96%,
+      transparent 4%
+    );
   }
 
   .mint-panel__size:hover:not(:disabled):not(.mint-panel__size--selected) {
-    background: rgba(255, 255, 255, 0.12);
+    background: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--bg) 87.10%, #fff 12.90%) 93%,
+      transparent 7%
+    );
   }
 }
 
