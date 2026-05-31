@@ -91,7 +91,7 @@ function RoutedContent({ path }: RoutedContentProps) {
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
   const routeDrop = resolveFrontendDropByPath(path);
-  const upcomingRoute = resolveUpcomingDropRouteByPath(path);
+  const upcomingRoute = routeDrop ? null : resolveUpcomingDropRouteByPath(path);
 
   if (isDrifRoute) {
     return (

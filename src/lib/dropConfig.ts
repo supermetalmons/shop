@@ -27,10 +27,23 @@ export type UpcomingDropRouteConfig = {
   title: string;
   notifyPath: string;
   previewDropId?: string;
+  previewImageUrl?: string;
+  previewAspectRatio?: number;
   boxNamePrefix?: string;
 };
 
 const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
+  {
+    path: '/card_nft_2',
+    dropFamily: 'card_nft_2',
+    solanaCluster: 'mainnet-beta',
+    label: 'Card NFT 2',
+    title: 'Card NFT 2',
+    notifyPath: '/notify_me',
+    previewImageUrl: '/card_nft_2/pack/1.webp',
+    previewAspectRatio: 833 / 1411,
+    boxNamePrefix: 'pack',
+  },
   {
     path: '/little_swag_hoodies',
     dropFamily: 'little_swag_hoodies',

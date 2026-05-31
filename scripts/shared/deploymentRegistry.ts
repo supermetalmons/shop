@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FigureMediaConfigSerialized = {
@@ -304,6 +304,7 @@ export function normalizeDropId(value: string | undefined): string {
 }
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  card_nft_2: 'card_nft_2',
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
@@ -320,6 +321,7 @@ function asDropFamily(value: unknown): DropFamily | undefined {
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'card_nft_2' ||
     normalized === 'default'
   ) {
     return normalized;
@@ -331,7 +333,7 @@ export function requireDropFamily(value: string, label: string): DropFamily {
   const normalized = asDropFamily(value);
   if (normalized) return normalized;
   throw new Error(
-    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, or poncho_drifella)`,
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, or card_nft_2)`,
   );
 }
 
@@ -779,7 +781,7 @@ export function renderFrontendDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FigureMediaStrategy = 'direct' | 'cyclic';
@@ -988,6 +990,7 @@ export function normalizeDropId(dropId: string): string {
 }
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  card_nft_2: 'card_nft_2',
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
@@ -1004,6 +1007,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'card_nft_2' ||
     normalized === 'default'
   ) {
     return normalized as DropFamily;
@@ -1262,7 +1266,7 @@ export function renderFunctionsDeploymentRegistryFile(args: {
  */
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type MintSelectionOption = {
@@ -1452,6 +1456,7 @@ export function normalizeDropId(dropId: string): string {
 }
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
+  card_nft_2: 'card_nft_2',
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
@@ -1468,6 +1473,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'card_nft_2' ||
     normalized === 'default'
   ) {
     return normalized as DropFamily;

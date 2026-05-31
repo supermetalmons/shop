@@ -7,9 +7,10 @@ const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const upcomingDropItems = listUpcomingDropRoutes().map((route) => {
   const liveDrop = resolveUpcomingRouteDrop(route);
   const previewDropId = liveDrop?.dropId || route.previewDropId;
+  const dropContent = previewDropId ? resolveDropContent(previewDropId) : undefined;
   return {
     key: `upcoming:${route.path}`,
-    image: previewDropId ? resolveDropContent(previewDropId).box.previewImageUrl : undefined,
+    image: dropContent?.box.previewImageUrl || route.previewImageUrl,
     alt: route.label,
     label: route.label,
     path: route.path,
@@ -25,9 +26,9 @@ type DropPanelItem = {
   previewScale?: number;
 };
 
-function DropPanelCard({ item, isOrphan }: { item: DropPanelItem; isOrphan?: boolean }) {
+function DropPanelCard({ item }: { item: DropPanelItem }) {
   return (
-    <div className={`drops-panel__drop${isOrphan ? ' drops-panel__drop--orphan' : ''}`}>
+    <div className="drops-panel__drop">
       <div className="drops-panel__image-wrap">
         {item.image ? (
           <img
@@ -75,16 +76,13 @@ export function DropsPanel() {
     ...upcomingDropItems,
   ];
 
-  const gridClassName = `drops-panel__grid${items.length > 1 ? ' drops-panel__grid--compact' : ''}`;
-
   return (
     <section className="drops-panel">
-      <div className={gridClassName}>
-        {items.map((item, index) => (
+      <div className="drops-panel__grid">
+        {items.map((item) => (
           <DropPanelCard
             key={item.key}
             item={item}
-            isOrphan={items.length > 1 && items.length % 2 === 1 && index === items.length - 1}
           />
         ))}
       </div>

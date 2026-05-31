@@ -1093,8 +1093,8 @@ function App({ currentPath }: AppProps) {
   );
   const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
   const upcomingDropRoute = useMemo(
-    () => resolveUpcomingDropRouteByPath(normalizedCurrentPath),
-    [normalizedCurrentPath],
+    () => (routeDrop ? null : resolveUpcomingDropRouteByPath(normalizedCurrentPath)),
+    [normalizedCurrentPath, routeDrop],
   );
   const [notifyOverlayOpen, setNotifyOverlayOpen] = useState(false);
   useEffect(() => {
@@ -1564,10 +1564,14 @@ function App({ currentPath }: AppProps) {
     [upcomingDropRoute?.previewDropId],
   );
   const upcomingMintPreviewImage =
-    upcomingDropContent?.mintPanel.previewImageUrl || upcomingDropContent?.box.previewImageUrl;
-  const upcomingMintPreviewAspectRatio = upcomingDropContent?.mintPanel.previewImageUrl
-    ? upcomingDropContent.mintPanel.aspectRatio
-    : upcomingDropContent?.box.aspectRatio || 1;
+    upcomingDropRoute?.previewImageUrl ||
+    upcomingDropContent?.mintPanel.previewImageUrl ||
+    upcomingDropContent?.box.previewImageUrl;
+  const upcomingMintPreviewAspectRatio =
+    upcomingDropRoute?.previewAspectRatio ||
+    (upcomingDropContent?.mintPanel.previewImageUrl
+      ? upcomingDropContent.mintPanel.aspectRatio
+      : upcomingDropContent?.box.aspectRatio || 1);
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
@@ -5138,12 +5142,12 @@ function App({ currentPath }: AppProps) {
       ? authError
       : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
-  const dropPageFrameActive = Boolean(routeDrop || upcomingDropRoute);
+  const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const pageRef = useRef<HTMLDivElement | null>(null);
   const dropPageFrameRef = useRef<HTMLDivElement | null>(null);
-  const primaryFrameClassName = dropPageFrameActive ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
+  const primaryFrameClassName = dropPageFrameViewport ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
   useDropPageCompactScroll({
-    active: dropPageFrameActive,
+    active: Boolean(routeDrop || upcomingDropRoute),
     pageRef,
     frameRef: dropPageFrameRef,
   });
