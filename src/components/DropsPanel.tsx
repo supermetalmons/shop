@@ -5,6 +5,12 @@ import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../l
 
 const lsbImage = mintPanelPreviewImage('little_swag_boxes');
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
+const cardNft2PackImages = [
+  '/card_nft_2/pack/1.webp',
+  '/card_nft_2/pack/2.webp',
+  '/card_nft_2/pack/3.webp',
+  '/card_nft_2/pack/4.webp',
+];
 const upcomingDropRoutes = listUpcomingDropRoutes();
 
 function resolveUpcomingTileSource(dropId: string, fallbackTitle: string) {
@@ -28,6 +34,7 @@ type DropPanelItem = {
   key: string;
   size: DropPanelTileSize;
   image?: string;
+  images?: string[];
   alt: string;
   title: string;
   path: string;
@@ -103,7 +110,20 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
     >
       <span className="drops-panel__title">{item.title}</span>
       <span className="drops-panel__image-stage">
-        {item.image ? (
+        {item.images?.length ? (
+          <span className="drops-panel__image-pack" aria-hidden="true">
+            {item.images.map((image) => (
+              <img
+                key={image}
+                className="drops-panel__image drops-panel__image--pack"
+                src={image}
+                alt=""
+                draggable={false}
+                onDragStart={(evt) => evt.preventDefault()}
+              />
+            ))}
+          </span>
+        ) : item.image ? (
           <img
             className="drops-panel__image"
             src={item.image}
@@ -128,6 +148,7 @@ export function DropsPanel() {
       key: 'card_nft_2',
       size: 'full',
       image: cardNft2.image,
+      images: cardNft2PackImages,
       alt: cardNft2.alt,
       title: cardNft2.title,
       path: cardNft2.path,
