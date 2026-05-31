@@ -5143,9 +5143,14 @@ function App({ currentPath }: AppProps) {
       : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
+  const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
   const pageRef = useRef<HTMLDivElement | null>(null);
   const dropPageFrameRef = useRef<HTMLDivElement | null>(null);
-  const primaryFrameClassName = dropPageFrameViewport ? 'drop-page-frame drop-page-frame--active' : 'drop-page-frame';
+  const primaryFrameClassName = [
+    'drop-page-frame',
+    dropPageFrameViewport ? 'drop-page-frame--active' : '',
+    dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
+  ].filter(Boolean).join(' ');
   useDropPageCompactScroll({
     active: Boolean(routeDrop || upcomingDropRoute),
     pageRef,
