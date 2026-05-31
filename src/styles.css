@@ -1396,8 +1396,8 @@ header.top--spacer {
 
 .drops-panel__grid {
   --drops-panel-gap: clamp(10px, 2.1cqw, 24px);
-  --drops-panel-full-min-height: clamp(310px, 42cqw, 470px);
   --drops-panel-half-min-height: clamp(280px, 35cqw, 390px);
+  --drops-panel-full-min-height: var(--drops-panel-half-min-height);
   width: 100%;
   flex: 1 1 auto;
   min-height: 100%;
@@ -1405,9 +1405,9 @@ header.top--spacer {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows:
-    minmax(var(--drops-panel-full-min-height), 1.08fr)
-    minmax(var(--drops-panel-half-min-height), 0.92fr)
-    minmax(var(--drops-panel-full-min-height), 1.08fr);
+    minmax(var(--drops-panel-full-min-height), 1fr)
+    minmax(var(--drops-panel-half-min-height), 1fr)
+    minmax(var(--drops-panel-full-min-height), 1fr);
   align-items: stretch;
   gap: var(--drops-panel-gap);
 }
@@ -1417,6 +1417,7 @@ header.top--spacer {
   --drops-panel-title-color: var(--fg);
   --drops-panel-image-max-width: 74%;
   --drops-panel-image-max-height: 68%;
+  --drops-panel-active-image-max-height: var(--drops-panel-image-max-height);
   --drops-panel-image-x: 0%;
   --drops-panel-image-y: 0%;
   --drops-panel-image-scale: 1;
@@ -1464,26 +1465,18 @@ header.top--spacer {
   grid-row: 1;
   z-index: 2;
   width: 100%;
-  max-width: min(86%, 680px);
-  margin: clamp(22px, 4.3cqw, 44px) auto 0;
-  padding: 0 clamp(18px, 4cqw, 42px);
+  max-width: 92%;
+  margin: clamp(20px, 3.2cqw, 34px) auto 0;
+  padding: 0 clamp(12px, 2.4cqw, 24px);
   display: block;
   text-align: center;
   color: var(--drops-panel-title-color);
-  font-size: clamp(30px, 5.2cqw, 52px);
-  line-height: 1.05;
+  font-size: clamp(23px, 3.5cqw, 35px);
+  line-height: 1.08;
   font-weight: 800;
   letter-spacing: 0;
   overflow-wrap: anywhere;
   text-wrap: balance;
-}
-
-.drops-panel__tile--half .drops-panel__title {
-  max-width: 92%;
-  margin-top: clamp(20px, 3.2cqw, 34px);
-  padding-inline: clamp(12px, 2.4cqw, 24px);
-  font-size: clamp(23px, 3.5cqw, 35px);
-  line-height: 1.08;
 }
 
 .drops-panel__image-stage {
@@ -1514,7 +1507,7 @@ header.top--spacer {
   width: auto;
   height: auto;
   max-width: var(--drops-panel-image-max-width);
-  max-height: var(--drops-panel-image-max-height);
+  max-height: var(--drops-panel-active-image-max-height);
   object-fit: contain;
   user-select: none;
   -webkit-user-select: none;
@@ -1532,8 +1525,8 @@ header.top--spacer {
 @container (max-width: 620px) {
   .drops-panel__grid {
     --drops-panel-gap: clamp(6px, 2.6cqw, 12px);
-    --drops-panel-full-min-height: clamp(260px, 74cqw, 330px);
-    --drops-panel-half-min-height: clamp(210px, 58cqw, 280px);
+    --drops-panel-half-min-height: clamp(210px, 48cqw, 240px);
+    --drops-panel-full-min-height: var(--drops-panel-half-min-height);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows:
       minmax(var(--drops-panel-full-min-height), auto)
@@ -1546,14 +1539,6 @@ header.top--spacer {
   }
 
   .drops-panel__title {
-    max-width: 94%;
-    margin-top: clamp(18px, 7cqw, 30px);
-    padding-inline: clamp(12px, 5cqw, 20px);
-    font-size: clamp(26px, 8cqw, 34px);
-    line-height: 1.08;
-  }
-
-  .drops-panel__tile--half .drops-panel__title {
     max-width: 96%;
     margin-top: clamp(14px, 4.4cqw, 22px);
     padding-inline: clamp(6px, 2.2cqw, 10px);
@@ -1563,6 +1548,7 @@ header.top--spacer {
 
   .drops-panel__tile {
     --drops-panel-image-y: 0%;
+    --drops-panel-active-image-max-height: var(--drops-panel-compact-image-max-height, var(--drops-panel-image-max-height));
     --drops-panel-active-image-scale: var(--drops-panel-compact-image-scale, var(--drops-panel-image-scale));
     --drops-panel-active-image-gap: var(--drops-panel-compact-image-gap, clamp(16px, 5cqw, 26px));
     --drops-panel-active-image-bottom-space: var(--drops-panel-compact-image-bottom-space, clamp(18px, 5cqw, 28px));
@@ -1580,15 +1566,11 @@ header.top--spacer {
 @media (max-width: 360px) {
   .drops-panel__grid {
     --drops-panel-gap: 6px;
-    --drops-panel-full-min-height: 250px;
     --drops-panel-half-min-height: 205px;
+    --drops-panel-full-min-height: var(--drops-panel-half-min-height);
   }
 
   .drops-panel__title {
-    font-size: clamp(24px, 8.4vw, 30px);
-  }
-
-  .drops-panel__tile--half .drops-panel__title {
     font-size: clamp(15px, 5.2vw, 18px);
   }
 }

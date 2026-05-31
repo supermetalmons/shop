@@ -35,6 +35,7 @@ type DropPanelItem = {
   titleColor?: string;
   imageMaxWidth?: string;
   imageMaxHeight?: string;
+  compactImageMaxHeight?: string;
   imageOffsetX?: string;
   imageOffsetY?: string;
   imageScale?: number;
@@ -50,6 +51,7 @@ type DropPanelTileStyle = CSSProperties & {
   '--drops-panel-title-color'?: string;
   '--drops-panel-image-max-width'?: string;
   '--drops-panel-image-max-height'?: string;
+  '--drops-panel-compact-image-max-height'?: string;
   '--drops-panel-image-x'?: string;
   '--drops-panel-image-y'?: string;
   '--drops-panel-image-scale'?: string;
@@ -66,6 +68,7 @@ function dropPanelTileStyle(item: DropPanelItem): DropPanelTileStyle {
     '--drops-panel-title-color': item.titleColor,
     '--drops-panel-image-max-width': item.imageMaxWidth,
     '--drops-panel-image-max-height': item.imageMaxHeight,
+    '--drops-panel-compact-image-max-height': item.compactImageMaxHeight,
     '--drops-panel-image-x': item.imageOffsetX,
     '--drops-panel-image-y': item.imageOffsetY,
     '--drops-panel-image-scale': item.imageScale ? String(item.imageScale) : undefined,
@@ -132,11 +135,12 @@ export function DropsPanel() {
       titleColor: '#1d1d1f',
       imageMaxWidth: '62%',
       imageMaxHeight: 'clamp(160px, 23.5cqw, 236px)',
+      compactImageMaxHeight: 'clamp(160px, 32cqw, 184px)',
       imageScale: 0.98,
-      imageGap: 'clamp(40px, 4.8cqw, 52px)',
-      compactImageGap: 'clamp(18px, 5cqw, 26px)',
-      imageBottomSpace: 'clamp(30px, 3.8cqw, 42px)',
-      compactImageBottomSpace: 'clamp(18px, 5cqw, 24px)',
+      imageGap: 'clamp(28px, 3.3cqw, 38px)',
+      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
+      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
     {
       key: 'little_swag_boxes',
@@ -148,7 +152,8 @@ export function DropsPanel() {
       background: '#f5f5f7',
       titleColor: '#1d1d1f',
       imageMaxWidth: '88%',
-      imageMaxHeight: 'clamp(120px, 20cqw, 200px)',
+      imageMaxHeight: 'clamp(140px, 23.5cqw, 230px)',
+      compactImageMaxHeight: 'clamp(120px, 28cqw, 150px)',
       imageScale: 1.03,
       compactImageScale: 1,
       imageGap: 'clamp(28px, 3.3cqw, 38px)',
@@ -166,7 +171,8 @@ export function DropsPanel() {
       background: '#050505',
       titleColor: '#f5f5f7',
       imageMaxWidth: '78%',
-      imageMaxHeight: 'clamp(145px, 23cqw, 220px)',
+      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
+      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
       imageScale: 0.92,
       compactImageScale: 0.88,
       imageGap: 'clamp(26px, 3cqw, 34px)',
@@ -185,12 +191,13 @@ export function DropsPanel() {
       titleColor: '#1d1d1f',
       imageMaxWidth: '82%',
       imageMaxHeight: 'clamp(150px, 24cqw, 240px)',
+      compactImageMaxHeight: 'clamp(150px, 32cqw, 180px)',
       imageScale: 1.04,
       compactImageScale: 1,
-      imageGap: 'clamp(24px, 3.2cqw, 36px)',
-      compactImageGap: 'clamp(14px, 4.4cqw, 22px)',
+      imageGap: 'clamp(28px, 3.3cqw, 38px)',
+      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
       imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
-      compactImageBottomSpace: 'clamp(18px, 5cqw, 26px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
   ];
 
