@@ -5,13 +5,27 @@ import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../l
 
 const lsbImage = mintPanelPreviewImage('little_swag_boxes');
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
-const cardNft2PackImages = [
+const cardNft2AvailablePackImages = [
   '/card_nft_2/pack/1.webp',
   '/card_nft_2/pack/2.webp',
   '/card_nft_2/pack/3.webp',
   '/card_nft_2/pack/4.webp',
 ];
+const CARD_NFT_2_PACK_TILE_COUNT = 3;
 const upcomingDropRoutes = listUpcomingDropRoutes();
+
+function randomPackSelection(images: string[], count: number): string[] {
+  const shuffled = images.slice();
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  return shuffled.slice(0, Math.max(0, Math.min(count, shuffled.length)));
+}
+
+const cardNft2PackImages = randomPackSelection(cardNft2AvailablePackImages, CARD_NFT_2_PACK_TILE_COUNT);
 
 function resolveUpcomingTileSource(dropId: string, fallbackTitle: string) {
   const path = dropPath(dropId);

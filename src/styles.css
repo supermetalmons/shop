@@ -1580,12 +1580,6 @@ header.top--spacer {
   }
 }
 
-@container (max-width: 430px) {
-  .drops-panel__image-pack .drops-panel__image:nth-child(4) {
-    display: none;
-  }
-}
-
 @media (max-width: 360px) {
   .drops-panel__grid {
     --drops-panel-gap: 6px;
