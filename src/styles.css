@@ -156,8 +156,14 @@ body.wip-scroll-lock #root {
   height: auto;
   min-height: calc(100vh - var(--page-padding-top));
   min-height: calc(100svh - var(--page-padding-top));
-  padding-bottom: var(--page-padding-top);
+  padding-bottom: clamp(14px, 2vw, var(--page-padding-top));
   gap: 2px;
+}
+
+.drop-page-frame--drops-panel + .inventory-section {
+  margin-top: calc(26px - var(--page-gap));
+  padding-top: 0;
+  border-top: none;
 }
 
 .drop-page-frame--active > .mint-panel {
@@ -204,6 +210,22 @@ body.wip-scroll-lock #root {
   line-height: 1.25;
   letter-spacing: 0;
   color: var(--fg);
+}
+
+.inventory-section .app-section__title,
+.shipments-section .app-section__title,
+.receipts-section .app-section__title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+@media (min-width: 760px) {
+  .inventory-section .app-section__title,
+  .shipments-section .app-section__title,
+  .receipts-section .app-section__title {
+    font-size: 18px;
+  }
 }
 
 .app-section__actions {
