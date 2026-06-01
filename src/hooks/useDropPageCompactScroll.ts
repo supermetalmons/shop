@@ -130,6 +130,8 @@ export function useDropPageCompactScroll({
     }
 
     let frameId = 0;
+    let scrollWatchIntervalId = 0;
+    let lastScrollY = Number.NaN;
     let metrics = measureDropPageCompactMetrics(frame);
 
     const applyProgress = () => {
@@ -163,15 +165,29 @@ export function useDropPageCompactScroll({
       requestApplyProgress();
     };
 
+    const watchScrollPosition = () => {
+      const nextScrollY = window.scrollY || 0;
+      if (Math.abs(nextScrollY - lastScrollY) > 0.25) {
+        lastScrollY = nextScrollY;
+        requestApplyProgress();
+      }
+    };
+
     applyProgress();
+    scrollWatchIntervalId = window.setInterval(watchScrollPosition, 80);
     window.addEventListener('scroll', requestApplyProgress, { passive: true });
+    document.addEventListener('scroll', requestApplyProgress, { passive: true, capture: true });
     window.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('scroll', requestApplyProgress, { passive: true });
     window.visualViewport?.addEventListener('resize', handleResize);
 
     return () => {
       if (frameId) window.cancelAnimationFrame(frameId);
+      if (scrollWatchIntervalId) window.clearInterval(scrollWatchIntervalId);
       window.removeEventListener('scroll', requestApplyProgress);
+      document.removeEventListener('scroll', requestApplyProgress, { capture: true });
       window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('scroll', requestApplyProgress);
       window.visualViewport?.removeEventListener('resize', handleResize);
       page.style.removeProperty('--drop-compact-progress');
       page.style.removeProperty('--drop-backdrop-opacity');

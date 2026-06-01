@@ -540,6 +540,11 @@ header.top--shop.top--fixed::before {
   pointer-events: none;
 }
 
+.drop-page-frame--active:not(.drop-page-frame--drops-panel) > header.top--shop.top--fixed::before {
+  opacity: var(--drop-compact-progress, 0);
+  transition: opacity 160ms ease;
+}
+
 header.top--shop.top--spacer {
   margin-top: calc(-1 * var(--page-padding-top));
 }
