@@ -5179,7 +5179,7 @@ function App({ currentPath }: AppProps) {
       ) : null}
       {revealOverlayNode}
       <div className={primaryFrameClassName} ref={dropPageFrameRef}>
-        <header className="top top--fixed">
+        <header className="top top--fixed top--shop">
           <div className="brand">
             <a
               href="/"
@@ -5330,7 +5330,7 @@ function App({ currentPath }: AppProps) {
             ) : null}
           </div>
         </header>
-        <header className="top top--spacer" aria-hidden="true">
+        <header className="top top--spacer top--shop" aria-hidden="true">
           <div className="brand">
             <a href="/" className="brand__home-link" draggable={false} tabIndex={-1}>
               <h1>

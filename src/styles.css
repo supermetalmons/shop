@@ -54,6 +54,7 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
 }
 
 body {
@@ -70,6 +71,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
   touch-action: manipulation;
 }
 
@@ -494,6 +496,127 @@ header.top--spacer {
     --top-wallet-font-size: 11.5px;
     --top-wallet-padding-x: 7px;
     --top-wallet-padding-y: 7px;
+  }
+}
+
+header.top--shop {
+  --top-gap: clamp(8px, 2vw, 12px);
+  --top-wallet-width: clamp(124px, 33vw, 144px);
+  --top-wallet-font-size: 12px;
+  --top-wallet-padding-x: 12px;
+  --top-wallet-padding-y: 0;
+  --top-wallet-min-height: 36px;
+  --top-settings-width: 32px;
+  --top-actions-gap: 6px;
+  --top-side-reserve: var(--top-wallet-width);
+  padding: 8px 0;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+header.top--shop.top--fixed {
+  top: 0;
+  z-index: 900;
+  background: transparent;
+  box-shadow: none;
+  isolation: isolate;
+}
+
+header.top--shop.top--fixed::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  z-index: 0;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+  pointer-events: none;
+}
+
+header.top--shop.top--spacer {
+  margin-top: calc(-1 * var(--page-padding-top));
+}
+
+.top--shop > * {
+  position: relative;
+  z-index: 1;
+}
+
+.top--shop .brand__home-link {
+  min-height: var(--top-wallet-min-height);
+  align-items: center;
+  padding: 0 8px 0 2px;
+}
+
+.top--shop .brand h1 {
+  font-size: clamp(18px, 6vw, 30px);
+  font-weight: 780;
+  gap: 6px;
+}
+
+.top--shop .brand-icon {
+  width: 1.08em;
+  height: 1.08em;
+  margin-top: 0;
+}
+
+.top--shop .brand h1 span {
+  margin-top: -2px;
+}
+
+.top--shop .top__right {
+  min-width: 0;
+  gap: var(--top-actions-gap);
+}
+
+.top--shop .top__wallet-button {
+  border: none;
+  box-shadow: none;
+  transition: background-color 0.16s ease;
+}
+
+.top--shop .top__actions {
+  position: relative;
+  top: auto;
+  right: auto;
+  transform: none;
+}
+
+.top--shop .top__settings {
+  width: var(--top-settings-width);
+}
+
+@media (prefers-color-scheme: dark) {
+  header.top--shop.top--fixed::before {
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+  }
+}
+
+@media (max-width: 360px) {
+  header.top--shop {
+    --top-wallet-width: 124px;
+    --top-wallet-font-size: 11.5px;
+    --top-wallet-padding-x: 10px;
+    --top-gap: 6px;
+    padding: 8px 0;
+  }
+}
+
+@media (max-width: 300px) {
+  header.top--shop {
+    --top-wallet-width: 116px;
+    --top-wallet-font-size: 11px;
+    --top-wallet-padding-x: 8px;
+  }
+
+  .top--shop .brand h1 {
+    font-size: 17px;
+    gap: 5px;
   }
 }
 
