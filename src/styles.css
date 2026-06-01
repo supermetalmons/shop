@@ -1611,7 +1611,11 @@ header.top--shop.top--spacer {
   z-index: 1;
   width: 100%;
   min-width: 0;
-  min-height: 0;
+  min-height: calc(
+    var(--drops-panel-active-image-gap) +
+    var(--drops-panel-active-image-max-height) +
+    var(--drops-panel-active-image-bottom-space)
+  );
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -1638,6 +1642,7 @@ header.top--shop.top--spacer {
 }
 
 .drops-panel__image {
+  display: block;
   width: auto;
   height: auto;
   max-width: var(--drops-panel-image-max-width);

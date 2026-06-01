@@ -1,18 +1,40 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import { navigate } from '../navigation';
-import { mintPanelPreviewImage, resolveDropContent } from '../lib/dropContent';
+import { mintPanelPreviewAspectRatio, mintPanelPreviewImage, resolveDropContent } from '../lib/dropContent';
 import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../lib/dropConfig';
 
+type DropPanelImageDimensions = {
+  width: number;
+  height: number;
+};
+
 const lsbImage = mintPanelPreviewImage('little_swag_boxes');
+const lsbImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('little_swag_boxes'));
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
+const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('poncho_drifella'));
 const cardNft2AvailablePackImages = [
   '/card_nft_2/pack/1.webp',
   '/card_nft_2/pack/2.webp',
   '/card_nft_2/pack/3.webp',
   '/card_nft_2/pack/4.webp',
 ];
+const cardNft2PackImageDimensions: Record<string, DropPanelImageDimensions> = {
+  '/card_nft_2/pack/1.webp': { width: 833, height: 1411 },
+  '/card_nft_2/pack/2.webp': { width: 837, height: 1408 },
+  '/card_nft_2/pack/3.webp': { width: 840, height: 1408 },
+  '/card_nft_2/pack/4.webp': { width: 840, height: 1412 },
+};
 const CARD_NFT_2_PACK_TILE_COUNT = 3;
 const upcomingDropRoutes = listUpcomingDropRoutes();
+
+function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return undefined;
+
+  return {
+    width: Math.round(aspectRatio * height),
+    height,
+  };
+}
 
 function randomPackSelection(images: string[], count: number): string[] {
   const shuffled = images.slice();
@@ -33,9 +55,16 @@ function resolveUpcomingTileSource(dropId: string, fallbackTitle: string) {
   const liveDrop = resolveUpcomingRouteDrop(route);
   const previewDropId = liveDrop?.dropId || route?.previewDropId || dropId;
   const dropContent = previewDropId ? resolveDropContent(previewDropId) : undefined;
+  const image = dropContent?.mintPanel.previewImageUrl || dropContent?.box.previewImageUrl || route?.previewImageUrl;
+  const aspectRatio = dropContent?.mintPanel.previewImageUrl
+    ? dropContent.mintPanel.aspectRatio
+    : dropContent?.box.previewImageUrl
+      ? dropContent.box.aspectRatio
+      : route?.previewAspectRatio;
 
   return {
-    image: dropContent?.mintPanel.previewImageUrl || dropContent?.box.previewImageUrl || route?.previewImageUrl,
+    image,
+    imageDimensions: imageDimensionsForAspectRatio(aspectRatio || 0),
     alt: route?.label || fallbackTitle,
     title: route?.label || fallbackTitle,
     path: liveDrop?.dropId ? dropPath(liveDrop.dropId) : route?.path || path,
@@ -48,7 +77,9 @@ type DropPanelItem = {
   key: string;
   size: DropPanelTileSize;
   image?: string;
+  imageDimensions?: DropPanelImageDimensions;
   images?: string[];
+  imageDimensionsBySrc?: Record<string, DropPanelImageDimensions>;
   alt: string;
   title: string;
   path: string;
@@ -126,23 +157,33 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
       <span className="drops-panel__image-stage">
         {item.images?.length ? (
           <span className="drops-panel__image-pack" aria-hidden="true">
-            {item.images.map((image) => (
-              <img
-                key={image}
-                className="drops-panel__image drops-panel__image--pack"
-                src={image}
-                alt=""
-                draggable={false}
-                onDragStart={(evt) => evt.preventDefault()}
-              />
-            ))}
+            {item.images.map((image) => {
+              const dimensions = item.imageDimensionsBySrc?.[image];
+
+              return (
+                <img
+                  key={image}
+                  className="drops-panel__image drops-panel__image--pack"
+                  src={image}
+                  alt=""
+                  width={dimensions?.width}
+                  height={dimensions?.height}
+                  draggable={false}
+                  decoding="async"
+                  onDragStart={(evt) => evt.preventDefault()}
+                />
+              );
+            })}
           </span>
         ) : item.image ? (
           <img
             className="drops-panel__image"
             src={item.image}
             alt={item.alt}
+            width={item.imageDimensions?.width}
+            height={item.imageDimensions?.height}
             draggable={false}
+            decoding="async"
             onDragStart={(evt) => evt.preventDefault()}
           />
         ) : (
@@ -163,6 +204,7 @@ export function DropsPanel() {
       size: 'full',
       image: cardNft2.image,
       images: cardNft2PackImages,
+      imageDimensionsBySrc: cardNft2PackImageDimensions,
       alt: cardNft2.alt,
       title: cardNft2.title,
       path: cardNft2.path,
@@ -179,6 +221,7 @@ export function DropsPanel() {
       key: 'little_swag_boxes',
       size: 'half',
       image: lsbImage,
+      imageDimensions: lsbImageDimensions,
       alt: 'Little Swag Boxes',
       title: 'Little Swag Boxes',
       path: dropPath('little_swag_boxes'),
@@ -196,6 +239,7 @@ export function DropsPanel() {
       key: 'poncho_drifella',
       size: 'half',
       image: ponchoImage,
+      imageDimensions: ponchoImageDimensions,
       alt: 'Poncho Drifella',
       title: 'Poncho Drifella',
       path: dropPath('poncho_drifella'),
@@ -213,6 +257,7 @@ export function DropsPanel() {
       key: 'little_swag_hoodies',
       size: 'full',
       image: littleSwagHoodies.image,
+      imageDimensions: littleSwagHoodies.imageDimensions,
       alt: littleSwagHoodies.alt,
       title: littleSwagHoodies.title,
       path: littleSwagHoodies.path,
