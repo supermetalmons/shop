@@ -108,8 +108,8 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
     }
 
     evt.preventDefault();
-    navigate(item.path);
     window.scrollTo({ top: 0, left: 0 });
+    navigate(item.path);
   };
 
   return (

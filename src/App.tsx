@@ -5188,8 +5188,8 @@ function App({ currentPath }: AppProps) {
               draggable={false}
               onClick={(evt) => {
                 evt.preventDefault();
-                navigate('/');
                 window.scrollTo({ top: 0, left: 0 });
+                navigate('/');
               }}
               onDragStart={(evt) => {
                 evt.preventDefault();

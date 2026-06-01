@@ -154,8 +154,9 @@ body.wip-scroll-lock #root {
 
 .drop-page-frame--active.drop-page-frame--drops-panel {
   height: auto;
-  min-height: var(--drop-frame-height, calc(100vh - var(--page-padding-top)));
-  min-height: var(--drop-frame-height, calc(100svh - var(--page-padding-top)));
+  min-height: calc(100vh - var(--page-padding-top));
+  min-height: calc(100svh - var(--page-padding-top));
+  padding-bottom: var(--page-padding-top);
   gap: 2px;
 }
 
