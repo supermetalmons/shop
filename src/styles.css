@@ -1166,9 +1166,9 @@ header.top--shop.top--spacer {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 18px;
+  font-size: var(--mint-panel-action-fit-label-font-size, 18px);
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--mint-panel-action-fit-letter-spacing, 0.3px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -1192,7 +1192,7 @@ header.top--shop.top--spacer {
   align-self: baseline;
   min-width: 0;
   justify-self: end;
-  font-size: 16px;
+  font-size: var(--mint-panel-action-fit-price-font-size, 16px);
   font-weight: 500;
   line-height: 1;
   opacity: 0.85;
@@ -1257,9 +1257,9 @@ header.top--shop.top--spacer {
 .mint-panel__submit-text {
   align-self: baseline;
   min-width: 0;
-  font-size: 18px;
+  font-size: var(--mint-panel-action-fit-label-font-size, 18px);
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--mint-panel-action-fit-letter-spacing, 0.3px);
   line-height: 1;
   white-space: nowrap;
 }
@@ -1267,7 +1267,7 @@ header.top--shop.top--spacer {
 .mint-panel__submit-price {
   align-self: baseline;
   min-width: 0;
-  font-size: 16px;
+  font-size: var(--mint-panel-action-fit-price-font-size, 16px);
   font-weight: 500;
   line-height: 1;
   opacity: 0.85;
@@ -1280,14 +1280,14 @@ header.top--shop.top--spacer {
   display: inline-flex;
   flex-direction: row;
   align-items: baseline;
-  gap: 5px;
+  gap: var(--mint-panel-action-price-gap, 5px);
   line-height: 1;
   opacity: 1;
   white-space: nowrap;
 }
 
 .mint-panel__submit-price-old {
-  font-size: 16px;
+  font-size: var(--mint-panel-action-fit-price-font-size, 16px);
   font-weight: 500;
   opacity: 0.62;
   text-decoration: line-through;
@@ -1295,12 +1295,12 @@ header.top--shop.top--spacer {
 }
 
 .mint-panel__submit-price-new {
-  font-size: 16px;
+  font-size: var(--mint-panel-action-fit-price-font-size, 16px);
   font-weight: 700;
 }
 
 .mint-panel__submit-price-currency {
-  font-size: 16px;
+  font-size: var(--mint-panel-action-fit-price-font-size, 16px);
   font-weight: 500;
   opacity: 0.82;
 }
@@ -1425,7 +1425,8 @@ header.top--shop.top--spacer {
 
   .mint-panel__cta-stack--with-payment .mint-panel__stripe-text,
   .mint-panel__cta-stack--with-payment .mint-panel__submit-text {
-    font-size: var(--mint-panel-action-font-size);
+    font-size: var(--mint-panel-action-fit-label-font-size, var(--mint-panel-action-font-size));
+    letter-spacing: var(--mint-panel-action-fit-letter-spacing, 0.3px);
   }
 
   .mint-panel__cta-stack--with-payment .mint-panel__stripe-price,
@@ -1433,7 +1434,7 @@ header.top--shop.top--spacer {
   .mint-panel__cta-stack--with-payment .mint-panel__submit-price-old,
   .mint-panel__cta-stack--with-payment .mint-panel__submit-price-new,
   .mint-panel__cta-stack--with-payment .mint-panel__submit-price-currency {
-    font-size: var(--mint-panel-action-price-font-size);
+    font-size: var(--mint-panel-action-fit-price-font-size, var(--mint-panel-action-price-font-size));
   }
 
   .mint-panel__cta-stack--with-payment .mint-panel__submit-price--discounted {
@@ -1478,7 +1479,7 @@ header.top--shop.top--spacer {
     --mint-panel-action-padding-x: clamp(5px, 2.2vw, 8px);
     --mint-panel-action-column-gap: clamp(3px, 1.5vw, 5px);
     --mint-panel-action-price-gap: clamp(2px, 1vw, 4px);
-    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
     gap: clamp(4px, 2.4vw, 10px);
   }
 
@@ -1497,7 +1498,7 @@ header.top--shop.top--spacer {
     --mint-panel-action-padding-x: clamp(12px, 3.2vw, 16px);
     --mint-panel-action-column-gap: clamp(8px, 2vw, 12px);
     --mint-panel-action-price-gap: clamp(3px, 1.2vw, 5px);
-    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    grid-template-columns: minmax(0, 1.04fr) minmax(0, 0.96fr);
     gap: clamp(8px, 2.1vw, 12px);
   }
 }
