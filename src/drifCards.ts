@@ -82,7 +82,7 @@ const EFFECTS: Record<string, EffectConfig> = {
 };
 
 export const DRIF_CARD_COUNT = 207;
-export const DRIF_SHOWCASE_CARD_COUNT = 12;
+export const DRIF_SHOWCASE_CARD_COUNT = 200;
 
 const DEFAULT_DRIF_GLOW_TYPE: GlowType = 'metal';
 

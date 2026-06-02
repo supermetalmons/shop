@@ -1,13 +1,23 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import DrifEffectCard from './components/DrifEffectCard';
 import { DRIF_SHOWCASE_CARDS } from './drifCards';
 import { navigate } from './navigation';
+
+const DRIF_SHOWCASE_PRELOAD_WINDOW = 6;
 
 export default function DrifApp() {
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_SHOWCASE_CARDS.length));
   const currentCard = DRIF_SHOWCASE_CARDS[cardIndex];
   const signupRef = useRef<HTMLDivElement | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const preloadCards = useMemo(
+    () =>
+      Array.from(
+        { length: Math.min(DRIF_SHOWCASE_PRELOAD_WINDOW, DRIF_SHOWCASE_CARDS.length) },
+        (_, offset) => DRIF_SHOWCASE_CARDS[(cardIndex + offset) % DRIF_SHOWCASE_CARDS.length],
+      ),
+    [cardIndex],
+  );
 
   const handleCardClick = useCallback(() => {
     setCardIndex((prevIndex) => (prevIndex + 1) % DRIF_SHOWCASE_CARDS.length);
@@ -67,7 +77,8 @@ export default function DrifApp() {
             ariaLabel="Expand the Pokemon Card; Custom Card."
             onClick={handleCardClick}
             preserveTransformOnCardChange
-            preloadCards={DRIF_SHOWCASE_CARDS}
+            preloadCards={preloadCards}
+            disableGlow
           />
         </div>
       </main>
