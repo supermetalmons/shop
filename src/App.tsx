@@ -16,7 +16,7 @@ import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { useDropPageCompactScroll } from './hooks/useDropPageCompactScroll';
+import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
 import {
   createStripeCheckoutSession,
   getAnonymousStripeDeliveryHistory,
@@ -5365,16 +5365,14 @@ function App({ currentPath }: AppProps) {
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
   const pageRef = useRef<HTMLDivElement | null>(null);
-  const dropPageFrameRef = useRef<HTMLDivElement | null>(null);
   const primaryFrameClassName = [
     'drop-page-frame',
     dropPageFrameViewport ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
   ].filter(Boolean).join(' ');
-  useDropPageCompactScroll({
+  useDropPageScrollFade({
     active: Boolean(routeDrop || upcomingDropRoute),
     pageRef,
-    frameRef: dropPageFrameRef,
   });
   const dropCardBackdropItems = useMemo(() => {
     if (!routeDrop) return null;
@@ -5398,7 +5396,7 @@ function App({ currentPath }: AppProps) {
         </div>
       ) : null}
       {revealOverlayNode}
-      <div className={primaryFrameClassName} ref={dropPageFrameRef}>
+      <div className={primaryFrameClassName}>
         <header className="top top--fixed top--shop">
           <div className="brand">
             <a
