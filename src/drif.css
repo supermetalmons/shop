@@ -22,6 +22,9 @@
 .drif-page {
   --drif-notify-bottom-gap: clamp(24px, 4vh, 60px);
   --drif-notify-clearance: calc(var(--drif-notify-bottom-gap) + 88px);
+  --bg: #000;
+  --fg: #fff;
+  --muted: rgba(255, 255, 255, 0.62);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -38,9 +41,13 @@
   touch-action: none;
 }
 
-.drif-top {
+.drif-page header.top--shop {
   color: #fff;
   flex: 0 0 auto;
+}
+
+.drif-page header.top--shop.top--fixed::before {
+  display: none;
 }
 
 .drif-main {
@@ -64,6 +71,7 @@
   min-height: 0;
   padding: 0 clamp(6px, 2vw, 20px);
   margin: 0 auto;
+  transform: translateY(clamp(10px, 2.4svh, 24px));
 }
 
 .drif-card-showcase .drif-effect-card {

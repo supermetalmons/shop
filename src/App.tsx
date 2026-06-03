@@ -12,6 +12,7 @@ import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
 import { NotifyOverlay } from './components/NotifyOverlay';
 import { ClaimForm } from './components/ClaimForm';
+import { ShopHeader } from './components/ShopHeader';
 import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
@@ -5386,6 +5387,148 @@ function App({ currentPath }: AppProps) {
       LSB_DROP_CARD_BACKDROP_CONFIG,
     );
   }, [routeDrop]);
+  const renderHeaderRight = ({ interactive }: { interactive: boolean }) => {
+    const walletAction = showHeaderWalletButton ? (
+      <button
+        type="button"
+        className="top__wallet-button secondary-light"
+        onClick={interactive ? handleHeaderWalletSignIn : undefined}
+        aria-label={interactive ? (publicKey ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana') : undefined}
+        tabIndex={interactive ? undefined : -1}
+      >
+        <span>Connect Wallet</span>
+      </button>
+    ) : (
+      <div className="top__wallet-spacer" aria-hidden="true" />
+    );
+    const adminMenu = !canUseAdminMenu ? null : interactive ? (
+      <div className="top__actions" ref={settingsRef}>
+        <button
+          type="button"
+          className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
+          onClick={() => setSettingsOpen((prev) => !prev)}
+          aria-label="App menu"
+          aria-haspopup="menu"
+          aria-expanded={settingsOpen}
+        >
+          <FaTableCellsLarge aria-hidden />
+        </button>
+        {settingsOpen ? (
+          <div className="top__submenu" role="menu" aria-label="App menu">
+            {canUseAdminViewer && !ownerPickerOpened ? (
+              <button
+                type="button"
+                className="link small top__submenu-nav"
+                aria-expanded={ownerPickerOpened}
+                onClick={() => {
+                  setOwnerPickerOpened(true);
+                }}
+              >
+                override address
+              </button>
+            ) : null}
+            {canUseAdminViewer && ownerPickerOpened ? (
+              <select
+                id="admin-owner-picker"
+                aria-label="Viewer owner"
+                value={ownerPickerValue}
+                onChange={(evt) => {
+                  const value = evt.target.value.trim();
+                  if (!connectedWallet || !value || value === connectedWallet) {
+                    setAdminViewedOwner(null);
+                    return;
+                  }
+                  setAdminViewedOwner(value);
+                }}
+              >
+                {connectedWallet ? (
+                  <option value={connectedWallet}>{connectedWallet}</option>
+                ) : null}
+                {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
+                  <option value={adminViewedOwner}>{adminViewedOwner}</option>
+                ) : null}
+                {deliveryOrderOwners
+                  .filter((entry) => entry !== connectedWallet)
+                  .map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry}
+                    </option>
+                  ))}
+              </select>
+            ) : null}
+            <button
+              type="button"
+              className="link small top__submenu-nav"
+              onClick={() => {
+                navigate('/ff');
+              }}
+            >
+              {adminMenuLabel('/fullfillment')}
+            </button>
+            <button
+              type="button"
+              className="link small top__submenu-nav"
+              onClick={() => {
+                navigate('/wip');
+              }}
+            >
+              {adminMenuLabel('/wip')}
+            </button>
+            <button
+              type="button"
+              className="link small top__submenu-nav"
+              onClick={() => {
+                navigate('/notify_me');
+              }}
+            >
+              {adminMenuLabel('/notify_me')}
+            </button>
+            {adminMenuDrops.map((drop) => (
+              <button
+                key={drop.dropId}
+                type="button"
+                className="link small top__submenu-nav"
+                onClick={() => {
+                  navigate(dropPath(drop.dropId));
+                }}
+              >
+                {adminMenuLabel(dropPath(drop.dropId))}
+              </button>
+            ))}
+            {canUseAdminViewer && canLoadMoreOwners ? (
+              <button
+                type="button"
+                className="link small top__submenu-more"
+                disabled={deliveryOrderOwnersLoadingMore}
+                onClick={() => {
+                  void fetchNextDeliveryOrderOwners();
+                }}
+              >
+                {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
+              </button>
+            ) : null}
+            {canUseAdminViewer && deliveryOrderOwnersErrorMessage ? (
+              <div className="error small">{deliveryOrderOwnersErrorMessage}</div>
+            ) : null}
+            <div className="muted small top__build-info">{BUILD_INFO}</div>
+          </div>
+        ) : null}
+      </div>
+    ) : (
+      <div className="top__actions">
+        <button type="button" className="top__settings" tabIndex={-1}>
+          <FaTableCellsLarge aria-hidden />
+        </button>
+      </div>
+    );
+
+    return (
+      <>
+        {walletAction}
+        {adminMenu}
+      </>
+    );
+  };
 
   return (
     <div className="page" ref={pageRef}>
@@ -5397,183 +5540,7 @@ function App({ currentPath }: AppProps) {
       ) : null}
       {revealOverlayNode}
       <div className={primaryFrameClassName}>
-        <header className="top top--fixed top--shop">
-          <div className="brand">
-            <a
-              href="/"
-              className="brand__home-link"
-              aria-label="Go to mons.shop home"
-              draggable={false}
-              onClick={(evt) => {
-                evt.preventDefault();
-                window.scrollTo({ top: 0, left: 0 });
-                navigate('/');
-              }}
-              onDragStart={(evt) => {
-                evt.preventDefault();
-              }}
-            >
-              <h1>
-                <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
-                <span>mons.shop</span>
-              </h1>
-            </a>
-          </div>
-          <div className="top__right">
-            {showHeaderWalletButton ? (
-              <button
-                type="button"
-                className="top__wallet-button secondary-light"
-                onClick={handleHeaderWalletSignIn}
-                aria-label={publicKey ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana'}
-              >
-                <span>Connect Wallet</span>
-              </button>
-            ) : (
-              <div className="top__wallet-spacer" aria-hidden="true" />
-            )}
-            {canUseAdminMenu ? (
-              <div className="top__actions" ref={settingsRef}>
-                <button
-                  type="button"
-                  className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
-                  onClick={() => setSettingsOpen((prev) => !prev)}
-                  aria-label="App menu"
-                  aria-haspopup="menu"
-                  aria-expanded={settingsOpen}
-                >
-                  <FaTableCellsLarge aria-hidden />
-                </button>
-                {settingsOpen ? (
-                  <div className="top__submenu" role="menu" aria-label="App menu">
-                    {canUseAdminViewer && !ownerPickerOpened ? (
-                      <button
-                        type="button"
-                        className="link small top__submenu-nav"
-                        aria-expanded={ownerPickerOpened}
-                        onClick={() => {
-                          setOwnerPickerOpened(true);
-                        }}
-                      >
-                        override address
-                      </button>
-                    ) : null}
-                    {canUseAdminViewer && ownerPickerOpened ? (
-                      <select
-                        id="admin-owner-picker"
-                        aria-label="Viewer owner"
-                        value={ownerPickerValue}
-                        onChange={(evt) => {
-                          const value = evt.target.value.trim();
-                          if (!connectedWallet || !value || value === connectedWallet) {
-                            setAdminViewedOwner(null);
-                            return;
-                          }
-                          setAdminViewedOwner(value);
-                        }}
-                      >
-                        {connectedWallet ? (
-                          <option value={connectedWallet}>{connectedWallet}</option>
-                        ) : null}
-                        {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
-                          <option value={adminViewedOwner}>{adminViewedOwner}</option>
-                        ) : null}
-                        {deliveryOrderOwners
-                          .filter((entry) => entry !== connectedWallet)
-                          .map((entry) => (
-                            <option key={entry} value={entry}>
-                              {entry}
-                            </option>
-                          ))}
-                      </select>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="link small top__submenu-nav"
-                      onClick={() => {
-                        navigate('/ff');
-                      }}
-                    >
-                      {adminMenuLabel('/fullfillment')}
-                    </button>
-                    <button
-                      type="button"
-                      className="link small top__submenu-nav"
-                      onClick={() => {
-                        navigate('/wip');
-                      }}
-                    >
-                      {adminMenuLabel('/wip')}
-                    </button>
-                    <button
-                      type="button"
-                      className="link small top__submenu-nav"
-                      onClick={() => {
-                        navigate('/notify_me');
-                      }}
-                    >
-                      {adminMenuLabel('/notify_me')}
-                    </button>
-                    {adminMenuDrops.map((drop) => (
-                      <button
-                        key={drop.dropId}
-                        type="button"
-                        className="link small top__submenu-nav"
-                        onClick={() => {
-                          navigate(dropPath(drop.dropId));
-                        }}
-                      >
-                        {adminMenuLabel(dropPath(drop.dropId))}
-                      </button>
-                    ))}
-                    {canUseAdminViewer && canLoadMoreOwners ? (
-                      <button
-                        type="button"
-                        className="link small top__submenu-more"
-                        disabled={deliveryOrderOwnersLoadingMore}
-                        onClick={() => {
-                          void fetchNextDeliveryOrderOwners();
-                        }}
-                      >
-                        {deliveryOrderOwnersLoadingMore ? 'Loading more owners…' : 'Show more owners'}
-                      </button>
-                    ) : null}
-                    {canUseAdminViewer && deliveryOrderOwnersErrorMessage ? (
-                      <div className="error small">{deliveryOrderOwnersErrorMessage}</div>
-                    ) : null}
-                    <div className="muted small top__build-info">{BUILD_INFO}</div>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </header>
-        <header className="top top--spacer top--shop" aria-hidden="true">
-          <div className="brand">
-            <a href="/" className="brand__home-link" draggable={false} tabIndex={-1}>
-              <h1>
-                <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
-                <span>mons.shop</span>
-              </h1>
-            </a>
-          </div>
-          <div className="top__right">
-            {showHeaderWalletButton ? (
-              <button type="button" className="top__wallet-button secondary-light" tabIndex={-1}>
-                <span>Connect Wallet</span>
-              </button>
-            ) : (
-              <div className="top__wallet-spacer" aria-hidden="true" />
-            )}
-            {canUseAdminMenu ? (
-              <div className="top__actions">
-                <button type="button" className="top__settings" tabIndex={-1}>
-                  <FaTableCellsLarge aria-hidden />
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </header>
+        <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
 
         {!routeDrop && upcomingDropRoute ? (
           <MintPanel

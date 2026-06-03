@@ -101,6 +101,10 @@ body.wip-scroll-lock #root {
   gap: var(--page-gap);
 }
 
+.fulfillment-page {
+  --page-gap: 2px;
+}
+
 .drop-page-frame,
 .app-section,
 .toast {
@@ -226,28 +230,19 @@ body.wip-scroll-lock #root {
 }
 
 header.top {
-  --top-gap: clamp(6px, 3vw, 16px);
-  --top-wallet-width: clamp(100px, 31vw, 132px);
-  --top-wallet-font-size: clamp(11.5px, 3.1vw, 13px);
-  --top-wallet-padding-x: clamp(7px, 2.5vw, 10px);
-  --top-wallet-padding-y: clamp(6px, 1.8vw, 7px);
-  --top-wallet-min-height: clamp(30px, 8vw, 34px);
-  --top-settings-width: 24px;
-  --top-actions-gap: 8px;
-  --top-side-reserve: var(--top-wallet-width);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--top-gap);
+  gap: var(--top-gap, 0);
   position: relative;
 }
 
 header.top--fixed {
   position: fixed;
-  top: var(--page-padding-top);
+  top: 0;
   left: var(--page-padding-inline);
   right: var(--page-padding-inline);
-  z-index: 100;
+  z-index: 900;
   width: auto;
   max-width: 980px;
   margin: 0 auto;
@@ -459,19 +454,9 @@ header.top--spacer {
 
 .brand h1 {
   margin: 0;
-  font-size: clamp(
-    12px,
-    min(
-      10vw,
-      calc((100vw - clamp(32px, 8vw, 96px) - var(--top-side-reserve) - var(--top-gap) - 8px) / 6.4)
-    ),
-    48px
-  );
-  font-weight: 800;
   letter-spacing: 0;
   display: flex;
   align-items: center;
-  gap: 4px;
   max-width: 100%;
   min-width: 0;
   white-space: nowrap;
@@ -480,36 +465,9 @@ header.top--spacer {
 }
 
 .brand-icon {
-  width: 1.1875em;
-  height: 1.1875em;
-  margin-top: 2px;
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;
-}
-
-.brand h1 span {
-  margin-top: -4px;
-}
-
-@media (max-width: 360px) {
-  header.top {
-    --top-wallet-width: 106px;
-    --top-gap: 8px;
-    --top-wallet-font-size: 12px;
-    --top-wallet-padding-x: 8px;
-    --top-wallet-padding-y: 7px;
-  }
-}
-
-@media (max-width: 300px) {
-  header.top {
-    --top-wallet-width: 100px;
-    --top-gap: 6px;
-    --top-wallet-font-size: 11.5px;
-    --top-wallet-padding-x: 7px;
-    --top-wallet-padding-y: 7px;
-  }
 }
 
 header.top--shop {

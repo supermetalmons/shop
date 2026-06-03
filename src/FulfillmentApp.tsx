@@ -18,6 +18,7 @@ import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from '
 import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './lib/dropLabels';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
+import { ShopHeader } from './components/ShopHeader';
 import { listFrontendDrops, normalizeDropId, type FigureMediaConfig, type FrontendDeploymentConfig } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 import { findCountryByCode } from './lib/countries';
@@ -1111,25 +1112,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   };
 
   return (
-    <div className="page">
-      <header className="top">
-        <div className="brand">
-          <a
-            href="/"
-            className="brand__home-link"
-            aria-label="Go to mons.shop home"
-            draggable={false}
-            onDragStart={(evt) => {
-              evt.preventDefault();
-            }}
-          >
-            <h1>
-              <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
-              <span>mons.shop</span>
-            </h1>
-          </a>
-        </div>
-      </header>
+    <div className="page fulfillment-page">
+      <ShopHeader scrollHomeToTop />
 
       {!walletBusy && walletReady && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : true) ? (
         !walletAddress ? (

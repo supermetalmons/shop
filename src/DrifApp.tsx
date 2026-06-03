@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ShopHeader } from './components/ShopHeader';
 import DrifEffectCard from './components/DrifEffectCard';
 import { DRIF_SHOWCASE_CARDS } from './drifCards';
-import { navigate } from './navigation';
 
 const DRIF_SHOWCASE_PRELOAD_WINDOW = 6;
 
@@ -48,28 +48,7 @@ export default function DrifApp() {
 
   return (
     <div className="drif-page">
-      <header className="top drif-top">
-        <div className="brand">
-          <a
-            href="/"
-            className="brand__home-link"
-            aria-label="Go to mons.shop home"
-            draggable={false}
-            onClick={(evt) => {
-              evt.preventDefault();
-              navigate('/');
-            }}
-            onDragStart={(evt) => {
-              evt.preventDefault();
-            }}
-          >
-            <h1>
-              <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
-              <span>mons.shop</span>
-            </h1>
-          </a>
-        </div>
-      </header>
+      <ShopHeader scrollHomeToTop />
       <main className="drif-main">
         <div className="drif-card-showcase">
           <DrifEffectCard
