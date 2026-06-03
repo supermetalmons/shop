@@ -1291,6 +1291,11 @@ header.top--shop.top--spacer {
 }
 
 @media (max-width: 860px) {
+  .drop-page-frame--active:not(.drop-page-frame--drops-panel),
+  .drop-page-frame--active.drop-page-frame--drops-panel {
+    --drop-frame-bottom-clearance: var(--page-padding-top);
+  }
+
   .mint-panel__footer {
     grid-template-columns: 1fr;
     align-items: start;
