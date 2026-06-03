@@ -166,15 +166,16 @@ body.wip-scroll-lock #root {
 }
 
 .drop-page-frame--active.drop-page-frame--drops-panel {
+  --drop-frame-bottom-clearance: clamp(8px, 1.4svh, 14px);
   height: auto;
   min-height: calc(100vh - var(--page-padding-top));
   min-height: calc(100svh - var(--page-padding-top));
-  padding-bottom: clamp(14px, 2vw, var(--page-padding-top));
+  padding-bottom: var(--drop-frame-bottom-clearance);
   gap: 2px;
 }
 
 .drop-page-frame--drops-panel + .inventory-section {
-  margin-top: calc(26px - var(--page-gap));
+  margin-top: calc(29px - var(--page-gap));
   padding-top: 0;
   border-top: none;
 }
@@ -481,9 +482,9 @@ header.top--spacer {
 
 header.top--shop {
   --top-gap: clamp(8px, 2vw, 12px);
-  --top-wallet-width: clamp(124px, 33vw, 144px);
+  --top-wallet-width: clamp(112px, 30vw, 120px);
   --top-wallet-font-size: 12px;
-  --top-wallet-padding-x: 12px;
+  --top-wallet-padding-x: 10px;
   --top-wallet-padding-y: 0;
   --top-wallet-min-height: 36px;
   --top-settings-width: 32px;
@@ -584,9 +585,9 @@ header.top--shop.top--spacer {
 
 @media (max-width: 360px) {
   header.top--shop {
-    --top-wallet-width: 124px;
+    --top-wallet-width: 112px;
     --top-wallet-font-size: 11.5px;
-    --top-wallet-padding-x: 10px;
+    --top-wallet-padding-x: 9px;
     --top-gap: 6px;
     padding: 8px 0;
   }
@@ -594,7 +595,7 @@ header.top--shop.top--spacer {
 
 @media (max-width: 300px) {
   header.top--shop {
-    --top-wallet-width: 116px;
+    --top-wallet-width: 108px;
     --top-wallet-font-size: 11px;
     --top-wallet-padding-x: 8px;
   }
