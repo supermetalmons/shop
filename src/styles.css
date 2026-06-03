@@ -149,11 +149,20 @@ body.wip-scroll-lock #root {
 }
 
 .drop-page-frame--active {
+  --drop-frame-bottom-clearance: var(--page-padding-top);
   height: calc(100vh - var(--page-padding-top));
   height: calc(100svh - var(--page-padding-top));
   min-height: calc(100vh - var(--page-padding-top));
   min-height: calc(100svh - var(--page-padding-top));
-  padding-bottom: var(--page-padding-top);
+  padding-bottom: var(--drop-frame-bottom-clearance);
+}
+
+.drop-page-frame--active:not(.drop-page-frame--drops-panel) {
+  --drop-frame-bottom-clearance: clamp(8px, 1.4svh, 14px);
+}
+
+.drop-page-frame--active:not(.drop-page-frame--drops-panel) + .inventory-section {
+  margin-top: calc(4px - var(--page-gap));
 }
 
 .drop-page-frame--active.drop-page-frame--drops-panel {
@@ -4176,6 +4185,10 @@ button.wallet-adapter-modal-button-close:hover {
 @media (max-width: 640px) {
   .page {
     gap: 22px;
+  }
+
+  .drop-page-frame--active:not(.drop-page-frame--drops-panel) + .inventory-section {
+    margin-top: -18px;
   }
 
   .app-section {
