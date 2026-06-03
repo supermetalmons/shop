@@ -140,9 +140,11 @@ const DROP_CARD_BACKDROP_ROWS = 5;
 const DROP_CARD_BACKDROP_EDGE_GAP_PX = 10;
 const DROP_CARD_BACKDROP_AVOID_GAP_PX = 12;
 const DROP_CARD_BACKDROP_MIN_CARD_SIZE_PX = 44;
-const DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX = 152;
-const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.24;
-const DROP_CARD_BACKDROP_REPOSITION_STEPS = 18;
+const DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX = 132;
+const DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO = 1.66;
+const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.04;
+const DROP_CARD_BACKDROP_REPOSITION_STEPS = 28;
+const DROP_CARD_BACKDROP_REPOSITION_CANDIDATES = 12;
 
 type DropCardBackdropConfig = {
   baseUrl: string;
@@ -154,6 +156,7 @@ type DropCardBackdropConfig = {
   opacityBase?: number;
   opacityRange?: number;
   rotateRange?: number;
+  heightRatio?: number;
 };
 type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
 type ReceiptViewerImage = {
@@ -177,6 +180,7 @@ type DropCardBackdropItem = {
   opacity: number;
   rotate: number;
   blur: number;
+  heightRatio: number;
 };
 type DropCardBackdropBounds = {
   viewportWidth: number;
@@ -192,6 +196,12 @@ type DropCardBackdropRect = {
 type DropCardBackdropPlacement = {
   x: number;
   y: number;
+  rect: DropCardBackdropRect;
+};
+type DropCardBackdropRenderItem = {
+  item: DropCardBackdropItem;
+  index: number;
+  placement: DropCardBackdropPlacement;
 };
 type StripePaymentMode = 'test' | 'live';
 type StripeCheckoutReturn =
@@ -238,6 +248,7 @@ function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBa
   const opacityBase = config.opacityBase ?? 0.07;
   const opacityRange = config.opacityRange ?? 0.1;
   const rotateRange = config.rotateRange ?? 26;
+  const heightRatio = config.heightRatio ?? DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO;
   const ids = config.allowRepeats
     ? Array.from({ length: DROP_CARD_BACKDROP_COUNT }, () => Math.floor(random() * config.maxId) + 1)
     : shuffleWithRandom(
@@ -266,6 +277,7 @@ function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBa
       opacity: opacityBase + depth * opacityRange,
       rotate: (random() - 0.5) * rotateRange,
       blur: depth < 0.35 ? 0.3 : 0,
+      heightRatio,
     };
   });
 }
@@ -273,6 +285,7 @@ function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBa
 const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   baseUrl: '/backdrops/poncho_drifella',
   maxId: 207,
+  heightRatio: 500 / 357,
 };
 const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   baseUrl: '/hoodie',
@@ -281,6 +294,7 @@ const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   sizeBase: 5.2,
   sizeRange: 3.2,
   rotateRange: 0,
+  heightRatio: 555 / 371,
 };
 const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   baseUrl: '/backdrops/little_swag_boxes',
@@ -288,27 +302,70 @@ const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   sizeBase: 5.2,
   sizeRange: 3.2,
   rotateRange: 0,
+  heightRatio: 500 / 304,
 };
 
-function dropCardBackdropSafeInset(items: DropCardBackdropItem[]): number {
-  const maxItemSizeVmin = items.reduce((max, item) => Math.max(max, item.size), 0);
-  const viewportMin = Math.min(window.innerWidth || 0, window.innerHeight || 0);
-  const maxItemSizePx = clampNumber(
-    ((viewportMin * maxItemSizeVmin) / 100) * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER,
-    DROP_CARD_BACKDROP_MIN_CARD_SIZE_PX,
-    DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX,
-  );
-  return maxItemSizePx / 2 + DROP_CARD_BACKDROP_EDGE_GAP_PX;
+function dropCardBackdropViewportMin(bounds: DropCardBackdropBounds): number {
+  const layoutWidth = typeof window === 'undefined' ? bounds.viewportWidth : window.innerWidth || bounds.viewportWidth;
+  const layoutHeight = typeof window === 'undefined' ? bounds.viewportHeight : window.innerHeight || bounds.viewportHeight;
+  return Math.min(layoutWidth, layoutHeight);
 }
 
-function dropCardBackdropItemSafeInset(item: DropCardBackdropItem): number {
-  const viewportMin = Math.min(window.innerWidth || 0, window.innerHeight || 0);
-  const itemSizePx = clampNumber(
-    ((viewportMin * item.size) / 100) * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER,
+function dropCardBackdropWidthPx(item: DropCardBackdropItem, bounds: DropCardBackdropBounds): number {
+  return clampNumber(
+    (dropCardBackdropViewportMin(bounds) * item.size) / 100,
     DROP_CARD_BACKDROP_MIN_CARD_SIZE_PX,
     DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX,
   );
-  return itemSizePx / 2 + DROP_CARD_BACKDROP_AVOID_GAP_PX;
+}
+
+function dropCardBackdropSafeBox(item: DropCardBackdropItem, bounds: DropCardBackdropBounds) {
+  const width = dropCardBackdropWidthPx(item, bounds);
+  const height = width * item.heightRatio;
+  const rotation = Math.abs(item.rotate) * (Math.PI / 180);
+  const rotatedWidth = width * Math.cos(rotation) + height * Math.sin(rotation);
+  const rotatedHeight = width * Math.sin(rotation) + height * Math.cos(rotation);
+
+  return {
+    halfWidth: (rotatedWidth * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER) / 2 + DROP_CARD_BACKDROP_AVOID_GAP_PX,
+    halfHeight: (rotatedHeight * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER) / 2 + DROP_CARD_BACKDROP_AVOID_GAP_PX,
+  };
+}
+
+function dropCardBackdropRectFromCenter(
+  x: number,
+  y: number,
+  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
+): DropCardBackdropRect {
+  return {
+    left: x - safeBox.halfWidth,
+    top: y - safeBox.halfHeight,
+    right: x + safeBox.halfWidth,
+    bottom: y + safeBox.halfHeight,
+  };
+}
+
+function rectsOverlap(a: DropCardBackdropRect, b: DropCardBackdropRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function rectInsideBackdropViewport(rect: DropCardBackdropRect, bounds: DropCardBackdropBounds): boolean {
+  return (
+    rect.left >= DROP_CARD_BACKDROP_EDGE_GAP_PX &&
+    rect.top >= DROP_CARD_BACKDROP_EDGE_GAP_PX &&
+    rect.right <= bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX &&
+    rect.bottom <= bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX
+  );
+}
+
+function backdropRectAllowed(
+  rect: DropCardBackdropRect,
+  bounds: DropCardBackdropBounds,
+  occupiedRects: DropCardBackdropRect[],
+): boolean {
+  if (!rectInsideBackdropViewport(rect, bounds)) return false;
+  if (bounds.avoidRects.some((avoidRect) => rectsOverlap(rect, avoidRect))) return false;
+  return !occupiedRects.some((occupiedRect) => rectsOverlap(rect, occupiedRect));
 }
 
 function elementAvoidRect(selector: string, padding: number): DropCardBackdropRect | null {
@@ -343,11 +400,10 @@ function elementAvoidRects(selector: string, padding: number): DropCardBackdropR
   });
 }
 
-function measureDropCardBackdropBounds(items: DropCardBackdropItem[]): DropCardBackdropBounds {
+function measureDropCardBackdropBounds(): DropCardBackdropBounds {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
   const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
-  const safeInset = dropCardBackdropSafeInset(items);
-  const avoidPadding = Math.max(DROP_CARD_BACKDROP_AVOID_GAP_PX, safeInset * 0.18);
+  const avoidPadding = DROP_CARD_BACKDROP_AVOID_GAP_PX;
   const avoidRects = [
     elementAvoidRect('header.top--fixed .brand h1', avoidPadding),
     elementAvoidRect('header.top--fixed .top__right', avoidPadding),
@@ -381,13 +437,77 @@ function boundsEqual(a: DropCardBackdropBounds | null, b: DropCardBackdropBounds
   });
 }
 
-function pointOverlapsAvoidRect(x: number, y: number, inset: number, rect: DropCardBackdropRect): boolean {
-  return x + inset > rect.left && x - inset < rect.right && y + inset > rect.top && y - inset < rect.bottom;
+function clampBackdropCenter(
+  x: number,
+  y: number,
+  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
+  bounds: DropCardBackdropBounds,
+): { x: number; y: number } | null {
+  const minX = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfWidth;
+  const minY = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfHeight;
+  const maxX = bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfWidth;
+  const maxY = bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfHeight;
+
+  if (maxX < minX || maxY < minY) return null;
+
+  return {
+    x: clampNumber(x, minX, maxX),
+    y: clampNumber(y, minY, maxY),
+  };
 }
 
-function pointAllowed(x: number, y: number, inset: number, bounds: DropCardBackdropBounds): boolean {
-  if (x < inset || x > bounds.viewportWidth - inset || y < inset || y > bounds.viewportHeight - inset) return false;
-  return !bounds.avoidRects.some((rect) => pointOverlapsAvoidRect(x, y, inset, rect));
+function backdropPlacementFromCenter(
+  x: number,
+  y: number,
+  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
+  bounds: DropCardBackdropBounds,
+  occupiedRects: DropCardBackdropRect[],
+): DropCardBackdropPlacement | null {
+  const center = clampBackdropCenter(x, y, safeBox, bounds);
+  if (!center) return null;
+
+  const rect = dropCardBackdropRectFromCenter(center.x, center.y, safeBox);
+  if (!backdropRectAllowed(rect, bounds, occupiedRects)) return null;
+
+  return { x: center.x, y: center.y, rect };
+}
+
+function scanBackdropGridPlacement(
+  x: number,
+  y: number,
+  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
+  bounds: DropCardBackdropBounds,
+  occupiedRects: DropCardBackdropRect[],
+): DropCardBackdropPlacement | null {
+  const minX = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfWidth;
+  const minY = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfHeight;
+  const maxX = bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfWidth;
+  const maxY = bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfHeight;
+  if (maxX < minX || maxY < minY) return null;
+
+  const stepX = Math.max(24, safeBox.halfWidth * 1.1);
+  const stepY = Math.max(24, safeBox.halfHeight * 1.1);
+  const cols = Math.max(1, Math.floor((maxX - minX) / stepX) + 1);
+  const rows = Math.max(1, Math.floor((maxY - minY) / stepY) + 1);
+  let best: DropCardBackdropPlacement | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let row = 0; row < rows; row += 1) {
+    const candidateY = rows === 1 ? (minY + maxY) / 2 : minY + ((maxY - minY) * row) / (rows - 1);
+    for (let col = 0; col < cols; col += 1) {
+      const candidateX = cols === 1 ? (minX + maxX) / 2 : minX + ((maxX - minX) * col) / (cols - 1);
+      const rect = dropCardBackdropRectFromCenter(candidateX, candidateY, safeBox);
+      if (!backdropRectAllowed(rect, bounds, occupiedRects)) continue;
+
+      const distanceScore = Math.abs(candidateX - x) + Math.abs(candidateY - y);
+      if (distanceScore < bestScore) {
+        best = { x: candidateX, y: candidateY, rect };
+        bestScore = distanceScore;
+      }
+    }
+  }
+
+  return best;
 }
 
 function repositionBackdropPlacement(
@@ -395,53 +515,63 @@ function repositionBackdropPlacement(
   index: number,
   x: number,
   y: number,
-  inset: number,
   bounds: DropCardBackdropBounds,
-): DropCardBackdropPlacement {
-  const clamped = {
-    x: clampNumber(x, inset, Math.max(inset, bounds.viewportWidth - inset)),
-    y: clampNumber(y, inset, Math.max(inset, bounds.viewportHeight - inset)),
-  };
-  if (pointAllowed(clamped.x, clamped.y, inset, bounds)) return clamped;
+  occupiedRects: DropCardBackdropRect[],
+): DropCardBackdropPlacement | null {
+  const safeBox = dropCardBackdropSafeBox(item, bounds);
+  const initial = backdropPlacementFromCenter(x, y, safeBox, bounds, occupiedRects);
+  if (initial) return initial;
 
   const baseAngle = seededBackdropRandom(item.id + index * 97) * Math.PI * 2;
-  const radiusStep = Math.max(24, inset * 0.72);
-  let best = clamped;
-  let bestScore = Number.POSITIVE_INFINITY;
+  const radiusStep = Math.max(24, Math.min(safeBox.halfWidth, safeBox.halfHeight) * 0.8);
 
   for (let step = 1; step <= DROP_CARD_BACKDROP_REPOSITION_STEPS; step += 1) {
     const radius = step * radiusStep;
-    const candidates = 8;
-    for (let candidate = 0; candidate < candidates; candidate += 1) {
-      const angle = baseAngle + (candidate / candidates) * Math.PI * 2;
-      const candidateX = clampNumber(x + Math.cos(angle) * radius, inset, Math.max(inset, bounds.viewportWidth - inset));
-      const candidateY = clampNumber(y + Math.sin(angle) * radius, inset, Math.max(inset, bounds.viewportHeight - inset));
-      const blocked = bounds.avoidRects.some((rect) => pointOverlapsAvoidRect(candidateX, candidateY, inset, rect));
-      const distanceScore = Math.abs(candidateX - x) + Math.abs(candidateY - y);
-      if (!blocked && distanceScore < bestScore) {
-        best = { x: candidateX, y: candidateY };
-        bestScore = distanceScore;
-      }
+    for (let candidate = 0; candidate < DROP_CARD_BACKDROP_REPOSITION_CANDIDATES; candidate += 1) {
+      const angle = baseAngle + (candidate / DROP_CARD_BACKDROP_REPOSITION_CANDIDATES) * Math.PI * 2;
+      const placed = backdropPlacementFromCenter(
+        x + Math.cos(angle) * radius,
+        y + Math.sin(angle) * radius,
+        safeBox,
+        bounds,
+        occupiedRects,
+      );
+      if (placed) return placed;
     }
-    if (Number.isFinite(bestScore)) return best;
   }
 
-  return best;
+  return scanBackdropGridPlacement(x, y, safeBox, bounds, occupiedRects);
 }
 
-function backdropPlacementStyle(item: DropCardBackdropItem, index: number, bounds: DropCardBackdropBounds | null) {
-  if (!bounds) return { x: `${item.x}%`, y: `${item.y}%` };
+function createDropCardBackdropPlacements(
+  items: DropCardBackdropItem[],
+  bounds: DropCardBackdropBounds,
+): DropCardBackdropRenderItem[] {
+  const occupiedRects: DropCardBackdropRect[] = [];
+  const orderedItems = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.size - a.item.size || a.index - b.index);
+  const placedItems: DropCardBackdropRenderItem[] = [];
 
-  const inset = dropCardBackdropItemSafeInset(item);
-  const x = (item.x / 100) * bounds.viewportWidth;
-  const y = (item.y / 100) * bounds.viewportHeight;
-  const placed = repositionBackdropPlacement(item, index, x, y, inset, bounds);
+  orderedItems.forEach(({ item, index }) => {
+    const x = (item.x / 100) * bounds.viewportWidth;
+    const y = (item.y / 100) * bounds.viewportHeight;
+    const placement = repositionBackdropPlacement(item, index, x, y, bounds, occupiedRects);
+    if (!placement) return;
 
-  return { x: `${placed.x}px`, y: `${placed.y}px` };
+    occupiedRects.push(placement.rect);
+    placedItems.push({ item, index, placement });
+  });
+
+  return placedItems.sort((a, b) => a.index - b.index);
 }
 
 function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
   const [bounds, setBounds] = useState<DropCardBackdropBounds | null>(null);
+  const placedItems = useMemo(
+    () => (bounds ? createDropCardBackdropPlacements(items, bounds) : []),
+    [bounds, items],
+  );
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -449,7 +579,7 @@ function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
     let frame = 0;
     const update = () => {
       frame = 0;
-      const next = measureDropCardBackdropBounds(items);
+      const next = measureDropCardBackdropBounds();
       setBounds((prev) => (boundsEqual(prev, next) ? prev : next));
     };
     const schedule = () => {
@@ -471,9 +601,7 @@ function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
 
   return (
     <div className="drop-cards-backdrop" aria-hidden="true">
-      {items.map((item, index) => {
-        const placement = backdropPlacementStyle(item, index, bounds);
-
+      {placedItems.map(({ item, index, placement }) => {
         return (
           <img
             key={`${item.id}-${index}`}
@@ -484,8 +612,8 @@ function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
             decoding="async"
             style={
               {
-                '--drop-card-x': placement.x,
-                '--drop-card-y': placement.y,
+                '--drop-card-x': `${placement.x}px`,
+                '--drop-card-y': `${placement.y}px`,
                 '--drop-card-size': `${item.size}vmin`,
                 '--drop-card-opacity': item.opacity,
                 '--drop-card-rotate': `${item.rotate}deg`,
