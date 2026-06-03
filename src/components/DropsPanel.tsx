@@ -19,10 +19,10 @@ const cardNft2AvailablePackImages = [
   '/card_nft_2/pack/4.webp',
 ];
 const cardNft2PackImageDimensions: Record<string, DropPanelImageDimensions> = {
-  '/card_nft_2/pack/1.webp': { width: 833, height: 1411 },
-  '/card_nft_2/pack/2.webp': { width: 837, height: 1408 },
-  '/card_nft_2/pack/3.webp': { width: 840, height: 1408 },
-  '/card_nft_2/pack/4.webp': { width: 840, height: 1412 },
+  '/card_nft_2/pack/1.webp': { width: 815, height: 1400 },
+  '/card_nft_2/pack/2.webp': { width: 815, height: 1400 },
+  '/card_nft_2/pack/3.webp': { width: 815, height: 1400 },
+  '/card_nft_2/pack/4.webp': { width: 815, height: 1400 },
 };
 const CARD_NFT_2_PACK_TILE_COUNT = 3;
 const upcomingDropRoutes = listUpcomingDropRoutes();
@@ -114,6 +114,16 @@ type DropPanelTileStyle = CSSProperties & {
   '--drops-panel-compact-image-bottom-space'?: string;
 };
 
+type DropPanelPackFrameStyle = CSSProperties & {
+  '--drops-panel-pack-aspect-ratio'?: string;
+};
+
+function imageAspectRatio(dimensions: DropPanelImageDimensions | undefined): string | undefined {
+  if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) return undefined;
+
+  return `${dimensions.width} / ${dimensions.height}`;
+}
+
 function dropPanelTileStyle(item: DropPanelItem): DropPanelTileStyle {
   return {
     '--drops-panel-tile-bg': item.background,
@@ -132,7 +142,24 @@ function dropPanelTileStyle(item: DropPanelItem): DropPanelTileStyle {
   };
 }
 
+function dropPanelPackFrameStyle(dimensions: DropPanelImageDimensions | undefined): DropPanelPackFrameStyle {
+  return {
+    '--drops-panel-pack-aspect-ratio': imageAspectRatio(dimensions),
+  };
+}
+
 function DropPanelTile({ item }: { item: DropPanelItem }) {
+  const packImages = item.images || [];
+  const hasImagePack = packImages.length > 0;
+  const tileClassName = [
+    'drops-panel__tile',
+    `drops-panel__tile--${item.size}`,
+    `drops-panel__tile--${item.key}`,
+    hasImagePack ? 'drops-panel__tile--pack' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   const handleClick = (evt: MouseEvent<HTMLAnchorElement>) => {
     if (evt.defaultPrevented || evt.button !== 0 || evt.metaKey || evt.altKey || evt.ctrlKey || evt.shiftKey) {
       return;
@@ -145,7 +172,7 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
 
   return (
     <a
-      className={`drops-panel__tile drops-panel__tile--${item.size}`}
+      className={tileClassName}
       href={item.path}
       aria-label={item.title}
       draggable={false}
@@ -155,23 +182,28 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
     >
       <span className="drops-panel__title">{item.title}</span>
       <span className="drops-panel__image-stage">
-        {item.images?.length ? (
+        {hasImagePack ? (
           <span className="drops-panel__image-pack" aria-hidden="true">
-            {item.images.map((image) => {
+            {packImages.map((image) => {
               const dimensions = item.imageDimensionsBySrc?.[image];
 
               return (
-                <img
+                <span
                   key={image}
-                  className="drops-panel__image drops-panel__image--pack"
-                  src={image}
-                  alt=""
-                  width={dimensions?.width}
-                  height={dimensions?.height}
-                  draggable={false}
-                  decoding="async"
-                  onDragStart={(evt) => evt.preventDefault()}
-                />
+                  className="drops-panel__pack-frame"
+                  style={dropPanelPackFrameStyle(dimensions)}
+                >
+                  <img
+                    className="drops-panel__image drops-panel__image--pack"
+                    src={image}
+                    alt=""
+                    width={dimensions?.width}
+                    height={dimensions?.height}
+                    draggable={false}
+                    decoding="async"
+                    onDragStart={(evt) => evt.preventDefault()}
+                  />
+                </span>
               );
             })}
           </span>

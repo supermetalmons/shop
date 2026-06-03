@@ -41,7 +41,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     title: 'Card NFT 2',
     notifyPath: '/notify_me',
     previewImageUrl: '/card_nft_2/pack/1.webp',
-    previewAspectRatio: 833 / 1411,
+    previewAspectRatio: 815 / 1400,
     boxNamePrefix: 'pack',
   },
   {
