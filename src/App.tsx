@@ -134,6 +134,7 @@ const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
+const DROP_CARD_BACKDROP_ENABLED = false;
 const DROP_CARD_BACKDROP_COUNT = 30;
 const DROP_CARD_BACKDROP_COLUMNS = 6;
 const DROP_CARD_BACKDROP_ROWS = 5;
@@ -5504,7 +5505,7 @@ function App({ currentPath }: AppProps) {
     pageRef,
   });
   const dropCardBackdropItems = useMemo(() => {
-    if (!routeDrop) return null;
+    if (!DROP_CARD_BACKDROP_ENABLED || !routeDrop) return null;
     if (isDropFamily(routeDrop, 'poncho_drifella')) {
       return createDropCardBackdropItems(PONCHO_DROP_CARD_BACKDROP_CONFIG);
     }
