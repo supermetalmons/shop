@@ -1617,7 +1617,7 @@ header.top--shop.top--spacer {
 .drops-panel__pack-frame {
   flex: 0 0 auto;
   height: var(--drops-panel-active-image-max-height);
-  aspect-ratio: var(--drops-panel-pack-aspect-ratio, 815 / 1400);
+  aspect-ratio: var(--drops-panel-pack-aspect-ratio, 837 / 1400);
 }
 
 .drops-panel__image {

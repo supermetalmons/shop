@@ -9,6 +9,7 @@ import {
   getFrontendDrop,
 } from '../config/deployment';
 import { getHeliusApiKey } from './helius';
+import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
 
 export function normalizePathname(pathname: string): string {
   const normalized = String(pathname || '').replace(/\/+$/, '');
@@ -40,8 +41,8 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     label: 'Card NFT 2',
     title: 'Card NFT 2',
     notifyPath: '/notify_me',
-    previewImageUrl: '/card_nft_2/pack/1.webp',
-    previewAspectRatio: 815 / 1400,
+    previewImageUrl: CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
+    previewAspectRatio: CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO,
     boxNamePrefix: 'pack',
   },
   {

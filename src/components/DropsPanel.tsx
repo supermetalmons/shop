@@ -1,5 +1,6 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import { navigate } from '../navigation';
+import { CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC, CARD_NFT_2_PACK_IMAGE_SRCS } from '../lib/cardNft2Packs';
 import { mintPanelPreviewAspectRatio, mintPanelPreviewImage, resolveDropContent } from '../lib/dropContent';
 import { dropPath, listUpcomingDropRoutes, resolveUpcomingRouteDrop } from '../lib/dropConfig';
 
@@ -12,18 +13,6 @@ const lsbImage = mintPanelPreviewImage('little_swag_boxes');
 const lsbImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('little_swag_boxes'));
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('poncho_drifella'));
-const cardNft2AvailablePackImages = [
-  '/card_nft_2/pack/1.webp',
-  '/card_nft_2/pack/2.webp',
-  '/card_nft_2/pack/3.webp',
-  '/card_nft_2/pack/4.webp',
-];
-const cardNft2PackImageDimensions: Record<string, DropPanelImageDimensions> = {
-  '/card_nft_2/pack/1.webp': { width: 815, height: 1400 },
-  '/card_nft_2/pack/2.webp': { width: 815, height: 1400 },
-  '/card_nft_2/pack/3.webp': { width: 815, height: 1400 },
-  '/card_nft_2/pack/4.webp': { width: 815, height: 1400 },
-};
 const CARD_NFT_2_PACK_TILE_COUNT = 3;
 const upcomingDropRoutes = listUpcomingDropRoutes();
 
@@ -47,7 +36,7 @@ function randomPackSelection(images: string[], count: number): string[] {
   return shuffled.slice(0, Math.max(0, Math.min(count, shuffled.length)));
 }
 
-const cardNft2PackImages = randomPackSelection(cardNft2AvailablePackImages, CARD_NFT_2_PACK_TILE_COUNT);
+const cardNft2PackImages = randomPackSelection(CARD_NFT_2_PACK_IMAGE_SRCS, CARD_NFT_2_PACK_TILE_COUNT);
 
 function resolveUpcomingTileSource(dropId: string, fallbackTitle: string) {
   const path = dropPath(dropId);
@@ -236,7 +225,7 @@ export function DropsPanel() {
       size: 'full',
       image: cardNft2.image,
       images: cardNft2PackImages,
-      imageDimensionsBySrc: cardNft2PackImageDimensions,
+      imageDimensionsBySrc: CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC,
       alt: cardNft2.alt,
       title: cardNft2.title,
       path: cardNft2.path,
