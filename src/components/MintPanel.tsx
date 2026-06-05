@@ -32,14 +32,27 @@ type MintPanelTerminalAction = {
   buttons?: MintPanelTerminalButton[];
 };
 
+export type MintPanelVideoSource = {
+  src: string;
+  type?: string;
+};
+
+export type MintPanelBoxMedia = {
+  imageSrc?: string;
+  videoSources?: readonly MintPanelVideoSource[];
+  videoPosterSrc?: string;
+  mediaScale?: number;
+  compactMediaScale?: number;
+  aspectRatio?: number;
+};
+
 interface MintPanelProps {
   stats?: MintStats;
   onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
   busy: boolean;
   onError?: (message: string) => void;
   title?: string;
-  boxImageSrc?: string;
-  boxAspectRatio?: number;
+  boxMedia?: MintPanelBoxMedia;
   boxNamePrefix?: string;
   dropId?: string;
   priceSol: number;
@@ -71,6 +84,7 @@ type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: num
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const BOX_MAX_RELATIVE_HEIGHT = 0.777;
+const BOX_MEDIA_SCALE_MAX = 1.5;
 const LAMPORTS_PER_SOL_UI = 1_000_000_000;
 const STRIPE_CHECKOUT_QUANTITY = 1;
 const ACTION_TEXT_FIT_MIN_SCALE = 0.62;
@@ -236,6 +250,58 @@ function tighterActionTextFit(a: ActionTextFit, b: ActionTextFit): ActionTextFit
   return a.scale <= b.scale ? a : b;
 }
 
+function mediaFallbackElementsForPreview(media: HTMLElement): HTMLElement[] {
+  const fallback = media.nextElementSibling;
+  if (!(fallback instanceof HTMLElement) || fallback.dataset.mintMediaFallback !== 'true') return [];
+
+  const elements = [fallback];
+  const placeholder = fallback.nextElementSibling;
+  if (placeholder instanceof HTMLElement && placeholder.dataset.mintMediaFallback === 'true') {
+    elements.push(placeholder);
+  }
+  return elements;
+}
+
+function showMediaHideFallback(media: HTMLElement) {
+  media.hidden = false;
+  mediaFallbackElementsForPreview(media).forEach((fallback) => {
+    fallback.hidden = true;
+  });
+}
+
+function hideMediaShowFallback(media: HTMLElement) {
+  media.hidden = true;
+  const fallback = mediaFallbackElementsForPreview(media)[0];
+  if (!fallback) return;
+
+  if (fallback instanceof HTMLImageElement) {
+    const fallbackSrc = fallback.dataset.mintMediaFallbackSrc;
+    if (fallbackSrc && fallback.getAttribute('src') !== fallbackSrc) {
+      fallback.src = fallbackSrc;
+    }
+  }
+  fallback.hidden = false;
+}
+
+function hideNextElementFallback(el: HTMLElement) {
+  const fallback = el.nextElementSibling;
+  if (fallback instanceof HTMLElement) fallback.hidden = true;
+}
+
+function prepareAutoplayVideo(video: HTMLVideoElement | null) {
+  if (!video) return;
+  video.defaultMuted = true;
+  video.muted = true;
+  video.volume = 0;
+}
+
+function playAutoplayVideo(video: HTMLVideoElement) {
+  video.defaultMuted = true;
+  video.muted = true;
+  video.volume = 0;
+  void video.play().catch(() => undefined);
+}
+
 function normalizeSolAmount(value: number | undefined, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return fallback;
@@ -327,14 +393,17 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
   return best;
 }
 
+function normalizeBoxMediaScale(requestedScale: number | undefined): number {
+  return clampNumber(Number(requestedScale) || 1, 1, BOX_MEDIA_SCALE_MAX);
+}
+
 export function MintPanel({
   stats,
   onMint,
   busy,
   onError,
   title,
-  boxImageSrc,
-  boxAspectRatio,
+  boxMedia,
   boxNamePrefix,
   dropId,
   priceSol,
@@ -478,9 +547,11 @@ export function MintPanel({
 
   const soldOut = remaining <= 0;
   const layout = useMemo(
-    () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxAspectRatio || BOX_ASPECT_RATIO),
-    [boxAspectRatio, quantity, previewBounds.height, previewBounds.width],
+    () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxMedia?.aspectRatio || BOX_ASPECT_RATIO),
+    [boxMedia?.aspectRatio, quantity, previewBounds.height, previewBounds.width],
   );
+  const effectiveBoxMediaScale = normalizeBoxMediaScale(boxMedia?.mediaScale);
+  const effectiveBoxCompactMediaScale = normalizeBoxMediaScale(boxMedia?.compactMediaScale ?? boxMedia?.mediaScale);
   const quantityLabel = dropAssetCount({ namePrefix: boxNamePrefix, figureNamePrefix: undefined }, 'box', quantity);
   const unitPriceLamports = solAmountToLamports(priceSol, priceSol);
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
@@ -529,7 +600,10 @@ export function MintPanel({
   const stripeActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const submitActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const mintTitle = title || 'Little Swag Boxes';
-  const mintBoxImageSrc = boxImageSrc;
+  const mintBoxImageSrc = boxMedia?.imageSrc;
+  const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
+  const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
+  const mintBoxVideoSourceKey = mintBoxVideoSources.map((source) => source.src).join('|');
   const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
     return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
       key: link.key,
@@ -626,11 +700,57 @@ export function MintPanel({
             ['--box-gap-x' as never]: `${layout.gapX}px`,
             ['--box-gap-y' as never]: `${layout.gapY}px`,
             ['--box-cols' as never]: String(layout.cols),
+            ['--box-media-scale' as never]: String(effectiveBoxMediaScale),
+            ['--box-compact-media-scale' as never]: String(effectiveBoxCompactMediaScale),
           }}
           aria-label={`Mint preview: ${quantityLabel}`}
         >
           {Array.from({ length: quantity }, (_, idx) => (
-            mintBoxImageSrc ? (
+            mintBoxVideoSources.length ? (
+              <Fragment key={idx}>
+                <video
+                  key={mintBoxVideoSourceKey}
+                  ref={prepareAutoplayVideo}
+                  className="mint-panel__box mint-panel__box--media"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  preload="auto"
+                  poster={mintBoxVideoPosterSrc}
+                  aria-hidden="true"
+                  onCanPlay={(evt) => {
+                    showMediaHideFallback(evt.currentTarget);
+                    playAutoplayVideo(evt.currentTarget);
+                  }}
+                  onError={(evt) => hideMediaShowFallback(evt.currentTarget)}
+                >
+                  {mintBoxVideoSources.map((source) => (
+                    <source key={source.src} src={source.src} type={source.type} />
+                  ))}
+                </video>
+                {mintBoxImageSrc ? (
+                  <img
+                    className="mint-panel__box mint-panel__box--media"
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                    hidden
+                    data-mint-media-fallback="true"
+                    data-mint-media-fallback-src={mintBoxImageSrc}
+                    onDragStart={(evt) => evt.preventDefault()}
+                    onLoad={(evt) => hideNextElementFallback(evt.currentTarget)}
+                    onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                  />
+                ) : null}
+                <div
+                  className="mint-panel__box mint-panel__box--placeholder"
+                  aria-hidden="true"
+                  data-mint-media-fallback="true"
+                  hidden
+                />
+              </Fragment>
+            ) : mintBoxImageSrc ? (
               <Fragment key={idx}>
                 <img
                   className="mint-panel__box"

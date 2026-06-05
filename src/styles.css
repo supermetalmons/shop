@@ -736,6 +736,11 @@ header.top--shop.top--spacer {
   -webkit-touch-callout: none;
 }
 
+.mint-panel__box--media {
+  transform: scale(var(--box-media-scale, 1));
+  transform-origin: center;
+}
+
 .mint-panel__box--placeholder {
   border-radius: var(--radius-sm);
   border: 1px dashed var(--border);
@@ -1316,6 +1321,10 @@ header.top--shop.top--spacer {
 
   .drop-page-frame--active > .mint-panel .mint-panel__preview {
     min-height: clamp(220px, 32vh, 300px);
+  }
+
+  .mint-panel__box--media {
+    transform: scale(var(--box-compact-media-scale, var(--box-media-scale, 1)));
   }
 
   .mint-panel__info {

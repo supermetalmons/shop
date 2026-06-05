@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { onAuthStateChanged } from 'firebase/auth';
 import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
-import { MintPanel } from './components/MintPanel';
+import { MintPanel, type MintPanelBoxMedia } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
@@ -127,6 +127,16 @@ import {
   calcPonchoDrifellaCardRect,
   calcPonchoDrifellaRevealTargetRect,
 } from './lib/revealOverlayLayout';
+import {
+  CARD_NFT_2_PACK_DARK_VIDEO_POSTER_URL,
+  CARD_NFT_2_PACK_DARK_VIDEO_SOURCES,
+  CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
+  CARD_NFT_2_PACK_LIGHT_VIDEO_POSTER_URL,
+  CARD_NFT_2_PACK_LIGHT_VIDEO_SOURCES,
+  CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
+  CARD_NFT_2_PACK_VIDEO_ASPECT_RATIO,
+  CARD_NFT_2_PACK_VIDEO_SCALE,
+} from './lib/cardNft2Packs';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
@@ -146,6 +156,7 @@ const DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO = 1.66;
 const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.04;
 const DROP_CARD_BACKDROP_REPOSITION_STEPS = 28;
 const DROP_CARD_BACKDROP_REPOSITION_CANDIDATES = 12;
+const DARK_COLOR_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 
 type DropCardBackdropConfig = {
   baseUrl: string;
@@ -1358,6 +1369,52 @@ function formatRevealIds(ids?: number[]) {
   return '';
 }
 
+function getPrefersDarkColorScheme(): boolean {
+  return typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(DARK_COLOR_SCHEME_QUERY).matches;
+}
+
+function usePrefersDarkColorScheme(): boolean {
+  const [prefersDark, setPrefersDark] = useState(getPrefersDarkColorScheme);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+
+    const mediaQuery = window.matchMedia(DARK_COLOR_SCHEME_QUERY);
+    const update = () => setPrefersDark(mediaQuery.matches);
+    update();
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
+
+  return prefersDark;
+}
+
+function resolveMintPreviewMedia(
+  media: MintPanelBoxMedia,
+  usesCardNft2Video: boolean,
+  cardNft2PackVideoSources: MintPanelBoxMedia['videoSources'],
+  cardNft2PackVideoPosterSrc: string,
+): MintPanelBoxMedia {
+  if (!usesCardNft2Video) return media;
+
+  return {
+    ...media,
+    imageSrc: media.imageSrc || CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
+    videoSources: cardNft2PackVideoSources,
+    videoPosterSrc: cardNft2PackVideoPosterSrc,
+    mediaScale: CARD_NFT_2_PACK_VIDEO_SCALE,
+    compactMediaScale: CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
+    aspectRatio: CARD_NFT_2_PACK_VIDEO_ASPECT_RATIO,
+  };
+}
+
 function errorMessage(err: unknown): string {
   if (!err) return '';
   if (typeof err === 'string') return err;
@@ -1437,6 +1494,13 @@ function App({ currentPath }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
+  const prefersDarkColorScheme = usePrefersDarkColorScheme();
+  const cardNft2PackVideoSources = prefersDarkColorScheme
+    ? CARD_NFT_2_PACK_DARK_VIDEO_SOURCES
+    : CARD_NFT_2_PACK_LIGHT_VIDEO_SOURCES;
+  const cardNft2PackVideoPosterSrc = prefersDarkColorScheme
+    ? CARD_NFT_2_PACK_DARK_VIDEO_POSTER_URL
+    : CARD_NFT_2_PACK_LIGHT_VIDEO_POSTER_URL;
   const normalizedCurrentPath = useMemo(
     () => (currentPath ? currentPath : getNormalizedPathname()),
     [currentPath],
@@ -1905,23 +1969,39 @@ function App({ currentPath }: AppProps) {
     },
     [getDropContent],
   );
-  const mintPreviewImage = routeDrop ? mintPanelPreviewImage(routeDrop.dropId) : undefined;
-  const mintPreviewAspectRatio = routeDrop ? mintPanelPreviewAspectRatio(routeDrop.dropId) : 1;
+  const mintPreviewMedia = routeDrop
+    ? resolveMintPreviewMedia(
+        {
+          imageSrc: mintPanelPreviewImage(routeDrop.dropId),
+          aspectRatio: mintPanelPreviewAspectRatio(routeDrop.dropId),
+        },
+        isDropFamily(routeDrop, 'card_nft_2'),
+        cardNft2PackVideoSources,
+        cardNft2PackVideoPosterSrc,
+      )
+    : { aspectRatio: 1 };
   const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
   const routeStripePaymentPriceLabel = stripeCheckoutPriceLabelForDrop(routeDrop, routeStripePaymentMode);
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
     [upcomingDropRoute?.previewDropId],
   );
-  const upcomingMintPreviewImage =
-    upcomingDropRoute?.previewImageUrl ||
-    upcomingDropContent?.mintPanel.previewImageUrl ||
-    upcomingDropContent?.box.previewImageUrl;
-  const upcomingMintPreviewAspectRatio =
-    upcomingDropRoute?.previewAspectRatio ||
-    (upcomingDropContent?.mintPanel.previewImageUrl
-      ? upcomingDropContent.mintPanel.aspectRatio
-      : upcomingDropContent?.box.aspectRatio || 1);
+  const upcomingMintPreviewMedia = resolveMintPreviewMedia(
+    {
+      imageSrc:
+        upcomingDropRoute?.previewImageUrl ||
+        upcomingDropContent?.mintPanel.previewImageUrl ||
+        upcomingDropContent?.box.previewImageUrl,
+      aspectRatio:
+        upcomingDropRoute?.previewAspectRatio ||
+        (upcomingDropContent?.mintPanel.previewImageUrl
+          ? upcomingDropContent.mintPanel.aspectRatio
+          : upcomingDropContent?.box.aspectRatio || 1),
+    },
+    upcomingDropRoute?.dropFamily === 'card_nft_2',
+    cardNft2PackVideoSources,
+    cardNft2PackVideoPosterSrc,
+  );
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
@@ -5676,8 +5756,7 @@ function App({ currentPath }: AppProps) {
             onMint={() => undefined}
             busy={false}
             title={upcomingDropRoute.title}
-            boxImageSrc={upcomingMintPreviewImage}
-            boxAspectRatio={upcomingMintPreviewAspectRatio}
+            boxMedia={upcomingMintPreviewMedia}
             boxNamePrefix={upcomingDropRoute.boxNamePrefix}
             priceSol={0}
             discountPriceSol={0}
@@ -5698,8 +5777,7 @@ function App({ currentPath }: AppProps) {
             busy={minting}
             onError={showToast}
             title={routeDrop.collectionName}
-            boxImageSrc={mintPreviewImage}
-            boxAspectRatio={mintPreviewAspectRatio}
+            boxMedia={mintPreviewMedia}
             boxNamePrefix={routeDrop.namePrefix}
             dropId={routeDrop.dropId}
             priceSol={routeDrop.priceSol}
