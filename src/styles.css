@@ -1625,6 +1625,10 @@ header.top--shop.top--spacer {
   gap: clamp(16px, 3cqw, 34px);
 }
 
+.drops-panel__tile--card_nft_2 .drops-panel__image-pack {
+  gap: clamp(26px, 4.4cqw, 56px);
+}
+
 .drops-panel__pack-frame {
   flex: 0 0 auto;
   height: var(--drops-panel-active-image-max-height);
@@ -1663,10 +1667,11 @@ header.top--shop.top--spacer {
   .drops-panel__grid {
     --drops-panel-gap: clamp(6px, 2.6cqw, 12px);
     --drops-panel-half-min-height: clamp(210px, 48cqw, 240px);
+    --drops-panel-card-nft-2-min-height: clamp(196px, 58cqw, 218px);
     --drops-panel-full-min-height: var(--drops-panel-half-min-height);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows:
-      minmax(var(--drops-panel-full-min-height), auto)
+      minmax(var(--drops-panel-card-nft-2-min-height), auto)
       minmax(var(--drops-panel-half-min-height), auto)
       minmax(var(--drops-panel-full-min-height), auto);
   }
@@ -1699,14 +1704,27 @@ header.top--shop.top--spacer {
     gap: clamp(12px, 4cqw, 22px);
   }
 
+  .drops-panel__tile--card_nft_2 .drops-panel__image-pack {
+    gap: clamp(10px, 3.8cqw, 18px);
+  }
+
+  .drops-panel__tile--card_nft_2 .drops-panel__image-stage {
+    align-items: center;
+    min-height: 0;
+  }
+
   .drops-panel__tile--half .drops-panel__image-stage {
     padding-inline: clamp(6px, 2.4cqw, 12px);
   }
 }
 
 @container (max-width: 350px) {
+  .drops-panel__grid {
+    --drops-panel-card-nft-2-min-height: clamp(184px, 58cqw, 196px);
+  }
+
   .drops-panel__tile--card_nft_2 {
-    --drops-panel-active-image-max-height: clamp(112px, 44cqw, 160px);
+    --drops-panel-active-image-max-height: min(clamp(102px, 31cqw, 112px), max(0px, calc(41cqw - 15px)));
   }
 }
 

@@ -13,7 +13,6 @@ const lsbImage = mintPanelPreviewImage('little_swag_boxes');
 const lsbImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('little_swag_boxes'));
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('poncho_drifella'));
-const CARD_NFT_2_PACK_TILE_COUNT = 3;
 const upcomingDropRoutes = listUpcomingDropRoutes();
 
 function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
@@ -25,18 +24,7 @@ function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): Drop
   };
 }
 
-function randomPackSelection(images: string[], count: number): string[] {
-  const shuffled = images.slice();
-
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-  }
-
-  return shuffled.slice(0, Math.max(0, Math.min(count, shuffled.length)));
-}
-
-const cardNft2PackImages = randomPackSelection(CARD_NFT_2_PACK_IMAGE_SRCS, CARD_NFT_2_PACK_TILE_COUNT);
+const cardNft2PackImages = CARD_NFT_2_PACK_IMAGE_SRCS.slice();
 
 function resolveUpcomingTileSource(dropId: string, fallbackTitle: string) {
   const path = dropPath(dropId);
@@ -231,7 +219,7 @@ export function DropsPanel() {
       path: cardNft2.path,
       imageMaxWidth: '62%',
       imageMaxHeight: 'clamp(160px, 23.5cqw, 236px)',
-      compactImageMaxHeight: 'clamp(160px, 32cqw, 184px)',
+      compactImageMaxHeight: 'clamp(124px, 28cqw, 156px)',
       imageScale: 0.98,
       imageGap: 'clamp(28px, 3.3cqw, 38px)',
       compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
