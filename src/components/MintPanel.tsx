@@ -524,7 +524,7 @@ export function MintPanel({
     };
   }, [sizeInfoOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = previewRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
 
