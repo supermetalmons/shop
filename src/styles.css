@@ -285,6 +285,8 @@ header.top--spacer {
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
   font-size: var(--top-wallet-font-size);
   font-weight: 600;
 }
