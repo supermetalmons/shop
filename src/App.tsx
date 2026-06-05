@@ -128,14 +128,12 @@ import {
   calcPonchoDrifellaRevealTargetRect,
 } from './lib/revealOverlayLayout';
 import {
-  CARD_NFT_2_PACK_DARK_VIDEO_POSTER_URL,
-  CARD_NFT_2_PACK_DARK_VIDEO_SOURCES,
   CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
-  CARD_NFT_2_PACK_LIGHT_VIDEO_POSTER_URL,
-  CARD_NFT_2_PACK_LIGHT_VIDEO_SOURCES,
-  CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
   CARD_NFT_2_PACK_VIDEO_ASPECT_RATIO,
+  CARD_NFT_2_PACK_VIDEO_POSTER_URL,
   CARD_NFT_2_PACK_VIDEO_SCALE,
+  CARD_NFT_2_PACK_VIDEO_SOURCES,
+  CARD_NFT_2_PACK_WEBM_FIRST_VIDEO_SOURCES,
 } from './lib/cardNft2Packs';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
@@ -156,7 +154,6 @@ const DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO = 1.66;
 const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.04;
 const DROP_CARD_BACKDROP_REPOSITION_STEPS = 28;
 const DROP_CARD_BACKDROP_REPOSITION_CANDIDATES = 12;
-const DARK_COLOR_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 
 type DropCardBackdropConfig = {
   baseUrl: string;
@@ -1369,46 +1366,26 @@ function formatRevealIds(ids?: number[]) {
   return '';
 }
 
-function getPrefersDarkColorScheme(): boolean {
-  return typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia(DARK_COLOR_SCHEME_QUERY).matches;
-}
-
-function usePrefersDarkColorScheme(): boolean {
-  const [prefersDark, setPrefersDark] = useState(getPrefersDarkColorScheme);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-
-    const mediaQuery = window.matchMedia(DARK_COLOR_SCHEME_QUERY);
-    const update = () => setPrefersDark(mediaQuery.matches);
-    update();
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', update);
-      return () => mediaQuery.removeEventListener('change', update);
-    }
-
-    mediaQuery.addListener(update);
-    return () => mediaQuery.removeListener(update);
-  }, []);
-
-  return prefersDark;
+function cardNft2PackVideoSourcesForBrowser(): MintPanelBoxMedia['videoSources'] {
+  if (typeof document === 'undefined') return CARD_NFT_2_PACK_VIDEO_SOURCES;
+  const video = document.createElement('video');
+  return video.canPlayType(CARD_NFT_2_PACK_VIDEO_SOURCES[0].type)
+    ? CARD_NFT_2_PACK_VIDEO_SOURCES
+    : CARD_NFT_2_PACK_WEBM_FIRST_VIDEO_SOURCES;
 }
 
 function resolveMintPreviewMedia(
   media: MintPanelBoxMedia,
   usesCardNft2Video: boolean,
   cardNft2PackVideoSources: MintPanelBoxMedia['videoSources'],
-  cardNft2PackVideoPosterSrc: string,
 ): MintPanelBoxMedia {
   if (!usesCardNft2Video) return media;
 
   return {
     ...media,
-    imageSrc: media.imageSrc || CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
+    imageSrc: CARD_NFT_2_PACK_VIDEO_POSTER_URL,
     videoSources: cardNft2PackVideoSources,
-    videoPosterSrc: cardNft2PackVideoPosterSrc,
+    videoPosterSrc: CARD_NFT_2_PACK_VIDEO_POSTER_URL,
     mediaScale: CARD_NFT_2_PACK_VIDEO_SCALE,
     compactMediaScale: CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
     aspectRatio: CARD_NFT_2_PACK_VIDEO_ASPECT_RATIO,
@@ -1494,13 +1471,7 @@ function App({ currentPath }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
-  const prefersDarkColorScheme = usePrefersDarkColorScheme();
-  const cardNft2PackVideoSources = prefersDarkColorScheme
-    ? CARD_NFT_2_PACK_DARK_VIDEO_SOURCES
-    : CARD_NFT_2_PACK_LIGHT_VIDEO_SOURCES;
-  const cardNft2PackVideoPosterSrc = prefersDarkColorScheme
-    ? CARD_NFT_2_PACK_DARK_VIDEO_POSTER_URL
-    : CARD_NFT_2_PACK_LIGHT_VIDEO_POSTER_URL;
+  const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
   const normalizedCurrentPath = useMemo(
     () => (currentPath ? currentPath : getNormalizedPathname()),
     [currentPath],
@@ -1977,7 +1948,6 @@ function App({ currentPath }: AppProps) {
         },
         isDropFamily(routeDrop, 'card_nft_2'),
         cardNft2PackVideoSources,
-        cardNft2PackVideoPosterSrc,
       )
     : { aspectRatio: 1 };
   const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
@@ -2000,7 +1970,6 @@ function App({ currentPath }: AppProps) {
     },
     upcomingDropRoute?.dropFamily === 'card_nft_2',
     cardNft2PackVideoSources,
-    cardNft2PackVideoPosterSrc,
   );
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);

@@ -16,18 +16,27 @@ export const CARD_NFT_2_PACK_IMAGES: readonly CardNft2PackImage[] = [
   { src: '/card_nft_2/pack/4.webp', width: 866, height: 1400 },
 ];
 
-export const CARD_NFT_2_PACK_LIGHT_VIDEO_SOURCES: readonly CardNft2PackVideoSource[] = [
-  { src: '/card_nft_2/pack/shapeshifting-h264.mp4', type: 'video/mp4' },
-  { src: '/card_nft_2/pack/shapeshifting.webm', type: 'video/webm' },
+const CARD_NFT_2_PACK_MOV_VIDEO_SOURCE: CardNft2PackVideoSource = {
+  src: '/card_nft_2/pack/shapeshifting.mov',
+  type: 'video/quicktime; codecs="hvc1"',
+};
+
+const CARD_NFT_2_PACK_WEBM_VIDEO_SOURCE: CardNft2PackVideoSource = {
+  src: '/card_nft_2/pack/shapeshifting.webm',
+  type: 'video/webm',
+};
+
+export const CARD_NFT_2_PACK_VIDEO_SOURCES: readonly CardNft2PackVideoSource[] = [
+  CARD_NFT_2_PACK_MOV_VIDEO_SOURCE,
+  CARD_NFT_2_PACK_WEBM_VIDEO_SOURCE,
 ];
 
-export const CARD_NFT_2_PACK_DARK_VIDEO_SOURCES: readonly CardNft2PackVideoSource[] = [
-  { src: '/card_nft_2/pack/shapeshifting_dark-h264.mp4', type: 'video/mp4' },
-  { src: '/card_nft_2/pack/shapeshifting_dark.webm', type: 'video/webm' },
+export const CARD_NFT_2_PACK_WEBM_FIRST_VIDEO_SOURCES: readonly CardNft2PackVideoSource[] = [
+  CARD_NFT_2_PACK_WEBM_VIDEO_SOURCE,
+  CARD_NFT_2_PACK_MOV_VIDEO_SOURCE,
 ];
 
-export const CARD_NFT_2_PACK_LIGHT_VIDEO_POSTER_URL = '/card_nft_2/pack/shapeshifting-poster.webp';
-export const CARD_NFT_2_PACK_DARK_VIDEO_POSTER_URL = '/card_nft_2/pack/shapeshifting_dark-poster.webp';
+export const CARD_NFT_2_PACK_VIDEO_POSTER_URL = '/card_nft_2/pack/shapeshifting-poster.webp';
 
 export const CARD_NFT_2_PACK_VIDEO_ASPECT_RATIO = 1;
 export const CARD_NFT_2_PACK_VIDEO_SCALE = 1.18;
