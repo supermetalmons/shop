@@ -4,6 +4,7 @@ import {
   FormEvent,
   Fragment,
   RefObject,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -296,10 +297,40 @@ function prepareAutoplayVideo(video: HTMLVideoElement | null) {
 }
 
 function playAutoplayVideo(video: HTMLVideoElement) {
-  video.defaultMuted = true;
-  video.muted = true;
-  video.volume = 0;
+  prepareAutoplayVideo(video);
+  if (!video.paused && !video.ended) return;
   void video.play().catch(() => undefined);
+}
+
+type RestartAutoplayVideoOptions = {
+  reload?: boolean;
+  reloadIfStale?: boolean;
+};
+
+function autoplayVideoNeedsReload(video: HTMLVideoElement): boolean {
+  return Boolean(video.error) || video.readyState === 0;
+}
+
+function resetAutoplayVideoTime(video: HTMLVideoElement) {
+  try {
+    video.currentTime = 0;
+  } catch {
+    // Some browsers reject seeking before metadata is available.
+  }
+}
+
+function stopAutoplayVideo(video: HTMLVideoElement) {
+  video.pause();
+  resetAutoplayVideoTime(video);
+}
+
+function restartAutoplayVideo(video: HTMLVideoElement, options: RestartAutoplayVideoOptions = {}) {
+  const shouldReload = Boolean(options.reload || (options.reloadIfStale && autoplayVideoNeedsReload(video)));
+  stopAutoplayVideo(video);
+  if (shouldReload) {
+    video.load();
+  }
+  playAutoplayVideo(video);
 }
 
 function normalizeSolAmount(value: number | undefined, fallback: number): number {
@@ -397,6 +428,55 @@ function normalizeBoxMediaScale(requestedScale: number | undefined): number {
   return clampNumber(Number(requestedScale) || 1, 1, BOX_MEDIA_SCALE_MAX);
 }
 
+type MintPanelBoxVideoProps = {
+  playIfActive: (video: HTMLVideoElement) => void;
+  posterSrc?: string;
+  registerVideo: (video: HTMLVideoElement, options?: Pick<RestartAutoplayVideoOptions, 'reload'>) => () => void;
+  sources: readonly MintPanelVideoSource[];
+};
+
+function MintPanelBoxVideo({
+  playIfActive,
+  posterSrc,
+  registerVideo,
+  sources,
+}: MintPanelBoxVideoProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const registeredSourceKeyRef = useRef<string | null>(null);
+  const sourceKey = sources.map((source) => source.src).join('|');
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return undefined;
+    const registeredSourceKey = registeredSourceKeyRef.current;
+    registeredSourceKeyRef.current = sourceKey;
+    return registerVideo(video, { reload: registeredSourceKey !== null && registeredSourceKey !== sourceKey });
+  }, [registerVideo, sourceKey]);
+
+  return (
+    <video
+      ref={videoRef}
+      className="mint-panel__box mint-panel__box--media"
+      autoPlay
+      loop
+      muted
+      playsInline
+      preload="auto"
+      poster={posterSrc}
+      aria-hidden="true"
+      onCanPlay={(evt) => {
+        showMediaHideFallback(evt.currentTarget);
+        playIfActive(evt.currentTarget);
+      }}
+      onError={(evt) => hideMediaShowFallback(evt.currentTarget)}
+    >
+      {sources.map((source) => (
+        <source key={source.src} src={source.src} type={source.type} />
+      ))}
+    </video>
+  );
+}
+
 export function MintPanel({
   stats,
   onMint,
@@ -453,14 +533,122 @@ export function MintPanel({
   const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
   const sizeInfoRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const mintBoxVideosRef = useRef<Set<HTMLVideoElement>>(new Set());
+  const mintBoxVideoPlaybackActiveRef = useRef(false);
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const stripePaymentPending = Boolean(stripePaymentBusy) || stripePaymentSubmitPending;
+  const mintBoxImageSrc = boxMedia?.imageSrc;
+  const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
+  const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
+  const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
+
+  const pruneMintBoxVideos = useCallback(() => {
+    mintBoxVideosRef.current.forEach((video) => {
+      if (video.isConnected) return;
+      stopAutoplayVideo(video);
+      mintBoxVideosRef.current.delete(video);
+    });
+  }, []);
+
+  const setMintBoxVideoPlaybackActive = useCallback(
+    (active: boolean, options: { reload?: boolean } = {}) => {
+      pruneMintBoxVideos();
+      const wasActive = mintBoxVideoPlaybackActiveRef.current;
+      const reload = Boolean(options.reload);
+      if (active === wasActive) {
+        if (active && reload) {
+          mintBoxVideosRef.current.forEach((video) => restartAutoplayVideo(video, { reload: true }));
+        }
+        return;
+      }
+
+      mintBoxVideoPlaybackActiveRef.current = active;
+
+      mintBoxVideosRef.current.forEach((video) => {
+        if (active) {
+          restartAutoplayVideo(video, { reload, reloadIfStale: true });
+        } else {
+          stopAutoplayVideo(video);
+        }
+      });
+    },
+    [pruneMintBoxVideos],
+  );
+
+  const playMintBoxVideoIfActive = useCallback((video: HTMLVideoElement) => {
+    if (mintBoxVideoPlaybackActiveRef.current) {
+      playAutoplayVideo(video);
+    }
+  }, []);
+
+  const registerMintBoxVideo = useCallback(
+    (video: HTMLVideoElement, options: Pick<RestartAutoplayVideoOptions, 'reload'> = {}) => {
+      pruneMintBoxVideos();
+      prepareAutoplayVideo(video);
+      mintBoxVideosRef.current.add(video);
+      if (mintBoxVideoPlaybackActiveRef.current) {
+        restartAutoplayVideo(video, { reload: options.reload });
+      }
+
+      return () => {
+        stopAutoplayVideo(video);
+        mintBoxVideosRef.current.delete(video);
+      };
+    },
+    [pruneMintBoxVideos],
+  );
 
   useEffect(() => {
     if (showSizeSelector) setQuantity(1);
   }, [showSizeSelector]);
+
+  useEffect(() => {
+    if (!hasMintBoxVideoSources) return undefined;
+
+    const isDocumentVisible = () => document.visibilityState !== 'hidden';
+
+    const suspendPlayback = () => {
+      setMintBoxVideoPlaybackActive(false);
+    };
+
+    const resumePlayback = (options: { reload?: boolean } = {}) => {
+      if (!isDocumentVisible()) {
+        suspendPlayback();
+        return;
+      }
+      setMintBoxVideoPlaybackActive(true, options);
+    };
+
+    const handleVisibilityChange = () => {
+      if (isDocumentVisible()) {
+        resumePlayback();
+      } else {
+        suspendPlayback();
+      }
+    };
+    const handleFocus = () => resumePlayback();
+    const handlePageShow = (evt: PageTransitionEvent) => resumePlayback({ reload: evt.persisted });
+
+    resumePlayback();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', suspendPlayback);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pagehide', suspendPlayback);
+    window.addEventListener('pageshow', handlePageShow);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', suspendPlayback);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pagehide', suspendPlayback);
+      window.removeEventListener('pageshow', handlePageShow);
+      mintBoxVideoPlaybackActiveRef.current = false;
+      mintBoxVideosRef.current.forEach((video) => stopAutoplayVideo(video));
+      mintBoxVideosRef.current.clear();
+    };
+  }, [hasMintBoxVideoSources, setMintBoxVideoPlaybackActive]);
 
   useEffect(() => {
     if (!showSizeSelector) setSelectedSize(null);
@@ -600,10 +788,6 @@ export function MintPanel({
   const stripeActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const submitActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const mintTitle = title || 'Little Swag Boxes';
-  const mintBoxImageSrc = boxMedia?.imageSrc;
-  const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
-  const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
-  const mintBoxVideoSourceKey = mintBoxVideoSources.map((source) => source.src).join('|');
   const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
     return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
       key: link.key,
@@ -706,29 +890,14 @@ export function MintPanel({
           aria-label={`Mint preview: ${quantityLabel}`}
         >
           {Array.from({ length: quantity }, (_, idx) => (
-            mintBoxVideoSources.length ? (
+            hasMintBoxVideoSources ? (
               <Fragment key={idx}>
-                <video
-                  key={mintBoxVideoSourceKey}
-                  ref={prepareAutoplayVideo}
-                  className="mint-panel__box mint-panel__box--media"
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  preload="auto"
-                  poster={mintBoxVideoPosterSrc}
-                  aria-hidden="true"
-                  onCanPlay={(evt) => {
-                    showMediaHideFallback(evt.currentTarget);
-                    playAutoplayVideo(evt.currentTarget);
-                  }}
-                  onError={(evt) => hideMediaShowFallback(evt.currentTarget)}
-                >
-                  {mintBoxVideoSources.map((source) => (
-                    <source key={source.src} src={source.src} type={source.type} />
-                  ))}
-                </video>
+                <MintPanelBoxVideo
+                  playIfActive={playMintBoxVideoIfActive}
+                  posterSrc={mintBoxVideoPosterSrc}
+                  registerVideo={registerMintBoxVideo}
+                  sources={mintBoxVideoSources}
+                />
                 {mintBoxImageSrc ? (
                   <img
                     className="mint-panel__box mint-panel__box--media"
