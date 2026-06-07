@@ -289,8 +289,8 @@ function showFirstAvailableFallbackAfter(element: HTMLElement) {
       return;
     }
 
-    // Keep the placeholder visible behind a loading image so slow image
-    // requests still leave a drawn preview frame instead of empty space.
+    // Keep the next fallback eligible while a preferred fallback image is still
+    // loading, so failed media can settle to the blank slot without a flash.
     fallback.hidden = mediaFallbackReady(selectedFallback) || fallback instanceof HTMLImageElement;
   });
 }
@@ -998,7 +998,7 @@ export function MintPanel({
                   />
                 ))}
                 <div
-                  className="mint-panel__box mint-panel__box--placeholder"
+                  className="mint-panel__box mint-panel__box--fallback"
                   aria-hidden="true"
                   data-mint-media-fallback="true"
                 />
@@ -1016,13 +1016,13 @@ export function MintPanel({
                   onError={(evt) => hideImageShowFallback(evt.currentTarget)}
                 />
                 <div
-                  className="mint-panel__box mint-panel__box--placeholder"
+                  className="mint-panel__box mint-panel__box--fallback"
                   aria-hidden="true"
                   data-mint-media-fallback="true"
                 />
               </div>
             ) : (
-              <div key={idx} className="mint-panel__box mint-panel__box--placeholder" aria-hidden="true" />
+              <div key={idx} className="mint-panel__box mint-panel__box--fallback" aria-hidden="true" />
             )
           ))}
         </div>

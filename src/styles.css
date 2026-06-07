@@ -741,10 +741,8 @@ header.top--shop.top--spacer {
   transform-origin: center;
 }
 
-.mint-panel__box--placeholder {
-  border-radius: var(--radius-sm);
-  border: 1px dashed var(--border);
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.08));
+.mint-panel__box--fallback {
+  background: transparent;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -761,7 +759,7 @@ header.top--shop.top--spacer {
   height: 100%;
 }
 
-.mint-panel__box-stack > .mint-panel__box--placeholder {
+.mint-panel__box-stack > .mint-panel__box--fallback {
   z-index: 0;
 }
 
