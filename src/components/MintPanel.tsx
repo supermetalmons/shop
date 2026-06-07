@@ -2,7 +2,6 @@ import {
   CSSProperties,
   DependencyList,
   FormEvent,
-  Fragment,
   RefObject,
   useCallback,
   useEffect,
@@ -14,7 +13,6 @@ import {
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
-import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 
@@ -251,42 +249,83 @@ function tighterActionTextFit(a: ActionTextFit, b: ActionTextFit): ActionTextFit
   return a.scale <= b.scale ? a : b;
 }
 
-function mediaFallbackElementsForPreview(media: HTMLElement): HTMLElement[] {
-  const fallback = media.nextElementSibling;
-  if (!(fallback instanceof HTMLElement) || fallback.dataset.mintMediaFallback !== 'true') return [];
-
-  const elements = [fallback];
-  const placeholder = fallback.nextElementSibling;
-  if (placeholder instanceof HTMLElement && placeholder.dataset.mintMediaFallback === 'true') {
-    elements.push(placeholder);
+function fallbackElementsAfter(element: HTMLElement): HTMLElement[] {
+  const elements: HTMLElement[] = [];
+  let fallback = element.nextElementSibling;
+  while (fallback instanceof HTMLElement && fallback.dataset.mintMediaFallback === 'true') {
+    elements.push(fallback);
+    fallback = fallback.nextElementSibling;
   }
+
   return elements;
 }
 
-function showMediaHideFallback(media: HTMLElement) {
-  media.hidden = false;
-  mediaFallbackElementsForPreview(media).forEach((fallback) => {
+function hideFallbackElementsAfter(element: HTMLElement) {
+  fallbackElementsAfter(element).forEach((fallback) => {
     fallback.hidden = true;
   });
 }
 
-function hideMediaShowFallback(media: HTMLElement) {
-  media.hidden = true;
-  const fallback = mediaFallbackElementsForPreview(media)[0];
-  if (!fallback) return;
-
-  if (fallback instanceof HTMLImageElement) {
-    const fallbackSrc = fallback.dataset.mintMediaFallbackSrc;
-    if (fallbackSrc && fallback.getAttribute('src') !== fallbackSrc) {
-      fallback.src = fallbackSrc;
-    }
-  }
-  fallback.hidden = false;
+function mediaFallbackFailed(fallback: HTMLElement): boolean {
+  return fallback instanceof HTMLImageElement && fallback.complete && fallback.naturalWidth === 0;
 }
 
-function hideNextElementFallback(el: HTMLElement) {
-  const fallback = el.nextElementSibling;
-  if (fallback instanceof HTMLElement) fallback.hidden = true;
+function mediaFallbackReady(fallback: HTMLElement): boolean {
+  return !(fallback instanceof HTMLImageElement) || (fallback.complete && fallback.naturalWidth > 0);
+}
+
+function showFirstAvailableFallbackAfter(element: HTMLElement) {
+  let selectedFallback: HTMLElement | null = null;
+
+  fallbackElementsAfter(element).forEach((fallback) => {
+    if (mediaFallbackFailed(fallback)) {
+      fallback.hidden = true;
+      return;
+    }
+
+    if (!selectedFallback) {
+      selectedFallback = fallback;
+      fallback.hidden = false;
+      return;
+    }
+
+    // Keep the placeholder visible behind a loading image so slow image
+    // requests still leave a drawn preview frame instead of empty space.
+    fallback.hidden = mediaFallbackReady(selectedFallback) || fallback instanceof HTMLImageElement;
+  });
+}
+
+function showPrimaryMediaFallback(media: HTMLElement) {
+  showFirstAvailableFallbackAfter(media);
+}
+
+function hideMediaShowFallback(media: HTMLElement) {
+  media.hidden = true;
+  showPrimaryMediaFallback(media);
+}
+
+function videoHasCurrentData(video: HTMLVideoElement): boolean {
+  return !video.error && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+}
+
+function hideLoadedImageFallbacks(image: HTMLImageElement) {
+  if (image.hidden) return;
+  hideFallbackElementsAfter(image);
+}
+
+function hideImageShowFallback(image: HTMLImageElement) {
+  image.hidden = true;
+  showFirstAvailableFallbackAfter(image);
+}
+
+function uniqueMediaSrcs(...sources: Array<string | undefined>): string[] {
+  const uniqueSources = new Set<string>();
+  sources.forEach((source) => {
+    const trimmedSource = source?.trim();
+    if (trimmedSource) uniqueSources.add(trimmedSource);
+  });
+
+  return Array.from(uniqueSources);
 }
 
 function prepareAutoplayVideo(video: HTMLVideoElement | null) {
@@ -430,45 +469,89 @@ function normalizeBoxMediaScale(requestedScale: number | undefined): number {
 
 type MintPanelBoxVideoProps = {
   playIfActive: (video: HTMLVideoElement) => void;
-  posterSrc?: string;
   registerVideo: (video: HTMLVideoElement, options?: Pick<RestartAutoplayVideoOptions, 'reload'>) => () => void;
   sources: readonly MintPanelVideoSource[];
 };
 
 function MintPanelBoxVideo({
   playIfActive,
-  posterSrc,
   registerVideo,
   sources,
 }: MintPanelBoxVideoProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoReadyRef = useRef(false);
   const registeredSourceKeyRef = useRef<string | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
   const sourceKey = sources.map((source) => source.src).join('|');
+  const videoClassName = videoReady
+    ? 'mint-panel__box mint-panel__box--video'
+    : 'mint-panel__box mint-panel__box--video mint-panel__box--video-loading';
+
+  const handleVideoReady = useCallback(
+    (video: HTMLVideoElement) => {
+      if (videoReadyRef.current) return;
+      videoReadyRef.current = true;
+      video.hidden = false;
+      video.classList.remove('mint-panel__box--video-loading');
+      setVideoReady(true);
+      playIfActive(video);
+      hideFallbackElementsAfter(video);
+    },
+    [playIfActive],
+  );
+
+  const handleVideoLoading = useCallback((video: HTMLVideoElement) => {
+    videoReadyRef.current = false;
+    video.classList.add('mint-panel__box--video-loading');
+    setVideoReady(false);
+    showPrimaryMediaFallback(video);
+  }, []);
+
+  const handleVideoError = useCallback((video: HTMLVideoElement) => {
+    videoReadyRef.current = false;
+    video.classList.add('mint-panel__box--video-loading');
+    setVideoReady(false);
+    hideMediaShowFallback(video);
+  }, []);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return undefined;
+    handleVideoLoading(video);
     const registeredSourceKey = registeredSourceKeyRef.current;
     registeredSourceKeyRef.current = sourceKey;
-    return registerVideo(video, { reload: registeredSourceKey !== null && registeredSourceKey !== sourceKey });
-  }, [registerVideo, sourceKey]);
+    const unregisterVideo = registerVideo(video, { reload: registeredSourceKey !== null && registeredSourceKey !== sourceKey });
+    if (videoHasCurrentData(video)) {
+      handleVideoReady(video);
+    }
+    return unregisterVideo;
+  }, [handleVideoLoading, handleVideoReady, registerVideo, sourceKey]);
 
   return (
     <video
       ref={videoRef}
-      className="mint-panel__box mint-panel__box--media"
+      className={videoClassName}
       autoPlay
       loop
       muted
       playsInline
       preload="auto"
-      poster={posterSrc}
       aria-hidden="true"
-      onCanPlay={(evt) => {
-        showMediaHideFallback(evt.currentTarget);
-        playIfActive(evt.currentTarget);
+      onLoadStart={(evt) => {
+        handleVideoLoading(evt.currentTarget);
       }}
-      onError={(evt) => hideMediaShowFallback(evt.currentTarget)}
+      onEmptied={(evt) => {
+        handleVideoLoading(evt.currentTarget);
+      }}
+      onLoadedData={(evt) => {
+        handleVideoReady(evt.currentTarget);
+      }}
+      onCanPlay={(evt) => {
+        handleVideoReady(evt.currentTarget);
+      }}
+      onError={(evt) => {
+        handleVideoError(evt.currentTarget);
+      }}
     >
       {sources.map((source) => (
         <source key={source.src} src={source.src} type={source.type} />
@@ -543,6 +626,7 @@ export function MintPanel({
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
   const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
   const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
+  const mintBoxVideoFallbackImageSrcs = uniqueMediaSrcs(mintBoxVideoPosterSrc, mintBoxImageSrc);
 
   const pruneMintBoxVideos = useCallback(() => {
     mintBoxVideosRef.current.forEach((video) => {
@@ -891,36 +975,36 @@ export function MintPanel({
         >
           {Array.from({ length: quantity }, (_, idx) => (
             hasMintBoxVideoSources ? (
-              <Fragment key={idx}>
+              <div key={idx} className="mint-panel__box mint-panel__box--media mint-panel__box-stack">
                 <MintPanelBoxVideo
                   playIfActive={playMintBoxVideoIfActive}
-                  posterSrc={mintBoxVideoPosterSrc}
                   registerVideo={registerMintBoxVideo}
                   sources={mintBoxVideoSources}
                 />
-                {mintBoxImageSrc ? (
+                {mintBoxVideoFallbackImageSrcs.map((src, fallbackIdx) => (
                   <img
-                    className="mint-panel__box mint-panel__box--media"
+                    key={src}
+                    className="mint-panel__box"
+                    src={src}
                     alt=""
                     aria-hidden="true"
                     draggable={false}
-                    hidden
+                    hidden={fallbackIdx > 0}
+                    loading="eager"
                     data-mint-media-fallback="true"
-                    data-mint-media-fallback-src={mintBoxImageSrc}
                     onDragStart={(evt) => evt.preventDefault()}
-                    onLoad={(evt) => hideNextElementFallback(evt.currentTarget)}
+                    onLoad={(evt) => hideLoadedImageFallbacks(evt.currentTarget)}
                     onError={(evt) => hideImageShowFallback(evt.currentTarget)}
                   />
-                ) : null}
+                ))}
                 <div
                   className="mint-panel__box mint-panel__box--placeholder"
                   aria-hidden="true"
                   data-mint-media-fallback="true"
-                  hidden
                 />
-              </Fragment>
+              </div>
             ) : mintBoxImageSrc ? (
-              <Fragment key={idx}>
+              <div key={idx} className="mint-panel__box mint-panel__box-stack">
                 <img
                   className="mint-panel__box"
                   src={mintBoxImageSrc}
@@ -928,15 +1012,15 @@ export function MintPanel({
                   aria-hidden="true"
                   draggable={false}
                   onDragStart={(evt) => evt.preventDefault()}
-                  onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                  onLoad={(evt) => hideLoadedImageFallbacks(evt.currentTarget)}
                   onError={(evt) => hideImageShowFallback(evt.currentTarget)}
                 />
                 <div
                   className="mint-panel__box mint-panel__box--placeholder"
                   aria-hidden="true"
-                  hidden
+                  data-mint-media-fallback="true"
                 />
-              </Fragment>
+              </div>
             ) : (
               <div key={idx} className="mint-panel__box mint-panel__box--placeholder" aria-hidden="true" />
             )
