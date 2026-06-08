@@ -10,10 +10,10 @@ export type CardNft2PackVideoSource = {
 };
 
 export const CARD_NFT_2_PACK_IMAGES: readonly CardNft2PackImage[] = [
-  { src: '/card_nft_2/pack/1.webp', width: 837, height: 1400 },
-  { src: '/card_nft_2/pack/2.webp', width: 844, height: 1400 },
-  { src: '/card_nft_2/pack/3.webp', width: 872, height: 1400 },
-  { src: '/card_nft_2/pack/4.webp', width: 866, height: 1400 },
+  { src: '/card_nft_2/pack/tight/1.webp', width: 837, height: 1400 },
+  { src: '/card_nft_2/pack/tight/2.webp', width: 844, height: 1400 },
+  { src: '/card_nft_2/pack/tight/3.webp', width: 872, height: 1400 },
+  { src: '/card_nft_2/pack/tight/4.webp', width: 866, height: 1400 },
 ];
 
 const CARD_NFT_2_PACK_MOV_VIDEO_SOURCE: CardNft2PackVideoSource = {
