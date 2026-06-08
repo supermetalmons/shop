@@ -10,10 +10,12 @@ import {
   type DropRevealRenderer,
   type DropRevealSoundProfile,
 } from '../config/dropsExtraContent';
+import { getMediaIdForTokenId } from './mediaMap';
 
 export type ResolvedDropContent = {
   box: {
     previewImageUrl?: string;
+    inventoryImageBaseUrl?: string;
     aspectRatio: number;
   };
   mintPanel: {
@@ -130,6 +132,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
   return {
     box: {
       previewImageUrl: joinDropAssetUrl(base, 'box/tight.webp'),
+      inventoryImageBaseUrl: undefined,
       aspectRatio: LEGACY_BOX_ASPECT_RATIO,
     },
     mintPanel: {
@@ -168,6 +171,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
   return {
     box: {
       previewImageUrl: undefined,
+      inventoryImageBaseUrl: undefined,
       aspectRatio: 1,
     },
     mintPanel: {
@@ -205,6 +209,7 @@ function applyDropExtraContentOverride(
   return {
     box: {
       previewImageUrl: asOptionalString(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
+      inventoryImageBaseUrl: asOptionalString(override.box?.inventoryImageBaseUrl) ?? base.box.inventoryImageBaseUrl,
       aspectRatio: asPositiveNumber(override.box?.aspectRatio, base.box.aspectRatio),
     },
     mintPanel: {
@@ -261,10 +266,21 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
   return resolved;
 }
 
-export function normalizeBoxDisplayImage(dropId: string, imageRaw?: string): string | undefined {
-  const content = resolveDropContent(dropId);
-  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
-  return content.box.previewImageUrl || resolvedImage || undefined;
+export type BoxDisplayImageInput = {
+  dropId: string;
+  imageRaw?: string;
+  boxId?: string | number;
+};
+
+export function normalizeBoxDisplayImage({ dropId, imageRaw, boxId }: BoxDisplayImageInput): string | undefined {
+  const drop = getFrontendDrop(dropId);
+  const content = resolveDropContent(drop || dropId);
+  const fallbackImage = content.box.previewImageUrl || resolveDropAssetUrl(imageRaw || '') || undefined;
+  const boxMediaId = content.box.inventoryImageBaseUrl ? getMediaIdForTokenId(boxId, drop?.boxMedia) : null;
+  if (boxMediaId) {
+    return joinDropAssetUrl(content.box.inventoryImageBaseUrl, `${boxMediaId}.webp`) || fallbackImage;
+  }
+  return fallbackImage;
 }
 
 export function mintPanelPreviewImage(dropId: string): string | undefined {

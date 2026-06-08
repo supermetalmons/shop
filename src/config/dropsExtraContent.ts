@@ -1,4 +1,5 @@
 import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal';
+import { CARD_NFT_2_PACK_INITIAL_BASE_URL } from './dropMediaDefaults.ts';
 import { isDropFamily, normalizeDropId } from './deployment';
 
 export type DropRevealMode = 'animated' | 'static';
@@ -25,6 +26,7 @@ export type DropRevealSoundProfile = {
 export type DropExtraContentOverride = {
   box?: {
     previewImageUrl?: string;
+    inventoryImageBaseUrl?: string;
     aspectRatio?: number;
   };
   mintPanel?: {
@@ -93,6 +95,11 @@ const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     inventoryImageUrl: HOODIE_CLEAN_IMAGE_URL,
   },
 };
+const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  box: {
+    inventoryImageBaseUrl: CARD_NFT_2_PACK_INITIAL_BASE_URL,
+  },
+};
 
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
 };
@@ -100,11 +107,10 @@ export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
 export function getDropExtraContentOverride(dropId?: string): DropExtraContentOverride | undefined {
   const normalizedDropId = normalizeDropId(dropId || '');
   if (!normalizedDropId) return undefined;
-  return DROPS_EXTRA_CONTENT[normalizedDropId] || (
-    isDropFamily(normalizedDropId, 'poncho_drifella')
-      ? PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT
-      : isDropFamily(normalizedDropId, 'little_swag_hoodies')
-        ? LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT
-        : undefined
-  );
+  const dropOverride = DROPS_EXTRA_CONTENT[normalizedDropId];
+  if (dropOverride) return dropOverride;
+  if (isDropFamily(normalizedDropId, 'poncho_drifella')) return PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'card_nft_2')) return CARD_NFT_2_FAMILY_EXTRA_CONTENT;
+  return undefined;
 }

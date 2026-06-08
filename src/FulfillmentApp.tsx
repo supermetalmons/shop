@@ -393,20 +393,21 @@ function renderBoxTiles(args: {
   boxIds: number[];
   keyPrefix: string;
   labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
-  previewSrc?: string;
+  getPreviewSrc?: (boxId: number) => string | undefined;
   secretCodeByBoxId?: ReadonlyMap<number, string>;
 }) {
-  const { boxIds, keyPrefix, labelSource, previewSrc, secretCodeByBoxId } = args;
+  const { boxIds, keyPrefix, labelSource, getPreviewSrc, secretCodeByBoxId } = args;
   return (
     <div className="figure-grid">
       {boxIds.map((boxId, index) => {
         const sizeLabel = dropMintSelectionLabel(labelSource, boxId);
         const label = sizeLabel || dropAssetReference(labelSource, 'box', boxId);
         const secretCode = secretCodeByBoxId?.get(boxId);
+        const imageSrc = getPreviewSrc?.(boxId);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
-            {previewSrc ? (
-              <img src={previewSrc} alt={label} loading="lazy" className="figure-image" />
+            {imageSrc ? (
+              <img src={imageSrc} alt={label} loading="lazy" className="figure-image" />
             ) : (
               <div className="figure-image figure-image--placeholder" aria-hidden="true" />
             )}
@@ -990,7 +991,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderKey = fulfillmentOrderKey(order);
     const orderDropContent = resolveDropContent(orderDrop);
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
-    const orderBoxPreviewImage = normalizeBoxDisplayImage(orderDrop.dropId);
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
@@ -1044,7 +1044,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 boxIds: order.boxes.map((box) => box.boxId),
                 keyPrefix: `${orderKey}:box`,
                 labelSource: orderDrop,
-                previewSrc: orderBoxPreviewImage,
+                getPreviewSrc: (boxId) => normalizeBoxDisplayImage({ dropId: orderDrop.dropId, boxId }),
                 secretCodeByBoxId: new Map(
                   order.boxes
                     .filter((box) => box.receiptClaimCode)

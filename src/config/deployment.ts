@@ -10,17 +10,22 @@
  *   override the bundled frontend defaults in `src/lib/helius.ts` and `src/lib/firebase.ts`.
  */
 
+import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
+
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
-export type FigureMediaStrategy = 'direct' | 'cyclic';
+export type MediaMapStrategy = 'direct' | 'cyclic';
 
-export type FigureMediaConfig = {
-  strategy?: FigureMediaStrategy;
+export type MediaMapConfig = {
+  strategy?: MediaMapStrategy;
   count?: number;
   overrides?: Record<number, number>;
 };
+
+export type FigureMediaConfig = MediaMapConfig;
+export type BoxMediaConfig = MediaMapConfig;
 
 export type MintSelectionOption = {
   key: string;
@@ -45,6 +50,7 @@ export type FrontendDropConfig = {
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
+  boxMedia?: BoxMediaConfig;
   forceSoldOut?: boolean;
   mintSelection?: MintSelectionConfig;
 
@@ -168,6 +174,10 @@ function isRawIpfsCid(value: string): boolean {
   return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
 function normalizeIpfsProtocolUrl(value: string): string {
   const trimmed = trimTrailingSlashes(String(value || '').trim());
   if (!trimmed) return '';
@@ -190,6 +200,7 @@ export function canonicalizeDropAssetUrl(url: string): string {
 
   const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
   if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
 
   try {
     const parsed = new URL(trimmed);
@@ -296,17 +307,17 @@ function defaultForceSoldOutForDropId(dropId: string): boolean {
   return FORCE_SOLD_OUT_DROP_OVERRIDES[normalizedDropId] === true;
 }
 
-function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
+function normalizeMediaMapConfig(raw: MediaMapConfig | undefined): MediaMapConfig | undefined {
   if (!raw) return undefined;
   const strategy = raw.strategy === 'cyclic' ? 'cyclic' : raw.strategy === 'direct' ? 'direct' : undefined;
   const countRaw = Number(raw.count);
   const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : undefined;
-  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([figureIdRaw, mediaIdRaw]) => {
-    const figureId = Math.floor(Number(figureIdRaw));
+  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([tokenIdRaw, mediaIdRaw]) => {
+    const tokenId = Math.floor(Number(tokenIdRaw));
     const mediaId = Math.floor(Number(mediaIdRaw));
-    if (!Number.isFinite(figureId) || figureId <= 0) return [];
+    if (!Number.isFinite(tokenId) || tokenId <= 0) return [];
     if (!Number.isFinite(mediaId) || mediaId <= 0) return [];
-    return [[figureId, mediaId] as const];
+    return [[tokenId, mediaId] as const];
   });
   const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
   if (!strategy && !count && !overrides) return undefined;
@@ -315,6 +326,14 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
     ...(count ? { count } : {}),
     ...(overrides ? { overrides } : {}),
   };
+}
+
+function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
+  return normalizeMediaMapConfig(raw);
+}
+
+function normalizeBoxMediaConfig(raw: BoxMediaConfig | undefined): BoxMediaConfig | undefined {
+  return normalizeMediaMapConfig(raw);
 }
 
 function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
@@ -372,6 +391,11 @@ function defaultFigureMediaConfigForDropFamily(dropFamily: DropFamily): FigureMe
   return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
+function defaultBoxMediaConfigForDropFamily(dropFamily: DropFamily): BoxMediaConfig | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return normalizeBoxMediaConfig(CARD_NFT_2_BOX_MEDIA);
+}
+
 export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
@@ -405,6 +429,7 @@ function createFrontendDrop(
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
+  const boxMedia = normalizeBoxMediaConfig(config.boxMedia) || defaultBoxMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
@@ -417,6 +442,7 @@ function createFrontendDrop(
     metadataPathFormat,
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(boxMedia ? { boxMedia } : {}),
     ...(mintSelection ? { mintSelection } : {}),
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
@@ -456,7 +482,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: "https://assets.mons.link/drops/cardnft2/json",
     metadataPathFormat: "compact",
-
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",

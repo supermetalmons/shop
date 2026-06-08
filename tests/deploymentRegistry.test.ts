@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -33,14 +33,17 @@ import {
   selectMetadataUri as functionsSelectMetadataUri,
 } from '../functions/src/dropMetadataUri.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
+import { CARD_NFT_2_BOX_MEDIA } from '../src/config/dropMediaDefaults.ts';
 import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
 
 const VALID_IPFS_CID = 'bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku';
+const DROP_MEDIA_DEFAULTS_SOURCE_URL = new URL('../src/config/dropMediaDefaults.ts', import.meta.url);
 
 async function withTempModule(source: string, run: (filePath: string) => Promise<void>, extension = '.mjs') {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'deployment-registry-test-'));
   const filePath = path.join(dir, `registry${extension}`);
   try {
+    await writeFile(path.join(dir, 'dropMediaDefaults.ts'), await readFile(DROP_MEDIA_DEFAULTS_SOURCE_URL, 'utf8'), 'utf8');
     await writeFile(filePath, source, 'utf8');
     await run(filePath);
   } finally {
@@ -57,6 +60,83 @@ test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => 
   assert.equal(functionsDrop.stripeCheckoutEnabled, true);
   assert.equal(functionsDrop.stripeLiveUnitAmountCents, 21900);
   assert.equal(functionsDrop.stripeProductTaxCode, 'txcd_30011000');
+});
+
+test('devnet card_nft_2 registry uses cyclic box media', () => {
+  assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet.boxMedia, CARD_NFT_2_BOX_MEDIA);
+});
+
+test('readFrontendDropRegistry applies default boxMedia to card_nft_2 family drops', async () => {
+  await withTempModule(
+    `export const FRONTEND_DROPS = {
+      future_card_drop: {
+        solanaCluster: 'devnet',
+        dropId: 'future_card_drop',
+        dropFamily: 'card_nft_2',
+        collectionName: 'Future Card Drop',
+        metadataBase: 'https://assets.example.com/drops/future-card',
+        metadataPathFormat: 'compact',
+        treasury: 'Treasury11111111111111111111111111111111',
+        priceSol: 1,
+        discountPriceSol: 0.5,
+        discountMintsPerWallet: 1,
+        discountMerkleRoot: '00'.repeat(32),
+        maxSupply: 10,
+        itemsPerBox: 1,
+        maxPerTx: 5,
+        namePrefix: 'pack',
+        figureNamePrefix: 'card',
+        symbol: 'card',
+        boxMinterProgramId: 'Program1111111111111111111111111111111111',
+        collectionMint: 'Collection11111111111111111111111111111111',
+      },
+    };`,
+    async (filePath) => {
+      const registry = await readFrontendDropRegistry(filePath);
+      assert.deepEqual(registry.drops.future_card_drop.boxMedia, CARD_NFT_2_BOX_MEDIA);
+    },
+  );
+});
+
+test('renderFrontendDeploymentRegistryFile omits default card_nft_2 boxMedia', async () => {
+  const source = renderFrontendDeploymentRegistryFile({
+    drops: {
+      future_card_drop: {
+        solanaCluster: 'devnet',
+        dropId: 'future_card_drop',
+        dropFamily: 'card_nft_2',
+        collectionName: 'Future Card Drop',
+        metadataBase: 'https://assets.example.com/drops/future-card',
+        metadataPathFormat: 'compact',
+        boxMedia: CARD_NFT_2_BOX_MEDIA,
+        treasury: 'Treasury11111111111111111111111111111111',
+        priceSol: 1,
+        discountPriceSol: 0.5,
+        discountMintsPerWallet: 1,
+        discountMerkleRoot: '00'.repeat(32),
+        maxSupply: 10,
+        itemsPerBox: 1,
+        maxPerTx: 5,
+        namePrefix: 'pack',
+        figureNamePrefix: 'card',
+        symbol: 'card',
+        boxMinterProgramId: 'Program1111111111111111111111111111111111',
+        collectionMint: 'Collection11111111111111111111111111111111',
+      },
+    },
+  });
+
+  assert.doesNotMatch(source, /\n    boxMedia: \{/);
+
+  await withTempModule(
+    source,
+    async (filePath) => {
+      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+      const mod = (await import(moduleUrl)) as { getFrontendDrop(dropId: string): { boxMedia?: unknown } };
+      assert.deepEqual(mod.getFrontendDrop('future_card_drop').boxMedia, CARD_NFT_2_BOX_MEDIA);
+    },
+    '.ts',
+  );
 });
 
 test('readFrontendDropRegistry preserves explicit boxMinterConfigPda', async () => {
@@ -89,6 +169,57 @@ test('readFrontendDropRegistry preserves explicit boxMinterConfigPda', async () 
       assert.equal(registry.drops.shared_drop.boxMinterConfigPda, 'Config11111111111111111111111111111111111');
       assert.equal(registry.drops.shared_drop.metadataPathFormat, 'legacy');
     },
+  );
+});
+
+test('renderFrontendDeploymentRegistryFile preserves explicit boxMedia', async () => {
+  const source = renderFrontendDeploymentRegistryFile({
+    drops: {
+      media_drop: {
+        solanaCluster: 'devnet',
+        dropId: 'media_drop',
+        dropFamily: 'default',
+        collectionName: 'Media Drop',
+        metadataBase: 'https://assets.example.com/drops/media',
+        metadataPathFormat: 'compact',
+        boxMedia: {
+          strategy: 'cyclic',
+          count: 4,
+          overrides: {
+            10: 2,
+          },
+        },
+        treasury: 'Treasury11111111111111111111111111111111',
+        priceSol: 1,
+        discountPriceSol: 0.5,
+        discountMintsPerWallet: 1,
+        discountMerkleRoot: '22'.repeat(32),
+        maxSupply: 10,
+        itemsPerBox: 1,
+        maxPerTx: 5,
+        namePrefix: 'box',
+        figureNamePrefix: 'figure',
+        symbol: 'mons',
+        boxMinterProgramId: 'Program1111111111111111111111111111111111',
+        collectionMint: 'Collection11111111111111111111111111111111',
+      },
+    },
+  });
+
+  await withTempModule(
+    source,
+    async (filePath) => {
+      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+      const mod = (await import(moduleUrl)) as { getFrontendDrop(dropId: string): { boxMedia?: unknown } };
+      assert.deepEqual(mod.getFrontendDrop('media_drop').boxMedia, {
+        strategy: 'cyclic',
+        count: 4,
+        overrides: {
+          10: 2,
+        },
+      });
+    },
+    '.ts',
   );
 });
 

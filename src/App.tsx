@@ -773,7 +773,8 @@ function loadPendingReveals(wallet?: string): LocalPendingReveal[] {
       const dropId = typeof entry.dropId === 'string' ? entry.dropId : undefined;
       const name = typeof entry.name === 'string' ? entry.name : undefined;
       const image = typeof entry.image === 'string' ? entry.image : undefined;
-      entries.push({ id, createdAt, dropId, name, image });
+      const boxId = typeof entry.boxId === 'string' ? entry.boxId : undefined;
+      entries.push({ id, createdAt, dropId, name, image, boxId });
     });
     return entries;
   } catch {
@@ -1094,14 +1095,19 @@ type LocalPendingReveal = {
   dropId?: string;
   name?: string;
   image?: string;
+  boxId?: string;
 };
 
 type LocalMintedBox = {
   id: string;
   dropId: string;
   createdAt: number;
-  expectedChainCount?: number;
+  expectedInventoryCount?: number;
 };
+
+function boxDisplayImageForInventoryItem(item: Pick<InventoryItem, 'dropId' | 'image' | 'boxId'>): string | undefined {
+  return normalizeBoxDisplayImage({ dropId: item.dropId, imageRaw: item.image, boxId: item.boxId });
+}
 
 function mergeDeliveryRecoveryRequest(
   current: RecoverDeliveryOrdersArgs | null,
@@ -1440,6 +1446,7 @@ function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingR
     if ((a.dropId || '') !== (b.dropId || '')) return false;
     if ((a.name || '') !== (b.name || '')) return false;
     if ((a.image || '') !== (b.image || '')) return false;
+    if ((a.boxId || '') !== (b.boxId || '')) return false;
   }
   return true;
 }
@@ -2562,7 +2569,8 @@ function App({ currentPath }: AppProps) {
         createdAt: now,
         dropId: item.dropId,
         name: item.name,
-        image: normalizeBoxDisplayImage(item.dropId, item.image),
+        image: item.image,
+        boxId: item.boxId,
       };
       const existingIndex = prev.findIndex((entry) => entry.id === item.id);
       if (existingIndex !== -1) {
@@ -2582,7 +2590,7 @@ function App({ currentPath }: AppProps) {
     const now = Date.now();
     setLocalMintedBoxes((prev) => {
       const entries: LocalMintedBox[] = [];
-      const knownChainCount = inventoryFetched
+      const knownInventoryCount = inventoryFetched
         ? inventoryView.filter((item) => item.kind === 'box' && item.dropId === normalizedDropId).length
         : undefined;
       const pendingForDrop = prev.filter((entry) => entry.dropId === normalizedDropId).length;
@@ -2592,7 +2600,7 @@ function App({ currentPath }: AppProps) {
           id: `local-minted-${now}-${localMintCounterRef.current}`,
           dropId: normalizedDropId,
           createdAt: now + i,
-          ...(knownChainCount != null ? { expectedChainCount: knownChainCount + pendingForDrop + i + 1 } : {}),
+          ...(knownInventoryCount != null ? { expectedInventoryCount: knownInventoryCount + pendingForDrop + i + 1 } : {}),
         });
       }
       return entries.length ? [...entries, ...prev] : prev;
@@ -2867,7 +2875,7 @@ function App({ currentPath }: AppProps) {
       id,
       dropId: overlayDropId,
       name: item.name,
-      image: normalizeBoxDisplayImage(overlayDropId, item.image),
+      image: normalizeBoxDisplayImage({ dropId: overlayDropId, imageRaw: item.image, boxId: item.boxId }),
       originRect,
       targetRect,
       phase,
@@ -3004,6 +3012,7 @@ function App({ currentPath }: AppProps) {
         dropId: existing?.dropId || entry.dropId || match?.dropId,
         name: existing?.name || match?.name,
         image: existing?.image || match?.image,
+        boxId: existing?.boxId || match?.boxId,
       });
     });
     localPendingReveals.forEach((entry) => {
@@ -3064,7 +3073,7 @@ function App({ currentPath }: AppProps) {
         const remainingIndexesByDrop = new Map<string, number[]>();
         prev.forEach((entry, index) => {
           const currentCount = currentBoxCountByDrop.get(entry.dropId) || 0;
-          if (entry.expectedChainCount != null && currentCount >= entry.expectedChainCount) {
+          if (entry.expectedInventoryCount != null && currentCount >= entry.expectedInventoryCount) {
             removeIndexes.add(index);
             return;
           }
@@ -3109,11 +3118,11 @@ function App({ currentPath }: AppProps) {
         indexes
           .sort((leftIdx, rightIdx) => prev[leftIdx].createdAt - prev[rightIdx].createdAt)
           .forEach((index, offset) => {
-            const expectedChainCount = knownCount + offset + 1;
-            if (prev[index].expectedChainCount === expectedChainCount) return;
+            const expectedInventoryCount = knownCount + offset + 1;
+            if (prev[index].expectedInventoryCount === expectedInventoryCount) return;
             next[index] = {
               ...prev[index],
-              expectedChainCount,
+              expectedInventoryCount,
             };
             changed = true;
           });
@@ -3412,7 +3421,7 @@ function App({ currentPath }: AppProps) {
       isViewerMode || !hiddenAssets.size ? inventoryView : inventoryView.filter((item) => !hiddenAssets.has(item.id));
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
-        const image = normalizeBoxDisplayImage(item.dropId, item.image);
+        const image = boxDisplayImageForInventoryItem(item);
         return image === item.image ? item : { ...item, image };
       }
       if (item.kind !== 'dude' || !item.dudeId) return item;
@@ -3429,7 +3438,7 @@ function App({ currentPath }: AppProps) {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataByKey, boxImageForDropId, isViewerMode]);
+  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataByKey, isViewerMode]);
 
   const localMintedItems = useMemo<InventoryItem[]>(() => {
     if (isViewerMode) return [] as InventoryItem[];
@@ -3543,12 +3552,18 @@ function App({ currentPath }: AppProps) {
       const localMatch = localById.get(id);
       const itemDropId = localMatch?.dropId || entry.dropId || match?.dropId || routeDrop?.dropId || '';
       if (!itemDropId) return;
+      const boxId = localMatch?.boxId || match?.boxId;
       pendingItems.push({
         id,
         dropId: itemDropId,
         name: localMatch?.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
         kind: 'box',
-        image: normalizeBoxDisplayImage(itemDropId, localMatch?.image || match?.image),
+        boxId,
+        image: normalizeBoxDisplayImage({
+          dropId: itemDropId,
+          imageRaw: localMatch?.image || match?.image,
+          boxId,
+        }),
       });
     });
     const localSorted = [...localPendingFiltered].sort((a, b) => b.createdAt - a.createdAt);
@@ -3559,12 +3574,18 @@ function App({ currentPath }: AppProps) {
       const match = inventoryById.get(id);
       const itemDropId = entry.dropId || match?.dropId || routeDrop?.dropId || '';
       if (!itemDropId) return;
+      const boxId = entry.boxId || match?.boxId;
       pendingItems.push({
         id,
         dropId: itemDropId,
         name: entry.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
         kind: 'box',
-        image: normalizeBoxDisplayImage(itemDropId, entry.image || match?.image),
+        boxId,
+        image: normalizeBoxDisplayImage({
+          dropId: itemDropId,
+          imageRaw: entry.image || match?.image,
+          boxId,
+        }),
       });
     });
     return moveLittleSwagBoxesFamilyToEnd(pendingItems);
@@ -3654,7 +3675,9 @@ function App({ currentPath }: AppProps) {
     const limit = compactPanel ? 3 : 5;
     const entries = selectedItems.map((item) => ({
       item,
-      previewImage: item.kind === 'box' ? normalizeBoxDisplayImage(item.dropId, item.image) : item.image,
+      previewImage: item.kind === 'box'
+        ? boxDisplayImageForInventoryItem(item)
+        : item.image,
     }));
     const preview: typeof entries = [];
     const counts = new Map<string, number>();
@@ -3689,7 +3712,7 @@ function App({ currentPath }: AppProps) {
       addEntry(entry);
     });
     return preview;
-  }, [selectedItems, boxImageForDropId, compactPanel]);
+  }, [selectedItems, compactPanel]);
   const selectedOverflow = Math.max(0, selectedCount - selectedPreview.length);
   const canOpenSelected =
     selectedCount === 1 &&
@@ -4367,8 +4390,7 @@ function App({ currentPath }: AppProps) {
         fallbackTarget.width,
         fallbackTarget.height,
       );
-      const overlayItem: InventoryItem = { ...box, image: normalizeBoxDisplayImage(box.dropId, box.image) };
-      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', overlayItem);
+      openRevealOverlay(box.id, originRect || fallbackRect, 'preparing', box);
     },
     [
       canOpenBoxesForDropId,
@@ -4991,7 +5013,7 @@ function App({ currentPath }: AppProps) {
             const label = dropAssetReference(dropConfig, item.kind === 'box' ? 'box' : 'figure', item.refId);
             const previewId = `shipment:${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`;
             if (item.kind === 'box') {
-              const boxImage = normalizeBoxDisplayImage(order.dropId);
+              const boxImage = normalizeBoxDisplayImage({ dropId: order.dropId, boxId: item.refId });
               return (
                 <div
                   key={previewId}

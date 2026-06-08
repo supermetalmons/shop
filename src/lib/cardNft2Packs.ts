@@ -1,3 +1,13 @@
+import {
+  CARD_NFT_2_PACK_INITIAL_BASE_URL,
+  CARD_NFT_2_PACK_INITIAL_COUNT,
+} from '../config/dropMediaDefaults.ts';
+
+export {
+  CARD_NFT_2_PACK_INITIAL_BASE_URL,
+  CARD_NFT_2_PACK_INITIAL_COUNT,
+} from '../config/dropMediaDefaults.ts';
+
 export type CardNft2PackImage = {
   src: string;
   width: number;
@@ -15,6 +25,15 @@ export const CARD_NFT_2_PACK_IMAGES: readonly CardNft2PackImage[] = [
   { src: '/card_nft_2/pack/tight/3.webp', width: 872, height: 1400 },
   { src: '/card_nft_2/pack/tight/4.webp', width: 866, height: 1400 },
 ];
+
+export const CARD_NFT_2_PACK_INITIAL_IMAGES: readonly CardNft2PackImage[] = Array.from(
+  { length: CARD_NFT_2_PACK_INITIAL_COUNT },
+  (_, index) => ({
+    src: `${CARD_NFT_2_PACK_INITIAL_BASE_URL}/${index + 1}.webp`,
+    width: 1440,
+    height: 1440,
+  }),
+);
 
 const CARD_NFT_2_PACK_MOV_VIDEO_SOURCE: CardNft2PackVideoSource = {
   src: '/card_nft_2/pack/shapeshifting.mov',
@@ -43,6 +62,7 @@ export const CARD_NFT_2_PACK_VIDEO_SCALE = 1.18;
 export const CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE = 1.24;
 
 export const CARD_NFT_2_PACK_IMAGE_SRCS = CARD_NFT_2_PACK_IMAGES.map((image) => image.src);
+export const CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS = CARD_NFT_2_PACK_INITIAL_IMAGES.map((image) => image.src);
 
 export const CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC = CARD_NFT_2_PACK_IMAGES.reduce<
   Record<string, CardNft2PackImage>

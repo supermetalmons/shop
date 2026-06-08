@@ -148,6 +148,10 @@ function isRawIpfsCid(value: string): boolean {
   return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
 function normalizeIpfsProtocolUrl(value: string): string {
   const trimmed = trimTrailingSlashes(String(value || '').trim());
   if (!trimmed) return '';
@@ -170,6 +174,7 @@ export function canonicalizeDropAssetUrl(url: string): string {
 
   const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
   if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
 
   try {
     const parsed = new URL(trimmed);

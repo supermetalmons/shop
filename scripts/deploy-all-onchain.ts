@@ -8,6 +8,7 @@ import { loadNewDropConfigById, newDropConfigUsage } from './shared/newDropLoade
 import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig.ts';
 import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
+  defaultFrontendBoxMediaForDropFamily,
   defaultFrontendFigureMediaForDropFamily,
   normalizeDropBase,
   readFrontendDropRegistry,
@@ -847,6 +848,7 @@ async function writeFrontendDeploymentConfig(args: {
   const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
   const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
   const figureMedia = defaultFrontendFigureMediaForDropFamily(dropFamily);
+  const boxMedia = defaultFrontendBoxMediaForDropFamily(dropFamily);
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
@@ -856,6 +858,7 @@ async function writeFrontendDeploymentConfig(args: {
     metadataPathFormat: args.metadataPathFormat,
     ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(boxMedia ? { boxMedia } : {}),
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),

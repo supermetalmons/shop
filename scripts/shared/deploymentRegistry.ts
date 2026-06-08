@@ -1,15 +1,19 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CARD_NFT_2_BOX_MEDIA } from '../../src/config/dropMediaDefaults.ts';
 
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
-export type FigureMediaConfigSerialized = {
+export type MediaMapConfigSerialized = {
   strategy?: 'direct' | 'cyclic';
   count?: number;
   overrides?: Record<number, number>;
 };
+
+export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
+export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
 
 export type MintSelectionOptionSerialized = {
   key: string;
@@ -32,6 +36,7 @@ export type FrontendDropConfigSerialized = {
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfigSerialized;
+  boxMedia?: BoxMediaConfigSerialized;
   forceSoldOut?: boolean;
   mintSelection?: MintSelectionConfigSerialized;
   treasury: string;
@@ -175,6 +180,10 @@ function isRawIpfsCid(value: string): boolean {
   return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
 function hasSupportedMetadataBaseScheme(value: string): boolean {
   const normalized = String(value || '').trim().toLowerCase();
   return (
@@ -252,6 +261,7 @@ export function canonicalizeDropAssetUrl(url: string): string {
 
   const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
   if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
 
   try {
     const parsed = new URL(trimmed);
@@ -434,16 +444,16 @@ const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfigSerialized = {
   },
 };
 
-function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigSerialized | undefined {
+function normalizeMediaMapConfigForRegistry(raw: unknown): MediaMapConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
   const strategy = obj.strategy === 'cyclic' ? 'cyclic' : obj.strategy === 'direct' ? 'direct' : undefined;
   const count = normalizePositiveInteger(obj.count);
-  const overrideEntries = Object.entries((obj.overrides as Record<string, unknown>) || {}).flatMap(([figureIdRaw, mediaIdRaw]) => {
-    const figureId = normalizePositiveInteger(figureIdRaw);
+  const overrideEntries = Object.entries((obj.overrides as Record<string, unknown>) || {}).flatMap(([tokenIdRaw, mediaIdRaw]) => {
+    const tokenId = normalizePositiveInteger(tokenIdRaw);
     const mediaId = normalizePositiveInteger(mediaIdRaw);
-    if (!figureId || !mediaId) return [];
-    return [[figureId, mediaId] as const];
+    if (!tokenId || !mediaId) return [];
+    return [[tokenId, mediaId] as const];
   });
   const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
   if (!strategy && !count && !overrides) return undefined;
@@ -452,6 +462,14 @@ function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigS
     ...(count ? { count } : {}),
     ...(overrides ? { overrides } : {}),
   };
+}
+
+function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigSerialized | undefined {
+  return normalizeMediaMapConfigForRegistry(raw);
+}
+
+function normalizeBoxMediaConfigForRegistry(raw: unknown): BoxMediaConfigSerialized | undefined {
+  return normalizeMediaMapConfigForRegistry(raw);
 }
 
 function normalizeMintSelectionConfigForRegistry(raw: unknown): MintSelectionConfigSerialized | undefined {
@@ -481,6 +499,11 @@ export function defaultFrontendFigureMediaForDropFamily(dropFamily: DropFamily):
   return normalizeFigureMediaConfigForRegistry(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
+export function defaultFrontendBoxMediaForDropFamily(dropFamily: DropFamily): BoxMediaConfigSerialized | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return normalizeBoxMediaConfigForRegistry(CARD_NFT_2_BOX_MEDIA);
+}
+
 function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
@@ -491,6 +514,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const secondaryMarketHref = asTrimmedString(obj.secondaryMarketHref);
   const defaultMarketHref = defaultSecondaryMarketHref(dropId);
   const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropFamily(dropFamily);
+  const boxMedia = normalizeBoxMediaConfigForRegistry(obj.boxMedia) || defaultFrontendBoxMediaForDropFamily(dropFamily);
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
   const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
   const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
@@ -505,6 +529,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     metadataPathFormat: normalizeMetadataPathFormat(obj.metadataPathFormat),
     ...(secondaryMarketHref && secondaryMarketHref !== defaultMarketHref ? { secondaryMarketHref } : {}),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(boxMedia ? { boxMedia } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     ...(mintSelection ? { mintSelection } : {}),
     treasury: asTrimmedString(obj.treasury),
@@ -608,8 +633,12 @@ export async function readFunctionsDropRegistry(filePath: string): Promise<Funct
   return { drops };
 }
 
-function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, indent = '    '): string {
-  const lines = [`${indent}figureMedia: {`];
+function renderMediaMapConfigLiteral(
+  propertyName: 'figureMedia' | 'boxMedia',
+  config: MediaMapConfigSerialized,
+  indent = '    ',
+): string {
+  const lines = [`${indent}${propertyName}: {`];
   if (config.strategy) {
     lines.push(`${indent}  strategy: ${tsStringLiteral(config.strategy)},`);
   }
@@ -617,18 +646,42 @@ function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, ind
     lines.push(`${indent}  count: ${Math.floor(config.count)},`);
   }
   const overrideEntries = Object.entries(config.overrides || {})
-    .map(([figureId, mediaId]) => [Math.floor(Number(figureId)), Math.floor(Number(mediaId))] as const)
-    .filter(([figureId, mediaId]) => Number.isFinite(figureId) && figureId > 0 && Number.isFinite(mediaId) && mediaId > 0)
+    .map(([tokenId, mediaId]) => [Math.floor(Number(tokenId)), Math.floor(Number(mediaId))] as const)
+    .filter(([tokenId, mediaId]) => Number.isFinite(tokenId) && tokenId > 0 && Number.isFinite(mediaId) && mediaId > 0)
     .sort((a, b) => a[0] - b[0]);
   if (overrideEntries.length) {
     lines.push(`${indent}  overrides: {`);
-    overrideEntries.forEach(([figureId, mediaId]) => {
-      lines.push(`${indent}    ${figureId}: ${mediaId},`);
+    overrideEntries.forEach(([tokenId, mediaId]) => {
+      lines.push(`${indent}    ${tokenId}: ${mediaId},`);
     });
     lines.push(`${indent}  },`);
   }
   lines.push(`${indent}},`);
   return lines.join('\n');
+}
+
+function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, indent = '    '): string {
+  return renderMediaMapConfigLiteral('figureMedia', config, indent);
+}
+
+function renderBoxMediaConfigLiteral(config: BoxMediaConfigSerialized, indent = '    '): string {
+  return renderMediaMapConfigLiteral('boxMedia', config, indent);
+}
+
+function mediaMapConfigsEqual(left: MediaMapConfigSerialized | undefined, right: MediaMapConfigSerialized | undefined): boolean {
+  const normalizedLeft = normalizeMediaMapConfigForRegistry(left);
+  const normalizedRight = normalizeMediaMapConfigForRegistry(right);
+  if (!normalizedLeft && !normalizedRight) return true;
+  if (!normalizedLeft || !normalizedRight) return false;
+  if ((normalizedLeft.strategy || '') !== (normalizedRight.strategy || '')) return false;
+  if ((normalizedLeft.count || 0) !== (normalizedRight.count || 0)) return false;
+  const leftOverrides = Object.entries(normalizedLeft.overrides || {}).sort(([a], [b]) => Number(a) - Number(b));
+  const rightOverrides = Object.entries(normalizedRight.overrides || {}).sort(([a], [b]) => Number(a) - Number(b));
+  if (leftOverrides.length !== rightOverrides.length) return false;
+  return leftOverrides.every(([tokenId, mediaId], index) => {
+    const [rightTokenId, rightMediaId] = rightOverrides[index];
+    return Number(tokenId) === Number(rightTokenId) && Number(mediaId) === Number(rightMediaId);
+  });
 }
 
 function renderMintSelectionConfigLiteral(config: MintSelectionConfigSerialized, indent = '    '): string {
@@ -675,6 +728,16 @@ function renderSharedProgramConfigPdaAssertion(registryName: string, registryLab
 }
 
 function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
+  const defaultBoxMedia = defaultFrontendBoxMediaForDropFamily(drop.dropFamily);
+  const boxMedia = mediaMapConfigsEqual(drop.boxMedia, defaultBoxMedia) ? undefined : drop.boxMedia;
+  const metadataOptionBlocks = [
+    drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},` : '',
+    drop.forceSoldOut ? `    forceSoldOut: true,` : '',
+    drop.figureMedia ? renderFigureMediaConfigLiteral(drop.figureMedia) : '',
+    boxMedia ? renderBoxMediaConfigLiteral(boxMedia) : '',
+    drop.mintSelection ? renderMintSelectionConfigLiteral(drop.mintSelection) : '',
+  ].filter(Boolean);
+  const metadataOptionLines = metadataOptionBlocks.length ? `\n${metadataOptionBlocks.join('\n')}` : '';
   const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
   const stripeLiveUnitAmountCentsLine =
     drop.stripeLiveUnitAmountCents != null
@@ -688,8 +751,7 @@ function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
 
     // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: ${tsStringLiteral(drop.metadataBase)},
-    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},
-${drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},\n` : ''}${drop.forceSoldOut ? `    forceSoldOut: true,\n` : ''}${drop.figureMedia ? `${renderFigureMediaConfigLiteral(drop.figureMedia)}\n` : ''}${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\n` : ''}
+    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},${metadataOptionLines}
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: ${tsStringLiteral(drop.treasury)},
@@ -780,17 +842,22 @@ export function renderFrontendDeploymentRegistryFile(args: {
  *   override the bundled frontend defaults in \`src/lib/helius.ts\` and \`src/lib/firebase.ts\`.
  */
 
+import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
+
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
-export type FigureMediaStrategy = 'direct' | 'cyclic';
+export type MediaMapStrategy = 'direct' | 'cyclic';
 
-export type FigureMediaConfig = {
-  strategy?: FigureMediaStrategy;
+export type MediaMapConfig = {
+  strategy?: MediaMapStrategy;
   count?: number;
   overrides?: Record<number, number>;
 };
+
+export type FigureMediaConfig = MediaMapConfig;
+export type BoxMediaConfig = MediaMapConfig;
 
 export type MintSelectionOption = {
   key: string;
@@ -815,6 +882,7 @@ export type FrontendDropConfig = {
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
+  boxMedia?: BoxMediaConfig;
   forceSoldOut?: boolean;
   mintSelection?: MintSelectionConfig;
 
@@ -938,6 +1006,10 @@ function isRawIpfsCid(value: string): boolean {
   return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
 function normalizeIpfsProtocolUrl(value: string): string {
   const trimmed = trimTrailingSlashes(String(value || '').trim());
   if (!trimmed) return '';
@@ -960,6 +1032,7 @@ export function canonicalizeDropAssetUrl(url: string): string {
 
   const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
   if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
 
   try {
     const parsed = new URL(trimmed);
@@ -1066,17 +1139,17 @@ function defaultForceSoldOutForDropId(dropId: string): boolean {
   return FORCE_SOLD_OUT_DROP_OVERRIDES[normalizedDropId] === true;
 }
 
-function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
+function normalizeMediaMapConfig(raw: MediaMapConfig | undefined): MediaMapConfig | undefined {
   if (!raw) return undefined;
   const strategy = raw.strategy === 'cyclic' ? 'cyclic' : raw.strategy === 'direct' ? 'direct' : undefined;
   const countRaw = Number(raw.count);
   const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : undefined;
-  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([figureIdRaw, mediaIdRaw]) => {
-    const figureId = Math.floor(Number(figureIdRaw));
+  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([tokenIdRaw, mediaIdRaw]) => {
+    const tokenId = Math.floor(Number(tokenIdRaw));
     const mediaId = Math.floor(Number(mediaIdRaw));
-    if (!Number.isFinite(figureId) || figureId <= 0) return [];
+    if (!Number.isFinite(tokenId) || tokenId <= 0) return [];
     if (!Number.isFinite(mediaId) || mediaId <= 0) return [];
-    return [[figureId, mediaId] as const];
+    return [[tokenId, mediaId] as const];
   });
   const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
   if (!strategy && !count && !overrides) return undefined;
@@ -1085,6 +1158,14 @@ function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureM
     ...(count ? { count } : {}),
     ...(overrides ? { overrides } : {}),
   };
+}
+
+function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
+  return normalizeMediaMapConfig(raw);
+}
+
+function normalizeBoxMediaConfig(raw: BoxMediaConfig | undefined): BoxMediaConfig | undefined {
+  return normalizeMediaMapConfig(raw);
 }
 
 function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
@@ -1142,6 +1223,11 @@ function defaultFigureMediaConfigForDropFamily(dropFamily: DropFamily): FigureMe
   return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
 }
 
+function defaultBoxMediaConfigForDropFamily(dropFamily: DropFamily): BoxMediaConfig | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return normalizeBoxMediaConfig(CARD_NFT_2_BOX_MEDIA);
+}
+
 export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
@@ -1175,6 +1261,7 @@ function createFrontendDrop(
   const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
+  const boxMedia = normalizeBoxMediaConfig(config.boxMedia) || defaultBoxMediaConfigForDropFamily(normalizedDropFamily);
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
@@ -1187,6 +1274,7 @@ function createFrontendDrop(
     metadataPathFormat,
     secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
     ...(figureMedia ? { figureMedia } : {}),
+    ...(boxMedia ? { boxMedia } : {}),
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
@@ -1404,6 +1492,10 @@ function isRawIpfsCid(value: string): boolean {
   return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value);
+}
+
 function normalizeIpfsProtocolUrl(value: string): string {
   const trimmed = trimTrailingSlashes(String(value || '').trim());
   if (!trimmed) return '';
@@ -1426,6 +1518,7 @@ export function canonicalizeDropAssetUrl(url: string): string {
 
   const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
   if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
+  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
 
   try {
     const parsed = new URL(trimmed);
