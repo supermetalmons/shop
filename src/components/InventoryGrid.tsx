@@ -1,9 +1,10 @@
-import { useEffect, useState, type DragEvent, type MouseEvent } from 'react';
-import { InventoryItem } from '../types';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import type { InventoryItem, InventoryPreviewVideo } from '../types';
 import { getFrontendDrop } from '../config/deployment';
 import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
+import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
 
 interface InventoryGridProps {
   items: InventoryItem[];
@@ -20,13 +21,126 @@ interface InventoryGridProps {
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
 }
 
+type InventoryVideoMediaProps = {
+  item: InventoryItem;
+  sources: InventoryPreviewVideo['sources'];
+  posterSrc?: string;
+};
+
+function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoActive, setVideoActive] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
+  const sourceKey = sources.map((source) => `${source.src}:${source.type || ''}`).join('|');
+  const videoKey = `${posterSrc || ''}|${sourceKey}`;
+  const showVideo = videoActive && !videoFailed;
+  const showPoster = Boolean(posterSrc);
+  const showPlaceholder = !showVideo && !showPoster;
+
+  useEffect(() => {
+    setVideoFailed(false);
+  }, [posterSrc, sourceKey]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof IntersectionObserver === 'undefined') {
+      setVideoActive(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setVideoActive(Boolean(entry?.isIntersecting));
+      },
+      { rootMargin: '160px' },
+    );
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!showVideo) {
+      video.pause();
+      return;
+    }
+    playMutedAutoplayVideo(video);
+    return () => {
+      video.pause();
+    };
+  }, [showVideo, sourceKey]);
+
+  return (
+    <div ref={rootRef} className="inventory__video-stack" role="img" aria-label={item.name}>
+      {posterSrc ? (
+        <img
+          className="inventory__video-poster"
+          src={posterSrc}
+          alt=""
+          aria-hidden="true"
+          loading="lazy"
+          draggable={false}
+          onDragStart={(evt) => evt.preventDefault()}
+        />
+      ) : null}
+      {showVideo ? (
+        <video
+          key={videoKey}
+          ref={videoRef}
+          className="inventory__video"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="metadata"
+          poster={posterSrc}
+          aria-hidden="true"
+          draggable={false}
+          onDragStart={(evt) => evt.preventDefault()}
+          onLoadStart={() => {
+            setVideoFailed(false);
+          }}
+          onLoadedData={(evt) => {
+            setVideoFailed(false);
+            playMutedAutoplayVideo(evt.currentTarget);
+          }}
+          onCanPlay={(evt) => {
+            setVideoFailed(false);
+            playMutedAutoplayVideo(evt.currentTarget);
+          }}
+          onError={() => {
+            setVideoFailed(true);
+          }}
+        >
+          {sources.map((source) => (
+            <source key={`${source.src}:${source.type || ''}`} src={source.src} type={source.type} />
+          ))}
+        </video>
+      ) : null}
+      <div className="placeholder" aria-hidden hidden={!showPlaceholder}>
+        <span> </span>
+      </div>
+    </div>
+  );
+}
+
 function InventoryMedia({ item }: { item: InventoryItem }) {
   const isFigure = item.kind === 'dude';
+  const previewVideo = item.previewVideo;
   const [figureImageFailed, setFigureImageFailed] = useState(false);
 
   useEffect(() => {
     setFigureImageFailed(false);
   }, [item.image]);
+
+  if (previewVideo) {
+    const previewVideoSources = previewVideo.sources.filter((source) => source.src);
+    if (previewVideoSources.length) {
+      return <InventoryVideoMedia item={item} sources={previewVideoSources} posterSrc={previewVideo.posterSrc} />;
+    }
+  }
 
   if (!item.image) {
     return (

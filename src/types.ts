@@ -1,11 +1,22 @@
 export type AssetKind = 'box' | 'dude' | 'certificate';
 
+export type PreviewVideoSource = {
+  src: string;
+  type?: string;
+};
+
+export type InventoryPreviewVideo = {
+  sources: readonly PreviewVideoSource[];
+  posterSrc?: string;
+};
+
 export interface InventoryItem {
   id: string;
   dropId: string;
   name: string;
   kind: AssetKind;
   image?: string;
+  previewVideo?: InventoryPreviewVideo;
   attributes?: { trait_type: string; value: string }[];
   boxId?: string;
   dudeId?: number;

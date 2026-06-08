@@ -11,10 +11,14 @@ import {
   useState,
 } from 'react';
 import { FaCircleQuestion } from 'react-icons/fa6';
-import { MintStats } from '../types';
+import { MintStats, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
+import {
+  playMutedAutoplayVideo as playAutoplayVideo,
+  prepareMutedAutoplayVideo as prepareAutoplayVideo,
+} from '../lib/autoplayVideo';
 
 type MintPanelTerminalButton = {
   key?: string;
@@ -31,10 +35,7 @@ type MintPanelTerminalAction = {
   buttons?: MintPanelTerminalButton[];
 };
 
-export type MintPanelVideoSource = {
-  src: string;
-  type?: string;
-};
+export type MintPanelVideoSource = PreviewVideoSource;
 
 export type MintPanelBoxMedia = {
   imageSrc?: string;
@@ -326,19 +327,6 @@ function uniqueMediaSrcs(...sources: Array<string | undefined>): string[] {
   });
 
   return Array.from(uniqueSources);
-}
-
-function prepareAutoplayVideo(video: HTMLVideoElement | null) {
-  if (!video) return;
-  video.defaultMuted = true;
-  video.muted = true;
-  video.volume = 0;
-}
-
-function playAutoplayVideo(video: HTMLVideoElement) {
-  prepareAutoplayVideo(video);
-  if (!video.paused && !video.ended) return;
-  void video.play().catch(() => undefined);
 }
 
 type RestartAutoplayVideoOptions = {

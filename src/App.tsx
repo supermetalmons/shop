@@ -107,11 +107,13 @@ import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/sh
 import {
   DeliveryOrderSummary,
   InventoryItem,
+  InventoryPreviewVideo,
   PendingOpenBox,
+  PreviewVideoSource,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
 } from './types';
-import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily, resolveDropAssetUrl } from './config/deployment';
+import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from './config/deployment';
 import { getNormalizedPathname, navigate } from './navigation';
 import {
   dropPath,
@@ -122,6 +124,19 @@ import {
 } from './lib/dropConfig';
 import { ADMIN_WALLETS, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
+import {
+  buildCurrentBoxIdIndexes,
+  isCardNft2LocalMintedBox,
+  isUnresolvedCardNft2Box,
+  localMintedBoxExpiresAt,
+  pruneExpiredLocalMintedBoxes,
+  reconcileLocalMintedBoxes,
+  refreshLocalMintedBoxCountExpectations,
+  withoutLocallyMintedUnresolvedCardNft2Boxes,
+  type CurrentBoxIdIndexes,
+  type LocalMintedBox,
+  type LocalMintedBoxMatch,
+} from './lib/localMintedBoxes';
 import {
   calcPonchoDrifellaAbsoluteCardRect,
   calcPonchoDrifellaCardRect,
@@ -222,6 +237,7 @@ type StripeCheckoutReturn =
       status: 'cancel' | 'unverified_success';
       sessionId?: undefined;
     };
+type CardNft2PackVideoSources = readonly PreviewVideoSource[];
 
 function shuffleWithRandom<T>(items: T[], random: () => number): T[] {
   const next = items.slice();
@@ -1098,12 +1114,7 @@ type LocalPendingReveal = {
   boxId?: string;
 };
 
-type LocalMintedBox = {
-  id: string;
-  dropId: string;
-  createdAt: number;
-  expectedInventoryCount?: number;
-};
+const EMPTY_LOCAL_MINTED_BOXES: readonly LocalMintedBox[] = [];
 
 function boxDisplayImageForInventoryItem(item: Pick<InventoryItem, 'dropId' | 'image' | 'boxId'>): string | undefined {
   return normalizeBoxDisplayImage({ dropId: item.dropId, imageRaw: item.image, boxId: item.boxId });
@@ -1372,7 +1383,7 @@ function formatRevealIds(ids?: number[]) {
   return '';
 }
 
-function cardNft2PackVideoSourcesForBrowser(): MintPanelBoxMedia['videoSources'] {
+function cardNft2PackVideoSourcesForBrowser(): CardNft2PackVideoSources {
   if (typeof document === 'undefined') return CARD_NFT_2_PACK_VIDEO_SOURCES;
   const video = document.createElement('video');
   return video.canPlayType(CARD_NFT_2_PACK_VIDEO_SOURCES[0].type)
@@ -1380,10 +1391,17 @@ function cardNft2PackVideoSourcesForBrowser(): MintPanelBoxMedia['videoSources']
     : CARD_NFT_2_PACK_WEBM_FIRST_VIDEO_SOURCES;
 }
 
+function createCardNft2PackInventoryPreviewVideo(sources: CardNft2PackVideoSources): InventoryPreviewVideo {
+  return {
+    sources,
+    posterSrc: CARD_NFT_2_PACK_VIDEO_POSTER_URL,
+  };
+}
+
 function resolveMintPreviewMedia(
   media: MintPanelBoxMedia,
   usesCardNft2Video: boolean,
-  cardNft2PackVideoSources: MintPanelBoxMedia['videoSources'],
+  cardNft2PackVideoSources: CardNft2PackVideoSources,
 ): MintPanelBoxMedia {
   if (!usesCardNft2Video) return media;
 
@@ -1479,6 +1497,10 @@ function App({ currentPath }: AppProps) {
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
+  const cardNft2PackInventoryPreviewVideo = useMemo(
+    () => createCardNft2PackInventoryPreviewVideo(cardNft2PackVideoSources),
+    [cardNft2PackVideoSources],
+  );
   const normalizedCurrentPath = useMemo(
     () => (currentPath ? currentPath : getNormalizedPathname()),
     [currentPath],
@@ -1893,7 +1915,11 @@ function App({ currentPath }: AppProps) {
   const openSelectedBoxIdRef = useRef<string | null>(null);
   const previousConnectedWalletForOwnerRef = useRef(connectedWallet);
   const localMintCounterRef = useRef(0);
-  const knownBoxIdsByDropRef = useRef<Map<string, Set<string>>>(new Map());
+  const knownBoxIdIndexesRef = useRef<CurrentBoxIdIndexes>({
+    allByDrop: new Map(),
+    resolvedByDrop: new Map(),
+    unresolvedByDrop: new Map(),
+  });
   const preloadedBoxFramesRef = useRef<Set<string>>(new Set());
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
@@ -2582,25 +2608,39 @@ function App({ currentPath }: AppProps) {
     });
   };
 
-  const addLocalMintedBoxes = (quantity: number, dropId: string) => {
+  const addLocalMintedBoxes = (quantity: number, dropId: string, assetIds: readonly string[] = []) => {
     if (isViewerMode) return;
     if (!Number.isFinite(quantity) || quantity <= 0) return;
-    const normalizedDropId = String(dropId || '').trim().toLowerCase();
+    const normalizedDropId = normalizeDropId(dropId);
     if (!normalizedDropId) return;
     const now = Date.now();
     setLocalMintedBoxes((prev) => {
       const entries: LocalMintedBox[] = [];
-      const knownInventoryCount = inventoryFetched
-        ? inventoryView.filter((item) => item.kind === 'box' && item.dropId === normalizedDropId).length
+      const knownBoxItems = inventoryFetched
+        ? inventoryView.filter((item) => item.kind === 'box' && normalizeDropId(item.dropId) === normalizedDropId)
         : undefined;
+      const isCardNft2Drop = isDropFamily(normalizedDropId, 'card_nft_2');
+      const knownInventoryCount = knownBoxItems?.filter((item) => !isUnresolvedCardNft2Box(item)).length;
+      const baselineAssetIds = knownBoxItems && isCardNft2Drop ? knownBoxItems.map((item) => item.id) : undefined;
       const pendingForDrop = prev.filter((entry) => entry.dropId === normalizedDropId).length;
       for (let i = 0; i < Math.floor(quantity); i += 1) {
+        const expectedAssetId = isCardNft2Drop ? assetIds[i] : undefined;
+        const match: LocalMintedBoxMatch = expectedAssetId
+          ? { kind: 'asset', expectedAssetId }
+          : baselineAssetIds
+            ? { kind: 'baseline', baselineAssetIds }
+            : {
+                kind: 'count',
+                ...(knownInventoryCount != null
+                  ? { expectedInventoryCount: knownInventoryCount + pendingForDrop + i + 1 }
+                  : {}),
+              };
         localMintCounterRef.current += 1;
         entries.push({
           id: `local-minted-${now}-${localMintCounterRef.current}`,
           dropId: normalizedDropId,
           createdAt: now + i,
-          ...(knownInventoryCount != null ? { expectedInventoryCount: knownInventoryCount + pendingForDrop + i + 1 } : {}),
+          match,
         });
       }
       return entries.length ? [...entries, ...prev] : prev;
@@ -2937,7 +2977,11 @@ function App({ currentPath }: AppProps) {
     figureMetadataLoadingRef.current.clear();
     figureMetadataRetryAtRef.current.clear();
     localMintCounterRef.current = 0;
-    knownBoxIdsByDropRef.current = new Map();
+    knownBoxIdIndexesRef.current = {
+      allByDrop: new Map(),
+      resolvedByDrop: new Map(),
+      unresolvedByDrop: new Map(),
+    };
     preloadedBoxFramesRef.current.clear();
     boxFramePreloadImagesRef.current.clear();
     clearPonchoDrifellaImageCache(ponchoImageCacheRef.current);
@@ -3040,95 +3084,47 @@ function App({ currentPath }: AppProps) {
     if (isViewerMode) return;
     if (revealOverlay) return;
     if (!inventoryFetched) return;
-    const currentBoxIdsByDrop = new Map<string, Set<string>>();
-    inventoryView.forEach((item) => {
-      if (item.kind !== 'box') return;
-      const dropId = String(item.dropId || '').trim().toLowerCase();
-      if (!dropId) return;
-      const existing = currentBoxIdsByDrop.get(dropId) || new Set<string>();
-      existing.add(item.id);
-      currentBoxIdsByDrop.set(dropId, existing);
-    });
-    const prevBoxIdsByDrop = knownBoxIdsByDropRef.current;
+    const currentBoxIds = buildCurrentBoxIdIndexes(inventoryView);
     if (localMintedBoxes.length) {
-      const currentBoxCountByDrop = new Map<string, number>();
-      currentBoxIdsByDrop.forEach((ids, dropId) => {
-        currentBoxCountByDrop.set(dropId, ids.size);
-      });
-      const newBoxCountByDrop = new Map<string, number>();
-      currentBoxIdsByDrop.forEach((ids, dropId) => {
-        const prevIds = prevBoxIdsByDrop.get(dropId);
-        if (!prevIds) return;
-        let newCount = 0;
-        ids.forEach((id) => {
-          if (!prevIds.has(id)) newCount += 1;
-        });
-        if (newCount > 0) {
-          newBoxCountByDrop.set(dropId, newCount);
-        }
-      });
-      setLocalMintedBoxes((prev) => {
-        if (!prev.length) return prev;
-        const removeIndexes = new Set<number>();
-        const remainingIndexesByDrop = new Map<string, number[]>();
-        prev.forEach((entry, index) => {
-          const currentCount = currentBoxCountByDrop.get(entry.dropId) || 0;
-          if (entry.expectedInventoryCount != null && currentCount >= entry.expectedInventoryCount) {
-            removeIndexes.add(index);
-            return;
-          }
-          const existing = remainingIndexesByDrop.get(entry.dropId) || [];
-          existing.push(index);
-          remainingIndexesByDrop.set(entry.dropId, existing);
-        });
-        remainingIndexesByDrop.forEach((indexes, dropId) => {
-          let remainingToRemove = newBoxCountByDrop.get(dropId) || 0;
-          if (!remainingToRemove) return;
-          indexes
-            .sort((leftIdx, rightIdx) => prev[leftIdx].createdAt - prev[rightIdx].createdAt)
-            .forEach((index) => {
-              if (remainingToRemove <= 0) return;
-              removeIndexes.add(index);
-              remainingToRemove -= 1;
-            });
-        });
-        if (!removeIndexes.size) return prev;
-        const next = prev.filter((_, index) => !removeIndexes.has(index));
-        if (next.length === prev.length) return prev;
-        return next;
-      });
+      const previousAllBoxIdsByDrop = knownBoxIdIndexesRef.current.allByDrop;
+      setLocalMintedBoxes((prev) =>
+        reconcileLocalMintedBoxes(prev, currentBoxIds, previousAllBoxIdsByDrop, Date.now()),
+      );
     }
-    knownBoxIdsByDropRef.current = currentBoxIdsByDrop;
+    knownBoxIdIndexesRef.current = currentBoxIds;
   }, [inventoryView, inventoryFetched, localMintedBoxes.length, revealOverlay, isViewerMode]);
+
+  useEffect(() => {
+    if (isViewerMode) return undefined;
+    if (revealOverlay) return undefined;
+
+    const pruneExpired = () => {
+      setLocalMintedBoxes((prev) => pruneExpiredLocalMintedBoxes(prev, Date.now()));
+    };
+    const now = Date.now();
+    let nextExpiresAt: number | null = null;
+    for (const entry of localMintedBoxes) {
+      const expiresAt = localMintedBoxExpiresAt(entry);
+      if (expiresAt == null) continue;
+      if (expiresAt <= now) {
+        pruneExpired();
+        return undefined;
+      }
+      nextExpiresAt = nextExpiresAt == null ? expiresAt : Math.min(nextExpiresAt, expiresAt);
+    }
+
+    if (nextExpiresAt == null || typeof window === 'undefined') return undefined;
+    const timeout = window.setTimeout(pruneExpired, Math.max(0, nextExpiresAt - now));
+
+    return () => window.clearTimeout(timeout);
+  }, [localMintedBoxes, revealOverlay, isViewerMode]);
 
   useEffect(() => {
     if (isViewerMode) return;
     if (!inventoryFetched) return;
-    setLocalMintedBoxes((prev) => {
-      let changed = false;
-      const next = [...prev];
-      const indexesByDrop = new Map<string, number[]>();
-      prev.forEach((entry, index) => {
-        const existing = indexesByDrop.get(entry.dropId) || [];
-        existing.push(index);
-        indexesByDrop.set(entry.dropId, existing);
-      });
-      indexesByDrop.forEach((indexes, dropId) => {
-        const knownCount = knownBoxIdsByDropRef.current.get(dropId)?.size || 0;
-        indexes
-          .sort((leftIdx, rightIdx) => prev[leftIdx].createdAt - prev[rightIdx].createdAt)
-          .forEach((index, offset) => {
-            const expectedInventoryCount = knownCount + offset + 1;
-            if (prev[index].expectedInventoryCount === expectedInventoryCount) return;
-            next[index] = {
-              ...prev[index],
-              expectedInventoryCount,
-            };
-            changed = true;
-          });
-      });
-      return changed ? next : prev;
-    });
+    setLocalMintedBoxes((prev) =>
+      refreshLocalMintedBoxCountExpectations(prev, knownBoxIdIndexesRef.current.resolvedByDrop),
+    );
   }, [inventoryFetched, isViewerMode]);
 
   useEffect(() => {
@@ -3388,8 +3384,8 @@ function App({ currentPath }: AppProps) {
   }, [connectedWallet, isViewerMode]);
 
   const localRevealedDudes = useMemo(() => {
-    if (isViewerMode) return [] as InventoryItem[];
-    if (!localRevealedDudeKeys.length) return [] as InventoryItem[];
+    if (isViewerMode) return EMPTY_INVENTORY;
+    if (!localRevealedDudeKeys.length) return EMPTY_INVENTORY;
     const chainDudeKeys = new Set(
       inventoryView
         .filter((item) => item.kind === 'dude' && typeof item.dudeId === 'number')
@@ -3416,9 +3412,16 @@ function App({ currentPath }: AppProps) {
     return out;
   }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey, figureReferenceForDropId, isViewerMode]);
 
+  const pendingCardNft2LocalMintedBoxes = useMemo(() => {
+    if (isViewerMode || !localMintedBoxes.length) return EMPTY_LOCAL_MINTED_BOXES;
+    const entries = localMintedBoxes.filter(isCardNft2LocalMintedBox);
+    return entries.length ? entries : EMPTY_LOCAL_MINTED_BOXES;
+  }, [localMintedBoxes, isViewerMode]);
+
   const visibleInventory = useMemo(() => {
-    const base =
+    const baseRaw =
       isViewerMode || !hiddenAssets.size ? inventoryView : inventoryView.filter((item) => !hiddenAssets.has(item.id));
+    const base = withoutLocallyMintedUnresolvedCardNft2Boxes(baseRaw, pendingCardNft2LocalMintedBoxes);
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
         const image = boxDisplayImageForInventoryItem(item);
@@ -3438,22 +3441,37 @@ function App({ currentPath }: AppProps) {
     });
     if (!localRevealedDudes.length) return enriched;
     return [...enriched, ...localRevealedDudes];
-  }, [inventoryView, hiddenAssets, localRevealedDudes, figureMetadataByKey, isViewerMode]);
+  }, [
+    inventoryView,
+    hiddenAssets,
+    pendingCardNft2LocalMintedBoxes,
+    localRevealedDudes,
+    figureMetadataByKey,
+    isViewerMode,
+  ]);
 
   const localMintedItems = useMemo<InventoryItem[]>(() => {
-    if (isViewerMode) return [] as InventoryItem[];
-    if (!localMintedBoxes.length) return [] as InventoryItem[];
+    if (isViewerMode) return EMPTY_INVENTORY;
+    if (!localMintedBoxes.length) return EMPTY_INVENTORY;
     return moveLittleSwagBoxesFamilyToEnd(
-      localMintedBoxes.map((entry) => ({
-        id: entry.id,
-        dropId: entry.dropId,
-        name: `Pending ${boxLabelForDropId(entry.dropId)}`,
-        kind: 'box' as const,
-        image: boxImageForDropId(entry.dropId),
-        status: 'pending' as const,
-      })),
+      localMintedBoxes.map((entry) => {
+        const isCardNft2 = isDropFamily(entry.dropId, 'card_nft_2');
+        return {
+          id: entry.id,
+          dropId: entry.dropId,
+          name: `Pending ${boxLabelForDropId(entry.dropId)}`,
+          kind: 'box' as const,
+          image: boxImageForDropId(entry.dropId),
+          ...(isCardNft2
+            ? {
+                previewVideo: cardNft2PackInventoryPreviewVideo,
+              }
+            : {}),
+          status: 'pending' as const,
+        };
+      }),
     );
-  }, [localMintedBoxes, boxImageForDropId, boxLabelForDropId, isViewerMode]);
+  }, [localMintedBoxes, boxImageForDropId, boxLabelForDropId, cardNft2PackInventoryPreviewVideo, isViewerMode]);
 
   const recentRevealedSet = useMemo(
     () => (isViewerMode ? new Set<string>() : new Set(recentRevealedBoxes)),
@@ -3951,6 +3969,7 @@ function App({ currentPath }: AppProps) {
     }
     const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
     let didConfirmMint = false;
+    let mintedBoxAssetIds: string[] = [];
     mintActionLockRef.current = 'mint';
     setMinting(true);
     try {
@@ -3960,6 +3979,7 @@ function App({ currentPath }: AppProps) {
           mintDrop.mintSelection?.kind === 'size'
             ? await buildMintVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
             : await buildMintBoxesTxWithAccounts(routeConnection, cfg, publicKey, quantity, mintDrop);
+        mintedBoxAssetIds = boxAccounts.map((account) => account.toBase58());
         return sendAndConfirmMintViaConnection(tx, routeConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
             recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
@@ -3970,7 +3990,7 @@ function App({ currentPath }: AppProps) {
         'Transaction expired before you approved it. Please approve again…',
       );
       if (!hasConfirmationError) {
-        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
         setSuccessfulMintToken((prev) => prev + 1);
         didConfirmMint = true;
       }
@@ -4016,6 +4036,7 @@ function App({ currentPath }: AppProps) {
     mintActionLockRef.current = 'discount';
     setDiscountMinting(true);
     let didConfirmMint = false;
+    let mintedBoxAssetIds: string[] = [];
     try {
       const proof = await getDiscountProof(mintDrop.dropId, publicKey.toBase58());
       if (!proof) {
@@ -4047,6 +4068,7 @@ function App({ currentPath }: AppProps) {
           mintDrop.mintSelection?.kind === 'size'
             ? await buildMintDiscountedVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
             : await buildMintDiscountedBoxTxWithAccounts(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
+        mintedBoxAssetIds = boxAccounts.map((account) => account.toBase58());
         return sendAndConfirmMintViaConnection(tx, routeConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
             recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
@@ -4057,7 +4079,7 @@ function App({ currentPath }: AppProps) {
         'Transaction expired before you approved it. Please approve again…',
       );
       if (!hasConfirmationError) {
-        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId);
+        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
         setSuccessfulMintToken((prev) => prev + 1);
         didConfirmMint = true;
       }

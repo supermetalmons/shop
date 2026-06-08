@@ -2,6 +2,7 @@ import {
   CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
 } from '../config/dropMediaDefaults.ts';
+import type { PreviewVideoSource } from '../types';
 
 export {
   CARD_NFT_2_PACK_INITIAL_BASE_URL,
@@ -14,8 +15,7 @@ export type CardNft2PackImage = {
   height: number;
 };
 
-export type CardNft2PackVideoSource = {
-  src: string;
+export type CardNft2PackVideoSource = PreviewVideoSource & {
   type: string;
 };
 
