@@ -9,7 +9,7 @@ export const NEW_DROP = defineNewDropConfig({
   deploy: {
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
-    reuseProgramId: true,
+    reuseProgramId: false,
   },
   onchain: {
     dropId: 'card_nft_2_devnet',

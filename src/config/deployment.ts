@@ -447,6 +447,35 @@ function assertSharedProgramDropsUseExplicitConfigPdas<
 
 // BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY
 export const FRONTEND_DROPS: FrontendDropsMap = {
+  "card_nft_2_devnet": createFrontendDrop({
+    solanaCluster: "devnet",
+    dropId: "card_nft_2_devnet",
+    dropFamily: "card_nft_2",
+    collectionName: "Card NFT 2",
+
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
+    metadataBase: "https://assets.mons.link/drops/cardnft2/json",
+    metadataPathFormat: "compact",
+
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
+    priceSol: 0.069,
+    discountPriceSol: 0.042,
+    discountMintsPerWallet: 3,
+    discountMerkleRoot: "a8cdf1ec11dbfacb15e9859d0d1484d95f388d883c012314db51e80e5f8021d3",
+    maxSupply: 65,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: "pack",
+    figureNamePrefix: "card",
+    symbol: "cardnft2",
+
+    // On-chain ids
+    boxMinterProgramId: "7h4JRc5vELpaahm11AeshFEQHe1jePauRnMFWaPSRNpV",
+    boxMinterConfigPda: "H8Mi2Yq2L8caoVKxvq3RJ4e4nASc7kXDW8beBBAsUfJE",
+    collectionMint: "9ATDCHKBges6BWiLHLhttmCxvCQQ83f9eiXjSX6iagRe",
+  }),
   "little_swag_boxes": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
