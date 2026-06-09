@@ -1,9 +1,10 @@
 import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal';
-import { CARD_NFT_2_PACK_INITIAL_BASE_URL } from './dropMediaDefaults.ts';
+import { CARD_NFT_2_PACK_BASE_URL } from './dropMediaDefaults.ts';
 import { isDropFamily, normalizeDropId } from './deployment';
 
 export type DropRevealMode = 'animated' | 'static';
 export type DropRevealRenderer = 'default' | 'poncho_drifella';
+export type DropBoxInventoryImagePathMode = 'file' | 'folder_initial';
 export type DropFigureInventoryImageMode = 'clean_variant' | 'metadata_raw';
 export type DropFigureRevealPresentation = 'videos' | 'metadata_stills';
 export type DropFigureFulfillmentPreviewMode = 'media_map_folder' | 'metadata_stills';
@@ -27,6 +28,7 @@ export type DropExtraContentOverride = {
   box?: {
     previewImageUrl?: string;
     inventoryImageBaseUrl?: string;
+    inventoryImagePathMode?: DropBoxInventoryImagePathMode;
     aspectRatio?: number;
   };
   mintPanel?: {
@@ -97,7 +99,8 @@ const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
 };
 const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
-    inventoryImageBaseUrl: CARD_NFT_2_PACK_INITIAL_BASE_URL,
+    inventoryImageBaseUrl: CARD_NFT_2_PACK_BASE_URL,
+    inventoryImagePathMode: 'folder_initial',
   },
 };
 

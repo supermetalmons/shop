@@ -1,6 +1,7 @@
 import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
 import {
   getDropExtraContentOverride,
+  type DropBoxInventoryImagePathMode,
   type DropExtraContentOverride,
   type DropFigureFulfillmentPreviewMode,
   type DropFigureInventoryImageMode,
@@ -16,6 +17,7 @@ export type ResolvedDropContent = {
   box: {
     previewImageUrl?: string;
     inventoryImageBaseUrl?: string;
+    inventoryImagePathMode?: DropBoxInventoryImagePathMode;
     aspectRatio: number;
   };
   mintPanel: {
@@ -133,6 +135,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
     box: {
       previewImageUrl: joinDropAssetUrl(base, 'box/tight.webp'),
       inventoryImageBaseUrl: undefined,
+      inventoryImagePathMode: 'file',
       aspectRatio: LEGACY_BOX_ASPECT_RATIO,
     },
     mintPanel: {
@@ -172,6 +175,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
     box: {
       previewImageUrl: undefined,
       inventoryImageBaseUrl: undefined,
+      inventoryImagePathMode: 'file',
       aspectRatio: 1,
     },
     mintPanel: {
@@ -210,6 +214,7 @@ function applyDropExtraContentOverride(
     box: {
       previewImageUrl: asOptionalString(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
       inventoryImageBaseUrl: asOptionalString(override.box?.inventoryImageBaseUrl) ?? base.box.inventoryImageBaseUrl,
+      inventoryImagePathMode: override.box?.inventoryImagePathMode || base.box.inventoryImagePathMode,
       aspectRatio: asPositiveNumber(override.box?.aspectRatio, base.box.aspectRatio),
     },
     mintPanel: {
@@ -278,7 +283,11 @@ export function normalizeBoxDisplayImage({ dropId, imageRaw, boxId }: BoxDisplay
   const fallbackImage = content.box.previewImageUrl || resolveDropAssetUrl(imageRaw || '') || undefined;
   const boxMediaId = content.box.inventoryImageBaseUrl ? getMediaIdForTokenId(boxId, drop?.boxMedia) : null;
   if (boxMediaId) {
-    return joinDropAssetUrl(content.box.inventoryImageBaseUrl, `${boxMediaId}.webp`) || fallbackImage;
+    const boxImagePath =
+      content.box.inventoryImagePathMode === 'folder_initial'
+        ? `${boxMediaId}/initial.webp`
+        : `${boxMediaId}.webp`;
+    return joinDropAssetUrl(content.box.inventoryImageBaseUrl, boxImagePath) || fallbackImage;
   }
   return fallbackImage;
 }
