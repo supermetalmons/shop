@@ -13,10 +13,12 @@ import {
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from '../src/lib/dropContent.ts';
 import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
 import {
+  getInteractiveCardPackCardByFigureId,
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
   getInteractiveCardPackRevealSequenceForDropId,
   selectInteractiveCardPackRevealCardId,
 } from '../src/lib/interactiveCardPackReveal.ts';
+import { getDrifCardByFigureId } from '../src/drifCards.ts';
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -101,4 +103,39 @@ test('interactive pack reveal content and selected card presentation are stable'
   assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.5), 12);
   assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.99), 13);
   assert.deepEqual(revealedIds, [11, 12, 13]);
+});
+
+test('card_nft_2 interactive card assets use assigned holo effects for ids 1 through 100', () => {
+  const card1 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 1);
+  assert.ok(card1);
+  assert.equal(card1.imageSrc, 'https://assets.mons.link/drops/cardnft2/img/card_1.webp');
+  assert.equal(card1.foilSrc, 'https://assets.mons.link/drops/cardnft2/holo/foil_1.webp');
+  assert.equal(card1.textureSrc, 'https://assets.mons.link/drops/cardnft2/holo/mask_1.webp');
+  assert.equal(card1.effect.id, 'swshp-SWSH179');
+  assert.equal(card1.effect.number, '1');
+
+  const card100 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 100);
+  assert.ok(card100);
+  assert.equal(card100.foilSrc, 'https://assets.mons.link/drops/cardnft2/holo/foil_100.webp');
+  assert.equal(card100.textureSrc, 'https://assets.mons.link/drops/cardnft2/holo/mask_100.webp');
+  assert.equal(card100.effect.id, 'pgo-24');
+  assert.equal(card100.effect.number, '100');
+});
+
+test('card_nft_2 interactive card assets remain plain outside assigned holo range', () => {
+  const card101 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 101);
+  assert.ok(card101);
+  assert.equal(card101.imageSrc, 'https://assets.mons.link/drops/cardnft2/img/card_101.webp');
+  assert.equal(card101.foilSrc, '/card_nft_2/back.webp');
+  assert.equal(card101.textureSrc, '/card_nft_2/back.webp');
+  assert.equal(card101.effect.id, 'card-nft-2-101');
+  assert.equal(card101.effect.source, 'card_nft_2');
+  assert.equal(card101.effect.number, '101');
+});
+
+test('poncho interactive card lookup still returns drif card configs', () => {
+  assert.equal(
+    getInteractiveCardPackCardByFigureId('poncho_drifella', 1),
+    getDrifCardByFigureId(1),
+  );
 });

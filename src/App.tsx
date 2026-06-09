@@ -89,12 +89,12 @@ import {
   PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   clearPonchoDrifellaImageCache,
   createPonchoDrifellaImageCache,
-  getPonchoDrifellaCardByFigureId,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
   type PonchoDrifellaRevealRequestStatus,
 } from './lib/ponchoDrifellaReveal';
 import {
+  getInteractiveCardPackCardByFigureId,
   getInteractiveCardPackCardsByFigureIds,
   getInteractiveCardPackRevealFigureIds,
   getInteractiveCardPackRevealSequenceForDropId,
@@ -3831,15 +3831,15 @@ function App({ currentPath }: AppProps) {
     selectedItems[0]?.kind === 'box' &&
     canOpenBoxesForDropId(selectedItems[0]?.dropId);
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
-  const selectedPonchoFigure = useMemo(() => {
+  const selectedInteractiveCardFigure = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
     if (!item || item.kind !== 'dude') return null;
-    if (!isDropFamily(item.dropId, 'poncho_drifella')) return null;
     if (typeof item.dudeId !== 'number') return null;
-    if (!getPonchoDrifellaCardByFigureId(item.dudeId)) return null;
+    if (!usesInteractiveCardPackRevealForDropId(item.dropId)) return null;
+    if (!getInteractiveCardPackCardByFigureId(item.dropId, item.dudeId)) return null;
     return item;
-  }, [selectedCount, selectedItems]);
-  const canViewSelected = Boolean(selectedPonchoFigure);
+  }, [selectedCount, selectedItems, usesInteractiveCardPackRevealForDropId]);
+  const canViewSelected = Boolean(selectedInteractiveCardFigure);
 
   useEffect(() => {
     if (!pendingRevealIds.size) return;
@@ -4563,7 +4563,7 @@ function App({ currentPath }: AppProps) {
 	    }
 	  };
 
-  const openPonchoCardViewer = useCallback((
+  const openInteractiveCardViewer = useCallback((
     {
       overlayId,
       dropId,
@@ -4582,12 +4582,12 @@ function App({ currentPath }: AppProps) {
       clearSelection?: boolean;
     },
   ) => {
-    if (!isDropFamily(dropId, 'poncho_drifella')) return false;
+    if (!usesInteractiveCardPackRevealForDropId(dropId)) return false;
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
 
-    const card = getPonchoDrifellaCardByFigureId(figureId);
+    const card = getInteractiveCardPackCardByFigureId(dropId, figureId);
     if (!card) return false;
 
     preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
@@ -4638,6 +4638,7 @@ function App({ currentPath }: AppProps) {
     resetPonchoRevealDismissState,
     revealLoading,
     startOpenLoading,
+    usesInteractiveCardPackRevealForDropId,
   ]);
 
   const openImageViewer = useCallback((
@@ -4751,20 +4752,20 @@ function App({ currentPath }: AppProps) {
     });
   }, [openReceiptImageViewerGroup]);
 
-  const handleViewSelectedPonchoCard = useCallback(() => {
-    if (!selectedPonchoFigure) return;
-    const figureId = selectedPonchoFigure.dudeId;
+  const handleViewSelectedInteractiveCard = useCallback(() => {
+    if (!selectedInteractiveCardFigure) return;
+    const figureId = selectedInteractiveCardFigure.dudeId;
     if (typeof figureId !== 'number') return;
-    openPonchoCardViewer({
-      overlayId: selectedPonchoFigure.id,
-      dropId: selectedPonchoFigure.dropId,
-      name: selectedPonchoFigure.name,
-      image: selectedPonchoFigure.image,
+    openInteractiveCardViewer({
+      overlayId: selectedInteractiveCardFigure.id,
+      dropId: selectedInteractiveCardFigure.dropId,
+      name: selectedInteractiveCardFigure.name,
+      image: selectedInteractiveCardFigure.image,
       figureId,
-      originRect: findInventoryRect(selectedPonchoFigure.id),
+      originRect: findInventoryRect(selectedInteractiveCardFigure.id),
       clearSelection: true,
     });
-  }, [findInventoryRect, openPonchoCardViewer, selectedPonchoFigure]);
+  }, [findInventoryRect, openInteractiveCardViewer, selectedInteractiveCardFigure]);
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
@@ -5117,7 +5118,6 @@ function App({ currentPath }: AppProps) {
       const dropContent = getDropContent(order.dropId);
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
       const useMediaFolderPreview = dropContent.figures.fulfillmentPreviewMode === 'media_map_folder';
-      const isPonchoFamily = isDropFamily(order.dropId, 'poncho_drifella');
       return (
         <div className="figure-grid shipment-item-grid">
           {order.items.map((item, index) => {
@@ -5184,7 +5184,9 @@ function App({ currentPath }: AppProps) {
             const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
             const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
-            const canViewPonchoCard = isPonchoFamily && Boolean(getPonchoDrifellaCardByFigureId(item.refId));
+            const canViewInteractiveCard =
+              usesInteractiveCardPackRevealForDropId(order.dropId) &&
+              Boolean(getInteractiveCardPackCardByFigureId(order.dropId, item.refId));
             const previewImage = primarySrc || fallbackSrc;
 
             return (
@@ -5199,8 +5201,8 @@ function App({ currentPath }: AppProps) {
                 onClick={(evt) => {
                   const originRect = getInventoryRevealRect(evt.currentTarget);
                   const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
-                  if (canViewPonchoCard) {
-                    openPonchoCardViewer({
+                  if (canViewInteractiveCard) {
+                    openInteractiveCardViewer({
                       overlayId: previewId,
                       dropId: order.dropId,
                       name: label,
@@ -5225,8 +5227,8 @@ function App({ currentPath }: AppProps) {
                   evt.preventDefault();
                   const originRect = getInventoryRevealRect(evt.currentTarget);
                   const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
-                  if (canViewPonchoCard) {
-                    openPonchoCardViewer({
+                  if (canViewInteractiveCard) {
+                    openInteractiveCardViewer({
                       overlayId: previewId,
                       dropId: order.dropId,
                       name: label,
@@ -5261,7 +5263,15 @@ function App({ currentPath }: AppProps) {
         </div>
       );
     },
-    [figureMetadataByKey, getDropContent, mergeLoadedFigureMetadata, openImageViewer, openPonchoCardViewer, requireKnownDropConfig],
+    [
+      figureMetadataByKey,
+      getDropContent,
+      mergeLoadedFigureMetadata,
+      openImageViewer,
+      openInteractiveCardViewer,
+      requireKnownDropConfig,
+      usesInteractiveCardPackRevealForDropId,
+    ],
   );
 
   const revealOverlayStyle = revealOverlay
@@ -5318,10 +5328,10 @@ function App({ currentPath }: AppProps) {
   const revealOverlayContainerLabel = revealOverlay
     ? boxLabelForDropId(revealOverlay.dropId)
     : boxLabelForDropId(routeDrop?.dropId);
-  const ponchoViewerCard = useMemo(() => {
+  const interactiveViewerCard = useMemo(() => {
     if (revealOverlay?.viewerMode !== 'poncho-card' || typeof revealOverlay.viewerFigureId !== 'number') return undefined;
-    return getPonchoDrifellaCardByFigureId(revealOverlay.viewerFigureId);
-  }, [revealOverlay?.viewerFigureId, revealOverlay?.viewerMode]);
+    return getInteractiveCardPackCardByFigureId(revealOverlay.dropId, revealOverlay.viewerFigureId);
+  }, [revealOverlay?.dropId, revealOverlay?.viewerFigureId, revealOverlay?.viewerMode]);
   const interactiveRevealCards = useMemo(() => {
     if (!revealOverlay?.revealedIds?.length) return [];
     const figureIds = getInteractiveCardPackRevealFigureIds(
@@ -5588,7 +5598,7 @@ function App({ currentPath }: AppProps) {
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
-        card={ponchoViewerCard}
+        card={interactiveViewerCard}
         loadingImageSrc={revealOverlay.image}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
@@ -6064,7 +6074,7 @@ function App({ currentPath }: AppProps) {
               <button
                 type="button"
                 className="selection-panel__view"
-                onClick={handleViewSelectedPonchoCard}
+                onClick={handleViewSelectedInteractiveCard}
               >
                 <svg
                   aria-hidden="true"

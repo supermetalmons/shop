@@ -81,6 +81,8 @@ const EFFECTS: Record<string, EffectConfig> = {
   },
 };
 
+export const DRIF_EFFECTS = EFFECTS;
+
 export const DRIF_CARD_COUNT = 207;
 export const DRIF_SHOWCASE_CARD_COUNT = 200;
 

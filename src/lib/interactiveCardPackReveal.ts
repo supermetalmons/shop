@@ -1,4 +1,4 @@
-import { getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
+import { DRIF_EFFECTS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults';
 import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment';
 
@@ -9,6 +9,7 @@ const INTERACTIVE_CARD_PACK_SEGMENT_1_2_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_AUTOPLAY_FRAME_COUNT = 10;
 const PONCHO_DRIFELLA_PACK_BASE_URL = '/Poncho_Drifella/pack';
 const CARD_NFT_2_CARD_FRONT_BASE_URL = 'https://assets.mons.link/drops/cardnft2/img';
+const CARD_NFT_2_HOLO_BASE_URL = 'https://assets.mons.link/drops/cardnft2/holo';
 const CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL = '/card_nft_2/back.webp';
 const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   id: 'card-nft-2-neutral',
@@ -20,6 +21,108 @@ const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   supertype: 'card',
   subtypes: 'card',
   trainerGallery: false,
+});
+const CARD_NFT_2_HOLO_EFFECT_BY_CARD_ID: Readonly<Partial<Record<number, keyof typeof DRIF_EFFECTS>>> = Object.freeze({
+  1: 'swshp-SWSH179',
+  2: 'swshp-SWSH179',
+  3: 'pgo-24',
+  4: 'swsh6-196',
+  5: 'swsh6-196',
+  6: 'swshp-SWSH179',
+  7: 'pgo-24',
+  8: 'pgo-24',
+  9: 'swshp-SWSH179',
+  10: 'pgo-24',
+  11: 'swshp-SWSH179',
+  12: 'pgo-24',
+  13: 'swsh4-9',
+  14: 'pgo-24',
+  15: 'swshp-SWSH179',
+  16: 'swshp-SWSH179',
+  17: 'swshp-SWSH179',
+  18: 'pgo-24',
+  19: 'swsh4-9',
+  20: 'swsh4-9',
+  21: 'swsh4-9',
+  22: 'swshp-SWSH179',
+  23: 'swsh6-196',
+  24: 'swsh4-9',
+  25: 'swsh4-9',
+  26: 'swsh4-9',
+  27: 'swshp-SWSH179',
+  28: 'swshp-SWSH179',
+  29: 'swshp-SWSH179',
+  30: 'pgo-24',
+  31: 'pgo-24',
+  32: 'swshp-SWSH179',
+  33: 'swshp-SWSH179',
+  34: 'swsh4-9',
+  35: 'swsh6-196',
+  36: 'swsh4-9',
+  37: 'swsh4-9',
+  38: 'swshp-SWSH179',
+  39: 'swsh6-196',
+  40: 'pgo-24',
+  41: 'pgo-24',
+  42: 'swshp-SWSH179',
+  43: 'swsh6-196',
+  44: 'swsh4-9',
+  45: 'pgo-24',
+  46: 'swsh4-9',
+  47: 'swshp-SWSH179',
+  48: 'swshp-SWSH179',
+  49: 'pgo-24',
+  50: 'swsh4-9',
+  51: 'swsh6-196',
+  52: 'pgo-24',
+  53: 'swsh6-196',
+  54: 'swsh6-196',
+  55: 'swsh4-9',
+  56: 'swsh6-196',
+  57: 'swsh6-196',
+  58: 'swsh6-196',
+  59: 'swsh6-196',
+  60: 'swsh6-196',
+  61: 'swsh6-196',
+  62: 'swshp-SWSH179',
+  63: 'swsh6-196',
+  64: 'pgo-24',
+  65: 'pgo-24',
+  66: 'swsh6-196',
+  67: 'swsh4-9',
+  68: 'swshp-SWSH179',
+  69: 'swsh6-196',
+  70: 'swsh4-9',
+  71: 'swsh6-196',
+  72: 'swsh4-9',
+  73: 'pgo-24',
+  74: 'swsh4-9',
+  75: 'pgo-24',
+  76: 'swshp-SWSH179',
+  77: 'swsh4-9',
+  78: 'swsh6-196',
+  79: 'swsh4-9',
+  80: 'pgo-24',
+  81: 'swsh6-196',
+  82: 'swshp-SWSH179',
+  83: 'swsh4-9',
+  84: 'swsh6-196',
+  85: 'pgo-24',
+  86: 'swsh4-9',
+  87: 'pgo-24',
+  88: 'swshp-SWSH179',
+  89: 'swsh6-196',
+  90: 'swsh4-9',
+  91: 'swsh6-196',
+  92: 'swshp-SWSH179',
+  93: 'swshp-SWSH179',
+  94: 'pgo-24',
+  95: 'pgo-24',
+  96: 'swsh4-9',
+  97: 'pgo-24',
+  98: 'swsh6-196',
+  99: 'swsh4-9',
+  100: 'pgo-24',
 });
 
 export type InteractiveCardPackRevealSequence = {
@@ -211,16 +314,23 @@ function getCardNft2CardByFigureId(figureId: number): DrifCardConfig | undefined
   if (!normalizedFigureId) return undefined;
   const cached = cardNft2CardByFigureId.get(normalizedFigureId);
   if (cached) return cached;
+  const holoEffectId = CARD_NFT_2_HOLO_EFFECT_BY_CARD_ID[normalizedFigureId];
+  const holoEffect = holoEffectId ? DRIF_EFFECTS[holoEffectId] : undefined;
   const card: DrifCardConfig = {
     imageSrc: `${CARD_NFT_2_CARD_FRONT_BASE_URL}/card_${normalizedFigureId}.webp`,
-    foilSrc: CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
-    textureSrc: CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
-    effect: {
-      ...CARD_NFT_2_NEUTRAL_CARD_EFFECT,
-      id: `card-nft-2-${normalizedFigureId}`,
-      number: String(normalizedFigureId),
-    },
-    glowType: 'metal',
+    foilSrc: holoEffect ? `${CARD_NFT_2_HOLO_BASE_URL}/foil_${normalizedFigureId}.webp` : CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
+    textureSrc: holoEffect ? `${CARD_NFT_2_HOLO_BASE_URL}/mask_${normalizedFigureId}.webp` : CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
+    effect: holoEffect
+      ? {
+          ...holoEffect,
+          number: String(normalizedFigureId),
+        }
+      : {
+          ...CARD_NFT_2_NEUTRAL_CARD_EFFECT,
+          id: `card-nft-2-${normalizedFigureId}`,
+          number: String(normalizedFigureId),
+        },
+    glowType: holoEffect?.typeClass ?? 'metal',
   };
   cardNft2CardByFigureId.set(normalizedFigureId, card);
   return card;
