@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { InventoryItem, InventoryPreviewVideo } from '../types';
-import { getFrontendDrop } from '../config/deployment';
+import { getFrontendDrop, isDropFamily } from '../config/deployment';
 import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
@@ -240,6 +240,7 @@ export function InventoryGrid({
         const viewEnabled = Boolean(!canSelect && !revealEnabled && onViewItem);
         const hasFooter = Boolean(item.assignedDudes?.length);
         const canInteract = canSelect || revealEnabled || viewEnabled;
+        const isInteractiveCardFigure = item.kind === 'dude' && isDropFamily(item.dropId, 'card_nft_2');
         const sizeLabel = dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId);
         const handleClick = canSelect
           ? () => onToggle(item.id)
@@ -266,6 +267,7 @@ export function InventoryGrid({
               hasFooter ? 'inventory__item--hasFooter' : '',
               isPendingReveal ? 'inventory__item--pending' : '',
               isReceipt ? 'inventory__item--receipt' : '',
+              isInteractiveCardFigure ? 'inventory__item--interactive-card-figure' : '',
               itemClassName || '',
             ]
               .filter(Boolean)

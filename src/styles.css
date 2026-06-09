@@ -15,6 +15,8 @@
   --mint-size-attention: #ff8a00;
   --mint-size-attention-soft: rgba(255, 138, 0, 0.18);
   --mint-size-attention-ring: rgba(255, 138, 0, 0.22);
+  --interactive-card-aspect: 0.7142857143;
+  --interactive-card-radius: 4.55% / 3.5%;
   --radius: 12px;
   --radius-sm: 8px;
   color-scheme: light;
@@ -2967,6 +2969,17 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   -webkit-user-select: none;
   -webkit-user-drag: none;
   -webkit-touch-callout: none;
+}
+
+.inventory__item--interactive-card-figure .inventory__image {
+  aspect-ratio: var(--interactive-card-aspect);
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  border-radius: var(--interactive-card-radius);
+  overflow: hidden;
+  background-size: cover;
+  background-clip: border-box;
 }
 
 .inventory__video-stack {

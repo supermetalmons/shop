@@ -193,8 +193,8 @@
   --clip: inset(9.85% 8% 52.85% 8%);
   --clip-stage: polygon(91.5% 9.85%, 57% 9.85%, 54% 12%, 17% 12%, 16% 14%, 12% 16%, 8% 16%, 8% 47.15%, 92% 47.15%);
   --clip-trainer: inset(14.5% 8.5% 48.2% 8.5%);
-  --card-aspect: 0.7142857143;
-  --card-radius: 4.55% / 3.5%;
+  --card-aspect: var(--interactive-card-aspect, 0.7142857143);
+  --card-radius: var(--interactive-card-radius, 4.55% / 3.5%);
   --card-edge: hsl(47, 100%, 78%);
   --card-back: #000;
   --card-glow: hsl(175, 100%, 90%);
