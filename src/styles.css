@@ -2223,9 +2223,9 @@ button.no-focus-style:focus-visible {
 .reveal-overlay__backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(8, 8, 8, 0.32);
-  backdrop-filter: blur(18px) saturate(1.05);
-  -webkit-backdrop-filter: blur(18px) saturate(1.05);
+  background: transparent;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   opacity: 0;
   transition: opacity 320ms ease;
 }
@@ -2491,10 +2491,10 @@ button.no-focus-style:focus-visible {
   font-size: 13px;
   font-weight: 300;
   letter-spacing: 0.01em;
-  color: rgba(255, 255, 255, 0.78);
+  color: rgba(29, 29, 31, 0.82);
   opacity: 0;
   transition: opacity 240ms ease;
-  text-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.7), 0 0 1px rgba(255, 255, 255, 0.9);
   pointer-events: none;
   z-index: 2;
 }
@@ -2840,7 +2840,7 @@ button.wip-reset-btn {
   border: none;
   border-radius: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.78);
+  color: rgba(29, 29, 31, 0.76);
   font-size: 13px;
   font-weight: 500;
   line-height: 1;
@@ -2873,7 +2873,7 @@ button.wip-close-btn:active:not(:disabled),
 button.wip-reset-btn:hover:not(:disabled),
 button.wip-reset-btn:active:not(:disabled) {
   background: transparent;
-  color: rgba(255, 255, 255, 0.92);
+  color: rgba(29, 29, 31, 0.94);
   opacity: 1;
 }
 
@@ -2932,8 +2932,21 @@ button.wip-reset-btn:focus:not(:focus-visible) {
     background: rgba(255, 255, 255, 0.03);
   }
 
-  .reveal-overlay__backdrop {
-    background: rgba(0, 0, 0, 0.55);
+  .reveal-overlay__note {
+    color: rgba(255, 255, 255, 0.78);
+    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  }
+
+  button.wip-close-btn,
+  button.wip-reset-btn {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  button.wip-close-btn:hover:not(:disabled),
+  button.wip-close-btn:active:not(:disabled),
+  button.wip-reset-btn:hover:not(:disabled),
+  button.wip-reset-btn:active:not(:disabled) {
+    color: rgba(255, 255, 255, 0.92);
   }
 }
 
