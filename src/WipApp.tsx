@@ -16,7 +16,7 @@ import {
   preloadPonchoDrifellaPackAssets,
 } from './lib/ponchoDrifellaReveal';
 import {
-  getInteractiveCardPackCardByFigureId,
+  getInteractiveCardPackCardsByFigureIds,
   getInteractiveCardPackRevealSequenceForDropId,
 } from './lib/interactiveCardPackReveal';
 import { isDropFamily, listFrontendDrops } from './config/deployment';
@@ -73,6 +73,21 @@ function randomWipCardId() {
   return Math.floor(Math.random() * WIP_CARD_COUNT) + 1;
 }
 
+function randomWipCardIds(count = WIP_ITEMS_PER_BOX) {
+  const targetUniqueCount = Math.min(count, WIP_CARD_COUNT);
+  const ids: number[] = [];
+  while (ids.length < targetUniqueCount) {
+    const nextId = randomWipCardId();
+    if (!ids.includes(nextId)) {
+      ids.push(nextId);
+    }
+  }
+  while (ids.length < count) {
+    ids.push(randomWipCardId());
+  }
+  return ids;
+}
+
 function randomWipPackMediaId() {
   return Math.floor(Math.random() * WIP_PACK_MEDIA_COUNT) + 1;
 }
@@ -84,6 +99,16 @@ function nextRandomWipValue(currentValue: number, count: number) {
     nextValue = Math.floor(Math.random() * count) + 1;
   }
   return nextValue;
+}
+
+function nextRandomWipCardIds(currentIds: readonly number[]) {
+  if (WIP_CARD_COUNT < 2) return [...currentIds];
+  const currentKey = currentIds.join(',');
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const nextIds = randomWipCardIds(currentIds.length || WIP_ITEMS_PER_BOX);
+    if (nextIds.join(',') !== currentKey) return nextIds;
+  }
+  return randomWipCardIds(currentIds.length || WIP_ITEMS_PER_BOX);
 }
 
 function isWipShortcutTarget(target: EventTarget | null) {
@@ -101,7 +126,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
-  const [cardId, setCardId] = useState(() => randomWipCardId());
+  const [cardIds, setCardIds] = useState(() => randomWipCardIds());
   const [packMediaId, setPackMediaId] = useState(() => randomWipPackMediaId());
   const [cardReady, setCardReady] = useState(false);
   const [resetKey, setResetKey] = useState(0);
@@ -114,7 +139,9 @@ function LocalPlayWipApp() {
     () => getInteractiveCardPackRevealSequenceForDropId(WIP_DROP.dropId, packMediaId),
     [packMediaId],
   );
-  const currentCard = useMemo(() => getInteractiveCardPackCardByFigureId(WIP_DROP.dropId, cardId), [cardId]);
+  const currentCards = useMemo(() => {
+    return getInteractiveCardPackCardsByFigureIds(WIP_DROP.dropId, cardIds);
+  }, [cardIds]);
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -211,6 +238,16 @@ function LocalPlayWipApp() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    currentCards.forEach((nextCard) => {
+      preloadPonchoDrifellaCardAssets(nextCard, ponchoImageCacheRef.current, {
+        mode: 'warm',
+        priority: 'low',
+      });
+    });
+  }, [currentCards]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     preloadRevealSounds();
   }, [preloadRevealSounds]);
 
@@ -227,17 +264,11 @@ function LocalPlayWipApp() {
 
   const handleReset = useCallback(() => {
     setResetKey((prev) => prev + 1);
-    const nextCardId = nextRandomWipValue(cardId, WIP_CARD_COUNT);
+    const nextCardIds = nextRandomWipCardIds(cardIds);
     const nextPackMediaId = nextRandomWipValue(packMediaId, WIP_PACK_MEDIA_COUNT);
-    if (nextCardId !== cardId) {
-      preloadPonchoDrifellaCardAssets(getInteractiveCardPackCardByFigureId(WIP_DROP.dropId, nextCardId), ponchoImageCacheRef.current, {
-        mode: 'warm',
-        priority: 'low',
-      });
-    }
-    setCardId(nextCardId);
+    setCardIds(nextCardIds);
     setPackMediaId(nextPackMediaId);
-  }, [cardId, packMediaId]);
+  }, [cardIds, packMediaId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -275,8 +306,8 @@ function LocalPlayWipApp() {
         phase="ready"
         boxLabel={revealContainerLabel}
         boxName={mysteryContainerName}
-        card={currentCard}
-        cardReady={cardReady}
+        cards={currentCards}
+        cardReady={cardReady && currentCards.length > 0}
         packSequence={packSequence}
         imageCache={ponchoImageCacheRef.current}
         boxButtonRef={revealButtonRef}

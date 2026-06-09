@@ -676,11 +676,13 @@ export function usePonchoDrifellaCardAssetsReady({
   card,
   imageCache,
   suspendResidentPreload = false,
+  releaseOnCleanup = true,
 }: {
   active: boolean;
   card: DrifCardConfig | undefined;
   imageCache: PonchoDrifellaImageCache;
   suspendResidentPreload?: boolean;
+  releaseOnCleanup?: boolean;
 }) {
   const imageCacheGeneration = usePonchoDrifellaImageCacheGeneration(imageCache);
   const [ready, setReady] = useState(() => active && arePonchoDrifellaCardAssetsReady(card, imageCache));
@@ -715,11 +717,11 @@ export function usePonchoDrifellaCardAssetsReady({
   }, [active, card, imageCache, imageCacheGeneration, suspendResidentPreload]);
 
   useEffect(() => {
-    if (!active || !card) return undefined;
+    if (!active || !card || !releaseOnCleanup) return undefined;
     return () => {
       releasePonchoDrifellaCardAssets(card, imageCache);
     };
-  }, [active, card, imageCache]);
+  }, [active, card, imageCache, releaseOnCleanup]);
 
   return ready;
 }

@@ -1,6 +1,6 @@
 import { getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults';
-import { isDropFamily, normalizeDropId } from '../config/deployment';
+import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment';
 
 const INTERACTIVE_CARD_PACK_PUNCH_VARIANT_COUNT = 3;
 const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;
@@ -57,6 +57,12 @@ function normalizePackBaseUrl(packBaseUrl: string) {
 function normalizePositiveInteger(value: unknown) {
   const normalized = Math.floor(Number(value));
   return Number.isFinite(normalized) && normalized > 0 ? normalized : undefined;
+}
+
+function normalizeInteractiveCardPackRevealIds(revealedIds: readonly unknown[] | undefined) {
+  return (revealedIds || [])
+    .map((revealedId) => normalizePositiveInteger(revealedId))
+    .filter((revealedId): revealedId is number => Boolean(revealedId));
 }
 
 export function normalizeInteractiveCardPackMediaId(value: unknown): number | undefined {
@@ -166,9 +172,7 @@ export function selectInteractiveCardPackRevealCardId(
   revealedIds: readonly number[] | undefined,
   random: () => number = Math.random,
 ): number | undefined {
-  const normalizedIds = (revealedIds || [])
-    .map((revealedId) => normalizePositiveInteger(revealedId))
-    .filter((revealedId): revealedId is number => Boolean(revealedId));
+  const normalizedIds = normalizeInteractiveCardPackRevealIds(revealedIds);
   if (!normalizedIds.length) return undefined;
   const randomValue = random();
   const index = Math.min(
@@ -176,6 +180,28 @@ export function selectInteractiveCardPackRevealCardId(
     Math.max(0, Math.floor((Number.isFinite(randomValue) ? randomValue : 0) * normalizedIds.length)),
   );
   return normalizedIds[index];
+}
+
+export function selectInteractiveCardPackRevealCardIdForDrop(
+  dropOrId: FrontendDropConfig | string | undefined,
+  revealedIds: readonly number[] | undefined,
+  random: () => number = Math.random,
+): number | undefined {
+  if (usesInteractiveCardPackStackReveal(dropOrId)) return undefined;
+  return selectInteractiveCardPackRevealCardId(revealedIds, random);
+}
+
+export function getInteractiveCardPackRevealFigureIds(
+  dropOrId: FrontendDropConfig | string | undefined,
+  revealedIds: readonly number[] | undefined,
+  selectedCardId?: number,
+): number[] {
+  const normalizedIds = normalizeInteractiveCardPackRevealIds(revealedIds);
+  if (!normalizedIds.length) return [];
+  if (usesInteractiveCardPackStackReveal(dropOrId)) return normalizedIds;
+  const normalizedSelectedCardId = normalizePositiveInteger(selectedCardId);
+  const revealCardId = normalizedSelectedCardId ?? (normalizedIds.length === 1 ? normalizedIds[0] : undefined);
+  return revealCardId ? [revealCardId] : [];
 }
 
 const cardNft2CardByFigureId = new Map<number, DrifCardConfig>();
@@ -208,4 +234,20 @@ export function getInteractiveCardPackCardByFigureId(
     return getCardNft2CardByFigureId(figureId);
   }
   return getDrifCardByFigureId(figureId);
+}
+
+export function getInteractiveCardPackCardsByFigureIds(
+  dropId: string | undefined,
+  figureIds: readonly number[] | undefined,
+): DrifCardConfig[] {
+  const cards: DrifCardConfig[] = [];
+  normalizeInteractiveCardPackRevealIds(figureIds).forEach((normalizedFigureId) => {
+    const card = getInteractiveCardPackCardByFigureId(dropId, normalizedFigureId);
+    if (card) cards.push(card);
+  });
+  return cards;
+}
+
+export function usesInteractiveCardPackStackReveal(dropOrId?: FrontendDropConfig | string) {
+  return isDropFamily(dropOrId, 'card_nft_2');
 }

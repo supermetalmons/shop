@@ -2735,6 +2735,12 @@ button.no-focus-style:focus-visible {
   transform: translate3d(0, 0, 0);
   pointer-events: none;
   cursor: pointer;
+  z-index: 2;
+}
+
+.wip-reveal__card-item--next {
+  pointer-events: none;
+  z-index: 1;
 }
 
 .wip-reveal__media.wip-reveal__media--locked .wip-reveal__card-item--locked {
@@ -2743,6 +2749,58 @@ button.no-focus-style:focus-visible {
 
 .wip-reveal__media.wip-reveal__media--interactive .wip-reveal__card-item--interactive {
   pointer-events: auto;
+  z-index: 3;
+}
+
+.wip-reveal__card-stack-entry {
+  width: 100%;
+  height: 100%;
+  transform: translate3d(0, 0, 0);
+  transform-origin: 48% 54%;
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 180ms ease, filter 180ms ease;
+}
+
+.wip-reveal__card-stack-entry--next {
+  opacity: 0.94;
+  filter: brightness(0.92) saturate(0.94);
+  transform: translate3d(2.8%, 1.8%, 0) scale(0.985) rotate(1.4deg);
+}
+
+.wip-reveal__card-stack-entry--next-depth-2 {
+  opacity: 0.86;
+  filter: brightness(0.84) saturate(0.88);
+  transform: translate3d(5.4%, 3.4%, 0) scale(0.97) rotate(2.8deg);
+}
+
+.wip-reveal__card-stack-entry--next-depth-3 {
+  opacity: 0.78;
+  filter: brightness(0.78) saturate(0.82);
+  transform: translate3d(7.8%, 5%, 0) scale(0.955) rotate(4deg);
+}
+
+.wip-reveal__card-stack-entry--discarding {
+  pointer-events: none;
+  transition: none;
+  will-change: transform, opacity, filter;
+  animation: wip-card-stack-discard-left 260ms cubic-bezier(0.5, 0, 1, 0.42) forwards;
+}
+
+@keyframes wip-card-stack-discard-left {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+    filter: blur(0);
+  }
+  38% {
+    opacity: 0.96;
+    transform: translate3d(-18%, -2%, 0) scale(0.99) rotate(-7deg);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(-132%, 8%, 0) scale(0.92) rotate(-18deg);
+    filter: blur(1px);
+  }
 }
 
 .wip-reveal__card-item .drif-effect-card {

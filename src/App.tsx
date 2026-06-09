@@ -96,10 +96,11 @@ import {
   type PonchoDrifellaRevealRequestStatus,
 } from './lib/ponchoDrifellaReveal';
 import {
-  getInteractiveCardPackCardByFigureId,
+  getInteractiveCardPackCardsByFigureIds,
+  getInteractiveCardPackRevealFigureIds,
   getInteractiveCardPackRevealSequenceForDropId,
   normalizeInteractiveCardPackMediaId,
-  selectInteractiveCardPackRevealCardId,
+  selectInteractiveCardPackRevealCardIdForDrop,
 } from './lib/interactiveCardPackReveal';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
@@ -1694,12 +1695,8 @@ function App({ currentPath }: AppProps) {
     (dropId?: string, figureIds?: readonly number[]) => {
       if (!usesInteractiveCardPackRevealForDropId(dropId)) return;
       if (!figureIds?.length) return;
-      figureIds.forEach((figureId) => {
-        preloadPonchoDrifellaCardAssets(
-          getInteractiveCardPackCardByFigureId(dropId, figureId),
-          ponchoImageCacheRef.current,
-          { mode: 'warm', priority: 'low' },
-        );
+      getInteractiveCardPackCardsByFigureIds(dropId, figureIds).forEach((card) => {
+        preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
       });
     },
     [usesInteractiveCardPackRevealForDropId],
@@ -1977,7 +1974,6 @@ function App({ currentPath }: AppProps) {
   const boxFramePreloadImagesRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const preloadedInteractivePackKeysRef = useRef<Set<string>>(new Set());
-  const [ponchoRevealComplete, setPonchoRevealComplete] = useState(false);
   const ponchoRevealCompleteRef = useRef(false);
   const [deliveryRecoveryOverrideNextCheckAt, setDeliveryRecoveryOverrideNextCheckAt] = useState<number | null>(null);
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
@@ -1990,11 +1986,10 @@ function App({ currentPath }: AppProps) {
   const revealLoadingRequestCounterRef = useRef(0);
   const revealLoadingRequestIdRef = useRef<number | null>(null);
   const revealDismissLockedUntilRef = useRef<number>(0);
-  const ponchoPackDiscardDismissReadyRef = useRef(false);
+  const ponchoRevealDismissReadyRef = useRef(false);
   const revealOverlayActiveRef = useRef(false);
   const revealOverlayClosingRef = useRef(false);
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
-  const ponchoPackDiscardDismissTimeoutRef = useRef<number | null>(null);
   const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
   const stripeCheckoutCompletionHandledRef = useRef(false);
   const stripeCheckoutWalletRefreshStartedRef = useRef(false);
@@ -2837,30 +2832,31 @@ function App({ currentPath }: AppProps) {
     revealOverlayCloseTimeoutRef.current = null;
   }, []);
 
-  const clearPonchoPackDiscardDismissTimeout = useCallback(() => {
-    if (ponchoPackDiscardDismissTimeoutRef.current === null) return;
-    if (typeof window === 'undefined') return;
-    window.clearTimeout(ponchoPackDiscardDismissTimeoutRef.current);
-    ponchoPackDiscardDismissTimeoutRef.current = null;
+  const markPonchoRevealDismissReady = useCallback(() => {
+    ponchoRevealDismissReadyRef.current = true;
+    revealDismissLockedUntilRef.current = Date.now() + PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS;
   }, []);
 
-  const markPonchoPackDiscardDismissReady = useCallback(() => {
-    ponchoPackDiscardDismissReadyRef.current = true;
-    revealDismissLockedUntilRef.current = Date.now() + PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS;
-    clearPonchoPackDiscardDismissTimeout();
-  }, [clearPonchoPackDiscardDismissTimeout]);
+  const updatePonchoDismissReady = useCallback(
+    (ready: boolean) => {
+      if (ready) {
+        markPonchoRevealDismissReady();
+        return;
+      }
+      ponchoRevealDismissReadyRef.current = false;
+    },
+    [markPonchoRevealDismissReady],
+  );
 
   const updatePonchoRevealComplete = useCallback((complete: boolean) => {
     ponchoRevealCompleteRef.current = complete;
-    setPonchoRevealComplete(complete);
   }, []);
 
   const resetPonchoRevealDismissState = useCallback(() => {
     revealDismissLockedUntilRef.current = 0;
-    ponchoPackDiscardDismissReadyRef.current = false;
+    ponchoRevealDismissReadyRef.current = false;
     updatePonchoRevealComplete(false);
-    clearPonchoPackDiscardDismissTimeout();
-  }, [clearPonchoPackDiscardDismissTimeout, updatePonchoRevealComplete]);
+  }, [updatePonchoRevealComplete]);
 
   const resetRevealRequestState = useCallback(() => {
     revealOverlaySessionRef.current += 1;
@@ -2917,7 +2913,7 @@ function App({ currentPath }: AppProps) {
   const canDismissInteractiveCardPackRevealOverlay = useCallback((overlay: Pick<RevealOverlayState, 'revealedIds'>) => {
     const hasResults = Boolean(overlay.revealedIds?.length);
     if (!ponchoRevealCompleteRef.current) return false;
-    if (hasResults && !ponchoPackDiscardDismissReadyRef.current) return false;
+    if (hasResults && !ponchoRevealDismissReadyRef.current) return false;
     if (hasResults && Date.now() < revealDismissLockedUntilRef.current) return false;
     return true;
   }, []);
@@ -4328,14 +4324,12 @@ function App({ currentPath }: AppProps) {
         return 'resolved';
       }
       const selectedInteractiveRevealCardId = usesInteractiveCardPackFlow
-        ? selectInteractiveCardPackRevealCardId(revealed)
+        ? selectInteractiveCardPackRevealCardIdForDrop(revealDrop, revealed)
         : undefined;
-      preloadInteractiveCardPackRevealCardAssetsForDropId(
-        revealDrop.dropId,
-        selectedInteractiveRevealCardId !== undefined
-          ? [selectedInteractiveRevealCardId]
-          : revealed,
-      );
+      const interactiveRevealFigureIds = usesInteractiveCardPackFlow
+        ? getInteractiveCardPackRevealFigureIds(revealDrop, revealed, selectedInteractiveRevealCardId)
+        : [];
+      preloadInteractiveCardPackRevealCardAssetsForDropId(revealDrop.dropId, interactiveRevealFigureIds);
       if (revealed.length) {
         revealDismissLockedUntilRef.current = Date.now() + 1_000;
       }
@@ -5332,13 +5326,14 @@ function App({ currentPath }: AppProps) {
     if (revealOverlay?.viewerMode !== 'poncho-card' || typeof revealOverlay.viewerFigureId !== 'number') return undefined;
     return getPonchoDrifellaCardByFigureId(revealOverlay.viewerFigureId);
   }, [revealOverlay?.viewerFigureId, revealOverlay?.viewerMode]);
-  const interactiveRevealCard = useMemo(() => {
-    if (!revealOverlay) return undefined;
-    const figureId =
-      revealOverlay.interactiveRevealCardId ??
-      (revealOverlay.revealedIds?.length === 1 ? revealOverlay.revealedIds[0] : undefined);
-    if (typeof figureId !== 'number') return undefined;
-    return getInteractiveCardPackCardByFigureId(revealOverlay.dropId, figureId);
+  const interactiveRevealCards = useMemo(() => {
+    if (!revealOverlay?.revealedIds?.length) return [];
+    const figureIds = getInteractiveCardPackRevealFigureIds(
+      revealOverlay.dropId,
+      revealOverlay.revealedIds,
+      revealOverlay.interactiveRevealCardId,
+    );
+    return getInteractiveCardPackCardsByFigureIds(revealOverlay.dropId, figureIds);
   }, [revealOverlay?.dropId, revealOverlay?.interactiveRevealCardId, revealOverlay?.revealedIds]);
   const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
   const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
@@ -5350,7 +5345,7 @@ function App({ currentPath }: AppProps) {
   );
   const revealOverlayCanRenderInteractiveCardPack = Boolean(
     revealOverlayHasInteractiveCardPackRenderer &&
-      (!revealOverlay?.revealedIds?.length || Boolean(interactiveRevealCard)),
+      (!revealOverlay?.revealedIds?.length || interactiveRevealCards.length > 0),
   );
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
@@ -5376,32 +5371,6 @@ function App({ currentPath }: AppProps) {
         ? 'revealed'
         : 'ready'
     : 'ready';
-  useEffect(() => {
-    if (!revealOverlayCanRenderInteractiveCardPack || !revealOverlay?.revealedIds?.length || !ponchoRevealComplete) {
-      ponchoPackDiscardDismissReadyRef.current = false;
-      clearPonchoPackDiscardDismissTimeout();
-      return undefined;
-    }
-    if (ponchoPackDiscardDismissReadyRef.current || typeof window === 'undefined') {
-      return undefined;
-    }
-    const overlayId = revealOverlay.id;
-    clearPonchoPackDiscardDismissTimeout();
-    ponchoPackDiscardDismissTimeoutRef.current = window.setTimeout(() => {
-      if (revealOverlayRef.current?.id !== overlayId) return;
-      markPonchoPackDiscardDismissReady();
-    }, PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS + PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS);
-    return () => {
-      clearPonchoPackDiscardDismissTimeout();
-    };
-  }, [
-    clearPonchoPackDiscardDismissTimeout,
-    markPonchoPackDiscardDismissReady,
-    ponchoRevealComplete,
-    revealOverlay?.id,
-    revealOverlay?.revealedIds?.length,
-    revealOverlayCanRenderInteractiveCardPack,
-  ]);
   const revealMediaItems = useMemo<Array<{ figureId: number; index: number; mediaId?: number; image?: string; name: string }>>(() => {
     if (revealOverlayCanRenderInteractiveCardPack || !revealOverlay?.revealedIds?.length) {
       return [];
@@ -5662,8 +5631,8 @@ function App({ currentPath }: AppProps) {
         active={revealOverlayActive}
         closing={revealOverlayClosing}
         phase={revealOverlay.phase}
-        card={interactiveRevealCard}
-        cardReady={Boolean(interactiveRevealCard)}
+        cards={interactiveRevealCards}
+        cardReady={interactiveRevealCards.length > 0}
         loading={revealLoading === revealOverlay.id}
         boxName={revealOverlay.name}
         boxLabel={revealOverlayContainerLabel}
@@ -5677,8 +5646,8 @@ function App({ currentPath }: AppProps) {
         onBeforeAdvance={ensureRevealOverlayAdvanceAllowed}
         onDismiss={handleRevealOverlayBackdropClick}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
-        onPackDiscardEnd={markPonchoPackDiscardDismissReady}
         onRevealCompleteChange={updatePonchoRevealComplete}
+        onDismissReadyChange={updatePonchoDismissReady}
       />
     ) : (
       defaultRevealOverlayNode

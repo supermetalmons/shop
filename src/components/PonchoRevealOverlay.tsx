@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type AnimationEvent,
@@ -11,7 +12,12 @@ import {
 } from 'react';
 import type { DrifCardConfig } from '../drifCards';
 import {
+  arePonchoDrifellaCardAssetsReady,
   createPonchoDrifellaRevealPlayer,
+  PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
+  PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
+  preloadPonchoDrifellaCardAssets,
+  releasePonchoDrifellaCardAssets,
   type PonchoDrifellaImageCache,
   type PonchoDrifellaRevealPhase,
   type PonchoDrifellaRevealPlayer,
@@ -43,12 +49,12 @@ type PonchoRevealSharedProps = {
   onBeforeAdvance?: () => boolean;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
-  onPackDiscardEnd?: () => void;
   onRevealCompleteChange?: (complete: boolean) => void;
+  onDismissReadyChange?: (ready: boolean) => void;
 };
 
 type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
-  card?: DrifCardConfig;
+  cards: readonly DrifCardConfig[];
   cardReady: boolean;
   loading?: boolean;
   boxButtonRef?: RefObject<HTMLButtonElement | null>;
@@ -56,7 +62,7 @@ type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
 
 export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
   mode: 'inventory-unbox';
-  card?: DrifCardConfig;
+  cards?: readonly DrifCardConfig[];
   cardReady?: boolean;
   loading: boolean;
 };
@@ -156,6 +162,135 @@ function shouldSuspendPonchoCardResidentPreload(stage: PonchoDrifellaRevealPlaye
   return stage === 'punch' || stage === 'segment_1_1' || stage === 'segment_1_2';
 }
 
+const EMPTY_CARD_STACK: readonly DrifCardConfig[] = [];
+const PONCHO_REVEAL_CARD_READY_FALLBACK_MS = 600;
+const PONCHO_REVEAL_CARD_STACK_DISCARD_FALLBACK_MS = 420;
+const PONCHO_REVEAL_PACK_DISCARD_FALLBACK_MS =
+  PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS + PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS + 120;
+
+function cardStackKeyForCard(card: DrifCardConfig, index: number) {
+  return `${index}:${card.effect.id}:${card.imageSrc}:${card.foilSrc || ''}:${card.textureSrc || ''}`;
+}
+
+function clearWindowTimeoutRef(timeoutRef: { current: number | null }) {
+  if (timeoutRef.current === null || typeof window === 'undefined') return;
+  window.clearTimeout(timeoutRef.current);
+  timeoutRef.current = null;
+}
+
+type PonchoCardStackEntryRole = 'active' | 'discarding' | 'next';
+
+type PonchoCardStackEntryModel = {
+  card: DrifCardConfig;
+  index: number;
+  role: PonchoCardStackEntryRole;
+  depth: number;
+};
+
+function usePonchoDrifellaCardStackAssets({
+  active,
+  activeCardIndex,
+  cardVisible,
+  imageCache,
+  stackCards,
+}: {
+  active: boolean;
+  activeCardIndex: number;
+  cardVisible: boolean;
+  imageCache: PonchoDrifellaImageCache;
+  stackCards: readonly DrifCardConfig[];
+}) {
+  const stackCardsKey = useMemo(() => stackCards.map(cardStackKeyForCard).join('|'), [stackCards]);
+
+  useEffect(() => {
+    if (!active || !cardVisible) return;
+    const [nextCard, ...laterCards] = stackCards.slice(activeCardIndex + 1);
+    if (nextCard) {
+      preloadPonchoDrifellaCardAssets(nextCard, imageCache, {
+        mode: 'resident',
+        priority: 'high',
+      });
+    }
+    laterCards.forEach((laterCard) => {
+      preloadPonchoDrifellaCardAssets(laterCard, imageCache, {
+        mode: 'warm',
+        priority: 'low',
+      });
+    });
+  }, [active, activeCardIndex, cardVisible, imageCache, stackCardsKey]);
+
+  useEffect(() => {
+    const cardsToRelease = [...stackCards];
+    return () => {
+      cardsToRelease.forEach((nextCard) => {
+        releasePonchoDrifellaCardAssets(nextCard, imageCache);
+      });
+    };
+  }, [imageCache, stackCardsKey]);
+}
+
+function PonchoRevealCardStackEntry({
+  entry,
+  cardKey,
+  cardInteractive,
+  cardLocked,
+  cardLabel,
+  onCardClick,
+  onImageReadyChange,
+  onDiscardAnimationEnd,
+}: {
+  entry: PonchoCardStackEntryModel;
+  cardKey: string;
+  cardInteractive: boolean;
+  cardLocked: boolean;
+  cardLabel: string;
+  onCardClick: (evt: SyntheticEvent) => void;
+  onImageReadyChange: (cardKey: string, ready: boolean) => void;
+  onDiscardAnimationEnd: (evt: AnimationEvent<HTMLElement>, cardIndex: number) => void;
+}) {
+  const { card, index, role, depth } = entry;
+  const isActiveEntry = role === 'active';
+  const isDiscardingEntry = role === 'discarding';
+  const isNextEntry = role === 'next';
+  const stackDepth = role === 'next' ? Math.min(Math.max(depth, 1), 3) : 0;
+  const handleImageReadyChange = useCallback(
+    (ready: boolean) => {
+      onImageReadyChange(cardKey, ready);
+    },
+    [cardKey, onImageReadyChange],
+  );
+  const handleDiscardAnimationEnd = useCallback(
+    (evt: AnimationEvent<HTMLElement>) => {
+      onDiscardAnimationEnd(evt, index);
+    },
+    [index, onDiscardAnimationEnd],
+  );
+
+  return (
+    <div
+      className={`reveal-overlay__media-item wip-reveal__card-item${isNextEntry ? ' wip-reveal__card-item--next' : ''}${isActiveEntry && cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${isActiveEntry && cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
+      aria-hidden={isNextEntry}
+      onClick={isActiveEntry || isDiscardingEntry ? onCardClick : undefined}
+    >
+      <div
+        className={`wip-reveal__card-stack-entry${isNextEntry ? ` wip-reveal__card-stack-entry--next wip-reveal__card-stack-entry--next-depth-${stackDepth}` : ''}${isDiscardingEntry ? ' wip-reveal__card-stack-entry--discarding' : ''}`}
+        onAnimationEnd={handleDiscardAnimationEnd}
+      >
+        <div className="reveal-overlay__media-float">
+          <WipInteractiveCard
+            card={card}
+            interactive={isActiveEntry && cardInteractive}
+            onImageReadyChange={isActiveEntry ? handleImageReadyChange : undefined}
+            wakeOnInteractiveUnlock={false}
+            ariaLabel={cardLabel}
+            imageAlt={cardLabel}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PonchoRevealOverlay({
   overlayStyle,
   active,
@@ -163,7 +298,7 @@ export function PonchoRevealOverlay({
   phase,
   boxLabel,
   boxName,
-  card,
+  cards = EMPTY_CARD_STACK,
   cardReady,
   packSequence,
   cardLabel = 'Revealed card',
@@ -177,8 +312,8 @@ export function PonchoRevealOverlay({
   onBeforeAdvance,
   onDismiss,
   onTransitionEnd,
-  onPackDiscardEnd,
   onRevealCompleteChange,
+  onDismissReadyChange,
 }: PonchoRevealRuntimeProps) {
   const imageCacheGeneration = usePonchoDrifellaImageCacheGeneration(imageCache);
   const boxCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -187,17 +322,65 @@ export function PonchoRevealOverlay({
   const activePackSequence = packSequence ?? PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE;
   const cardImageReadyRef = useRef(false);
   const discardAnimationReportedRef = useRef(false);
+  const packDiscardFallbackTimeoutRef = useRef<number | null>(null);
+  const cardStackAdvanceLockedRef = useRef(false);
+  const cardStackDiscardFallbackTimeoutRef = useRef<number | null>(null);
+  const activeCardReadyFallbackTimeoutRef = useRef<number | null>(null);
   const [hasCommittedBoxVisual, setHasCommittedBoxVisual] = useState(false);
+  const [activeCardIndex, setActiveCardIndex] = useState(0);
+  const [discardingCardIndex, setDiscardingCardIndex] = useState<number | null>(null);
+  const [packDiscardAnimationComplete, setPackDiscardAnimationComplete] = useState(false);
+  const [readyCardKey, setReadyCardKey] = useState('');
+  const [fallbackReadyCardKey, setFallbackReadyCardKey] = useState('');
   const [playerState, setPlayerState] = useState<PonchoDrifellaRevealPlayerViewState>(() =>
     createInitialPlayerState(phase, boxLabel),
   );
+  const stackCards = cards;
+  const stackCardsKey = useMemo(() => stackCards.map(cardStackKeyForCard).join('|'), [stackCards]);
+  const activeStackCard = stackCards[activeCardIndex];
+  const activeStackCardKey = activeStackCard ? cardStackKeyForCard(activeStackCard, activeCardIndex) : '';
+  const nextStackCard = stackCards[activeCardIndex + 1];
+  const remainingStackCards = useMemo(
+    () => stackCards.slice(activeCardIndex + 1),
+    [activeCardIndex, stackCards],
+  );
   const cardAssetsReady = usePonchoDrifellaCardAssetsReady({
     active,
-    card,
+    card: activeStackCard,
     imageCache,
     suspendResidentPreload: shouldSuspendPonchoCardResidentPreload(playerState.stage),
+    releaseOnCleanup: false,
   });
-
+  const playerCardReady = cardReady && Boolean(activeStackCard);
+  const cardStackTransitioning = discardingCardIndex !== null;
+  const activeStackCardReady = Boolean(
+    activeStackCardKey &&
+      cardAssetsReady &&
+      arePonchoDrifellaCardAssetsReady(activeStackCard, imageCache) &&
+      (readyCardKey === activeStackCardKey || fallbackReadyCardKey === activeStackCardKey),
+  );
+  const cardStackCanAdvance =
+    playerState.cardInteractive &&
+    activeStackCardReady &&
+    packDiscardAnimationComplete &&
+    Boolean(nextStackCard) &&
+    !cardStackTransitioning &&
+    !closing;
+  const cardStackDismissReady = Boolean(
+    playerState.cardInteractive &&
+      activeStackCardReady &&
+      packDiscardAnimationComplete &&
+      stackCards.length > 0 &&
+      activeCardIndex >= stackCards.length - 1 &&
+      !cardStackTransitioning,
+  );
+  usePonchoDrifellaCardStackAssets({
+    active,
+    activeCardIndex,
+    cardVisible: playerState.cardVisible,
+    imageCache,
+    stackCards,
+  });
   const clearVisuals = useCallback(() => {
     clearPonchoCanvas(boxCanvasRef.current);
     clearPonchoCanvas(foregroundCanvasRef.current);
@@ -239,10 +422,160 @@ export function PonchoRevealOverlay({
     setPlayerState((currentState) => (samePlayerState(currentState, nextState) ? currentState : nextState));
   }, []);
 
+  const clearPackDiscardFallbackTimeout = useCallback(() => {
+    clearWindowTimeoutRef(packDiscardFallbackTimeoutRef);
+  }, []);
+
+  const clearCardStackDiscardFallbackTimeout = useCallback(() => {
+    clearWindowTimeoutRef(cardStackDiscardFallbackTimeoutRef);
+  }, []);
+
+  const clearActiveCardReadyFallbackTimeout = useCallback(() => {
+    clearWindowTimeoutRef(activeCardReadyFallbackTimeoutRef);
+  }, []);
+
+  const completePackDiscardAnimation = useCallback(() => {
+    if (discardAnimationReportedRef.current) return;
+    discardAnimationReportedRef.current = true;
+    clearPackDiscardFallbackTimeout();
+    setPackDiscardAnimationComplete(true);
+  }, [clearPackDiscardFallbackTimeout]);
+
   useEffect(() => {
     if (active && playerState.revealComplete) return;
     discardAnimationReportedRef.current = false;
-  }, [active, playerState.revealComplete]);
+    clearPackDiscardFallbackTimeout();
+    setPackDiscardAnimationComplete(false);
+  }, [active, clearPackDiscardFallbackTimeout, playerState.revealComplete]);
+
+  const finishCardStackDiscard = useCallback(
+    (discardedIndex: number) => {
+      clearCardStackDiscardFallbackTimeout();
+      cardStackAdvanceLockedRef.current = false;
+      setActiveCardIndex((currentIndex) => Math.max(currentIndex, discardedIndex + 1));
+      setDiscardingCardIndex((currentIndex) => (currentIndex === discardedIndex ? null : currentIndex));
+    },
+    [clearCardStackDiscardFallbackTimeout],
+  );
+
+  const advanceCardStack = useCallback(() => {
+    if (!cardStackCanAdvance) return false;
+    if (cardStackAdvanceLockedRef.current) return true;
+    const discardedIndex = activeCardIndex;
+    cardStackAdvanceLockedRef.current = true;
+    setDiscardingCardIndex(discardedIndex);
+    clearCardStackDiscardFallbackTimeout();
+    if (typeof window !== 'undefined') {
+      cardStackDiscardFallbackTimeoutRef.current = window.setTimeout(() => {
+        cardStackDiscardFallbackTimeoutRef.current = null;
+        finishCardStackDiscard(discardedIndex);
+      }, PONCHO_REVEAL_CARD_STACK_DISCARD_FALLBACK_MS);
+    }
+    return true;
+  }, [activeCardIndex, cardStackCanAdvance, clearCardStackDiscardFallbackTimeout, finishCardStackDiscard]);
+
+  useEffect(() => {
+    cardImageReadyRef.current = false;
+    cardStackAdvanceLockedRef.current = false;
+    discardAnimationReportedRef.current = false;
+    clearPackDiscardFallbackTimeout();
+    clearCardStackDiscardFallbackTimeout();
+    clearActiveCardReadyFallbackTimeout();
+    setReadyCardKey('');
+    setFallbackReadyCardKey('');
+    setActiveCardIndex(0);
+    setDiscardingCardIndex(null);
+    setPackDiscardAnimationComplete(false);
+  }, [
+    active,
+    clearActiveCardReadyFallbackTimeout,
+    clearCardStackDiscardFallbackTimeout,
+    clearPackDiscardFallbackTimeout,
+    resetKey,
+    stackCardsKey,
+  ]);
+
+  useEffect(() => {
+    onDismissReadyChange?.(cardStackDismissReady);
+  }, [cardStackDismissReady, onDismissReadyChange]);
+
+  useEffect(() => {
+    if (!active || !playerState.packDiscarded || packDiscardAnimationComplete) {
+      clearPackDiscardFallbackTimeout();
+      return undefined;
+    }
+    if (typeof window === 'undefined') {
+      completePackDiscardAnimation();
+      return undefined;
+    }
+    clearPackDiscardFallbackTimeout();
+    packDiscardFallbackTimeoutRef.current = window.setTimeout(() => {
+      packDiscardFallbackTimeoutRef.current = null;
+      completePackDiscardAnimation();
+    }, PONCHO_REVEAL_PACK_DISCARD_FALLBACK_MS);
+    return () => {
+      clearPackDiscardFallbackTimeout();
+    };
+  }, [
+    active,
+    clearPackDiscardFallbackTimeout,
+    completePackDiscardAnimation,
+    packDiscardAnimationComplete,
+    playerState.packDiscarded,
+  ]);
+
+  useEffect(() => {
+    if (
+      !active ||
+      !activeStackCardKey ||
+      readyCardKey === activeStackCardKey ||
+      fallbackReadyCardKey === activeStackCardKey ||
+      !playerState.cardInteractive ||
+      !packDiscardAnimationComplete ||
+      !cardAssetsReady ||
+      !arePonchoDrifellaCardAssetsReady(activeStackCard, imageCache)
+    ) {
+      clearActiveCardReadyFallbackTimeout();
+      return undefined;
+    }
+    if (typeof window === 'undefined') {
+      setFallbackReadyCardKey(activeStackCardKey);
+      return undefined;
+    }
+    clearActiveCardReadyFallbackTimeout();
+    activeCardReadyFallbackTimeoutRef.current = window.setTimeout(() => {
+      activeCardReadyFallbackTimeoutRef.current = null;
+      setFallbackReadyCardKey(activeStackCardKey);
+    }, PONCHO_REVEAL_CARD_READY_FALLBACK_MS);
+    return () => {
+      clearActiveCardReadyFallbackTimeout();
+    };
+  }, [
+    active,
+    activeStackCard,
+    activeStackCardKey,
+    cardAssetsReady,
+    clearActiveCardReadyFallbackTimeout,
+    fallbackReadyCardKey,
+    imageCache,
+    packDiscardAnimationComplete,
+    playerState.cardInteractive,
+    readyCardKey,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      clearPackDiscardFallbackTimeout();
+      clearCardStackDiscardFallbackTimeout();
+      clearActiveCardReadyFallbackTimeout();
+      onDismissReadyChange?.(false);
+    };
+  }, [
+    clearActiveCardReadyFallbackTimeout,
+    clearCardStackDiscardFallbackTimeout,
+    clearPackDiscardFallbackTimeout,
+    onDismissReadyChange,
+  ]);
 
   useEffect(() => {
     if (!active) {
@@ -261,7 +594,7 @@ export function PonchoRevealOverlay({
       active,
       phase,
       boxLabel,
-      cardReady,
+      cardReady: playerCardReady,
       cardAssetsReady,
       packSequence: activePackSequence,
       imageCache,
@@ -309,7 +642,7 @@ export function PonchoRevealOverlay({
       active,
       phase,
       boxLabel,
-      cardReady,
+      cardReady: playerCardReady,
       cardAssetsReady,
       packSequence: activePackSequence,
       imageCache,
@@ -317,7 +650,7 @@ export function PonchoRevealOverlay({
       onPlayClick,
       onPlayReveal,
     });
-  }, [active, activePackSequence, boxLabel, cardAssetsReady, cardReady, imageCache, onPlayClick, onPlayReveal, onRequestReveal, phase]);
+  }, [active, activePackSequence, boxLabel, cardAssetsReady, imageCache, onPlayClick, onPlayReveal, onRequestReveal, phase, playerCardReady]);
 
   useEffect(() => {
     onRevealCompleteChange?.(playerState.revealComplete);
@@ -349,24 +682,36 @@ export function PonchoRevealOverlay({
     return undefined;
   }, []);
 
-  const handleCardImageReadyChange = useCallback((ready: boolean) => {
-    if (ready) {
-      cardImageReadyRef.current = true;
-    }
-    playerRef.current?.setCardImageReady(ready);
-  }, []);
+  const handleCardImageReadyChange = useCallback(
+    (cardKey: string, ready: boolean) => {
+      if (cardKey !== activeStackCardKey) return;
+      if (ready) {
+        setReadyCardKey(cardKey);
+        clearActiveCardReadyFallbackTimeout();
+        setFallbackReadyCardKey((currentKey) => (currentKey === cardKey ? '' : currentKey));
+      } else {
+        setReadyCardKey((currentKey) => (currentKey === cardKey ? '' : currentKey));
+      }
+      const wasReady = cardImageReadyRef.current;
+      cardImageReadyRef.current = ready;
+      if (ready && !wasReady) {
+        playerRef.current?.setCardImageReady(true);
+      }
+    },
+    [activeStackCardKey, clearActiveCardReadyFallbackTimeout],
+  );
 
-  const stopOverlayDismiss = (evt: SyntheticEvent) => {
-    evt.stopPropagation();
-  };
-
-  const handlePackDiscardAnimationEnd = (evt: AnimationEvent<HTMLElement>) => {
+  const handlePackDiscardAnimationEnd = useCallback((evt: AnimationEvent<HTMLElement>) => {
     if (evt.animationName !== 'wip-pack-discard') return;
     if (!playerState.packDiscarded) return;
-    if (discardAnimationReportedRef.current) return;
-    discardAnimationReportedRef.current = true;
-    onPackDiscardEnd?.();
-  };
+    completePackDiscardAnimation();
+  }, [completePackDiscardAnimation, playerState.packDiscarded]);
+
+  const handleCardStackDiscardAnimationEnd = useCallback((evt: AnimationEvent<HTMLElement>, cardIndex: number) => {
+    if (evt.animationName !== 'wip-card-stack-discard-left') return;
+    if (discardingCardIndex !== cardIndex) return;
+    finishCardStackDiscard(cardIndex);
+  }, [discardingCardIndex, finishCardStackDiscard]);
 
   const handleAdvance = () => {
     if (closing) return;
@@ -374,15 +719,45 @@ export function PonchoRevealOverlay({
     playerRef.current?.handleAdvance();
   };
 
+  const handleOverlayClick = useCallback(() => {
+    if (advanceCardStack()) return;
+    onDismiss?.();
+  }, [advanceCardStack, onDismiss]);
+
+  const handleCardClick = useCallback((evt: SyntheticEvent) => {
+    evt.stopPropagation();
+    advanceCardStack();
+  }, [advanceCardStack]);
+
   const boxDisabled = closing || playerState.phase !== 'ready' || playerState.revealComplete || playerState.advanceLocked;
   const cardLocked = playerState.packDiscarded && playerState.cardVisible && !playerState.cardInteractive;
+  const cardStackEntries = useMemo<PonchoCardStackEntryModel[]>(() => {
+    const nextEntries = remainingStackCards
+      .map((remainingCard, remainingIndex) => ({
+        card: remainingCard,
+        index: activeCardIndex + remainingIndex + 1,
+        role: 'next' as PonchoCardStackEntryRole,
+        depth: remainingIndex + 1,
+      }))
+      .reverse();
+    if (!activeStackCard) return nextEntries;
+    return [
+      ...nextEntries,
+      {
+        card: activeStackCard,
+        index: activeCardIndex,
+        role: discardingCardIndex === activeCardIndex ? 'discarding' : 'active',
+        depth: 0,
+      },
+    ];
+  }, [activeCardIndex, activeStackCard, discardingCardIndex, remainingStackCards]);
 
   return (
     <div
       className={`reveal-overlay wip-overlay reveal-overlay--${playerState.phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyle}
-      onClick={onDismiss}
+      onClick={handleOverlayClick}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -417,26 +792,27 @@ export function PonchoRevealOverlay({
           <canvas ref={boxCanvasRef} className="reveal-overlay__image" aria-hidden="true" />
         </button>
         <div className={`wip-reveal__stage${playerState.stageVisible ? ' wip-reveal__stage--visible' : ''}`} aria-hidden={!playerState.stageVisible}>
-          {card ? (
+          {activeStackCard ? (
             <div
               className={`reveal-overlay__media wip-reveal__media${playerState.cardVisible ? ' wip-reveal__media--visible' : ''}${playerState.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
               aria-hidden={!playerState.cardVisible || !playerState.cardInteractive}
             >
-              <div
-                className={`reveal-overlay__media-item wip-reveal__card-item${playerState.cardInteractive ? ' wip-reveal__card-item--interactive' : ''}${cardLocked ? ' wip-reveal__card-item--locked' : ''}`}
-                onClick={playerState.cardInteractive || cardLocked ? stopOverlayDismiss : undefined}
-              >
-                <div className="reveal-overlay__media-float">
-                  <WipInteractiveCard
-                    card={card}
-                    interactive={playerState.cardInteractive}
+              {cardStackEntries.map((entry) => {
+                const cardKey = cardStackKeyForCard(entry.card, entry.index);
+                return (
+                  <PonchoRevealCardStackEntry
+                    key={cardKey}
+                    entry={entry}
+                    cardKey={cardKey}
+                    cardInteractive={playerState.cardInteractive}
+                    cardLocked={cardLocked}
+                    cardLabel={cardLabel}
+                    onCardClick={handleCardClick}
                     onImageReadyChange={handleCardImageReadyChange}
-                    wakeOnInteractiveUnlock={false}
-                    ariaLabel={cardLabel}
-                    imageAlt={cardLabel}
+                    onDiscardAnimationEnd={handleCardStackDiscardAnimationEnd}
                   />
-                </div>
-              </div>
+                );
+              })}
             </div>
           ) : null}
           <div
@@ -459,11 +835,11 @@ export function PonchoRevealOverlay({
 
 export default function PonchoInventoryRevealOverlay({
   mode: _mode,
-  card,
+  cards = EMPTY_CARD_STACK,
   cardReady,
   ...overlayProps
 }: PonchoInventoryRevealOverlayProps) {
-  return <PonchoRevealOverlay {...overlayProps} card={card} cardReady={cardReady ?? Boolean(card)} />;
+  return <PonchoRevealOverlay {...overlayProps} cards={cards} cardReady={cardReady ?? cards.length > 0} />;
 }
 
 export function InteractiveCardPackRevealOverlay(props: InteractiveCardPackRevealOverlayProps) {
