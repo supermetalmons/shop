@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
-import type { DrifCardConfig } from '../drifCards';
+import { getDrifCardAssetSources, type DrifCardConfig } from '../drifCards';
 
 type SpringVec2 = { x: number; y: number };
 type SpringVec3 = { x: number; y: number; o: number };
@@ -251,8 +251,8 @@ export default function DrifEffectCard({
   const cardStyle = useMemo<React.CSSProperties>(
     () => ({
       ...staticCardStyle,
-      ['--mask' as never]: `url(${card.textureSrc})`,
-      ['--foil' as never]: `url(${card.foilSrc})`,
+      ...(card.textureSrc ? { ['--mask' as never]: `url(${card.textureSrc})` } : {}),
+      ...(card.foilSrc ? { ['--foil' as never]: `url(${card.foilSrc})` } : {}),
     }),
     [card.foilSrc, card.textureSrc, staticCardStyle],
   );
@@ -461,12 +461,14 @@ export default function DrifEffectCard({
   useEffect(() => {
     if (!preloadCards?.length || typeof window === 'undefined') return undefined;
 
-    const preloadImages = preloadCards.flatMap(({ imageSrc, foilSrc, textureSrc }) => [imageSrc, foilSrc, textureSrc]).map((src) => {
-      const image = new Image();
-      image.decoding = 'async';
-      image.src = src;
-      return image;
-    });
+    const preloadImages = preloadCards
+      .flatMap((preloadCard) => getDrifCardAssetSources(preloadCard))
+      .map((src) => {
+        const image = new Image();
+        image.decoding = 'async';
+        image.src = src;
+        return image;
+      });
 
     return () => {
       preloadImages.forEach((image) => {
@@ -689,7 +691,7 @@ export default function DrifEffectCard({
     'drif-effect-card',
     glowType,
     interactive ? 'interactive' : 'non-interactive',
-    'masked',
+    card.textureSrc ? 'masked' : '',
     disableGlow ? 'no-glow' : 'glowing',
     interacting ? 'interacting' : '',
     loading ? 'loading' : '',

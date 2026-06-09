@@ -733,6 +733,30 @@ button.drif-effect-card__rotator:disabled {
   filter: brightness(0.6) contrast(3);
 }
 
+.drif-effect-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__shine,
+.drif-effect-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__glitter {
+  display: none;
+}
+
+.drif-effect-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__glare {
+  background-image: radial-gradient(
+    farthest-corner circle at var(--pointer-x) var(--pointer-y),
+    hsla(0, 0%, 100%, 0.66) 8%,
+    hsla(0, 0%, 100%, 0.34) 24%,
+    hsla(0, 0%, 100%, 0.04) 58%,
+    hsla(0, 0%, 0%, 0.16) 100%
+  );
+  opacity: calc(var(--card-opacity) * 0.56);
+  mix-blend-mode: overlay;
+  filter: brightness(0.98);
+}
+
+.drif-effect-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__glare:before,
+.drif-effect-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__glare:after {
+  content: none;
+  background: none;
+}
+
 .drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine,
 .drif-effect-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:after {
   --space: 5%;

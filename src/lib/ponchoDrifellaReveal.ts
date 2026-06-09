@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
+import { getDrifCardAssetSources, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 import {
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
   type InteractiveCardPackRevealSequence,
@@ -200,17 +200,6 @@ async function decodePonchoDrifellaImage(image: HTMLImageElement) {
     }
   }
   return image;
-}
-
-function ponchoDrifellaCardAssetSources(card: DrifCardConfig | undefined) {
-  if (!card) return [];
-  return Array.from(
-    new Set(
-      [card.imageSrc, card.textureSrc, card.foilSrc]
-        .map((imageSrc) => normalizePonchoDrifellaImageSrc(imageSrc))
-        .filter((imageSrc): imageSrc is string => Boolean(imageSrc)),
-    ),
-  );
 }
 
 function ponchoDrifellaImageResidentReady(
@@ -635,7 +624,7 @@ export function arePonchoDrifellaCardAssetsReady(
   card: DrifCardConfig | undefined,
   imageCache?: PonchoDrifellaImageCache,
 ) {
-  return arePonchoDrifellaImageSourcesResidentReady(ponchoDrifellaCardAssetSources(card), imageCache);
+  return arePonchoDrifellaImageSourcesResidentReady(getDrifCardAssetSources(card), imageCache);
 }
 
 export function preloadPonchoDrifellaCardAssets(
@@ -643,7 +632,7 @@ export function preloadPonchoDrifellaCardAssets(
   imageCache: PonchoDrifellaImageCache,
   options: PonchoDrifellaImagePreloadOptions = {},
 ) {
-  const assetSources = ponchoDrifellaCardAssetSources(card);
+  const assetSources = getDrifCardAssetSources(card);
   if (!assetSources.length) return;
   preloadPonchoDrifellaImageSources(assetSources, imageCache, options);
 }
@@ -652,7 +641,7 @@ export function releasePonchoDrifellaCardAssets(
   card: DrifCardConfig | undefined,
   imageCache: PonchoDrifellaImageCache,
 ) {
-  const assetSources = ponchoDrifellaCardAssetSources(card);
+  const assetSources = getDrifCardAssetSources(card);
   if (!assetSources.length) return;
   releasePonchoDrifellaResidentImages(assetSources, imageCache);
 }
@@ -663,7 +652,7 @@ export function waitForPonchoDrifellaCardAssetsUntilReady(
   signal?: AbortSignal,
   options: PonchoDrifellaImagePreloadOptions = {},
 ) {
-  const assetSources = ponchoDrifellaCardAssetSources(card);
+  const assetSources = getDrifCardAssetSources(card);
   if (!assetSources.length) return Promise.resolve(true);
   return waitForPonchoDrifellaResidentImageSourcesProgressively(assetSources, imageCache, {
     signal,

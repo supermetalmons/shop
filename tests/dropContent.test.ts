@@ -18,7 +18,7 @@ import {
   getInteractiveCardPackRevealSequenceForDropId,
   selectInteractiveCardPackRevealCardId,
 } from '../src/lib/interactiveCardPackReveal.ts';
-import { getDrifCardByFigureId } from '../src/drifCards.ts';
+import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -126,11 +126,13 @@ test('card_nft_2 interactive card assets remain plain outside assigned holo rang
   const card101 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 101);
   assert.ok(card101);
   assert.equal(card101.imageSrc, 'https://assets.mons.link/drops/cardnft2/img/card_101.webp');
-  assert.equal(card101.foilSrc, '/card_nft_2/back.webp');
-  assert.equal(card101.textureSrc, '/card_nft_2/back.webp');
+  assert.equal(card101.foilSrc, undefined);
+  assert.equal(card101.textureSrc, undefined);
   assert.equal(card101.effect.id, 'card-nft-2-101');
+  assert.equal(card101.effect.effectKey, DRIF_EFFECT_KEYS.lightingOnly);
   assert.equal(card101.effect.source, 'card_nft_2');
   assert.equal(card101.effect.number, '101');
+  assert.doesNotMatch(JSON.stringify(card101), /back\.webp/);
 });
 
 test('poncho interactive card lookup still returns drif card configs', () => {

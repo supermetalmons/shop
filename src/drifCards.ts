@@ -10,9 +10,19 @@ export type GlowType =
   | 'dragon'
   | 'fairy';
 
+export const DRIF_EFFECT_KEYS = Object.freeze({
+  vRegular: 'v-regular',
+  trainerFullArt: 'trainer-full-art',
+  amazingRare: 'amazing-rare',
+  regularHolo: 'regular-holo',
+  lightingOnly: 'lighting-only',
+} as const);
+
+export type DrifEffectKey = (typeof DRIF_EFFECT_KEYS)[keyof typeof DRIF_EFFECT_KEYS];
+
 export type EffectConfig = {
   id: string;
-  effectKey: string;
+  effectKey: DrifEffectKey;
   source: string;
   setId: string;
   number: string;
@@ -23,18 +33,26 @@ export type EffectConfig = {
   typeClass?: GlowType;
 };
 
-export type DrifCardConfig = {
-  imageSrc: string;
+export type DrifCardEffectAssets = {
   foilSrc: string;
   textureSrc: string;
+};
+
+type DrifCardWithoutEffectAssets = {
+  foilSrc?: undefined;
+  textureSrc?: undefined;
+};
+
+export type DrifCardConfig = {
+  imageSrc: string;
   effect: EffectConfig;
   glowType?: GlowType;
-};
+} & (DrifCardEffectAssets | DrifCardWithoutEffectAssets);
 
 const EFFECTS: Record<string, EffectConfig> = {
   'swshp-SWSH179': {
     id: 'swshp-SWSH179',
-    effectKey: 'v-regular',
+    effectKey: DRIF_EFFECT_KEYS.vRegular,
     source: 'swsh',
     setId: 'swshp',
     number: 'swsh179',
@@ -46,7 +64,7 @@ const EFFECTS: Record<string, EffectConfig> = {
   },
   'swsh6-196': {
     id: 'swsh6-196',
-    effectKey: 'trainer-full-art',
+    effectKey: DRIF_EFFECT_KEYS.trainerFullArt,
     source: 'swsh',
     setId: 'swsh6',
     number: '196',
@@ -57,7 +75,7 @@ const EFFECTS: Record<string, EffectConfig> = {
   },
   'swsh4-9': {
     id: 'swsh4-9',
-    effectKey: 'amazing-rare',
+    effectKey: DRIF_EFFECT_KEYS.amazingRare,
     source: 'swsh',
     setId: 'swsh4',
     number: '9',
@@ -69,7 +87,7 @@ const EFFECTS: Record<string, EffectConfig> = {
   },
   'pgo-24': {
     id: 'pgo-24',
-    effectKey: 'regular-holo',
+    effectKey: DRIF_EFFECT_KEYS.regularHolo,
     source: 'swsh',
     setId: 'pgo',
     number: '24',
@@ -323,6 +341,21 @@ function getDrifEffectPreferenceKey(assetId: number): keyof typeof DEFAULT_EFFEC
 
 function getDrifAssetSrc(assetType: 'drifs' | 'foils' | 'textures', assetId: number) {
   return `/Poncho_Drifella/${assetType}/${assetId}.webp`;
+}
+
+function normalizeDrifCardAssetSrc(assetSrc: string | undefined) {
+  return String(assetSrc || '').trim();
+}
+
+export function getDrifCardAssetSources(card: DrifCardConfig | undefined): string[] {
+  if (!card) return [];
+  return Array.from(
+    new Set(
+      [card.imageSrc, card.textureSrc, card.foilSrc]
+        .map((assetSrc) => normalizeDrifCardAssetSrc(assetSrc))
+        .filter((assetSrc) => assetSrc.length > 0),
+    ),
+  );
 }
 
 export const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {

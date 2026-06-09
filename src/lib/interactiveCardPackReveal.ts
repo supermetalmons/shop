@@ -1,4 +1,4 @@
-import { DRIF_EFFECTS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
+import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults';
 import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment';
 
@@ -10,14 +10,13 @@ const INTERACTIVE_CARD_PACK_SEGMENT_AUTOPLAY_FRAME_COUNT = 10;
 const PONCHO_DRIFELLA_PACK_BASE_URL = '/Poncho_Drifella/pack';
 const CARD_NFT_2_CARD_FRONT_BASE_URL = 'https://assets.mons.link/drops/cardnft2/img';
 const CARD_NFT_2_HOLO_BASE_URL = 'https://assets.mons.link/drops/cardnft2/holo';
-const CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL = '/card_nft_2/back.webp';
 const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   id: 'card-nft-2-neutral',
-  effectKey: 'regular-holo',
+  effectKey: DRIF_EFFECT_KEYS.lightingOnly,
   source: 'card_nft_2',
   setId: 'cardnft2',
   number: 'card',
-  rarity: 'rare holo',
+  rarity: 'card',
   supertype: 'card',
   subtypes: 'card',
   trainerGallery: false,
@@ -316,22 +315,27 @@ function getCardNft2CardByFigureId(figureId: number): DrifCardConfig | undefined
   if (cached) return cached;
   const holoEffectId = CARD_NFT_2_HOLO_EFFECT_BY_CARD_ID[normalizedFigureId];
   const holoEffect = holoEffectId ? DRIF_EFFECTS[holoEffectId] : undefined;
-  const card: DrifCardConfig = {
-    imageSrc: `${CARD_NFT_2_CARD_FRONT_BASE_URL}/card_${normalizedFigureId}.webp`,
-    foilSrc: holoEffect ? `${CARD_NFT_2_HOLO_BASE_URL}/foil_${normalizedFigureId}.webp` : CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
-    textureSrc: holoEffect ? `${CARD_NFT_2_HOLO_BASE_URL}/mask_${normalizedFigureId}.webp` : CARD_NFT_2_NEUTRAL_CARD_EFFECT_ASSET_URL,
-    effect: holoEffect
-      ? {
+  const imageSrc = `${CARD_NFT_2_CARD_FRONT_BASE_URL}/card_${normalizedFigureId}.webp`;
+  const card: DrifCardConfig = holoEffect
+    ? {
+        imageSrc,
+        foilSrc: `${CARD_NFT_2_HOLO_BASE_URL}/foil_${normalizedFigureId}.webp`,
+        textureSrc: `${CARD_NFT_2_HOLO_BASE_URL}/mask_${normalizedFigureId}.webp`,
+        effect: {
           ...holoEffect,
           number: String(normalizedFigureId),
-        }
-      : {
+        },
+        glowType: holoEffect.typeClass ?? 'metal',
+      }
+    : {
+        imageSrc,
+        effect: {
           ...CARD_NFT_2_NEUTRAL_CARD_EFFECT,
           id: `card-nft-2-${normalizedFigureId}`,
           number: String(normalizedFigureId),
         },
-    glowType: holoEffect?.typeClass ?? 'metal',
-  };
+        glowType: 'metal',
+      };
   cardNft2CardByFigureId.set(normalizedFigureId, card);
   return card;
 }
