@@ -78,7 +78,6 @@ import {
   dropOpenActionLabel,
   dropOpenActionProgress,
   dropOpenGerund,
-  dropOpenVerb,
 } from './lib/dropLabels';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
@@ -1099,7 +1098,6 @@ function FigureTileImage(props: {
 const MAX_SHIPMENT_ITEMS = 24;
 const EMPTY_INVENTORY: InventoryItem[] = [];
 const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
-const REVEAL_NOTE_OFFSET = 28;
 // Keep locally-inserted pending reveals visible for a short grace window while on-chain indexing catches up.
 const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
@@ -1622,7 +1620,6 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => dropOpenActionProgress(getDropConfig(dropId)),
     [getDropConfig],
   );
-  const openVerbForDropId = useCallback((dropId?: string) => dropOpenVerb(getDropConfig(dropId)), [getDropConfig]);
   const openGerundForDropId = useCallback((dropId?: string) => dropOpenGerund(getDropConfig(dropId)), [getDropConfig]);
   const canOpenBoxesForDropId = useCallback(
     (dropId?: string) => {
@@ -5301,7 +5298,6 @@ function App({ currentPath }: AppProps) {
           ['--reveal-start-y' as never]: `${originRect.top - targetRect.top}px`,
           ['--reveal-start-scale-x' as never]: String(scaleX),
           ['--reveal-start-scale-y' as never]: String(scaleY),
-          ['--reveal-note-offset' as never]: `${REVEAL_NOTE_OFFSET}px`,
           ...(ponchoCardRect
             ? {
                 ['--poncho-card-left' as never]: `${ponchoCardRect.left}px`,
@@ -5471,20 +5467,6 @@ function App({ currentPath }: AppProps) {
     revealOverlay && !revealOverlayCanRenderInteractiveCardPack && revealOverlay.frame
       ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
       : undefined;
-  const revealOverlayNote =
-    revealOverlayStage === 'preparing'
-      ? `preparing to ${openVerbForDropId(revealOverlay?.dropId)}...`
-      : revealOverlayStage === 'revealed'
-        ? ''
-        : revealOverlay
-          ? revealOverlay.hasRevealAttempted
-            ? revealOverlayContent.reveal.mode === 'animated'
-              ? `keep clicking the ${revealOverlayContainerLabel}`
-              : revealLoading === revealOverlay.id
-                ? 'opening...'
-                : ''
-            : `click the ${revealOverlayContainerLabel} to open`
-          : '';
   const defaultRevealOverlayNode = revealOverlay ? (
     <div
       className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
@@ -5598,7 +5580,6 @@ function App({ currentPath }: AppProps) {
           )}
         </button>
       </div>
-      <div className="reveal-overlay__note">{revealOverlayNote}</div>
     </div>
   ) : null;
   const revealOverlayNode = revealOverlay ? (

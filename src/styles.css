@@ -2211,7 +2211,6 @@ button.no-focus-style:focus-visible {
   --reveal-start-y: 0px;
   --reveal-start-scale-x: 1;
   --reveal-start-scale-y: 1;
-  --reveal-note-offset: 14px;
   --poncho-card-left: 0px;
   --poncho-card-top: 0px;
   --poncho-card-width: 0px;
@@ -2479,37 +2478,6 @@ button.no-focus-style:focus-visible {
   outline: none;
   box-shadow: none;
   -webkit-tap-highlight-color: transparent;
-}
-
-.reveal-overlay__note {
-  position: absolute;
-  left: 50%;
-  bottom: var(--reveal-note-offset);
-  transform: translateX(-50%);
-  width: min(360px, 90vw);
-  text-align: center;
-  font-size: 13px;
-  font-weight: 300;
-  letter-spacing: 0.01em;
-  color: rgba(29, 29, 31, 0.82);
-  opacity: 0;
-  transition: opacity 240ms ease;
-  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.7), 0 0 1px rgba(255, 255, 255, 0.9);
-  pointer-events: none;
-  z-index: 2;
-}
-
-.reveal-overlay--active .reveal-overlay__note {
-  opacity: 1;
-}
-
-.reveal-overlay--revealed.reveal-overlay--active .reveal-overlay__note {
-  animation: reveal-note-fade 1.8s ease forwards;
-  animation-delay: 0.35s;
-}
-
-.reveal-overlay--closing .reveal-overlay__note {
-  opacity: 0;
 }
 
 .reveal-overlay__box:focus-visible {
@@ -2840,11 +2808,11 @@ button.wip-reset-btn {
   border: none;
   border-radius: 0;
   background: transparent;
-  color: rgba(29, 29, 31, 0.76);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.01em;
+  color: rgba(29, 29, 31, 0.5);
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.35;
+  letter-spacing: 0;
   cursor: pointer;
   box-shadow: none;
   appearance: none;
@@ -2854,8 +2822,8 @@ button.wip-reset-btn {
   -webkit-user-select: none;
   user-select: none;
   touch-action: manipulation;
-  opacity: 0.82;
-  transition: opacity 0.15s ease;
+  opacity: 1;
+  transition: color 0.15s ease;
 }
 
 button.wip-close-btn {
@@ -2873,14 +2841,13 @@ button.wip-close-btn:active:not(:disabled),
 button.wip-reset-btn:hover:not(:disabled),
 button.wip-reset-btn:active:not(:disabled) {
   background: transparent;
-  color: rgba(29, 29, 31, 0.94);
-  opacity: 1;
+  color: rgba(29, 29, 31, 0.68);
 }
 
 button.wip-close-btn:focus-visible,
 button.wip-reset-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 1px solid currentColor;
+  outline-offset: 3px;
   border-radius: 2px;
 }
 
@@ -2903,16 +2870,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   outline: none;
 }
 
-@keyframes reveal-note-fade {
-  0%,
-  65% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
 @media (prefers-color-scheme: dark) {
   .inventory__item--selectable:focus-visible,
   .inventory__item--viewable:focus-visible {
@@ -2932,21 +2889,16 @@ button.wip-reset-btn:focus:not(:focus-visible) {
     background: rgba(255, 255, 255, 0.03);
   }
 
-  .reveal-overlay__note {
-    color: rgba(255, 255, 255, 0.78);
-    text-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-  }
-
   button.wip-close-btn,
   button.wip-reset-btn {
-    color: rgba(255, 255, 255, 0.78);
+    color: rgba(255, 255, 255, 0.5);
   }
 
   button.wip-close-btn:hover:not(:disabled),
   button.wip-close-btn:active:not(:disabled),
   button.wip-reset-btn:hover:not(:disabled),
   button.wip-reset-btn:active:not(:disabled) {
-    color: rgba(255, 255, 255, 0.92);
+    color: rgba(255, 255, 255, 0.68);
   }
 }
 
@@ -2965,7 +2917,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 @media (prefers-reduced-motion: reduce) {
   .reveal-overlay__backdrop,
   .reveal-overlay__frame,
-  .reveal-overlay__note,
   .reveal-overlay__media,
   .reveal-overlay__shine,
   .reveal-overlay__media-item {
@@ -2978,10 +2929,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   }
 
   .reveal-overlay__media-float {
-    animation-duration: 1ms;
-  }
-
-  .reveal-overlay--revealed.reveal-overlay--active .reveal-overlay__note {
     animation-duration: 1ms;
   }
 }

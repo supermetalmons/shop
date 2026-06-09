@@ -828,7 +828,6 @@ export function PonchoRevealOverlay({
           </div>
         </div>
       </div>
-      <div className="reveal-overlay__note">{playerState.note}</div>
     </div>
   );
 }

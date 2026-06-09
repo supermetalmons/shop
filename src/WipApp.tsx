@@ -26,7 +26,6 @@ import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from '
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
-const REVEAL_NOTE_OFFSET = 28;
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
 const WIP_DROP = (() => {
@@ -196,7 +195,6 @@ function LocalPlayWipApp() {
       ['--reveal-start-y' as never]: '0px',
       ['--reveal-start-scale-x' as never]: '1',
       ['--reveal-start-scale-y' as never]: '1',
-      ['--reveal-note-offset' as never]: `${REVEAL_NOTE_OFFSET}px`,
       ['--poncho-card-left' as never]: `${cardRect.left}px`,
       ['--poncho-card-top' as never]: `${cardRect.top}px`,
       ['--poncho-card-width' as never]: `${cardRect.width}px`,
