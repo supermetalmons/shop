@@ -1,12 +1,15 @@
 import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
 import {
   getDropExtraContentOverride,
+  usesInteractiveCardPackRevealFlow,
   type DropBoxInventoryImagePathMode,
   type DropExtraContentOverride,
   type DropFigureFulfillmentPreviewMode,
   type DropFigureInventoryImageMode,
   type DropFigureRevealPresentation,
   type DropRevealFrameSequence,
+  type DropRevealFrameSourceSequence,
+  type DropRevealFrameTiming,
   type DropRevealMode,
   type DropRevealRenderer,
   type DropRevealSoundProfile,
@@ -27,7 +30,8 @@ export type ResolvedDropContent = {
   reveal: {
     mode: DropRevealMode;
     renderer: DropRevealRenderer;
-    frameSequence?: DropRevealFrameSequence;
+    frameTiming?: DropRevealFrameTiming;
+    frameSequence?: DropRevealFrameSourceSequence;
     sound: DropRevealSoundProfile;
   };
   figures: {
@@ -92,11 +96,13 @@ export function joinDropAssetUrl(baseUrl: string | undefined, path: string): str
 function mergeFrameSequence(
   base: DropRevealFrameSequence | undefined,
   override: Partial<DropRevealFrameSequence> | undefined,
+  timingOverride: Partial<DropRevealFrameTiming> | undefined,
 ): DropRevealFrameSequence | undefined {
-  if (!base && !override) return undefined;
+  if (!base && !override && !timingOverride) return undefined;
   const merged = {
     ...(base || {}),
     ...(override || {}),
+    ...(timingOverride || {}),
   } as Partial<DropRevealFrameSequence>;
   const frames = Array.isArray(merged.frames)
     ? merged.frames.map((frame) => asOptionalString(frame)).filter((frame): frame is string => Boolean(frame))
@@ -105,7 +111,15 @@ function mergeFrameSequence(
   const ext = asOptionalString(merged.ext);
   const hasExplicitFrames = Boolean(frames?.length);
   const hasSequentialFrames = Boolean(baseUrl && ext);
-  if (!hasExplicitFrames && !hasSequentialFrames) return undefined;
+  const hasTimingMetadata = Boolean(
+    !hasExplicitFrames &&
+      !hasSequentialFrames &&
+      (merged.frameCount !== undefined ||
+        merged.clickMax !== undefined ||
+        merged.autoplayStart !== undefined ||
+        merged.mediaStart !== undefined),
+  );
+  if (!hasExplicitFrames && !hasSequentialFrames && !hasTimingMetadata) return undefined;
   const frameCountFallback = frames?.length || 1;
   const frameCount = hasExplicitFrames
     ? frames!.length
@@ -125,12 +139,33 @@ function mergeFrameSequence(
     clickMax,
     autoplayStart,
     mediaStart,
-    ...(hasExplicitFrames ? { frames } : { baseUrl, ext }),
+    ...(hasExplicitFrames ? { frames } : hasSequentialFrames ? { baseUrl, ext } : {}),
   };
+}
+
+function pickFrameTiming(frameSequence: DropRevealFrameSequence): DropRevealFrameTiming {
+  return {
+    frameCount: frameSequence.frameCount,
+    clickMax: frameSequence.clickMax,
+    autoplayStart: frameSequence.autoplayStart,
+    mediaStart: frameSequence.mediaStart,
+  };
+}
+
+function hasFrameSources(frameSequence: DropRevealFrameSequence | undefined): frameSequence is DropRevealFrameSourceSequence {
+  return Boolean(frameSequence?.frames?.length || (frameSequence?.baseUrl && frameSequence.ext));
 }
 
 function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropContent {
   const base = drop.paths.base;
+  const frameSequence = {
+    baseUrl: joinDropAssetUrl(base, 'box/'),
+    ext: 'webp',
+    frameCount: 21,
+    clickMax: 8,
+    autoplayStart: 9,
+    mediaStart: 10,
+  };
   return {
     box: {
       previewImageUrl: joinDropAssetUrl(base, 'box/tight.webp'),
@@ -145,14 +180,8 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
     reveal: {
       mode: 'animated',
       renderer: 'default',
-      frameSequence: {
-        baseUrl: joinDropAssetUrl(base, 'box/'),
-        ext: 'webp',
-        frameCount: 21,
-        clickMax: 8,
-        autoplayStart: 9,
-        mediaStart: 10,
-      },
+      frameTiming: pickFrameTiming(frameSequence),
+      ...(hasFrameSources(frameSequence) ? { frameSequence } : {}),
       sound: DEFAULT_DROP_REVEAL_SOUND_PROFILE,
     },
     figures: {
@@ -209,7 +238,16 @@ function applyDropExtraContentOverride(
 ): ResolvedDropContent {
   if (!override) return base;
   const nextMode = override.reveal?.mode || base.reveal.mode;
-  const nextFrameSequence = mergeFrameSequence(base.reveal.frameSequence, override.reveal?.frameSequence);
+  const nextRenderer = override.reveal?.renderer || base.reveal.renderer;
+  const frameSequenceBase = usesInteractiveCardPackRevealFlow(nextRenderer)
+    ? undefined
+    : base.reveal.frameSequence;
+  const nextFrameTimingAndSources = mergeFrameSequence(
+    frameSequenceBase,
+    override.reveal?.frameSequence,
+    override.reveal?.frameTiming,
+  );
+  const nextFrameSequence = hasFrameSources(nextFrameTimingAndSources) ? nextFrameTimingAndSources : undefined;
   return {
     box: {
       previewImageUrl: asOptionalString(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
@@ -223,11 +261,14 @@ function applyDropExtraContentOverride(
     },
     reveal: {
       mode: nextMode,
-      renderer: override.reveal?.renderer || base.reveal.renderer,
+      renderer: nextRenderer,
       sound: {
         clickVolume: asNonNegativeNumber(override.reveal?.sound?.clickVolume, base.reveal.sound.clickVolume),
         revealVolume: asNonNegativeNumber(override.reveal?.sound?.revealVolume, base.reveal.sound.revealVolume),
       },
+      ...(nextMode === 'animated' && nextFrameTimingAndSources
+        ? { frameTiming: pickFrameTiming(nextFrameTimingAndSources) }
+        : {}),
       ...(nextMode === 'animated' && nextFrameSequence ? { frameSequence: nextFrameSequence } : {}),
     },
     figures: {
@@ -277,11 +318,28 @@ export type BoxDisplayImageInput = {
   boxId?: string | number;
 };
 
+function resolveBoxMediaId(drop: FrontendDropConfig | undefined, boxId?: string | number): number | null {
+  return getMediaIdForTokenId(boxId, drop?.boxMedia);
+}
+
+export function resolveBoxMediaIdForDrop(
+  dropOrId: FrontendDropConfig | string | undefined,
+  boxId?: string | number,
+): number | null {
+  const drop =
+    typeof dropOrId === 'string'
+      ? getFrontendDrop(dropOrId)
+      : dropOrId && typeof dropOrId === 'object'
+        ? dropOrId
+        : undefined;
+  return resolveBoxMediaId(drop, boxId);
+}
+
 export function normalizeBoxDisplayImage({ dropId, imageRaw, boxId }: BoxDisplayImageInput): string | undefined {
   const drop = getFrontendDrop(dropId);
   const content = resolveDropContent(drop || dropId);
   const fallbackImage = content.box.previewImageUrl || resolveDropAssetUrl(imageRaw || '') || undefined;
-  const boxMediaId = content.box.inventoryImageBaseUrl ? getMediaIdForTokenId(boxId, drop?.boxMedia) : null;
+  const boxMediaId = content.box.inventoryImageBaseUrl ? resolveBoxMediaId(drop, boxId) : null;
   if (boxMediaId) {
     const boxImagePath =
       content.box.inventoryImagePathMode === 'folder_initial'

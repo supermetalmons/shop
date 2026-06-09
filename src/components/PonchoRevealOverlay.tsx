@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type AnimationEvent,
@@ -12,9 +11,7 @@ import {
 } from 'react';
 import type { DrifCardConfig } from '../drifCards';
 import {
-  PONCHO_DRIFELLA_INITIAL_FRAME_URL,
   createPonchoDrifellaRevealPlayer,
-  getPonchoDrifellaCardByFigureId,
   type PonchoDrifellaImageCache,
   type PonchoDrifellaRevealPhase,
   type PonchoDrifellaRevealPlayer,
@@ -23,6 +20,10 @@ import {
   usePonchoDrifellaCardAssetsReady,
   usePonchoDrifellaImageCacheGeneration,
 } from '../lib/ponchoDrifellaReveal';
+import {
+  PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
+  type InteractiveCardPackRevealSequence,
+} from '../lib/interactiveCardPackReveal';
 import WipInteractiveCard from './WipInteractiveCard';
 
 type PonchoRevealSharedProps = {
@@ -33,6 +34,8 @@ type PonchoRevealSharedProps = {
   boxLabel: string;
   boxName: string;
   imageCache: PonchoDrifellaImageCache;
+  packSequence?: InteractiveCardPackRevealSequence;
+  cardLabel?: string;
   resetKey: string | number;
   onRequestReveal?: () => PonchoDrifellaRevealRequestStatus | void | Promise<PonchoDrifellaRevealRequestStatus | void>;
   onPlayClick?: () => void;
@@ -53,9 +56,12 @@ type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
 
 export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
   mode: 'inventory-unbox';
-  revealedIds?: number[];
+  card?: DrifCardConfig;
+  cardReady?: boolean;
   loading: boolean;
 };
+
+export type InteractiveCardPackRevealOverlayProps = PonchoInventoryRevealOverlayProps;
 
 export type PonchoCardViewerOverlayProps = {
   overlayStyle?: CSSProperties;
@@ -159,6 +165,8 @@ export function PonchoRevealOverlay({
   boxName,
   card,
   cardReady,
+  packSequence,
+  cardLabel = 'Revealed card',
   loading = false,
   boxButtonRef,
   imageCache,
@@ -176,6 +184,7 @@ export function PonchoRevealOverlay({
   const boxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const foregroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<PonchoDrifellaRevealPlayer | null>(null);
+  const activePackSequence = packSequence ?? PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE;
   const cardImageReadyRef = useRef(false);
   const discardAnimationReportedRef = useRef(false);
   const [hasCommittedBoxVisual, setHasCommittedBoxVisual] = useState(false);
@@ -254,6 +263,7 @@ export function PonchoRevealOverlay({
       boxLabel,
       cardReady,
       cardAssetsReady,
+      packSequence: activePackSequence,
       imageCache,
       host: {
         clearVisuals,
@@ -284,6 +294,7 @@ export function PonchoRevealOverlay({
     };
   }, [
     active,
+    activePackSequence,
     boxLabel,
     clearVisuals,
     commitVisual,
@@ -300,12 +311,13 @@ export function PonchoRevealOverlay({
       boxLabel,
       cardReady,
       cardAssetsReady,
+      packSequence: activePackSequence,
       imageCache,
       onRequestReveal,
       onPlayClick,
       onPlayReveal,
     });
-  }, [active, boxLabel, cardAssetsReady, cardReady, imageCache, onPlayClick, onPlayReveal, onRequestReveal, phase]);
+  }, [active, activePackSequence, boxLabel, cardAssetsReady, cardReady, imageCache, onPlayClick, onPlayReveal, onRequestReveal, phase]);
 
   useEffect(() => {
     onRevealCompleteChange?.(playerState.revealComplete);
@@ -393,7 +405,7 @@ export function PonchoRevealOverlay({
         >
           {!hasCommittedBoxVisual ? (
             <img
-              src={PONCHO_DRIFELLA_INITIAL_FRAME_URL}
+              src={activePackSequence.initialFrameUrl}
               alt=""
               className="reveal-overlay__image"
               loading="eager"
@@ -420,6 +432,8 @@ export function PonchoRevealOverlay({
                     interactive={playerState.cardInteractive}
                     onImageReadyChange={handleCardImageReadyChange}
                     wakeOnInteractiveUnlock={false}
+                    ariaLabel={cardLabel}
+                    imageAlt={cardLabel}
                   />
                 </div>
               </div>
@@ -445,15 +459,15 @@ export function PonchoRevealOverlay({
 
 export default function PonchoInventoryRevealOverlay({
   mode: _mode,
-  revealedIds,
+  card,
+  cardReady,
   ...overlayProps
 }: PonchoInventoryRevealOverlayProps) {
-  const revealedCard = useMemo(() => {
-    if (!revealedIds?.length || revealedIds.length !== 1) return undefined;
-    return getPonchoDrifellaCardByFigureId(revealedIds[0]);
-  }, [revealedIds]);
+  return <PonchoRevealOverlay {...overlayProps} card={card} cardReady={cardReady ?? Boolean(card)} />;
+}
 
-  return <PonchoRevealOverlay {...overlayProps} card={revealedCard} cardReady={Boolean(revealedCard)} />;
+export function InteractiveCardPackRevealOverlay(props: InteractiveCardPackRevealOverlayProps) {
+  return <PonchoInventoryRevealOverlay {...props} />;
 }
 
 export function PonchoCardViewerOverlay({

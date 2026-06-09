@@ -1,28 +1,46 @@
 import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal';
+import { INTERACTIVE_CARD_PACK_REVEAL_TIMING } from '../lib/interactiveCardPackReveal';
 import { CARD_NFT_2_PACK_BASE_URL } from './dropMediaDefaults.ts';
 import { isDropFamily, normalizeDropId } from './deployment';
 
 export type DropRevealMode = 'animated' | 'static';
-export type DropRevealRenderer = 'default' | 'poncho_drifella';
+export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack';
 export type DropBoxInventoryImagePathMode = 'file' | 'folder_initial';
 export type DropFigureInventoryImageMode = 'clean_variant' | 'metadata_raw';
 export type DropFigureRevealPresentation = 'videos' | 'metadata_stills';
 export type DropFigureFulfillmentPreviewMode = 'media_map_folder' | 'metadata_stills';
 
-export type DropRevealFrameSequence = {
+export type DropRevealFrameTiming = {
   frameCount: number;
   clickMax: number;
   autoplayStart: number;
   mediaStart: number;
+};
+
+export type DropRevealFrameSequence = DropRevealFrameTiming & {
   baseUrl?: string;
   ext?: string;
   frames?: string[];
 };
 
+export type DropRevealFrameSourceSequence = DropRevealFrameTiming & (
+  | { frames: string[]; baseUrl?: string; ext?: string }
+  | { baseUrl: string; ext: string; frames?: string[] }
+);
+
 export type DropRevealSoundProfile = {
   clickVolume: number;
   revealVolume: number;
 };
+
+export function usesInteractiveCardPackRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
+  return INTERACTIVE_CARD_PACK_REVEAL_RENDERERS.has(renderer as DropRevealRenderer);
+}
+
+const INTERACTIVE_CARD_PACK_REVEAL_RENDERERS = new Set<DropRevealRenderer>([
+  'interactive_card_pack',
+  'poncho_drifella',
+]);
 
 export type DropExtraContentOverride = {
   box?: {
@@ -38,6 +56,7 @@ export type DropExtraContentOverride = {
   reveal?: {
     mode?: DropRevealMode;
     renderer?: DropRevealRenderer;
+    frameTiming?: Partial<DropRevealFrameTiming>;
     frameSequence?: Partial<DropRevealFrameSequence>;
     sound?: Partial<DropRevealSoundProfile>;
   };
@@ -71,7 +90,7 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   },
   reveal: {
     mode: 'animated',
-    renderer: 'poncho_drifella',
+    renderer: 'interactive_card_pack',
     frameSequence: PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE,
     sound: {
       revealVolume: 0.3,
@@ -101,6 +120,12 @@ const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     inventoryImageBaseUrl: CARD_NFT_2_PACK_BASE_URL,
     inventoryImagePathMode: 'folder_initial',
+    aspectRatio: 1,
+  },
+  reveal: {
+    mode: 'animated',
+    renderer: 'interactive_card_pack',
+    frameTiming: INTERACTIVE_CARD_PACK_REVEAL_TIMING,
   },
 };
 

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import PonchoInventoryRevealOverlay, {
+import {
+  InteractiveCardPackRevealOverlay,
   PonchoRevealOverlay,
-  type PonchoInventoryRevealOverlayProps,
+  type InteractiveCardPackRevealOverlayProps,
 } from './components/PonchoRevealOverlay';
-import { DRIF_CARD_COUNT, DRIF_CARDS } from './drifCards';
+import { CARD_NFT_2_PACK_INITIAL_COUNT } from './config/dropMediaDefaults';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
@@ -14,6 +15,10 @@ import {
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
 } from './lib/ponchoDrifellaReveal';
+import {
+  getInteractiveCardPackCardByFigureId,
+  getInteractiveCardPackRevealSequenceForDropId,
+} from './lib/interactiveCardPackReveal';
 import { isDropFamily, listFrontendDrops } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -25,15 +30,19 @@ const REVEAL_NOTE_OFFSET = 28;
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
 const WIP_DROP = (() => {
-  const devnetPonchoDrop = listFrontendDrops().find(
-    (drop) => drop.solanaCluster === 'devnet' && isDropFamily(drop, 'poncho_drifella'),
+  const devnetCardNft2Drop = listFrontendDrops().find(
+    (drop) => drop.solanaCluster === 'devnet' && isDropFamily(drop, 'card_nft_2'),
   );
-  if (!devnetPonchoDrop) {
-    throw new Error('Missing devnet poncho_drifella frontend drop config');
+  if (!devnetCardNft2Drop) {
+    throw new Error('Missing devnet card_nft_2 frontend drop config');
   }
-  return devnetPonchoDrop;
+  return devnetCardNft2Drop;
 })();
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
+const WIP_BOX_SUPPLY_COUNT = Math.max(1, Math.floor(WIP_DROP.maxSupply));
+const WIP_ITEMS_PER_BOX = Math.max(1, Math.floor(WIP_DROP.itemsPerBox || 1));
+const WIP_CARD_COUNT = WIP_BOX_SUPPLY_COUNT * WIP_ITEMS_PER_BOX;
+const WIP_PACK_MEDIA_COUNT = Math.max(1, Math.floor(WIP_DROP.boxMedia?.count || CARD_NFT_2_PACK_INITIAL_COUNT));
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -41,7 +50,7 @@ type WipLocalPlayProps = {
   mode?: 'local-play';
 };
 
-export type WipAppProps = WipLocalPlayProps | PonchoInventoryRevealOverlayProps;
+export type WipAppProps = WipLocalPlayProps | InteractiveCardPackRevealOverlayProps;
 
 function getInitialTargetRect(): OverlayRect {
   if (typeof window === 'undefined') {
@@ -60,13 +69,21 @@ function randomWipRevealDelayMs() {
   return WIP_CARD_READY_MIN_DELAY_MS + Math.floor(Math.random() * (WIP_CARD_READY_MAX_DELAY_MS - WIP_CARD_READY_MIN_DELAY_MS + 1));
 }
 
-function nextWipCardIndex(currentIndex: number) {
-  if (DRIF_CARD_COUNT < 2) return currentIndex;
-  let nextIndex = currentIndex;
-  while (nextIndex === currentIndex) {
-    nextIndex = Math.floor(Math.random() * DRIF_CARD_COUNT);
+function randomWipCardId() {
+  return Math.floor(Math.random() * WIP_CARD_COUNT) + 1;
+}
+
+function randomWipPackMediaId() {
+  return Math.floor(Math.random() * WIP_PACK_MEDIA_COUNT) + 1;
+}
+
+function nextRandomWipValue(currentValue: number, count: number) {
+  if (count < 2) return currentValue;
+  let nextValue = currentValue;
+  while (nextValue === currentValue) {
+    nextValue = Math.floor(Math.random() * count) + 1;
   }
-  return nextIndex;
+  return nextValue;
 }
 
 function isWipShortcutTarget(target: EventTarget | null) {
@@ -84,7 +101,8 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
-  const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_CARD_COUNT));
+  const [cardId, setCardId] = useState(() => randomWipCardId());
+  const [packMediaId, setPackMediaId] = useState(() => randomWipPackMediaId());
   const [cardReady, setCardReady] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
@@ -92,7 +110,11 @@ function LocalPlayWipApp() {
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
-  const currentCard = DRIF_CARDS[cardIndex];
+  const packSequence = useMemo(
+    () => getInteractiveCardPackRevealSequenceForDropId(WIP_DROP.dropId, packMediaId),
+    [packMediaId],
+  );
+  const currentCard = useMemo(() => getInteractiveCardPackCardByFigureId(WIP_DROP.dropId, cardId), [cardId]);
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -184,8 +206,8 @@ function LocalPlayWipApp() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    preloadPonchoDrifellaPackAssets(ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
-  }, []);
+    preloadPonchoDrifellaPackAssets(ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' }, packSequence);
+  }, [packSequence]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -205,15 +227,17 @@ function LocalPlayWipApp() {
 
   const handleReset = useCallback(() => {
     setResetKey((prev) => prev + 1);
-    const nextIndex = nextWipCardIndex(cardIndex);
-    if (nextIndex !== cardIndex) {
-      preloadPonchoDrifellaCardAssets(DRIF_CARDS[nextIndex], ponchoImageCacheRef.current, {
+    const nextCardId = nextRandomWipValue(cardId, WIP_CARD_COUNT);
+    const nextPackMediaId = nextRandomWipValue(packMediaId, WIP_PACK_MEDIA_COUNT);
+    if (nextCardId !== cardId) {
+      preloadPonchoDrifellaCardAssets(getInteractiveCardPackCardByFigureId(WIP_DROP.dropId, nextCardId), ponchoImageCacheRef.current, {
         mode: 'warm',
         priority: 'low',
       });
     }
-    setCardIndex(nextIndex);
-  }, [cardIndex]);
+    setCardId(nextCardId);
+    setPackMediaId(nextPackMediaId);
+  }, [cardId, packMediaId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -253,6 +277,7 @@ function LocalPlayWipApp() {
         boxName={mysteryContainerName}
         card={currentCard}
         cardReady={cardReady}
+        packSequence={packSequence}
         imageCache={ponchoImageCacheRef.current}
         boxButtonRef={revealButtonRef}
         resetKey={resetKey}
@@ -278,7 +303,7 @@ function LocalPlayWipApp() {
 
 export default function WipApp(props: WipAppProps) {
   if (props.mode === 'inventory-unbox') {
-    return <PonchoInventoryRevealOverlay {...props} />;
+    return <InteractiveCardPackRevealOverlay {...props} />;
   }
   return <LocalPlayWipApp />;
 }

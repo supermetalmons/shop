@@ -1,4 +1,4 @@
-import type { DropRevealFrameSequence } from '../config/dropsExtraContent';
+import type { DropRevealFrameSourceSequence } from '../config/dropsExtraContent';
 
 function trimLeadingSlashes(value: string): string {
   return value.replace(/^\/+/, '');
@@ -12,14 +12,14 @@ function joinBaseAndPath(baseUrl: string, path: string): string {
   return `${trimTrailingSlashes(baseUrl)}/${trimLeadingSlashes(path)}`;
 }
 
-function clampFrameIndex(frameSequence: DropRevealFrameSequence, frameIndex: number): number {
+function clampFrameIndex(frameSequence: DropRevealFrameSourceSequence, frameIndex: number): number {
   const normalizedFrameIndex = Math.floor(Number(frameIndex));
   if (!Number.isFinite(normalizedFrameIndex)) return 1;
   return Math.min(Math.max(normalizedFrameIndex, 1), frameSequence.frameCount);
 }
 
 export function resolveRevealFrameSrc(
-  frameSequence: DropRevealFrameSequence | undefined,
+  frameSequence: DropRevealFrameSourceSequence | undefined,
   frameIndex: number,
 ): string | undefined {
   if (!frameSequence) return undefined;
@@ -31,7 +31,7 @@ export function resolveRevealFrameSrc(
   return joinBaseAndPath(frameSequence.baseUrl, `${safeFrameIndex}.${frameSequence.ext}`);
 }
 
-export function listRevealFrameSrcs(frameSequence: DropRevealFrameSequence | undefined): string[] {
+export function listRevealFrameSrcs(frameSequence: DropRevealFrameSourceSequence | undefined): string[] {
   if (!frameSequence) return [];
   const sources: string[] = [];
   for (let frameIndex = 1; frameIndex <= frameSequence.frameCount; frameIndex += 1) {
@@ -72,7 +72,7 @@ export function preloadRevealFrameSrc(
 }
 
 export function preloadRevealFrames(
-  frameSequence: DropRevealFrameSequence | undefined,
+  frameSequence: DropRevealFrameSourceSequence | undefined,
   loadedFrames: Set<string>,
   pendingFrames: Map<string, HTMLImageElement>,
   fromFrame = 1,

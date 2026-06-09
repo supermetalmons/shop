@@ -10,8 +10,13 @@ import {
   CARD_NFT_2_PACK_IMAGE_SRCS,
   CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS,
 } from '../src/lib/cardNft2Packs.ts';
-import { normalizeBoxDisplayImage, resolveDropContent } from '../src/lib/dropContent.ts';
+import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from '../src/lib/dropContent.ts';
 import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
+import {
+  PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
+  getInteractiveCardPackRevealSequenceForDropId,
+  selectInteractiveCardPackRevealCardId,
+} from '../src/lib/interactiveCardPackReveal.ts';
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -34,6 +39,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(resolveDropContent('card_nft_2_devnet').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
   assert.equal(resolveDropContent('card_nft_2_devnet').box.inventoryImagePathMode, 'folder_initial');
+  assert.equal(resolveBoxMediaIdForDrop('card_nft_2_devnet', 5), 1);
   assert.equal(
     normalizeBoxDisplayImage({
       dropId: 'card_nft_2_devnet',
@@ -57,4 +63,42 @@ test('card_nft_2 box inventory images resolve from token id', () => {
     }),
     'https://assets.example.com/metadata-pack.webp',
   );
+});
+
+test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls', () => {
+  assert.equal(PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.initialFrameUrl, '/Poncho_Drifella/pack/initial.webp');
+  assert.equal(
+    PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.punchFrameUrlsByVariant[2]?.[2],
+    '/Poncho_Drifella/pack/recoverable_punches/3/3.webp',
+  );
+  assert.equal(
+    PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segmentAutoplayOvertopFrameUrls[9],
+    '/Poncho_Drifella/pack/final_sequence/autoplay/overtop/10.webp',
+  );
+
+  const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet', 1);
+  const cardPack4 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet', 4);
+  assert.equal(cardPack1.initialFrameUrl, '/card_nft_2/pack/1/initial.webp');
+  assert.equal(cardPack1.segment11FrameUrls[0], '/card_nft_2/pack/1/final_sequence/1/1.webp');
+  assert.equal(cardPack4.initialFrameUrl, '/card_nft_2/pack/4/initial.webp');
+  assert.equal(cardPack4.punchFrameUrlsByVariant[1]?.[2], '/card_nft_2/pack/4/recoverable_punches/2/3.webp');
+  assert.equal(
+    cardPack4.segmentAutoplayOvertopFrameUrls[9],
+    '/card_nft_2/pack/4/final_sequence/autoplay/overtop/10.webp',
+  );
+});
+
+test('interactive pack reveal content and selected card presentation are stable', () => {
+  assert.equal(resolveDropContent('poncho_drifella_devnet_x10').reveal.renderer, 'interactive_card_pack');
+  const cardNft2Content = resolveDropContent('card_nft_2_devnet');
+  assert.equal(cardNft2Content.reveal.renderer, 'interactive_card_pack');
+  assert.equal(cardNft2Content.reveal.frameTiming?.frameCount, PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.revealFrameSequence.frameCount);
+  assert.equal(cardNft2Content.reveal.frameSequence, undefined);
+  assert.equal(cardNft2Content.box.inventoryImagePathMode, 'folder_initial');
+
+  const revealedIds = [11, 12, 13];
+  assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0), 11);
+  assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.5), 12);
+  assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.99), 13);
+  assert.deepEqual(revealedIds, [11, 12, 13]);
 });
