@@ -43,6 +43,10 @@ const WIP_DROP = (() => {
 })();
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
 const WIP_REVEAL_SOUND_URLS = interactiveCardPackRevealSoundUrlsForDropId(WIP_DROP.dropId);
+const WIP_CARD_MOTION_SOUND_URLS = [
+  WIP_REVEAL_SOUND_URLS.cardSwipe,
+  WIP_REVEAL_SOUND_URLS.cardSpread,
+].filter((soundUrl): soundUrl is string => Boolean(soundUrl));
 const WIP_BOX_SUPPLY_COUNT = Math.max(1, Math.floor(WIP_DROP.maxSupply));
 const WIP_ITEMS_PER_BOX = Math.max(1, Math.floor(WIP_DROP.itemsPerBox || 1));
 const WIP_CARD_COUNT = WIP_BOX_SUPPLY_COUNT * WIP_ITEMS_PER_BOX;
@@ -159,20 +163,34 @@ function LocalPlayWipApp() {
     return soundInitPromiseRef.current;
   }, []);
 
+  const preloadCardMotionSounds = useCallback(() => {
+    WIP_CARD_MOTION_SOUND_URLS.forEach((motionUrl) => {
+      void soundPlayer.preloadSound(motionUrl);
+    });
+  }, []);
+  const scheduleCardMotionSoundPreload = useCallback(() => {
+    if (typeof window === 'undefined') {
+      preloadCardMotionSounds();
+      return;
+    }
+    window.setTimeout(preloadCardMotionSounds, 0);
+  }, [preloadCardMotionSounds]);
   const preloadRevealSounds = useCallback(() => {
     void soundPlayer.preloadSound(WIP_REVEAL_SOUND_URLS.reveal);
     WIP_REVEAL_SOUND_URLS.click.forEach((clickUrl) => {
       void soundPlayer.preloadSound(clickUrl);
     });
-  }, []);
+    preloadCardMotionSounds();
+  }, [preloadCardMotionSounds]);
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
       void soundPlayer.playSound(
         pickRandomInteractiveCardPackClickSoundUrl(WIP_DROP.dropId),
         WIP_REVEAL_SOUND_PROFILE.clickVolume,
       );
+      scheduleCardMotionSoundPreload();
     });
-  }, [ensureSoundReady]);
+  }, [ensureSoundReady, scheduleCardMotionSoundPreload]);
   const playRevealSound = useCallback(() => {
     const play = () => {
       void soundPlayer.playSound(WIP_REVEAL_SOUND_URLS.reveal, WIP_REVEAL_SOUND_PROFILE.revealVolume);
@@ -186,6 +204,31 @@ function LocalPlayWipApp() {
       void pending.then(play);
     }
   }, []);
+  const playCardMotionSound = useCallback(
+    (motionUrl: string | undefined) => {
+      if (!motionUrl) return;
+      const play = () => {
+        void soundPlayer.playSound(motionUrl, WIP_REVEAL_SOUND_PROFILE.clickVolume);
+      };
+      if (soundPlayer.isInitialized) {
+        play();
+        return;
+      }
+      const pending = soundInitPromiseRef.current;
+      if (pending) {
+        void pending.then(play);
+        return;
+      }
+      void ensureSoundReady().then(play);
+    },
+    [ensureSoundReady],
+  );
+  const playCardSwipeSound = useCallback(() => {
+    playCardMotionSound(WIP_REVEAL_SOUND_URLS.cardSwipe);
+  }, [playCardMotionSound]);
+  const playCardSpreadSound = useCallback(() => {
+    playCardMotionSound(WIP_REVEAL_SOUND_URLS.cardSpread);
+  }, [playCardMotionSound]);
 
   const revealOverlayStyle = useMemo<React.CSSProperties>(
     () => ponchoDrifellaRevealOverlayStyleVars({
@@ -321,6 +364,8 @@ function LocalPlayWipApp() {
         resetKey={resetKey}
         onPlayClick={playClickSound}
         onPlayReveal={playRevealSound}
+        onPlayCardSwipe={playCardSwipeSound}
+        onPlayCardSpread={playCardSpreadSound}
         onDismiss={handleClose}
       />
       <button

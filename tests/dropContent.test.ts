@@ -21,6 +21,8 @@ import {
 import {
   CARD_NFT_2_BOX_SOUND_CLICK_URLS,
   CARD_NFT_2_BOX_SOUND_REVEAL_URL,
+  CARD_NFT_2_CARD_SOUND_SPREAD_URL,
+  CARD_NFT_2_CARD_SOUND_SWIPE_URL,
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   interactiveCardPackRevealSoundUrlsForDropId,
@@ -116,6 +118,8 @@ test('interactive pack reveal sounds resolve by drop family', () => {
   assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('card_nft_2_devnet'), {
     click: CARD_NFT_2_BOX_SOUND_CLICK_URLS,
     reveal: CARD_NFT_2_BOX_SOUND_REVEAL_URL,
+    cardSwipe: CARD_NFT_2_CARD_SOUND_SWIPE_URL,
+    cardSpread: CARD_NFT_2_CARD_SOUND_SPREAD_URL,
   });
   assert.deepEqual(CARD_NFT_2_BOX_SOUND_CLICK_URLS, [
     '/card_nft_2/sounds/hit1.mp3',
@@ -123,6 +127,8 @@ test('interactive pack reveal sounds resolve by drop family', () => {
     '/card_nft_2/sounds/hit3.mp3',
   ]);
   assert.equal(CARD_NFT_2_BOX_SOUND_REVEAL_URL, '/card_nft_2/sounds/crash.mp3');
+  assert.equal(CARD_NFT_2_CARD_SOUND_SWIPE_URL, '/card_nft_2/sounds/swipe.mp3');
+  assert.equal(CARD_NFT_2_CARD_SOUND_SPREAD_URL, '/card_nft_2/sounds/spread.mp3');
 
   assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('poncho_drifella_devnet_x10'), {
     click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,

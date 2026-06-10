@@ -59,6 +59,8 @@ type PonchoRevealSharedProps = {
   onRequestReveal?: () => PonchoDrifellaRevealRequestStatus | void | Promise<PonchoDrifellaRevealRequestStatus | void>;
   onPlayClick?: () => void;
   onPlayReveal?: () => void;
+  onPlayCardSwipe?: () => void;
+  onPlayCardSpread?: () => void;
   onBeforeAdvance?: () => boolean;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
@@ -510,6 +512,8 @@ export function PonchoRevealOverlay({
   onRequestReveal,
   onPlayClick,
   onPlayReveal,
+  onPlayCardSwipe,
+  onPlayCardSpread,
   onBeforeAdvance,
   onDismiss,
   onTransitionEnd,
@@ -1178,14 +1182,24 @@ export function PonchoRevealOverlay({
   const activateCardStack = useCallback(() => {
     if (stackRevealEnabled) {
       if (cardStackRowVisible) return;
+      if (cardStackCanCycle && !cardStackAdvanceLockedRef.current) {
+        onPlayCardSwipe?.();
+      }
       if (startCardStackCycle()) return;
+      if (cardStackCanSpreadToRow && !cardStackAdvanceLockedRef.current) {
+        onPlayCardSpread?.();
+      }
       spreadCardStackToRow();
       return;
     }
     if (advanceCardStack()) return;
   }, [
     advanceCardStack,
+    cardStackCanCycle,
+    cardStackCanSpreadToRow,
     cardStackRowVisible,
+    onPlayCardSpread,
+    onPlayCardSwipe,
     spreadCardStackToRow,
     stackRevealEnabled,
     startCardStackCycle,

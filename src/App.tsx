@@ -1658,10 +1658,12 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => {
       const { sound } = getDropContent(dropId).reveal;
       if (usesInteractiveCardPackRevealForDropId(dropId)) {
-        const { click, reveal } = interactiveCardPackRevealSoundUrlsForDropId(dropId);
+        const { click, reveal, cardSwipe, cardSpread } = interactiveCardPackRevealSoundUrlsForDropId(dropId);
         return {
           click,
           reveal,
+          cardSwipe,
+          cardSpread,
           clickVolume: sound.clickVolume,
           revealVolume: sound.revealVolume,
         };
@@ -2580,18 +2582,69 @@ function App({ currentPath }: AppProps) {
   }, []);
 
   const preloadRevealSounds = useCallback((dropId?: string) => {
-    const { click, reveal } = revealSoundUrlsForDropId(dropId);
+    const { click, reveal, cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);
+    const motionSounds = [cardSwipe, cardSpread].filter((soundUrl): soundUrl is string => Boolean(soundUrl));
     void soundPlayer.preloadSound(reveal);
     click.forEach((clickUrl) => {
       void soundPlayer.preloadSound(clickUrl);
+    });
+    motionSounds.forEach((motionUrl) => {
+      void soundPlayer.preloadSound(motionUrl);
     });
     void ensureSoundReady().then(() => {
       void soundPlayer.preloadSound(reveal);
       click.forEach((clickUrl) => {
         void soundPlayer.preloadSound(clickUrl);
       });
+      motionSounds.forEach((motionUrl) => {
+        void soundPlayer.preloadSound(motionUrl);
+      });
     });
   }, [ensureSoundReady, revealSoundUrlsForDropId]);
+  const preloadCardMotionSoundsForDropId = useCallback(
+    (dropId?: string) => {
+      const { cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);
+      [cardSwipe, cardSpread].forEach((motionUrl) => {
+        if (motionUrl) {
+          void soundPlayer.preloadSound(motionUrl);
+        }
+      });
+    },
+    [revealSoundUrlsForDropId],
+  );
+  const scheduleCardMotionSoundPreloadForDropId = useCallback(
+    (dropId?: string) => {
+      if (typeof window === 'undefined') {
+        preloadCardMotionSoundsForDropId(dropId);
+        return;
+      }
+      window.setTimeout(() => {
+        preloadCardMotionSoundsForDropId(dropId);
+      }, 0);
+    },
+    [preloadCardMotionSoundsForDropId],
+  );
+  const playCardMotionSoundForDropId = useCallback(
+    (dropId: string | undefined, soundKey: 'cardSwipe' | 'cardSpread') => {
+      const soundUrls = revealSoundUrlsForDropId(dropId);
+      const motionUrl = soundUrls[soundKey];
+      if (!motionUrl) return;
+      const play = () => {
+        void soundPlayer.playSound(motionUrl, soundUrls.clickVolume);
+      };
+      if (soundPlayer.isInitialized) {
+        play();
+        return;
+      }
+      const pending = soundInitPromiseRef.current;
+      if (pending) {
+        void pending.then(play);
+        return;
+      }
+      void ensureSoundReady().then(play);
+    },
+    [ensureSoundReady, revealSoundUrlsForDropId],
+  );
   const playRevealSoundForDropId = useCallback(
     (dropId?: string) => {
       const { reveal, revealVolume } = revealSoundUrlsForDropId(dropId);
@@ -2615,9 +2668,10 @@ function App({ currentPath }: AppProps) {
       const clickUrl = pickRandomSoundUrl(click);
       void ensureSoundReady().then(() => {
         void soundPlayer.playSound(clickUrl, clickVolume);
+        scheduleCardMotionSoundPreloadForDropId(dropId);
       });
     },
-    [ensureSoundReady, revealSoundUrlsForDropId],
+    [ensureSoundReady, revealSoundUrlsForDropId, scheduleCardMotionSoundPreloadForDropId],
   );
 
   const preloadRevealAssetsForPackMedia = useCallback(
@@ -5366,6 +5420,14 @@ function App({ currentPath }: AppProps) {
     if (!revealOverlay) return;
     playRevealSoundForDropId(revealOverlay.dropId);
   }, [playRevealSoundForDropId, revealOverlay?.dropId]);
+  const handlePonchoOverlayPlayCardSwipe = useCallback(() => {
+    if (!revealOverlay) return;
+    playCardMotionSoundForDropId(revealOverlay.dropId, 'cardSwipe');
+  }, [playCardMotionSoundForDropId, revealOverlay?.dropId]);
+  const handlePonchoOverlayPlayCardSpread = useCallback(() => {
+    if (!revealOverlay) return;
+    playCardMotionSoundForDropId(revealOverlay.dropId, 'cardSpread');
+  }, [playCardMotionSoundForDropId, revealOverlay?.dropId]);
   const showRevealOutcome = Boolean(
     revealOverlay &&
       revealOverlay.revealedIds?.length &&
@@ -5635,6 +5697,8 @@ function App({ currentPath }: AppProps) {
         onRequestReveal={handlePonchoOverlayRequestReveal}
         onPlayClick={handlePonchoOverlayPlayClick}
         onPlayReveal={handlePonchoOverlayPlayReveal}
+        onPlayCardSwipe={handlePonchoOverlayPlayCardSwipe}
+        onPlayCardSpread={handlePonchoOverlayPlayCardSpread}
         onBeforeAdvance={ensureRevealOverlayAdvanceAllowed}
         onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
