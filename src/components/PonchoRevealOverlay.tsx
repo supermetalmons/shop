@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,9 +32,28 @@ import {
   type InteractiveCardPackRevealSequence,
 } from '../lib/interactiveCardPackReveal';
 import { PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT } from '../lib/revealOverlayLayout';
+import {
+  createMobileTapCandidate,
+  findTouchByIdentifier,
+  isMobileBrowser,
+  prepareMobileTouchActivation,
+  shouldCompleteMobileTapCandidate,
+  updateMobileTapCandidateForMove,
+  type MobileTapCandidate,
+} from '../lib/mobileInteractionGuards';
 import WipInteractiveCard from './WipInteractiveCard';
 
 export type PonchoRevealDismissReadySource = 'card' | 'row';
+
+const PONCHO_REVEAL_TOUCH_TARGET = {
+  box: 'box',
+  card: 'card',
+} as const;
+const PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE = 'data-poncho-reveal-touch-target';
+const PONCHO_REVEAL_TOUCH_TARGET_SELECTOR = {
+  box: `[${PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE}="${PONCHO_REVEAL_TOUCH_TARGET.box}"]`,
+  card: `[${PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE}="${PONCHO_REVEAL_TOUCH_TARGET.card}"]`,
+} as const;
 
 type PonchoRevealSharedProps = {
   overlayStyle?: CSSProperties;
@@ -438,6 +458,9 @@ function PonchoRevealCardStackEntry({
     isRowEntry,
     interactiveEntry,
   } = cardStackEntryRoleState(entry);
+  const touchTarget = (isActiveEntry || isRowEntry) && cardInteractive
+    ? PONCHO_REVEAL_TOUCH_TARGET.card
+    : undefined;
   const handleImageReadyChange = useCallback(
     (ready: boolean) => {
       onImageReadyChange(cardKey, ready);
@@ -462,6 +485,7 @@ function PonchoRevealCardStackEntry({
         cycleSettled,
       )}
       aria-hidden={!isActiveEntry && !isRowEntry}
+      data-poncho-reveal-touch-target={touchTarget}
       onClick={interactiveEntry ? onCardClick : undefined}
       onAnimationEnd={handleMotionAnimationEnd}
     >
@@ -1143,6 +1167,11 @@ export function PonchoRevealOverlay({
     playerRef.current?.handleAdvance();
   };
 
+  const handleBoxClick = (evt: SyntheticEvent) => {
+    evt.stopPropagation();
+    handleAdvance();
+  };
+
   const handleOverlayClick = useCallback(() => {
     if (stackRevealEnabled) {
       if (cardStackRowVisible && cardStackRowTransitionComplete) {
@@ -1160,8 +1189,7 @@ export function PonchoRevealOverlay({
     stackRevealEnabled,
   ]);
 
-  const handleCardClick = useCallback((evt: SyntheticEvent) => {
-    evt.stopPropagation();
+  const activateCardStack = useCallback(() => {
     if (stackRevealEnabled) {
       if (cardStackRowVisible) return;
       if (startCardStackCycle()) return;
@@ -1177,8 +1205,96 @@ export function PonchoRevealOverlay({
     startCardStackCycle,
   ]);
 
+  const handleCardClick = useCallback((evt: SyntheticEvent) => {
+    evt.stopPropagation();
+    activateCardStack();
+  }, [activateCardStack]);
+
   const boxDisabled = closing || playerState.phase !== 'ready' || playerState.revealComplete || playerState.advanceLocked;
   const cardLocked = playerState.packDiscarded && playerState.cardVisible && !playerState.cardInteractive;
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const cardTapCandidateRef = useRef<MobileTapCandidate | null>(null);
+  const mobileTouchStateRef = useRef({
+    boxDisabled,
+    handleAdvance,
+    handleOverlayClick,
+    activateCardStack,
+  });
+  useLayoutEffect(() => {
+    mobileTouchStateRef.current = {
+      boxDisabled,
+      handleAdvance,
+      handleOverlayClick,
+      activateCardStack,
+    };
+  });
+
+  useEffect(() => {
+    if (!isMobileBrowser()) return undefined;
+
+    const handleDocumentTouchStart = (event: globalThis.TouchEvent) => {
+      cardTapCandidateRef.current = null;
+      const overlayElement = overlayRef.current;
+      if (!overlayElement || !(event.target instanceof Element)) return;
+      if (!overlayElement.contains(event.target)) return;
+
+      const boxElement = event.target.closest(PONCHO_REVEAL_TOUCH_TARGET_SELECTOR.box);
+      if (boxElement && overlayElement.contains(boxElement)) {
+        if (!prepareMobileTouchActivation(event)) return;
+        const touchState = mobileTouchStateRef.current;
+        if (!touchState.boxDisabled) touchState.handleAdvance();
+        return;
+      }
+
+      const cardElement = event.target.closest(PONCHO_REVEAL_TOUCH_TARGET_SELECTOR.card);
+      if (cardElement && overlayElement.contains(cardElement)) {
+        if (!prepareMobileTouchActivation(event)) return;
+        const touch = event.changedTouches.item(0);
+        if (!touch || event.touches.length !== 1) return;
+        cardTapCandidateRef.current = createMobileTapCandidate(touch);
+        return;
+      }
+
+      if (!prepareMobileTouchActivation(event)) return;
+      mobileTouchStateRef.current.handleOverlayClick();
+    };
+
+    const handleDocumentTouchMove = (event: globalThis.TouchEvent) => {
+      const candidate = cardTapCandidateRef.current;
+      if (!candidate) return;
+      const touch = findTouchByIdentifier(event.changedTouches, candidate.identifier);
+      cardTapCandidateRef.current = updateMobileTapCandidateForMove(candidate, touch);
+    };
+
+    const handleDocumentTouchEnd = (event: globalThis.TouchEvent) => {
+      const candidate = cardTapCandidateRef.current;
+      if (!candidate) return;
+      const touch = findTouchByIdentifier(event.changedTouches, candidate.identifier);
+      cardTapCandidateRef.current = null;
+      if (!shouldCompleteMobileTapCandidate(candidate, touch)) return;
+      mobileTouchStateRef.current.activateCardStack();
+    };
+
+    const handleDocumentTouchCancel = (event: globalThis.TouchEvent) => {
+      const candidate = cardTapCandidateRef.current;
+      if (!candidate) return;
+      if (!findTouchByIdentifier(event.changedTouches, candidate.identifier)) return;
+      cardTapCandidateRef.current = null;
+    };
+
+    document.addEventListener('touchstart', handleDocumentTouchStart, { passive: false });
+    document.addEventListener('touchmove', handleDocumentTouchMove, { passive: true });
+    document.addEventListener('touchend', handleDocumentTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', handleDocumentTouchCancel, { passive: true });
+    return () => {
+      cardTapCandidateRef.current = null;
+      document.removeEventListener('touchstart', handleDocumentTouchStart);
+      document.removeEventListener('touchmove', handleDocumentTouchMove);
+      document.removeEventListener('touchend', handleDocumentTouchEnd);
+      document.removeEventListener('touchcancel', handleDocumentTouchCancel);
+    };
+  }, []);
+
   const cardStackEntries = useMemo<PonchoCardStackEntryModel[]>(() => {
     if (stackRevealEnabled) {
       if (cardStackViewMode === 'row') {
@@ -1258,6 +1374,7 @@ export function PonchoRevealOverlay({
 
   return (
     <div
+      ref={overlayRef}
       className={`reveal-overlay wip-overlay reveal-overlay--${playerState.phase}${active ? ' reveal-overlay--active' : ''}${cardStackTransitioning ? ' wip-overlay--card-motion' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyleWithMotionVars}
@@ -1276,10 +1393,8 @@ export function PonchoRevealOverlay({
           aria-busy={loading}
           aria-disabled={boxDisabled}
           disabled={boxDisabled}
-          onClick={(evt) => {
-            evt.stopPropagation();
-            handleAdvance();
-          }}
+          data-poncho-reveal-touch-target={PONCHO_REVEAL_TOUCH_TARGET.box}
+          onClick={handleBoxClick}
           onAnimationEnd={handlePackDiscardAnimationEnd}
         >
           {!hasCommittedBoxVisual ? (

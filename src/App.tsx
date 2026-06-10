@@ -62,6 +62,7 @@ import {
   type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { hideImageShowFallback, showImageHideFallback } from './lib/imageFallback';
+import { isMobileBrowser, prepareMobileTouchActivation } from './lib/mobileInteractionGuards';
 import {
   joinDropAssetUrl,
   mintPanelPreviewAspectRatio,
@@ -173,6 +174,12 @@ const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
+const SELECTION_PANEL_ACTION = {
+  cancel: 'cancel',
+  view: 'view',
+  open: 'open',
+  ship: 'ship',
+} as const;
 const DROP_CARD_BACKDROP_ENABLED = false;
 const DROP_CARD_BACKDROP_COUNT = 30;
 const DROP_CARD_BACKDROP_COLUMNS = 6;
@@ -185,6 +192,18 @@ const DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO = 1.66;
 const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.04;
 const DROP_CARD_BACKDROP_REPOSITION_STEPS = 28;
 const DROP_CARD_BACKDROP_REPOSITION_CANDIDATES = 12;
+
+type SelectionPanelAction = (typeof SELECTION_PANEL_ACTION)[keyof typeof SELECTION_PANEL_ACTION];
+type SelectionPanelActionHandlers = Record<SelectionPanelAction, () => void>;
+
+function isSelectionPanelAction(action: string | undefined): action is SelectionPanelAction {
+  return (
+    action === SELECTION_PANEL_ACTION.cancel ||
+    action === SELECTION_PANEL_ACTION.view ||
+    action === SELECTION_PANEL_ACTION.open ||
+    action === SELECTION_PANEL_ACTION.ship
+  );
+}
 
 type DropCardBackdropConfig = {
   baseUrl: string;
@@ -4749,6 +4768,45 @@ function App({ currentPath }: AppProps) {
     setDeliveryOpen(true);
   };
 
+  const selectionPanelActionHandlersRef = useRef<SelectionPanelActionHandlers>({
+    [SELECTION_PANEL_ACTION.cancel]: () => {},
+    [SELECTION_PANEL_ACTION.view]: () => {},
+    [SELECTION_PANEL_ACTION.open]: () => {},
+    [SELECTION_PANEL_ACTION.ship]: () => {},
+  });
+  useLayoutEffect(() => {
+    selectionPanelActionHandlersRef.current = {
+      [SELECTION_PANEL_ACTION.cancel]: () => setSelected(new Set()),
+      [SELECTION_PANEL_ACTION.view]: handleViewSelectedInteractiveCard,
+      [SELECTION_PANEL_ACTION.open]: () => {
+        void handleOpenSelectedBox();
+      },
+      [SELECTION_PANEL_ACTION.ship]: () => {
+        void handleOpenShip();
+      },
+    };
+  });
+
+  useEffect(() => {
+    if (!isMobileBrowser()) return undefined;
+
+    const handleDocumentTouchStart = (event: globalThis.TouchEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest<HTMLButtonElement>('[data-selection-panel-action]');
+      if (!button || button.disabled) return;
+
+      const action = button.dataset.selectionPanelAction;
+      if (!isSelectionPanelAction(action)) return;
+      if (!prepareMobileTouchActivation(event)) return;
+      selectionPanelActionHandlersRef.current[action]();
+    };
+
+    document.addEventListener('touchstart', handleDocumentTouchStart, { passive: false });
+    return () => {
+      document.removeEventListener('touchstart', handleDocumentTouchStart);
+    };
+  }, []);
+
   const handleShip = async ({
     formatted,
     country,
@@ -6010,7 +6068,12 @@ function App({ currentPath }: AppProps) {
             </div>
           </div>
           <div className="selection-panel__actions">
-            <button type="button" className="quiet" onClick={() => setSelected(new Set())}>
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => setSelected(new Set())}
+              data-selection-panel-action={SELECTION_PANEL_ACTION.cancel}
+            >
               Cancel
             </button>
             {canViewSelected ? (
@@ -6018,6 +6081,7 @@ function App({ currentPath }: AppProps) {
                 type="button"
                 className="selection-panel__view"
                 onClick={handleViewSelectedInteractiveCard}
+                data-selection-panel-action={SELECTION_PANEL_ACTION.view}
               >
                 <svg
                   aria-hidden="true"
@@ -6041,12 +6105,13 @@ function App({ currentPath }: AppProps) {
               </button>
             ) : null}
             {canOpenSelected ? (
-	              <button
-	                type="button"
-	                className="selection-panel__open"
-	                onClick={handleOpenSelectedBox}
-	                disabled={Boolean(startOpenLoading)}
-	              >
+              <button
+                type="button"
+                className="selection-panel__open"
+                onClick={handleOpenSelectedBox}
+                data-selection-panel-action={SELECTION_PANEL_ACTION.open}
+                disabled={Boolean(startOpenLoading)}
+              >
                 <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
                 <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
               </button>
@@ -6055,6 +6120,7 @@ function App({ currentPath }: AppProps) {
               type="button"
               className="selection-panel__ship"
               onClick={handleOpenShip}
+              data-selection-panel-action={SELECTION_PANEL_ACTION.ship}
             >
               <FaPlane aria-hidden="true" focusable="false" size={16} />
               <span>Send</span>

@@ -1,10 +1,20 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { InventoryItem, InventoryPreviewVideo } from '../types';
 import { getFrontendDrop, isDropFamily } from '../config/deployment';
 import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
+import {
+  createMobileTapCandidate,
+  findTouchByIdentifier,
+  isMobileBrowser,
+  MOBILE_SYNTHETIC_CLICK_SUPPRESSION_MS,
+  prepareMobileTouchActivation,
+  shouldCompleteMobileTapCandidate,
+  updateMobileTapCandidateForMove,
+  type MobileTapCandidate,
+} from '../lib/mobileInteractionGuards';
 
 interface InventoryGridProps {
   items: InventoryItem[];
@@ -19,6 +29,107 @@ interface InventoryGridProps {
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
+}
+
+type InventoryTapCandidate = MobileTapCandidate & {
+  itemId: string;
+  target: HTMLElement;
+};
+
+type SuppressedMobileClick = {
+  itemId: string;
+  expiresAt: number;
+};
+
+type InventoryInteractionMode = 'select' | 'reveal' | 'view' | null;
+
+type InventoryInteractionContext = {
+  selected: Set<string>;
+  pendingRevealIds?: Set<string>;
+  onReveal?: InventoryGridProps['onReveal'];
+  onViewItem?: InventoryGridProps['onViewItem'];
+  canRevealItem?: InventoryGridProps['canRevealItem'];
+  revealLoadingId?: string | null;
+  revealDisabled?: boolean;
+};
+
+type InventoryActivationContext = {
+  onToggle: InventoryGridProps['onToggle'];
+  onReveal?: InventoryGridProps['onReveal'];
+  onViewItem?: InventoryGridProps['onViewItem'];
+};
+
+type InventoryTouchState = InventoryInteractionContext & InventoryActivationContext & {
+  itemsById: Map<string, InventoryItem>;
+};
+
+type InventoryInteractionState = {
+  mode: InventoryInteractionMode;
+  isReceipt: boolean;
+  isPendingReveal: boolean;
+  canSelect: boolean;
+  isSelected: boolean;
+  revealEnabled: boolean;
+  viewEnabled: boolean;
+  canInteract: boolean;
+};
+
+function getInventoryItemInteraction(
+  item: InventoryItem,
+  {
+    selected,
+    pendingRevealIds,
+    onReveal,
+    onViewItem,
+    canRevealItem,
+    revealLoadingId,
+    revealDisabled,
+  }: InventoryInteractionContext,
+): InventoryInteractionState {
+  const isReceipt = item.kind === 'certificate';
+  const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
+  const isPendingLocal = item.status === 'pending';
+  const canSelect = !isReceipt && !isPendingReveal && !isPendingLocal;
+  const isSelected = canSelect ? selected.has(item.id) : false;
+  const canReveal = Boolean(isPendingReveal && onReveal && (canRevealItem ? canRevealItem(item) : true));
+  const isRevealing = revealLoadingId === item.id;
+  const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
+  const viewEnabled = Boolean(!canSelect && !revealEnabled && onViewItem);
+  const mode = canSelect ? 'select' : revealEnabled ? 'reveal' : viewEnabled ? 'view' : null;
+
+  return {
+    mode,
+    isReceipt,
+    isPendingReveal,
+    canSelect,
+    isSelected,
+    revealEnabled,
+    viewEnabled,
+    canInteract: mode !== null,
+  };
+}
+
+function activateInventoryItem(
+  item: InventoryItem,
+  interaction: InventoryInteractionState,
+  target: HTMLElement,
+  { onToggle, onReveal, onViewItem }: InventoryActivationContext,
+): boolean {
+  if (interaction.mode === 'select') {
+    onToggle(item.id);
+    return true;
+  }
+  if (interaction.mode === 'reveal') {
+    if (!onReveal) return false;
+    onReveal(item.id, getInventoryRevealRect(target));
+    return true;
+  }
+  if (interaction.mode === 'view') {
+    if (!onViewItem) return false;
+    onViewItem(item, getInventoryRevealRect(target));
+    return true;
+  }
+  return false;
 }
 
 type InventoryVideoMediaProps = {
@@ -212,7 +323,109 @@ export function InventoryGrid({
   revealDisabled,
   emptyStateVisibility = 'visible',
 }: InventoryGridProps) {
-  const getRevealRect = (target: HTMLElement) => getInventoryRevealRect(target);
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const tapCandidateRef = useRef<InventoryTapCandidate | null>(null);
+  const suppressedMobileClickRef = useRef<SuppressedMobileClick | null>(null);
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
+  const touchStateRef = useRef<InventoryTouchState>({
+    itemsById,
+    selected,
+    onToggle,
+    pendingRevealIds,
+    onReveal,
+    onViewItem,
+    canRevealItem,
+    revealLoadingId,
+    revealDisabled,
+  });
+  useLayoutEffect(() => {
+    touchStateRef.current = {
+      itemsById,
+      selected,
+      onToggle,
+      pendingRevealIds,
+      onReveal,
+      onViewItem,
+      canRevealItem,
+      revealLoadingId,
+      revealDisabled,
+    };
+  });
+
+  useEffect(() => {
+    if (!isMobileBrowser()) return undefined;
+
+    const handleDocumentTouchStart = (event: globalThis.TouchEvent) => {
+      tapCandidateRef.current = null;
+      const gridElement = gridRef.current;
+      if (!gridElement || !(event.target instanceof Element)) return;
+      const itemElement = event.target.closest<HTMLElement>('[data-inventory-id]');
+      if (!itemElement || !gridElement.contains(itemElement)) return;
+      if (event.defaultPrevented) return;
+
+      const itemId = itemElement.dataset.inventoryId;
+      const touchState = touchStateRef.current;
+      const item = itemId ? touchState.itemsById.get(itemId) : undefined;
+      if (!item) return;
+
+      const interaction = getInventoryItemInteraction(item, touchState);
+      if (!interaction.canInteract) return;
+      const touch = event.changedTouches.item(0);
+      if (!touch || event.touches.length !== 1) return;
+      tapCandidateRef.current = {
+        ...createMobileTapCandidate(touch),
+        itemId: item.id,
+        target: itemElement,
+      };
+    };
+
+    const handleDocumentTouchMove = (event: globalThis.TouchEvent) => {
+      const candidate = tapCandidateRef.current;
+      if (!candidate) return;
+      const touch = findTouchByIdentifier(event.changedTouches, candidate.identifier);
+      tapCandidateRef.current = updateMobileTapCandidateForMove(candidate, touch);
+    };
+
+    const handleDocumentTouchEnd = (event: globalThis.TouchEvent) => {
+      const candidate = tapCandidateRef.current;
+      if (!candidate) return;
+      const touch = findTouchByIdentifier(event.changedTouches, candidate.identifier);
+      tapCandidateRef.current = null;
+      if (!shouldCompleteMobileTapCandidate(candidate, touch)) return;
+      if (!prepareMobileTouchActivation(event)) return;
+
+      const gridElement = gridRef.current;
+      if (!gridElement || !gridElement.contains(candidate.target)) return;
+      const touchState = touchStateRef.current;
+      const item = touchState.itemsById.get(candidate.itemId);
+      if (!item) return;
+      const interaction = getInventoryItemInteraction(item, touchState);
+      if (activateInventoryItem(item, interaction, candidate.target, touchState)) {
+        suppressedMobileClickRef.current = {
+          itemId: candidate.itemId,
+          expiresAt: Date.now() + MOBILE_SYNTHETIC_CLICK_SUPPRESSION_MS,
+        };
+      }
+    };
+
+    const handleDocumentTouchCancel = (event: globalThis.TouchEvent) => {
+      const candidate = tapCandidateRef.current;
+      if (!candidate) return;
+      if (!findTouchByIdentifier(event.changedTouches, candidate.identifier)) return;
+      tapCandidateRef.current = null;
+    };
+
+    document.addEventListener('touchstart', handleDocumentTouchStart, { passive: false });
+    document.addEventListener('touchmove', handleDocumentTouchMove, { passive: true });
+    document.addEventListener('touchend', handleDocumentTouchEnd, { passive: false });
+    document.addEventListener('touchcancel', handleDocumentTouchCancel, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', handleDocumentTouchStart);
+      document.removeEventListener('touchmove', handleDocumentTouchMove);
+      document.removeEventListener('touchend', handleDocumentTouchEnd);
+      document.removeEventListener('touchcancel', handleDocumentTouchCancel);
+    };
+  }, []);
 
   if (!items.length) {
     if (emptyStateVisibility === 'none') return null;
@@ -227,32 +440,52 @@ export function InventoryGrid({
   const gridClassName = ['inventory', className].filter(Boolean).join(' ');
 
   return (
-    <div className={gridClassName}>
+    <div ref={gridRef} className={gridClassName}>
       {items.map((item) => {
-        const isReceipt = item.kind === 'certificate';
-        const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
-        const isPendingLocal = item.status === 'pending';
-        const canSelect = !isReceipt && !isPendingReveal && !isPendingLocal;
-        const isSelected = canSelect ? selected.has(item.id) : false;
-        const canReveal = Boolean(isPendingReveal && onReveal && (canRevealItem ? canRevealItem(item) : true));
-        const isRevealing = revealLoadingId === item.id;
-        const revealEnabled = canReveal && selected.size === 0 && !revealDisabled && !isRevealing;
-        const viewEnabled = Boolean(!canSelect && !revealEnabled && onViewItem);
+        const interaction = getInventoryItemInteraction(item, {
+          selected,
+          pendingRevealIds,
+          onReveal,
+          onViewItem,
+          canRevealItem,
+          revealLoadingId,
+          revealDisabled,
+        });
+        const {
+          isReceipt,
+          isPendingReveal,
+          canSelect,
+          isSelected,
+          revealEnabled,
+          viewEnabled,
+          canInteract,
+        } = interaction;
         const hasFooter = Boolean(item.assignedDudes?.length);
-        const canInteract = canSelect || revealEnabled || viewEnabled;
         const isInteractiveCardFigure = item.kind === 'dude' && isDropFamily(item.dropId, 'card_nft_2');
         const sizeLabel = dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId);
-        const handleClick = canSelect
-          ? () => onToggle(item.id)
-          : revealEnabled
-            ? (evt: MouseEvent<HTMLElement>) => {
-                onReveal?.(item.id, getRevealRect(evt.currentTarget));
-              }
-            : viewEnabled
-              ? (evt: MouseEvent<HTMLElement>) => {
-                  onViewItem?.(item, getRevealRect(evt.currentTarget));
+        const handleActivate = (target: HTMLElement) => {
+          activateInventoryItem(item, interaction, target, {
+            onToggle,
+            onReveal,
+            onViewItem,
+          });
+        };
+        const handleClick = canInteract
+          ? (evt: MouseEvent<HTMLElement>) => {
+              const suppressedClick = suppressedMobileClickRef.current;
+              if (suppressedClick) {
+                if (suppressedClick.expiresAt <= Date.now()) {
+                  suppressedMobileClickRef.current = null;
+                } else if (suppressedClick.itemId === item.id) {
+                  evt.preventDefault();
+                  evt.stopPropagation();
+                  suppressedMobileClickRef.current = null;
+                  return;
                 }
-            : undefined;
+              }
+              handleActivate(evt.currentTarget);
+            }
+          : undefined;
         return (
           <article
             key={item.id}
@@ -284,13 +517,7 @@ export function InventoryGrid({
                 ? (e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      if (canSelect) {
-                        onToggle(item.id);
-                      } else if (revealEnabled && onReveal) {
-                        onReveal(item.id, getRevealRect(e.currentTarget as HTMLElement));
-                      } else if (viewEnabled && onViewItem) {
-                        onViewItem(item, getRevealRect(e.currentTarget as HTMLElement));
-                      }
+                      handleActivate(e.currentTarget as HTMLElement);
                     }
                   }
                 : undefined

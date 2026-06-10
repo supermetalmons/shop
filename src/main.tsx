@@ -9,11 +9,14 @@ import { getBuildInfo } from './lib/buildInfo';
 import { WalletContextProvider } from './wallet/WalletContext';
 import { type SolanaCluster, listFrontendDrops } from './config/deployment';
 import { resolveFrontendDropByPath, resolveUpcomingDropRouteByPath } from './lib/dropConfig';
+import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import './styles.css';
 
 if (!window.Buffer) {
   window.Buffer = Buffer;
 }
+
+installMobileInteractionGuards();
 
 document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 
