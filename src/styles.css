@@ -2830,7 +2830,17 @@ button.no-focus-style:focus-visible {
 
 .wip-reveal__card-item--cycling {
   pointer-events: none;
+  transition: none;
   will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.wip-reveal__card-item--cycle-settled {
+  transition: none;
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .wip-reveal__card-item--cycling-out {

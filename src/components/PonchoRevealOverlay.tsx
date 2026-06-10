@@ -172,6 +172,7 @@ const PONCHO_REVEAL_CARD_STACK_CYCLE_OUT_DURATION_MS =
   Math.round(PONCHO_REVEAL_CARD_STACK_CYCLE_DURATION_MS * 0.43);
 const PONCHO_REVEAL_CARD_STACK_CYCLE_IN_DURATION_MS =
   PONCHO_REVEAL_CARD_STACK_CYCLE_DURATION_MS - PONCHO_REVEAL_CARD_STACK_CYCLE_OUT_DURATION_MS;
+const PONCHO_REVEAL_CARD_STACK_CYCLE_SETTLE_MS = 120;
 const PONCHO_REVEAL_CARD_ROW_DURATION_MS = 560;
 const PONCHO_REVEAL_CARD_STACK_DISCARD_FALLBACK_MS = 420;
 const PONCHO_REVEAL_CARD_STACK_CYCLE_FALLBACK_MS =
@@ -240,6 +241,7 @@ function cardStackEntryClassName(
   cardLocked: boolean,
   rowTransitioning: boolean,
   cycleRestacked: boolean,
+  cycleSettled: boolean,
 ) {
   const {
     isActiveEntry,
@@ -258,6 +260,7 @@ function cardStackEntryClassName(
     isCyclingEntry
       ? `wip-reveal__card-item--cycling-${cycleRestacked ? 'in' : 'out'}`
       : '',
+    isNextEntry && cycleSettled ? 'wip-reveal__card-item--cycle-settled' : '',
     isRowEntry ? `wip-reveal__card-item--row wip-reveal__card-item--row-slot-${rowSlotIndex}` : '',
     isRowEntry && rowTransitioning ? 'wip-reveal__card-item--row-spreading' : '',
     (isActiveEntry || isRowEntry) && cardInteractive ? 'wip-reveal__card-item--interactive' : '',
@@ -403,6 +406,7 @@ function PonchoRevealCardStackEntry({
   cardLabel,
   rowTransitioning,
   cycleRestacked,
+  cycleSettled,
   trackImageReady,
   onCardClick,
   onImageReadyChange,
@@ -415,6 +419,7 @@ function PonchoRevealCardStackEntry({
   cardLabel: string;
   rowTransitioning: boolean;
   cycleRestacked: boolean;
+  cycleSettled: boolean;
   trackImageReady: boolean;
   onCardClick: (evt: SyntheticEvent) => void;
   onImageReadyChange: (cardKey: string, ready: boolean) => void;
@@ -449,6 +454,7 @@ function PonchoRevealCardStackEntry({
         cardLocked,
         rowTransitioning,
         cycleRestacked,
+        cycleSettled,
       )}
       aria-hidden={!isActiveEntry && !isRowEntry}
       onClick={interactiveEntry ? onCardClick : undefined}
@@ -506,6 +512,7 @@ export function PonchoRevealOverlay({
   const cardStackAdvanceLockedRef = useRef(false);
   const cardStackMotionFallbackTimeoutRef = useRef<number | null>(null);
   const cardStackCycleRestackTimeoutRef = useRef<number | null>(null);
+  const cardStackCycleSettleTimeoutRef = useRef<number | null>(null);
   const cardStackRowFallbackTimeoutRef = useRef<number | null>(null);
   const activeCardReadyFallbackTimeoutRef = useRef<number | null>(null);
   const stackCards = useMemo(
@@ -524,6 +531,7 @@ export function PonchoRevealOverlay({
   const [cardStackDiscard, setCardStackDiscard] = useState<number | null>(null);
   const [cardStackCycle, setCardStackCycle] = useState<number | null>(null);
   const [cardStackCycleRestacked, setCardStackCycleRestacked] = useState<number | null>(null);
+  const [cardStackCycleSettled, setCardStackCycleSettled] = useState<number | null>(null);
   const [cardStackViewMode, setCardStackViewMode] = useState<CardStackViewMode>('stack');
   const [cardStackRowTransitionComplete, setCardStackRowTransitionComplete] = useState(false);
   const [packDiscardAnimationComplete, setPackDiscardAnimationComplete] = useState(false);
@@ -664,6 +672,10 @@ export function PonchoRevealOverlay({
     clearWindowTimeoutRef(cardStackCycleRestackTimeoutRef);
   }, []);
 
+  const clearCardStackCycleSettleTimeout = useCallback(() => {
+    clearWindowTimeoutRef(cardStackCycleSettleTimeoutRef);
+  }, []);
+
   const clearCardStackRowFallbackTimeout = useCallback(() => {
     clearWindowTimeoutRef(cardStackRowFallbackTimeoutRef);
   }, []);
@@ -671,12 +683,15 @@ export function PonchoRevealOverlay({
   const clearCardStackTransitionState = useCallback(() => {
     clearCardStackMotionFallbackTimeout();
     clearCardStackCycleRestackTimeout();
+    clearCardStackCycleSettleTimeout();
     clearCardStackRowFallbackTimeout();
     setCardStackDiscard(null);
     setCardStackCycle(null);
     setCardStackCycleRestacked(null);
+    setCardStackCycleSettled(null);
   }, [
     clearCardStackCycleRestackTimeout,
+    clearCardStackCycleSettleTimeout,
     clearCardStackMotionFallbackTimeout,
     clearCardStackRowFallbackTimeout,
   ]);
@@ -734,6 +749,7 @@ export function PonchoRevealOverlay({
     (cycledIndex: number) => {
       clearCardStackMotionFallbackTimeout();
       clearCardStackCycleRestackTimeout();
+      clearCardStackCycleSettleTimeout();
       cardStackAdvanceLockedRef.current = false;
       setCardStackOrder((currentOrder) => {
         if (currentOrder[0] !== cycledIndex) return currentOrder;
@@ -741,8 +757,19 @@ export function PonchoRevealOverlay({
       });
       setCardStackCycle((currentCycle) => (currentCycle === cycledIndex ? null : currentCycle));
       setCardStackCycleRestacked((currentCycle) => (currentCycle === cycledIndex ? null : currentCycle));
+      setCardStackCycleSettled(cycledIndex);
+      if (typeof window !== 'undefined') {
+        cardStackCycleSettleTimeoutRef.current = window.setTimeout(() => {
+          cardStackCycleSettleTimeoutRef.current = null;
+          setCardStackCycleSettled((currentCycle) => (currentCycle === cycledIndex ? null : currentCycle));
+        }, PONCHO_REVEAL_CARD_STACK_CYCLE_SETTLE_MS);
+      }
     },
-    [clearCardStackCycleRestackTimeout, clearCardStackMotionFallbackTimeout],
+    [
+      clearCardStackCycleRestackTimeout,
+      clearCardStackCycleSettleTimeout,
+      clearCardStackMotionFallbackTimeout,
+    ],
   );
 
   const startCardStackCycleReturn = useCallback(
@@ -825,6 +852,7 @@ export function PonchoRevealOverlay({
     clearPackDiscardFallbackTimeout();
     clearCardStackMotionFallbackTimeout();
     clearCardStackCycleRestackTimeout();
+    clearCardStackCycleSettleTimeout();
     clearCardStackRowFallbackTimeout();
     clearActiveCardReadyFallbackTimeout();
     setReadyCardKey('');
@@ -834,6 +862,7 @@ export function PonchoRevealOverlay({
     setCardStackDiscard(null);
     setCardStackCycle(null);
     setCardStackCycleRestacked(null);
+    setCardStackCycleSettled(null);
     setCardStackViewMode('stack');
     setCardStackRowTransitionComplete(false);
     setPackDiscardAnimationComplete(false);
@@ -841,6 +870,7 @@ export function PonchoRevealOverlay({
     active,
     clearActiveCardReadyFallbackTimeout,
     clearCardStackCycleRestackTimeout,
+    clearCardStackCycleSettleTimeout,
     clearCardStackMotionFallbackTimeout,
     clearCardStackRowFallbackTimeout,
     clearPackDiscardFallbackTimeout,
@@ -925,6 +955,7 @@ export function PonchoRevealOverlay({
       clearPackDiscardFallbackTimeout();
       clearCardStackMotionFallbackTimeout();
       clearCardStackCycleRestackTimeout();
+      clearCardStackCycleSettleTimeout();
       clearCardStackRowFallbackTimeout();
       clearActiveCardReadyFallbackTimeout();
       onDismissReadyChange?.(false);
@@ -932,6 +963,7 @@ export function PonchoRevealOverlay({
   }, [
     clearActiveCardReadyFallbackTimeout,
     clearCardStackCycleRestackTimeout,
+    clearCardStackCycleSettleTimeout,
     clearCardStackMotionFallbackTimeout,
     clearCardStackRowFallbackTimeout,
     clearPackDiscardFallbackTimeout,
@@ -1191,6 +1223,7 @@ export function PonchoRevealOverlay({
         cardLabel={cardLabel}
         rowTransitioning={cardStackRowTransitioning}
         cycleRestacked={entry.role === 'cycling' && cardStackCycleRestacked === entry.index}
+        cycleSettled={entry.role === 'next' && cardStackCycleSettled === entry.index}
         trackImageReady={trackImageReady}
         onCardClick={handleCardClick}
         onImageReadyChange={handleCardImageReadyChange}
