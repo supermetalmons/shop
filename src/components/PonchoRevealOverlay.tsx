@@ -130,7 +130,12 @@ function drawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLIm
     return false;
   }
 
-  const dpr = typeof window === 'undefined' ? 1 : Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5));
+  const rawDpr =
+    typeof window === 'undefined' || !Number.isFinite(window.devicePixelRatio) || window.devicePixelRatio <= 0
+      ? 1
+      : window.devicePixelRatio;
+  const maxDprForCanvas = 1080 / Math.max(cssWidth, cssHeight);
+  const dpr = Math.min(rawDpr, maxDprForCanvas);
   const targetWidth = Math.max(1, Math.round(cssWidth * dpr));
   const targetHeight = Math.max(1, Math.round(cssHeight * dpr));
   if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
@@ -147,7 +152,7 @@ function drawPonchoFrameToCanvas(canvas: HTMLCanvasElement | null, image: HTMLIm
   const drawY = (targetHeight - drawHeight) / 2;
   const downscaling = drawWidth < image.naturalWidth || drawHeight < image.naturalHeight;
   context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = downscaling && dpr <= 1.2 ? 'high' : 'medium';
+  context.imageSmoothingQuality = downscaling ? 'high' : 'medium';
   context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
   return true;
 }
