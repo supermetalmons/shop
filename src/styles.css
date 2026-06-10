@@ -2703,10 +2703,41 @@ button.no-focus-style:focus-visible {
 }
 
 .wip-reveal__media .reveal-overlay__media-float,
-.wip-reveal__row-layer .reveal-overlay__media-float {
+.wip-reveal__row-layer .reveal-overlay__media-float,
+.wip-reveal__stack-layer .reveal-overlay__media-float {
   animation: none;
   opacity: 1;
   transform: none;
+}
+
+.wip-reveal__stack-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0;
+  contain: none;
+  transform: none;
+  isolation: isolate;
+}
+
+.wip-reveal__stack-layer--visible {
+  opacity: 1;
+}
+
+.reveal-overlay--closing .wip-reveal__stack-layer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wip-reveal__stack-layer--row {
+  overflow: hidden;
+}
+
+.wip-reveal__stack-layer .wip-reveal__card-item:not(.wip-reveal__card-item--row) {
+  left: calc(var(--reveal-target-left) + var(--poncho-card-left));
+  top: calc(var(--reveal-target-top) + var(--poncho-card-top));
 }
 
 .wip-reveal__row-layer {
@@ -2753,11 +2784,13 @@ button.no-focus-style:focus-visible {
   will-change: auto;
 }
 
-.wip-reveal__media.wip-reveal__media--locked .wip-reveal__card-item--locked {
+.wip-reveal__media.wip-reveal__media--locked .wip-reveal__card-item--locked,
+.wip-reveal__stack-layer--visible.wip-reveal__stack-layer--locked .wip-reveal__card-item--locked {
   pointer-events: auto;
 }
 
-.wip-reveal__media.wip-reveal__media--interactive .wip-reveal__card-item--interactive {
+.wip-reveal__media.wip-reveal__media--interactive .wip-reveal__card-item--interactive,
+.wip-reveal__stack-layer--visible.wip-reveal__stack-layer--interactive .wip-reveal__card-item--interactive {
   pointer-events: auto;
 }
 

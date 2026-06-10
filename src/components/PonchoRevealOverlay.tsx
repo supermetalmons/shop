@@ -393,6 +393,7 @@ function PonchoRevealCardStackEntry({
   cardLocked,
   cardLabel,
   rowTransitioning,
+  trackImageReady,
   onCardClick,
   onImageReadyChange,
   onMotionAnimationEnd,
@@ -403,6 +404,7 @@ function PonchoRevealCardStackEntry({
   cardLocked: boolean;
   cardLabel: string;
   rowTransitioning: boolean;
+  trackImageReady: boolean;
   onCardClick: (evt: SyntheticEvent) => void;
   onImageReadyChange: (cardKey: string, ready: boolean) => void;
   onMotionAnimationEnd: (evt: AnimationEvent<HTMLElement>, cardIndex: number) => void;
@@ -440,7 +442,7 @@ function PonchoRevealCardStackEntry({
           <WipInteractiveCard
             card={card}
             interactive={interactiveEntry && cardInteractive}
-            onImageReadyChange={isActiveEntry ? handleImageReadyChange : undefined}
+            onImageReadyChange={isActiveEntry && trackImageReady ? handleImageReadyChange : undefined}
             wakeOnInteractiveUnlock={false}
             interactionMode={isCyclingEntry || isDiscardingEntry ? 'settling' : 'normal'}
             ariaLabel={cardLabel}
@@ -543,6 +545,9 @@ export function PonchoRevealOverlay({
   const cardStackRowVisible = stackRevealEnabled && cardStackViewMode === 'row';
   const cardStackRowTransitioning = cardStackRowVisible && !cardStackRowTransitionComplete;
   const cardStackTransitioning = cardStackDiscard !== null || cardStackCycling || cardStackRowTransitioning;
+  const cardStackFixedLayerMounted = stackRevealEnabled && Boolean(activeStackCard) && playerState.cardVisible;
+  const cardStackFixedLayerReady = cardStackFixedLayerMounted && packDiscardAnimationComplete;
+  const cardStackFixedLayerVisible = cardStackFixedLayerReady && !closing;
   const activeCardIsLastRevealedCard = stackCards.length > 0 && activeCardIndex >= stackCards.length - 1;
   const activeStackCardReady = Boolean(
     activeStackCardKey &&
@@ -1102,23 +1107,45 @@ export function PonchoRevealOverlay({
     stackCards,
     stackRevealEnabled,
   ]);
-  const renderCardStackEntry = (entry: PonchoCardStackEntryModel) => {
+  const renderCardStackEntry = (
+    entry: PonchoCardStackEntryModel,
+    {
+      cardInteractive: entryCardInteractive,
+      cardLocked: entryCardLocked,
+      trackImageReady,
+    }: {
+      cardInteractive: boolean;
+      cardLocked: boolean;
+      trackImageReady: boolean;
+    },
+  ) => {
     const cardKey = cardStackKeyForCard(entry.card, entry.index);
     return (
       <PonchoRevealCardStackEntry
         key={cardKey}
         entry={entry}
         cardKey={cardKey}
-        cardInteractive={playerState.cardInteractive}
-        cardLocked={cardLocked}
+        cardInteractive={entryCardInteractive}
+        cardLocked={entryCardLocked}
         cardLabel={cardLabel}
         rowTransitioning={cardStackRowTransitioning}
+        trackImageReady={trackImageReady}
         onCardClick={handleCardClick}
         onImageReadyChange={handleCardImageReadyChange}
         onMotionAnimationEnd={handleCardStackMotionAnimationEnd}
       />
     );
   };
+  const cardStackFixedLayerTracksImages = cardStackFixedLayerReady && !activeStackCardReady;
+  const cardStackFixedLayerInteractive = cardStackFixedLayerVisible && playerState.cardInteractive;
+  const cardStackFixedLayerLocked = cardStackFixedLayerVisible && cardLocked;
+  const cardStackFixedLayerClassName = [
+    'wip-reveal__stack-layer',
+    cardStackFixedLayerVisible ? 'wip-reveal__stack-layer--visible' : '',
+    cardStackRowVisible ? 'wip-reveal__stack-layer--row' : '',
+    cardStackFixedLayerInteractive ? 'wip-reveal__stack-layer--interactive' : '',
+    cardStackFixedLayerLocked ? 'wip-reveal__stack-layer--locked' : '',
+  ].filter(Boolean).join(' ');
   const overlayStyleWithMotionVars: CSSProperties = {
     ['--poncho-pack-discard-delay' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS}ms`,
     ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
@@ -1167,12 +1194,18 @@ export function PonchoRevealOverlay({
           <canvas ref={boxCanvasRef} className="reveal-overlay__image" aria-hidden="true" />
         </button>
         <div className={`wip-reveal__stage${playerState.stageVisible ? ' wip-reveal__stage--visible' : ''}`} aria-hidden={!playerState.stageVisible}>
-          {activeStackCard && !cardStackRowVisible ? (
+          {activeStackCard && !cardStackRowVisible && !cardStackFixedLayerReady ? (
             <div
               className={`reveal-overlay__media wip-reveal__media${playerState.cardVisible ? ' wip-reveal__media--visible' : ''}${playerState.cardInteractive ? ' wip-reveal__media--interactive' : ''}${cardLocked ? ' wip-reveal__media--locked' : ''}`}
               aria-hidden={!playerState.cardVisible || !playerState.cardInteractive}
             >
-              {cardStackEntries.map(renderCardStackEntry)}
+              {cardStackEntries.map((entry) =>
+                renderCardStackEntry(entry, {
+                  cardInteractive: playerState.cardInteractive,
+                  cardLocked,
+                  trackImageReady: true,
+                })
+              )}
             </div>
           ) : null}
           <div
@@ -1188,12 +1221,18 @@ export function PonchoRevealOverlay({
           </div>
         </div>
       </div>
-      {cardStackRowVisible && activeStackCard ? (
+      {cardStackFixedLayerMounted && activeStackCard ? (
         <div
-          className={`wip-reveal__row-layer${playerState.cardVisible ? ' wip-reveal__row-layer--visible' : ''}${playerState.cardInteractive ? ' wip-reveal__row-layer--interactive' : ''}`}
-          aria-hidden={!playerState.cardVisible || !playerState.cardInteractive}
+          className={cardStackFixedLayerClassName}
+          aria-hidden={!cardStackFixedLayerInteractive}
         >
-          {cardStackEntries.map(renderCardStackEntry)}
+          {cardStackEntries.map((entry) =>
+            renderCardStackEntry(entry, {
+              cardInteractive: cardStackFixedLayerInteractive,
+              cardLocked: cardStackFixedLayerLocked,
+              trackImageReady: cardStackFixedLayerTracksImages,
+            })
+          )}
         </div>
       ) : null}
     </div>
