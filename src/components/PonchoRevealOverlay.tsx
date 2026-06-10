@@ -45,16 +45,6 @@ import WipInteractiveCard from './WipInteractiveCard';
 
 export type PonchoRevealDismissReadySource = 'card' | 'row';
 
-const PONCHO_REVEAL_TOUCH_TARGET = {
-  box: 'box',
-  card: 'card',
-} as const;
-const PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE = 'data-poncho-reveal-touch-target';
-const PONCHO_REVEAL_TOUCH_TARGET_SELECTOR = {
-  box: `[${PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE}="${PONCHO_REVEAL_TOUCH_TARGET.box}"]`,
-  card: `[${PONCHO_REVEAL_TOUCH_TARGET_ATTRIBUTE}="${PONCHO_REVEAL_TOUCH_TARGET.card}"]`,
-} as const;
-
 type PonchoRevealSharedProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
@@ -458,9 +448,6 @@ function PonchoRevealCardStackEntry({
     isRowEntry,
     interactiveEntry,
   } = cardStackEntryRoleState(entry);
-  const touchTarget = (isActiveEntry || isRowEntry) && cardInteractive
-    ? PONCHO_REVEAL_TOUCH_TARGET.card
-    : undefined;
   const handleImageReadyChange = useCallback(
     (ready: boolean) => {
       onImageReadyChange(cardKey, ready);
@@ -485,7 +472,6 @@ function PonchoRevealCardStackEntry({
         cycleSettled,
       )}
       aria-hidden={!isActiveEntry && !isRowEntry}
-      data-poncho-reveal-touch-target={touchTarget}
       onClick={interactiveEntry ? onCardClick : undefined}
       onAnimationEnd={handleMotionAnimationEnd}
     >
@@ -1212,7 +1198,6 @@ export function PonchoRevealOverlay({
 
   const boxDisabled = closing || playerState.phase !== 'ready' || playerState.revealComplete || playerState.advanceLocked;
   const cardLocked = playerState.packDiscarded && playerState.cardVisible && !playerState.cardInteractive;
-  const overlayRef = useRef<HTMLDivElement | null>(null);
   const cardTapCandidateRef = useRef<MobileTapCandidate | null>(null);
   const mobileTouchStateRef = useRef({
     boxDisabled,
@@ -1234,11 +1219,11 @@ export function PonchoRevealOverlay({
 
     const handleDocumentTouchStart = (event: globalThis.TouchEvent) => {
       cardTapCandidateRef.current = null;
-      const overlayElement = overlayRef.current;
-      if (!overlayElement || !(event.target instanceof Element)) return;
-      if (!overlayElement.contains(event.target)) return;
+      if (!(event.target instanceof Element)) return;
+      const overlayElement = event.target.closest('.reveal-overlay.wip-overlay');
+      if (!overlayElement) return;
 
-      const boxElement = event.target.closest(PONCHO_REVEAL_TOUCH_TARGET_SELECTOR.box);
+      const boxElement = event.target.closest('.reveal-overlay__box');
       if (boxElement && overlayElement.contains(boxElement)) {
         if (!prepareMobileTouchActivation(event)) return;
         const touchState = mobileTouchStateRef.current;
@@ -1246,7 +1231,7 @@ export function PonchoRevealOverlay({
         return;
       }
 
-      const cardElement = event.target.closest(PONCHO_REVEAL_TOUCH_TARGET_SELECTOR.card);
+      const cardElement = event.target.closest('.wip-reveal__card-item--interactive');
       if (cardElement && overlayElement.contains(cardElement)) {
         if (!prepareMobileTouchActivation(event)) return;
         const touch = event.changedTouches.item(0);
@@ -1374,7 +1359,6 @@ export function PonchoRevealOverlay({
 
   return (
     <div
-      ref={overlayRef}
       className={`reveal-overlay wip-overlay reveal-overlay--${playerState.phase}${active ? ' reveal-overlay--active' : ''}${cardStackTransitioning ? ' wip-overlay--card-motion' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyleWithMotionVars}
@@ -1393,7 +1377,6 @@ export function PonchoRevealOverlay({
           aria-busy={loading}
           aria-disabled={boxDisabled}
           disabled={boxDisabled}
-          data-poncho-reveal-touch-target={PONCHO_REVEAL_TOUCH_TARGET.box}
           onClick={handleBoxClick}
           onAnimationEnd={handlePackDiscardAnimationEnd}
         >

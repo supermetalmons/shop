@@ -1,6 +1,5 @@
 export const MIN_TIME_BETWEEN_TOUCHSTARTS = 555;
 export const MOBILE_TAP_MOVE_CANCEL_PX = 12;
-export const MOBILE_SYNTHETIC_CLICK_SUPPRESSION_MS = 700;
 
 type TouchstartGuardInput = {
   currentTime: number;
@@ -16,7 +15,6 @@ type TouchstartPreventableEvent = {
 };
 
 type MobileActivationEvent = {
-  defaultPrevented?: boolean;
   preventDefault: () => void;
 };
 
@@ -116,7 +114,6 @@ export function preventTouchstartIfNeeded(event: TouchstartPreventableEvent): bo
 
 export function prepareMobileTouchActivation(event: MobileActivationEvent): boolean {
   if (!isMobileBrowser()) return false;
-  if (event.defaultPrevented) return false;
 
   event.preventDefault();
   return true;

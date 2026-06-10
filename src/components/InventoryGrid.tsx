@@ -9,7 +9,6 @@ import {
   createMobileTapCandidate,
   findTouchByIdentifier,
   isMobileBrowser,
-  MOBILE_SYNTHETIC_CLICK_SUPPRESSION_MS,
   prepareMobileTouchActivation,
   shouldCompleteMobileTapCandidate,
   updateMobileTapCandidateForMove,
@@ -361,7 +360,6 @@ export function InventoryGrid({
       if (!gridElement || !(event.target instanceof Element)) return;
       const itemElement = event.target.closest<HTMLElement>('[data-inventory-id]');
       if (!itemElement || !gridElement.contains(itemElement)) return;
-      if (event.defaultPrevented) return;
 
       const itemId = itemElement.dataset.inventoryId;
       const touchState = touchStateRef.current;
@@ -403,7 +401,7 @@ export function InventoryGrid({
       if (activateInventoryItem(item, interaction, candidate.target, touchState)) {
         suppressedMobileClickRef.current = {
           itemId: candidate.itemId,
-          expiresAt: Date.now() + MOBILE_SYNTHETIC_CLICK_SUPPRESSION_MS,
+          expiresAt: Date.now() + 700,
         };
       }
     };

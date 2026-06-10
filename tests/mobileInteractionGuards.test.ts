@@ -7,7 +7,6 @@ import {
   getTouchstartGuardResult,
   isEditableMobileInteractionTarget,
   isMobileUserAgent,
-  prepareMobileTouchActivation,
   shouldCompleteMobileTapCandidate,
   shouldPreventMobileContextMenu,
   updateMobileTapCandidateForMove,
@@ -38,24 +37,6 @@ function fakeTouchList(touches: Array<Pick<Touch, 'identifier' | 'clientX' | 'cl
     length: touches.length,
     item: (index: number) => (touches[index] ?? null) as Touch | null,
   } as TouchList;
-}
-
-function withNavigatorUserAgent<T>(userAgent: string, callback: () => T): T {
-  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    value: { userAgent },
-  });
-
-  try {
-    return callback();
-  } finally {
-    if (originalNavigator) {
-      Object.defineProperty(globalThis, 'navigator', originalNavigator);
-    } else {
-      Reflect.deleteProperty(globalThis, 'navigator');
-    }
-  }
 }
 
 test('mobile touchstart guard allows the first touch', () => {
@@ -106,35 +87,6 @@ test('mobile user agent detection matches iOS and Android mobile browsers', () =
   assert.equal(isMobileUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)'), true);
   assert.equal(isMobileUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel 8) Mobile Safari/537.36'), true);
   assert.equal(isMobileUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) Safari/605.1.15'), false);
-});
-
-test('mobile touch activation prevents default for allowed mobile events', () => {
-  let prevented = false;
-  const activated = withNavigatorUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', () =>
-    prepareMobileTouchActivation({
-      preventDefault: () => {
-        prevented = true;
-      },
-    }),
-  );
-
-  assert.equal(activated, true);
-  assert.equal(prevented, true);
-});
-
-test('mobile touch activation ignores events already prevented by the global guard', () => {
-  let prevented = false;
-  const activated = withNavigatorUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)', () =>
-    prepareMobileTouchActivation({
-      defaultPrevented: true,
-      preventDefault: () => {
-        prevented = true;
-      },
-    }),
-  );
-
-  assert.equal(activated, false);
-  assert.equal(prevented, false);
 });
 
 test('mobile tap candidate completes without meaningful movement', () => {
