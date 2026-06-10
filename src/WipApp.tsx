@@ -6,10 +6,7 @@ import {
 } from './components/PonchoRevealOverlay';
 import { CARD_NFT_2_PACK_INITIAL_COUNT } from './config/dropMediaDefaults';
 import {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
-  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   createPonchoDrifellaImageCache,
-  getRandomPonchoDrifellaBoxClickSoundUrl,
   preloadPonchoDrifellaCardAssets,
   preloadPonchoDrifellaPackAssets,
 } from './lib/ponchoDrifellaReveal';
@@ -17,6 +14,10 @@ import {
   getInteractiveCardPackCardsByFigureIds,
   getInteractiveCardPackRevealSequenceForDropId,
 } from './lib/interactiveCardPackReveal';
+import {
+  interactiveCardPackRevealSoundUrlsForDropId,
+  pickRandomInteractiveCardPackClickSoundUrl,
+} from './lib/interactiveCardPackRevealSounds';
 import { isDropFamily, listFrontendDrops } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -41,6 +42,7 @@ const WIP_DROP = (() => {
   return devnetCardNft2Drop;
 })();
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
+const WIP_REVEAL_SOUND_URLS = interactiveCardPackRevealSoundUrlsForDropId(WIP_DROP.dropId);
 const WIP_BOX_SUPPLY_COUNT = Math.max(1, Math.floor(WIP_DROP.maxSupply));
 const WIP_ITEMS_PER_BOX = Math.max(1, Math.floor(WIP_DROP.itemsPerBox || 1));
 const WIP_CARD_COUNT = WIP_BOX_SUPPLY_COUNT * WIP_ITEMS_PER_BOX;
@@ -158,19 +160,22 @@ function LocalPlayWipApp() {
   }, []);
 
   const preloadRevealSounds = useCallback(() => {
-    void soundPlayer.preloadSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL);
-    PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS.forEach((clickUrl) => {
+    void soundPlayer.preloadSound(WIP_REVEAL_SOUND_URLS.reveal);
+    WIP_REVEAL_SOUND_URLS.click.forEach((clickUrl) => {
       void soundPlayer.preloadSound(clickUrl);
     });
   }, []);
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(getRandomPonchoDrifellaBoxClickSoundUrl(), WIP_REVEAL_SOUND_PROFILE.clickVolume);
+      void soundPlayer.playSound(
+        pickRandomInteractiveCardPackClickSoundUrl(WIP_DROP.dropId),
+        WIP_REVEAL_SOUND_PROFILE.clickVolume,
+      );
     });
   }, [ensureSoundReady]);
   const playRevealSound = useCallback(() => {
     const play = () => {
-      void soundPlayer.playSound(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, WIP_REVEAL_SOUND_PROFILE.revealVolume);
+      void soundPlayer.playSound(WIP_REVEAL_SOUND_URLS.reveal, WIP_REVEAL_SOUND_PROFILE.revealVolume);
     };
     if (soundPlayer.isInitialized) {
       play();

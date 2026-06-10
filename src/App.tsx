@@ -88,8 +88,6 @@ import {
   type PonchoRevealDismissReadySource,
 } from './components/PonchoRevealOverlay';
 import {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
-  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   clearPonchoDrifellaImageCache,
   createPonchoDrifellaImageCache,
   preloadPonchoDrifellaCardAssets,
@@ -104,6 +102,7 @@ import {
   normalizeInteractiveCardPackMediaId,
   selectInteractiveCardPackRevealCardIdForDrop,
 } from './lib/interactiveCardPackReveal';
+import { interactiveCardPackRevealSoundUrlsForDropId } from './lib/interactiveCardPackRevealSounds';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
   encryptAddressPayload,
@@ -1659,9 +1658,10 @@ function App({ currentPath }: AppProps) {
     (dropId?: string) => {
       const { sound } = getDropContent(dropId).reveal;
       if (usesInteractiveCardPackRevealForDropId(dropId)) {
+        const { click, reveal } = interactiveCardPackRevealSoundUrlsForDropId(dropId);
         return {
-          click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
-          reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+          click,
+          reveal,
           clickVolume: sound.clickVolume,
           revealVolume: sound.revealVolume,
         };

@@ -4,6 +4,14 @@ import {
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
   type InteractiveCardPackRevealSequence,
 } from './interactiveCardPackReveal';
+import {
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
+  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+} from './interactiveCardPackRevealSounds';
+export {
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
+  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+} from './interactiveCardPackRevealSounds';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
 export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 50;
 export const PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS = 420;
@@ -15,13 +23,6 @@ const PONCHO_DRIFELLA_BACKGROUND_PRELOAD_PAUSE_MS = 48;
 const PONCHO_DRIFELLA_CARD_IMAGE_SETTLE_DELAY_MS = 96;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_BASE_MS = 12_000;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_MAX_MS = 60_000;
-
-export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
-export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS = [
-  '/Poncho_Drifella/sounds/hit1.mp3',
-  '/Poncho_Drifella/sounds/hit2.mp3',
-  '/Poncho_Drifella/sounds/hit3.mp3',
-] as const;
 
 export type PonchoDrifellaImagePreloadMode = 'warm' | 'resident';
 export type PonchoDrifellaImagePreloadPriority = 'high' | 'low';

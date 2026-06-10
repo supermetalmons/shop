@@ -18,6 +18,13 @@ import {
   getInteractiveCardPackRevealSequenceForDropId,
   selectInteractiveCardPackRevealCardId,
 } from '../src/lib/interactiveCardPackReveal.ts';
+import {
+  CARD_NFT_2_BOX_SOUND_CLICK_URLS,
+  CARD_NFT_2_BOX_SOUND_REVEAL_URL,
+  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
+  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  interactiveCardPackRevealSoundUrlsForDropId,
+} from '../src/lib/interactiveCardPackRevealSounds.ts';
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
 test('media map helper cycles ids and honors overrides', () => {
@@ -103,6 +110,30 @@ test('interactive pack reveal content and selected card presentation are stable'
   assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.5), 12);
   assert.equal(selectInteractiveCardPackRevealCardId(revealedIds, () => 0.99), 13);
   assert.deepEqual(revealedIds, [11, 12, 13]);
+});
+
+test('interactive pack reveal sounds resolve by drop family', () => {
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('card_nft_2_devnet'), {
+    click: CARD_NFT_2_BOX_SOUND_CLICK_URLS,
+    reveal: CARD_NFT_2_BOX_SOUND_REVEAL_URL,
+  });
+  assert.deepEqual(CARD_NFT_2_BOX_SOUND_CLICK_URLS, [
+    '/card_nft_2/sounds/hit1.mp3',
+    '/card_nft_2/sounds/hit2.mp3',
+    '/card_nft_2/sounds/hit3.mp3',
+  ]);
+  assert.equal(CARD_NFT_2_BOX_SOUND_REVEAL_URL, '/card_nft_2/sounds/crash.mp3');
+
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('poncho_drifella_devnet_x10'), {
+    click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
+    reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
+  });
+  assert.deepEqual(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS, [
+    '/Poncho_Drifella/sounds/hit1.mp3',
+    '/Poncho_Drifella/sounds/hit2.mp3',
+    '/Poncho_Drifella/sounds/hit3.mp3',
+  ]);
+  assert.equal(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, '/Poncho_Drifella/sounds/crash.mp3');
 });
 
 test('card_nft_2 interactive card assets use assigned holo effects for ids 1 through 100', () => {
