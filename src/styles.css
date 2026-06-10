@@ -2217,6 +2217,20 @@ button.no-focus-style:focus-visible {
   --poncho-card-top: 0px;
   --poncho-card-width: 0px;
   --poncho-card-height: 0px;
+  --poncho-card-row-left-0: 0px;
+  --poncho-card-row-left-1: 0px;
+  --poncho-card-row-left-2: 0px;
+  --poncho-card-row-top: 0px;
+  --poncho-card-row-width: 0px;
+  --poncho-card-row-height: 0px;
+  --poncho-card-row-start-dx-0: 0px;
+  --poncho-card-row-start-dx-1: 0px;
+  --poncho-card-row-start-dx-2: 0px;
+  --poncho-card-row-start-dy: 0px;
+  --poncho-card-row-start-scale-x: 1;
+  --poncho-card-row-start-scale-y: 1;
+  --poncho-card-stack-cycle-duration: 560ms;
+  --poncho-card-row-duration: 560ms;
   --poncho-pack-discard-delay: 0ms;
   --poncho-pack-discard-duration: 380ms;
 }
@@ -2557,6 +2571,22 @@ button.no-focus-style:focus-visible {
   animation: wip-pack-discard var(--poncho-pack-discard-duration) cubic-bezier(0.55, 0, 1, 0.45) var(--poncho-pack-discard-delay) forwards;
 }
 
+.wip-overlay--card-motion .reveal-overlay__frame,
+.wip-overlay--card-motion .wip-reveal__stage,
+.wip-overlay--card-motion .reveal-overlay__media,
+.wip-overlay--card-motion .reveal-overlay__media-item,
+.poncho-card-viewer-overlay .reveal-overlay__frame,
+.poncho-card-viewer-overlay .wip-reveal__stage,
+.poncho-card-viewer-overlay .reveal-overlay__media,
+.poncho-card-viewer-overlay .reveal-overlay__media-item {
+  overflow: visible;
+}
+
+.wip-overlay--card-motion .wip-reveal__stage,
+.poncho-card-viewer-overlay .wip-reveal__stage {
+  contain: none;
+}
+
 @keyframes wip-pack-discard {
   0% {
     opacity: 1;
@@ -2584,17 +2614,6 @@ button.no-focus-style:focus-visible {
 
 .wip-reveal__stage--visible {
   opacity: 1;
-}
-
-.poncho-card-viewer-overlay .reveal-overlay__frame,
-.poncho-card-viewer-overlay .wip-reveal__stage,
-.poncho-card-viewer-overlay .reveal-overlay__media,
-.poncho-card-viewer-overlay .reveal-overlay__media-item {
-  overflow: visible;
-}
-
-.poncho-card-viewer-overlay .wip-reveal__stage {
-  contain: none;
 }
 
 .receipt-viewer-overlay .reveal-overlay__frame {
@@ -2679,13 +2698,32 @@ button.no-focus-style:focus-visible {
   cursor: pointer;
 }
 
-.wip-reveal__media .reveal-overlay__media-float {
+.wip-reveal__media.wip-reveal__media--interactive {
+  pointer-events: auto;
+}
+
+.wip-reveal__media .reveal-overlay__media-float,
+.wip-reveal__row-layer .reveal-overlay__media-float {
   animation: none;
   opacity: 1;
   transform: none;
 }
 
-.wip-reveal__media.wip-reveal__media--interactive {
+.wip-reveal__row-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.wip-reveal__row-layer--visible {
+  opacity: 1;
+}
+
+.wip-reveal__row-layer--interactive .wip-reveal__card-item--interactive {
   pointer-events: auto;
 }
 
@@ -2694,6 +2732,10 @@ button.no-focus-style:focus-visible {
 }
 
 .wip-reveal__card-item {
+  --wip-stack-x: 0%;
+  --wip-stack-y: 0%;
+  --wip-stack-scale: 1;
+  --wip-stack-rotate: 0deg;
   left: var(--poncho-card-left);
   top: var(--poncho-card-top);
   width: var(--poncho-card-width);
@@ -2702,15 +2744,13 @@ button.no-focus-style:focus-visible {
   max-height: none;
   aspect-ratio: auto;
   filter: none;
-  transform: translate3d(0, 0, 0);
+  transform: translate3d(var(--wip-stack-x), var(--wip-stack-y), 0) scale(var(--wip-stack-scale))
+    rotate(var(--wip-stack-rotate));
   pointer-events: none;
   cursor: pointer;
   z-index: 2;
-}
-
-.wip-reveal__card-item--next {
-  pointer-events: none;
-  z-index: 1;
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: auto;
 }
 
 .wip-reveal__media.wip-reveal__media--locked .wip-reveal__card-item--locked {
@@ -2719,7 +2759,78 @@ button.no-focus-style:focus-visible {
 
 .wip-reveal__media.wip-reveal__media--interactive .wip-reveal__card-item--interactive {
   pointer-events: auto;
+}
+
+.wip-reveal__card-item--stack-depth-0 {
+  --wip-stack-x: 0%;
+  --wip-stack-y: 0%;
+  --wip-stack-scale: 1;
+  --wip-stack-rotate: 0deg;
+  z-index: 5;
+}
+
+.wip-reveal__card-item--stack-depth-1 {
+  --wip-stack-x: 2.8%;
+  --wip-stack-y: 1.7%;
+  --wip-stack-scale: 0.992;
+  --wip-stack-rotate: 1.1deg;
+  z-index: 4;
+}
+
+.wip-reveal__card-item--stack-depth-2 {
+  --wip-stack-x: 5.3%;
+  --wip-stack-y: 3.3%;
+  --wip-stack-scale: 0.984;
+  --wip-stack-rotate: 2.2deg;
   z-index: 3;
+}
+
+.wip-reveal__card-item--stack-depth-3 {
+  --wip-stack-x: 7.2%;
+  --wip-stack-y: 4.8%;
+  --wip-stack-scale: 0.976;
+  --wip-stack-rotate: 3deg;
+  z-index: 2;
+}
+
+.wip-reveal__card-item--cycling {
+  pointer-events: none;
+  z-index: 6;
+  animation: wip-card-stack-cycle-to-bottom var(--poncho-card-stack-cycle-duration)
+    cubic-bezier(0.18, 0.86, 0.3, 1) forwards;
+  will-change: transform;
+}
+
+.wip-reveal__card-item--row {
+  --wip-row-left: var(--poncho-card-row-left-0);
+  --wip-row-start-dx: var(--poncho-card-row-start-dx-0);
+  left: var(--wip-row-left);
+  top: var(--poncho-card-row-top);
+  width: var(--poncho-card-row-width);
+  height: var(--poncho-card-row-height);
+  transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  transform-origin: top left;
+}
+
+.wip-reveal__card-item--row-spreading {
+  animation: wip-card-row-spread var(--poncho-card-row-duration)
+    cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  will-change: transform;
+}
+
+.wip-reveal__card-item--row-slot-0 {
+  --wip-row-left: var(--poncho-card-row-left-0);
+  --wip-row-start-dx: var(--poncho-card-row-start-dx-0);
+}
+
+.wip-reveal__card-item--row-slot-1 {
+  --wip-row-left: var(--poncho-card-row-left-1);
+  --wip-row-start-dx: var(--poncho-card-row-start-dx-1);
+}
+
+.wip-reveal__card-item--row-slot-2 {
+  --wip-row-left: var(--poncho-card-row-left-2);
+  --wip-row-start-dx: var(--poncho-card-row-start-dx-2);
 }
 
 .wip-reveal__card-stack-entry {
@@ -2731,21 +2842,10 @@ button.no-focus-style:focus-visible {
 }
 
 .wip-reveal__card-stack-entry--next {
-  opacity: 0.94;
-  filter: brightness(0.92) saturate(0.94);
-  transform: translate3d(2.8%, 1.8%, 0) scale(0.985) rotate(1.4deg);
-}
-
-.wip-reveal__card-stack-entry--next-depth-2 {
-  opacity: 0.86;
-  filter: brightness(0.84) saturate(0.88);
-  transform: translate3d(5.4%, 3.4%, 0) scale(0.97) rotate(2.8deg);
-}
-
-.wip-reveal__card-stack-entry--next-depth-3 {
-  opacity: 0.78;
-  filter: brightness(0.78) saturate(0.82);
-  transform: translate3d(7.8%, 5%, 0) scale(0.955) rotate(4deg);
+  opacity: 1;
+  filter: none;
+  transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  transition: none;
 }
 
 .wip-reveal__card-stack-entry--discarding {
@@ -2753,6 +2853,28 @@ button.no-focus-style:focus-visible {
   transition: none;
   will-change: transform, opacity, filter;
   animation: wip-card-stack-discard-left 260ms cubic-bezier(0.5, 0, 1, 0.42) forwards;
+}
+
+@keyframes wip-card-stack-cycle-to-bottom {
+  0% {
+    z-index: 6;
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  42% {
+    z-index: 6;
+    transform: translate3d(calc(0px - var(--poncho-card-width) - clamp(12px, 4vmin, 32px)), -2%, 0)
+      scale(0.996) rotate(-7deg);
+  }
+  43% {
+    z-index: 0;
+    transform: translate3d(calc(0px - var(--poncho-card-width) - clamp(12px, 4vmin, 32px)), -2%, 0)
+      scale(0.996) rotate(-7deg);
+  }
+  100% {
+    z-index: 0;
+    transform: translate3d(var(--wip-stack-x), var(--wip-stack-y), 0) scale(var(--wip-stack-scale))
+      rotate(var(--wip-stack-rotate));
+  }
 }
 
 @keyframes wip-card-stack-discard-left {
@@ -2770,6 +2892,21 @@ button.no-focus-style:focus-visible {
     opacity: 0;
     transform: translate3d(-132%, 8%, 0) scale(0.92) rotate(-18deg);
     filter: blur(1px);
+  }
+}
+
+@keyframes wip-card-row-spread {
+  0% {
+    transform: translate3d(
+        calc(var(--wip-row-start-dx) + var(--wip-stack-x)),
+        calc(var(--poncho-card-row-start-dy) + var(--wip-stack-y)),
+        0
+      )
+      scale(var(--poncho-card-row-start-scale-x), var(--poncho-card-row-start-scale-y))
+      rotate(var(--wip-stack-rotate));
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
   }
 }
 
@@ -2931,6 +3068,12 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   }
 
   .reveal-overlay__media-float {
+    animation-duration: 1ms;
+  }
+
+  .wip-reveal__card-item--cycling,
+  .wip-reveal__card-item--row-spreading,
+  .wip-reveal__card-stack-entry--discarding {
     animation-duration: 1ms;
   }
 }

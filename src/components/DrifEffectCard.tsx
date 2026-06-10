@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
-import { getDrifCardAssetSources, type DrifCardConfig } from '../drifCards';
+import { drifCardIdentityKey, getDrifCardAssetSources, type DrifCardConfig } from '../drifCards';
 
 type SpringVec2 = { x: number; y: number };
 type SpringVec3 = { x: number; y: number; o: number };
 type SpringValue = number | SpringVec2 | SpringVec3;
+export type DrifEffectCardInteractionMode = 'normal' | 'settling';
 
 type SpringSetOptions = {
   hard?: boolean;
@@ -44,6 +45,7 @@ type DrifEffectCardProps = {
   enableInteractiveUnlockWake?: boolean;
   disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
+  interactionMode?: DrifEffectCardInteractionMode;
   preloadCards?: readonly DrifCardConfig[];
   imageLoading?: 'lazy' | 'eager';
 };
@@ -183,6 +185,7 @@ export default function DrifEffectCard({
   enableInteractiveUnlockWake = false,
   disableGlow = false,
   preserveTransformOnCardChange = false,
+  interactionMode = 'normal',
   preloadCards,
   imageLoading = 'lazy',
 }: DrifEffectCardProps) {
@@ -220,6 +223,8 @@ export default function DrifEffectCard({
   const [interacting, setInteracting] = useState(false);
   const interactiveReadyRef = useRef(false);
   const showingLoadingImage = displayImageSrc !== card.imageSrc;
+  const settling = interactionMode === 'settling';
+  const cardIdentityKey = useMemo(() => drifCardIdentityKey(card), [card]);
 
   const canUseHoverWake = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
@@ -282,7 +287,7 @@ export default function DrifEffectCard({
     (now: number) => {
       const elapsed = now - springTickLastTimeRef.current;
       springTickLastTimeRef.current = now;
-      const dt = (elapsed * 60) / 1000;
+      const dt = Math.min((elapsed * 60) / 1000, 2);
       const springs = springsRef.current;
 
       let settled = true;
@@ -414,12 +419,12 @@ export default function DrifEffectCard({
       }
       pendingSpringUpdateRef.current = null;
 
-    interactTimerRef.current = window.setTimeout(() => {
-      const springs = springsRef.current;
-      const snapStiff = 0.01;
-      const snapDamp = 0.06;
-      interactingRef.current = false;
-      setInteracting(false);
+      interactTimerRef.current = window.setTimeout(() => {
+        const springs = springsRef.current;
+        const snapStiff = 0.01;
+        const snapDamp = 0.06;
+        interactingRef.current = false;
+        setInteracting(false);
 
         springs.rotate.stiffness = snapStiff;
         springs.rotate.damping = snapDamp;
@@ -439,6 +444,42 @@ export default function DrifEffectCard({
     },
     [clearInteractTimer, ensureSpringLoop],
   );
+
+  const settleTransformToNeutral = useCallback(() => {
+    clearInteractTimer();
+    if (springUpdateRafRef.current !== null) {
+      cancelAnimationFrame(springUpdateRafRef.current);
+      springUpdateRafRef.current = null;
+    }
+    pendingSpringUpdateRef.current = null;
+    interactingRef.current = false;
+    setInteracting(false);
+
+    const springs = springsRef.current;
+    const prepareSpring = <T extends SpringValue>(spring: SpringState<T>) => {
+      spring.last = cloneSpringValue(spring.current);
+      spring.invMass = 1;
+      spring.invMassRecoveryRate = 0;
+    };
+
+    prepareSpring(springs.rotate);
+    prepareSpring(springs.glare);
+    prepareSpring(springs.background);
+
+    springs.rotate.stiffness = 0.04;
+    springs.rotate.damping = 0.2;
+    setSpringTarget(springs.rotate, { x: 0, y: 0 });
+
+    springs.glare.stiffness = 0.04;
+    springs.glare.damping = 0.2;
+    setSpringTarget(springs.glare, { x: 50, y: 50, o: 0 });
+
+    springs.background.stiffness = 0.04;
+    springs.background.damping = 0.2;
+    setSpringTarget(springs.background, { x: 50, y: 50 });
+
+    ensureSpringLoop();
+  }, [clearInteractTimer, ensureSpringLoop]);
 
   const reset = useCallback(() => {
     interactEnd(0);
@@ -555,7 +596,7 @@ export default function DrifEffectCard({
   }, [finalImageReady, onImageReadyChange]);
 
   useEffect(() => {
-    const interactiveReady = interactive && finalImageReady;
+    const interactiveReady = interactive && finalImageReady && !settling;
     if (enableInteractiveUnlockWake && interactiveReady && !interactiveReadyRef.current) {
       hoverWakeArmedRef.current = true;
     }
@@ -563,12 +604,13 @@ export default function DrifEffectCard({
       hoverWakeArmedRef.current = false;
     }
     interactiveReadyRef.current = interactiveReady;
-  }, [enableInteractiveUnlockWake, finalImageReady, interactive]);
+  }, [enableInteractiveUnlockWake, finalImageReady, interactive, settling]);
 
   useEffect(() => {
     if (
       !enableInteractiveUnlockWake ||
       !interactive ||
+      settling ||
       !finalImageReady ||
       !hoverWakeArmedRef.current ||
       typeof window === 'undefined' ||
@@ -640,9 +682,9 @@ export default function DrifEffectCard({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, interactive, setPointerFromPercent]);
+  }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, interactive, settling, setPointerFromPercent]);
 
-  const interactiveEnabled = interactive && finalImageReady;
+  const interactiveEnabled = interactive && finalImageReady && !settling;
 
   useEffect(() => {
     if (interactive) return;
@@ -661,6 +703,11 @@ export default function DrifEffectCard({
     setSpringTarget(springs.background, { x: 50, y: 50 }, { hard: true });
     applyStylesFromSprings();
   }, [applyStylesFromSprings, clearInteractTimer, interactive]);
+
+  useEffect(() => {
+    if (!settling) return;
+    settleTransformToNeutral();
+  }, [cardIdentityKey, settling, settleTransformToNeutral]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {

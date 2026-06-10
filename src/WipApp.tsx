@@ -8,8 +8,6 @@ import { CARD_NFT_2_PACK_INITIAL_COUNT } from './config/dropMediaDefaults';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-  PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
-  PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   createPonchoDrifellaImageCache,
   getRandomPonchoDrifellaBoxClickSoundUrl,
   preloadPonchoDrifellaCardAssets,
@@ -22,7 +20,12 @@ import {
 import { isDropFamily, listFrontendDrops } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
-import { calcPonchoDrifellaCardRect, calcPonchoDrifellaRevealTargetRect } from './lib/revealOverlayLayout';
+import {
+  calcPonchoDrifellaRevealTargetRectInViewport,
+  PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
+  ponchoDrifellaRevealOverlayStyleVars,
+  sameRevealOverlayRect,
+} from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
 import { navigate } from './navigation';
 
@@ -51,7 +54,7 @@ type WipLocalPlayProps = {
 
 export type WipAppProps = WipLocalPlayProps | InteractiveCardPackRevealOverlayProps;
 
-function getInitialTargetRect(): OverlayRect {
+function calcWipTargetRect(): OverlayRect {
   if (typeof window === 'undefined') {
     const width = 320;
     return {
@@ -61,7 +64,7 @@ function getInitialTargetRect(): OverlayRect {
       height: width,
     };
   }
-  return calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight);
+  return calcPonchoDrifellaRevealTargetRectInViewport();
 }
 
 function randomWipRevealDelayMs() {
@@ -124,7 +127,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
 }
 
 function LocalPlayWipApp() {
-  const [targetRect, setTargetRect] = useState<OverlayRect>(() => getInitialTargetRect());
+  const [targetRect, setTargetRect] = useState<OverlayRect>(calcWipTargetRect);
   const [cardIds, setCardIds] = useState(() => randomWipCardIds());
   const [packMediaId, setPackMediaId] = useState(() => randomWipPackMediaId());
   const [cardReady, setCardReady] = useState(false);
@@ -179,41 +182,39 @@ function LocalPlayWipApp() {
     }
   }, []);
 
-  const revealOverlayStyle = useMemo<React.CSSProperties>(() => {
-    const safeTargetWidth = Math.max(1, targetRect.width);
-    const safeTargetHeight = Math.max(1, targetRect.height);
-    const cardRect = calcPonchoDrifellaCardRect({
-      width: safeTargetWidth,
-      height: safeTargetHeight,
-    });
-    return {
-      ['--reveal-target-left' as never]: `${targetRect.left}px`,
-      ['--reveal-target-top' as never]: `${targetRect.top}px`,
-      ['--reveal-target-width' as never]: `${safeTargetWidth}px`,
-      ['--reveal-target-height' as never]: `${safeTargetHeight}px`,
-      ['--reveal-start-x' as never]: '0px',
-      ['--reveal-start-y' as never]: '0px',
-      ['--reveal-start-scale-x' as never]: '1',
-      ['--reveal-start-scale-y' as never]: '1',
-      ['--poncho-card-left' as never]: `${cardRect.left}px`,
-      ['--poncho-card-top' as never]: `${cardRect.top}px`,
-      ['--poncho-card-width' as never]: `${cardRect.width}px`,
-      ['--poncho-card-height' as never]: `${cardRect.height}px`,
-      ['--poncho-pack-discard-delay' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS}ms`,
-      ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
-    };
-  }, [targetRect]);
+  const revealOverlayStyle = useMemo<React.CSSProperties>(
+    () => ponchoDrifellaRevealOverlayStyleVars({
+      originRect: targetRect,
+      targetRect,
+      cardCount: currentCards.length || PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
+    }) as React.CSSProperties,
+    [currentCards.length, targetRect],
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
+    let frameId: number | null = null;
     const updateTarget = () => {
-      setTargetRect(calcPonchoDrifellaRevealTargetRect(window.innerWidth, window.innerHeight));
+      if (frameId !== null) return;
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        const nextRect = calcWipTargetRect();
+        setTargetRect((currentRect) => (sameRevealOverlayRect(currentRect, nextRect) ? currentRect : nextRect));
+      });
     };
+    const visualViewport = window.visualViewport;
     window.addEventListener('resize', updateTarget);
     window.addEventListener('orientationchange', updateTarget);
+    visualViewport?.addEventListener('resize', updateTarget);
+    visualViewport?.addEventListener('scroll', updateTarget);
     return () => {
       window.removeEventListener('resize', updateTarget);
       window.removeEventListener('orientationchange', updateTarget);
+      visualViewport?.removeEventListener('resize', updateTarget);
+      visualViewport?.removeEventListener('scroll', updateTarget);
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
     };
   }, []);
 
@@ -267,6 +268,9 @@ function LocalPlayWipApp() {
     setCardIds(nextCardIds);
     setPackMediaId(nextPackMediaId);
   }, [cardIds, packMediaId]);
+  const handleClose = useCallback(() => {
+    navigate('/');
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -312,13 +316,12 @@ function LocalPlayWipApp() {
         resetKey={resetKey}
         onPlayClick={playClickSound}
         onPlayReveal={playRevealSound}
+        onDismiss={handleClose}
       />
       <button
         type="button"
         className="wip-close-btn"
-        onClick={() => {
-          navigate('/');
-        }}
+        onClick={handleClose}
         aria-label="Close wip overlay"
       >
         Close

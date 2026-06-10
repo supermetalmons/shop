@@ -1,4 +1,4 @@
-import DrifEffectCard from './DrifEffectCard';
+import DrifEffectCard, { type DrifEffectCardInteractionMode } from './DrifEffectCard';
 import type { DrifCardConfig } from '../drifCards';
 
 export default function WipInteractiveCard({
@@ -7,6 +7,7 @@ export default function WipInteractiveCard({
   loadingImageSrc,
   onImageReadyChange,
   wakeOnInteractiveUnlock = true,
+  interactionMode = 'normal',
   ariaLabel = 'Revealed card',
   imageAlt = 'Revealed card',
 }: {
@@ -15,6 +16,7 @@ export default function WipInteractiveCard({
   loadingImageSrc?: string;
   onImageReadyChange?: (ready: boolean) => void;
   wakeOnInteractiveUnlock?: boolean;
+  interactionMode?: DrifEffectCardInteractionMode;
   ariaLabel?: string;
   imageAlt?: string;
 }) {
@@ -28,6 +30,7 @@ export default function WipInteractiveCard({
       disableGlow
       enableInteractiveUnlockWake={wakeOnInteractiveUnlock}
       interactive={interactive}
+      interactionMode={interactionMode}
       imageLoading="eager"
     />
   );

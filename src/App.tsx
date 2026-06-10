@@ -81,12 +81,14 @@ import {
 } from './lib/dropLabels';
 import { soundPlayer } from './lib/SoundPlayer';
 import { getBuildInfo } from './lib/buildInfo';
-import { InteractiveCardPackRevealOverlay, PonchoCardViewerOverlay } from './components/PonchoRevealOverlay';
+import {
+  InteractiveCardPackRevealOverlay,
+  PonchoCardViewerOverlay,
+  type PonchoRevealDismissReadySource,
+} from './components/PonchoRevealOverlay';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-  PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS,
-  PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS,
   clearPonchoDrifellaImageCache,
   createPonchoDrifellaImageCache,
   preloadPonchoDrifellaCardAssets,
@@ -147,8 +149,14 @@ import {
 } from './lib/localMintedBoxes';
 import {
   calcPonchoDrifellaAbsoluteCardRect,
-  calcPonchoDrifellaCardRect,
+  calcPonchoDrifellaRevealTargetRectInViewport,
   calcPonchoDrifellaRevealTargetRect,
+  PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
+  getRevealOverlayViewport as getOverlayViewport,
+  offsetRevealOverlayRectForViewport,
+  ponchoDrifellaRevealOverlayStyleVars,
+  revealOverlayStyleVars,
+  sameRevealOverlayRect,
 } from './lib/revealOverlayLayout';
 import {
   CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
@@ -197,12 +205,6 @@ type ReceiptViewerImage = {
   image?: string;
 };
 type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-count'?: string };
-type OverlayViewport = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
 type DropCardBackdropItem = {
   id: number;
   src: string;
@@ -1208,7 +1210,7 @@ function ReceiptImageViewerOverlay({
       className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={overlayStyle}
-      onClick={onDismiss}
+      onClick={() => onDismiss?.()}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -1309,46 +1311,12 @@ function calcReceiptViewerTargetRect(
   };
 }
 
-function getOverlayViewport(): OverlayViewport {
-  if (typeof window === 'undefined') return { left: 0, top: 0, width: 1, height: 1 };
-  const visualViewport = window.visualViewport;
-  if (!visualViewport) {
-    return {
-      left: 0,
-      top: 0,
-      width: Math.max(1, window.innerWidth),
-      height: Math.max(1, window.innerHeight),
-    };
-  }
-  return {
-    left: Number.isFinite(visualViewport.offsetLeft) ? visualViewport.offsetLeft : 0,
-    top: Number.isFinite(visualViewport.offsetTop) ? visualViewport.offsetTop : 0,
-    width: Math.max(1, visualViewport.width),
-    height: Math.max(1, visualViewport.height),
-  };
-}
-
-function offsetOverlayRectForViewport(rect: OverlayRect, viewport: OverlayViewport): OverlayRect {
-  return {
-    ...rect,
-    left: Math.round(rect.left + viewport.left),
-    top: Math.round(rect.top + viewport.top),
-  };
-}
-
-function calcPonchoDrifellaRevealTargetRectInViewport(viewport = getOverlayViewport()): OverlayRect {
-  return offsetOverlayRectForViewport(
-    calcPonchoDrifellaRevealTargetRect(viewport.width, viewport.height),
-    viewport,
-  );
-}
-
 function calcReceiptViewerTargetRectInViewport(
   aspectRatio: number,
   size: ImageViewerSize = 'receipt',
   viewport = getOverlayViewport(),
 ): OverlayRect {
-  return offsetOverlayRectForViewport(
+  return offsetRevealOverlayRectForViewport(
     calcReceiptViewerTargetRect(viewport.width, viewport.height, aspectRatio, size),
     viewport,
   );
@@ -1359,7 +1327,7 @@ function calcRevealTargetRectForRendererInViewport(
   aspectRatio: number,
   viewport = getOverlayViewport(),
 ): OverlayRect {
-  return offsetOverlayRectForViewport(
+  return offsetRevealOverlayRectForViewport(
     calcRevealTargetRectForRenderer(viewport.width, viewport.height, revealRenderer, aspectRatio),
     viewport,
   );
@@ -2829,16 +2797,25 @@ function App({ currentPath }: AppProps) {
     revealOverlayCloseTimeoutRef.current = null;
   }, []);
 
-  const markPonchoRevealDismissReady = useCallback(() => {
+  const markPonchoRevealDismissReady = useCallback((lockOutsideTap = true) => {
     ponchoRevealDismissReadyRef.current = true;
-    revealDismissLockedUntilRef.current = Date.now() + PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS;
+    revealDismissLockedUntilRef.current = lockOutsideTap
+      ? Date.now() + PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS
+      : 0;
   }, []);
 
   const updatePonchoDismissReady = useCallback(
-    (ready: boolean) => {
+    (ready: boolean, source?: PonchoRevealDismissReadySource) => {
       if (ready) {
-        markPonchoRevealDismissReady();
-        return;
+        switch (source) {
+          case 'row':
+            markPonchoRevealDismissReady(false);
+            return;
+          case 'card':
+          default:
+            markPonchoRevealDismissReady(true);
+            return;
+        }
       }
       ponchoRevealDismissReadyRef.current = false;
     },
@@ -3386,12 +3363,7 @@ function App({ currentPath }: AppProps) {
                   boxAspectRatioForDropId(prev.dropId),
                   viewport,
                 );
-          if (
-            prev.targetRect.left === nextTarget.left &&
-            prev.targetRect.top === nextTarget.top &&
-            prev.targetRect.width === nextTarget.width &&
-            prev.targetRect.height === nextTarget.height
-          ) {
+          if (sameRevealOverlayRect(prev.targetRect, nextTarget)) {
             return prev;
           }
           return { ...prev, targetRect: nextTarget };
@@ -4451,7 +4423,7 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleRevealOverlayBackdropClick = () => {
+  const handleRevealOverlayDismiss = () => {
     if (!revealOverlay || revealOverlayClosing) return;
     if (revealOverlay.viewerMode === 'poncho-card' || revealOverlay.viewerMode === 'receipt-image') {
       closeRevealOverlay();
@@ -5274,53 +5246,17 @@ function App({ currentPath }: AppProps) {
     ],
   );
 
-  const revealOverlayStyle = revealOverlay
-    ? (() => {
-        const { originRect, targetRect } = revealOverlay;
-        const safeTargetWidth = Math.max(1, targetRect.width);
-        const safeTargetHeight = Math.max(1, targetRect.height);
-        const viewerScale = Math.max(0.01, originRect.height / safeTargetHeight);
-        const scaleX = revealOverlay.viewerMode === 'poncho-card'
-          ? viewerScale
-          : Math.max(0.01, originRect.width / safeTargetWidth);
-        const scaleY = revealOverlay.viewerMode === 'poncho-card'
-          ? viewerScale
-          : Math.max(0.01, originRect.height / safeTargetHeight);
-        const ponchoCardRect = usesInteractiveCardPackRevealForDropId(revealOverlay.dropId)
-          ? revealOverlay.viewerMode === 'poncho-card'
-            ? {
-                left: 0,
-                top: 0,
-                width: safeTargetWidth,
-                height: safeTargetHeight,
-              }
-            : calcPonchoDrifellaCardRect({
-                width: safeTargetWidth,
-                height: safeTargetHeight,
-              })
-          : undefined;
-        return {
-          ['--reveal-target-left' as never]: `${targetRect.left}px`,
-          ['--reveal-target-top' as never]: `${targetRect.top}px`,
-          ['--reveal-target-width' as never]: `${safeTargetWidth}px`,
-          ['--reveal-target-height' as never]: `${safeTargetHeight}px`,
-          ['--reveal-start-x' as never]: `${originRect.left - targetRect.left}px`,
-          ['--reveal-start-y' as never]: `${originRect.top - targetRect.top}px`,
-          ['--reveal-start-scale-x' as never]: String(scaleX),
-          ['--reveal-start-scale-y' as never]: String(scaleY),
-          ...(ponchoCardRect
-            ? {
-                ['--poncho-card-left' as never]: `${ponchoCardRect.left}px`,
-                ['--poncho-card-top' as never]: `${ponchoCardRect.top}px`,
-                ['--poncho-card-width' as never]: `${ponchoCardRect.width}px`,
-                ['--poncho-card-height' as never]: `${ponchoCardRect.height}px`,
-                ['--poncho-pack-discard-delay' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS}ms`,
-                ['--poncho-pack-discard-duration' as never]: `${PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS}ms`,
-              }
-            : {}),
-        };
-      })()
-    : undefined;
+  const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
+  const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
+  const revealOverlayHasInteractiveCardPackRenderer = Boolean(
+    revealOverlay &&
+      !revealOverlayUsesPonchoViewer &&
+      !revealOverlayUsesReceiptImage &&
+      usesInteractiveCardPackRevealForDropId(revealOverlay.dropId),
+  );
+  const revealOverlayUsesPonchoLayout = Boolean(
+    revealOverlayUsesPonchoViewer || revealOverlayHasInteractiveCardPackRenderer,
+  );
   const revealOverlayContent = useMemo(
     () => getDropContent(revealOverlay?.dropId || routeDrop?.dropId),
     [getDropContent, revealOverlay?.dropId, routeDrop?.dropId],
@@ -5341,14 +5277,21 @@ function App({ currentPath }: AppProps) {
     );
     return getInteractiveCardPackCardsByFigureIds(revealOverlay.dropId, figureIds);
   }, [revealOverlay?.dropId, revealOverlay?.interactiveRevealCardId, revealOverlay?.revealedIds]);
-  const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
-  const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
-  const revealOverlayHasInteractiveCardPackRenderer = Boolean(
-    revealOverlay &&
-      !revealOverlayUsesPonchoViewer &&
-      !revealOverlayUsesReceiptImage &&
-      usesInteractiveCardPackRevealForDropId(revealOverlay.dropId),
-  );
+  const revealOverlayStyle: CSSProperties | undefined = revealOverlay
+    ? (revealOverlayUsesPonchoLayout
+        ? ponchoDrifellaRevealOverlayStyleVars({
+            originRect: revealOverlay.originRect,
+            targetRect: revealOverlay.targetRect,
+            mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
+            viewport: getOverlayViewport(),
+            cardCount: interactiveRevealCards.length || PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
+          })
+        : revealOverlayStyleVars({
+            originRect: revealOverlay.originRect,
+            targetRect: revealOverlay.targetRect,
+            mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
+          })) as CSSProperties
+    : undefined;
   const revealOverlayCanRenderInteractiveCardPack = Boolean(
     revealOverlayHasInteractiveCardPackRenderer &&
       (!revealOverlay?.revealedIds?.length || interactiveRevealCards.length > 0),
@@ -5482,7 +5425,7 @@ function App({ currentPath }: AppProps) {
       className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
       role="presentation"
       style={revealOverlayStyle}
-      onClick={handleRevealOverlayBackdropClick}
+      onClick={() => handleRevealOverlayDismiss()}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -5600,7 +5543,7 @@ function App({ currentPath }: AppProps) {
         closing={revealOverlayClosing}
         card={interactiveViewerCard}
         loadingImageSrc={revealOverlay.image}
-        onDismiss={handleRevealOverlayBackdropClick}
+        onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />
     ) : revealOverlayUsesReceiptImage ? (
@@ -5612,7 +5555,7 @@ function App({ currentPath }: AppProps) {
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
         viewerSize={revealOverlay.imageViewerSize}
-        onDismiss={handleRevealOverlayBackdropClick}
+        onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />
     ) : revealOverlayCanRenderInteractiveCardPack ? (
@@ -5635,7 +5578,7 @@ function App({ currentPath }: AppProps) {
         onPlayClick={handlePonchoOverlayPlayClick}
         onPlayReveal={handlePonchoOverlayPlayReveal}
         onBeforeAdvance={ensureRevealOverlayAdvanceAllowed}
-        onDismiss={handleRevealOverlayBackdropClick}
+        onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
         onRevealCompleteChange={updatePonchoRevealComplete}
         onDismissReadyChange={updatePonchoDismissReady}

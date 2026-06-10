@@ -347,6 +347,15 @@ function normalizeDrifCardAssetSrc(assetSrc: string | undefined) {
   return String(assetSrc || '').trim();
 }
 
+export function drifCardIdentityKey(card: DrifCardConfig): string {
+  return JSON.stringify([
+    card.effect.id,
+    normalizeDrifCardAssetSrc(card.imageSrc),
+    normalizeDrifCardAssetSrc(card.foilSrc),
+    normalizeDrifCardAssetSrc(card.textureSrc),
+  ]);
+}
+
 export function getDrifCardAssetSources(card: DrifCardConfig | undefined): string[] {
   if (!card) return [];
   return Array.from(
