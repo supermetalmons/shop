@@ -13,7 +13,7 @@ import {
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { MintStats, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
-import { secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
+import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 import {
   playMutedAutoplayVideo as playAutoplayVideo,
@@ -630,6 +630,7 @@ export function MintPanel({
   const mintBoxImageSrc = boxMedia?.imageSrc;
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
   const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
+  const previewQuantity = hasMintBoxVideoSources && isDropFamily(dropId, 'card_nft_2') ? 1 : quantity;
   const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
   const mintBoxVideoFallbackImageSrcs = uniqueMediaSrcs(mintBoxVideoPosterSrc, mintBoxImageSrc);
 
@@ -824,8 +825,8 @@ export function MintPanel({
 
   const soldOut = remaining <= 0;
   const layout = useMemo(
-    () => calcBoxPreviewLayout(quantity, previewBounds.width, previewBounds.height, boxMedia?.aspectRatio || BOX_ASPECT_RATIO),
-    [boxMedia?.aspectRatio, quantity, previewBounds.height, previewBounds.width],
+    () => calcBoxPreviewLayout(previewQuantity, previewBounds.width, previewBounds.height, boxMedia?.aspectRatio || BOX_ASPECT_RATIO),
+    [boxMedia?.aspectRatio, previewBounds.height, previewBounds.width, previewQuantity],
   );
   const effectiveBoxMediaScale = normalizeBoxMediaScale(boxMedia?.mediaScale);
   const effectiveBoxCompactMediaScale = normalizeBoxMediaScale(boxMedia?.compactMediaScale ?? boxMedia?.mediaScale);
@@ -987,7 +988,7 @@ export function MintPanel({
           }}
           aria-label={`Mint preview: ${quantityLabel}`}
         >
-          {Array.from({ length: quantity }, (_, idx) => (
+          {Array.from({ length: previewQuantity }, (_, idx) => (
             hasMintBoxVideoSources ? (
               <div key={idx} className="mint-panel__box mint-panel__box--media mint-panel__box-stack">
                 <MintPanelBoxVideo

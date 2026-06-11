@@ -1376,7 +1376,9 @@ header.top--shop.top--spacer {
   }
 
   .mint-panel__label-text {
-    display: none;
+    display: block;
+    font-size: 13px;
+    line-height: 1.2;
   }
 
   .mint-panel__sizes-row {
