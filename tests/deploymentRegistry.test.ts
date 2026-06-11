@@ -620,7 +620,7 @@ test('IPFS URL helpers canonicalize gateway URLs and resolve HTTP fetch URLs', (
   );
   assert.equal(
     resolveDropAssetUrl(`ipfs://${VALID_IPFS_CID}/rf12.json`),
-    `https://dweb.link/ipfs/${VALID_IPFS_CID}/rf12.json`,
+    `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/rf12.json`,
   );
 });
 
@@ -645,7 +645,7 @@ test('frontend metadata URI helpers accept legacy and compact formats', () => {
   );
   assert.equal(
     frontendSelectMetadataUri(
-      `https://dweb.link/ipfs/${VALID_IPFS_CID}/f34.json`,
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/f34.json`,
       'https://assets.example.com/drops/alpha/json/figures/99.json',
     ),
     `ipfs://${VALID_IPFS_CID}/f34.json`,
@@ -653,7 +653,7 @@ test('frontend metadata URI helpers accept legacy and compact formats', () => {
   assert.equal(
     frontendSelectMetadataUri(
       'https://assets.example.com/images/preview.webp',
-      `https://dweb.link/ipfs/${VALID_IPFS_CID}/f34.json`,
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/f34.json`,
     ),
     'https://assets.example.com/images/preview.webp',
   );
@@ -665,7 +665,7 @@ test('functions metadata URI helpers accept legacy and compact formats', () => {
   assert.equal(functionsBoxIdFromMetadataUri(`ipfs://${VALID_IPFS_CID}/b7.json`), '7');
   assert.equal(functionsDudeIdFromMetadataUri(`ipfs://${VALID_IPFS_CID}/rf9.json`), 9);
   assert.equal(
-    functionsMetadataBaseFromMetadataUri(`https://dweb.link/ipfs/${VALID_IPFS_CID}/rf9.json`),
+    functionsMetadataBaseFromMetadataUri(`https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/rf9.json`),
     `ipfs://${VALID_IPFS_CID}`,
   );
   assert.equal(
@@ -674,7 +674,7 @@ test('functions metadata URI helpers accept legacy and compact formats', () => {
   );
   assert.equal(
     functionsSelectMetadataUri(
-      `https://dweb.link/ipfs/${VALID_IPFS_CID}/b7.json`,
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/b7.json`,
       'https://assets.example.com/drops/alpha/json/boxes/12.json',
     ),
     `ipfs://${VALID_IPFS_CID}/b7.json`,
@@ -682,7 +682,7 @@ test('functions metadata URI helpers accept legacy and compact formats', () => {
   assert.equal(
     functionsSelectMetadataUri(
       'https://assets.example.com/images/preview.webp',
-      `https://dweb.link/ipfs/${VALID_IPFS_CID}/rf9.json`,
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${VALID_IPFS_CID}/rf9.json`,
     ),
     'https://assets.example.com/images/preview.webp',
   );

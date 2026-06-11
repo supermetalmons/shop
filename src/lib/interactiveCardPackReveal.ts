@@ -1,6 +1,7 @@
 import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
 import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults';
 import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment';
+import { cardNft2AssetUrl, isCardNft2CommonCardId, normalizeCardNft2CardId } from './cardNft2Assets';
 
 const INTERACTIVE_CARD_PACK_PUNCH_VARIANT_COUNT = 3;
 const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;
@@ -8,8 +9,6 @@ const INTERACTIVE_CARD_PACK_SEGMENT_1_1_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_1_2_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_AUTOPLAY_FRAME_COUNT = 10;
 const PONCHO_DRIFELLA_PACK_BASE_URL = '/Poncho_Drifella/pack';
-const CARD_NFT_2_CARD_FRONT_BASE_URL = 'https://assets.mons.link/drops/cardnft2/img';
-const CARD_NFT_2_HOLO_BASE_URL = 'https://assets.mons.link/drops/cardnft2/holo';
 const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   id: 'card-nft-2-neutral',
   effectKey: DRIF_EFFECT_KEYS.lightingOnly,
@@ -21,108 +20,12 @@ const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   subtypes: 'card',
   trainerGallery: false,
 });
-const CARD_NFT_2_HOLO_EFFECT_BY_CARD_ID: Readonly<Partial<Record<number, keyof typeof DRIF_EFFECTS>>> = Object.freeze({
-  1: 'swshp-SWSH179',
-  2: 'swshp-SWSH179',
-  3: 'pgo-24',
-  4: 'swsh6-196',
-  5: 'swsh6-196',
-  6: 'swshp-SWSH179',
-  7: 'pgo-24',
-  8: 'pgo-24',
-  9: 'swshp-SWSH179',
-  10: 'pgo-24',
-  11: 'swshp-SWSH179',
-  12: 'pgo-24',
-  13: 'swsh4-9',
-  14: 'pgo-24',
-  15: 'swshp-SWSH179',
-  16: 'swshp-SWSH179',
-  17: 'swshp-SWSH179',
-  18: 'pgo-24',
-  19: 'swsh4-9',
-  20: 'swsh4-9',
-  21: 'swsh4-9',
-  22: 'swshp-SWSH179',
-  23: 'swsh6-196',
-  24: 'swsh4-9',
-  25: 'swsh4-9',
-  26: 'swsh4-9',
-  27: 'swshp-SWSH179',
-  28: 'swshp-SWSH179',
-  29: 'swshp-SWSH179',
-  30: 'pgo-24',
-  31: 'pgo-24',
-  32: 'swshp-SWSH179',
-  33: 'swshp-SWSH179',
-  34: 'swsh4-9',
-  35: 'swsh6-196',
-  36: 'swsh4-9',
-  37: 'swsh4-9',
-  38: 'swshp-SWSH179',
-  39: 'swsh6-196',
-  40: 'pgo-24',
-  41: 'pgo-24',
-  42: 'swshp-SWSH179',
-  43: 'swsh6-196',
-  44: 'swsh4-9',
-  45: 'pgo-24',
-  46: 'swsh4-9',
-  47: 'swshp-SWSH179',
-  48: 'swshp-SWSH179',
-  49: 'pgo-24',
-  50: 'swsh4-9',
-  51: 'swsh6-196',
-  52: 'pgo-24',
-  53: 'swsh6-196',
-  54: 'swsh6-196',
-  55: 'swsh4-9',
-  56: 'swsh6-196',
-  57: 'swsh6-196',
-  58: 'swsh6-196',
-  59: 'swsh6-196',
-  60: 'swsh6-196',
-  61: 'swsh6-196',
-  62: 'swshp-SWSH179',
-  63: 'swsh6-196',
-  64: 'pgo-24',
-  65: 'pgo-24',
-  66: 'swsh6-196',
-  67: 'swsh4-9',
-  68: 'swshp-SWSH179',
-  69: 'swsh6-196',
-  70: 'swsh4-9',
-  71: 'swsh6-196',
-  72: 'swsh4-9',
-  73: 'pgo-24',
-  74: 'swsh4-9',
-  75: 'pgo-24',
-  76: 'swshp-SWSH179',
-  77: 'swsh4-9',
-  78: 'swsh6-196',
-  79: 'swsh4-9',
-  80: 'pgo-24',
-  81: 'swsh6-196',
-  82: 'swshp-SWSH179',
-  83: 'swsh4-9',
-  84: 'swsh6-196',
-  85: 'pgo-24',
-  86: 'swsh4-9',
-  87: 'pgo-24',
-  88: 'swshp-SWSH179',
-  89: 'swsh6-196',
-  90: 'swsh4-9',
-  91: 'swsh6-196',
-  92: 'swshp-SWSH179',
-  93: 'swshp-SWSH179',
-  94: 'pgo-24',
-  95: 'pgo-24',
-  96: 'swsh4-9',
-  97: 'pgo-24',
-  98: 'swsh6-196',
-  99: 'swsh4-9',
-  100: 'pgo-24',
-});
+const CARD_NFT_2_HOLO_EFFECT_IDS_BY_REMAINDER = Object.freeze([
+  'swshp-SWSH179',
+  'pgo-24',
+  'swsh6-196',
+  'swsh4-9',
+] satisfies readonly (keyof typeof DRIF_EFFECTS)[]);
 
 export type InteractiveCardPackRevealSequence = {
   packBaseUrl: string;
@@ -308,34 +211,45 @@ export function getInteractiveCardPackRevealFigureIds(
 
 const cardNft2CardByFigureId = new Map<number, DrifCardConfig>();
 
+function getCardNft2HoloEffect(cardId: number) {
+  const effectId = CARD_NFT_2_HOLO_EFFECT_IDS_BY_REMAINDER[cardId % CARD_NFT_2_HOLO_EFFECT_IDS_BY_REMAINDER.length];
+  return effectId ? DRIF_EFFECTS[effectId] : undefined;
+}
+
 function getCardNft2CardByFigureId(figureId: number): DrifCardConfig | undefined {
-  const normalizedFigureId = normalizePositiveInteger(figureId);
+  const normalizedFigureId = normalizeCardNft2CardId(figureId);
   if (!normalizedFigureId) return undefined;
   const cached = cardNft2CardByFigureId.get(normalizedFigureId);
   if (cached) return cached;
-  const holoEffectId = CARD_NFT_2_HOLO_EFFECT_BY_CARD_ID[normalizedFigureId];
-  const holoEffect = holoEffectId ? DRIF_EFFECTS[holoEffectId] : undefined;
-  const imageSrc = `${CARD_NFT_2_CARD_FRONT_BASE_URL}/card_${normalizedFigureId}.webp`;
-  const card: DrifCardConfig = holoEffect
-    ? {
-        imageSrc,
-        foilSrc: `${CARD_NFT_2_HOLO_BASE_URL}/foil_${normalizedFigureId}.webp`,
-        textureSrc: `${CARD_NFT_2_HOLO_BASE_URL}/mask_${normalizedFigureId}.webp`,
-        effect: {
-          ...holoEffect,
-          number: String(normalizedFigureId),
-        },
-        glowType: holoEffect.typeClass ?? 'metal',
-      }
-    : {
-        imageSrc,
-        effect: {
-          ...CARD_NFT_2_NEUTRAL_CARD_EFFECT,
-          id: `card-nft-2-${normalizedFigureId}`,
-          number: String(normalizedFigureId),
-        },
-        glowType: 'metal',
-      };
+  const imageSrc = cardNft2AssetUrl('img', normalizedFigureId);
+  if (!imageSrc) return undefined;
+  if (isCardNft2CommonCardId(normalizedFigureId)) {
+    const card: DrifCardConfig = {
+      imageSrc,
+      effect: {
+        ...CARD_NFT_2_NEUTRAL_CARD_EFFECT,
+        id: `card-nft-2-${normalizedFigureId}`,
+        number: String(normalizedFigureId),
+      },
+      glowType: 'metal',
+    };
+    cardNft2CardByFigureId.set(normalizedFigureId, card);
+    return card;
+  }
+  const holoEffect = getCardNft2HoloEffect(normalizedFigureId);
+  const foilSrc = cardNft2AssetUrl('foil', normalizedFigureId);
+  const textureSrc = cardNft2AssetUrl('mask', normalizedFigureId);
+  if (!holoEffect || !foilSrc || !textureSrc) return undefined;
+  const card: DrifCardConfig = {
+    imageSrc,
+    foilSrc,
+    textureSrc,
+    effect: {
+      ...holoEffect,
+      number: String(normalizedFigureId),
+    },
+    glowType: holoEffect.typeClass ?? 'metal',
+  };
   cardNft2CardByFigureId.set(normalizedFigureId, card);
   return card;
 }

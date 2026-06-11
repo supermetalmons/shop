@@ -14,6 +14,7 @@ import {
   type DropRevealRenderer,
   type DropRevealSoundProfile,
 } from '../config/dropsExtraContent';
+import { cardNft2AssetUrl } from './cardNft2Assets';
 import { getMediaIdForTokenId } from './mediaMap';
 
 export type ResolvedDropContent = {
@@ -362,10 +363,14 @@ export function mintPanelPreviewAspectRatio(dropId: string): number {
 
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   const content = resolveDropContent(dropId);
+  const cardNft2Image = isDropFamily(dropId, 'card_nft_2')
+    ? cardNft2AssetUrl('img', figureId)
+    : undefined;
+  if (cardNft2Image) return cardNft2Image;
+  const normalizedFigureId = asPositiveInteger(figureId);
   if (content.figures.inventoryImageUrl) {
     return resolveDropAssetUrl(content.figures.inventoryImageUrl);
   }
-  const normalizedFigureId = asPositiveInteger(figureId);
   if (content.figures.inventoryImageBaseUrl && normalizedFigureId) {
     return joinDropAssetUrl(content.figures.inventoryImageBaseUrl, `${normalizedFigureId}.webp`) || imageRaw;
   }
@@ -376,8 +381,12 @@ export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, f
   return resolvedImage.includes('/figures/') ? resolvedImage.replace('/figures/', '/figures/clean/') : resolvedImage;
 }
 
-export function normalizeCertificateDisplayImage(dropId: string, imageRaw?: string): string | undefined {
+export function normalizeCertificateDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   const content = resolveDropContent(dropId);
+  const cardNft2Receipt = isDropFamily(dropId, 'card_nft_2')
+    ? cardNft2AssetUrl('receipt', figureId)
+    : undefined;
+  if (cardNft2Receipt) return cardNft2Receipt;
   const resolvedImage = resolveDropAssetUrl(imageRaw || '');
   return content.certificates.inventoryImageUrl || resolvedImage || undefined;
 }

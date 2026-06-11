@@ -657,7 +657,7 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     kind === 'dude'
       ? normalizeFigureDisplayImage(dropId, imageRaw, dudeId)
       : kind === 'certificate'
-        ? normalizeCertificateDisplayImage(dropId, imageRaw)
+        ? normalizeCertificateDisplayImage(dropId, imageRaw, dudeId)
         : imageRaw;
   return {
     id: asset.id,

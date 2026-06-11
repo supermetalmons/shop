@@ -107,7 +107,7 @@ function asOptionalStripeUnitAmountCents(value: unknown): number | undefined {
 }
 
 const IPFS_PROTOCOL = 'ipfs://';
-export const DROP_METADATA_IPFS_GATEWAY = 'https://dweb.link/ipfs/';
+export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 const HTTP_PROTOCOL = 'http://';
@@ -999,7 +999,7 @@ export type DropPaths = {
   receiptsFiguresJsonBase: string;
 };
 
-export const DROP_METADATA_IPFS_GATEWAY = 'https://dweb.link/ipfs/';
+export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const IPFS_PROTOCOL = 'ipfs://';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -1500,7 +1500,7 @@ export type DropPaths = {
   receiptsFiguresJsonBase: string;
 };
 
-export const DROP_METADATA_IPFS_GATEWAY = 'https://dweb.link/ipfs/';
+export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const IPFS_PROTOCOL = 'ipfs://';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';

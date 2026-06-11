@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
@@ -10,8 +11,20 @@ import {
   CARD_NFT_2_PACK_IMAGE_SRCS,
   CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS,
 } from '../src/lib/cardNft2Packs.ts';
-import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from '../src/lib/dropContent.ts';
+import {
+  normalizeBoxDisplayImage,
+  normalizeCertificateDisplayImage,
+  normalizeFigureDisplayImage,
+  resolveBoxMediaIdForDrop,
+  resolveDropContent,
+} from '../src/lib/dropContent.ts';
 import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
+import {
+  CARD_NFT_2_COMMON_CARD_IDS,
+  CARD_NFT_2_MAX_CARD_ID,
+  cardNft2AssetUrl,
+  isCardNft2CommonCardId,
+} from '../src/lib/cardNft2Assets.ts';
 import {
   getInteractiveCardPackCardByFigureId,
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
@@ -84,6 +97,51 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   );
 });
 
+test('card_nft_2 asset helper pads ids and enforces range', () => {
+  assert.equal(
+    cardNft2AssetUrl('img', 1),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/0001.webp',
+  );
+  assert.equal(
+    cardNft2AssetUrl('foil', 2),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeigzyk3qd7brxfd3uinftdywhwao65gdxuleqirv5zje3okftmxczy/0002.webp',
+  );
+  assert.equal(
+    cardNft2AssetUrl('mask', 100),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiapwcv66aqu2wzh3f5mp4j4j6h7zej3no7paae4qcqxpu3mg436ia/0100.webp',
+  );
+  assert.equal(
+    cardNft2AssetUrl('receipt', 9999),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/9999.webp',
+  );
+  assert.equal(
+    cardNft2AssetUrl('receipt', 10000),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/10000.webp',
+  );
+  assert.equal(
+    cardNft2AssetUrl('img', 11133),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/11133.webp',
+  );
+  assert.equal(cardNft2AssetUrl('img', 11134), undefined);
+  assert.equal(cardNft2AssetUrl('img', 1.5), undefined);
+});
+
+test('card_nft_2 bundled common ids are valid and unique', () => {
+  const commonIds = JSON.parse(
+    readFileSync(new URL('../src/lib/cardNft2CommonIds.json', import.meta.url), 'utf8'),
+  ) as unknown[];
+  assert.ok(Array.isArray(commonIds));
+  assert.equal(commonIds.length, CARD_NFT_2_COMMON_CARD_IDS.size);
+  commonIds.forEach((commonId) => {
+    assert.equal(typeof commonId, 'string');
+    const normalizedCommonId = Number(commonId);
+    assert.equal(Number.isInteger(normalizedCommonId), true);
+    assert.equal(normalizedCommonId >= 1, true);
+    assert.equal(normalizedCommonId <= CARD_NFT_2_MAX_CARD_ID, true);
+    assert.equal(isCardNft2CommonCardId(normalizedCommonId), true);
+  });
+});
+
 test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls', () => {
   assert.equal(PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.initialFrameUrl, '/Poncho_Drifella/pack/initial.webp');
   assert.equal(
@@ -150,34 +208,60 @@ test('interactive pack reveal sounds resolve by drop family', () => {
   assert.equal(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, '/Poncho_Drifella/sounds/crash.mp3');
 });
 
-test('card_nft_2 interactive card assets use assigned holo effects for ids 1 through 100', () => {
-  const card1 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 1);
-  assert.ok(card1);
-  assert.equal(card1.imageSrc, 'https://assets.mons.link/drops/cardnft2/img/card_1.webp');
-  assert.equal(card1.foilSrc, 'https://assets.mons.link/drops/cardnft2/holo/foil_1.webp');
-  assert.equal(card1.textureSrc, 'https://assets.mons.link/drops/cardnft2/holo/mask_1.webp');
-  assert.equal(card1.effect.id, 'swshp-SWSH179');
-  assert.equal(card1.effect.number, '1');
+function assertCardNft2HoloCard(cardId: number, effectId: string) {
+  const card = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', cardId);
+  assert.ok(card);
+  assert.equal(card.imageSrc, cardNft2AssetUrl('img', cardId));
+  assert.equal(card.foilSrc, cardNft2AssetUrl('foil', cardId));
+  assert.equal(card.textureSrc, cardNft2AssetUrl('mask', cardId));
+  assert.equal(card.effect.id, effectId);
+  assert.equal(card.effect.number, String(cardId));
+}
 
-  const card100 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 100);
-  assert.ok(card100);
-  assert.equal(card100.foilSrc, 'https://assets.mons.link/drops/cardnft2/holo/foil_100.webp');
-  assert.equal(card100.textureSrc, 'https://assets.mons.link/drops/cardnft2/holo/mask_100.webp');
-  assert.equal(card100.effect.id, 'pgo-24');
-  assert.equal(card100.effect.number, '100');
+test('card_nft_2 interactive cards use neutral effects for bundled common ids', () => {
+  const card4 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 4);
+  assert.ok(card4);
+  assert.equal(isCardNft2CommonCardId(4), true);
+  assert.equal(card4.imageSrc, cardNft2AssetUrl('img', 4));
+  assert.equal(card4.foilSrc, undefined);
+  assert.equal(card4.textureSrc, undefined);
+  assert.equal(card4.effect.id, 'card-nft-2-4');
+  assert.equal(card4.effect.effectKey, DRIF_EFFECT_KEYS.lightingOnly);
+  assert.equal(card4.effect.source, 'card_nft_2');
+  assert.equal(card4.effect.number, '4');
+  assert.doesNotMatch(JSON.stringify(card4), /back\.webp/);
 });
 
-test('card_nft_2 interactive card assets remain plain outside assigned holo range', () => {
-  const card101 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 101);
-  assert.ok(card101);
-  assert.equal(card101.imageSrc, 'https://assets.mons.link/drops/cardnft2/img/card_101.webp');
-  assert.equal(card101.foilSrc, undefined);
-  assert.equal(card101.textureSrc, undefined);
-  assert.equal(card101.effect.id, 'card-nft-2-101');
-  assert.equal(card101.effect.effectKey, DRIF_EFFECT_KEYS.lightingOnly);
-  assert.equal(card101.effect.source, 'card_nft_2');
-  assert.equal(card101.effect.number, '101');
-  assert.doesNotMatch(JSON.stringify(card101), /back\.webp/);
+test('card_nft_2 interactive cards assign deterministic modulo holo effects for non-common ids', () => {
+  assert.equal(isCardNft2CommonCardId(8), false);
+  assert.equal(isCardNft2CommonCardId(1), false);
+  assert.equal(isCardNft2CommonCardId(2), false);
+  assert.equal(isCardNft2CommonCardId(3), false);
+  assertCardNft2HoloCard(8, 'swshp-SWSH179');
+  assertCardNft2HoloCard(1, 'pgo-24');
+  assertCardNft2HoloCard(2, 'swsh6-196');
+  assertCardNft2HoloCard(3, 'swsh4-9');
+
+  const card11133 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 11133);
+  assert.ok(card11133);
+  assert.equal(card11133.imageSrc, cardNft2AssetUrl('img', 11133));
+  assert.equal(card11133.effect.id, 'pgo-24');
+  assert.equal(getInteractiveCardPackCardByFigureId('card_nft_2_devnet', 11134), undefined);
+});
+
+test('card_nft_2 figure and receipt display images prefer padded IPFS assets', () => {
+  assert.equal(
+    normalizeFigureDisplayImage('card_nft_2_devnet', 'https://assets.example.com/old-card.webp', 2),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/0002.webp',
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage('card_nft_2_devnet', 'https://assets.example.com/old-receipt.webp', 2),
+    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/0002.webp',
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage('card_nft_2_devnet', 'https://assets.example.com/box-receipt.webp'),
+    'https://assets.example.com/box-receipt.webp',
+  );
 });
 
 test('poncho interactive card lookup still returns drif card configs', () => {

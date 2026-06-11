@@ -77,7 +77,7 @@ export type DropExtraContentOverride = {
 const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://assets.mons.link/drops/poncho/items/clean';
 const PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL = '/Poncho_Drifella/pack/tight.webp';
 const PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO = 637 / 1092;
-const HOODIE_CLEAN_IMAGE_URL = 'https://bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4.ipfs.dweb.link/hoodie_clean.webp';
+const HOODIE_CLEAN_IMAGE_URL = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/hoodie_clean.webp';
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 877;
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {

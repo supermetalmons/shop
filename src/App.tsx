@@ -1029,13 +1029,16 @@ function buildClaimedReceiptPreviewItems(
 async function loadClaimedReceiptImage(dropId: string, figureId: number): Promise<string | undefined> {
   const drop = getFrontendDrop(dropId);
   if (!drop) return undefined;
+  if (isDropFamily(drop, 'card_nft_2')) {
+    return normalizeCertificateDisplayImage(dropId, undefined, figureId);
+  }
   const metadataUrl = resolveDropAssetUrl(`${drop.paths.receiptsFiguresJsonBase}${figureId}.json`);
   if (!metadataUrl) return undefined;
   try {
     const resp = await fetch(metadataUrl);
     if (!resp.ok) return undefined;
     const metadata = (await resp.json()) as { image?: unknown };
-    return normalizeCertificateDisplayImage(dropId, typeof metadata.image === 'string' ? metadata.image : undefined);
+    return normalizeCertificateDisplayImage(dropId, typeof metadata.image === 'string' ? metadata.image : undefined, figureId);
   } catch {
     return undefined;
   }
