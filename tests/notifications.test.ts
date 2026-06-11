@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldNotifyShippersForDeliveryReadyToShipWrite } from '../functions/src/notifications.ts';
+import {
+  RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED,
+  shouldNotifyShippersForDeliveryReadyToShipWrite,
+  shouldSendResendNotificationEmail,
+} from '../functions/src/notifications.ts';
+
+test('Resend non-checkout error notification emails are temporarily disabled', () => {
+  assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, false);
+  assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), false);
+  assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
+});
 
 test('shouldNotifyShippersForDeliveryReadyToShipWrite accepts create-ready delivery orders', () => {
   assert.equal(

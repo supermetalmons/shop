@@ -55,7 +55,12 @@ import {
   stripeCheckoutOwnerId,
 } from './stripeCheckout/contract.js';
 import { bubblegumTransferV2Ix } from './bubblegum.js';
-import { shouldNotifyShippersForDeliveryReadyToShipWrite } from './notifications.js';
+import {
+  RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
+  shouldNotifyShippersForDeliveryReadyToShipWrite,
+  shouldSendResendNotificationEmail,
+  type ResendNotificationEmailKind,
+} from './notifications.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { parseRequest } from './request.js';
 import {
@@ -3013,6 +3018,7 @@ type EmailNotificationReservation =
 
 type NotificationEmailResult =
   | { status: 'sent'; provider: string; messageId?: string }
+  | { status: 'skipped'; provider: string; reason: string }
   | { status: 'failed_permanent'; provider: string; reason: string; providerError: ResendErrorSummary };
 
 type ResendErrorSummary = {
@@ -3156,6 +3162,7 @@ async function sendShipperReadyToShipEmail(
   const text = buildShipperReadyEmailText(message);
   const html = buildShipperReadyEmailHtml(message);
   return sendResendNotificationEmail({
+    notificationKind: 'shipper_ready_to_ship',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject,
@@ -3234,6 +3241,7 @@ async function sendStripeCheckoutManualReviewEmail(
   message: StripeCheckoutManualReviewEmailMessage,
 ): Promise<NotificationEmailResult> {
   return sendResendNotificationEmail({
+    notificationKind: 'stripe_checkout_manual_review',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: `Stripe Checkout Manual Review — ${message.dropName || message.dropId}`,
@@ -3247,6 +3255,7 @@ async function sendStripeCheckoutManualReviewEmail(
 }
 
 async function sendResendNotificationEmail(params: {
+  notificationKind: ResendNotificationEmailKind;
   idempotencyKey: string;
   recipients: string[];
   subject: string;
@@ -3257,6 +3266,14 @@ async function sendResendNotificationEmail(params: {
   missingApiKeyDetails: unknown;
   retryableFailurePrefix: string;
 }): Promise<NotificationEmailResult> {
+  if (!shouldSendResendNotificationEmail(params.notificationKind)) {
+    return {
+      status: 'skipped',
+      provider: 'resend',
+      reason: RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
+    };
+  }
+
   const resend = await resendClient();
   if (!resend) {
     throw new RetryableNotificationEmailError(
@@ -3359,6 +3376,25 @@ async function recordEmailNotificationSendResult(
         failedAt: FieldValue.delete(),
         skippedAt: FieldValue.delete(),
         skipReason: FieldValue.delete(),
+        lastError: FieldValue.delete(),
+      },
+      { merge: true },
+    );
+    return;
+  }
+
+  if (result.status === 'skipped') {
+    await notificationRef.set(
+      {
+        status: 'skipped',
+        skippedAt: FieldValue.serverTimestamp(),
+        skipReason: result.reason,
+        transport: {
+          provider: result.provider,
+        },
+        leaseExpiresAt: FieldValue.delete(),
+        failedAt: FieldValue.delete(),
+        failureReason: FieldValue.delete(),
         lastError: FieldValue.delete(),
       },
       { merge: true },
