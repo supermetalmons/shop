@@ -63,7 +63,7 @@ interface MintPanelProps {
   discountMaxQuantity?: number;
   onDiscountMint?: (quantity: number, variantKey?: string) => void | Promise<void>;
   discountBusy?: boolean;
-  onStripePaymentClick?: (variantKey?: string) => void | Promise<void>;
+  onStripePaymentClick?: (quantity: number, variantKey?: string) => void | Promise<void>;
   stripePaymentVisible?: boolean;
   stripePaymentBusy?: boolean;
   stripePaymentPriceLabel?: string;
@@ -86,7 +86,6 @@ const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const BOX_MAX_RELATIVE_HEIGHT = 0.777;
 const BOX_MEDIA_SCALE_MAX = 1.5;
 const LAMPORTS_PER_SOL_UI = 1_000_000_000;
-const STRIPE_CHECKOUT_QUANTITY = 1;
 const ACTION_TEXT_FIT_MIN_SCALE = 0.62;
 const ACTION_TEXT_FIT_SAFETY_PX = 8;
 const ACTION_TEXT_FIT_TOLERANCE = 0.004;
@@ -817,7 +816,11 @@ export function MintPanel({
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const totalDiscountPriceLabel = formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
-  const stripePaymentDisplayPriceLabel = stripePaymentPriceLabel?.trim();
+  const stripePaymentUnitPriceLabel = stripePaymentPriceLabel?.trim();
+  const stripePaymentDisplayPriceLabel =
+    stripePaymentUnitPriceLabel && quantity > 1
+      ? `${stripePaymentUnitPriceLabel} x ${quantity}`
+      : stripePaymentUnitPriceLabel;
   const formId = 'mint-form';
   const normalizedDiscountMaxQuantity =
     Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) >= 0
@@ -828,7 +831,6 @@ export function MintPanel({
   const useDiscountMint =
     Boolean(discountAvailable && onDiscountMint) && !soldOut && hasDiscountAllowance && !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick && stripePaymentDisplayPriceLabel) && !soldOut;
-  const stripePaymentQuantitySupported = quantity === STRIPE_CHECKOUT_QUANTITY;
   const submitBusy = busy || discountSubmitPending || (useDiscountMint && Boolean(discountBusy));
   const controlsBusy = submitBusy || stripePaymentPending;
   const submitClassName = submitBusy
@@ -933,10 +935,10 @@ export function MintPanel({
       setSizeBlinkToken((prev) => prev + 1);
       return;
     }
-    if (quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported) return;
+    if (quantity < 1 || quantity > maxSelectable) return;
     setStripePaymentSubmitPending(true);
     try {
-      await onStripePaymentClick(selectedSize || undefined);
+      await onStripePaymentClick(quantity, selectedSize || undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
       if (onError) onError(message);
@@ -1185,8 +1187,7 @@ export function MintPanel({
                   onClick={() => {
                     void handleStripePaymentClick();
                   }}
-                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable || !stripePaymentQuantitySupported}
-                  title={stripePaymentQuantitySupported ? undefined : 'Stripe checkout supports one item at a time'}
+                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
                 >
                   {stripePaymentPending ? (
                     <>

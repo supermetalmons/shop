@@ -71,6 +71,7 @@ import {
   requireStripeCheckoutSessionId,
   stripeWebhookRawBody,
   stripeWebhookSignature,
+  type StripeCheckoutKind,
   type StripeCheckoutFlowDeps,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
@@ -2232,24 +2233,39 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
   return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
 }
 
-function requireStripeCheckoutVariantAvailable(params: {
+function requireStripeCheckoutAvailable(params: {
   dropRuntime: DropRuntime;
   cfg: DecodedBoxMinterConfig;
-  variantKey: string;
+  checkoutKind: StripeCheckoutKind;
+  variantKey?: string;
   quantity: number;
 }): void {
-  const { dropRuntime, cfg, variantKey } = params;
+  const { dropRuntime, cfg, checkoutKind, variantKey } = params;
   let quantity: number;
   try {
     quantity = normalizeStripeCheckoutQuantity(params.quantity);
   } catch (err) {
     throw new HttpsError('invalid-argument', err instanceof Error ? err.message : 'Stripe checkout quantity is invalid.');
   }
-  if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox)) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout is only available for direct-delivery drops.');
-  }
   if (!cfg.started) {
     throw new HttpsError('failed-precondition', 'Mint has not started.');
+  }
+  if (cfg.minted + quantity > cfg.maxSupply) {
+    throw new HttpsError('failed-precondition', 'Mint is sold out.');
+  }
+  if (quantity > cfg.maxPerTx) {
+    throw new HttpsError('failed-precondition', `Stripe checkout quantity cannot exceed ${cfg.maxPerTx}.`);
+  }
+
+  if (checkoutKind === 'standard_pack') {
+    if (isDirectDeliveryItemsPerBox(cfg.itemsPerBox) || cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
+      throw new HttpsError('failed-precondition', 'Stripe pack checkout requires a non-variant pack drop.');
+    }
+    return;
+  }
+
+  if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox)) {
+    throw new HttpsError('failed-precondition', 'Stripe checkout is only available for direct-delivery size drops.');
   }
   if (cfg.mintVariantKind !== MINT_VARIANT_KIND_SIZE) {
     throw new HttpsError('failed-precondition', 'Stripe checkout requires on-chain size variant minting.');
@@ -2257,7 +2273,7 @@ function requireStripeCheckoutVariantAvailable(params: {
 
   let variantIndex: number;
   try {
-    variantIndex = resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey);
+    variantIndex = resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey || '');
   } catch (err) {
     throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
   }
@@ -2270,9 +2286,6 @@ function requireStripeCheckoutVariantAvailable(params: {
   const endId = cfg.mintVariantEndIds[variantIndex];
   if (!option || option.startId !== startId || option.endId !== endId) {
     throw new HttpsError('failed-precondition', 'Drop mint selection is out of sync with on-chain variant ranges.');
-  }
-  if (cfg.minted + quantity > cfg.maxSupply) {
-    throw new HttpsError('failed-precondition', 'Mint is sold out.');
   }
 
   const nextId = cfg.mintVariantNextIds[variantIndex];
@@ -2327,7 +2340,7 @@ function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBo
     connection,
     fetchCheckoutConfig: fetchDecodedBoxMinterConfigAccount,
     ensureOnchainCoreConfig,
-    requireStripeCheckoutVariantAvailable,
+    requireStripeCheckoutAvailable,
     requireStripeCheckoutFulfillmentPrerequisites,
     requireStripeCheckoutCollectionMatchesConfig,
     cosigner,

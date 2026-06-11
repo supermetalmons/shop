@@ -14,6 +14,8 @@ import {
   readFrontendDropRegistry,
   readFunctionsDropRegistry,
   resolveDropAssetUrl,
+  resolveStripeCheckoutEnabledForDropFamily,
+  resolveStripeProductTaxCodeForDropFamily,
   requireDropFamily,
   writeFrontendDeploymentRegistryFile,
   writeFunctionsDeploymentRegistryFile,
@@ -823,6 +825,7 @@ async function writeFrontendDeploymentConfig(args: {
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
+  stripeLiveUnitAmountCents?: number;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -849,6 +852,14 @@ async function writeFrontendDeploymentConfig(args: {
   const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
   const figureMedia = defaultFrontendFigureMediaForDropFamily(dropFamily);
   const boxMedia = defaultFrontendBoxMediaForDropFamily(dropFamily);
+  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(args.stripeCheckoutEnabled, dropFamily);
+  const stripeLiveUnitAmountCents =
+    args.stripeLiveUnitAmountCents == null
+      ? undefined
+      : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
+  if (stripeCheckout.enabled && args.solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
+    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
+  }
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
@@ -862,7 +873,8 @@ async function writeFrontendDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
-    ...(args.stripeCheckoutEnabled === true ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckout.enabled ? { stripeCheckoutEnabled: true } : stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {}),
+    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
     discountMerkleRoot: args.discountMerkleRoot,
     maxSupply: Math.floor(Number(args.maxSupply)),
@@ -924,7 +936,15 @@ async function writeFunctionsDeploymentConfig(args: {
     args.stripeLiveUnitAmountCents == null
       ? undefined
       : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
-  const stripeProductTaxCode = trimToUndefined(args.stripeProductTaxCode);
+  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(args.stripeCheckoutEnabled, dropFamily);
+  if (stripeCheckout.enabled && args.solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
+    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
+  }
+  const stripeProductTaxCode = resolveStripeProductTaxCodeForDropFamily(
+    args.stripeProductTaxCode,
+    dropFamily,
+    stripeCheckout.enabled,
+  );
   nextDrops[normalizedDropId] = {
     solanaCluster: args.solanaCluster,
     dropId: normalizedDropId,
@@ -936,7 +956,7 @@ async function writeFunctionsDeploymentConfig(args: {
     treasury: args.treasury,
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
-    ...(args.stripeCheckoutEnabled === true ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckout.enabled ? { stripeCheckoutEnabled: true } : stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
@@ -2687,6 +2707,7 @@ async function main() {
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
+    stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
     discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
     discountMerkleRoot: discountMerkleRoot.toString('hex'),
     maxSupply: Number(boxMinterConfig.maxSupply),

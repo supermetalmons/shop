@@ -9,6 +9,7 @@ import {
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
+  STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
   STRIPE_OFFCHAIN_FULFILLMENT_MODE,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
@@ -22,6 +23,7 @@ import {
   encodeAdminDeliverVariantOrderArgs,
   generateStripeReceiptClaimCode,
   isStripeOffchainFulfillmentSession,
+  normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
@@ -49,6 +51,7 @@ import {
   stripeApiKeyForMode,
   stripeCheckoutProductName,
   stripeCheckoutProductTaxCodeForDrop,
+  stripeCheckoutKindForDrop,
   stripeCheckoutShippingParams,
   stripeCheckoutUnitAmountCentsForDrop,
   stripeTestApiKey,
@@ -155,6 +158,7 @@ test('admin order PDA and instruction args use the on-chain seed and discriminat
   const orderHash = Buffer.alloc(32, 9);
   const [pda] = deriveAdminOrderPda(programId, configPda, orderHash);
   const data = encodeAdminDeliverVariantOrderArgs({ orderHash, variantIndex: 2, quantity: 1 });
+  const packData = encodeAdminDeliverVariantOrderArgs({ orderHash, variantIndex: 0, quantity: 3 });
 
   assert.deepEqual(IX_ADMIN_DELIVER_VARIANT_ORDER, anchorDiscriminator('global', 'admin_deliver_variant_order'));
   assert.deepEqual(ACCOUNT_ADMIN_DELIVERY_ORDER, anchorDiscriminator('account', 'AdminDeliveryOrderRecord'));
@@ -163,6 +167,8 @@ test('admin order PDA and instruction args use the on-chain seed and discriminat
   assert.deepEqual(data.subarray(0, 8), IX_ADMIN_DELIVER_VARIANT_ORDER);
   assert.equal(data.readUInt8(40), 2);
   assert.equal(data.readUInt8(41), 1);
+  assert.equal(packData.readUInt8(40), 0);
+  assert.equal(packData.readUInt8(41), 3);
 });
 
 test('resolveMintSelectionVariantIndex maps configured size keys', () => {
@@ -765,6 +771,37 @@ test('buildStripeOffchainDeliveryOrderDocument shapes multi-item receipt claims'
   assert.equal('stripeReceiptClaimCode' in marker, false);
 });
 
+test('buildStripeOffchainDeliveryOrderDocument omits variant labels for pack checkouts', () => {
+  const input = {
+    dropId: 'card_nft_2_devnet',
+    deliveryId: 789,
+    owner: 'firebase:anon_uid_pack',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+    firebaseUid: 'anon_uid_pack',
+    receiptOwner: pubkey(93).toBase58(),
+    metadataIds: [1, 2],
+    orderHashHex: '12'.repeat(32),
+    stripeSession: { id: 'cs_test_pack' },
+    receiptTx: 'txpack',
+    addressSnapshot: { encrypted: 'cipher', hint: 'B...US', countryCode: 'US' },
+    stripeReceiptClaims: [
+      { code: 'PACKAA-0123456789', boxId: 1, status: 'unclaimed' },
+      { code: 'PACKBB-0123456789', boxId: 2, status: 'unclaimed' },
+    ],
+  };
+
+  const doc = buildStripeOffchainDeliveryOrderDocument(input);
+  assert.deepEqual(doc.items, [
+    { kind: 'box', refId: 1 },
+    { kind: 'box', refId: 2 },
+  ]);
+  assert.equal('variantKey' in doc, false);
+
+  const marker = buildStripeOffchainOrderMarkerDocument(input);
+  assert.equal('variantKey' in marker, false);
+  assert.deepEqual(marker.metadataIds, [1, 2]);
+});
+
 test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code atomically', async () => {
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'cd'.repeat(32);
@@ -936,6 +973,92 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   assert.equal(updates[0].data.quantity, 3);
 });
 
+test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers on retry', async () => {
+  const dropId = 'card_nft_2_devnet';
+  const orderHashHex = '34'.repeat(32);
+  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_pack_retry` } as any;
+  const markerData = buildStripeOffchainOrderMarkerDocument({
+    dropId,
+    deliveryId: 789,
+    owner: 'firebase:anon_uid_pack',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+    firebaseUid: 'anon_uid_pack',
+    receiptOwner: pubkey(94).toBase58(),
+    metadataIds: [1, 2],
+    orderHashHex,
+    stripeSession: { id: 'cs_test_pack_retry' },
+    receiptTx: 'txpackretry',
+    stripeReceiptClaims: [
+      { code: 'PACKCC-0123456789', boxId: 1, status: 'unclaimed' },
+      { code: 'PACKDD-0123456789', boxId: 2, status: 'unclaimed' },
+    ],
+  });
+  const creates: Array<{ ref: any; data: any }> = [];
+  const updates: Array<{ ref: any; data: any }> = [];
+  const db = {
+    doc: (path: string) => {
+      if (path === markerRef.path) return markerRef;
+      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
+      if (path.startsWith('claimCodes/')) return { path };
+      return { path };
+    },
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          if (ref === markerRef) {
+            return {
+              exists: true,
+              get: (fieldPath: string) => (markerData as any)[fieldPath],
+            };
+          }
+          if (ref === checkoutRef) {
+            return {
+              exists: true,
+              data: () => ({
+                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+                processingAttemptId: 'attempt_current',
+              }),
+            };
+          }
+          throw new Error(`unexpected ref: ${ref?.path}`);
+        },
+        create: (ref: any, data: any) => {
+          creates.push({ ref, data });
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const result = await createOrGetStripeOffchainDeliveryOrder({
+    db,
+    checkoutRef,
+    isAlreadyExistsError: () => false,
+    processingAttemptId: 'attempt_current',
+    order: {
+      dropId,
+      orderHashHex,
+      owner: 'firebase:anon_uid_pack',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_pack',
+      receiptOwner: pubkey(94).toBase58(),
+      metadataIds: [1, 2],
+      stripeSession: { id: 'cs_test_pack_retry' },
+      receiptTx: 'txpackretry',
+      addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+    },
+  });
+
+  assert.deepEqual(result, { deliveryId: 789, checkoutStatus: 'fulfilled' });
+  assert.equal(creates.length, 0);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].data.metadataIds, [1, 2]);
+  assert.equal(updates[0].data.quantity, 2);
+  assert.equal('variantKey' in markerData, false);
+});
+
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {
   assert.deepEqual(buildStripeCheckoutSessionMetadata({ dropId: 'little_swag_hoodies_devnet', uid: 'anon_uid_123', variantKey: 'XL' }), {
     dropId: 'little_swag_hoodies_devnet',
@@ -1076,6 +1199,70 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   );
 });
 
+test('Stripe checkout contract accepts pack documents without variantKey up to max quantity', () => {
+  assert.equal(STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY, 15);
+  assert.equal(normalizeStripeCheckoutQuantity(15), 15);
+  assert.throws(() => normalizeStripeCheckoutQuantity(16), /1 to 15/);
+  assert.deepEqual(
+    buildStripeCheckoutSessionMetadata({
+      dropId: 'card_nft_2_devnet',
+      uid: 'anon_uid_pack',
+      quantity: STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
+    }),
+    {
+      dropId: 'card_nft_2_devnet',
+      uid: 'anon_uid_pack',
+      fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+      placeholder: 'stripe_direct_delivery',
+      quantity: '15',
+    },
+  );
+  assert.throws(
+    () =>
+      buildStripeCheckoutSessionMetadata({
+        dropId: 'card_nft_2_devnet',
+        uid: 'anon_uid_pack',
+        quantity: 16,
+      }),
+    /1 to 15/,
+  );
+
+  const checkout = buildStripeCheckoutDocument({
+    dropId: 'card_nft_2_devnet',
+    sessionId: 'cs_test_pack',
+    uid: 'anon_uid_pack',
+    quantity: 15,
+    unitAmountCents: 100,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  assert.equal('variantKey' in checkout, false);
+  assert.deepEqual(
+    validateStripeCheckoutDocumentData({
+      dropId: 'card_nft_2_devnet',
+      sessionId: 'cs_test_pack',
+      checkout,
+    }),
+    {
+      uid: 'anon_uid_pack',
+      quantity: 15,
+      unitAmountCents: 100,
+      livemode: false,
+      status: STRIPE_CHECKOUT_STATUS.CREATED,
+    },
+  );
+  assert.throws(
+    () =>
+      validateStripeCheckoutDocumentData({
+        dropId: 'card_nft_2_devnet',
+        variantKey: 'XL',
+        sessionId: 'cs_test_pack',
+        checkout,
+      }),
+    /invalid variant key/,
+  );
+});
+
 test('stripeTestApiKey uses the first configured test key only', () => {
   assert.equal(stripeTestApiKey(['rk_test_restricted', 'sk_test_secret']), 'rk_test_restricted');
   assert.equal(stripeTestApiKey(['', 'sk_live_ignored', 'sk_test_secret']), 'sk_test_secret');
@@ -1098,6 +1285,47 @@ test('stripeApiKeysForMode preserves matching fallback keys', () => {
     'rk_test_restricted',
     'sk_test_fallback',
   ]);
+});
+
+test('stripeCheckoutKindForDrop accepts size variants and standard packs only', () => {
+  assert.equal(
+    stripeCheckoutKindForDrop({
+      dropId: 'little_swag_hoodies_devnet',
+      itemsPerBox: 0,
+      config: {
+        mintSelection: { kind: 'size', options: [{ key: 'L' }, { key: 'XL' }] },
+      },
+    } as any),
+    'size_variant',
+  );
+  assert.equal(
+    stripeCheckoutKindForDrop({
+      dropId: 'card_nft_2_devnet',
+      itemsPerBox: 5,
+      config: {},
+    } as any),
+    'standard_pack',
+  );
+  assert.throws(
+    () =>
+      stripeCheckoutKindForDrop({
+        dropId: 'direct_delivery_without_size',
+        itemsPerBox: 0,
+        config: {},
+      } as any),
+    /direct-delivery size drops or standard pack drops/,
+  );
+  assert.throws(
+    () =>
+      stripeCheckoutKindForDrop({
+        dropId: 'variant_pack',
+        itemsPerBox: 5,
+        config: {
+          mintSelection: { kind: 'size', options: [{ key: 'L' }] },
+        },
+      } as any),
+    /direct-delivery size drops or standard pack drops/,
+  );
 });
 
 test('stripeCheckoutProductName uses a singular, non-duplicated item label', () => {
@@ -1263,6 +1491,7 @@ test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_p
       ({
         dropId: id,
         cluster: 'devnet',
+        itemsPerBox: 0,
         config: {
           mintSelection: {
             kind: 'size',
@@ -1281,6 +1510,75 @@ test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_p
   assert.equal(updates.length, 1);
   assert.equal(updates[0].ref, checkoutRef);
   assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+});
+
+test('enqueueStripeCheckoutFulfillment accepts pack checkout documents without variantKey', async () => {
+  const dropId = 'card_nft_2_devnet';
+  const sessionId = 'cs_test_pack';
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkout = buildStripeCheckoutDocument({
+    dropId,
+    sessionId,
+    uid: 'anon_uid_pack',
+    quantity: 2,
+    unitAmountCents: 100,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  const session = {
+    id: sessionId,
+    livemode: false,
+    mode: 'payment',
+    payment_status: 'paid',
+    amount_total: 200,
+    currency: STRIPE_OFFCHAIN_CURRENCY,
+    metadata: {
+      fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+      dropId,
+      quantity: '2',
+    },
+  } as any;
+  const db = {
+    doc: (path: string) => {
+      if (path === checkoutRef.path) return checkoutRef;
+      throw new Error(`unexpected path: ${path}`);
+    },
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          if (ref === checkoutRef) return { exists: true, data: () => checkout };
+          throw new Error(`unexpected ref: ${ref.path}`);
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const result = await enqueueStripeCheckoutFulfillment({
+    db,
+    event: { id: 'evt_pack', type: 'checkout.session.completed', data: { object: session } } as any,
+    session,
+    requireDropId: (raw) => String(raw),
+    getDropRuntime: (id) =>
+      ({
+        dropId: id,
+        cluster: 'devnet',
+        itemsPerBox: 5,
+        config: {},
+      }) as any,
+  });
+
+  assert.deepEqual(result, {
+    queued: true,
+    dropId,
+    sessionId,
+    checkoutPath: checkoutRef.path,
+  });
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.equal('variantKey' in checkout, false);
 });
 
 test('enqueueStripeCheckoutFulfillment ignores non-app Stripe sessions', async () => {
@@ -1330,7 +1628,18 @@ test('enqueueStripeCheckoutFulfillment requires the app-created checkout documen
         event: { id: 'evt_123', type: 'checkout.session.completed', data: { object: session } } as any,
         session,
         requireDropId: (raw) => String(raw),
-        getDropRuntime: (id) => ({ dropId: id, cluster: 'devnet', config: {} }) as any,
+        getDropRuntime: (id) =>
+          ({
+            dropId: id,
+            cluster: 'devnet',
+            itemsPerBox: 0,
+            config: {
+              mintSelection: {
+                kind: 'size',
+                options: [{ key: 'L' }, { key: 'XL' }, { key: '2XL' }],
+              },
+            },
+          }) as any,
       }),
     /created by this app/,
   );
@@ -1392,6 +1701,7 @@ test('enqueueStripeCheckoutFulfillment accepts live mainnet app checkout documen
       ({
         dropId: id,
         cluster: 'mainnet-beta',
+        itemsPerBox: 0,
         config: {
           mintSelection: {
             kind: 'size',
@@ -1424,13 +1734,13 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
     data: () =>
       ({
         ...buildStripeCheckoutDocument({
-        dropId,
-        sessionId,
-        uid: 'anon_uid_123',
-        variantKey,
-        unitAmountCents: 100,
-        createdAt: 'createdAt',
-        updatedAt: 'updatedAt',
+          dropId,
+          sessionId,
+          uid: 'anon_uid_123',
+          variantKey,
+          unitAmountCents: 100,
+          createdAt: 'createdAt',
+          updatedAt: 'updatedAt',
         }),
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
       }),
@@ -1455,6 +1765,50 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
   assert.equal(updates[0].ref, checkoutRef);
   assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
   assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
+});
+
+test('startStripeCheckoutFulfillmentDocument starts pack documents without variantKey', async () => {
+  const dropId = 'card_nft_2_devnet';
+  const sessionId = 'cs_test_pack';
+  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutSnap = {
+    exists: true,
+    data: () => ({
+      ...buildStripeCheckoutDocument({
+        dropId,
+        sessionId,
+        uid: 'anon_uid_pack',
+        quantity: 2,
+        unitAmountCents: 100,
+        createdAt: 'createdAt',
+        updatedAt: 'updatedAt',
+      }),
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+    }),
+  };
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async (ref: any) => {
+          assert.equal(ref, checkoutRef);
+          return checkoutSnap;
+        },
+        update: (ref: any, data: any) => {
+          updates.push({ ref, data });
+        },
+      }),
+  };
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef });
+
+  assert.equal(started.started, true);
+  if (started.started) {
+    assert.equal('variantKey' in started, false);
+    assert.equal(started.checkout.quantity, 2);
+  }
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
 });
 
 test('startStripeCheckoutFulfillmentDocument skips active processing leases', async () => {
@@ -2103,7 +2457,7 @@ test('createStripeCheckoutSessionForRequest rejects drops without explicit Strip
       configFetches += 1;
       throw new Error('unexpected config fetch');
     },
-    requireStripeCheckoutVariantAvailable: () => undefined,
+    requireStripeCheckoutAvailable: () => undefined,
     requireStripeCheckoutCollectionMatchesConfig: () => undefined,
     requireStripeCheckoutFulfillmentPrerequisites: () => undefined,
   } as any;

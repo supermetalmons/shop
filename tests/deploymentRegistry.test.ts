@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
+  CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
   dropPathsFromBase as dropPathsFromRegistryBase,
   normalizeAndValidateMetadataBaseInput,
@@ -51,6 +52,17 @@ async function withTempModule(source: string, run: (filePath: string) => Promise
   }
 }
 
+function generatedEntrySource(source: string, dropId: string): string {
+  const entryStart = source.indexOf(`  ${JSON.stringify(dropId)}: create`);
+  assert.notEqual(entryStart, -1, `Generated entry for ${dropId} was not found`);
+  const nextEntryStart = source.indexOf('\n  "', entryStart + 1);
+  const registryEnd = source.indexOf('\n};', entryStart + 1);
+  const entryEnd =
+    nextEntryStart < 0 ? registryEnd : Math.min(nextEntryStart, registryEnd < 0 ? nextEntryStart : registryEnd);
+  assert.notEqual(entryEnd, -1, `Generated entry for ${dropId} has no end marker`);
+  return source.slice(entryStart, entryEnd);
+}
+
 test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => {
   const frontendDrop = FRONTEND_DROPS.little_swag_hoodies;
   const functionsDrop = FUNCTIONS_DROPS.little_swag_hoodies;
@@ -62,8 +74,51 @@ test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => 
   assert.equal(functionsDrop.stripeProductTaxCode, 'txcd_30011000');
 });
 
-test('devnet card_nft_2 registry uses cyclic box media', () => {
-  assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet.boxMedia, CARD_NFT_2_BOX_MEDIA);
+test('devnet card_nft_2 registry uses card media and Stripe tangible-goods defaults', () => {
+  const frontendDrop = FRONTEND_DROPS.card_nft_2_devnet;
+  const functionsDrop = FUNCTIONS_DROPS.card_nft_2_devnet;
+
+  assert.deepEqual(frontendDrop.boxMedia, CARD_NFT_2_BOX_MEDIA);
+  assert.equal(frontendDrop.stripeCheckoutEnabled, true);
+  assert.equal(frontendDrop.stripeLiveUnitAmountCents, undefined);
+  assert.equal(functionsDrop.stripeCheckoutEnabled, true);
+  assert.equal(functionsDrop.stripeLiveUnitAmountCents, undefined);
+  assert.equal(functionsDrop.stripeProductTaxCode, CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE);
+});
+
+test('readFunctionsDropRegistry rejects Stripe-enabled mainnet drops without live pricing', async () => {
+  await withTempModule(
+    `export const FUNCTIONS_DROPS = {
+      mainnet_card_drop: {
+        solanaCluster: 'mainnet-beta',
+        dropId: 'mainnet_card_drop',
+        dropFamily: 'card_nft_2',
+        collectionName: 'Mainnet Card Drop',
+        metadataBase: 'https://assets.example.com/drops/mainnet-card',
+        treasury: 'Treasury11111111111111111111111111111111',
+        priceSol: 1,
+        discountPriceSol: 0.5,
+        discountMintsPerWallet: 1,
+        discountMerkleRoot: '${'00'.repeat(32)}',
+        maxSupply: 100,
+        itemsPerBox: 5,
+        maxPerTx: 15,
+        namePrefix: 'pack',
+        figureNamePrefix: 'card',
+        symbol: 'CARD',
+        boxMinterProgramId: 'Program1111111111111111111111111111111',
+        collectionMint: 'Collection111111111111111111111111111111',
+        receiptsMerkleTree: 'Tree11111111111111111111111111111111111',
+        deliveryLookupTable: 'Lookup1111111111111111111111111111111',
+      },
+    };`,
+    async (filePath) => {
+      await assert.rejects(
+        () => readFunctionsDropRegistry(filePath),
+        /stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop mainnet_card_drop/,
+      );
+    },
+  );
 });
 
 test('readFrontendDropRegistry applies default boxMedia to card_nft_2 family drops', async () => {
@@ -94,6 +149,43 @@ test('readFrontendDropRegistry applies default boxMedia to card_nft_2 family dro
     async (filePath) => {
       const registry = await readFrontendDropRegistry(filePath);
       assert.deepEqual(registry.drops.future_card_drop.boxMedia, CARD_NFT_2_BOX_MEDIA);
+      assert.equal(registry.drops.future_card_drop.stripeCheckoutEnabled, true);
+    },
+  );
+});
+
+test('readFunctionsDropRegistry applies card_nft_2 Stripe defaults', async () => {
+  await withTempModule(
+    `export const FUNCTIONS_DROPS = {
+      future_card_drop: {
+        solanaCluster: 'devnet',
+        dropId: 'future_card_drop',
+        dropFamily: 'card_nft_2',
+        collectionName: 'Future Card Drop',
+        metadataBase: 'https://assets.example.com/drops/future-card',
+        metadataPathFormat: 'compact',
+        treasury: 'Treasury11111111111111111111111111111111',
+        priceSol: 1,
+        discountPriceSol: 0.5,
+        discountMintsPerWallet: 1,
+        discountMerkleRoot: '00'.repeat(32),
+        maxSupply: 10,
+        itemsPerBox: 1,
+        maxPerTx: 5,
+        namePrefix: 'pack',
+        figureNamePrefix: 'card',
+        symbol: 'card',
+        boxMinterProgramId: 'Program1111111111111111111111111111111111',
+        collectionMint: 'Collection11111111111111111111111111111111',
+        receiptsMerkleTree: 'Tree111111111111111111111111111111111111',
+        deliveryLookupTable: 'Lookup1111111111111111111111111111111111',
+      },
+    };`,
+    async (filePath) => {
+      const registry = await readFunctionsDropRegistry(filePath);
+      assert.equal(registry.drops.future_card_drop.stripeCheckoutEnabled, true);
+      assert.equal(registry.drops.future_card_drop.stripeProductTaxCode, CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE);
+      assert.equal(registry.drops.future_card_drop.stripeLiveUnitAmountCents, undefined);
     },
   );
 });
@@ -134,6 +226,109 @@ test('renderFrontendDeploymentRegistryFile omits default card_nft_2 boxMedia', a
       const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
       const mod = (await import(moduleUrl)) as { getFrontendDrop(dropId: string): { boxMedia?: unknown } };
       assert.deepEqual(mod.getFrontendDrop('future_card_drop').boxMedia, CARD_NFT_2_BOX_MEDIA);
+    },
+    '.ts',
+  );
+});
+
+test('rendered card_nft_2 registries preserve Stripe opt-out and tax-code override', async () => {
+  const baseCardDrop = {
+    solanaCluster: 'devnet',
+    dropFamily: 'card_nft_2' as const,
+    collectionName: 'Future Card Drop',
+    metadataBase: 'https://assets.example.com/drops/future-card',
+    metadataPathFormat: 'compact' as const,
+    treasury: 'Treasury11111111111111111111111111111111',
+    priceSol: 1,
+    discountPriceSol: 0.5,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: '00'.repeat(32),
+    maxSupply: 10,
+    itemsPerBox: 1,
+    maxPerTx: 5,
+    namePrefix: 'pack',
+    figureNamePrefix: 'card',
+    symbol: 'card',
+    boxMinterProgramId: 'Program1111111111111111111111111111111111',
+    boxMinterConfigPda: 'Config11111111111111111111111111111111111',
+    collectionMint: 'Collection11111111111111111111111111111111',
+  };
+  const frontendSource = renderFrontendDeploymentRegistryFile({
+    drops: {
+      default_card_drop: {
+        ...baseCardDrop,
+        dropId: 'default_card_drop',
+      },
+      opt_out_card_drop: {
+        ...baseCardDrop,
+        dropId: 'opt_out_card_drop',
+        stripeCheckoutEnabled: false,
+      },
+    },
+  });
+
+  const defaultFrontendEntry = generatedEntrySource(frontendSource, 'default_card_drop');
+  const optOutFrontendEntry = generatedEntrySource(frontendSource, 'opt_out_card_drop');
+  assert.doesNotMatch(defaultFrontendEntry, /stripeCheckoutEnabled/);
+  assert.match(optOutFrontendEntry, /stripeCheckoutEnabled: false/);
+  await withTempModule(
+    frontendSource,
+    async (filePath) => {
+      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+      const mod = (await import(moduleUrl)) as { getFrontendDrop(dropId: string): { stripeCheckoutEnabled?: boolean } };
+      assert.equal(mod.getFrontendDrop('default_card_drop').stripeCheckoutEnabled, true);
+      assert.equal(mod.getFrontendDrop('opt_out_card_drop').stripeCheckoutEnabled, false);
+    },
+    '.ts',
+  );
+
+  const functionsSource = renderFunctionsDeploymentRegistryFile({
+    drops: {
+      default_card_drop: {
+        ...baseCardDrop,
+        dropId: 'default_card_drop',
+        receiptsMerkleTree: 'Tree111111111111111111111111111111111111',
+        deliveryLookupTable: 'Lookup1111111111111111111111111111111111',
+      },
+      opt_out_card_drop: {
+        ...baseCardDrop,
+        dropId: 'opt_out_card_drop',
+        stripeCheckoutEnabled: false,
+        receiptsMerkleTree: 'Tree222222222222222222222222222222222222',
+        deliveryLookupTable: 'Lookup2222222222222222222222222222222222',
+      },
+      override_card_drop: {
+        ...baseCardDrop,
+        dropId: 'override_card_drop',
+        stripeProductTaxCode: 'txcd_12345678',
+        receiptsMerkleTree: 'Tree333333333333333333333333333333333333',
+        deliveryLookupTable: 'Lookup3333333333333333333333333333333333',
+      },
+    },
+  });
+
+  const defaultFunctionsEntry = generatedEntrySource(functionsSource, 'default_card_drop');
+  const optOutFunctionsEntry = generatedEntrySource(functionsSource, 'opt_out_card_drop');
+  const overrideFunctionsEntry = generatedEntrySource(functionsSource, 'override_card_drop');
+  assert.doesNotMatch(defaultFunctionsEntry, /stripeCheckoutEnabled/);
+  assert.doesNotMatch(defaultFunctionsEntry, /stripeProductTaxCode/);
+  assert.match(optOutFunctionsEntry, /stripeCheckoutEnabled: false/);
+  assert.doesNotMatch(optOutFunctionsEntry, /stripeProductTaxCode/);
+  assert.doesNotMatch(overrideFunctionsEntry, /stripeCheckoutEnabled/);
+  assert.match(overrideFunctionsEntry, /stripeProductTaxCode: "txcd_12345678"/);
+  await withTempModule(
+    functionsSource,
+    async (filePath) => {
+      const moduleUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+      const mod = (await import(moduleUrl)) as {
+        getFunctionsDrop(dropId: string): { stripeCheckoutEnabled?: boolean; stripeProductTaxCode?: string };
+      };
+      assert.equal(mod.getFunctionsDrop('default_card_drop').stripeCheckoutEnabled, true);
+      assert.equal(mod.getFunctionsDrop('default_card_drop').stripeProductTaxCode, CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE);
+      assert.equal(mod.getFunctionsDrop('opt_out_card_drop').stripeCheckoutEnabled, false);
+      assert.equal(mod.getFunctionsDrop('opt_out_card_drop').stripeProductTaxCode, undefined);
+      assert.equal(mod.getFunctionsDrop('override_card_drop').stripeCheckoutEnabled, true);
+      assert.equal(mod.getFunctionsDrop('override_card_drop').stripeProductTaxCode, 'txcd_12345678');
     },
     '.ts',
   );

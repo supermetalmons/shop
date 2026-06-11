@@ -396,6 +396,16 @@ function defaultBoxMediaConfigForDropFamily(dropFamily: DropFamily): BoxMediaCon
   return normalizeBoxMediaConfig(CARD_NFT_2_BOX_MEDIA);
 }
 
+function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+  return dropFamily === 'card_nft_2';
+}
+
+function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
+  if (value === true) return true;
+  if (value === false) return false;
+  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
+}
+
 export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
@@ -433,7 +443,12 @@ function createFrontendDrop(
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
-  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
+  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
+  const stripeCheckoutDisabledOverride =
+    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
+  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
+    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
+  }
   return {
     ...baseConfig,
     dropId: normalizedDropId,
@@ -447,7 +462,7 @@ function createFrontendDrop(
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase, metadataPathFormat),
   };

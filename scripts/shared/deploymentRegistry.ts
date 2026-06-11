@@ -6,6 +6,8 @@ import { CARD_NFT_2_BOX_MEDIA } from '../../src/config/dropMediaDefaults.ts';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
+export const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
+
 export type MediaMapConfigSerialized = {
   strategy?: 'direct' | 'cyclic';
   count?: number;
@@ -58,7 +60,6 @@ export type FrontendDropConfigSerialized = {
 };
 
 export type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
-  stripeLiveUnitAmountCents?: number;
   stripeProductTaxCode?: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
@@ -504,6 +505,54 @@ export function defaultFrontendBoxMediaForDropFamily(dropFamily: DropFamily): Bo
   return normalizeBoxMediaConfigForRegistry(CARD_NFT_2_BOX_MEDIA);
 }
 
+export function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+  return dropFamily === 'card_nft_2';
+}
+
+export function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
+}
+
+export type StripeCheckoutEnabledResolution = {
+  enabled: boolean;
+  disabledOverride: boolean;
+};
+
+export function resolveStripeCheckoutEnabledForDropFamily(
+  value: unknown,
+  dropFamily: DropFamily,
+): StripeCheckoutEnabledResolution {
+  if (value === true) return { enabled: true, disabledOverride: false };
+  if (value === false) {
+    return {
+      enabled: false,
+      disabledOverride: defaultStripeCheckoutEnabledForDropFamily(dropFamily),
+    };
+  }
+  return {
+    enabled: defaultStripeCheckoutEnabledForDropFamily(dropFamily),
+    disabledOverride: false,
+  };
+}
+
+export function resolveStripeProductTaxCodeForDropFamily(
+  value: unknown,
+  dropFamily: DropFamily,
+  stripeCheckoutEnabled: boolean,
+): string | undefined {
+  const explicitTaxCode = asTrimmedString(value);
+  if (explicitTaxCode) return explicitTaxCode;
+  return stripeCheckoutEnabled ? defaultStripeProductTaxCodeForDropFamily(dropFamily) : undefined;
+}
+
+function renderableStripeCheckoutEnabled(
+  stripeCheckout: StripeCheckoutEnabledResolution,
+): Pick<FrontendDropConfigSerialized, 'stripeCheckoutEnabled'> {
+  if (stripeCheckout.enabled) return { stripeCheckoutEnabled: true };
+  return stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {};
+}
+
 function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
@@ -518,10 +567,14 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
   const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
   const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
   const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
-  const stripeCheckoutEnabled = obj.stripeCheckoutEnabled === true;
+  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(obj.stripeCheckoutEnabled, dropFamily);
   const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
+  const solanaCluster = asTrimmedString(obj.solanaCluster);
+  if (stripeCheckout.enabled && solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
+    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${dropId}`);
+  }
   return {
-    solanaCluster: asTrimmedString(obj.solanaCluster),
+    solanaCluster,
     dropId,
     dropFamily,
     collectionName: asTrimmedString(obj.collectionName) || dropId,
@@ -535,7 +588,7 @@ function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSeria
     treasury: asTrimmedString(obj.treasury),
     priceSol: asFiniteNumber(obj.priceSol),
     discountPriceSol: asFiniteNumber(obj.discountPriceSol),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...renderableStripeCheckoutEnabled(stripeCheckout),
     ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(obj.discountMintsPerWallet),
     discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
@@ -556,11 +609,13 @@ function normalizeFunctionsDropForRegistry(raw: unknown): FunctionsDropConfigSer
   const obj = raw as Record<string, unknown>;
   const frontendShape = normalizeFrontendDropForRegistry(raw);
   if (!frontendShape) return undefined;
-  const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
-  const stripeProductTaxCode = asTrimmedString(obj.stripeProductTaxCode);
+  const stripeProductTaxCode = resolveStripeProductTaxCodeForDropFamily(
+    obj.stripeProductTaxCode,
+    frontendShape.dropFamily,
+    frontendShape.stripeCheckoutEnabled === true,
+  );
   return {
     ...frontendShape,
-    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
     ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     receiptsMerkleTree: asTrimmedString(obj.receiptsMerkleTree),
     deliveryLookupTable: asTrimmedString(obj.deliveryLookupTable),
@@ -703,6 +758,15 @@ function renderOptionalBoxMinterConfigPdaLine(boxMinterConfigPda?: string): stri
   return boxMinterConfigPda ? `    boxMinterConfigPda: ${tsStringLiteral(boxMinterConfigPda)},\n` : '';
 }
 
+function renderStripeCheckoutEnabledLine(drop: { dropFamily: DropFamily; stripeCheckoutEnabled?: boolean }): string {
+  const defaultEnabled = defaultStripeCheckoutEnabledForDropFamily(drop.dropFamily);
+  if (drop.stripeCheckoutEnabled === true && !defaultEnabled) return `    stripeCheckoutEnabled: true,\n`;
+  if (drop.stripeCheckoutEnabled === false && defaultEnabled) {
+    return `    stripeCheckoutEnabled: false,\n`;
+  }
+  return '';
+}
+
 function renderSharedProgramConfigPdaAssertion(registryName: string, registryLabel: string): string {
   return [
     `function assertSharedProgramDropsUseExplicitConfigPdas<`,
@@ -738,7 +802,7 @@ function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
     drop.mintSelection ? renderMintSelectionConfigLiteral(drop.mintSelection) : '',
   ].filter(Boolean);
   const metadataOptionLines = metadataOptionBlocks.length ? `\n${metadataOptionBlocks.join('\n')}` : '';
-  const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
+  const stripeCheckoutEnabledLine = renderStripeCheckoutEnabledLine(drop);
   const stripeLiveUnitAmountCentsLine =
     drop.stripeLiveUnitAmountCents != null
       ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
@@ -773,13 +837,15 @@ ${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMi
 }
 
 function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
-  const stripeCheckoutEnabledLine = drop.stripeCheckoutEnabled ? `    stripeCheckoutEnabled: true,\n` : '';
+  const stripeCheckoutEnabledLine = renderStripeCheckoutEnabledLine(drop);
   const stripeLiveUnitAmountCentsLine =
     drop.stripeLiveUnitAmountCents != null
       ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
       : '';
-  const stripeProductTaxCodeLine = drop.stripeProductTaxCode
-    ? `    stripeProductTaxCode: ${tsStringLiteral(drop.stripeProductTaxCode)},\n`
+  const stripeProductTaxCode = String(drop.stripeProductTaxCode || '').trim();
+  const defaultStripeProductTaxCode = defaultStripeProductTaxCodeForDropFamily(drop.dropFamily);
+  const stripeProductTaxCodeLine = stripeProductTaxCode && stripeProductTaxCode !== defaultStripeProductTaxCode
+    ? `    stripeProductTaxCode: ${tsStringLiteral(stripeProductTaxCode)},\n`
     : '';
   return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
     solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
@@ -1228,6 +1294,16 @@ function defaultBoxMediaConfigForDropFamily(dropFamily: DropFamily): BoxMediaCon
   return normalizeBoxMediaConfig(CARD_NFT_2_BOX_MEDIA);
 }
 
+function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+  return dropFamily === 'card_nft_2';
+}
+
+function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
+  if (value === true) return true;
+  if (value === false) return false;
+  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
+}
+
 export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
@@ -1265,7 +1341,12 @@ function createFrontendDrop(
   const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
-  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
+  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
+  const stripeCheckoutDisabledOverride =
+    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
+  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
+    throw new Error(\`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop \${normalizedDropId}\`);
+  }
   return {
     ...baseConfig,
     dropId: normalizedDropId,
@@ -1279,7 +1360,7 @@ function createFrontendDrop(
     ...(mintSelection ? { mintSelection } : {}),
     figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     paths: dropPathsFromBase(config.metadataBase, metadataPathFormat),
   };
@@ -1574,6 +1655,23 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   return defaultDropFamilyForDropId(dropId || '');
 }
 
+const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
+
+function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+  return dropFamily === 'card_nft_2';
+}
+
+function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
+}
+
+function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
+  if (value === true) return true;
+  if (value === false) return false;
+  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
+}
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -1637,8 +1735,15 @@ function createFunctionsDrop(
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
-  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
-  const stripeProductTaxCode = String(rawStripeProductTaxCode || '').trim();
+  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
+  const stripeCheckoutDisabledOverride =
+    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
+  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
+    throw new Error(\`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop \${normalizedDropId}\`);
+  }
+  const stripeProductTaxCode =
+    String(rawStripeProductTaxCode || '').trim() ||
+    (stripeCheckoutEnabled ? defaultStripeProductTaxCodeForDropFamily(normalizedDropFamily) || '' : '');
   return {
     ...baseConfig,
     dropId: normalizedDropId,
@@ -1647,7 +1752,7 @@ function createFunctionsDrop(
     metadataPathFormat,
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     ...(mintSelection ? { mintSelection } : {}),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),

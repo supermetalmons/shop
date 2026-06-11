@@ -10,7 +10,7 @@ export const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
-export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 10;
+export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
@@ -68,7 +68,7 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
   receiptOwner: string;
   metadataId?: number;
   metadataIds?: number[];
-  variantKey: string;
+  variantKey?: string;
   orderHashHex: string;
   stripeSession: {
     id?: string | null;
@@ -93,7 +93,7 @@ export type StripeCheckoutDocumentInput = {
   dropId: string;
   sessionId: string;
   uid: string;
-  variantKey: string;
+  variantKey?: string;
   unitAmountCents: number;
   quantity?: number;
   livemode?: boolean;
@@ -108,7 +108,7 @@ export type StripeAddressEncryptionResult = {
 
 export type StripeCheckoutDocumentData = {
   uid: string;
-  variantKey: string;
+  variantKey?: string;
   quantity: number;
   unitAmountCents: number;
   livemode: boolean;
@@ -310,7 +310,7 @@ export function stripeCheckoutOwnerId(uid: string): string {
 
 export function validateStripeCheckoutDocumentData(params: {
   dropId: string;
-  variantKey: string;
+  variantKey?: string;
   sessionId: string;
   expectedLivemode?: boolean;
   checkout: any;
@@ -326,7 +326,11 @@ export function validateStripeCheckoutDocumentData(params: {
   requireString(checkout.sessionId, params.sessionId, 'session id');
   requireString(checkout.fulfillmentMode, STRIPE_OFFCHAIN_FULFILLMENT_MODE, 'fulfillment mode');
   requireString(checkout.dropId, params.dropId, 'drop id');
-  requireString(checkout.variantKey, params.variantKey, 'variant key');
+  const expectedVariantKey = normalizedString(params.variantKey);
+  const checkoutVariantKey = normalizedString(checkout.variantKey);
+  if (expectedVariantKey || checkoutVariantKey) {
+    requireString(checkout.variantKey, expectedVariantKey, 'variant key');
+  }
   requireString(checkout.currency, STRIPE_OFFCHAIN_CURRENCY, 'currency');
 
   let quantity: number;
@@ -349,7 +353,7 @@ export function validateStripeCheckoutDocumentData(params: {
   const deliveryId = positiveIntegerOrNull(checkout.deliveryId);
   return {
     uid,
-    variantKey: params.variantKey,
+    ...(expectedVariantKey ? { variantKey: expectedVariantKey } : {}),
     quantity,
     unitAmountCents,
     livemode: expectedLivemode,
@@ -625,6 +629,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
   const stripeReceiptClaimsByBoxId = buildStripeReceiptClaimsByBoxId(stripeReceiptClaims);
   const legacyStripeReceiptClaim = stripeReceiptClaims.length === 1 ? stripeReceiptClaims[0] : undefined;
+  const variantKey = normalizedString(args.variantKey);
 
   return {
     dropId: args.dropId,
@@ -636,7 +641,11 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
     receiptOwner: args.receiptOwner,
     addressSnapshot: args.addressSnapshot,
     itemIds: [],
-    items: metadataIds.map((metadataId) => ({ kind: 'box', refId: metadataId, variantKey: args.variantKey })),
+    items: metadataIds.map((metadataId) => ({
+      kind: 'box',
+      refId: metadataId,
+      ...(variantKey ? { variantKey } : {}),
+    })),
     deliveryId: args.deliveryId,
     quantity: metadataIds.length,
     metadataIds,
@@ -661,6 +670,7 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
     stripeReceiptClaims.map((claim) => [stripeReceiptClaimBoxMapKey(claim.boxId), claim.code]),
   );
   const legacyStripeReceiptClaim = stripeReceiptClaims.length === 1 ? stripeReceiptClaims[0] : undefined;
+  const variantKey = normalizedString(args.variantKey);
 
   return {
     dropId: args.dropId,
@@ -673,7 +683,7 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
     firstMetadataId: metadataIds[0],
     metadataIds,
     ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
-    variantKey: args.variantKey,
+    ...(variantKey ? { variantKey } : {}),
     offchainOrderHash: args.orderHashHex,
     stripeCheckoutSessionId: args.stripeSession.id,
     receiptTx: args.receiptTx,
@@ -685,22 +695,24 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
 export function buildStripeCheckoutSessionMetadata(args: {
   dropId: string;
   uid: string;
-  variantKey: string;
+  variantKey?: string;
   quantity?: number;
 }): Record<string, string> {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
+  const variantKey = normalizedString(args.variantKey);
   return {
     dropId: args.dropId,
     uid: args.uid,
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
     placeholder: 'stripe_direct_delivery',
     quantity: String(quantity),
-    variantKey: args.variantKey,
+    ...(variantKey ? { variantKey } : {}),
   };
 }
 
 export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
+  const variantKey = normalizedString(args.variantKey);
   return {
     sessionId: args.sessionId,
     dropId: args.dropId,
@@ -708,7 +720,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
     owner: stripeCheckoutOwnerId(args.uid),
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
     firebaseUid: args.uid,
-    variantKey: args.variantKey,
+    ...(variantKey ? { variantKey } : {}),
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     unitAmountCents: args.unitAmountCents,

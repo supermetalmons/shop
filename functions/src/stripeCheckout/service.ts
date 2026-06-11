@@ -115,7 +115,7 @@ export type StripeCheckoutFulfillmentStart =
       started: true;
       checkoutRef: DocumentReference;
       checkout: StripeCheckoutDocumentRecord;
-      variantKey: string;
+      variantKey?: string;
       processingAttemptId: string;
     }
   | {
@@ -188,6 +188,8 @@ export type StripeCheckoutPrograms = {
   mplCoreCpiSigner: PublicKey;
 };
 
+export type StripeCheckoutKind = 'size_variant' | 'standard_pack';
+
 type DropRuntimeDeps<Runtime extends StripeCheckoutDropRuntime> = {
   requireDropId: (rawDropId: unknown) => string;
   getDropRuntime: (dropId: string) => Runtime;
@@ -200,10 +202,11 @@ export type StripeCheckoutFlowDeps<
   connection: (dropRuntime: Runtime) => Connection;
   fetchCheckoutConfig: (params: { dropRuntime: Runtime; conn: Connection; context: string }) => Promise<Config>;
   ensureOnchainCoreConfig: (dropRuntime: Runtime) => Promise<Config>;
-  requireStripeCheckoutVariantAvailable: (params: {
+  requireStripeCheckoutAvailable: (params: {
     dropRuntime: Runtime;
     cfg: Config;
-    variantKey: string;
+    checkoutKind: StripeCheckoutKind;
+    variantKey?: string;
     quantity: number;
   }) => void;
   requireStripeCheckoutFulfillmentPrerequisites: (cfg: Config) => void;
@@ -348,13 +351,6 @@ class StripeCheckoutProcessingAttemptOwnershipCheckError extends Error {
     super('Could not verify Stripe checkout fulfillment processing lease ownership');
     this.name = 'StripeCheckoutProcessingAttemptOwnershipCheckError';
     this.cause = cause;
-  }
-}
-
-class StripeReceiptClaimCodeCollisionError extends Error {
-  constructor() {
-    super('Generated Stripe receipt claim code already exists');
-    this.name = 'StripeReceiptClaimCodeCollisionError';
   }
 }
 
@@ -540,21 +536,48 @@ export function checkoutReturnUrl(
   }
 }
 
-function normalizeStripeVariantKey(
+function normalizeSizeStripeVariantKey(
   dropRuntime: StripeCheckoutDropRuntime,
   variantKey: string | undefined,
 ): string | undefined {
   const value = String(variantKey || '').trim();
   if (!value) return undefined;
   const selection = dropRuntime.config.mintSelection;
-  if (selection?.kind === 'size') {
-    try {
-      return selection.options[resolveMintSelectionVariantIndex(selection, value)].key;
-    } catch {
-      throw new HttpsError('invalid-argument', 'Invalid variantKey');
-    }
+  if (selection?.kind !== 'size') {
+    throw new HttpsError('failed-precondition', 'Stripe checkout requires size variant minting.');
   }
-  return value.slice(0, 64);
+  try {
+    return selection.options[resolveMintSelectionVariantIndex(selection, value)].key;
+  } catch {
+    throw new HttpsError('invalid-argument', 'Invalid variantKey');
+  }
+}
+
+export function stripeCheckoutKindForDrop(dropRuntime: StripeCheckoutDropRuntime): StripeCheckoutKind {
+  const itemsPerBox = Math.floor(Number(dropRuntime.itemsPerBox));
+  const hasSizeSelection = dropRuntime.config.mintSelection?.kind === 'size';
+  if (itemsPerBox === 0 && hasSizeSelection) return 'size_variant';
+  if (itemsPerBox > 0 && !dropRuntime.config.mintSelection) return 'standard_pack';
+  throw new HttpsError(
+    'failed-precondition',
+    'Stripe checkout is only enabled for direct-delivery size drops or standard pack drops.',
+  );
+}
+
+function normalizeStripeCheckoutVariantKey(
+  dropRuntime: StripeCheckoutDropRuntime,
+  rawVariantKey: string | undefined,
+  checkoutKind: StripeCheckoutKind,
+): string | undefined {
+  const raw = String(rawVariantKey || '').trim();
+  if (checkoutKind === 'standard_pack') {
+    if (raw) throw new HttpsError('invalid-argument', 'variantKey is only supported for size Stripe checkout.');
+    return undefined;
+  }
+
+  const variantKey = normalizeSizeStripeVariantKey(dropRuntime, raw);
+  if (!variantKey) throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
+  return variantKey;
 }
 
 function itemNameWithCollectionCasing(itemName: string, collectionSuffix: string): string {
@@ -710,7 +733,7 @@ function stripeCheckoutSessionSnapshot(session: Stripe.Checkout.Session): Stripe
 function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutDropRuntime>(
   session: Stripe.Checkout.Session,
   deps: DropRuntimeDeps<Runtime>,
-): { dropId: string; sessionId: string; dropRuntime: Runtime; variantKey: string } {
+): { dropId: string; sessionId: string; dropRuntime: Runtime; checkoutKind: StripeCheckoutKind; variantKey?: string } {
   const sessionId = requireStripeCheckoutSessionId(session.id);
   if (!isStripeOffchainFulfillmentSession(session)) {
     throw new HttpsError('failed-precondition', 'Stripe checkout session is not app-created off-chain fulfillment', {
@@ -720,7 +743,7 @@ function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutD
 
   const dropIdRaw = session.metadata?.dropId;
   const variantKeyRaw = session.metadata?.variantKey;
-  if (!dropIdRaw || !variantKeyRaw) {
+  if (!dropIdRaw) {
     throw new HttpsError('failed-precondition', 'Stripe checkout session is missing off-chain fulfillment metadata', {
       sessionId,
     });
@@ -728,16 +751,14 @@ function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutD
 
   const dropId = deps.requireDropId(dropIdRaw);
   const dropRuntime = deps.getDropRuntime(dropId);
-  const variantKey = normalizeStripeVariantKey(dropRuntime, variantKeyRaw);
-  if (!variantKey) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout session is missing variantKey', { dropId, sessionId });
-  }
-  return { dropId, sessionId, dropRuntime, variantKey };
+  const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
+  const variantKey = normalizeStripeCheckoutVariantKey(dropRuntime, variantKeyRaw, checkoutKind);
+  return { dropId, sessionId, dropRuntime, checkoutKind, ...(variantKey ? { variantKey } : {}) };
 }
 
 function requireAppCreatedStripeCheckoutDocumentData(params: {
   dropId: string;
-  variantKey: string;
+  variantKey?: string;
   sessionId: string;
   expectedLivemode?: boolean;
   checkout: any;
@@ -754,7 +775,7 @@ function requireAppCreatedStripeCheckoutDocumentData(params: {
 
 function requireAppCreatedStripeCheckoutSnapshot(params: {
   dropId: string;
-  variantKey: string;
+  variantKey?: string;
   sessionId: string;
   expectedLivemode?: boolean;
   ref: DocumentReference;
@@ -1003,9 +1024,6 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
           return deliveryId ? { deliveryId, checkoutStatus } : { checkoutStatus };
         }
 
-        const claimSnaps = await Promise.all(claimRefs.map((claimRef) => tx.get(claimRef)));
-        if (claimSnaps.some((claimSnap) => claimSnap.exists)) throw new StripeReceiptClaimCodeCollisionError();
-
         const stripeReceiptClaims = metadataIds.map((boxId, index) => ({
           code: requireStripeReceiptClaimCode(claimCodes[index]),
           boxId,
@@ -1038,7 +1056,7 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
             ...(order.firebaseUid ? { firebaseUid: order.firebaseUid } : {}),
             receiptOwner: order.receiptOwner,
             boxId: claim.boxId,
-            variantKey: order.variantKey,
+            ...(order.variantKey ? { variantKey: order.variantKey } : {}),
             offchainOrderHash: order.orderHashHex,
             stripeCheckoutSessionId: order.stripeSession.id,
             status: 'unclaimed',
@@ -1060,7 +1078,6 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
       });
       return result;
     } catch (err) {
-      if (err instanceof StripeReceiptClaimCodeCollisionError) continue;
       if (params.isAlreadyExistsError(err)) continue;
       throw err;
     }
@@ -1102,7 +1119,7 @@ async function fulfillStripeCheckoutSession<
   checkout: StripeCheckoutDocumentRecord;
   expectedDropId: string;
   expectedSessionId: string;
-  expectedVariantKey: string;
+  expectedVariantKey?: string;
   processingAttemptId?: string;
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
 }): Promise<{
@@ -1125,13 +1142,8 @@ async function fulfillStripeCheckoutSession<
   const dropRuntime = deps.getDropRuntime(dropId);
   const mode = stripeApiModeForCluster(dropRuntime.cluster);
   const expectedLivemode = mode === 'live';
-  const variantKey = normalizeStripeVariantKey(dropRuntime, params.expectedVariantKey);
-  if (!variantKey) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout fulfillment is missing variantKey', {
-      dropId,
-      sessionId,
-    });
-  }
+  const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
+  const variantKey = normalizeStripeCheckoutVariantKey(dropRuntime, params.expectedVariantKey, checkoutKind);
   if (metadataContext.dropId !== dropId || metadataContext.variantKey !== variantKey) {
     throw new HttpsError('failed-precondition', 'Stripe checkout metadata does not match the pending fulfillment', {
       sessionId,
@@ -1150,17 +1162,14 @@ async function fulfillStripeCheckoutSession<
       checkoutLivemode: checkout.livemode,
     });
   }
-  if (Math.floor(Number(dropRuntime.itemsPerBox)) !== 0) {
-    throw new HttpsError('failed-precondition', 'Off-chain variant fulfillment requires a direct-delivery drop', { dropId });
-  }
-  if (dropRuntime.config.mintSelection?.kind !== 'size') {
-    throw new HttpsError('failed-precondition', 'Off-chain variant fulfillment requires a size-variant drop', { dropId });
-  }
   if (!dropRuntime.receiptsMerkleTreeStr) {
     throw new HttpsError('unavailable', 'Receipt cNFT tree is not configured', { dropId });
   }
 
-  const variantIndex = resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey);
+  const variantIndex =
+    checkoutKind === 'size_variant'
+      ? resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey || '')
+      : 0;
   const orderHash = stripeCheckoutSessionOrderHash(sessionId, Boolean(session.livemode));
   const orderHashHex = orderHash.toString('hex');
   const existingOrder = await fetchStripeOffchainDeliveryOrderMarker({ db, dropId, orderHashHex });
@@ -1347,7 +1356,7 @@ async function fulfillStripeCheckoutSession<
       receiptOwner: receiptOwner.toBase58(),
       metadataId,
       metadataIds,
-      variantKey,
+      ...(variantKey ? { variantKey } : {}),
       stripeSession: session,
       receiptTx,
       addressSnapshot,
@@ -1482,15 +1491,9 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
     }
 
     const variantKey = String(checkoutData?.variantKey || '').trim();
-    if (!variantKey) {
-      throw new HttpsError('failed-precondition', 'Stripe checkout fulfillment is missing variantKey', {
-        dropId,
-        sessionId,
-      });
-    }
     const checkout = requireAppCreatedStripeCheckoutSnapshot({
       dropId,
-      variantKey,
+      ...(variantKey ? { variantKey } : {}),
       sessionId,
       expectedLivemode: params.expectedLivemode,
       ref: checkoutRef,
@@ -1506,7 +1509,7 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
       processingLeaseExpiresAt: Timestamp.fromMillis(nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    return { started: true, checkoutRef, checkout, variantKey, processingAttemptId };
+    return { started: true, checkoutRef, checkout, ...(variantKey ? { variantKey } : {}), processingAttemptId };
   });
 }
 
@@ -1681,17 +1684,12 @@ export async function createStripeCheckoutSessionForRequest<
       `Stripe ${params.allowedMode} checkout is only enabled for ${clusterLabel} drops.`,
     );
   }
-  if (Math.floor(Number(dropRuntime.itemsPerBox)) !== 0 || dropRuntime.config.mintSelection?.kind !== 'size') {
-    throw new HttpsError('failed-precondition', 'Stripe checkout is only enabled for direct-delivery size drops.');
-  }
+  const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
   if (!dropRuntime.receiptsMerkleTreeStr) {
     throw new HttpsError('failed-precondition', 'Stripe checkout requires a configured receipt cNFT tree.');
   }
 
-  const variantKey = normalizeStripeVariantKey(dropRuntime, rawVariantKey);
-  if (!variantKey) {
-    throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
-  }
+  const variantKey = normalizeStripeCheckoutVariantKey(dropRuntime, rawVariantKey, checkoutKind);
   let quantity: number;
   try {
     quantity = normalizeStripeCheckoutQuantity(rawQuantity);
@@ -1707,7 +1705,7 @@ export async function createStripeCheckoutSessionForRequest<
     conn: deps.connection(dropRuntime),
     context: 'getAccountInfo:boxMinterConfig:stripeCheckout',
   });
-  deps.requireStripeCheckoutVariantAvailable({ dropRuntime, cfg, variantKey, quantity });
+  deps.requireStripeCheckoutAvailable({ dropRuntime, cfg, checkoutKind, variantKey, quantity });
   deps.requireStripeCheckoutCollectionMatchesConfig(dropRuntime, cfg);
   deps.requireStripeCheckoutFulfillmentPrerequisites(cfg);
 
@@ -1742,7 +1740,7 @@ export async function createStripeCheckoutSessionForRequest<
       dropId,
       sessionId: session.id,
       uid: params.uid,
-      variantKey,
+      ...(variantKey ? { variantKey } : {}),
       unitAmountCents,
       quantity,
       livemode: session.livemode,

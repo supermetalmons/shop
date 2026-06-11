@@ -230,6 +230,23 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   return defaultDropFamilyForDropId(dropId || '');
 }
 
+const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
+
+function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+  return dropFamily === 'card_nft_2';
+}
+
+function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
+  if (dropFamily !== 'card_nft_2') return undefined;
+  return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
+}
+
+function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
+  if (value === true) return true;
+  if (value === false) return false;
+  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
+}
+
 function normalizeDiscountMintsPerWallet(value: unknown): number {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
@@ -293,8 +310,15 @@ function createFunctionsDrop(
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
-  const stripeCheckoutEnabled = rawStripeCheckoutEnabled === true;
-  const stripeProductTaxCode = String(rawStripeProductTaxCode || '').trim();
+  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
+  const stripeCheckoutDisabledOverride =
+    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
+  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
+    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
+  }
+  const stripeProductTaxCode =
+    String(rawStripeProductTaxCode || '').trim() ||
+    (stripeCheckoutEnabled ? defaultStripeProductTaxCodeForDropFamily(normalizedDropFamily) || '' : '');
   return {
     ...baseConfig,
     dropId: normalizedDropId,
@@ -303,7 +327,7 @@ function createFunctionsDrop(
     metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : {}),
+    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
     figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
     discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),

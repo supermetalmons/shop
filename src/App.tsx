@@ -700,6 +700,16 @@ function stripeCheckoutModeForDrop(drop: FrontendDeploymentConfig | null | undef
   return null;
 }
 
+type StripeCheckoutKind = 'size_variant' | 'standard_pack';
+
+function stripeCheckoutKindForDrop(drop: FrontendDeploymentConfig | null | undefined): StripeCheckoutKind | null {
+  if (!drop) return null;
+  const itemsPerBox = Math.floor(Number(drop.itemsPerBox));
+  if (itemsPerBox === 0 && drop.mintSelection?.kind === 'size') return 'size_variant';
+  if (itemsPerBox > 0 && !drop.mintSelection) return 'standard_pack';
+  return null;
+}
+
 function normalizeStripeUnitAmountCents(value: unknown): number | null {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed)) return null;
@@ -2021,6 +2031,10 @@ function App({ currentPath }: AppProps) {
     : { aspectRatio: 1 };
   const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
   const routeStripePaymentPriceLabel = stripeCheckoutPriceLabelForDrop(routeDrop, routeStripePaymentMode);
+  const routeStripeCheckoutKind = stripeCheckoutKindForDrop(routeDrop);
+  const routeStripePaymentVisible = Boolean(
+    routeDrop && routeStripePaymentMode && routeStripePaymentPriceLabel && routeStripeCheckoutKind,
+  );
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
     [upcomingDropRoute?.previewDropId],
@@ -4247,12 +4261,17 @@ function App({ currentPath }: AppProps) {
     }
   };
 
-  const handleStripePayment = async (variantKey?: string) => {
+  const handleStripePayment = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
     const mintDrop = requireRouteDrop('Stripe payment');
     const stripePaymentMode = stripeCheckoutModeForDrop(mintDrop);
     if (!stripePaymentMode) {
       showToast('Stripe payment is not enabled for this drop');
+      return;
+    }
+    const stripeCheckoutKind = stripeCheckoutKindForDrop(mintDrop);
+    if (!stripeCheckoutKind) {
+      showToast('Stripe payment is not available for this drop');
       return;
     }
     if (stripePaymentLoading) return;
@@ -4262,6 +4281,7 @@ function App({ currentPath }: AppProps) {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
       const { id, url } = await createStripeCheckoutSession({
         dropId: mintDrop.dropId,
+        quantity: stripeCheckoutKind === 'size_variant' ? 1 : quantity,
         variantKey,
         returnUrl,
       });
@@ -5937,12 +5957,7 @@ function App({ currentPath }: AppProps) {
             onDiscountMint={handleDiscountMint}
             discountBusy={discountMinting || minting || walletBusy}
             onStripePaymentClick={handleStripePayment}
-            stripePaymentVisible={
-              Boolean(routeStripePaymentMode) &&
-              Boolean(routeStripePaymentPriceLabel) &&
-              isDirectDeliveryItemsPerBox(routeDrop.itemsPerBox) &&
-              routeDrop.mintSelection?.kind === 'size'
-            }
+            stripePaymentVisible={routeStripePaymentVisible}
             stripePaymentBusy={stripePaymentLoading}
             stripePaymentPriceLabel={routeStripePaymentPriceLabel}
             mintSelection={routeDrop.mintSelection}
