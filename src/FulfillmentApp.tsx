@@ -20,7 +20,13 @@ import { fulfillmentBoxSecretCode } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { Modal } from './components/Modal';
 import { ShopHeader } from './components/ShopHeader';
-import { listFrontendDrops, normalizeDropId, type FigureMediaConfig, type FrontendDeploymentConfig } from './config/deployment';
+import {
+  isDropFamily,
+  listFrontendDrops,
+  normalizeDropId,
+  type FigureMediaConfig,
+  type FrontendDeploymentConfig,
+} from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 import { findCountryByCode } from './lib/countries';
 
@@ -424,6 +430,16 @@ function renderBoxTiles(args: {
       })}
     </div>
   );
+}
+
+function renderFulfillmentPackSecretImage(args: {
+  dropId: string;
+  boxId: number;
+}) {
+  const { dropId, boxId } = args;
+  const imageSrc = normalizeBoxDisplayImage({ dropId, boxId });
+  if (!imageSrc) return null;
+  return <img src={imageSrc} alt="" aria-hidden="true" loading="lazy" className="fulfillment-pack-secret-image" />;
 }
 
 type FulfillmentAppProps = {
@@ -993,6 +1009,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderDropContent = resolveDropContent(orderDrop);
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
+    const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
@@ -1056,6 +1073,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               <div className="box-contents-list">
                 {order.boxes.map((box) => {
                   const secretCode = fulfillmentBoxSecretCode(box);
+                  const packSecretImage = orderShowsFulfillmentPackPreview
+                    ? renderFulfillmentPackSecretImage({
+                        dropId: orderDrop.dropId,
+                        boxId: box.boxId,
+                      })
+                    : null;
                   return (
                     <div
                       key={`${orderKey}:${box.boxId}`}
@@ -1064,10 +1087,13 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     >
                       <div className="card__title">
                         {secretCode ? (
-                          <>
-                            {dropAssetLabel(orderDrop, 'box', 1, { capitalize: true })} Secret{' '}
-                            <span className="fulfillment-secret-code">{secretCode}</span>
-                          </>
+                          <span className="fulfillment-pack-secret">
+                            {packSecretImage}
+                            <span>
+                              {dropAssetLabel(orderDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                              <span className="fulfillment-secret-code">{secretCode}</span>
+                            </span>
+                          </span>
                         ) : (
                           dropAssetReference(orderDrop, 'box', box.boxId, { capitalize: true })
                         )}

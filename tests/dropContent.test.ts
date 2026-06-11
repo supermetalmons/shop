@@ -71,6 +71,14 @@ test('card_nft_2 box inventory images resolve from token id', () => {
     normalizeBoxDisplayImage({
       dropId: 'card_nft_2_devnet',
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
+      boxId: 6,
+    }),
+    CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[1],
+  );
+  assert.equal(
+    normalizeBoxDisplayImage({
+      dropId: 'card_nft_2_devnet',
+      imageRaw: 'https://assets.example.com/metadata-pack.webp',
     }),
     'https://assets.example.com/metadata-pack.webp',
   );
