@@ -23,6 +23,7 @@ export const NEW_DROP = defineNewDropConfig({
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/card_nft_2.csv',
     receiptsTree: {
+      // 3711 packs * (3 cards + 1 pack receipt) = 14844 leaves; 2^14 = 16384.
       maxDepth: 14,
       maxBufferSize: 64,
       canopyDepth: 0,
@@ -31,7 +32,7 @@ export const NEW_DROP = defineNewDropConfig({
     priceSol: 0.44,
     discountPriceSol: 0.36,
     discountMintsPerWallet: 1,
-    maxSupply: 11133,
+    maxSupply: 3711,
     itemsPerBox: 3,
     maxPerTx: 15,
     namePrefix: 'pack',
