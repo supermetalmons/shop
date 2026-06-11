@@ -726,22 +726,23 @@ function stripeTestUnitAmountCents(): number {
   );
 }
 
-function stripeCheckoutPriceLabelForDrop(
+function stripeCheckoutUnitAmountCentsForDrop(
   drop: FrontendDeploymentConfig | null | undefined,
   mode: StripePaymentMode | null,
-): string | undefined {
-  if (!drop || !mode) return undefined;
-  const unitAmountCents =
-    mode === 'test'
-      ? stripeTestUnitAmountCents()
-      : normalizeStripeUnitAmountCents(drop.stripeLiveUnitAmountCents);
-  if (unitAmountCents == null) return undefined;
+): number | null {
+  if (!drop || !mode) return null;
+  return mode === 'test'
+    ? stripeTestUnitAmountCents()
+    : normalizeStripeUnitAmountCents(drop.stripeLiveUnitAmountCents);
+}
+
+function formatStripeUsdAmountCents(amountCents: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(unitAmountCents / 100);
+  }).format(amountCents / 100);
 }
 
 function consumeStripeCheckoutReturnFromUrl(): StripeCheckoutReturn | null {
@@ -2030,10 +2031,14 @@ function App({ currentPath }: AppProps) {
       )
     : { aspectRatio: 1 };
   const routeStripePaymentMode = stripeCheckoutModeForDrop(routeDrop);
-  const routeStripePaymentPriceLabel = stripeCheckoutPriceLabelForDrop(routeDrop, routeStripePaymentMode);
+  const routeStripePaymentUnitAmountCents = stripeCheckoutUnitAmountCentsForDrop(routeDrop, routeStripePaymentMode);
+  const routeStripePaymentPriceLabel =
+    routeStripePaymentUnitAmountCents == null
+      ? undefined
+      : formatStripeUsdAmountCents(routeStripePaymentUnitAmountCents);
   const routeStripeCheckoutKind = stripeCheckoutKindForDrop(routeDrop);
   const routeStripePaymentVisible = Boolean(
-    routeDrop && routeStripePaymentMode && routeStripePaymentPriceLabel && routeStripeCheckoutKind,
+    routeDrop && routeStripePaymentMode && routeStripePaymentUnitAmountCents != null && routeStripeCheckoutKind,
   );
   const upcomingDropContent = useMemo(
     () => (upcomingDropRoute?.previewDropId ? resolveDropContent(upcomingDropRoute.previewDropId) : undefined),
@@ -5960,6 +5965,7 @@ function App({ currentPath }: AppProps) {
             stripePaymentVisible={routeStripePaymentVisible}
             stripePaymentBusy={stripePaymentLoading}
             stripePaymentPriceLabel={routeStripePaymentPriceLabel}
+            stripePaymentUnitAmountCents={routeStripePaymentUnitAmountCents ?? undefined}
             mintSelection={routeDrop.mintSelection}
             showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
             successfulMintToken={successfulMintToken}

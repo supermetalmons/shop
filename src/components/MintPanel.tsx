@@ -67,6 +67,7 @@ interface MintPanelProps {
   stripePaymentVisible?: boolean;
   stripePaymentBusy?: boolean;
   stripePaymentPriceLabel?: string;
+  stripePaymentUnitAmountCents?: number;
   mintSelection?: MintSelectionConfig;
   showSizeInfo?: boolean;
   successfulMintToken?: number;
@@ -96,6 +97,12 @@ const ACTION_TEXT_FIT_DEFAULT = {
   priceFontSizePx: 0,
   labelLetterSpacingPx: 0,
 };
+const STRIPE_USD_PRICE_FORMATTER = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
 
 const ACTION_TEXT_FIT_STYLE_PROPS = [
   '--mint-panel-action-fit-label-font-size',
@@ -379,6 +386,16 @@ function formatSolAmount(value: number): string {
   });
 }
 
+function normalizeStripePaymentUnitAmountCents(value: number | undefined): number | null {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function formatStripeUsdAmountCents(value: number): string {
+  return STRIPE_USD_PRICE_FORMATTER.format(value / 100);
+}
+
 function calcBoxPreviewLayout(count: number, width: number, height: number, boxAspectRatio: number): BoxPreviewLayout {
   const safeCount = Math.max(1, Math.min(15, Math.floor(count)));
   const safeWidth = Math.max(0, Math.floor(width));
@@ -568,6 +585,7 @@ export function MintPanel({
   stripePaymentVisible,
   stripePaymentBusy,
   stripePaymentPriceLabel,
+  stripePaymentUnitAmountCents,
   mintSelection,
   showSizeInfo,
   successfulMintToken = 0,
@@ -817,10 +835,16 @@ export function MintPanel({
   const totalPriceLabel = formatSolAmount((unitPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const totalDiscountPriceLabel = formatSolAmount((unitDiscountPriceLamports * quantity) / LAMPORTS_PER_SOL_UI);
   const stripePaymentUnitPriceLabel = stripePaymentPriceLabel?.trim();
-  const stripePaymentDisplayPriceLabel =
+  const normalizedStripePaymentUnitAmountCents = normalizeStripePaymentUnitAmountCents(stripePaymentUnitAmountCents);
+  const stripePaymentTotalPriceLabel =
+    normalizedStripePaymentUnitAmountCents == null
+      ? undefined
+      : formatStripeUsdAmountCents(normalizedStripePaymentUnitAmountCents * quantity);
+  const stripePaymentFallbackPriceLabel =
     stripePaymentUnitPriceLabel && quantity > 1
       ? `${stripePaymentUnitPriceLabel} x ${quantity}`
       : stripePaymentUnitPriceLabel;
+  const stripePaymentDisplayPriceLabel = stripePaymentTotalPriceLabel || stripePaymentFallbackPriceLabel;
   const formId = 'mint-form';
   const normalizedDiscountMaxQuantity =
     Number.isFinite(Number(discountMaxQuantity)) && Number(discountMaxQuantity) >= 0
