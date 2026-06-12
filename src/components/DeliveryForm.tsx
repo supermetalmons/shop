@@ -47,6 +47,7 @@ export function DeliveryForm({
   const selectedCountryCode = countryCode ?? localCountryCode;
   const directDelivery = isDirectDeliveryItemsPerBox(itemsPerBox);
   const unitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
+  const baseDeliveryUnitCount = dropFamily === 'card_nft_2' ? 3 : unitsPerBox;
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
@@ -54,19 +55,24 @@ export function DeliveryForm({
   const countryName = countryOption?.name || selectedCountryCode;
   const labelSource = { namePrefix: boxNamePrefix, figureNamePrefix };
   const deliveryUnitKind = directDelivery ? 'box' : 'figure';
-  const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, unitsPerBox);
+  const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, baseDeliveryUnitCount);
   const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
-  let shippingNote = `International delivery: 0.25 SOL up to ${unitsPerBox} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
+  let shippingNote = `International delivery: 0.25 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
   if (dropFamily === 'little_swag_hoodies') {
     shippingNote =
       selectedCountryCode === 'US'
         ? 'Free US shipping'
         : `International delivery: 0.6 SOL for the first ${singleDeliveryUnitLabel}. 0.5 SOL each additional ${singleDeliveryUnitLabel}.`;
+  } else if (dropFamily === 'card_nft_2') {
+    shippingNote =
+      selectedCountryCode === 'US'
+        ? `US delivery: 0.2 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.06 SOL each additional ${singleDeliveryUnitLabel}.`
+        : `International delivery: 0.4 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.06 SOL each additional ${singleDeliveryUnitLabel}.`;
   } else if (selectedCountryCode === 'US') {
     if (directDelivery) {
       shippingNote = 'Free US shipping';
     } else if (dropFamily === 'little_swag_boxes') {
-      shippingNote = `US delivery: 0.1 SOL up to ${unitsPerBox} ${deliveryUnitLabel}. 0.025 SOL each additional ${singleDeliveryUnitLabel}.`;
+      shippingNote = `US delivery: 0.1 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.025 SOL each additional ${singleDeliveryUnitLabel}.`;
     } else if (dropFamily === 'poncho_drifella') {
       shippingNote = 'US delivery: 0.05 SOL flat.';
     } else {

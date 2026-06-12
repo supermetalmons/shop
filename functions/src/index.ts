@@ -583,6 +583,10 @@ const INTL_DELIVERY_BASE_LAMPORTS = 250_000_000;
 const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
 const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
+const CARD_NFT_2_BASE_DELIVERY_CARD_COUNT = 3;
+const CARD_NFT_2_US_BASE_LAMPORTS = 200_000_000;
+const CARD_NFT_2_INTL_BASE_LAMPORTS = 400_000_000;
+const CARD_NFT_2_EXTRA_LAMPORTS = 60_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS = 600_000_000;
 const LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS = 500_000_000;
@@ -605,7 +609,14 @@ const MAX_GENERIC_DELIVERY_LAMPORTS =
 const MAX_HOODIE_DELIVERY_LAMPORTS =
   LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS +
   Math.max(0, MAX_DELIVERY_ITEMS - 1) * LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS;
-const MAX_DELIVERY_LAMPORTS = Math.max(MAX_GENERIC_DELIVERY_LAMPORTS, MAX_HOODIE_DELIVERY_LAMPORTS);
+const MAX_CARD_NFT_2_DELIVERY_LAMPORTS =
+  CARD_NFT_2_INTL_BASE_LAMPORTS +
+  Math.max(0, MAX_DELIVERY_FIGURES - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT) * CARD_NFT_2_EXTRA_LAMPORTS;
+const MAX_DELIVERY_LAMPORTS = Math.max(
+  MAX_GENERIC_DELIVERY_LAMPORTS,
+  MAX_HOODIE_DELIVERY_LAMPORTS,
+  MAX_CARD_NFT_2_DELIVERY_LAMPORTS,
+);
 
 // Optional: Address Lookup Table to shrink delivery tx size (allows more items per tx).
 // Should contain: config PDA, treasury, core collection, MPL core program id, system program id, SPL noop program id.
@@ -2924,6 +2935,10 @@ function calculateUsDeliveryLamports(figureCount: number, itemsPerBox: number, d
     const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
     return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
   }
+  if (dropFamily === 'card_nft_2') {
+    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
+    return CARD_NFT_2_US_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
+  }
   if (dropFamily === 'poncho_drifella') {
     return PONCHO_DRIFELLA_US_FLAT_LAMPORTS;
   }
@@ -2946,6 +2961,10 @@ function calculateDeliveryLamports(
   }
   if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
   const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
+  if (dropFamily === 'card_nft_2') {
+    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
+    return CARD_NFT_2_INTL_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
+  }
   const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
   return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
 }
