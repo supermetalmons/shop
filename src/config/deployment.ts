@@ -723,8 +723,8 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
-    priceSol: 2.49,
-    discountPriceSol: 1.99,
+    priceSol: 3,
+    discountPriceSol: 2.55,
     stripeCheckoutEnabled: true,
     stripeLiveUnitAmountCents: 21900,
     discountMintsPerWallet: 1,

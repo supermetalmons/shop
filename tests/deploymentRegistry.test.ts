@@ -67,8 +67,12 @@ test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => 
   const frontendDrop = FRONTEND_DROPS.little_swag_hoodies;
   const functionsDrop = FUNCTIONS_DROPS.little_swag_hoodies;
 
+  assert.equal(frontendDrop.priceSol, 3);
+  assert.equal(frontendDrop.discountPriceSol, 2.55);
   assert.equal(frontendDrop.stripeCheckoutEnabled, true);
   assert.equal(frontendDrop.stripeLiveUnitAmountCents, 21900);
+  assert.equal(functionsDrop.priceSol, 3);
+  assert.equal(functionsDrop.discountPriceSol, 2.55);
   assert.equal(functionsDrop.stripeCheckoutEnabled, true);
   assert.equal(functionsDrop.stripeLiveUnitAmountCents, 21900);
   assert.equal(functionsDrop.stripeProductTaxCode, 'txcd_30011000');

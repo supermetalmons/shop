@@ -20,6 +20,7 @@
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
+    "set-mint-prices": "node --experimental-strip-types scripts/setMintPrices.ts",
     "export_collection_files": "node --experimental-strip-types scripts/exportCollectionFiles.ts",
     "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts"
   },
