@@ -368,7 +368,7 @@ const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
 };
 
 const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  card_nft_2: 'https://www.tensor.trade/trade/0ae22a03-5109-4179-ad81-6f842f2b06a6',
+  card_nft_2: 'https://www.tensor.trade/trade/card_nft_2',
   little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
@@ -1167,7 +1167,7 @@ const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
 };
 
 const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  card_nft_2: 'https://www.tensor.trade/trade/0ae22a03-5109-4179-ad81-6f842f2b06a6',
+  card_nft_2: 'https://www.tensor.trade/trade/card_nft_2',
   little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
