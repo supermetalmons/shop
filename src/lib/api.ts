@@ -154,6 +154,8 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 }
 
 const heliusApiKey = getHeliusApiKey();
+const MIN_OPENABLE_ITEMS_PER_BOX = 1;
+const MAX_ITEMS_PER_BOX = 5;
 
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
@@ -325,6 +327,10 @@ function readU32(buf: Uint8Array, offset: number): number {
   return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset, true);
 }
 
+function readU64(buf: Uint8Array, offset: number): bigint {
+  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigUint64(offset, true);
+}
+
 // Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
 const ACCOUNT_PENDING_OPEN_BOX = Uint8Array.from([0x45, 0x07, 0x45, 0x1a, 0xf0, 0x0c, 0x43, 0xa1]);
 // base58(ACCOUNT_PENDING_OPEN_BOX)
@@ -336,6 +342,96 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+function normalizeOpenableItemsPerBox(value: unknown): number | null {
+  const count = Number(value);
+  return Number.isInteger(count) && count >= MIN_OPENABLE_ITEMS_PER_BOX && count <= MAX_ITEMS_PER_BOX ? count : null;
+}
+
+function pendingOpenLegacyFixedLen(itemsPerBox: number): number {
+  return 8 + 32 + 32 + 32 * itemsPerBox + 8 + 1;
+}
+
+function pendingOpenRecordCandidateItemCounts(scope: Pick<PendingOpenProgramScope, 'drops'>): number[] {
+  const counts = new Set<number>();
+  scope.drops.forEach((drop) => {
+    const count = normalizeOpenableItemsPerBox(drop.itemsPerBox);
+    if (count != null) counts.add(count);
+  });
+  return Array.from(counts).sort((a, b) => a - b);
+}
+
+function decodeLegacyFixedPendingOpenPayload(
+  buf: Uint8Array,
+  itemsPerBox: number,
+): { dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
+  if (buf.length !== pendingOpenLegacyFixedLen(itemsPerBox)) return null;
+  const dudeAssetIds: string[] = [];
+  let o = 8 + 32 + 32;
+  for (let i = 0; i < itemsPerBox; i += 1) {
+    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
+    o += 32;
+  }
+  const createdSlotBig = readU64(buf, o);
+  o += 8 + 1; // slot + bump
+  if (o !== buf.length) return null;
+  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
+  return {
+    dudeAssetIds,
+    ...(createdSlot != null ? { createdSlot } : {}),
+  };
+}
+
+function decodeVecPendingOpenPayload(buf: Uint8Array): { dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
+  if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) return null;
+  const dudeAssetIds: string[] = [];
+  let o = 8 + 32 + 32;
+  const dudeCount = readU32(buf, o);
+  o += 4;
+  if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) return null;
+  for (let i = 0; i < dudeCount; i += 1) {
+    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
+    o += 32;
+  }
+
+  const createdSlotBig = readU64(buf, o);
+  o += 8;
+  o += 1; // bump
+  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
+  let configPda: string | undefined;
+  if (o < buf.length) {
+    const trailing = buf.length - o;
+    if (trailing !== 32) return null;
+    configPda = new PublicKey(buf.subarray(o, o + 32)).toBase58();
+  }
+
+  return {
+    dudeAssetIds,
+    ...(createdSlot != null ? { createdSlot } : {}),
+    ...(configPda ? { configPda } : {}),
+  };
+}
+
+export function decodePendingOpenRecordData(
+  data: Uint8Array,
+  scope: Pick<PendingOpenProgramScope, 'drops'>,
+): { owner: string; boxAssetId: string; dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
+  const buf = Uint8Array.from(data);
+  if (buf.length < 8 + 32 + 32 + 8 + 1) return null;
+  if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) return null;
+
+  const owner = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
+  const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
+
+  const itemCounts = pendingOpenRecordCandidateItemCounts(scope);
+  for (const count of itemCounts) {
+    const legacy = decodeLegacyFixedPendingOpenPayload(buf, count);
+    if (legacy) return { owner, boxAssetId, ...legacy };
+  }
+
+  const vec = decodeVecPendingOpenPayload(buf);
+  return vec ? { owner, boxAssetId, ...vec } : null;
 }
 
 function heliusRpcUrl(cluster: SolanaCluster) {
@@ -591,43 +687,18 @@ function decodePendingOpenRecordCandidate(
   if (!pendingPda || !dataB64) return null;
 
   const buf = Uint8Array.from(Buffer.from(dataB64, 'base64'));
-  if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) return null;
-  if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) return null;
-
-  const ownerFromChain = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
-  if (ownerFromChain !== owner) return null;
-
-  const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
-  const dudeAssetIds: string[] = [];
-  let o = 8 + 32 + 32;
-  const dudeCount = readU32(buf, o);
-  o += 4;
-  if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) return null;
-  for (let i = 0; i < dudeCount; i += 1) {
-    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
-    o += 32;
-  }
-
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const createdSlotBig = view.getBigUint64(o, true);
-  o += 8;
-  o += 1; // bump
-  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
-  let configPda: string | undefined;
-  if (o < buf.length) {
-    const trailing = buf.length - o;
-    if (trailing !== 32) return null;
-    configPda = new PublicKey(buf.subarray(o, o + 32)).toBase58();
-  }
+  const decoded = decodePendingOpenRecordData(buf, scope);
+  if (!decoded) return null;
+  if (decoded.owner !== owner) return null;
 
   return {
     solanaCluster: scope.solanaCluster,
     pendingPda,
-    boxAssetId,
-    dudeAssetIds,
+    boxAssetId: decoded.boxAssetId,
+    dudeAssetIds: decoded.dudeAssetIds,
     candidateDrops: scope.drops,
-    ...(createdSlot != null ? { createdSlot } : {}),
-    ...(configPda ? { configPda } : {}),
+    ...(decoded.createdSlot != null ? { createdSlot: decoded.createdSlot } : {}),
+    ...(decoded.configPda ? { configPda: decoded.configPda } : {}),
   };
 }
 

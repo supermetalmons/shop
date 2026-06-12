@@ -42,6 +42,7 @@ import {
   dropDudePoolPath,
 } from './dropPaths.js';
 import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
+import { decodePendingOpenBox } from './pendingOpenBox.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   STRIPE_CHECKOUT_STATUS,
@@ -566,8 +567,6 @@ const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQ
 
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
 const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
-// Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
-const ACCOUNT_PENDING_OPEN_BOX = Buffer.from('4507451af00c43a1', 'hex');
 // Anchor discriminator = sha256("account:DeliveryRecord")[0..8]
 const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
@@ -2415,56 +2414,6 @@ function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }, d
     u32LE(dudeIds.length),
     ...dudeIds.map((id) => u16LE(Math.floor(id))),
   ]);
-}
-
-function decodePendingOpenBox(data: Buffer): {
-  owner: PublicKey;
-  boxAsset: PublicKey;
-  dudeAssets: PublicKey[];
-  createdSlot: bigint;
-  bump: number;
-  config?: PublicKey;
-} {
-  if (!Buffer.isBuffer(data)) data = Buffer.from(data || []);
-  const minLen = 8 + 32 + 32 + 4 + 8 + 1;
-  if (data.length < minLen) {
-    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (too short)');
-  }
-  const disc = data.subarray(0, 8);
-  if (!disc.equals(ACCOUNT_PENDING_OPEN_BOX)) {
-    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account discriminator');
-  }
-  let o = 8;
-  const owner = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const boxAsset = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const dudeCount = data.readUInt32LE(o);
-  o += 4;
-  if (data.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) {
-    throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (truncated vector)');
-  }
-  const dudeAssets: PublicKey[] = [];
-  for (let i = 0; i < dudeCount; i += 1) {
-    dudeAssets.push(new PublicKey(data.subarray(o, o + 32)));
-    o += 32;
-  }
-  const createdSlot = data.readBigUInt64LE(o);
-  o += 8;
-  const bump = data.readUInt8(o);
-  o += 1;
-  let config: PublicKey | undefined;
-  if (o < data.length) {
-    const trailing = data.subarray(o);
-    if (trailing.length < 32) {
-      throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (truncated config)');
-    }
-    config = new PublicKey(trailing.subarray(0, 32));
-    if (hasAnyNonZeroByte(trailing.subarray(32))) {
-      throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (unexpected trailing bytes)');
-    }
-  }
-  return { owner, boxAsset, dudeAssets, createdSlot, bump, ...(config ? { config } : {}) };
 }
 
 function decodeDeliveryRecord(data: Buffer): {
@@ -4982,7 +4931,7 @@ export const revealDudes = onCallLogged(
       { pending: pendingPda.toBase58(), boxAssetId },
     );
   }
-  const pending = decodePendingOpenBox(pendingInfo.data);
+  const pending = decodePendingOpenBox(pendingInfo.data, { expectedDudeCount: dropRuntime.itemsPerBox });
   if (!pending.owner.equals(ownerPk) || !pending.boxAsset.equals(boxAssetPk)) {
     throw new HttpsError('permission-denied', 'Pending open belongs to a different wallet', {
       owner: ownerWallet,
