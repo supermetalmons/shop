@@ -43,6 +43,7 @@ import {
 } from './dropPaths.js';
 import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
 import { decodePendingOpenBox } from './pendingOpenBox.js';
+import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   STRIPE_CHECKOUT_STATUS,
@@ -565,8 +566,6 @@ const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK7
 // Bubblegum -> MPL-Core CPI signer (used when minting cNFTs to an MPL-Core collection).
 const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk');
 
-// Anchor discriminator = sha256("global:finalize_open_box")[0..8]
-const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 // Anchor discriminator = sha256("account:DeliveryRecord")[0..8]
 const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
 // Anchor discriminator = sha256("global:deliver")[0..8]
@@ -2373,23 +2372,6 @@ function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBo
     txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
     txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
   };
-}
-
-function encodeFinalizeOpenBoxArgs(dudeIds: number[], dropRuntime: DropRuntime): Buffer {
-  assertOpenableDrop(dropRuntime, 'This drop does not support opening.');
-  if (!Array.isArray(dudeIds) || dudeIds.length !== dropRuntime.itemsPerBox) {
-    throw new HttpsError('invalid-argument', `dudeIds must have length ${dropRuntime.itemsPerBox}`);
-  }
-  const ids = dudeIds.map((n) => Number(n));
-  ids.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > dropRuntime.maxDudeId) {
-      throw new HttpsError('invalid-argument', `Invalid dude id: ${id}`);
-    }
-  });
-  if (new Set(ids).size !== ids.length) {
-    throw new HttpsError('invalid-argument', 'Duplicate dude ids');
-  }
-  return Buffer.concat([IX_FINALIZE_OPEN_BOX, u32LE(ids.length), ...ids.map(u16LE)]);
 }
 
 function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }, dropRuntime: DropRuntime): Buffer {
@@ -5000,7 +4982,11 @@ export const revealDudes = onCallLogged(
       { pubkey: ownerPk, isSigner: false, isWritable: false },
       ...pending.dudeAssets.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
-    data: encodeFinalizeOpenBoxArgs(dudeIds, dropRuntime),
+    data: encodeFinalizeOpenBoxArgs(dudeIds, {
+      itemsPerBox: dropRuntime.itemsPerBox,
+      maxDudeId: dropRuntime.maxDudeId,
+      pendingLayout: pending.layout,
+    }),
   });
 
   const instructions: TransactionInstruction[] = [

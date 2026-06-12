@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PublicKey } from '@solana/web3.js';
 import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
+import { encodeFinalizeOpenBoxArgs } from '../functions/src/finalizeOpenBoxArgs.ts';
 import { ACCOUNT_PENDING_OPEN_BOX, decodePendingOpenBox } from '../functions/src/pendingOpenBox.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import { decodePendingOpenRecordData } from '../src/lib/api.ts';
@@ -82,6 +83,7 @@ test('decodePendingOpenBox supports legacy fixed-array pending records', () => {
   ]);
   assert.equal(decoded.createdSlot, 426043418n);
   assert.equal(decoded.bump, 251);
+  assert.equal(decoded.layout, 'legacyFixed');
   assert.equal(decoded.config, undefined);
 
   const frontendDrop = liveOpenableFrontendDrop('little_swag_boxes');
@@ -124,7 +126,34 @@ test('decodePendingOpenBox supports vector records with config pubkey', () => {
   );
   assert.equal(decoded.createdSlot, 123n);
   assert.equal(decoded.bump, 7);
+  assert.equal(decoded.layout, 'vec');
   assert.equal(decoded.config?.toBase58(), config.toBase58());
+});
+
+test('finalize args match the pending account layout for legacy and current programs', () => {
+  const dudeIds = [11, 22, 333];
+  const legacy = encodeFinalizeOpenBoxArgs(dudeIds, {
+    itemsPerBox: 3,
+    maxDudeId: 999,
+    pendingLayout: 'legacyFixed',
+  });
+  assert.equal(legacy.length, 8 + 2 * dudeIds.length);
+  assert.deepEqual(
+    Array.from(legacy.subarray(8)),
+    [0x0b, 0x00, 0x16, 0x00, 0x4d, 0x01],
+  );
+
+  const vec = encodeFinalizeOpenBoxArgs(dudeIds, {
+    itemsPerBox: 3,
+    maxDudeId: 999,
+    pendingLayout: 'vec',
+  });
+  assert.equal(vec.length, 8 + 4 + 2 * dudeIds.length);
+  assert.equal(vec.readUInt32LE(8), dudeIds.length);
+  assert.deepEqual(
+    Array.from(vec.subarray(12)),
+    [0x0b, 0x00, 0x16, 0x00, 0x4d, 0x01],
+  );
 });
 
 test('pending-open decoders support every live mainnet openable drop config', () => {

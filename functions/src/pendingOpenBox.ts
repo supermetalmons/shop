@@ -3,12 +3,15 @@ import { HttpsError } from 'firebase-functions/v2/https';
 
 export const ACCOUNT_PENDING_OPEN_BOX = Buffer.from('4507451af00c43a1', 'hex');
 
+export type PendingOpenBoxLayout = 'legacyFixed' | 'vec';
+
 export type DecodedPendingOpenBox = {
   owner: PublicKey;
   boxAsset: PublicKey;
   dudeAssets: PublicKey[];
   createdSlot: bigint;
   bump: number;
+  layout: PendingOpenBoxLayout;
   config?: PublicKey;
 };
 
@@ -67,7 +70,7 @@ function decodeLegacyFixedPendingOpenBox(data: Buffer, expectedDudeCount: number
   const createdSlot = data.readBigUInt64LE(o);
   o += 8;
   const bump = data.readUInt8(o);
-  return { owner, boxAsset, dudeAssets, createdSlot, bump };
+  return { owner, boxAsset, dudeAssets, createdSlot, bump, layout: 'legacyFixed' };
 }
 
 function decodeVecPendingOpenBox(data: Buffer): DecodedPendingOpenBox {
@@ -106,7 +109,7 @@ function decodeVecPendingOpenBox(data: Buffer): DecodedPendingOpenBox {
       throw new HttpsError('failed-precondition', 'Invalid PendingOpenBox account data (unexpected trailing bytes)');
     }
   }
-  return { owner, boxAsset, dudeAssets, createdSlot, bump, ...(config ? { config } : {}) };
+  return { owner, boxAsset, dudeAssets, createdSlot, bump, layout: 'vec', ...(config ? { config } : {}) };
 }
 
 export function decodePendingOpenBox(
