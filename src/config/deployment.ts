@@ -273,6 +273,7 @@ const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
 };
 
 const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
+  card_nft_2: true,
   poncho_drifella: true,
 };
 
