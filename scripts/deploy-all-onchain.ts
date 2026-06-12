@@ -1929,7 +1929,6 @@ function deployedProgramMatchesBinary(args: {
   solanaUrl: string;
   cwd: string;
   env?: Record<string, string | undefined>;
-  failOnDumpError?: boolean;
 }): boolean {
   const env = args.env ? { ...process.env, ...args.env } : process.env;
   const dumpPath = path.join(tmpdir(), `mons-shop-program-dump-${process.pid}-${Date.now()}.so`);
@@ -1943,9 +1942,6 @@ function deployedProgramMatchesBinary(args: {
     if (res.status !== 0 || !existsSync(dumpPath)) {
       const stderr = String(res.stderr || '').trim();
       const message = `Could not dump deployed program ${args.programId} for hash comparison.${stderr ? ` ${stderr}` : ''}`;
-      if (args.failOnDumpError) {
-        throw new Error(message);
-      }
       console.warn(`⚠️  ${message}`);
       return false;
     }
@@ -1990,31 +1986,6 @@ function writeProgramIdToSource(onchainDir: string, programId: string) {
   console.log('Synced program id in source:', programId);
 }
 
-function setTemporaryProgramIdInSource(onchainDir: string, programId: string): () => void {
-  const libPath = path.join(onchainDir, 'programs', 'box_minter', 'src', 'lib.rs');
-  const original = readFileSync(libPath, 'utf8');
-  const existing = original.match(DECLARE_ID_RE);
-  if (!existing?.[1]) {
-    throw new Error(`Could not find declare_id!(...) in ${libPath}`);
-  }
-  if (existing[1] === programId) return () => {};
-  const next = original.replace(DECLARE_ID_RE, `declare_id!("${programId}")`);
-  if (!next.includes(`declare_id!("${programId}")`)) {
-    throw new Error(`Could not update declare_id!(...) in ${libPath}`);
-  }
-  writeFileSync(libPath, next, 'utf8');
-  console.log(`Temporarily set declare_id! to ${programId} for this build.`);
-  let restored = false;
-  return () => {
-    if (restored) return;
-    restored = true;
-    if (readFileSync(libPath, 'utf8') !== original) {
-      writeFileSync(libPath, original, 'utf8');
-      console.log('Restored original on-chain source declare_id!.');
-    }
-  };
-}
-
 function anchorProgramSectionForCluster(cluster: SolanaCluster): string {
   return cluster === 'mainnet-beta' ? 'mainnet' : cluster;
 }
@@ -2037,102 +2008,6 @@ function writeProgramIdToAnchorToml(onchainDir: string, cluster: SolanaCluster, 
   const next = content.replace(sectionRe, `${match[1]}${nextSectionBody}`);
   writeTextFileIfChanged(anchorTomlPath, next);
   console.log(`Synced [programs.${sectionName}] box_minter:`, programId);
-}
-
-function readProgramIdFromKeypair(programKeypairPath: string): string {
-  if (!existsSync(programKeypairPath)) {
-    throw new Error(`Missing program keypair: ${programKeypairPath}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(programKeypairPath, 'utf8'));
-  } catch {
-    throw new Error(`Invalid program keypair JSON: ${programKeypairPath}`);
-  }
-  if (!Array.isArray(parsed) || parsed.some((n) => typeof n !== 'number')) {
-    throw new Error(`Invalid program keypair format: ${programKeypairPath}`);
-  }
-  return keypairFromBytes(Uint8Array.from(parsed as number[])).publicKey.toBase58();
-}
-
-function expandPossibleHomePath(input: string): string {
-  const trimmed = String(input || '').trim();
-  if (!trimmed.startsWith('~/')) return trimmed;
-  const home = process.env.HOME;
-  return home ? path.join(home, trimmed.slice(2)) : trimmed;
-}
-
-function parseProgramKeypairInput(input: string): Keypair {
-  const raw = String(input || '').trim();
-  if (!raw) throw new Error('Empty program keypair input.');
-
-  const expandedPath = expandPossibleHomePath(raw);
-  if (existsSync(expandedPath)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(expandedPath, 'utf8'));
-    } catch {
-      throw new Error(`Invalid program keypair JSON file: ${expandedPath}`);
-    }
-    if (!Array.isArray(parsed) || parsed.some((n) => typeof n !== 'number')) {
-      throw new Error(`Invalid program keypair file format: ${expandedPath}`);
-    }
-    return keypairFromBytes(Uint8Array.from(parsed as number[]));
-  }
-
-  return parsePrivateKeyInput(raw);
-}
-
-async function promptForMatchingProgramKeypair(args: {
-  expectedProgramId: string;
-  reason: string;
-}): Promise<string> {
-  console.warn(args.reason);
-  console.log('Enter the reusable program keypair for the expected program id (input is hidden).');
-  console.log('Accepted formats: path to keypair JSON, base58 secret key, or JSON array.');
-  const programKeypair = parseProgramKeypairInput(await promptMaskedInput('program keypair: '));
-  const actualProgramId = programKeypair.publicKey.toBase58();
-  if (actualProgramId !== args.expectedProgramId) {
-    throw new Error(
-      `Program keypair does not match the reused program id.\n` +
-        `Expected: ${args.expectedProgramId}\n` +
-        `Got     : ${actualProgramId}`,
-    );
-  }
-  const tempProgramKeypairPath = writeTempKeypairFile(programKeypair, 'mons-shop-program');
-  registerTempKeypairCleanup(tempProgramKeypairPath);
-  console.log('Using entered program keypair for:', actualProgramId);
-  return tempProgramKeypairPath;
-}
-
-async function resolveProgramKeypairForReuse(args: {
-  programKeypairPath: string;
-  expectedProgramId: string;
-}): Promise<string> {
-  if (existsSync(args.programKeypairPath)) {
-    try {
-      const localProgramKeypairId = readProgramIdFromKeypair(args.programKeypairPath);
-      if (localProgramKeypairId === args.expectedProgramId) {
-        console.log('Local program keypair matches reused program:', args.programKeypairPath);
-        return args.programKeypairPath;
-      }
-      return promptForMatchingProgramKeypair({
-        expectedProgramId: args.expectedProgramId,
-        reason:
-          `⚠️  Local program keypair ${args.programKeypairPath} is ${localProgramKeypairId}, not reused program ${args.expectedProgramId}.`,
-      });
-    } catch (err) {
-      return await promptForMatchingProgramKeypair({
-        expectedProgramId: args.expectedProgramId,
-        reason: `⚠️  Could not read local program keypair ${args.programKeypairPath}: ${errorMessage(err)}`,
-      });
-    }
-  }
-
-  return await promptForMatchingProgramKeypair({
-    expectedProgramId: args.expectedProgramId,
-    reason: `⚠️  Missing local program keypair: ${args.programKeypairPath}`,
-  });
 }
 
 function uniqueStrings(values: string[]) {
@@ -2626,14 +2501,6 @@ async function main() {
     dropMetadataBase,
   });
 
-  let programKeypairForDeploy = programKeypair;
-  if (reuseProgramId) {
-    programKeypairForDeploy = await resolveProgramKeypairForReuse({
-      programKeypairPath: programKeypair,
-      expectedProgramId: preflightProgramId,
-    });
-  }
-
   console.log('Enter the deployer wallet private key (input is hidden).');
   console.log('Accepted formats: base58 secret key, or JSON array (like ~/.config/solana/id.json contents).');
   const payer = parsePrivateKeyInput(await promptMaskedInput('deployer private key: '));
@@ -2660,25 +2527,22 @@ async function main() {
   }
 
   // 1) Build + deploy the program only for fresh shared-program lineages.
-  // Reused drops still build against the target program id for a hash comparison before any drop setup txs.
+  // Reused drops intentionally skip program build/deploy; program upgrades must use upgrade-onchain.
   let programId = preflightProgramId;
-  const hasSolanaCargo = canRunSolanaCargo();
-  if (hasSolanaCargo) {
-    console.log('solana cargo toolchain:', 'cargo +solana');
-  } else {
-    console.warn('⚠️  Missing rustup `solana` toolchain (`cargo +solana`). Anchor may fail if your Cargo.lock is too new.');
-  }
-
-  let restoreProgramSource: (() => void) | undefined;
   if (reuseProgramId) {
-    console.log('\nReusing deployed program; building local binary for hash comparison.');
-    restoreProgramSource = setTemporaryProgramIdInSource(onchainDir, programId);
+    console.log('\nReusing deployed program; skipping program build/deploy.');
+    console.log('Program deployed:', programId);
   } else {
+    const hasSolanaCargo = canRunSolanaCargo();
+    if (hasSolanaCargo) {
+      console.log('solana cargo toolchain:', 'cargo +solana');
+    } else {
+      console.warn('⚠️  Missing rustup `solana` toolchain (`cargo +solana`). Anchor may fail if your Cargo.lock is too new.');
+    }
+
     writeProgramIdToSource(onchainDir, programId);
     writeProgramIdToAnchorToml(onchainDir, cluster, programId);
-  }
 
-  try {
     removeStaleAnchorGeneratedArtifacts(onchainDir);
     const syncedProgramId = readProgramId(onchainDir);
     if (syncedProgramId !== programId) {
@@ -2717,30 +2581,24 @@ async function main() {
     if (!existsSync(programBinary)) {
       throw new Error(`Missing program binary after build: ${programBinary}`);
     }
-  } finally {
-    if (restoreProgramSource) {
-      restoreProgramSource();
-      restoreProgramSource = undefined;
+
+    const canSkipRedeploy = deployedProgramMatchesBinary({
+      programId,
+      programBinary,
+      solanaUrl,
+      cwd: onchainDir,
+      env: toolEnv,
+    });
+
+    if (canSkipRedeploy) {
+      console.log('\nProgram already deployed with matching binary; skipping upgrade.');
+      console.log('Program deployed:', programId);
+    } else {
+      // Deploy program via Solana CLI (Agave). This avoids `anchor deploy` rebuilding with the wrong arch/tooling.
+      const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypair, '--url', solanaUrl, '--keypair', tempKeypairPath];
+      run('solana', deployArgs, { cwd: onchainDir, env: toolEnv });
+      console.log('\nProgram deployed:', programId);
     }
-  }
-
-  const canSkipRedeploy = deployedProgramMatchesBinary({
-    programId,
-    programBinary,
-    solanaUrl,
-    cwd: onchainDir,
-    env: toolEnv,
-    failOnDumpError: reuseProgramId,
-  });
-
-  if (canSkipRedeploy) {
-    console.log('\nProgram already deployed with matching binary; skipping upgrade.');
-    console.log('Program deployed:', programId);
-  } else {
-    // Deploy program via Solana CLI (Agave). This avoids `anchor deploy` rebuilding with the wrong arch/tooling.
-    const deployArgs = ['program', 'deploy', programBinary, '--program-id', programKeypairForDeploy, '--url', solanaUrl, '--keypair', tempKeypairPath];
-    run('solana', deployArgs, { cwd: onchainDir, env: toolEnv });
-    console.log('\nProgram deployed:', programId);
   }
 
   // 2) Deploy on-chain prerequisites + initialize config PDA.

@@ -354,6 +354,38 @@ function assertSharedProgramDropsUseExplicitConfigPdas<
 
 // BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY
 export const FUNCTIONS_DROPS: FunctionsDropsMap = {
+  "card_nft_2": createFunctionsDrop({
+    solanaCluster: "mainnet-beta",
+    dropId: "card_nft_2",
+    dropFamily: "card_nft_2",
+    collectionName: "Card NFT 2",
+
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
+    metadataBase: "https://assets.mons.link/drops/cardnft2/json",
+    metadataPathFormat: "compact",
+
+
+    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
+    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
+    priceSol: 0.44,
+    discountPriceSol: 0.36,
+    stripeLiveUnitAmountCents: 4400,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "a8cdf1ec11dbfacb15e9859d0d1484d95f388d883c012314db51e80e5f8021d3",
+    maxSupply: 3711,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: "pack",
+    figureNamePrefix: "card",
+    symbol: "cardnft2",
+
+    // On-chain ids
+    boxMinterProgramId: "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+    boxMinterConfigPda: "5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm",
+    collectionMint: "EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu",
+    receiptsMerkleTree: "EsGrHZjZzHmxzCSrqjyzuBBC4oAq3yS87ZNF1JdvDBh",
+    deliveryLookupTable: "27S1HddzYtfhYpwq4QHxnnXAkRt6JFx9Kad9KMnRUpcd",
+  }),
   "card_nft_2_devnet": createFunctionsDrop({
     solanaCluster: "devnet",
     dropId: "card_nft_2_devnet",
