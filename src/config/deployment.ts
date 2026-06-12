@@ -516,6 +516,34 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     boxMinterConfigPda: "H8Mi2Yq2L8caoVKxvq3RJ4e4nASc7kXDW8beBBAsUfJE",
     collectionMint: "9ATDCHKBges6BWiLHLhttmCxvCQQ83f9eiXjSX6iagRe",
   }),
+  "card_nft_2_devnet_final": createFrontendDrop({
+    solanaCluster: "devnet",
+    dropId: "card_nft_2_devnet_final",
+    dropFamily: "card_nft_2",
+    collectionName: "Card NFT 2",
+
+    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
+    metadataBase: "https://assets.mons.link/drops/cardnft2/json",
+    metadataPathFormat: "compact",
+
+    // Drop config (kept in sync with on-chain config; useful for UI defaults)
+    treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
+    priceSol: 0.44,
+    discountPriceSol: 0.36,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: "a8cdf1ec11dbfacb15e9859d0d1484d95f388d883c012314db51e80e5f8021d3",
+    maxSupply: 3711,
+    itemsPerBox: 3,
+    maxPerTx: 15,
+    namePrefix: "pack",
+    figureNamePrefix: "card",
+    symbol: "cardnft2",
+
+    // On-chain ids
+    boxMinterProgramId: "7h4JRc5vELpaahm11AeshFEQHe1jePauRnMFWaPSRNpV",
+    boxMinterConfigPda: "CPDsJdtvjoYyepqK5sEtYCxmFK6Fjaga9gx7JCBqBj6y",
+    collectionMint: "3iX4NjZ9b8TCi2s8xkss4sr1YwYkNhtjH4sib5kxAuEq",
+  }),
   "little_swag_boxes": createFrontendDrop({
     solanaCluster: "mainnet-beta",
     dropId: "little_swag_boxes",
@@ -556,7 +584,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
         999: 86,
       },
     },
-
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
@@ -615,7 +642,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
       },
     },
 
-
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.1,
@@ -665,7 +691,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
         },
       ],
     },
-
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
@@ -720,7 +745,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
       ],
     },
 
-
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
     priceSol: 0.069,
@@ -751,7 +775,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     metadataPathFormat: "legacy",
     forceSoldOut: true,
 
-
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
     priceSol: 0.69,
@@ -778,7 +801,6 @@ export const FRONTEND_DROPS: FrontendDropsMap = {
     // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
     metadataBase: "https://assets.mons.link/drops/poncho",
     metadataPathFormat: "legacy",
-
 
     // Drop config (kept in sync with on-chain config; useful for UI defaults)
     treasury: "AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq",
