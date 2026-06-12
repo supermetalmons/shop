@@ -79,8 +79,8 @@ test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => 
 });
 
 test('devnet card_nft_2 registry uses card media and Stripe tangible-goods defaults', () => {
-  const frontendDrop = FRONTEND_DROPS.card_nft_2_devnet;
-  const functionsDrop = FUNCTIONS_DROPS.card_nft_2_devnet;
+  const frontendDrop = FRONTEND_DROPS.card_nft_2_devnet_final;
+  const functionsDrop = FUNCTIONS_DROPS.card_nft_2_devnet_final;
 
   assert.deepEqual(frontendDrop.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(frontendDrop.stripeCheckoutEnabled, true);
