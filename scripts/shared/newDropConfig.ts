@@ -11,6 +11,7 @@ export type NewDropDeployConfig = {
   solanaRpcUrl?: string;
   coreCollectionPubkey?: string;
   reuseProgramId: boolean;
+  reuseProgramIdFromDropId?: string;
 };
 
 export type NewDropOnchainConfig = {

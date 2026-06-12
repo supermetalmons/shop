@@ -10,6 +10,7 @@ export const NEW_DROP = defineNewDropConfig({
     solanaRpcUrl: undefined,
     coreCollectionPubkey: undefined,
     reuseProgramId: true,
+    reuseProgramIdFromDropId: 'little_swag_hoodies',
   },
   onchain: {
     dropId: 'card_nft_2',
@@ -31,6 +32,8 @@ export const NEW_DROP = defineNewDropConfig({
     treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
     priceSol: 0.44,
     discountPriceSol: 0.36,
+    stripeCheckoutEnabled: true,
+    stripeLiveUnitAmountCents: 4400,
     discountMintsPerWallet: 1,
     maxSupply: 3711,
     itemsPerBox: 3,

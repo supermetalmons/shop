@@ -5,7 +5,9 @@ import {
   assertMplCoreCollectionHasUpdateDelegates,
   decodeMplCoreCollectionUpdateDelegates,
   formatFreshProgramKeypairNotice,
+  prepareStripeCheckoutConfig,
 } from '../scripts/deploy-all-onchain.ts';
+import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
 
 function u8(value: number): Buffer {
   return Buffer.from([value & 0xff]);
@@ -147,4 +149,21 @@ test('formatFreshProgramKeypairNotice warns to back up non-git fresh shared prog
   assert.match(notice, /Back up this keypair file immediately/);
   assert.match(notice, /not tracked by git/);
   assert.match(notice, /Previous keypair backup: .*onchain\/target\/deploy\/box_minter-keypair\.bak\.json/);
+});
+
+test('card_nft_2 new drop config enables live Stripe Checkout at $44', () => {
+  assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeCheckoutEnabled, true);
+  assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeLiveUnitAmountCents, 4400);
+});
+
+test('prepareStripeCheckoutConfig fails preflight for Stripe-enabled mainnet drops without live pricing', () => {
+  assert.throws(
+    () =>
+      prepareStripeCheckoutConfig({
+        solanaCluster: 'mainnet-beta',
+        dropId: 'mainnet_card_drop',
+        dropFamily: 'card_nft_2',
+      }),
+    /stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop mainnet_card_drop/,
+  );
 });
