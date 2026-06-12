@@ -41,6 +41,7 @@ import {
   dropDudeAssignmentPath,
   dropDudePoolPath,
 } from './dropPaths.js';
+import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   STRIPE_CHECKOUT_STATUS,
@@ -2576,42 +2577,40 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
           });
         }
 
-        const chosen: number[] = [];
-        const chosenSet = new Set<number>();
-        let candidatesChecked = 0;
-        let staleAssigned = 0;
-
         // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
         // across boxes *within the same drop* by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
-        while (chosen.length < itemsPerBox) {
-          if (!pool.length) {
-            throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
+        let chosen: number[];
+        let candidatesChecked = 0;
+        let staleAssigned = 0;
+        try {
+          const picked = await pickDudeIdsForAssignment({
+            dropFamily: dropRuntime.config.dropFamily,
+            itemsPerBox,
+            maxDudeId,
+            pool,
+            isAssigned: async (candidate) => {
+              const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
+              const dudeSnap = await tx.get(dudeRef);
+              return dudeSnap.exists;
+            },
+          });
+          chosen = picked.chosen;
+          candidatesChecked = picked.candidatesChecked;
+          staleAssigned = picked.staleAssigned;
+        } catch (err) {
+          if (err instanceof DudeAssignmentPoolExhaustedError) {
+            throw new HttpsError('resource-exhausted', err.message, {
               boxAssetId,
-              chosen,
-              candidatesChecked,
-              staleAssigned,
+              dropId,
+              bucket: err.bucket,
+              chosen: err.chosen,
+              candidatesChecked: err.candidatesChecked,
+              staleAssigned: err.staleAssigned,
+              poolLen: err.poolLen,
+              required: itemsPerBox,
             });
           }
-
-          const pick = randomInt(0, pool.length);
-          const candidate = pool[pick];
-          pool.splice(pick, 1);
-          candidatesChecked += 1;
-
-          if (!Number.isFinite(candidate) || candidate < 1 || candidate > maxDudeId) continue;
-          if (chosenSet.has(candidate)) continue;
-
-          const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
-          const dudeSnap = await tx.get(dudeRef);
-          if (dudeSnap.exists) {
-            // Pool is stale/corrupt (it includes an already-assigned dude). Keep it removed from `pool` so the
-            // pool doc gets self-healed on commit.
-            staleAssigned += 1;
-            continue;
-          }
-
-          chosen.push(candidate);
-          chosenSet.add(candidate);
+          throw err;
         }
 
         // Reserve dudes (uniqueness across boxes, even if the pool doc is corrupted).
