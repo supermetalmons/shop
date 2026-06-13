@@ -3048,17 +3048,8 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   outline: none;
 }
 
-.wip-overlay .reveal-overlay__box:focus {
-  outline: 2px solid rgba(255, 255, 255, 0.62);
-  outline-offset: 4px;
-}
-
+.wip-overlay .reveal-overlay__box:focus,
 .wip-overlay .reveal-overlay__box:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.62);
-  outline-offset: 4px;
-}
-
-.wip-overlay .reveal-overlay__box:focus:not(:focus-visible) {
   outline: none;
 }
 
