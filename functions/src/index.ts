@@ -449,15 +449,15 @@ function normalizeShipperEmail(rawEmail: unknown): string | null {
 const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
   {
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'],
   },
   {
     wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    dropIds: ['poncho_drifella'],
+    dropIds: ['poncho_drifella', 'card_nft_2'],
   },
   {
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'little_swag_hoodies_devnet'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'],
   },
 ];
 
