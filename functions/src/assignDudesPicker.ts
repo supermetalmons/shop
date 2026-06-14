@@ -1,7 +1,11 @@
 import { randomInt as cryptoRandomInt } from 'crypto';
-import { CARD_NFT_2_COMMON_CARD_ID_SET, CARD_NFT_2_SUPER_RARE_CARD_ID_SET } from './cardNft2RevealIds.js';
+import {
+  CARD_NFT_2_COMMON_CARD_ID_SET,
+  CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET,
+  CARD_NFT_2_SUPER_RARE_CARD_ID_SET,
+} from './cardNft2RevealIds.js';
 
-export type DudeAssignmentBucket = 'any' | 'common' | 'neither' | 'super_rare';
+export type DudeAssignmentBucket = 'any' | 'common' | 'neither' | 'pixel_mosaic' | 'super_rare';
 
 export type DudeAssignmentPickResult = {
   chosen: number[];
@@ -37,7 +41,7 @@ export class DudeAssignmentPoolExhaustedError extends Error {
         ? 'No dudes remaining to assign'
         : args.bucket === 'neither'
           ? 'No neither dudes remaining to assign'
-        : `No ${args.bucket === 'super_rare' ? 'super rare' : args.bucket} dudes remaining to assign`,
+        : `No ${bucketDisplayName(args.bucket)} dudes remaining to assign`,
     );
     this.name = 'DudeAssignmentPoolExhaustedError';
     this.bucket = args.bucket;
@@ -59,16 +63,25 @@ function boundedRandomIndex(randomInt: (maxExclusive: number) => number, maxExcl
   return index;
 }
 
+function bucketDisplayName(bucket: DudeAssignmentBucket): string {
+  if (bucket === 'super_rare') return 'super rare';
+  if (bucket === 'pixel_mosaic') return 'pixel mosaic';
+  return bucket;
+}
+
 function indexesForBucket(pool: readonly number[], bucket: DudeAssignmentBucket, maxDudeId: number): number[] {
   const indexes: number[] = [];
   for (let i = 0; i < pool.length; i += 1) {
     const dudeId = pool[i];
     if (!Number.isFinite(dudeId) || dudeId < 1 || dudeId > maxDudeId) continue;
     if (bucket === 'super_rare' && !CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(dudeId)) continue;
+    if (bucket === 'pixel_mosaic' && !CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.has(dudeId)) continue;
     if (bucket === 'common' && !CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId)) continue;
     if (
       bucket === 'neither' &&
-      (CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(dudeId) || CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId))
+      (CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(dudeId) ||
+        CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.has(dudeId) ||
+        CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId))
     ) {
       continue;
     }
@@ -122,22 +135,14 @@ function shuffleInPlace(values: number[], randomInt: (maxExclusive: number) => n
   }
 }
 
-function countBucketCandidates(pool: readonly number[], bucket: 'common' | 'super_rare', maxDudeId: number): number {
-  return indexesForBucket(pool, bucket, maxDudeId).length;
-}
+type CardNft2AssignableBucket = Exclude<DudeAssignmentBucket, 'any'>;
 
-function chooseCardNft2FlexibleFallbackBucket(args: {
-  chosenCount: number;
-  itemsPerBox: number;
-  maxDudeId: number;
-  pool: readonly number[];
-}): 'common' | 'super_rare' | null {
-  const slotsLeftInCurrentPack = Math.max(1, args.itemsPerBox - args.chosenCount);
-  const futurePacks = Math.max(0, Math.floor((args.pool.length - slotsLeftInCurrentPack) / args.itemsPerBox));
-  if (countBucketCandidates(args.pool, 'common', args.maxDudeId) > futurePacks) return 'common';
-  if (countBucketCandidates(args.pool, 'super_rare', args.maxDudeId) > futurePacks) return 'super_rare';
-  return null;
-}
+const CARD_NFT_2_EXTRA_BUCKET_PRIORITY: readonly CardNft2AssignableBucket[] = [
+  'neither',
+  'common',
+  'super_rare',
+  'pixel_mosaic',
+];
 
 function throwCardNft2FlexibleExtraExhausted(args: {
   chosen: readonly number[];
@@ -153,7 +158,8 @@ function throwCardNft2FlexibleExtraExhausted(args: {
   });
 }
 
-async function takeCardNft2SuperRareIfAvailable(args: {
+async function takeCardNft2BucketIfAvailable(args: {
+  bucket: CardNft2AssignableBucket;
   chosen: number[];
   maxDudeId: number;
   pool: number[];
@@ -163,7 +169,7 @@ async function takeCardNft2SuperRareIfAvailable(args: {
 }): Promise<number | null> {
   try {
     return await takeRandomAvailableDude({
-      bucket: 'super_rare',
+      bucket: args.bucket,
       chosen: args.chosen,
       maxDudeId: args.maxDudeId,
       pool: args.pool,
@@ -172,23 +178,80 @@ async function takeCardNft2SuperRareIfAvailable(args: {
       stats: args.stats,
     });
   } catch (err) {
-    if (err instanceof DudeAssignmentPoolExhaustedError && err.bucket === 'super_rare') return null;
+    if (err instanceof DudeAssignmentPoolExhaustedError && err.bucket === args.bucket) return null;
     throw err;
   }
 }
 
-async function takeCardNft2FlexibleExtraDude(args: {
+async function takeCardNft2SuperRareSlotDudeIfAvailable(args: {
   chosen: number[];
-  itemsPerBox: number;
+  maxDudeId: number;
+  pool: number[];
+  randomInt: (maxExclusive: number) => number;
+  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
+  stats: { candidatesChecked: number; staleAssigned: number };
+}): Promise<number | null> {
+  const superRare = await takeCardNft2BucketIfAvailable({
+    bucket: 'super_rare',
+    chosen: args.chosen,
+    maxDudeId: args.maxDudeId,
+    pool: args.pool,
+    randomInt: args.randomInt,
+    isAssigned: args.isAssigned,
+    stats: args.stats,
+  });
+  if (superRare !== null) return superRare;
+  return takeCardNft2BucketIfAvailable({
+    bucket: 'pixel_mosaic',
+    chosen: args.chosen,
+    maxDudeId: args.maxDudeId,
+    pool: args.pool,
+    randomInt: args.randomInt,
+    isAssigned: args.isAssigned,
+    stats: args.stats,
+  });
+}
+
+async function takeCardNft2CommonSlotDude(args: {
+  chosen: number[];
   maxDudeId: number;
   pool: number[];
   randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
   stats: { candidatesChecked: number; staleAssigned: number };
 }): Promise<number> {
-  try {
-    return await takeRandomAvailableDude({
-      bucket: 'neither',
+  const common = await takeCardNft2BucketIfAvailable({
+    bucket: 'common',
+    chosen: args.chosen,
+    maxDudeId: args.maxDudeId,
+    pool: args.pool,
+    randomInt: args.randomInt,
+    isAssigned: args.isAssigned,
+    stats: args.stats,
+  });
+  if (common !== null) return common;
+  return takeRandomAvailableDude({
+    bucket: 'any',
+    chosen: args.chosen,
+    maxDudeId: args.maxDudeId,
+    pool: args.pool,
+    randomInt: args.randomInt,
+    isAssigned: args.isAssigned,
+    stats: args.stats,
+  });
+}
+
+async function takeCardNft2FlexibleExtraDude(args: {
+  chosen: number[];
+  maxDudeId: number;
+  pool: number[];
+  randomInt: (maxExclusive: number) => number;
+  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
+  stats: { candidatesChecked: number; staleAssigned: number };
+}): Promise<number> {
+  for (const bucket of CARD_NFT_2_EXTRA_BUCKET_PRIORITY) {
+    const dude = await takeCardNft2BucketIfAvailable({
+      bucket,
       chosen: args.chosen,
       maxDudeId: args.maxDudeId,
       pool: args.pool,
@@ -196,39 +259,14 @@ async function takeCardNft2FlexibleExtraDude(args: {
       isAssigned: args.isAssigned,
       stats: args.stats,
     });
-  } catch (err) {
-    if (!(err instanceof DudeAssignmentPoolExhaustedError) || err.bucket !== 'neither') throw err;
+    if (dude !== null) return dude;
   }
 
-  while (true) {
-    const bucket = chooseCardNft2FlexibleFallbackBucket({
-      chosenCount: args.chosen.length,
-      itemsPerBox: args.itemsPerBox,
-      maxDudeId: args.maxDudeId,
-      pool: args.pool,
-    });
-    if (!bucket) {
-      throwCardNft2FlexibleExtraExhausted({
-        chosen: args.chosen,
-        pool: args.pool,
-        stats: args.stats,
-      });
-    }
-
-    try {
-      return await takeRandomAvailableDude({
-        bucket,
-        chosen: args.chosen,
-        maxDudeId: args.maxDudeId,
-        pool: args.pool,
-        randomInt: args.randomInt,
-        isAssigned: args.isAssigned,
-        stats: args.stats,
-      });
-    } catch (err) {
-      if (!(err instanceof DudeAssignmentPoolExhaustedError) || err.bucket !== bucket) throw err;
-    }
-  }
+  throwCardNft2FlexibleExtraExhausted({
+    chosen: args.chosen,
+    pool: args.pool,
+    stats: args.stats,
+  });
 }
 
 export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): Promise<DudeAssignmentPickResult> {
@@ -248,7 +286,7 @@ export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): 
       });
     }
 
-    const superRare = await takeCardNft2SuperRareIfAvailable({
+    const superRareSlotDude = await takeCardNft2SuperRareSlotDudeIfAvailable({
       chosen,
       maxDudeId: args.maxDudeId,
       pool: args.pool,
@@ -256,11 +294,10 @@ export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): 
       isAssigned: args.isAssigned,
       stats,
     });
-    if (superRare !== null) chosen.push(superRare);
+    if (superRareSlotDude !== null) chosen.push(superRareSlotDude);
 
     chosen.push(
-      await takeRandomAvailableDude({
-        bucket: 'common',
+      await takeCardNft2CommonSlotDude({
         chosen,
         maxDudeId: args.maxDudeId,
         pool: args.pool,
@@ -276,7 +313,6 @@ export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): 
       chosen.push(
         await takeCardNft2FlexibleExtraDude({
           chosen,
-          itemsPerBox: args.itemsPerBox,
           maxDudeId: args.maxDudeId,
           pool: args.pool,
           randomInt,
