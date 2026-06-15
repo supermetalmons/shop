@@ -106,7 +106,7 @@ const STRIPE_USD_PRICE_FORMATTER = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-const PACK_STATUS_NUMBER_FORMATTER = new Intl.NumberFormat('en-US');
+const PACK_STATUS_NUMBER_FORMATTER = new Intl.NumberFormat('en-US', { useGrouping: false });
 
 const ACTION_TEXT_FIT_STYLE_PROPS = [
   '--mint-panel-action-fit-label-font-size',
@@ -434,13 +434,13 @@ function formatPackStatusPercentage(percentage: number): string {
 
 function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreakdown }) {
   return (
-    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Pack status" aria-busy={!breakdown}>
+    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Card status" aria-busy={!breakdown}>
       {breakdown ? (
         <table className="mint-panel__pack-status-table">
           <thead>
             <tr>
-              <th scope="col">Status</th>
-              <th scope="col">Amount</th>
+              <th scope="col" aria-label="Status" />
+              <th scope="col">Cards</th>
               <th scope="col">% of supply</th>
             </tr>
           </thead>
@@ -1110,7 +1110,7 @@ export function MintPanel({
                   <button
                     type="button"
                     className="mint-panel__pack-status-info"
-                    aria-label="Pack status"
+                    aria-label="Card status"
                     aria-expanded={packStatusInfoOpen}
                     aria-haspopup="dialog"
                     onClick={() => setPackStatusInfoOpen((prev) => !prev)}

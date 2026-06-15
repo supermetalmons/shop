@@ -5,6 +5,7 @@ import { IRL_CLAIM_CODE_NAMESPACE } from './claimCodes.js';
 
 export const PACK_STATUS_SCHEMA_VERSION = 1;
 export const PACK_STATUS_SUPPORTED_DROP_ID = 'card_nft_2';
+export const PACK_STATUS_CARDS_PER_PACK = 3;
 
 export type PackStatusDropRuntime = {
   dropId: string;
@@ -13,7 +14,7 @@ export type PackStatusDropRuntime = {
 };
 
 export type PackStatusBreakdownItem = {
-  key: 'unsealed_online' | 'redeemed_irl' | 'sealed' | 'total';
+  key: 'redeemed' | 'unsealed' | 'total';
   label: string;
   amount: number;
   percentage: number;
@@ -22,20 +23,28 @@ export type PackStatusBreakdownItem = {
 export type PackStatusBreakdown = {
   dropId: string;
   total: number;
+  totalInitialSupply: number;
+  totalCards: number;
+  cardsPerPack: number;
   unsealedOnline: number;
+  unsealedCards: number;
   redeemedIrl: number;
   redeemedIrlNormal: number;
   redeemedIrlStripe: number;
-  sealed: number;
+  redeemedUnsealedCards: number;
+  redeemedCards: number;
   items: PackStatusBreakdownItem[];
 };
 
 export type PackStatusCounters = {
   dropId: string;
   totalInitialSupply: number;
+  totalCards: number;
+  cardsPerPack: number;
   unsealedOnline: number;
   redeemedIrlNormal: number;
   redeemedIrlStripe: number;
+  redeemedUnsealedCards: number;
 };
 
 export type PackStatusCountResult = {
@@ -61,7 +70,15 @@ export type PackStatusRebuildInputs = {
 };
 
 type PackStatusEventType = 'onlineReveal' | 'redeemedIrlNormal' | 'redeemedIrlStripe';
-type PackStatusCounterField = 'unsealedOnline' | 'redeemedIrlNormal' | 'redeemedIrlStripe';
+type PackStatusCounterIncrement = {
+  field: 'unsealedOnline' | 'redeemedIrlNormal' | 'redeemedIrlStripe' | 'redeemedUnsealedCards';
+  quantity: number;
+};
+
+function packStatusIncrementCardQuantity(increment: PackStatusCounterIncrement): number {
+  const quantity = safeNonNegativeInteger(increment.quantity);
+  return increment.field === 'redeemedUnsealedCards' ? quantity : quantity * PACK_STATUS_CARDS_PER_PACK;
+}
 
 function safeInteger(value: unknown): number {
   const parsed = Math.floor(Number(value));
@@ -105,6 +122,10 @@ export function countDeliveryOrderBoxItems(items: unknown): number {
   return deliveryOrderBoxItems(items).length;
 }
 
+export function countDeliveryOrderDudeItems(items: unknown): number {
+  return Array.isArray(items) ? items.filter((item) => item && typeof item === 'object' && (item as any).kind === 'dude').length : 0;
+}
+
 export function deliveryOrderBoxAssetIds(items: unknown): string[] {
   return deliveryOrderBoxItems(items)
     .map((item) => (typeof item.assetId === 'string' ? item.assetId.trim() : ''))
@@ -125,30 +146,29 @@ function isStripeOffchainOrder(order: any): boolean {
 }
 
 export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStatusBreakdown {
-  const total = safeNonNegativeInteger(counters.totalInitialSupply);
+  const totalInitialSupply = safeNonNegativeInteger(counters.totalInitialSupply);
+  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const totalCards = safeNonNegativeInteger(counters.totalCards) || totalInitialSupply * cardsPerPack;
+  const total = totalCards;
   const unsealedOnline = safeNonNegativeInteger(counters.unsealedOnline);
   const redeemedIrlNormal = safeNonNegativeInteger(counters.redeemedIrlNormal);
   const redeemedIrlStripe = safeNonNegativeInteger(counters.redeemedIrlStripe);
+  const redeemedUnsealedCards = safeNonNegativeInteger(counters.redeemedUnsealedCards);
   const redeemedIrl = redeemedIrlNormal + redeemedIrlStripe;
-  const sealed = Math.max(0, total - unsealedOnline - redeemedIrl);
+  const unsealedCards = unsealedOnline * cardsPerPack;
+  const redeemedCards = redeemedIrl * cardsPerPack + redeemedUnsealedCards;
   const items: PackStatusBreakdownItem[] = [
     {
-      key: 'unsealed_online',
-      label: 'Unsealed online',
-      amount: unsealedOnline,
-      percentage: percentage(unsealedOnline, total),
+      key: 'unsealed',
+      label: 'Unpacked',
+      amount: unsealedCards,
+      percentage: percentage(unsealedCards, total),
     },
     {
-      key: 'redeemed_irl',
-      label: 'Redeemed IRL',
-      amount: redeemedIrl,
-      percentage: percentage(redeemedIrl, total),
-    },
-    {
-      key: 'sealed',
-      label: 'Sealed',
-      amount: sealed,
-      percentage: percentage(sealed, total),
+      key: 'redeemed',
+      label: 'Redeemed',
+      amount: redeemedCards,
+      percentage: percentage(redeemedCards, total),
     },
     {
       key: 'total',
@@ -160,11 +180,16 @@ export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStat
   return {
     dropId: counters.dropId,
     total,
+    totalInitialSupply,
+    totalCards,
+    cardsPerPack,
     unsealedOnline,
+    unsealedCards,
     redeemedIrl,
     redeemedIrlNormal,
     redeemedIrlStripe,
-    sealed,
+    redeemedUnsealedCards,
+    redeemedCards,
     items,
   };
 }
@@ -172,18 +197,24 @@ export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStat
 export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebuildInputs): PackStatusCounters {
   let redeemedIrlNormal = 0;
   let redeemedIrlStripe = 0;
+  let redeemedUnsealedCards = 0;
   for (const order of params.deliveryOrders) {
     if (order?.status !== 'ready_to_ship') continue;
     if (isStripeOffchainOrder(order)) {
       redeemedIrlStripe += stripeIrlPackQuantityFromOrder(order);
     } else {
       redeemedIrlNormal += countDeliveryOrderBoxItems(order?.items);
+      redeemedUnsealedCards += countDeliveryOrderDudeItems(order?.items);
     }
   }
+  const cardsPerPack = PACK_STATUS_CARDS_PER_PACK;
+  const totalInitialSupply = safeNonNegativeInteger(params.dropRuntime.maxSupply);
 
   return {
     dropId: params.dropRuntime.dropId,
-    totalInitialSupply: safeNonNegativeInteger(params.dropRuntime.maxSupply),
+    totalInitialSupply,
+    totalCards: totalInitialSupply * cardsPerPack,
+    cardsPerPack,
     unsealedOnline: Math.max(
       0,
       safeNonNegativeInteger(params.assignmentCount) -
@@ -192,17 +223,24 @@ export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebui
     ),
     redeemedIrlNormal,
     redeemedIrlStripe,
+    redeemedUnsealedCards,
   };
 }
 
 export function buildPackStatusStatsDocument(counters: PackStatusCounters): Record<string, unknown> {
+  const totalInitialSupply = safeNonNegativeInteger(counters.totalInitialSupply);
+  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const totalCards = safeNonNegativeInteger(counters.totalCards) || totalInitialSupply * cardsPerPack;
   return {
     version: PACK_STATUS_SCHEMA_VERSION,
     dropId: counters.dropId,
-    totalInitialSupply: safeNonNegativeInteger(counters.totalInitialSupply),
+    totalInitialSupply,
+    totalCards,
+    cardsPerPack,
     unsealedOnline: safeNonNegativeInteger(counters.unsealedOnline),
     redeemedIrlNormal: safeNonNegativeInteger(counters.redeemedIrlNormal),
     redeemedIrlStripe: safeNonNegativeInteger(counters.redeemedIrlStripe),
+    redeemedUnsealedCards: safeNonNegativeInteger(counters.redeemedUnsealedCards),
     rebuiltAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
@@ -217,15 +255,20 @@ async function countPackStatusEvent(params: {
   dropRuntime: PackStatusDropRuntime;
   type: PackStatusEventType;
   eventKey: string;
-  counterField: PackStatusCounterField;
-  quantity: number;
+  increments: PackStatusCounterIncrement[];
   extraEventData?: Record<string, unknown>;
 }): Promise<PackStatusCountResult> {
   const { db, dropRuntime } = params;
   if (!shouldTrackPackStatusForDrop(dropRuntime)) return { counted: false, quantity: 0 };
-  const quantity = safeNonNegativeInteger(params.quantity);
+  const increments = params.increments
+    .map((increment) => ({
+      field: increment.field,
+      quantity: safeNonNegativeInteger(increment.quantity),
+    }))
+    .filter((increment) => increment.quantity > 0);
+  const quantity = increments.reduce((total, increment) => total + packStatusIncrementCardQuantity(increment), 0);
   const eventKey = String(params.eventKey || '').trim();
-  if (!eventKey || quantity <= 0) return { counted: false, quantity: 0 };
+  if (!eventKey || !increments.length) return { counted: false, quantity: 0 };
 
   const statsRef = packStatusStatsRef(db, dropRuntime.dropId);
   const eventRef = packStatusEventRef(db, dropRuntime.dropId, params.type, eventKey);
@@ -234,7 +277,7 @@ async function countPackStatusEvent(params: {
     if (eventSnap.exists) return { counted: false, quantity: 0 };
 
     tx.update(statsRef, {
-      [params.counterField]: FieldValue.increment(quantity),
+      ...Object.fromEntries(increments.map((increment) => [increment.field, FieldValue.increment(increment.quantity)])),
       updatedAt: FieldValue.serverTimestamp(),
     });
     tx.create(eventRef, {
@@ -243,6 +286,7 @@ async function countPackStatusEvent(params: {
       type: params.type,
       eventKey,
       quantity,
+      increments: Object.fromEntries(increments.map((increment) => [increment.field, increment.quantity])),
       ...(params.extraEventData ?? {}),
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -262,8 +306,7 @@ export function countOnlineRevealPackStatus(params: {
     dropRuntime: params.dropRuntime,
     type: 'onlineReveal',
     eventKey: boxAssetId,
-    counterField: 'unsealedOnline',
-    quantity: 1,
+    increments: [{ field: 'unsealedOnline', quantity: 1 }],
     extraEventData: {
       boxAssetId,
       ...(params.signature ? { signature: params.signature } : {}),
@@ -275,7 +318,8 @@ export function countNormalIrlPackStatus(params: {
   db: Firestore;
   dropRuntime: PackStatusDropRuntime;
   deliveryId: number;
-  quantity: number;
+  packQuantity: number;
+  unsealedCardQuantity: number;
 }): Promise<PackStatusCountResult> {
   const deliveryId = Math.floor(Number(params.deliveryId));
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) return Promise.resolve({ counted: false, quantity: 0 });
@@ -284,8 +328,10 @@ export function countNormalIrlPackStatus(params: {
     dropRuntime: params.dropRuntime,
     type: 'redeemedIrlNormal',
     eventKey: String(deliveryId),
-    counterField: 'redeemedIrlNormal',
-    quantity: params.quantity,
+    increments: [
+      { field: 'redeemedIrlNormal', quantity: params.packQuantity },
+      { field: 'redeemedUnsealedCards', quantity: params.unsealedCardQuantity },
+    ],
     extraEventData: {
       deliveryId,
     },
@@ -306,8 +352,7 @@ export function countStripeIrlPackStatus(params: {
     dropRuntime: params.dropRuntime,
     type: 'redeemedIrlStripe',
     eventKey: orderHashHex,
-    counterField: 'redeemedIrlStripe',
-    quantity: params.quantity,
+    increments: [{ field: 'redeemedIrlStripe', quantity: params.quantity }],
     extraEventData: {
       orderHashHex,
       ...(params.deliveryId ? { deliveryId: params.deliveryId } : {}),

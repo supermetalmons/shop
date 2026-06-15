@@ -43,6 +43,7 @@ import {
   dropRootPath,
 } from './dropPaths.js';
 import {
+  countDeliveryOrderDudeItems,
   countDeliveryOrderBoxItems,
   countNormalIrlPackStatus,
   countOnlineRevealPackStatus,
@@ -6146,7 +6147,8 @@ export async function retryIssueReceiptsForDeliveryOrder(
     db,
     dropRuntime,
     deliveryId,
-    quantity: countDeliveryOrderBoxItems(order.items),
+    packQuantity: countDeliveryOrderBoxItems(order.items),
+    unsealedCardQuantity: countDeliveryOrderDudeItems(order.items),
   }).catch((err) => {
     logger.warn('retryIssueReceiptsForDeliveryOrder:packStatusCountFailed', {
       dropId,

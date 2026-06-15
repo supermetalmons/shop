@@ -965,6 +965,8 @@ function normalizePackStatusAmount(value: unknown): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
+const PACK_STATUS_CARDS_PER_PACK = 3;
+
 function packStatusPercentage(amount: number, total: number): number {
   if (total <= 0) return 0;
   return Math.round((amount / total) * 10_000) / 100;
@@ -988,27 +990,36 @@ function normalizePackStatusBreakdown(raw: any, dropId: string): PackStatusBreak
   if (!raw || typeof raw !== 'object') return null;
   if (normalizePackStatusAmount(raw.version) !== 1) return null;
   if (typeof raw.dropId === 'string' && raw.dropId && raw.dropId !== dropId) return null;
-  const total = normalizePackStatusAmount(raw.totalInitialSupply);
-  if (total <= 0) return null;
+  const totalInitialSupply = normalizePackStatusAmount(raw.totalInitialSupply);
+  if (totalInitialSupply <= 0) return null;
+  const cardsPerPack = normalizePackStatusAmount(raw.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const totalCards = normalizePackStatusAmount(raw.totalCards) || totalInitialSupply * cardsPerPack;
+  const total = totalCards;
   const unsealedOnline = normalizePackStatusAmount(raw.unsealedOnline);
+  const unsealedCards = unsealedOnline * cardsPerPack;
   const redeemedIrlNormal = normalizePackStatusAmount(raw.redeemedIrlNormal);
   const redeemedIrlStripe = normalizePackStatusAmount(raw.redeemedIrlStripe);
+  const redeemedUnsealedCards = normalizePackStatusAmount(raw.redeemedUnsealedCards);
   const redeemedIrl = redeemedIrlNormal + redeemedIrlStripe;
-  const sealed = Math.max(0, total - unsealedOnline - redeemedIrl);
+  const redeemedCards = redeemedIrl * cardsPerPack + redeemedUnsealedCards;
   const items: PackStatusBreakdownItem[] = [
-    packStatusItem('unsealed_online', 'Unsealed online', unsealedOnline, total),
-    packStatusItem('redeemed_irl', 'Redeemed IRL', redeemedIrl, total),
-    packStatusItem('sealed', 'Sealed', sealed, total),
+    packStatusItem('unsealed', 'Unpacked', unsealedCards, total),
+    packStatusItem('redeemed', 'Redeemed', redeemedCards, total),
     packStatusItem('total', 'Total', total, total),
   ];
   return {
     dropId,
     total,
+    totalInitialSupply,
+    totalCards,
+    cardsPerPack,
     unsealedOnline,
+    unsealedCards,
     redeemedIrl,
     redeemedIrlNormal,
     redeemedIrlStripe,
-    sealed,
+    redeemedUnsealedCards,
+    redeemedCards,
     items,
   };
 }

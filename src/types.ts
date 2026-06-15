@@ -43,7 +43,7 @@ export interface MintStats {
 }
 
 export interface PackStatusBreakdownItem {
-  key: 'unsealed_online' | 'redeemed_irl' | 'sealed' | 'total';
+  key: 'redeemed' | 'unsealed' | 'total';
   label: string;
   amount: number;
   percentage: number;
@@ -52,11 +52,16 @@ export interface PackStatusBreakdownItem {
 export interface PackStatusBreakdown {
   dropId: string;
   total: number;
+  totalInitialSupply: number;
+  totalCards: number;
+  cardsPerPack: number;
   unsealedOnline: number;
+  unsealedCards: number;
   redeemedIrl: number;
   redeemedIrlNormal: number;
   redeemedIrlStripe: number;
-  sealed: number;
+  redeemedUnsealedCards: number;
+  redeemedCards: number;
   items: PackStatusBreakdownItem[];
 }
 

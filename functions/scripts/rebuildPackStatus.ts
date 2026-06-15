@@ -184,13 +184,15 @@ async function main(): Promise<void> {
     );
   } else {
     console.log(`${args.write ? 'Writing' : 'Dry run for'} pack status: ${dropRuntime.dropId}`);
-    console.log(`  Unsealed online: ${breakdown.unsealedOnline}`);
-    console.log(`  Redeemed IRL:    ${breakdown.redeemedIrl}`);
-    console.log(`  Sealed:          ${breakdown.sealed}`);
-    console.log(`  Total:           ${breakdown.total}`);
-    console.log(`  Assignments:     ${result.historicalAssignmentCounts.boxAssignments}`);
-    console.log(`  IRL assignments: ${result.historicalAssignmentCounts.irlClaimAssignments}`);
-    console.log(`  In-flight boxes: ${result.historicalAssignmentCounts.inFlightNormalAssignments}`);
+    console.log(`  Redeemed cards:          ${breakdown.redeemedCards}`);
+    console.log(`  Unsealed cards:          ${breakdown.unsealedCards}`);
+    console.log(`  Total cards:             ${breakdown.totalCards}`);
+    console.log(`  Unsealed online packs:   ${breakdown.unsealedOnline}`);
+    console.log(`  Redeemed IRL packs:      ${breakdown.redeemedIrl}`);
+    console.log(`  Redeemed unsealed cards: ${breakdown.redeemedUnsealedCards}`);
+    console.log(`  Assignments:             ${result.historicalAssignmentCounts.boxAssignments}`);
+    console.log(`  IRL assignments:         ${result.historicalAssignmentCounts.irlClaimAssignments}`);
+    console.log(`  In-flight boxes:         ${result.historicalAssignmentCounts.inFlightNormalAssignments}`);
   }
 
   if (!args.write) {
