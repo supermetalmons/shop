@@ -2,8 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
-import { FulfillmentOrder, FulfillmentOrdersCursor, FulfillmentStatus } from './types';
+import { FiAlertTriangle } from 'react-icons/fi';
+import { listFulfillmentManualReviewCheckouts, listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
+import {
+  FulfillmentManualReviewCheckout,
+  FulfillmentOrder,
+  FulfillmentOrderAddress,
+  FulfillmentOrdersCursor,
+  FulfillmentStatus,
+} from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
@@ -70,7 +77,7 @@ function formatFulfillmentCountry(country?: string, countryCode?: string) {
   return countryValueName || countryValue || (typeof countryCode === 'string' ? countryCode.trim().toUpperCase() : '');
 }
 
-function formatFulfillmentAddressText(address: FulfillmentOrder['address']) {
+function formatFulfillmentAddressText(address: FulfillmentOrderAddress) {
   const formattedCountry = formatFulfillmentCountry(address.country, address.countryCode);
   if (address.full === '***') return formattedCountry || '***';
   if (typeof address.full !== 'string') return '';
@@ -85,6 +92,57 @@ function formatFulfillmentAddressText(address: FulfillmentOrder['address']) {
   const nextLines = [...lines];
   nextLines[finalLineIndex] = formattedCountry;
   return nextLines.join('\n');
+}
+
+function formatManualReviewAmount(amountTotal?: number, currency?: string) {
+  if (typeof amountTotal !== 'number' || !Number.isFinite(amountTotal)) return 'Amount pending';
+  const currencyCode = String(currency || '').trim().toUpperCase();
+  const amount = amountTotal / 100;
+  if (currencyCode) {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
+    } catch {
+      return `${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currencyCode}`;
+    }
+  }
+  return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function shortenStripeSessionId(sessionId: string) {
+  const value = String(sessionId || '').trim();
+  if (value.length <= 24) return value || 'Session unavailable';
+  return `${value.slice(0, 12)}…${value.slice(-6)}`;
+}
+
+function manualReviewCheckoutKey(checkout: Pick<FulfillmentManualReviewCheckout, 'dropId' | 'sessionId'>): string {
+  return `${checkout.dropId}:${checkout.sessionId}`;
+}
+
+function manualReviewSortValue(checkout: FulfillmentManualReviewCheckout): number {
+  return checkout.failedAt || checkout.createdAt || 0;
+}
+
+function sortManualReviewCheckouts(checkouts: FulfillmentManualReviewCheckout[]): FulfillmentManualReviewCheckout[] {
+  return [...checkouts].sort(
+    (a, b) =>
+      manualReviewSortValue(b) - manualReviewSortValue(a) ||
+      a.dropId.localeCompare(b.dropId) ||
+      b.sessionId.localeCompare(a.sessionId),
+  );
+}
+
+function dedupeManualReviewCheckouts(checkouts: FulfillmentManualReviewCheckout[]): FulfillmentManualReviewCheckout[] {
+  const seen = new Set<string>();
+  return checkouts.filter((checkout) => {
+    const key = manualReviewCheckoutKey(checkout);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function manualReviewIssueText(checkout: FulfillmentManualReviewCheckout): string {
+  return checkout.errorMessage || checkout.manualRefundReviewReason || 'Manual review required';
 }
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
@@ -499,6 +557,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>(
     DEFAULT_ORDER_VISIBILITY_FILTER,
   );
+  const [manualReviewCheckouts, setManualReviewCheckouts] = useState<FulfillmentManualReviewCheckout[]>([]);
+  const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
@@ -509,6 +569,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(() => !walletAddress);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const manualReviewMenuRef = useRef<HTMLDivElement | null>(null);
   const orderRequestEpochRef = useRef(0);
 
   useEffect(() => {
@@ -584,6 +645,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setCursorsByDropId({});
       setOrders([]);
       setOrderPageKeys([]);
+      setManualReviewCheckouts([]);
+      setManualReviewMenuOpen(false);
       setStatusEdits({});
       setStatusSaving({});
       setActiveUpdateOrderKey(null);
@@ -598,18 +661,31 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setCursorsByDropId({});
     setOrders([]);
     setOrderPageKeys([]);
+    setManualReviewCheckouts([]);
+    setManualReviewMenuOpen(false);
     setStatusEdits({});
     setStatusSaving({});
     setActiveUpdateOrderKey(null);
     try {
       const responses = await Promise.all(
         selectedDropIds.map(async (dropId) => {
-          const resp = await listFulfillmentOrders({
-            limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
-            cursor: null,
+          const [ordersResp, manualReviewResp] = await Promise.all([
+            listFulfillmentOrders({
+              limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
+              cursor: null,
+              dropId,
+            }),
+            listFulfillmentManualReviewCheckouts({ dropId }).catch((err) => {
+              console.warn('[mons] failed to load fulfillment manual-review checkouts', { dropId, error: err });
+              return { checkouts: [] as FulfillmentManualReviewCheckout[] };
+            }),
+          ]);
+          return {
             dropId,
-          });
-          return { dropId, orders: Array.isArray(resp.orders) ? resp.orders : [], nextCursor: resp.nextCursor || null };
+            orders: Array.isArray(ordersResp.orders) ? ordersResp.orders : [],
+            nextCursor: ordersResp.nextCursor || null,
+            manualReviewCheckouts: Array.isArray(manualReviewResp.checkouts) ? manualReviewResp.checkouts : [],
+          };
         }),
       );
       if (orderRequestEpochRef.current !== requestEpoch) return;
@@ -618,8 +694,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         return acc;
       }, {});
       const nextOrders = sortFulfillmentOrders(dedupeOrdersByKey(responses.flatMap((resp) => resp.orders)));
+      const nextManualReviewCheckouts = sortManualReviewCheckouts(
+        dedupeManualReviewCheckouts(responses.flatMap((resp) => resp.manualReviewCheckouts)),
+      );
       setOrders(nextOrders);
       setOrderPageKeys(nextOrders.length ? [nextOrders.map((order) => fulfillmentOrderKey(order))] : []);
+      setManualReviewCheckouts(nextManualReviewCheckouts);
       mergeStatusEdits(nextOrders);
       setCursorsByDropId(nextCursors);
       setHasMore(Object.values(nextCursors).some(Boolean));
@@ -627,6 +707,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
       setOrdersError(err instanceof Error ? err.message : 'Failed to load orders');
+      setManualReviewCheckouts([]);
+      setManualReviewMenuOpen(false);
     } finally {
       if (orderRequestEpochRef.current === requestEpoch) {
         setLoading(false);
@@ -698,6 +780,32 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   useEffect(() => {
     void loadInitial();
   }, [loadInitial]);
+
+  useEffect(() => {
+    if (!manualReviewCheckouts.length && manualReviewMenuOpen) {
+      setManualReviewMenuOpen(false);
+    }
+  }, [manualReviewCheckouts.length, manualReviewMenuOpen]);
+
+  useEffect(() => {
+    if (!manualReviewMenuOpen || typeof document === 'undefined') return;
+    const handlePointerDown = (evt: MouseEvent | TouchEvent) => {
+      const node = manualReviewMenuRef.current;
+      if (!node || node.contains(evt.target as Node)) return;
+      setManualReviewMenuOpen(false);
+    };
+    const handleKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') setManualReviewMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [manualReviewMenuOpen]);
 
   const mergeLoadedFigureMetadata = useCallback((records: FigureMetadataRecord[]) => {
     if (!records.length) return;
@@ -998,6 +1106,44 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [pendingSignIn, publicKey, walletModalVisible]);
 
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
+  const showManualReviewDropId = selectedDropIds.length > 1;
+
+  const renderManualReviewMenu = () => (
+    <div className="manual-review-menu" role="dialog" aria-label="Needs manual review">
+      <div className="manual-review-menu__head">
+        <div className="manual-review-menu__title">Needs manual review</div>
+        <div className="muted small">
+          {manualReviewCheckouts.length} {manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'}
+        </div>
+      </div>
+      <div className="manual-review-menu__list">
+        {manualReviewCheckouts.map((checkout) => {
+          const addressText = formatFulfillmentAddressText(checkout.address);
+          const contactEmail = checkout.address.full !== '***' ? checkout.address.email : '';
+          const quantityText = typeof checkout.quantity === 'number' ? `${checkout.quantity} item${checkout.quantity === 1 ? '' : 's'}` : 'Quantity pending';
+          const ownerText = checkout.owner || checkout.firebaseUid || 'Owner unavailable';
+          return (
+            <div key={manualReviewCheckoutKey(checkout)} className="manual-review-row">
+              <div className="manual-review-row__top">
+                <div className="manual-review-row__title">
+                  {showManualReviewDropId ? `${checkout.dropId} · ` : ''}
+                  {quantityText} · {formatManualReviewAmount(checkout.amountTotal, checkout.currency)}
+                </div>
+                <div className="muted small">{formatOrderDate(checkout.failedAt || checkout.createdAt)}</div>
+              </div>
+              <div className="manual-review-row__meta">
+                <span className="mono small">{shortenStripeSessionId(checkout.sessionId)}</span>
+                <span className="mono small">{ownerText}</span>
+              </div>
+              {contactEmail ? <div className="manual-review-contact small">{contactEmail}</div> : null}
+              <div className="manual-review-address small">{addressText || 'Address unavailable'}</div>
+              <div className="manual-review-reason small">{manualReviewIssueText(checkout)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   const renderFulfillmentOrderSection = (
     order: FulfillmentOrder,
@@ -1199,6 +1345,25 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     </option>
                   ))}
                 </select>
+              ) : null}
+              {manualReviewCheckouts.length ? (
+                <div className="manual-review-menu-wrap" ref={manualReviewMenuRef}>
+                  <button
+                    type="button"
+                    className="manual-review-button"
+                    aria-label={`Needs manual review, ${manualReviewCheckouts.length} ${
+                      manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'
+                    }`}
+                    aria-haspopup="dialog"
+                    aria-expanded={manualReviewMenuOpen}
+                    title="Needs manual review"
+                    onClick={() => setManualReviewMenuOpen((open) => !open)}
+                  >
+                    <FiAlertTriangle aria-hidden="true" />
+                    <span>{manualReviewCheckouts.length}</span>
+                  </button>
+                  {manualReviewMenuOpen ? renderManualReviewMenu() : null}
+                </div>
               ) : null}
             </div>
             {selectedDropIds.length && loading && !hasVisibleOrderCards ? <div className="muted small">Loading orders…</div> : null}

@@ -21,7 +21,7 @@ installMobileInteractionGuards();
 document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 
 const queryClient = new QueryClient();
-const canonicalFulfillmentPath = '/fullfillment';
+const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
 const drifPaths = new Set([canonicalDrifPath]);
 const DrifApp = React.lazy(() => import('./DrifApp'));
@@ -35,6 +35,7 @@ type RouteAlias = {
 
 const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
+  '/fullfillment': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
   '/notify-me': { targetPath: canonicalDrifPath, replaceUrl: true },
 };
 

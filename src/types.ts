@@ -160,6 +160,21 @@ export interface FulfillmentOrder {
   looseDudes: number[];
 }
 
+export interface FulfillmentManualReviewCheckout {
+  dropId: string;
+  sessionId: string;
+  owner: string;
+  firebaseUid?: string;
+  quantity?: number;
+  amountTotal?: number;
+  currency?: string;
+  createdAt?: number;
+  failedAt?: number;
+  manualRefundReviewReason?: string;
+  errorMessage?: string;
+  address: FulfillmentOrderAddress;
+}
+
 export interface FulfillmentOrdersCursor {
   processedAt: {
     seconds: number;

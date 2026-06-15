@@ -40,6 +40,7 @@ import {
   dropDeliveryOrdersCollectionPath,
   dropDudeAssignmentPath,
   dropDudePoolPath,
+  dropRootPath,
 } from './dropPaths.js';
 import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
 import { decodePendingOpenBox } from './pendingOpenBox.js';
@@ -67,15 +68,20 @@ import {
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { parseRequest } from './request.js';
 import {
+  buildStripeCheckoutManualReviewSummary,
   createStripeCheckoutSessionForRequest,
   createTestStripeCheckoutSessionForRequest,
+  fetchStripeCheckoutSession,
   handleStripeWebhookEvent,
+  isStripeCheckoutManualReviewCandidate,
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
+  stripeApiModeForCluster,
   stripeWebhookRawBody,
   stripeWebhookSignature,
   type StripeCheckoutKind,
   type StripeCheckoutFlowDeps,
+  type StripeCheckoutManualReviewSummary,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
@@ -2929,7 +2935,7 @@ const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manual-review';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
-const FULFILLMENT_APP_URL = 'https://mons.shop/fullfillment';
+const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
 const SHIPPER_READY_FROM_EMAIL = 'notifications@mons.academy';
 
 type ShipperReadyOrderSummary = {
@@ -4787,6 +4793,74 @@ export const listFulfillmentOrders = onCallLogged(
     return { orders, nextCursor };
   },
   { secrets: [ADDRESS_DECRYPTION_SECRET] },
+);
+
+export const listFulfillmentManualReviewCheckouts = onCallLogged(
+  'listFulfillmentManualReviewCheckouts',
+  async (request) => {
+    const schema = z.object({ dropId: z.string().min(1).max(64) });
+    const { dropId: requestDropId } = parseRequest(schema, request.data);
+    const dropId = requireDropId(requestDropId);
+    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
+    const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
+    const dropRuntime = getDropRuntime(dropId);
+    const apiMode = stripeApiModeForCluster(dropRuntime.cluster);
+    const apiKeys = stripeApiKeys();
+
+    const snap = await db
+      .collection(`${dropRootPath(dropId)}/stripeCheckouts`)
+      .where('manualRefundReviewRequired', '==', true)
+      .get();
+
+    const summaries = await Promise.all(
+      snap.docs.map(async (doc) => {
+        const checkout = doc.data();
+        if (!isStripeCheckoutManualReviewCandidate(checkout)) return null;
+
+        let sessionId: string;
+        try {
+          sessionId = requireStripeCheckoutSessionId(checkout?.sessionId || doc.id);
+        } catch (err) {
+          logger.warn('listFulfillmentManualReviewCheckouts:invalidSessionId', {
+            dropId,
+            docId: doc.id,
+            error: summarizeError(err),
+          });
+          return null;
+        }
+
+        let session: Stripe.Checkout.Session | null = null;
+        try {
+          session = (await fetchStripeCheckoutSession(sessionId, apiKeys, apiMode)).session;
+        } catch (err) {
+          logger.warn('listFulfillmentManualReviewCheckouts:stripeSessionFetchFailed', {
+            dropId,
+            sessionId,
+            error: summarizeError(err),
+          });
+        }
+
+        return buildStripeCheckoutManualReviewSummary({
+          dropId,
+          sessionId,
+          checkout,
+          session,
+          canViewSensitiveAddress: allowSensitiveAddressView,
+        });
+      }),
+    );
+
+    const checkouts = summaries
+      .filter((entry): entry is StripeCheckoutManualReviewSummary => Boolean(entry))
+      .sort(
+        (a, b) =>
+          (b.failedAt || b.createdAt || 0) - (a.failedAt || a.createdAt || 0) ||
+          b.sessionId.localeCompare(a.sessionId),
+      );
+
+    return { checkouts };
+  },
+  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY, STRIPE_RESTRICTED_KEY_LIVE, STRIPE_SECRET_KEY_LIVE] },
 );
 
 export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {

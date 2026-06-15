@@ -5845,10 +5845,10 @@ function App({ currentPath }: AppProps) {
               type="button"
               className="link small top__submenu-nav"
               onClick={() => {
-                navigate('/ff');
+                navigate('/fulfillment');
               }}
             >
-              {adminMenuLabel('/fullfillment')}
+              {adminMenuLabel('/fulfillment')}
             </button>
             <button
               type="button"

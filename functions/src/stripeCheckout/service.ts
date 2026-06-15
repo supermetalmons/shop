@@ -36,6 +36,7 @@ import {
   requireStripeReceiptClaimCode,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
+  stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
   type DecodedAdminDeliveryOrderRecord,
@@ -77,6 +78,28 @@ export type StripeCheckoutDocumentRecord = {
   ref: DocumentReference;
   checkout: any;
 } & StripeCheckoutDocumentData;
+
+export type StripeCheckoutManualReviewAddress = {
+  email?: string;
+  country?: string;
+  countryCode?: string;
+  full?: string | null;
+};
+
+export type StripeCheckoutManualReviewSummary = {
+  dropId: string;
+  sessionId: string;
+  owner: string;
+  firebaseUid?: string;
+  quantity?: number;
+  amountTotal?: number;
+  currency?: string;
+  createdAt?: number;
+  failedAt?: number;
+  manualRefundReviewReason?: string;
+  errorMessage?: string;
+  address: StripeCheckoutManualReviewAddress;
+};
 
 export type StripeCheckoutFulfillmentEnqueueReason =
   | 'not_app_fulfillment'
@@ -440,7 +463,7 @@ export function stripeApiKeyForMode(apiKeys: readonly string[], mode: StripeApiM
   return stripeApiKeysForMode(apiKeys, mode)[0];
 }
 
-function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
+export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
   if (cluster === 'devnet') return 'test';
   if (cluster === 'mainnet-beta') return 'live';
   throw new HttpsError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
@@ -652,7 +675,7 @@ async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Chec
   return stripe.checkout.sessions.listLineItems(session.id, { limit: 10, expand: ['data.price'] });
 }
 
-async function fetchStripeCheckoutSession(sessionId: string, apiKeys: readonly string[], mode: StripeApiMode): Promise<{
+export async function fetchStripeCheckoutSession(sessionId: string, apiKeys: readonly string[], mode: StripeApiMode): Promise<{
   session: Stripe.Checkout.Session;
   stripe: Stripe;
 }> {
@@ -728,6 +751,121 @@ function stripeCheckoutSessionSnapshot(session: Stripe.Checkout.Session): Stripe
   if (session.total_details !== undefined) snapshot.total_details = session.total_details;
   if (session.currency !== undefined) snapshot.currency = session.currency;
   return snapshot;
+}
+
+function normalizedManualReviewString(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function manualReviewPositiveInteger(value: unknown): number | undefined {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function manualReviewNonNegativeInteger(value: unknown): number | undefined {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function manualReviewCurrency(value: unknown): string | undefined {
+  const currency = normalizedManualReviewString(value).toLowerCase();
+  return /^[a-z]{3}$/.test(currency) ? currency : undefined;
+}
+
+function truncateManualReviewText(value: string, maxLength = 220): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function firstManualReviewErrorLine(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const line = value
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find(Boolean);
+  return line ? truncateManualReviewText(line) : undefined;
+}
+
+function stripeCheckoutManualReviewErrorMessage(checkout: any): string | undefined {
+  const error = checkout?.lastFulfillmentError;
+  const candidates = [
+    error?.message,
+    error?.details?.lastError,
+    error?.lastError,
+    checkout?.manualRefundReviewReason,
+  ];
+  for (const candidate of candidates) {
+    const message = firstManualReviewErrorLine(candidate);
+    if (message) return message;
+  }
+  return undefined;
+}
+
+function stripeCheckoutManualReviewAddress(args: {
+  session?: Stripe.Checkout.Session | null;
+  canViewSensitiveAddress: boolean;
+}): StripeCheckoutManualReviewAddress {
+  const parsed = stripeFulfillmentAddressFromSession(args.session);
+  if (!parsed) return { full: null };
+  const country = normalizedManualReviewString(parsed.country);
+  const countryCode = normalizedManualReviewString(parsed.countryCode).toUpperCase();
+  if (!args.canViewSensitiveAddress) {
+    return {
+      full: '***',
+      ...(country ? { country } : {}),
+      ...(countryCode ? { countryCode } : {}),
+    };
+  }
+  return {
+    full: parsed.formatted || null,
+    ...(parsed.email ? { email: parsed.email } : {}),
+    ...(country ? { country } : {}),
+    ...(countryCode ? { countryCode } : {}),
+  };
+}
+
+export function isStripeCheckoutManualReviewCandidate(checkout: any): boolean {
+  return checkout?.manualRefundReviewRequired === true && checkout?.status === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED;
+}
+
+export function buildStripeCheckoutManualReviewSummary(args: {
+  dropId: string;
+  sessionId: string;
+  checkout: any;
+  session?: Stripe.Checkout.Session | null;
+  canViewSensitiveAddress: boolean;
+}): StripeCheckoutManualReviewSummary | null {
+  const { checkout } = args;
+  if (!isStripeCheckoutManualReviewCandidate(checkout)) return null;
+  const sessionSummary = checkout?.stripeSessionSummary || {};
+  const quantity = manualReviewPositiveInteger(checkout?.quantity ?? sessionSummary?.metadata?.quantity ?? args.session?.metadata?.quantity);
+  const amountTotal = manualReviewNonNegativeInteger(args.session?.amount_total ?? sessionSummary?.amount_total);
+  const currency = manualReviewCurrency(args.session?.currency ?? sessionSummary?.currency);
+  const owner = normalizedManualReviewString(checkout?.owner);
+  const firebaseUid = normalizedManualReviewString(checkout?.firebaseUid || checkout?.uid);
+  const manualRefundReviewReason = normalizedManualReviewString(checkout?.manualRefundReviewReason);
+  const errorMessage = stripeCheckoutManualReviewErrorMessage(checkout);
+  const createdAt = toMillisMaybe(checkout?.createdAt);
+  const failedAt = toMillisMaybe(checkout?.failedAt);
+
+  return {
+    dropId: args.dropId,
+    sessionId: requireStripeCheckoutSessionId(args.sessionId),
+    owner,
+    ...(firebaseUid ? { firebaseUid } : {}),
+    ...(quantity ? { quantity } : {}),
+    ...(amountTotal !== undefined ? { amountTotal } : {}),
+    ...(currency ? { currency } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(failedAt !== undefined ? { failedAt } : {}),
+    ...(manualRefundReviewReason ? { manualRefundReviewReason } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    address: stripeCheckoutManualReviewAddress({
+      session: args.session,
+      canViewSensitiveAddress: args.canViewSensitiveAddress,
+    }),
+  };
 }
 
 function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutDropRuntime>(

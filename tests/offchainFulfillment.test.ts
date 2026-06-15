@@ -37,6 +37,7 @@ import {
 } from '../functions/src/stripeCheckout/contract.ts';
 import {
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
+  buildStripeCheckoutManualReviewSummary,
   checkoutReturnUrl,
   createOrGetStripeOffchainDeliveryOrder,
   createStripeCheckoutSessionForRequest,
@@ -46,6 +47,7 @@ import {
   markStripeCheckoutFulfillmentFailed,
   markStripeCheckoutFulfillmentFulfilled,
   runStripeCheckoutFulfillmentWithRetry,
+  isStripeCheckoutManualReviewCandidate,
   startStripeCheckoutFulfillmentDocument,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
@@ -271,6 +273,144 @@ test('stripeFulfillmentAddressFromSession returns null when address is missing',
     }),
     null,
   );
+});
+
+test('buildStripeCheckoutManualReviewSummary includes failed manual-review checkout contact info when allowed', () => {
+  const checkout = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+    manualRefundReviewRequired: true,
+    manualRefundReviewReason: 'delivery_order_creation_failed',
+    owner: 'owner_wallet',
+    firebaseUid: 'firebase_uid',
+    quantity: '15',
+    createdAt: timestampLike(1_000),
+    failedAt: timestampLike(2_000),
+    lastFulfillmentError: { message: 'processing failure\nstack hidden' },
+    stripeSessionSummary: {
+      amount_total: '66000',
+      currency: STRIPE_OFFCHAIN_CURRENCY,
+    },
+  };
+  const session = {
+    id: 'cs_test_manual_review_123',
+    amount_total: 66000,
+    currency: STRIPE_OFFCHAIN_CURRENCY,
+    metadata: { quantity: '15' },
+    customer_details: { email: 'buyer@example.com', phone: '+15551234567' },
+    shipping_details: {
+      name: 'Buyer Name',
+      address: {
+        line1: '1 Main St',
+        line2: 'Unit 2',
+        city: 'New York',
+        state: 'NY',
+        postal_code: '10001',
+        country: 'US',
+      },
+    },
+  };
+
+  const summary = buildStripeCheckoutManualReviewSummary({
+    dropId: 'card_nft_2',
+    sessionId: 'cs_test_manual_review_123',
+    checkout,
+    session: session as any,
+    canViewSensitiveAddress: true,
+  });
+
+  assert.deepEqual(summary, {
+    dropId: 'card_nft_2',
+    sessionId: 'cs_test_manual_review_123',
+    owner: 'owner_wallet',
+    firebaseUid: 'firebase_uid',
+    quantity: 15,
+    amountTotal: 66000,
+    currency: STRIPE_OFFCHAIN_CURRENCY,
+    createdAt: 1_000,
+    failedAt: 2_000,
+    manualRefundReviewReason: 'delivery_order_creation_failed',
+    errorMessage: 'processing failure',
+    address: {
+      email: 'buyer@example.com',
+      country: 'US',
+      countryCode: 'US',
+      full: 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS',
+    },
+  });
+  assert.equal(summary?.address && 'phone' in summary.address, false);
+});
+
+test('buildStripeCheckoutManualReviewSummary masks failed checkout contact info when address access is not allowed', () => {
+  const checkout = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+    manualRefundReviewRequired: true,
+    owner: 'owner_wallet',
+    manualRefundReviewReason: 'fulfillment_failed',
+  };
+  const session = {
+    id: 'cs_test_manual_review_456',
+    customer_details: { email: 'buyer@example.com' },
+    shipping_details: {
+      name: 'Buyer Name',
+      address: {
+        line1: '1 Main St',
+        city: 'New York',
+        state: 'NY',
+        postal_code: '10001',
+        country: 'US',
+      },
+    },
+  };
+
+  const summary = buildStripeCheckoutManualReviewSummary({
+    dropId: 'card_nft_2',
+    sessionId: 'cs_test_manual_review_456',
+    checkout,
+    session: session as any,
+    canViewSensitiveAddress: false,
+  });
+
+  assert.equal(summary?.address.full, '***');
+  assert.equal(summary?.address.email, undefined);
+  assert.equal(summary?.address.countryCode, 'US');
+});
+
+test('manual-review checkout summary excludes non-failed or non-manual-review checkout docs', () => {
+  const included = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+    manualRefundReviewRequired: true,
+    owner: 'owner_wallet',
+  };
+  const excluded = [
+    { ...included, manualRefundReviewRequired: false },
+    { ...included, status: STRIPE_CHECKOUT_STATUS.FULFILLED },
+    { ...included, status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING },
+    { ...included, status: STRIPE_CHECKOUT_STATUS.CREATED, manualRefundReviewRequired: true },
+  ];
+
+  assert.equal(isStripeCheckoutManualReviewCandidate(included), true);
+  assert.ok(
+    buildStripeCheckoutManualReviewSummary({
+      dropId: 'card_nft_2',
+      sessionId: 'cs_test_manual_review_789',
+      checkout: included,
+      session: null,
+      canViewSensitiveAddress: true,
+    }),
+  );
+  excluded.forEach((checkout) => {
+    assert.equal(isStripeCheckoutManualReviewCandidate(checkout), false);
+    assert.equal(
+      buildStripeCheckoutManualReviewSummary({
+        dropId: 'card_nft_2',
+        sessionId: 'cs_test_manual_review_789',
+        checkout,
+        session: null,
+        canViewSensitiveAddress: true,
+      }),
+      null,
+    );
+  });
 });
 
 test('buildStripeOffchainAddressSnapshot accepts US shipping addresses', () => {

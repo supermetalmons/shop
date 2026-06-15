@@ -4,6 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp } from './firebase';
 import {
   DeliverySelection,
+  FulfillmentManualReviewCheckout,
   FulfillmentStatus,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
@@ -973,6 +974,22 @@ export async function listFulfillmentOrders(args: {
     orders: (Array.isArray(resp.orders) ? resp.orders : []).map((order) => ({
       ...order,
       dropId: order.dropId || args.dropId,
+    })),
+  };
+}
+
+export async function listFulfillmentManualReviewCheckouts(args: {
+  dropId: string;
+}): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
+  const resp = await callFunction<
+    { dropId: string },
+    { checkouts: FulfillmentManualReviewCheckout[] }
+  >('listFulfillmentManualReviewCheckouts', { dropId: args.dropId });
+  return {
+    checkouts: (Array.isArray(resp.checkouts) ? resp.checkouts : []).map((checkout) => ({
+      ...checkout,
+      dropId: checkout.dropId || args.dropId,
+      address: checkout.address || {},
     })),
   };
 }
