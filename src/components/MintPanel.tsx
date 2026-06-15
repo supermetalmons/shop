@@ -427,11 +427,6 @@ function formatPackStatusAmount(amount: number): string {
   return PACK_STATUS_NUMBER_FORMATTER.format(Math.max(0, Math.floor(Number(amount) || 0)));
 }
 
-function formatPackStatusPercentage(percentage: number): string {
-  const normalized = Number.isFinite(percentage) ? percentage : 0;
-  return `${normalized.toFixed(2)}%`;
-}
-
 function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreakdown }) {
   return (
     <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Card status" aria-busy={!breakdown}>
@@ -441,7 +436,6 @@ function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreak
             <tr>
               <th scope="col" aria-label="Status" />
               <th scope="col">Cards</th>
-              <th scope="col">% of supply</th>
             </tr>
           </thead>
           <tbody>
@@ -449,7 +443,6 @@ function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreak
               <tr key={item.key} className={item.key === 'total' ? 'mint-panel__pack-status-row--total' : undefined}>
                 <th scope="row">{item.label}</th>
                 <td>{formatPackStatusAmount(item.amount)}</td>
-                <td>{formatPackStatusPercentage(item.percentage)}</td>
               </tr>
             ))}
           </tbody>

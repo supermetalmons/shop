@@ -1045,8 +1045,9 @@ header.top--shop.top--spacer {
   left: calc(100% + 12px);
   right: auto;
   bottom: 0;
-  min-width: 310px;
-  max-width: min(360px, calc(100vw - 32px));
+  width: min(240px, calc(100vw - 32px));
+  min-width: 0;
+  max-width: none;
   padding: 12px 14px 10px;
 }
 
@@ -1501,6 +1502,8 @@ header.top--shop.top--spacer {
     left: auto;
     right: -6px;
     bottom: calc(100% + 18px);
+    width: min(240px, calc(100vw - 24px));
+    max-width: none;
   }
 
   .mint-panel__pack-status-info-wrap {
