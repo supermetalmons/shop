@@ -86,6 +86,7 @@ interface MintPanelProps {
 const REMAINING_OVERRIDE: number | null = null;
 
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
+type BoxPreviewBounds = { width: number; height: number; viewportWidth: number; centerX: number };
 
 const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
 const BOX_MAX_RELATIVE_HEIGHT = 0.777;
@@ -541,6 +542,18 @@ function normalizeBoxMediaScale(requestedScale: number | undefined): number {
   return clampNumber(Number(requestedScale) || 1, 1, BOX_MEDIA_SCALE_MAX);
 }
 
+function constrainBoxMediaScale(scale: number, layout: BoxPreviewLayout, bounds: BoxPreviewBounds): number {
+  if (layout.width <= 0 || bounds.viewportWidth <= 0) return scale;
+
+  const availableWidthAroundCenter = Math.max(
+    0,
+    2 * Math.min(bounds.centerX, bounds.viewportWidth - bounds.centerX),
+  );
+  if (availableWidthAroundCenter <= 0) return scale;
+
+  return Math.min(scale, Math.max(1, availableWidthAroundCenter / layout.width));
+}
+
 type MintPanelBoxVideoProps = {
   playIfActive: (video: HTMLVideoElement) => void;
   registerVideo: (video: HTMLVideoElement, options?: Pick<RestartAutoplayVideoOptions, 'reload'>) => () => void;
@@ -701,7 +714,12 @@ export function MintPanel({
   const mintBoxVideoPlaybackActiveRef = useRef(false);
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [previewBounds, setPreviewBounds] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [previewBounds, setPreviewBounds] = useState<BoxPreviewBounds>({
+    width: 0,
+    height: 0,
+    viewportWidth: 0,
+    centerX: 0,
+  });
   const stripePaymentPending = Boolean(stripePaymentBusy) || stripePaymentSubmitPending;
   const mintBoxImageSrc = boxMedia?.imageSrc;
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
@@ -877,13 +895,27 @@ export function MintPanel({
       const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       const width = Math.max(0, Math.floor(el.clientWidth - paddingX));
       const height = Math.max(0, Math.floor(el.clientHeight - paddingY));
-      setPreviewBounds((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      const rect = el.getBoundingClientRect();
+      const viewportWidth = Math.max(0, document.documentElement.clientWidth || window.innerWidth || 0);
+      const centerX = rect.left + rect.width / 2;
+      setPreviewBounds((prev) => (
+        prev.width === width &&
+        prev.height === height &&
+        prev.viewportWidth === viewportWidth &&
+        Math.abs(prev.centerX - centerX) < 0.5
+          ? prev
+          : { width, height, viewportWidth, centerX }
+      ));
     };
 
     update();
     const ro = new ResizeObserver(() => update());
     ro.observe(el);
-    return () => ro.disconnect();
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+    };
   }, []);
 
   const soldOut = remaining <= 0;
@@ -891,8 +923,12 @@ export function MintPanel({
     () => calcBoxPreviewLayout(previewQuantity, previewBounds.width, previewBounds.height, boxMedia?.aspectRatio || BOX_ASPECT_RATIO),
     [boxMedia?.aspectRatio, previewBounds.height, previewBounds.width, previewQuantity],
   );
-  const effectiveBoxMediaScale = normalizeBoxMediaScale(boxMedia?.mediaScale);
-  const effectiveBoxCompactMediaScale = normalizeBoxMediaScale(boxMedia?.compactMediaScale ?? boxMedia?.mediaScale);
+  const effectiveBoxMediaScale = constrainBoxMediaScale(normalizeBoxMediaScale(boxMedia?.mediaScale), layout, previewBounds);
+  const effectiveBoxCompactMediaScale = constrainBoxMediaScale(
+    normalizeBoxMediaScale(boxMedia?.compactMediaScale ?? boxMedia?.mediaScale),
+    layout,
+    previewBounds,
+  );
   const quantityLabel = dropAssetCount({ namePrefix: boxNamePrefix, figureNamePrefix: undefined }, 'box', quantity);
   const unitPriceLamports = solAmountToLamports(priceSol, priceSol);
   const unitDiscountPriceLamports = solAmountToLamports(discountPriceSol, discountPriceSol);
