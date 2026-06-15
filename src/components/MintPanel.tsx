@@ -10,8 +10,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { FaCircleQuestion } from 'react-icons/fa6';
-import { MintStats, type PreviewVideoSource } from '../types';
+import { FaCircleInfo, FaCircleQuestion } from 'react-icons/fa6';
+import { MintStats, type PackStatusBreakdown, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
@@ -72,6 +72,7 @@ interface MintPanelProps {
   showSizeInfo?: boolean;
   successfulMintToken?: number;
   terminalAction?: MintPanelTerminalAction;
+  packStatusBreakdown?: PackStatusBreakdown;
 }
 
 /**
@@ -103,6 +104,7 @@ const STRIPE_USD_PRICE_FORMATTER = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+const PACK_STATUS_NUMBER_FORMATTER = new Intl.NumberFormat('en-US');
 
 const ACTION_TEXT_FIT_STYLE_PROPS = [
   '--mint-panel-action-fit-label-font-size',
@@ -240,6 +242,29 @@ function useActionTextFit<T extends HTMLElement>(ref: RefObject<T | null>, deps:
   }, deps);
 
   return fit;
+}
+
+function useDismissiblePopover<T extends HTMLElement>(
+  open: boolean,
+  rootRef: RefObject<T | null>,
+  setOpen: (open: boolean) => void,
+): void {
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (evt: MouseEvent) => {
+      const root = rootRef.current;
+      if (root && !root.contains(evt.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, rootRef, setOpen]);
 }
 
 function actionTextFitStyle(fit: ActionTextFit): CSSProperties | undefined {
@@ -394,6 +419,40 @@ function normalizeStripePaymentUnitAmountCents(value: number | undefined): numbe
 
 function formatStripeUsdAmountCents(value: number): string {
   return STRIPE_USD_PRICE_FORMATTER.format(value / 100);
+}
+
+function formatPackStatusAmount(amount: number): string {
+  return PACK_STATUS_NUMBER_FORMATTER.format(Math.max(0, Math.floor(Number(amount) || 0)));
+}
+
+function formatPackStatusPercentage(percentage: number): string {
+  const normalized = Number.isFinite(percentage) ? percentage : 0;
+  return `${normalized.toFixed(2)}%`;
+}
+
+function MintPanelPackStatusPopover({ breakdown }: { breakdown: PackStatusBreakdown }) {
+  return (
+    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Pack status">
+      <table className="mint-panel__pack-status-table">
+        <thead>
+          <tr>
+            <th scope="col">Status</th>
+            <th scope="col">Amount</th>
+            <th scope="col">% of supply</th>
+          </tr>
+        </thead>
+        <tbody>
+          {breakdown.items.map((item) => (
+            <tr key={item.key} className={item.key === 'total' ? 'mint-panel__pack-status-row--total' : undefined}>
+              <th scope="row">{item.label}</th>
+              <td>{formatPackStatusAmount(item.amount)}</td>
+              <td>{formatPackStatusPercentage(item.percentage)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function calcBoxPreviewLayout(count: number, width: number, height: number, boxAspectRatio: number): BoxPreviewLayout {
@@ -590,6 +649,7 @@ export function MintPanel({
   showSizeInfo,
   successfulMintToken = 0,
   terminalAction,
+  packStatusBreakdown,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -619,7 +679,9 @@ export function MintPanel({
   const [discountSubmitPending, setDiscountSubmitPending] = useState(false);
   const [stripePaymentSubmitPending, setStripePaymentSubmitPending] = useState(false);
   const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
+  const [packStatusInfoOpen, setPackStatusInfoOpen] = useState(false);
   const sizeInfoRef = useRef<HTMLDivElement | null>(null);
+  const packStatusInfoRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const mintBoxVideosRef = useRef<Set<HTMLVideoElement>>(new Set());
   const mintBoxVideoPlaybackActiveRef = useRef(false);
@@ -783,24 +845,11 @@ export function MintPanel({
   }, [showSizeSelector, sizeInfoOpen]);
 
   useEffect(() => {
-    if (!sizeInfoOpen) return;
-    const onPointerDown = (evt: MouseEvent) => {
-      const root = sizeInfoRef.current;
-      if (!root) return;
-      if (!root.contains(evt.target as Node)) {
-        setSizeInfoOpen(false);
-      }
-    };
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') setSizeInfoOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [sizeInfoOpen]);
+    if (!packStatusBreakdown && packStatusInfoOpen) setPackStatusInfoOpen(false);
+  }, [packStatusBreakdown, packStatusInfoOpen]);
+
+  useDismissiblePopover(sizeInfoOpen, sizeInfoRef, setSizeInfoOpen);
+  useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
 
   useLayoutEffect(() => {
     const el = previewRef.current;
@@ -1046,7 +1095,24 @@ export function MintPanel({
         <div className={terminalFooterClassName}>
           <div className="mint-panel__info">
             <div className="mint-panel__price">{mintTitle}</div>
-            <div className="mint-panel__remaining">{terminalState.statusText}</div>
+            <div className="mint-panel__remaining mint-panel__remaining--with-info">
+              <span>{terminalState.statusText}</span>
+              {packStatusBreakdown ? (
+                <span className="mint-panel__pack-status-info-wrap" ref={packStatusInfoRef}>
+                  <button
+                    type="button"
+                    className="mint-panel__pack-status-info"
+                    aria-label="Pack status"
+                    aria-expanded={packStatusInfoOpen}
+                    aria-haspopup="dialog"
+                    onClick={() => setPackStatusInfoOpen((prev) => !prev)}
+                  >
+                    <FaCircleInfo aria-hidden="true" focusable="false" size={15} />
+                  </button>
+                  {packStatusInfoOpen ? <MintPanelPackStatusPopover breakdown={packStatusBreakdown} /> : null}
+                </span>
+              ) : null}
+            </div>
           </div>
           {terminalButtons.length ? (
             <div className="mint-panel__cta">

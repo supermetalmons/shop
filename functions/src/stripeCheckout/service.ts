@@ -14,6 +14,7 @@ import type Stripe from 'stripe';
 import { z } from 'zod';
 import type { MintSelectionConfig, SolanaCluster } from '../config/deployment.js';
 import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
+import { countStripeIrlPackStatus, type PackStatusDropRuntime } from '../packStatus.js';
 import {
   buildStripeCheckoutDocument,
   buildStripeCheckoutSessionMetadata,
@@ -183,6 +184,7 @@ export type StripeCheckoutDropRuntime = {
   dropId: string;
   cluster: SolanaCluster;
   itemsPerBox: number;
+  maxSupply?: number;
   boxMinterProgramId: PublicKey;
   boxMinterConfigPda: PublicKey;
   collectionMint: PublicKey;
@@ -270,7 +272,7 @@ type StripeOffchainDeliveryOrderMarker = {
 };
 type StripeOffchainDeliveryOrderDraft = Omit<StripeOffchainDeliveryOrderDocumentInput, 'deliveryId'>;
 type StripeOffchainDeliveryOrderResult =
-  | { checkoutStatus: 'fulfilled'; deliveryId: number }
+  | { checkoutStatus: 'fulfilled'; deliveryId: number; created?: boolean }
   | { checkoutStatus: 'already_fulfilled'; deliveryId?: number }
   | { checkoutStatus: 'stale_processing_attempt' };
 
@@ -1107,6 +1109,7 @@ function generateUniqueStripeReceiptClaimCodes(quantity: number): string[] {
 
 export async function createOrGetStripeOffchainDeliveryOrder(params: {
   db: Firestore;
+  dropRuntime?: PackStatusDropRuntime;
   order: StripeOffchainDeliveryOrderDraft;
   checkoutRef: DocumentReference;
   isAlreadyExistsError: (err: unknown) => boolean;
@@ -1114,6 +1117,12 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
 }): Promise<StripeOffchainDeliveryOrderResult> {
   const { db, order, checkoutRef } = params;
   const { dropId, orderHashHex } = order;
+  if (params.dropRuntime && params.dropRuntime.dropId !== dropId) {
+    throw new HttpsError('failed-precondition', 'Stripe checkout drop runtime does not match the delivery order drop.', {
+      orderDropId: dropId,
+      runtimeDropId: params.dropRuntime.dropId,
+    });
+  }
   const metadataIds = normalizedMetadataIds(order.metadataIds, order.metadataId);
   const quantity = normalizeStripeCheckoutQuantity(metadataIds.length);
   const markerRef = db.doc(`${dropRootPath(dropId)}/offchainOrders/${orderHashHex}`);
@@ -1128,7 +1137,7 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
     const claimRefs = claimCodes.map((claimCode) => db.doc(`claimCodes/${claimCode}`));
 
     try {
-      const result = await db.runTransaction(async (tx) => {
+      const operation = () => db.runTransaction(async (tx) => {
         const marker = await tx.get(markerRef);
         const checkoutSnap = params.processingAttemptId ? await tx.get(checkoutRef) : null;
         const checkout = checkoutSnap?.exists ? (checkoutSnap.data() as any) : null;
@@ -1204,16 +1213,36 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
         if (checkoutStatus === 'fulfilled') {
           tx.update(
             checkoutRef,
-            stripeCheckoutFulfilledUpdate({
-              deliveryId: candidate,
-              ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
-              metadataIds,
-              receiptTx: order.receiptTx,
-            }),
+            {
+              ...stripeCheckoutFulfilledUpdate({
+                deliveryId: candidate,
+                ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
+                metadataIds,
+                receiptTx: order.receiptTx,
+              }),
+            },
           );
         }
-        return { deliveryId: candidate, checkoutStatus };
+        return { deliveryId: candidate, checkoutStatus, created: true };
       });
+      const result = await operation();
+      if (params.dropRuntime && result.checkoutStatus === 'fulfilled' && result.created === true) {
+        void countStripeIrlPackStatus({
+          db,
+          dropRuntime: params.dropRuntime,
+          orderHashHex,
+          quantity,
+          deliveryId: result.deliveryId,
+          checkoutSessionId: order.stripeSession.id,
+        }).catch((err) => {
+          console.warn('[mons/functions] createOrGetStripeOffchainDeliveryOrder:packStatusCountFailed', {
+            dropId,
+            orderHashHex,
+            deliveryId: result.deliveryId,
+            error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+          });
+        });
+      }
       return result;
     } catch (err) {
       if (params.isAlreadyExistsError(err)) continue;
@@ -1485,6 +1514,7 @@ async function fulfillStripeCheckoutSession<
 
   const order = await createOrGetStripeOffchainDeliveryOrder({
     db,
+    dropRuntime,
     order: {
       dropId,
       orderHashHex,

@@ -21,6 +21,7 @@ import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
 import {
   createStripeCheckoutSession,
   getAnonymousStripeDeliveryHistory,
+  getDropPackStatus,
   getProfile,
   listDeliveryOrderOwners,
   recoverMyDeliveryOrders,
@@ -1732,6 +1733,15 @@ function App({ currentPath }: AppProps) {
   );
   const shouldFetchMintStats = Boolean(routeDrop && !routeDrop.forceSoldOut);
   const { data: mintStats, refetch: refetchStats } = useMintProgress(routeConnection, routeDrop, shouldFetchMintStats);
+  const packStatusDropId = routeDrop?.dropId === 'card_nft_2' && routeDrop.solanaCluster === 'mainnet-beta' ? routeDrop.dropId : null;
+  const { data: packStatusBreakdown } = useQuery({
+    queryKey: ['drop-pack-status', packStatusDropId || 'none'],
+    enabled: Boolean(packStatusDropId),
+    queryFn: () => getDropPackStatus(packStatusDropId || ''),
+    staleTime: 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
   const {
     profile,
     token,
@@ -5972,6 +5982,7 @@ function App({ currentPath }: AppProps) {
             mintSelection={routeDrop.mintSelection}
             showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
             successfulMintToken={successfulMintToken}
+            packStatusBreakdown={packStatusBreakdown ?? undefined}
           />
         )}
       </div>

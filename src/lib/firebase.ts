@@ -1,5 +1,6 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
 const DEFAULT_FIREBASE_API_KEY = 'AIzaSyA3NTv_zfVYMB2VNORxbKg3rJUsiMXIhko';
 const FIREBASE_FUNCTIONS_REGION = 'us-central1' as const;
@@ -20,4 +21,5 @@ export const firebaseApp =
     : getApps()[0];
 
 export const auth = firebaseApp ? getAuth(firebaseApp) : undefined;
+export const firestore = firebaseApp ? getFirestore(firebaseApp) : undefined;
 export { FIREBASE_FUNCTIONS_REGION };

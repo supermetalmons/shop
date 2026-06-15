@@ -42,6 +42,24 @@ export interface MintStats {
   mintSelectionAvailability?: Record<string, number>;
 }
 
+export interface PackStatusBreakdownItem {
+  key: 'unsealed_online' | 'redeemed_irl' | 'sealed' | 'total';
+  label: string;
+  amount: number;
+  percentage: number;
+}
+
+export interface PackStatusBreakdown {
+  dropId: string;
+  total: number;
+  unsealedOnline: number;
+  redeemedIrl: number;
+  redeemedIrlNormal: number;
+  redeemedIrlStripe: number;
+  sealed: number;
+  items: PackStatusBreakdownItem[];
+}
+
 export interface ProfileAddress {
   id: string;
   country: string;

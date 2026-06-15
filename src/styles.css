@@ -679,6 +679,13 @@ header.top--shop.top--spacer {
   transition: opacity 220ms ease;
 }
 
+.mint-panel__remaining--with-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .mint-panel__remaining--hidden {
   opacity: 0;
 }
@@ -944,7 +951,8 @@ header.top--shop.top--spacer {
   }
 }
 
-.mint-panel__size-info {
+.mint-panel__size-info,
+.mint-panel__pack-status-info {
   width: 28px;
   height: 28px;
   padding: 0;
@@ -961,40 +969,58 @@ header.top--shop.top--spacer {
   transition: color 0.15s ease;
 }
 
-.mint-panel__size-info > svg {
+.mint-panel__pack-status-info {
+  width: 24px;
+  height: 24px;
+}
+
+.mint-panel__size-info > svg,
+.mint-panel__pack-status-info > svg {
   display: block;
   width: 16px;
   height: 16px;
   overflow: visible;
 }
 
-.mint-panel__size-info:hover:not(:disabled) {
+.mint-panel__pack-status-info > svg {
+  width: 15px;
+  height: 15px;
+}
+
+.mint-panel__size-info:hover:not(:disabled),
+.mint-panel__pack-status-info:hover:not(:disabled) {
   color: #6e6e73;
   background: transparent;
 }
 
 @media (prefers-color-scheme: dark) {
-  .mint-panel__size-info {
+  .mint-panel__size-info,
+  .mint-panel__pack-status-info {
     color: #6e6e73;
   }
-  .mint-panel__size-info:hover:not(:disabled) {
+  .mint-panel__size-info:hover:not(:disabled),
+  .mint-panel__pack-status-info:hover:not(:disabled) {
     color: #b0b0b5;
   }
 }
 
 .mint-panel__size-info:focus,
-.mint-panel__size-info:focus-visible {
+.mint-panel__size-info:focus-visible,
+.mint-panel__pack-status-info:focus,
+.mint-panel__pack-status-info:focus-visible {
   outline: none;
   box-shadow: none;
 }
 
-.mint-panel__size-info-wrap {
+.mint-panel__size-info-wrap,
+.mint-panel__pack-status-info-wrap {
   position: relative;
   display: inline-flex;
   align-items: center;
 }
 
-.mint-panel__size-popover {
+.mint-panel__size-popover,
+.mint-panel__pack-status-popover {
   position: absolute;
   bottom: calc(100% + 18px);
   right: -6px;
@@ -1009,10 +1035,16 @@ header.top--shop.top--spacer {
   border-radius: var(--radius);
   box-shadow: none;
   text-align: left;
-  animation: mint-panel-size-popover-in 0.14s ease-out;
+  animation: mint-panel-popover-in 0.14s ease-out;
 }
 
-@keyframes mint-panel-size-popover-in {
+.mint-panel__pack-status-popover {
+  min-width: 310px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 12px 14px 10px;
+}
+
+@keyframes mint-panel-popover-in {
   from {
     opacity: 0;
   }
@@ -1028,14 +1060,34 @@ header.top--shop.top--spacer {
   font-variant-numeric: tabular-nums;
 }
 
+.mint-panel__pack-status-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .mint-panel__size-table th,
-.mint-panel__size-table td {
+.mint-panel__size-table td,
+.mint-panel__pack-status-table th,
+.mint-panel__pack-status-table td {
   padding: 7px 6px;
   text-align: center;
   border-bottom: 1px solid var(--border);
 }
 
-.mint-panel__size-table thead th {
+.mint-panel__pack-status-table th:first-child,
+.mint-panel__pack-status-table td:first-child {
+  text-align: left;
+}
+
+.mint-panel__pack-status-table th:not(:first-child),
+.mint-panel__pack-status-table td:not(:first-child) {
+  text-align: right;
+}
+
+.mint-panel__size-table thead th,
+.mint-panel__pack-status-table thead th {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1044,15 +1096,27 @@ header.top--shop.top--spacer {
   border-bottom-color: var(--border);
 }
 
-.mint-panel__size-table tbody th {
+.mint-panel__size-table tbody th,
+.mint-panel__pack-status-table tbody th {
   text-align: left;
   font-weight: 600;
+}
+
+.mint-panel__size-table tbody th {
   width: 36px;
 }
 
 .mint-panel__size-table tbody tr:last-child th,
-.mint-panel__size-table tbody tr:last-child td {
+.mint-panel__size-table tbody tr:last-child td,
+.mint-panel__pack-status-table tbody tr:last-child th,
+.mint-panel__pack-status-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.mint-panel__pack-status-row--total th,
+.mint-panel__pack-status-row--total td {
+  color: var(--fg);
+  font-weight: 700;
 }
 
 .mint-panel__size-quote {
@@ -1399,7 +1463,8 @@ header.top--shop.top--spacer {
     flex: 1;
   }
 
-  .mint-panel__size-popover {
+  .mint-panel__size-popover,
+  .mint-panel__pack-status-popover {
     min-width: 0;
     width: max-content;
     max-width: min(320px, calc(100vw - 24px));

@@ -39,6 +39,11 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
+      match /meta/packStatus {
+        allow get: if request.auth != null && dropId == "card_nft_2";
+        allow list, create, update, delete: if false;
+      }
+
       match /meta/dudePool {
         allow read, write: if false;
       }

@@ -12,6 +12,7 @@
     "typecheck": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && tsc --noEmit",
     "check-irl-claims": "tsx functions/scripts/checkIrlClaims.ts",
     "unstuck-processing-orders": "npm --prefix functions run build && node --experimental-strip-types functions/scripts/unstuckProcessingOrders.ts",
+    "rebuild-pack-status": "tsx functions/scripts/rebuildPackStatus.ts",
     "wipe-drop": "node --experimental-strip-types functions/scripts/wipeDrop.ts",
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",

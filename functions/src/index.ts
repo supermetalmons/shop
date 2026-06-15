@@ -42,6 +42,11 @@ import {
   dropDudePoolPath,
   dropRootPath,
 } from './dropPaths.js';
+import {
+  countDeliveryOrderBoxItems,
+  countNormalIrlPackStatus,
+  countOnlineRevealPackStatus,
+} from './packStatus.js';
 import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
 import { decodePendingOpenBox } from './pendingOpenBox.js';
 import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
@@ -86,7 +91,7 @@ import {
 } from './stripeCheckout/service.js';
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
 import { toMillisMaybe } from './time.js';
-import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
+import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from './claimCodes.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -2632,8 +2637,6 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
   throw new HttpsError('unavailable', 'Failed to assign dudes (try again)', { boxAssetId });
 }
 
-const IRL_CLAIM_CODE_NAMESPACE = 'irl_v2';
-
 function generateIrlClaimCode(): string {
   // 10 digits, including leading zeros.
   const max = 10 ** IRL_CLAIM_CODE_DIGITS;
@@ -2763,6 +2766,7 @@ async function ensureIrlClaimCodeForBox(params: {
   }
 
   const assignmentRef = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
+
   return db.runTransaction(async (tx) => {
     const assignmentSnap = await tx.get(assignmentRef);
     const assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
@@ -2807,7 +2811,7 @@ async function ensureIrlClaimCodeForBox(params: {
     }
 
     // Allocate a unique 10-digit claim code.
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let claimAttempt = 0; claimAttempt < 40; claimAttempt += 1) {
       const code = generateIrlClaimCode();
       const claimRef = db.doc(`claimCodes/${code}`);
       const snap = await tx.get(claimRef);
@@ -5072,6 +5076,14 @@ export const revealDudes = onCallLogged(
   const tx = buildTx(instructions, signer.publicKey, blockhash, [signer]);
 
   const sig = await sendAndConfirmSignedTx(conn, tx, 'revealDudes');
+  void countOnlineRevealPackStatus({ db, dropRuntime, boxAssetId, signature: sig }).catch((err) => {
+    logger.warn('revealDudes:packStatusCountFailed', {
+      dropId,
+      boxAssetId,
+      signature: sig,
+      error: summarizeError(err),
+    });
+  });
 
   return { signature: sig, dudeIds };
   },
@@ -6130,6 +6142,18 @@ export async function retryIssueReceiptsForDeliveryOrder(
     },
     { merge: true },
   );
+  void countNormalIrlPackStatus({
+    db,
+    dropRuntime,
+    deliveryId,
+    quantity: countDeliveryOrderBoxItems(order.items),
+  }).catch((err) => {
+    logger.warn('retryIssueReceiptsForDeliveryOrder:packStatusCountFailed', {
+      dropId,
+      deliveryId,
+      error: summarizeError(err),
+    });
+  });
   await orderRef.update({
     'receiptRecovery.leaseExpiresAt': FieldValue.delete(),
     'receiptRecovery.lastErrorCode': FieldValue.delete(),

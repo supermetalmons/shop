@@ -1,7 +1,8 @@
 import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
-import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp } from './firebase';
+import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp, firestore } from './firebase';
 import {
   DeliverySelection,
   FulfillmentManualReviewCheckout,
@@ -10,6 +11,8 @@ import {
   FulfillmentOrdersCursor,
   InventoryItem,
   IssueReceiptsResult,
+  PackStatusBreakdown,
+  PackStatusBreakdownItem,
   PendingOpenBox,
   PreparedTxResponse,
   Profile,
@@ -29,6 +32,7 @@ import {
 } from './dropMetadataUri';
 import {
   FRONTEND_DROPS,
+  normalizeDropId,
   type FrontendDeploymentConfig,
   type SolanaCluster,
 } from '../config/deployment';
@@ -954,6 +958,69 @@ export async function createTestStripeCheckoutSession(args: StripeCheckoutSessio
     'createTestStripeCheckoutSession',
     stripeCheckoutSessionPayload(args),
   );
+}
+
+function normalizePackStatusAmount(value: unknown): number {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function packStatusPercentage(amount: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.round((amount / total) * 10_000) / 100;
+}
+
+function packStatusItem(
+  key: PackStatusBreakdownItem['key'],
+  label: string,
+  amount: number,
+  total: number,
+): PackStatusBreakdownItem {
+  return {
+    key,
+    label,
+    amount,
+    percentage: key === 'total' && total > 0 ? 100 : packStatusPercentage(amount, total),
+  };
+}
+
+function normalizePackStatusBreakdown(raw: any, dropId: string): PackStatusBreakdown | null {
+  if (!raw || typeof raw !== 'object') return null;
+  if (normalizePackStatusAmount(raw.version) !== 1) return null;
+  if (typeof raw.dropId === 'string' && raw.dropId && raw.dropId !== dropId) return null;
+  const total = normalizePackStatusAmount(raw.totalInitialSupply);
+  if (total <= 0) return null;
+  const unsealedOnline = normalizePackStatusAmount(raw.unsealedOnline);
+  const redeemedIrlNormal = normalizePackStatusAmount(raw.redeemedIrlNormal);
+  const redeemedIrlStripe = normalizePackStatusAmount(raw.redeemedIrlStripe);
+  const redeemedIrl = redeemedIrlNormal + redeemedIrlStripe;
+  const sealed = Math.max(0, total - unsealedOnline - redeemedIrl);
+  const items: PackStatusBreakdownItem[] = [
+    packStatusItem('unsealed_online', 'Unsealed online', unsealedOnline, total),
+    packStatusItem('redeemed_irl', 'Redeemed IRL', redeemedIrl, total),
+    packStatusItem('sealed', 'Sealed', sealed, total),
+    packStatusItem('total', 'Total', total, total),
+  ];
+  return {
+    dropId,
+    total,
+    unsealedOnline,
+    redeemedIrl,
+    redeemedIrlNormal,
+    redeemedIrlStripe,
+    sealed,
+    items,
+  };
+}
+
+export async function getDropPackStatus(dropId: string): Promise<PackStatusBreakdown | null> {
+  const normalizedDropId = normalizeDropId(dropId);
+  if (!normalizedDropId) throw new Error('dropId is required');
+  if (!firestore) throw new Error('Firebase client is not configured');
+  await ensureAuthenticated();
+  const snap = await getDoc(doc(firestore, 'drops', normalizedDropId, 'meta', 'packStatus'));
+  if (!snap.exists()) return null;
+  return normalizePackStatusBreakdown(snap.data(), normalizedDropId);
 }
 
 export async function listFulfillmentOrders(args: {

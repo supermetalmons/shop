@@ -14,6 +14,10 @@ export function dropDudePoolPath(dropId: string): string {
   return `${dropRootPath(dropId)}/meta/dudePool`;
 }
 
+export function dropPackStatusPath(dropId: string): string {
+  return `${dropRootPath(dropId)}/meta/packStatus`;
+}
+
 export function dropDeliveryOrdersCollectionPath(dropId: string): string {
   return `${dropRootPath(dropId)}/deliveryOrders`;
 }
