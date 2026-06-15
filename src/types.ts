@@ -65,6 +65,11 @@ export interface PackStatusBreakdown {
   items: PackStatusBreakdownItem[];
 }
 
+export interface PackStatusDisplayLabels {
+  itemColumnLabel: string;
+  ariaLabel: string;
+}
+
 export interface ProfileAddress {
   id: string;
   country: string;

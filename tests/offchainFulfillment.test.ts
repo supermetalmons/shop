@@ -1163,7 +1163,7 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
     db,
-    dropRuntime: { dropId, cluster: 'mainnet-beta', maxSupply: 12_000 },
+    dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
     checkoutRef,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',

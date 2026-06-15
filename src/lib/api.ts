@@ -13,6 +13,7 @@ import {
   IssueReceiptsResult,
   PackStatusBreakdown,
   PackStatusBreakdownItem,
+  PackStatusDisplayLabels,
   PendingOpenBox,
   PreparedTxResponse,
   Profile,
@@ -22,6 +23,7 @@ import {
 } from '../types';
 import { getHeliusApiKey } from './helius';
 import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
+import { dropAssetLabel } from './dropLabels';
 import {
   boxIdFromMetadataUri,
   canonicalMetadataBase,
@@ -965,7 +967,52 @@ function normalizePackStatusAmount(value: unknown): number {
   return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
-const PACK_STATUS_CARDS_PER_PACK = 3;
+const PACK_STATUS_DEFAULT_CARDS_PER_PACK = 3;
+
+type PackStatusFrontendConfig = {
+  unsealedLabel: string;
+};
+
+const PACK_STATUS_FRONTEND_CONFIGS_BY_DROP_ID: Record<string, PackStatusFrontendConfig> = {
+  card_nft_2: {
+    unsealedLabel: 'Unpacked',
+  },
+  poncho_drifella: {
+    unsealedLabel: 'Unpacked',
+  },
+  little_swag_boxes: {
+    unsealedLabel: 'Unboxed',
+  },
+};
+
+function packStatusFrontendConfigForDropId(dropId: string): PackStatusFrontendConfig | null {
+  const normalizedDropId = normalizeDropId(dropId);
+  const config = PACK_STATUS_FRONTEND_CONFIGS_BY_DROP_ID[normalizedDropId];
+  const drop = FRONTEND_DROPS[normalizedDropId];
+  if (!config || !drop || drop.solanaCluster !== 'mainnet-beta' || normalizePackStatusAmount(drop.itemsPerBox) <= 0) return null;
+  return config;
+}
+
+function packStatusCardsPerPackForDropId(dropId: string): number {
+  const normalizedDropId = normalizeDropId(dropId);
+  const dropItemsPerBox = normalizePackStatusAmount(FRONTEND_DROPS[normalizedDropId]?.itemsPerBox);
+  return dropItemsPerBox || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
+}
+
+export function packStatusDisplayLabelsForDropId(dropId: string | undefined): PackStatusDisplayLabels | null {
+  if (!dropId) return null;
+  const normalizedDropId = normalizeDropId(dropId);
+  const drop = FRONTEND_DROPS[normalizedDropId];
+  if (!drop || !packStatusFrontendConfigForDropId(normalizedDropId)) return null;
+  return {
+    itemColumnLabel: dropAssetLabel(drop, 'figure', 2, { capitalize: true }),
+    ariaLabel: `${dropAssetLabel(drop, 'figure', 1, { capitalize: true })} status`,
+  };
+}
+
+export function supportsFrontendPackStatus(dropId: string | undefined): boolean {
+  return Boolean(dropId && packStatusFrontendConfigForDropId(dropId));
+}
 
 function packStatusPercentage(amount: number, total: number): number {
   if (total <= 0) return 0;
@@ -992,7 +1039,8 @@ function normalizePackStatusBreakdown(raw: any, dropId: string): PackStatusBreak
   if (typeof raw.dropId === 'string' && raw.dropId && raw.dropId !== dropId) return null;
   const totalInitialSupply = normalizePackStatusAmount(raw.totalInitialSupply);
   if (totalInitialSupply <= 0) return null;
-  const cardsPerPack = normalizePackStatusAmount(raw.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const config = packStatusFrontendConfigForDropId(dropId);
+  const cardsPerPack = normalizePackStatusAmount(raw.cardsPerPack) || packStatusCardsPerPackForDropId(dropId);
   const totalCards = normalizePackStatusAmount(raw.totalCards) || totalInitialSupply * cardsPerPack;
   const total = totalCards;
   const unsealedOnline = normalizePackStatusAmount(raw.unsealedOnline);
@@ -1003,7 +1051,7 @@ function normalizePackStatusBreakdown(raw: any, dropId: string): PackStatusBreak
   const redeemedIrl = redeemedIrlNormal + redeemedIrlStripe;
   const redeemedCards = redeemedIrl * cardsPerPack + redeemedUnsealedCards;
   const items: PackStatusBreakdownItem[] = [
-    packStatusItem('unsealed', 'Unpacked', unsealedCards, total),
+    packStatusItem('unsealed', config?.unsealedLabel || 'Unpacked', unsealedCards, total),
     packStatusItem('redeemed', 'Redeemed', redeemedCards, total),
     packStatusItem('total', 'Total', total, total),
   ];

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
+  PACK_STATUS_SUPPORTED_DROP_IDS,
   buildPackStatusBreakdown,
   buildPackStatusCountersFromRebuildInputs,
   countNormalIrlPackStatus,
@@ -11,18 +13,35 @@ import { requireSupportedPackStatusDrop } from '../functions/scripts/rebuildPack
 const CARD_NFT_2_RUNTIME: PackStatusDropRuntime = {
   dropId: 'card_nft_2',
   cluster: 'mainnet-beta',
+  itemsPerBox: 3,
   maxSupply: 12_000,
+};
+
+const PONCHO_DRIFELLA_RUNTIME: PackStatusDropRuntime = {
+  dropId: 'poncho_drifella',
+  cluster: 'mainnet-beta',
+  itemsPerBox: 1,
+  maxSupply: 207,
+};
+
+const LITTLE_SWAG_BOXES_RUNTIME: PackStatusDropRuntime = {
+  dropId: 'little_swag_boxes',
+  cluster: 'mainnet-beta',
+  itemsPerBox: 3,
+  maxSupply: 333,
 };
 
 test('pack status breakdown computes card-focused rows from pack and card counters', () => {
   const breakdown = buildPackStatusBreakdown({
     dropId: 'card_nft_2',
     totalInitialSupply: 100,
+    totalCards: 300,
+    cardsPerPack: 3,
     unsealedOnline: 20,
     redeemedIrlNormal: 10,
     redeemedIrlStripe: 5,
     redeemedUnsealedCards: 7,
-  } as any);
+  });
 
   assert.equal(breakdown.totalInitialSupply, 100);
   assert.equal(breakdown.cardsPerPack, 3);
@@ -37,6 +56,58 @@ test('pack status breakdown computes card-focused rows from pack and card counte
       ['unsealed', 'Unpacked', 60, 20],
       ['redeemed', 'Redeemed', 52, 17.33],
       ['total', 'Total', 300, 100],
+    ],
+  );
+});
+
+test('pack status breakdown computes poncho card rows from one card per pack', () => {
+  const breakdown = buildPackStatusBreakdown({
+    dropId: 'poncho_drifella',
+    totalInitialSupply: 207,
+    totalCards: 207,
+    cardsPerPack: 1,
+    unsealedOnline: 12,
+    redeemedIrlNormal: 3,
+    redeemedIrlStripe: 2,
+    redeemedUnsealedCards: 1,
+  });
+
+  assert.equal(breakdown.cardsPerPack, 1);
+  assert.equal(breakdown.totalCards, 207);
+  assert.equal(breakdown.unsealedCards, 12);
+  assert.equal(breakdown.redeemedCards, 6);
+  assert.deepEqual(
+    breakdown.items.map((item) => [item.key, item.label, item.amount]),
+    [
+      ['unsealed', 'Unpacked', 12],
+      ['redeemed', 'Redeemed', 6],
+      ['total', 'Total', 207],
+    ],
+  );
+});
+
+test('pack status breakdown computes little swag figure rows with unboxed copy', () => {
+  const breakdown = buildPackStatusBreakdown({
+    dropId: 'little_swag_boxes',
+    totalInitialSupply: 333,
+    totalCards: 999,
+    cardsPerPack: 3,
+    unsealedOnline: 20,
+    redeemedIrlNormal: 7,
+    redeemedIrlStripe: 2,
+    redeemedUnsealedCards: 4,
+  });
+
+  assert.equal(breakdown.cardsPerPack, 3);
+  assert.equal(breakdown.totalCards, 999);
+  assert.equal(breakdown.unsealedCards, 60);
+  assert.equal(breakdown.redeemedCards, 31);
+  assert.deepEqual(
+    breakdown.items.map((item) => [item.key, item.label, item.amount]),
+    [
+      ['unsealed', 'Unboxed', 60],
+      ['redeemed', 'Redeemed', 31],
+      ['total', 'Total', 999],
     ],
   );
 });
@@ -105,6 +176,76 @@ test('historical pack status counting separates online reveals, normal IRL, and 
   });
 });
 
+test('historical poncho pack status counting uses one card per pack', () => {
+  const counters = buildPackStatusCountersFromRebuildInputs({
+    dropRuntime: PONCHO_DRIFELLA_RUNTIME,
+    assignmentCount: 12,
+    irlClaimAssignmentCount: 1,
+    inFlightNormalAssignments: 2,
+    deliveryOrders: [
+      {
+        status: 'ready_to_ship',
+        items: [
+          { kind: 'box', assetId: 'poncho-box-a' },
+          { kind: 'box', assetId: 'poncho-box-b' },
+          { kind: 'dude', assetId: 'poncho-card-a' },
+        ],
+      },
+      {
+        status: 'ready_to_ship',
+        source: 'stripe_offchain',
+        metadataIds: [10, 11],
+      },
+    ],
+  });
+
+  assert.deepEqual(counters, {
+    dropId: 'poncho_drifella',
+    totalInitialSupply: 207,
+    totalCards: 207,
+    cardsPerPack: 1,
+    unsealedOnline: 9,
+    redeemedIrlNormal: 2,
+    redeemedIrlStripe: 2,
+    redeemedUnsealedCards: 1,
+  });
+});
+
+test('historical little swag pack status counting uses three figures per box', () => {
+  const counters = buildPackStatusCountersFromRebuildInputs({
+    dropRuntime: LITTLE_SWAG_BOXES_RUNTIME,
+    assignmentCount: 6,
+    irlClaimAssignmentCount: 1,
+    inFlightNormalAssignments: 1,
+    deliveryOrders: [
+      {
+        status: 'ready_to_ship',
+        items: [
+          { kind: 'box', assetId: 'lsb-box-a' },
+          { kind: 'dude', assetId: 'lsb-figure-a' },
+          { kind: 'dude', assetId: 'lsb-figure-b' },
+        ],
+      },
+      {
+        status: 'ready_to_ship',
+        source: 'stripe_offchain',
+        metadataId: 10,
+      },
+    ],
+  });
+
+  assert.deepEqual(counters, {
+    dropId: 'little_swag_boxes',
+    totalInitialSupply: 333,
+    totalCards: 999,
+    cardsPerPack: 3,
+    unsealedOnline: 4,
+    redeemedIrlNormal: 1,
+    redeemedIrlStripe: 1,
+    redeemedUnsealedCards: 2,
+  });
+});
+
 test('normal IRL pack status increments counters and records card-equivalent event quantity', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const creates: Array<{ ref: any; data: any }> = [];
@@ -140,6 +281,30 @@ test('normal IRL pack status increments counters and records card-equivalent eve
   });
 });
 
+test('normal IRL poncho pack status records one-card pack event quantity', async () => {
+  const creates: Array<{ ref: any; data: any }> = [];
+  const db = {
+    doc: (path: string) => ({ path }),
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async () => ({ exists: false }),
+        update: () => undefined,
+        create: (ref: any, data: any) => creates.push({ ref, data }),
+      }),
+  } as any;
+
+  const result = await countNormalIrlPackStatus({
+    db,
+    dropRuntime: PONCHO_DRIFELLA_RUNTIME,
+    deliveryId: 456,
+    packQuantity: 2,
+    unsealedCardQuantity: 4,
+  });
+
+  assert.deepEqual(result, { counted: true, quantity: 6 });
+  assert.equal(creates[0].data.quantity, 6);
+});
+
 test('normal IRL pack status skips duplicate events without incrementing counters', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const creates: Array<{ ref: any; data: any }> = [];
@@ -166,7 +331,31 @@ test('normal IRL pack status skips duplicate events without incrementing counter
   assert.equal(creates.length, 0);
 });
 
-test('pack status rebuild script rejects unsupported drops', () => {
-  assert.throws(() => requireSupportedPackStatusDrop('card_nft_2_devnet_final'), /only supports card_nft_2/i);
+test('pack status rebuild script accepts supported mainnet drops and rejects unsupported drops', () => {
   assert.equal(requireSupportedPackStatusDrop('card_nft_2').dropId, 'card_nft_2');
+  assert.equal(requireSupportedPackStatusDrop('poncho_drifella').itemsPerBox, 1);
+  assert.equal(requireSupportedPackStatusDrop('little_swag_boxes').itemsPerBox, 3);
+  assert.throws(
+    () => requireSupportedPackStatusDrop('card_nft_2_devnet_final'),
+    /only supports card_nft_2, poncho_drifella, little_swag_boxes/i,
+  );
+  assert.throws(
+    () => requireSupportedPackStatusDrop('little_swag_hoodies'),
+    /only supports card_nft_2, poncho_drifella, little_swag_boxes/i,
+  );
+});
+
+test('Firestore rules allow client pack status reads for every supported drop', () => {
+  const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
+  const start = rules.indexOf('match /meta/packStatus');
+  const end = rules.indexOf('match /meta/dudePool', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const packStatusRule = rules.slice(start, end);
+
+  assert.match(packStatusRule, /request\.auth\s*!=\s*null/);
+  for (const dropId of PACK_STATUS_SUPPORTED_DROP_IDS) {
+    assert.equal(packStatusRule.includes(`"${dropId}"`), true);
+  }
+  assert.match(packStatusRule, /allow\s+list,\s+create,\s+update,\s+delete:\s+if\s+false/);
 });

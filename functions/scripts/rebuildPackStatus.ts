@@ -5,12 +5,14 @@ import { normalizeDropId, requireFunctionsDrop } from '../src/config/deployment.
 import { dropDeliveryOrdersCollectionPath, dropRootPath } from '../src/dropPaths.ts';
 import { IRL_CLAIM_CODE_NAMESPACE } from '../src/claimCodes.ts';
 import {
-  PACK_STATUS_SUPPORTED_DROP_ID,
+  PACK_STATUS_DEFAULT_DROP_ID,
+  PACK_STATUS_SUPPORTED_DROP_IDS,
   assignmentHasNormalInFlightPackStatusClaim,
   buildPackStatusBreakdown,
   buildPackStatusCountersFromRebuildInputs,
   buildPackStatusStatsDocument,
   deliveryOrderBoxAssetIds,
+  isPackStatusSupportedDropId,
   packStatusAssignmentRef,
   packStatusStatsRef,
   shouldTrackPackStatusForDrop,
@@ -37,7 +39,7 @@ function usage(): string {
     '  npm run rebuild-pack-status -- --drop-id card_nft_2 --json',
     '',
     'Options:',
-    '  --drop-id <id>  Drop to rebuild (default: card_nft_2)',
+    `  --drop-id <id>  Drop to rebuild: ${PACK_STATUS_SUPPORTED_DROP_IDS.join(', ')} (default: ${PACK_STATUS_DEFAULT_DROP_ID})`,
     '  --write         Overwrite drops/<drop>/meta/packStatus',
     '  --json          Print machine-readable output',
     '  -h, --help      Show this help',
@@ -49,7 +51,7 @@ function fail(message: string): never {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dropId: PACK_STATUS_SUPPORTED_DROP_ID, write: false, json: false };
+  const args: Args = { dropId: PACK_STATUS_DEFAULT_DROP_ID, write: false, json: false };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -80,19 +82,28 @@ function parseArgs(argv: string[]): Args {
 
 export function requireSupportedPackStatusDrop(dropId: string): PackStatusDropRuntime {
   const normalizedDropId = normalizeDropId(dropId);
-  if (normalizedDropId !== PACK_STATUS_SUPPORTED_DROP_ID) {
-    fail(`Pack status rebuild only supports ${PACK_STATUS_SUPPORTED_DROP_ID}. Received: ${dropId}`);
+  if (!isPackStatusSupportedDropId(normalizedDropId)) {
+    fail(`Pack status rebuild only supports ${PACK_STATUS_SUPPORTED_DROP_IDS.join(', ')}. Received: ${dropId}`);
   }
   const drop = requireFunctionsDrop(normalizedDropId);
   const dropRuntime = {
     dropId: drop.dropId,
     cluster: drop.solanaCluster,
+    itemsPerBox: drop.itemsPerBox,
     maxSupply: drop.maxSupply,
   };
   if (!shouldTrackPackStatusForDrop(dropRuntime)) {
-    fail(`Pack status is only supported for mainnet ${PACK_STATUS_SUPPORTED_DROP_ID}.`);
+    fail(`Pack status is only supported for mainnet drops: ${PACK_STATUS_SUPPORTED_DROP_IDS.join(', ')}.`);
   }
   return dropRuntime;
+}
+
+function packStatusItemPlural(dropId: string): string {
+  return dropId === 'little_swag_boxes' ? 'figures' : 'cards';
+}
+
+function packStatusContainerPlural(dropId: string): string {
+  return dropId === 'little_swag_boxes' ? 'boxes' : 'packs';
 }
 
 async function aggregateCount(query: any): Promise<number> {
@@ -183,13 +194,15 @@ async function main(): Promise<void> {
       ),
     );
   } else {
+    const itemPlural = packStatusItemPlural(dropRuntime.dropId);
+    const containerPlural = packStatusContainerPlural(dropRuntime.dropId);
     console.log(`${args.write ? 'Writing' : 'Dry run for'} pack status: ${dropRuntime.dropId}`);
-    console.log(`  Redeemed cards:          ${breakdown.redeemedCards}`);
-    console.log(`  Unsealed cards:          ${breakdown.unsealedCards}`);
-    console.log(`  Total cards:             ${breakdown.totalCards}`);
-    console.log(`  Unsealed online packs:   ${breakdown.unsealedOnline}`);
-    console.log(`  Redeemed IRL packs:      ${breakdown.redeemedIrl}`);
-    console.log(`  Redeemed unsealed cards: ${breakdown.redeemedUnsealedCards}`);
+    console.log(`  Redeemed ${itemPlural}:          ${breakdown.redeemedCards}`);
+    console.log(`  Unsealed ${itemPlural}:          ${breakdown.unsealedCards}`);
+    console.log(`  Total ${itemPlural}:             ${breakdown.totalCards}`);
+    console.log(`  Unsealed online ${containerPlural}:   ${breakdown.unsealedOnline}`);
+    console.log(`  Redeemed IRL ${containerPlural}:      ${breakdown.redeemedIrl}`);
+    console.log(`  Redeemed unsealed ${itemPlural}: ${breakdown.redeemedUnsealedCards}`);
     console.log(`  Assignments:             ${result.historicalAssignmentCounts.boxAssignments}`);
     console.log(`  IRL assignments:         ${result.historicalAssignmentCounts.irlClaimAssignments}`);
     console.log(`  In-flight boxes:         ${result.historicalAssignmentCounts.inFlightNormalAssignments}`);

@@ -24,12 +24,14 @@ import {
   getDropPackStatus,
   getProfile,
   listDeliveryOrderOwners,
+  packStatusDisplayLabelsForDropId,
   recoverMyDeliveryOrders,
   rememberPendingOpenDropId,
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
   saveEncryptedAddress,
+  supportsFrontendPackStatus,
   issueReceipts,
 } from './lib/api';
 import { auth } from './lib/firebase';
@@ -1733,7 +1735,8 @@ function App({ currentPath }: AppProps) {
   );
   const shouldFetchMintStats = Boolean(routeDrop && !routeDrop.forceSoldOut);
   const { data: mintStats, refetch: refetchStats } = useMintProgress(routeConnection, routeDrop, shouldFetchMintStats);
-  const packStatusDropId = routeDrop?.dropId === 'card_nft_2' && routeDrop.solanaCluster === 'mainnet-beta' ? routeDrop.dropId : null;
+  const packStatusDropId = routeDrop?.dropId && supportsFrontendPackStatus(routeDrop.dropId) ? routeDrop.dropId : null;
+  const packStatusDisplayLabels = packStatusDisplayLabelsForDropId(packStatusDropId || undefined);
   const { data: packStatusBreakdown } = useQuery({
     queryKey: ['drop-pack-status', packStatusDropId || 'none'],
     enabled: Boolean(packStatusDropId),
@@ -5984,6 +5987,7 @@ function App({ currentPath }: AppProps) {
             successfulMintToken={successfulMintToken}
             showPackStatusInfo={Boolean(packStatusDropId)}
             packStatusBreakdown={packStatusBreakdown ?? undefined}
+            packStatusDisplayLabels={packStatusDisplayLabels ?? undefined}
           />
         )}
       </div>

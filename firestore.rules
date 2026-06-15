@@ -40,7 +40,11 @@ service cloud.firestore {
       }
 
       match /meta/packStatus {
-        allow get: if request.auth != null && dropId == "card_nft_2";
+        allow get: if request.auth != null && (
+          dropId == "card_nft_2" ||
+          dropId == "poncho_drifella" ||
+          dropId == "little_swag_boxes"
+        );
         allow list, create, update, delete: if false;
       }
 

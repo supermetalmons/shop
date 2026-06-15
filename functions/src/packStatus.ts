@@ -4,12 +4,14 @@ import { dropBoxAssignmentPath, dropPackStatusPath, dropRootPath } from './dropP
 import { IRL_CLAIM_CODE_NAMESPACE } from './claimCodes.js';
 
 export const PACK_STATUS_SCHEMA_VERSION = 1;
-export const PACK_STATUS_SUPPORTED_DROP_ID = 'card_nft_2';
-export const PACK_STATUS_CARDS_PER_PACK = 3;
+export const PACK_STATUS_DEFAULT_DROP_ID = 'card_nft_2';
+export const PACK_STATUS_SUPPORTED_DROP_IDS = ['card_nft_2', 'poncho_drifella', 'little_swag_boxes'] as const;
+export const PACK_STATUS_DEFAULT_CARDS_PER_PACK = 3;
 
 export type PackStatusDropRuntime = {
   dropId: string;
   cluster: SolanaCluster;
+  itemsPerBox: number;
   maxSupply?: number;
 };
 
@@ -75,9 +77,11 @@ type PackStatusCounterIncrement = {
   quantity: number;
 };
 
-function packStatusIncrementCardQuantity(increment: PackStatusCounterIncrement): number {
+const PACK_STATUS_SUPPORTED_DROP_ID_SET = new Set<string>(PACK_STATUS_SUPPORTED_DROP_IDS);
+
+function packStatusIncrementCardQuantity(increment: PackStatusCounterIncrement, cardsPerPack: number): number {
   const quantity = safeNonNegativeInteger(increment.quantity);
-  return increment.field === 'redeemedUnsealedCards' ? quantity : quantity * PACK_STATUS_CARDS_PER_PACK;
+  return increment.field === 'redeemedUnsealedCards' ? quantity : quantity * cardsPerPack;
 }
 
 function safeInteger(value: unknown): number {
@@ -94,10 +98,23 @@ function percentage(amount: number, total: number): number {
   return Math.round((amount / total) * 10_000) / 100;
 }
 
+function packStatusUnsealedLabel(dropId: string): string {
+  return dropId === 'little_swag_boxes' ? 'Unboxed' : 'Unpacked';
+}
+
+export function packStatusCardsPerPack(dropRuntime: Pick<PackStatusDropRuntime, 'itemsPerBox'> | undefined): number {
+  return safeNonNegativeInteger(dropRuntime?.itemsPerBox) || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
+}
+
+export function isPackStatusSupportedDropId(dropId: string | undefined): boolean {
+  return PACK_STATUS_SUPPORTED_DROP_ID_SET.has(String(dropId || '').trim());
+}
+
 export function shouldTrackPackStatusForDrop(dropRuntime: PackStatusDropRuntime | undefined): boolean {
   return (
-    dropRuntime?.dropId === PACK_STATUS_SUPPORTED_DROP_ID &&
+    isPackStatusSupportedDropId(dropRuntime?.dropId) &&
     dropRuntime?.cluster === 'mainnet-beta' &&
+    safeNonNegativeInteger(dropRuntime?.itemsPerBox) > 0 &&
     safeNonNegativeInteger(dropRuntime?.maxSupply) > 0
   );
 }
@@ -147,7 +164,7 @@ function isStripeOffchainOrder(order: any): boolean {
 
 export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStatusBreakdown {
   const totalInitialSupply = safeNonNegativeInteger(counters.totalInitialSupply);
-  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
   const totalCards = safeNonNegativeInteger(counters.totalCards) || totalInitialSupply * cardsPerPack;
   const total = totalCards;
   const unsealedOnline = safeNonNegativeInteger(counters.unsealedOnline);
@@ -160,7 +177,7 @@ export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStat
   const items: PackStatusBreakdownItem[] = [
     {
       key: 'unsealed',
-      label: 'Unpacked',
+      label: packStatusUnsealedLabel(counters.dropId),
       amount: unsealedCards,
       percentage: percentage(unsealedCards, total),
     },
@@ -207,7 +224,7 @@ export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebui
       redeemedUnsealedCards += countDeliveryOrderDudeItems(order?.items);
     }
   }
-  const cardsPerPack = PACK_STATUS_CARDS_PER_PACK;
+  const cardsPerPack = packStatusCardsPerPack(params.dropRuntime);
   const totalInitialSupply = safeNonNegativeInteger(params.dropRuntime.maxSupply);
 
   return {
@@ -229,7 +246,7 @@ export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebui
 
 export function buildPackStatusStatsDocument(counters: PackStatusCounters): Record<string, unknown> {
   const totalInitialSupply = safeNonNegativeInteger(counters.totalInitialSupply);
-  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_CARDS_PER_PACK;
+  const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
   const totalCards = safeNonNegativeInteger(counters.totalCards) || totalInitialSupply * cardsPerPack;
   return {
     version: PACK_STATUS_SCHEMA_VERSION,
@@ -266,9 +283,10 @@ async function countPackStatusEvent(params: {
       quantity: safeNonNegativeInteger(increment.quantity),
     }))
     .filter((increment) => increment.quantity > 0);
-  const quantity = increments.reduce((total, increment) => total + packStatusIncrementCardQuantity(increment), 0);
   const eventKey = String(params.eventKey || '').trim();
   if (!eventKey || !increments.length) return { counted: false, quantity: 0 };
+  const cardsPerPack = packStatusCardsPerPack(dropRuntime);
+  const quantity = increments.reduce((total, increment) => total + packStatusIncrementCardQuantity(increment, cardsPerPack), 0);
 
   const statsRef = packStatusStatsRef(db, dropRuntime.dropId);
   const eventRef = packStatusEventRef(db, dropRuntime.dropId, params.type, eventKey);

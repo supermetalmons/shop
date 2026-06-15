@@ -12,7 +12,7 @@ import {
 } from 'react';
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { LuInfo } from 'react-icons/lu';
-import { MintStats, type PackStatusBreakdown, type PreviewVideoSource } from '../types';
+import { MintStats, type PackStatusBreakdown, type PackStatusDisplayLabels, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
@@ -75,6 +75,7 @@ interface MintPanelProps {
   terminalAction?: MintPanelTerminalAction;
   showPackStatusInfo?: boolean;
   packStatusBreakdown?: PackStatusBreakdown;
+  packStatusDisplayLabels?: PackStatusDisplayLabels;
 }
 
 /**
@@ -427,15 +428,26 @@ function formatPackStatusAmount(amount: number): string {
   return PACK_STATUS_NUMBER_FORMATTER.format(Math.max(0, Math.floor(Number(amount) || 0)));
 }
 
-function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreakdown }) {
+const DEFAULT_PACK_STATUS_DISPLAY_LABELS: PackStatusDisplayLabels = {
+  itemColumnLabel: 'Cards',
+  ariaLabel: 'Card status',
+};
+
+function MintPanelPackStatusPopover({
+  breakdown,
+  displayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
+}: {
+  breakdown?: PackStatusBreakdown;
+  displayLabels?: PackStatusDisplayLabels;
+}) {
   return (
-    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Card status" aria-busy={!breakdown}>
+    <div className="mint-panel__pack-status-popover" role="dialog" aria-label={displayLabels.ariaLabel} aria-busy={!breakdown}>
       {breakdown ? (
         <table className="mint-panel__pack-status-table">
           <thead>
             <tr>
               <th scope="col" aria-label="Status" />
-              <th scope="col">Cards</th>
+              <th scope="col">{displayLabels.itemColumnLabel}</th>
             </tr>
           </thead>
           <tbody>
@@ -650,6 +662,7 @@ export function MintPanel({
   terminalAction,
   showPackStatusInfo,
   packStatusBreakdown,
+  packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
   const total = stats?.total ?? maxSupply;
@@ -1103,14 +1116,16 @@ export function MintPanel({
                   <button
                     type="button"
                     className="mint-panel__pack-status-info"
-                    aria-label="Card status"
+                    aria-label={packStatusDisplayLabels.ariaLabel}
                     aria-expanded={packStatusInfoOpen}
                     aria-haspopup="dialog"
                     onClick={() => setPackStatusInfoOpen((prev) => !prev)}
                   >
                     <LuInfo aria-hidden="true" focusable="false" size={16} strokeWidth={2} />
                   </button>
-                  {packStatusInfoOpen ? <MintPanelPackStatusPopover breakdown={packStatusBreakdown} /> : null}
+                  {packStatusInfoOpen ? (
+                    <MintPanelPackStatusPopover breakdown={packStatusBreakdown} displayLabels={packStatusDisplayLabels} />
+                  ) : null}
                 </span>
               ) : null}
             </div>
