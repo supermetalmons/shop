@@ -6,9 +6,9 @@ import {
   shouldSendResendNotificationEmail,
 } from '../functions/src/notifications.ts';
 
-test('Resend non-checkout error notification emails are temporarily disabled', () => {
-  assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, false);
-  assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), false);
+test('Resend non-checkout error notification emails are enabled', () => {
+  assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, true);
+  assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), true);
   assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
 });
 
