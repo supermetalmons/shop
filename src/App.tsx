@@ -18,6 +18,7 @@ import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
+import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
   createStripeCheckoutSession,
   getAnonymousStripeDeliveryHistory,
@@ -151,6 +152,7 @@ import {
   type LocalMintedBoxMatch,
 } from './lib/localMintedBoxes';
 import {
+  calcAspectLockedRevealOriginRect,
   calcPonchoDrifellaAbsoluteCardRect,
   calcPonchoDrifellaRevealTargetRectInViewport,
   calcPonchoDrifellaRevealTargetRect,
@@ -160,6 +162,7 @@ import {
   ponchoDrifellaRevealOverlayStyleVars,
   revealOverlayStyleVars,
   sameRevealOverlayRect,
+  toRevealOverlayRect,
 } from './lib/revealOverlayLayout';
 import {
   CARD_NFT_2_PACK_COMPACT_VIDEO_SCALE,
@@ -688,8 +691,6 @@ const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
 const STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT = 100;
 const STRIPE_UNIT_AMOUNT_CENTS_MIN = 50;
 const STRIPE_UNIT_AMOUNT_CENTS_MAX = 99_999_999;
-const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
-const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
 
 function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
   return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
@@ -1274,27 +1275,6 @@ function ReceiptImageViewerOverlay({
         </div>
       </div>
     </div>
-  );
-}
-
-function toOverlayRect(rect: DOMRect): OverlayRect {
-  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-}
-
-function calcAspectLockedViewerOriginRect(
-  originRect: DOMRect,
-  targetRect: Readonly<{ width: number; height: number }>,
-): DOMRect {
-  const safeSourceHeight = Math.max(1, originRect.height);
-  const safeTargetWidth = Math.max(1, targetRect.width);
-  const safeTargetHeight = Math.max(1, targetRect.height);
-  const aspectRatio = safeTargetWidth / safeTargetHeight;
-  const width = Math.max(1, safeSourceHeight * aspectRatio);
-  return new DOMRect(
-    originRect.left + (originRect.width - width) / 2,
-    originRect.top,
-    width,
-    safeSourceHeight,
   );
 }
 
@@ -3079,7 +3059,7 @@ function App({ currentPath }: AppProps) {
     clearRevealOverlayCloseTimeout();
     const packMediaId = resolveInteractiveCardPackMediaIdForBox(overlayDropId, item.boxId);
     preloadRevealAssetsForPackMedia(overlayDropId, packMediaId);
-    const originRect = toOverlayRect(rect);
+    const originRect = toRevealOverlayRect(rect);
     const targetRect = calcRevealTargetRectForRendererInViewport(
       revealRendererForDropId(overlayDropId),
       boxAspectRatioForDropId(overlayDropId),
@@ -3405,44 +3385,13 @@ function App({ currentPath }: AppProps) {
     return () => window.clearTimeout(timeout);
   }, [revealFrameCountForDropId, revealMediaStartForDropId, revealOverlay, revealOverlayClosing]);
 
-  useEffect(() => {
-    if (!revealOverlayOpen) return;
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if ((evt.metaKey || evt.ctrlKey) && OVERLAY_ZOOM_SHORTCUT_KEYS.has(evt.key)) {
-        evt.preventDefault();
-        return;
-      }
-      if (evt.key !== 'Escape') return;
-      evt.preventDefault();
-      if (!canDismissRevealOverlayFromKeyboard()) return;
+  const handleRevealOverlayEscape = useCallback(() => {
+    if (canDismissRevealOverlayFromKeyboard()) {
       closeRevealOverlay();
-    };
-    const html = document.documentElement;
-    const body = document.body;
-    const previousHtmlOverflow = html.style.overflow;
-    const previousBodyOverflow = body.style.overflow;
-    const preventDefault = (evt: Event) => evt.preventDefault();
-    const nonPassiveOptions = { passive: false } as AddEventListenerOptions;
+    }
+  }, [canDismissRevealOverlayFromKeyboard, closeRevealOverlay]);
 
-    document.addEventListener('keydown', onKeyDown);
-    OVERLAY_BLOCKED_EVENTS.forEach((eventName) => {
-      document.addEventListener(eventName, preventDefault, nonPassiveOptions);
-    });
-    html.classList.add('overlay-scroll-lock');
-    body.classList.add('overlay-scroll-lock');
-    html.style.overflow = 'hidden';
-    body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      OVERLAY_BLOCKED_EVENTS.forEach((eventName) => {
-        document.removeEventListener(eventName, preventDefault, nonPassiveOptions);
-      });
-      html.classList.remove('overlay-scroll-lock');
-      body.classList.remove('overlay-scroll-lock');
-      html.style.overflow = previousHtmlOverflow;
-      body.style.overflow = previousBodyOverflow;
-    };
-  }, [revealOverlayOpen, canDismissRevealOverlayFromKeyboard, closeRevealOverlay]);
+  useOverlayScrollLock({ active: revealOverlayOpen, onEscape: handleRevealOverlayEscape });
 
   useEffect(() => {
     if (!revealOverlayOpen) return;
@@ -4686,7 +4635,7 @@ function App({ currentPath }: AppProps) {
       calcPonchoDrifellaRevealTargetRectInViewport(),
     );
     const resolvedOriginRect = originRect
-      ? calcAspectLockedViewerOriginRect(originRect, targetRect)
+      ? calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(
           targetRect.left,
           targetRect.top,
@@ -4698,7 +4647,7 @@ function App({ currentPath }: AppProps) {
       dropId,
       name,
       image,
-      originRect: toOverlayRect(resolvedOriginRect),
+      originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
       phase: 'revealed',
       frame: 1,
@@ -4760,7 +4709,7 @@ function App({ currentPath }: AppProps) {
           : 1;
     const targetRect = calcReceiptViewerTargetRectInViewport(aspectRatio, options?.size);
     const resolvedOriginRect = originRect
-      ? calcAspectLockedViewerOriginRect(originRect, targetRect)
+      ? calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
 
     resetPonchoRevealDismissState();
@@ -4772,7 +4721,7 @@ function App({ currentPath }: AppProps) {
       dropId: item.dropId,
       name: options?.overlayName || item.name,
       image: item.image,
-      originRect: toOverlayRect(resolvedOriginRect),
+      originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
       phase: 'revealed',
       frame: 1,

@@ -107,6 +107,45 @@ body.wip-scroll-lock #root {
   --page-gap: 2px;
 }
 
+.card-nft2-unrevealed-page {
+  --page-gap: 18px;
+  max-width: 1120px;
+}
+
+.route-loading-page {
+  min-height: 100vh;
+  min-height: 100svh;
+  align-items: center;
+  justify-content: center;
+}
+
+.route-loading-indicator {
+  width: 42px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(60, 60, 67, 0.32);
+  animation: route-loading-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes route-loading-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scaleX(0.62);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-indicator {
+    animation: none;
+  }
+}
+
 .drop-page-frame,
 .app-section,
 .toast {
@@ -239,6 +278,52 @@ body.wip-scroll-lock #root {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.card-nft2-unrevealed-section {
+  padding-top: 18px;
+}
+
+.card-nft2-unrevealed-section__head {
+  align-items: flex-end;
+}
+
+.card-nft2-unrevealed-section__head .app-section__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.card-nft2-unrevealed-section__error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.card-nft2-unrevealed-section__retry {
+  width: fit-content;
+}
+
+.card-nft2-unrevealed-section__loading,
+.card-nft2-unrevealed-section__end {
+  align-self: center;
+}
+
+.card-nft2-unrevealed-section__pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.card-nft2-unrevealed-section__page-button {
+  min-width: 104px;
+}
+
+.card-nft2-unrevealed-section__page-status {
+  min-width: 72px;
+  text-align: center;
 }
 
 header.top {
@@ -2144,32 +2229,19 @@ button.no-focus-style:focus-visible {
   gap: 12px;
 }
 
-@media (max-width: 560px) {
-  .inventory,
-  .inventory--receipts {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .inventory--receipts {
-    gap: 6px;
-  }
-}
-
-@media (max-width: 340px) {
-  .inventory,
-  .inventory--receipts {
-    gap: 8px;
-  }
-
-  .inventory--receipts {
-    gap: 4px;
-  }
+.inventory--card-nft2-unrevealed {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
 }
 
 @media (max-width: 720px) {
-  .inventory:not(.inventory--receipts) {
+  .inventory:not(.inventory--receipts):not(.inventory--card-nft2-unrevealed) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .inventory--card-nft2-unrevealed {
     width: 100%;
     gap: 8px;
   }
@@ -2199,6 +2271,10 @@ button.no-focus-style:focus-visible {
 @media (max-width: 340px) {
   .inventory--receipts {
     gap: 4px;
+  }
+
+  .inventory--card-nft2-unrevealed {
+    gap: 6px;
   }
 }
 
@@ -2353,6 +2429,22 @@ button.no-focus-style:focus-visible {
 
 .reveal-overlay--active .reveal-overlay__backdrop {
   opacity: 1;
+}
+
+.poncho-card-viewer-overlay__card-id {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + clamp(14px, 3.2svh, 34px));
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  color: rgba(92, 92, 94, 0.54);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
 }
 
 .reveal-overlay--closing {

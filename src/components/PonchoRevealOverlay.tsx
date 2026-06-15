@@ -89,6 +89,7 @@ export type PonchoCardViewerOverlayProps = {
   active: boolean;
   closing: boolean;
   card?: DrifCardConfig;
+  cardIdLabel?: string;
   loadingImageSrc?: string;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
@@ -1471,6 +1472,7 @@ export function PonchoCardViewerOverlay({
   active,
   closing,
   card,
+  cardIdLabel,
   loadingImageSrc,
   onDismiss,
   onTransitionEnd,
@@ -1489,6 +1491,7 @@ export function PonchoCardViewerOverlay({
       onDragStart={(evt) => evt.preventDefault()}
     >
       <div className="reveal-overlay__backdrop" />
+      {cardIdLabel ? <div className="poncho-card-viewer-overlay__card-id">{cardIdLabel}</div> : null}
       <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
         <div className="wip-reveal__stage wip-reveal__stage--visible">
           {card ? (

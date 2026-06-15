@@ -189,6 +189,17 @@ export type DropFetchOptions = {
   includeDevnet?: boolean;
 };
 
+export type ListCardNft2UnrevealedCardsRequest = {
+  limit?: number;
+  cursor?: number;
+};
+
+export type ListCardNft2UnrevealedCardsResponse = {
+  ids: number[];
+  nextCursor?: number;
+  hasMore: boolean;
+};
+
 const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
   .sort((a, b) => a.localeCompare(b))
   .map((dropId) => {
@@ -824,6 +835,15 @@ async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Prom
 export async function fetchInventory(owner: string, options?: DropFetchOptions): Promise<InventoryItem[]> {
   const assets = await fetchAssetsOwned(owner, options);
   return assets.map(transformInventoryItem).filter(Boolean) as InventoryItem[];
+}
+
+export async function listCardNft2UnrevealedCards(
+  args: ListCardNft2UnrevealedCardsRequest = {},
+): Promise<ListCardNft2UnrevealedCardsResponse> {
+  return callFunction<ListCardNft2UnrevealedCardsRequest, ListCardNft2UnrevealedCardsResponse>(
+    'listCardNft2UnrevealedCards',
+    args,
+  );
 }
 
 export async function fetchPendingOpenBoxes(owner: string, options?: DropFetchOptions): Promise<PendingOpenBox[]> {

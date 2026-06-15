@@ -133,6 +133,27 @@ export function calcPonchoDrifellaAbsoluteCardRect(
   };
 }
 
+export function toRevealOverlayRect(rect: Readonly<PonchoDrifellaFrameRect>): PonchoDrifellaFrameRect {
+  return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+export function calcAspectLockedRevealOriginRect(
+  originRect: DOMRect,
+  targetRect: Readonly<Pick<PonchoDrifellaFrameRect, 'width' | 'height'>>,
+): DOMRect {
+  const safeSourceHeight = Math.max(1, originRect.height);
+  const safeTargetWidth = Math.max(1, targetRect.width);
+  const safeTargetHeight = Math.max(1, targetRect.height);
+  const aspectRatio = safeTargetWidth / safeTargetHeight;
+  const width = Math.max(1, safeSourceHeight * aspectRatio);
+  return new DOMRect(
+    originRect.left + (originRect.width - width) / 2,
+    originRect.top,
+    width,
+    safeSourceHeight,
+  );
+}
+
 export function getRevealOverlayViewport(): RevealOverlayViewport {
   if (typeof window === 'undefined') return { left: 0, top: 0, width: 1, height: 1 };
   const visualViewport = window.visualViewport;

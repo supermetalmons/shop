@@ -93,6 +93,11 @@ import {
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
 import { toMillisMaybe } from './time.js';
 import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from './claimCodes.js';
+import {
+  paginateCardNft2UnrevealedCandidateIds,
+  type ListCardNft2UnrevealedCardsRequest,
+  type ListCardNft2UnrevealedCardsResponse,
+} from './cardNft2Unrevealed.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -2638,6 +2643,30 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
   throw new HttpsError('unavailable', 'Failed to assign dudes (try again)', { boxAssetId });
 }
 
+const CARD_NFT_2_UNREVEALED_DROP_ID = 'card_nft_2';
+
+async function listCardNft2UnrevealedCardIds(
+  rawRequest: unknown,
+): Promise<ListCardNft2UnrevealedCardsResponse> {
+  const request =
+    rawRequest && typeof rawRequest === 'object'
+      ? (rawRequest as ListCardNft2UnrevealedCardsRequest)
+      : {};
+  const dropRuntime = getDropRuntime(CARD_NFT_2_UNREVEALED_DROP_ID);
+  if (dropRuntime.config.dropFamily !== 'card_nft_2') {
+    throw new HttpsError('failed-precondition', 'Card NFT 2 drop config is invalid.');
+  }
+
+  const poolSnap = await db.doc(dropDudePoolPath(dropRuntime.dropId)).get();
+  const rawPool = poolSnap.exists ? (poolSnap.data() as any)?.available : undefined;
+  return paginateCardNft2UnrevealedCandidateIds({
+    rawPool,
+    limit: request.limit,
+    cursor: request.cursor,
+    maxCardId: dropRuntime.maxDudeId,
+  });
+}
+
 function generateIrlClaimCode(): string {
   // 10 digits, including leading zeros.
   const max = 10 ** IRL_CLAIM_CODE_DIGITS;
@@ -4928,6 +4957,11 @@ export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentIn
 
   return { deliveryId, fulfillmentInternalStatus: status };
 });
+
+export const listCardNft2UnrevealedCards = onCallAuthed(
+  'listCardNft2UnrevealedCards',
+  async (request) => listCardNft2UnrevealedCardIds(request.data),
+);
 
 export const revealDudes = onCallLogged(
   'revealDudes',

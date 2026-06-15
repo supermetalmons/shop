@@ -15,10 +15,8 @@ import {
   type MobileTapCandidate,
 } from '../lib/mobileInteractionGuards';
 
-interface InventoryGridProps {
+type InventoryGridSharedProps = {
   items: InventoryItem[];
-  selected: Set<string>;
-  onToggle: (id: string) => void;
   itemClassName?: string;
   className?: string;
   pendingRevealIds?: Set<string>;
@@ -28,7 +26,23 @@ interface InventoryGridProps {
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
-}
+  figureMediaMode?: 'background' | 'image';
+};
+
+type InventoryGridDefaultProps = InventoryGridSharedProps & {
+  interactionMode?: 'default';
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+};
+
+type InventoryGridViewOnlyProps = InventoryGridSharedProps & {
+  interactionMode: 'view-only';
+  selected?: Set<string>;
+  onToggle?: (id: string) => void;
+  onViewItem: (item: InventoryItem, rect: DOMRect) => void;
+};
+
+type InventoryGridProps = InventoryGridDefaultProps | InventoryGridViewOnlyProps;
 
 type InventoryTapCandidate = MobileTapCandidate & {
   itemId: string;
@@ -44,6 +58,7 @@ type InventoryInteractionMode = 'select' | 'reveal' | 'view' | null;
 
 type InventoryInteractionContext = {
   selected: Set<string>;
+  interactionMode?: InventoryGridProps['interactionMode'];
   pendingRevealIds?: Set<string>;
   onReveal?: InventoryGridProps['onReveal'];
   onViewItem?: InventoryGridProps['onViewItem'];
@@ -53,7 +68,7 @@ type InventoryInteractionContext = {
 };
 
 type InventoryActivationContext = {
-  onToggle: InventoryGridProps['onToggle'];
+  onToggle: (id: string) => void;
   onReveal?: InventoryGridProps['onReveal'];
   onViewItem?: InventoryGridProps['onViewItem'];
 };
@@ -73,10 +88,14 @@ type InventoryInteractionState = {
   canInteract: boolean;
 };
 
+const EMPTY_INVENTORY_SELECTION = new Set<string>();
+const noopInventoryToggle = () => undefined;
+
 function getInventoryItemInteraction(
   item: InventoryItem,
   {
     selected,
+    interactionMode = 'default',
     pendingRevealIds,
     onReveal,
     onViewItem,
@@ -88,6 +107,19 @@ function getInventoryItemInteraction(
   const isReceipt = item.kind === 'certificate';
   const isPendingReveal = pendingRevealIds?.has(item.id) ?? false;
   const isPendingLocal = item.status === 'pending';
+  if (interactionMode === 'view-only') {
+    const viewEnabled = Boolean(onViewItem);
+    return {
+      mode: viewEnabled ? 'view' : null,
+      isReceipt,
+      isPendingReveal,
+      canSelect: false,
+      isSelected: false,
+      revealEnabled: false,
+      viewEnabled,
+      canInteract: viewEnabled,
+    };
+  }
   const canSelect = !isReceipt && !isPendingReveal && !isPendingLocal;
   const isSelected = canSelect ? selected.has(item.id) : false;
   const canReveal = Boolean(isPendingReveal && onReveal && (canRevealItem ? canRevealItem(item) : true));
@@ -236,14 +268,84 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
   );
 }
 
-function InventoryMedia({ item }: { item: InventoryItem }) {
-  const isFigure = item.kind === 'dude';
-  const previewVideo = item.previewVideo;
+type InventoryImageWithFallbackProps = {
+  src: string;
+  alt: string;
+  ariaHidden?: boolean;
+  decoding?: 'async' | 'auto' | 'sync';
+};
+
+function InventoryImageWithFallback({
+  src,
+  alt,
+  ariaHidden = false,
+  decoding,
+}: InventoryImageWithFallbackProps) {
+  return (
+    <>
+      <img
+        className="inventory__image"
+        src={src}
+        alt={ariaHidden ? '' : alt}
+        aria-hidden={ariaHidden ? 'true' : undefined}
+        loading="lazy"
+        decoding={decoding}
+        draggable={false}
+        onDragStart={(evt) => evt.preventDefault()}
+        onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+        onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+      />
+      <div className="placeholder" aria-hidden hidden>
+        <span> </span>
+      </div>
+    </>
+  );
+}
+
+function InventoryFigureBackgroundMedia({ item }: { item: InventoryItem }) {
   const [figureImageFailed, setFigureImageFailed] = useState(false);
 
   useEffect(() => {
     setFigureImageFailed(false);
   }, [item.image]);
+
+  return (
+    <>
+      <img
+        src={item.image}
+        alt=""
+        aria-hidden="true"
+        hidden
+        loading="lazy"
+        draggable={false}
+        onDragStart={(evt) => evt.preventDefault()}
+        onError={() => setFigureImageFailed(true)}
+      />
+      {figureImageFailed ? (
+        <div className="placeholder" aria-hidden>
+          <span> </span>
+        </div>
+      ) : (
+        <div
+          className="inventory__image"
+          style={{ backgroundImage: `url(${item.image})` }}
+          role="img"
+          aria-label={item.name}
+        />
+      )}
+    </>
+  );
+}
+
+function InventoryMedia({
+  item,
+  figureMediaMode = 'background',
+}: {
+  item: InventoryItem;
+  figureMediaMode?: InventoryGridSharedProps['figureMediaMode'];
+}) {
+  const isFigure = item.kind === 'dude';
+  const previewVideo = item.previewVideo;
 
   if (previewVideo) {
     const previewVideoSources = previewVideo.sources.filter((source) => source.src);
@@ -261,57 +363,21 @@ function InventoryMedia({ item }: { item: InventoryItem }) {
   }
 
   if (isFigure) {
-    return (
-      <>
-        <img
-          src={item.image}
-          alt=""
-          aria-hidden="true"
-          hidden
-          loading="lazy"
-          draggable={false}
-          onDragStart={(evt) => evt.preventDefault()}
-          onError={() => setFigureImageFailed(true)}
-        />
-        {figureImageFailed ? (
-          <div className="placeholder" aria-hidden>
-            <span> </span>
-          </div>
-        ) : (
-          <div
-            className="inventory__image"
-            style={{ backgroundImage: `url(${item.image})` }}
-            role="img"
-            aria-label={item.name}
-          />
-        )}
-      </>
-    );
+    if (figureMediaMode === 'image') {
+      return <InventoryImageWithFallback src={item.image} alt={item.name} ariaHidden decoding="async" />;
+    }
+
+    return <InventoryFigureBackgroundMedia item={item} />;
   }
 
-  return (
-    <>
-      <img
-        className="inventory__image"
-        src={item.image}
-        alt={item.name}
-        loading="lazy"
-        draggable={false}
-        onDragStart={(evt) => evt.preventDefault()}
-        onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-        onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-      />
-      <div className="placeholder" aria-hidden hidden>
-        <span> </span>
-      </div>
-    </>
-  );
+  return <InventoryImageWithFallback src={item.image} alt={item.name} />;
 }
 
 export function InventoryGrid({
   items,
-  selected,
-  onToggle,
+  selected = EMPTY_INVENTORY_SELECTION,
+  onToggle = noopInventoryToggle,
+  interactionMode = 'default',
   itemClassName,
   className,
   pendingRevealIds,
@@ -321,6 +387,7 @@ export function InventoryGrid({
   revealLoadingId,
   revealDisabled,
   emptyStateVisibility = 'visible',
+  figureMediaMode = 'background',
 }: InventoryGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const tapCandidateRef = useRef<InventoryTapCandidate | null>(null);
@@ -329,6 +396,7 @@ export function InventoryGrid({
   const touchStateRef = useRef<InventoryTouchState>({
     itemsById,
     selected,
+    interactionMode,
     onToggle,
     pendingRevealIds,
     onReveal,
@@ -341,6 +409,7 @@ export function InventoryGrid({
     touchStateRef.current = {
       itemsById,
       selected,
+      interactionMode,
       onToggle,
       pendingRevealIds,
       onReveal,
@@ -442,6 +511,7 @@ export function InventoryGrid({
       {items.map((item) => {
         const interaction = getInventoryItemInteraction(item, {
           selected,
+          interactionMode,
           pendingRevealIds,
           onReveal,
           onViewItem,
@@ -460,7 +530,9 @@ export function InventoryGrid({
         } = interaction;
         const hasFooter = Boolean(item.assignedDudes?.length);
         const isInteractiveCardFigure = item.kind === 'dude' && isDropFamily(item.dropId, 'card_nft_2');
-        const sizeLabel = dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId);
+        const sizeLabel = isSelected
+          ? dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId)
+          : '';
         const handleActivate = (target: HTMLElement) => {
           activateInventoryItem(item, interaction, target, {
             onToggle,
@@ -522,7 +594,7 @@ export function InventoryGrid({
             }
           >
             <div className="inventory__media">
-              <InventoryMedia item={item} />
+              <InventoryMedia item={item} figureMediaMode={figureMediaMode} />
             </div>
             {sizeLabel && isSelected ? (
               <span className="inventory__size-badge" aria-label={`Size ${sizeLabel}`}>

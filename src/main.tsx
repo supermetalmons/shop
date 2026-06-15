@@ -2,14 +2,12 @@ import { Buffer } from 'buffer';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import App from './App';
-import FulfillmentApp from './FulfillmentApp';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { getBuildInfo } from './lib/buildInfo';
-import { WalletContextProvider } from './wallet/WalletContext';
-import { type SolanaCluster, listFrontendDrops } from './config/deployment';
+import type { SolanaCluster } from './config/deployment';
 import { resolveFrontendDropByPath, resolveUpcomingDropRouteByPath } from './lib/dropConfig';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
+import ShopRoute from './ShopRoute';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -23,9 +21,11 @@ document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
+const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
 const drifPaths = new Set([canonicalDrifPath]);
+const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));
 const DrifApp = React.lazy(() => import('./DrifApp'));
-const WipApp = React.lazy(() => import('./WipApp'));
+const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
 type RouteAlias = {
@@ -53,6 +53,7 @@ const resolveCurrentPath = (): string => {
   if (
     normalizedPath === '/' ||
     normalizedPath === canonicalFulfillmentPath ||
+    normalizedPath === canonicalCardNft2UnrevealedPath ||
     normalizedPath === '/wip' ||
     drifPaths.has(normalizedPath) ||
     resolveUpcomingDropRouteByPath(normalizedPath) ||
@@ -90,51 +91,52 @@ type RoutedContentProps = {
   path: string;
 };
 
+function RouteFallback() {
+  return (
+    <div className="page route-loading-page" aria-label="Loading" aria-busy="true">
+      <div className="route-loading-indicator" aria-hidden="true" />
+    </div>
+  );
+}
+
 function RoutedContent({ path }: RoutedContentProps) {
   const isDrifRoute = drifPaths.has(path);
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
-  const routeDrop = resolveFrontendDropByPath(path);
+  const isCardNft2UnrevealedRoute = path === canonicalCardNft2UnrevealedPath;
+  const routeDrop = isCardNft2UnrevealedRoute ? null : resolveFrontendDropByPath(path);
   const upcomingRoute = routeDrop ? null : resolveUpcomingDropRouteByPath(path);
 
   if (isDrifRoute) {
     return (
-      <React.Suspense fallback={null}>
+      <React.Suspense fallback={<RouteFallback />}>
         <DrifApp />
       </React.Suspense>
     );
   }
 
   if (isFulfillmentRoute) {
-    return <FulfillmentRoute />;
+    return (
+      <React.Suspense fallback={<RouteFallback />}>
+        <FulfillmentRoute />
+      </React.Suspense>
+    );
+  }
+
+  if (isCardNft2UnrevealedRoute) {
+    return (
+      <React.Suspense fallback={<RouteFallback />}>
+        <CardNft2UnrevealedApp />
+      </React.Suspense>
+    );
   }
 
   return (
-    <WalletContextProvider
+    <ShopRoute
       cluster={routeDrop?.solanaCluster || upcomingRoute?.solanaCluster || NEUTRAL_WALLET_CLUSTER}
-    >
-      <App currentPath={isWipRoute ? '/' : path} />
-      {isWipRoute ? (
-        <React.Suspense fallback={null}>
-          <WipApp />
-        </React.Suspense>
-      ) : null}
-    </WalletContextProvider>
-  );
-}
-
-function FulfillmentRoute() {
-  const drops = React.useMemo(() => listFrontendDrops(), []);
-  const [selectedDropId, setSelectedDropId] = React.useState('');
-  const selectedDrop = React.useMemo(
-    () => drops.find((drop) => drop.dropId === selectedDropId) || null,
-    [drops, selectedDropId],
-  );
-
-  return (
-    <WalletContextProvider cluster={selectedDrop?.solanaCluster || NEUTRAL_WALLET_CLUSTER}>
-      <FulfillmentApp selectedDropId={selectedDropId} onSelectedDropIdChange={setSelectedDropId} />
-    </WalletContextProvider>
+      currentPath={path}
+      isWipRoute={isWipRoute}
+    />
   );
 }
 
