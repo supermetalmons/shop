@@ -1140,6 +1140,18 @@ header.top--shop.top--spacer {
   position: static;
 }
 
+@media (min-width: 861px) {
+  .mint-panel__footer--soldout .mint-panel__remaining--with-info {
+    position: static;
+  }
+
+  .mint-panel__footer--soldout .mint-panel__pack-status-popover {
+    left: 0;
+    right: auto;
+    bottom: calc(100% + 18px);
+  }
+}
+
 @keyframes mint-panel-popover-in {
   from {
     opacity: 0;
