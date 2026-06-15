@@ -10,7 +10,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { FaCircleInfo, FaCircleQuestion } from 'react-icons/fa6';
+import { FaCircleQuestion } from 'react-icons/fa6';
+import { LuInfo } from 'react-icons/lu';
 import { MintStats, type PackStatusBreakdown, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
@@ -72,6 +73,7 @@ interface MintPanelProps {
   showSizeInfo?: boolean;
   successfulMintToken?: number;
   terminalAction?: MintPanelTerminalAction;
+  showPackStatusInfo?: boolean;
   packStatusBreakdown?: PackStatusBreakdown;
 }
 
@@ -430,27 +432,31 @@ function formatPackStatusPercentage(percentage: number): string {
   return `${normalized.toFixed(2)}%`;
 }
 
-function MintPanelPackStatusPopover({ breakdown }: { breakdown: PackStatusBreakdown }) {
+function MintPanelPackStatusPopover({ breakdown }: { breakdown?: PackStatusBreakdown }) {
   return (
-    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Pack status">
-      <table className="mint-panel__pack-status-table">
-        <thead>
-          <tr>
-            <th scope="col">Status</th>
-            <th scope="col">Amount</th>
-            <th scope="col">% of supply</th>
-          </tr>
-        </thead>
-        <tbody>
-          {breakdown.items.map((item) => (
-            <tr key={item.key} className={item.key === 'total' ? 'mint-panel__pack-status-row--total' : undefined}>
-              <th scope="row">{item.label}</th>
-              <td>{formatPackStatusAmount(item.amount)}</td>
-              <td>{formatPackStatusPercentage(item.percentage)}</td>
+    <div className="mint-panel__pack-status-popover" role="dialog" aria-label="Pack status" aria-busy={!breakdown}>
+      {breakdown ? (
+        <table className="mint-panel__pack-status-table">
+          <thead>
+            <tr>
+              <th scope="col">Status</th>
+              <th scope="col">Amount</th>
+              <th scope="col">% of supply</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {breakdown.items.map((item) => (
+              <tr key={item.key} className={item.key === 'total' ? 'mint-panel__pack-status-row--total' : undefined}>
+                <th scope="row">{item.label}</th>
+                <td>{formatPackStatusAmount(item.amount)}</td>
+                <td>{formatPackStatusPercentage(item.percentage)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="mint-panel__pack-status-loading">LOADING</div>
+      )}
     </div>
   );
 }
@@ -649,6 +655,7 @@ export function MintPanel({
   showSizeInfo,
   successfulMintToken = 0,
   terminalAction,
+  showPackStatusInfo,
   packStatusBreakdown,
 }: MintPanelProps) {
   const minted = stats?.minted ?? 0;
@@ -668,6 +675,7 @@ export function MintPanel({
   const showSizeSelector = Boolean(sizeSelection);
   const showQuantitySlider = !showSizeSelector && maxSelectable > 1;
   const showFormControls = showQuantitySlider || showSizeSelector;
+  const showPackStatusControl = Boolean(showPackStatusInfo || packStatusBreakdown);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   // Bumping this token forces the size buttons to re-mount so the blink
   // animation restarts even when the user clicks Mint repeatedly.
@@ -845,8 +853,8 @@ export function MintPanel({
   }, [showSizeSelector, sizeInfoOpen]);
 
   useEffect(() => {
-    if (!packStatusBreakdown && packStatusInfoOpen) setPackStatusInfoOpen(false);
-  }, [packStatusBreakdown, packStatusInfoOpen]);
+    if (!showPackStatusControl && packStatusInfoOpen) setPackStatusInfoOpen(false);
+  }, [showPackStatusControl, packStatusInfoOpen]);
 
   useDismissiblePopover(sizeInfoOpen, sizeInfoRef, setSizeInfoOpen);
   useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
@@ -1097,7 +1105,7 @@ export function MintPanel({
             <div className="mint-panel__price">{mintTitle}</div>
             <div className="mint-panel__remaining mint-panel__remaining--with-info">
               <span>{terminalState.statusText}</span>
-              {packStatusBreakdown ? (
+              {showPackStatusControl ? (
                 <span className="mint-panel__pack-status-info-wrap" ref={packStatusInfoRef}>
                   <button
                     type="button"
@@ -1107,7 +1115,7 @@ export function MintPanel({
                     aria-haspopup="dialog"
                     onClick={() => setPackStatusInfoOpen((prev) => !prev)}
                   >
-                    <FaCircleInfo aria-hidden="true" focusable="false" size={15} />
+                    <LuInfo aria-hidden="true" focusable="false" size={16} strokeWidth={2} />
                   </button>
                   {packStatusInfoOpen ? <MintPanelPackStatusPopover breakdown={packStatusBreakdown} /> : null}
                 </span>

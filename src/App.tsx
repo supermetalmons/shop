@@ -5982,6 +5982,7 @@ function App({ currentPath }: AppProps) {
             mintSelection={routeDrop.mintSelection}
             showSizeInfo={isDropFamily(routeDrop.dropId, 'little_swag_hoodies') && routeDrop.mintSelection?.kind === 'size'}
             successfulMintToken={successfulMintToken}
+            showPackStatusInfo={Boolean(packStatusDropId)}
             packStatusBreakdown={packStatusBreakdown ?? undefined}
           />
         )}
