@@ -12,7 +12,10 @@ import {
   Muxer as WebMMuxer,
 } from 'webm-muxer';
 
-const VIDEO_SIZE = 1080;
+const DEFAULT_OUTPUT_SIZE = {
+  width: 1080,
+  height: 1080,
+} as const;
 const FRAME_RATE = 60;
 const CYCLE_DURATION_MS = 4_600;
 const FLOAT_RADIUS_X = 22;
@@ -62,6 +65,16 @@ export type RecordProgress = {
 type CreateWritable = (name: string) => Promise<FileSystemWritableFileStream>;
 type SaveBlob = (blob: Blob, name: string) => Promise<void> | void;
 
+type OutputSize = {
+  width: number;
+  height: number;
+};
+
+type CardPosition = {
+  x: number;
+  y: number;
+};
+
 export type RecordCardOptions = {
   filename?: string;
   createWritable?: CreateWritable | null;
@@ -69,6 +82,9 @@ export type RecordCardOptions = {
   canvasBackground?: string | null;
   cardSize?: 'default' | 'ratio_669' | 'ratio_551' | 'custom';
   customCardWidth?: number;
+  outputSize?: OutputSize;
+  cardPosition?: CardPosition | null;
+  requireMp4?: boolean;
   verticalOffset?: number;
   speed?: number;
 };
@@ -87,8 +103,8 @@ type OutputTarget = {
 type OutputContainer = 'mp4' | 'webm';
 
 let embeddedCssSnapshotPromise: Promise<{ embeddedCSS: string; rootVarsInline: string }> | null = null;
-let mp4EncoderSupportPromise: Promise<EncoderSupport | null> | null = null;
-let webmEncoderSupportPromise: Promise<EncoderSupport | null> | null = null;
+const mp4EncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
+const webmEncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
 const recordingBackgroundPromises = new Map<string, Promise<string | null>>();
 
 function clamp(value: number, min = 0, max = 100) {
@@ -139,95 +155,107 @@ function getBaseOutputName(filename?: string | null) {
   return filename.replace(/\.(webm|mp4)$/i, '');
 }
 
-async function getSupportedMp4Encoder(): Promise<EncoderSupport | null> {
-  if (!mp4EncoderSupportPromise) {
-    mp4EncoderSupportPromise = (async () => {
-      if (
-        typeof VideoEncoder === 'undefined' ||
-        typeof VideoFrame === 'undefined' ||
-        typeof VideoEncoder.isConfigSupported !== 'function'
-      ) {
-        return null;
-      }
+function getOutputSizeKey(outputSize: OutputSize) {
+  return `${outputSize.width}x${outputSize.height}`;
+}
 
-      for (const candidate of MP4_ENCODER_CANDIDATES) {
-        const config: VideoEncoderConfig = {
-          codec: candidate.codec,
-          width: VIDEO_SIZE,
-          height: VIDEO_SIZE,
-          bitrate: VIDEO_BITRATE,
-          framerate: FRAME_RATE,
-          latencyMode: 'realtime',
-          ...candidate.extraConfig,
-        };
-
-        try {
-          const support = await VideoEncoder.isConfigSupported(config);
-          if (support.supported && support.config) {
-            return {
-              encoderConfig: support.config,
-              muxerCodec: candidate.muxerCodec,
-            };
-          }
-        } catch {
-          // Try the next codec.
+async function getSupportedMp4Encoder(outputSize: OutputSize): Promise<EncoderSupport | null> {
+  const outputSizeKey = getOutputSizeKey(outputSize);
+  if (!mp4EncoderSupportPromises.has(outputSizeKey)) {
+    mp4EncoderSupportPromises.set(
+      outputSizeKey,
+      (async () => {
+        if (
+          typeof VideoEncoder === 'undefined' ||
+          typeof VideoFrame === 'undefined' ||
+          typeof VideoEncoder.isConfigSupported !== 'function'
+        ) {
+          return null;
         }
-      }
 
-      return null;
-    })();
+        for (const candidate of MP4_ENCODER_CANDIDATES) {
+          const config: VideoEncoderConfig = {
+            codec: candidate.codec,
+            width: outputSize.width,
+            height: outputSize.height,
+            bitrate: VIDEO_BITRATE,
+            framerate: FRAME_RATE,
+            latencyMode: 'realtime',
+            ...candidate.extraConfig,
+          };
+
+          try {
+            const support = await VideoEncoder.isConfigSupported(config);
+            if (support.supported && support.config) {
+              return {
+                encoderConfig: support.config,
+                muxerCodec: candidate.muxerCodec,
+              };
+            }
+          } catch {
+            // Try the next codec.
+          }
+        }
+
+        return null;
+      })(),
+    );
   }
 
   try {
-    return await mp4EncoderSupportPromise;
+    return await mp4EncoderSupportPromises.get(outputSizeKey)!;
   } catch (error) {
-    mp4EncoderSupportPromise = null;
+    mp4EncoderSupportPromises.delete(outputSizeKey);
     throw error;
   }
 }
 
-async function getSupportedWebmEncoder(): Promise<EncoderSupport | null> {
-  if (!webmEncoderSupportPromise) {
-    webmEncoderSupportPromise = (async () => {
-      if (
-        typeof VideoEncoder === 'undefined' ||
-        typeof VideoFrame === 'undefined' ||
-        typeof VideoEncoder.isConfigSupported !== 'function'
-      ) {
-        return null;
-      }
-
-      for (const candidate of WEBM_ENCODER_CANDIDATES) {
-        const config: VideoEncoderConfig = {
-          codec: candidate.codec,
-          width: VIDEO_SIZE,
-          height: VIDEO_SIZE,
-          bitrate: VIDEO_BITRATE,
-          framerate: FRAME_RATE,
-          latencyMode: 'realtime',
-        };
-
-        try {
-          const support = await VideoEncoder.isConfigSupported(config);
-          if (support.supported && support.config) {
-            return {
-              encoderConfig: support.config,
-              muxerCodec: candidate.muxerCodec,
-            };
-          }
-        } catch {
-          // Try the next codec.
+async function getSupportedWebmEncoder(outputSize: OutputSize): Promise<EncoderSupport | null> {
+  const outputSizeKey = getOutputSizeKey(outputSize);
+  if (!webmEncoderSupportPromises.has(outputSizeKey)) {
+    webmEncoderSupportPromises.set(
+      outputSizeKey,
+      (async () => {
+        if (
+          typeof VideoEncoder === 'undefined' ||
+          typeof VideoFrame === 'undefined' ||
+          typeof VideoEncoder.isConfigSupported !== 'function'
+        ) {
+          return null;
         }
-      }
 
-      return null;
-    })();
+        for (const candidate of WEBM_ENCODER_CANDIDATES) {
+          const config: VideoEncoderConfig = {
+            codec: candidate.codec,
+            width: outputSize.width,
+            height: outputSize.height,
+            bitrate: VIDEO_BITRATE,
+            framerate: FRAME_RATE,
+            latencyMode: 'realtime',
+          };
+
+          try {
+            const support = await VideoEncoder.isConfigSupported(config);
+            if (support.supported && support.config) {
+              return {
+                encoderConfig: support.config,
+                muxerCodec: candidate.muxerCodec,
+              };
+            }
+          } catch {
+            // Try the next codec.
+          }
+        }
+
+        return null;
+      })(),
+    );
   }
 
   try {
-    return await webmEncoderSupportPromise;
+    return await webmEncoderSupportPromises.get(outputSizeKey)!;
   } catch (error) {
-    webmEncoderSupportPromise = null;
+    webmEncoderSupportPromises.delete(outputSizeKey);
     throw error;
   }
 }
@@ -256,21 +284,64 @@ function normalizeRelativeCardWidth(relativeWidth = RELATIVE_CARD_WIDTH_RATIO_66
   return numeric;
 }
 
+function normalizeOutputDimension(value: number | undefined, fallback: number) {
+  const numeric = Math.floor(Number(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return numeric;
+}
+
+function normalizeOutputSize(size?: OutputSize) {
+  return {
+    width: normalizeOutputDimension(size?.width, DEFAULT_OUTPUT_SIZE.width),
+    height: normalizeOutputDimension(size?.height, DEFAULT_OUTPUT_SIZE.height),
+  };
+}
+
+function normalizeRelativePosition(value: number, fallback: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return clamp(numeric, 0, 1);
+}
+
+function normalizeCardPosition(cardPosition?: CardPosition | null) {
+  if (!cardPosition) return null;
+  return {
+    x: normalizeRelativePosition(cardPosition.x, 0.5),
+    y: normalizeRelativePosition(cardPosition.y, 0.5),
+  };
+}
+
 function normalizeRelativeVerticalOffset(relativeOffset = 0) {
   const numeric = Number(relativeOffset);
   if (!Number.isFinite(numeric)) return 0;
   return clamp(numeric, -1, 1);
 }
 
-function getCardWidthPx(cardSize: RecordCardOptions['cardSize'] = 'default', customCardWidth = RELATIVE_CARD_WIDTH_RATIO_669) {
-  if (cardSize === 'ratio_669') return VIDEO_SIZE * RELATIVE_CARD_WIDTH_RATIO_669;
-  if (cardSize === 'ratio_551') return VIDEO_SIZE * RELATIVE_CARD_WIDTH_RATIO_551;
-  if (cardSize === 'custom') return VIDEO_SIZE * normalizeRelativeCardWidth(customCardWidth);
+function getCardWidthPx(
+  outputSize: OutputSize,
+  cardSize: RecordCardOptions['cardSize'] = 'default',
+  customCardWidth = RELATIVE_CARD_WIDTH_RATIO_669,
+) {
+  if (cardSize === 'ratio_669') return outputSize.width * RELATIVE_CARD_WIDTH_RATIO_669;
+  if (cardSize === 'ratio_551') return outputSize.width * RELATIVE_CARD_WIDTH_RATIO_551;
+  if (cardSize === 'custom') return outputSize.width * normalizeRelativeCardWidth(customCardWidth);
   return DEFAULT_CARD_WIDTH_PX;
 }
 
-function getCardOffsetYPx(relativeOffset = 0) {
-  return VIDEO_SIZE * normalizeRelativeVerticalOffset(relativeOffset);
+function getCardOffsetYPx(outputSize: OutputSize, relativeOffset = 0) {
+  return outputSize.height * normalizeRelativeVerticalOffset(relativeOffset);
+}
+
+function getCardWrapperStyle(cardWidthPx: number, cardOffsetYPx: number, cardPosition?: CardPosition | null) {
+  const x = cardPosition ? round(cardPosition.x * 100, 4) : 50;
+  const y = cardPosition ? round(cardPosition.y * 100, 4) : 50;
+  return [
+    'position:absolute',
+    `width:${round(cardWidthPx)}px`,
+    `left:${x}%`,
+    `top:calc(${y}% + ${round(cardOffsetYPx)}px)`,
+    'transform:translate(-50%,-50%)',
+  ].join(';');
 }
 
 async function createOutputTarget(
@@ -547,10 +618,17 @@ async function embedImagesInElement(el: Element, cache: Map<string, string>) {
   }
 }
 
-function createRecordingViewport(cardClone: Element, backgroundDataUrl: string | null, cardWidthPx: number, cardOffsetYPx = 0) {
+function createRecordingViewport(
+  cardClone: Element,
+  backgroundDataUrl: string | null,
+  outputSize: OutputSize,
+  cardWidthPx: number,
+  cardOffsetYPx = 0,
+  cardPosition?: CardPosition | null,
+) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const scale = Math.min(1, (Math.min(vw, vh) * 0.82) / VIDEO_SIZE);
+  const scale = Math.min(1, (vw * 0.9) / outputSize.width, (vh * 0.82) / outputSize.height);
 
   const viewport = document.createElement('div');
   Object.assign(viewport.style, {
@@ -566,16 +644,14 @@ function createRecordingViewport(cardClone: Element, backgroundDataUrl: string |
 
   const stage = document.createElement('div');
   Object.assign(stage.style, {
-    width: `${VIDEO_SIZE}px`,
-    height: `${VIDEO_SIZE}px`,
+    width: `${outputSize.width}px`,
+    height: `${outputSize.height}px`,
     backgroundColor: '#000',
     backgroundImage: backgroundDataUrl ? `url("${backgroundDataUrl}")` : 'none',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
     backgroundSize: 'cover',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    position: 'relative',
     overflow: 'hidden',
     transform: `scale(${scale})`,
     transformOrigin: 'center',
@@ -584,10 +660,7 @@ function createRecordingViewport(cardClone: Element, backgroundDataUrl: string |
   });
 
   const wrapper = document.createElement('div');
-  Object.assign(wrapper.style, {
-    width: `${cardWidthPx}px`,
-    transform: `translateY(${cardOffsetYPx}px)`,
-  });
+  wrapper.setAttribute('style', getCardWrapperStyle(cardWidthPx, cardOffsetYPx, cardPosition));
   wrapper.appendChild(cardClone);
   stage.appendChild(wrapper);
   viewport.appendChild(stage);
@@ -601,29 +674,31 @@ function buildSVGDocument(
   rootVarsInline: string,
   cardClone: Element,
   backgroundDataUrl: string | null,
+  outputSize: OutputSize,
   cardWidthPx: number,
   cardOffsetYPx = 0,
+  cardPosition?: CardPosition | null,
 ) {
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', String(VIDEO_SIZE));
-  svg.setAttribute('height', String(VIDEO_SIZE));
+  svg.setAttribute('width', String(outputSize.width));
+  svg.setAttribute('height', String(outputSize.height));
   svg.setAttribute('color-interpolation', 'sRGB');
   svg.setAttribute('color-interpolation-filters', 'sRGB');
 
   const foreignObject = document.createElementNS(SVG_NS, 'foreignObject');
   foreignObject.setAttribute('x', '0');
   foreignObject.setAttribute('y', '0');
-  foreignObject.setAttribute('width', String(VIDEO_SIZE));
-  foreignObject.setAttribute('height', String(VIDEO_SIZE));
+  foreignObject.setAttribute('width', String(outputSize.width));
+  foreignObject.setAttribute('height', String(outputSize.height));
 
   const container = document.createElementNS(XHTML_NS, 'div');
   container.setAttribute(
     'style',
-    `width:${VIDEO_SIZE}px;height:${VIDEO_SIZE}px;background-color:#000;` +
+    `width:${outputSize.width}px;height:${outputSize.height}px;background-color:#000;` +
       (backgroundDataUrl
         ? `background-image:url("${backgroundDataUrl}");background-position:center;background-repeat:no-repeat;background-size:cover;`
         : '') +
-      'display:flex;align-items:center;justify-content:center;overflow:hidden;' +
+      'position:relative;overflow:hidden;' +
       'color:white;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;' +
       rootVarsInline,
   );
@@ -633,7 +708,7 @@ function buildSVGDocument(
   container.appendChild(styleEl);
 
   const wrapper = document.createElementNS(XHTML_NS, 'div');
-  wrapper.setAttribute('style', `width:${cardWidthPx}px;transform:translateY(${cardOffsetYPx}px);`);
+  wrapper.setAttribute('style', getCardWrapperStyle(cardWidthPx, cardOffsetYPx, cardPosition));
   wrapper.appendChild(cardClone);
   container.appendChild(wrapper);
 
@@ -642,7 +717,7 @@ function buildSVGDocument(
   return svg;
 }
 
-async function svgToImage(svgElement: SVGSVGElement): Promise<ImageBitmap | HTMLImageElement> {
+async function svgToImage(svgElement: SVGSVGElement, outputSize: OutputSize): Promise<ImageBitmap | HTMLImageElement> {
   const svgString = new XMLSerializer().serializeToString(svgElement);
   const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
 
@@ -679,7 +754,7 @@ async function svgToImage(svgElement: SVGSVGElement): Promise<ImageBitmap | HTML
     reader.readAsDataURL(svgBlob);
   });
 
-  const img = new Image(VIDEO_SIZE, VIDEO_SIZE);
+  const img = new Image(outputSize.width, outputSize.height);
   await new Promise<void>((resolve, reject) => {
     const timeoutId = window.setTimeout(() => reject(new Error('Timed out decoding frame SVG')), 5_000);
     img.onload = () => {
@@ -699,6 +774,7 @@ async function svgToImage(svgElement: SVGSVGElement): Promise<ImageBitmap | HTML
 }
 
 function normalizeRecordOptions(options: RecordCardOptions = {}) {
+  const outputSize = normalizeOutputSize(options.outputSize);
   return {
     filename: options.filename || null,
     saveBlob: options.saveBlob || null,
@@ -706,20 +782,23 @@ function normalizeRecordOptions(options: RecordCardOptions = {}) {
     canvasBackground: options.canvasBackground || null,
     cardSize: options.cardSize || 'default',
     customCardWidth: normalizeRelativeCardWidth(options.customCardWidth),
+    outputSize,
+    cardPosition: normalizeCardPosition(options.cardPosition),
+    requireMp4: Boolean(options.requireMp4),
     verticalOffset: normalizeRelativeVerticalOffset(options.verticalOffset),
     speed: normalizePlaybackSpeed(options.speed),
   };
 }
 
-function createMuxer(container: OutputContainer, output: OutputTarget, encoderSupport: EncoderSupport) {
+function createMuxer(container: OutputContainer, output: OutputTarget, encoderSupport: EncoderSupport, outputSize: OutputSize) {
   if (container === 'mp4') {
     return new Mp4Muxer({
       target: output.target as Mp4ArrayBufferTarget | Mp4FileSystemWritableFileStreamTarget,
       fastStart: false,
       video: {
         codec: encoderSupport.muxerCodec as 'avc' | 'hevc' | 'vp9' | 'av1',
-        width: VIDEO_SIZE,
-        height: VIDEO_SIZE,
+        width: outputSize.width,
+        height: outputSize.height,
         frameRate: FRAME_RATE,
       },
     });
@@ -729,8 +808,8 @@ function createMuxer(container: OutputContainer, output: OutputTarget, encoderSu
     target: output.target as WebMArrayBufferTarget | WebMFileSystemWritableFileStreamTarget,
     video: {
       codec: encoderSupport.muxerCodec,
-      width: VIDEO_SIZE,
-      height: VIDEO_SIZE,
+      width: outputSize.width,
+      height: outputSize.height,
       frameRate: FRAME_RATE,
     },
   });
@@ -744,19 +823,22 @@ export async function recordCard(
   if (!cardElement) throw new Error('No card element provided');
 
   const normalizedOptions = normalizeRecordOptions(options);
-  const mp4EncoderSupport = await getSupportedMp4Encoder();
-  const webmEncoderSupport = mp4EncoderSupport ? null : await getSupportedWebmEncoder();
+  const outputSize = normalizedOptions.outputSize;
+  const mp4EncoderSupport = await getSupportedMp4Encoder(outputSize);
+  if (!mp4EncoderSupport && normalizedOptions.requireMp4) {
+    throw new Error(`This browser does not support MP4/H.264 encoding at ${outputSize.width}x${outputSize.height}`);
+  }
+  const webmEncoderSupport = mp4EncoderSupport ? null : await getSupportedWebmEncoder(outputSize);
   if (!mp4EncoderSupport && !webmEncoderSupport) {
     throw new Error('This browser does not support the WebCodecs encoder required for stable batch recording');
   }
 
-  const useWebmFallbackForMp4 = !mp4EncoderSupport && webmEncoderSupport?.muxerCodec === 'V_VP9';
-  const outputContainer: OutputContainer = mp4EncoderSupport || useWebmFallbackForMp4 ? 'mp4' : 'webm';
+  const outputContainer: OutputContainer = mp4EncoderSupport ? 'mp4' : 'webm';
   const encoderSupport = mp4EncoderSupport || webmEncoderSupport!;
   const outputBaseName = getBaseOutputName(normalizedOptions.filename);
   const outputName = `${outputBaseName}.${outputContainer}`;
-  const cardWidthPx = getCardWidthPx(normalizedOptions.cardSize, normalizedOptions.customCardWidth);
-  const cardOffsetYPx = getCardOffsetYPx(normalizedOptions.verticalOffset);
+  const cardWidthPx = getCardWidthPx(outputSize, normalizedOptions.cardSize, normalizedOptions.customCardWidth);
+  const cardOffsetYPx = getCardOffsetYPx(outputSize, normalizedOptions.verticalOffset);
   const totalFrames = getTotalFrames(normalizedOptions.speed);
 
   onProgress({ phase: 'preparing', current: 0, total: 0 });
@@ -774,7 +856,14 @@ export async function recordCard(
   const origStyle = cardElement.getAttribute('style') || '';
   const embeddedOrigStyle = await embedUrlsInText(origStyle, cache);
   const staticStyle = extractStaticStyle(embeddedOrigStyle);
-  const { viewport } = createRecordingViewport(clone, recordingBackgroundDataUrl, cardWidthPx, cardOffsetYPx);
+  const { viewport } = createRecordingViewport(
+    clone,
+    recordingBackgroundDataUrl,
+    outputSize,
+    cardWidthPx,
+    cardOffsetYPx,
+    normalizedOptions.cardPosition,
+  );
 
   let output: OutputTarget | null = null;
   let finalized = false;
@@ -783,8 +872,8 @@ export async function recordCard(
 
   try {
     const canvas = document.createElement('canvas');
-    canvas.width = VIDEO_SIZE;
-    canvas.height = VIDEO_SIZE;
+    canvas.width = outputSize.width;
+    canvas.height = outputSize.height;
     const ctx = canvas.getContext('2d', {
       alpha: false,
       colorSpace: CANVAS_COLOR_SPACE,
@@ -796,7 +885,7 @@ export async function recordCard(
       createWritable: normalizedOptions.createWritable,
       saveBlob: normalizedOptions.saveBlob,
     });
-    const muxer = createMuxer(outputContainer, output, encoderSupport);
+    const muxer = createMuxer(outputContainer, output, encoderSupport, outputSize);
 
     encoder = new VideoEncoder({
       output: (chunk, meta) => {
@@ -827,14 +916,16 @@ export async function recordCard(
         rootVarsInline,
         svgClone,
         recordingBackgroundDataUrl,
+        outputSize,
         cardWidthPx,
         cardOffsetYPx,
+        normalizedOptions.cardPosition,
       );
-      const renderedFrame = await svgToImage(svgDoc);
+      const renderedFrame = await svgToImage(svgDoc, outputSize);
 
       try {
-        ctx.clearRect(0, 0, VIDEO_SIZE, VIDEO_SIZE);
-        ctx.drawImage(renderedFrame, 0, 0, VIDEO_SIZE, VIDEO_SIZE);
+        ctx.clearRect(0, 0, outputSize.width, outputSize.height);
+        ctx.drawImage(renderedFrame, 0, 0, outputSize.width, outputSize.height);
       } finally {
         if ('close' in renderedFrame) renderedFrame.close();
       }
@@ -877,7 +968,9 @@ export async function recordCard(
       frameCount: totalFrames,
       durationMs: CYCLE_DURATION_MS,
       frameRate: FRAME_RATE,
-      size: VIDEO_SIZE,
+      size: outputSize.width,
+      width: outputSize.width,
+      height: outputSize.height,
     };
   } catch (error) {
     if (!finalized) {

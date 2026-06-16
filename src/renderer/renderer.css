@@ -118,6 +118,7 @@ input:disabled {
   gap: 12px;
 }
 
+.renderer-list-row label,
 .renderer-field-row label {
   display: grid;
   gap: 7px;
@@ -126,6 +127,7 @@ input:disabled {
   font-weight: 700;
 }
 
+.renderer-list-row input,
 .renderer-field-row input {
   width: 100%;
   min-height: 44px;
@@ -136,12 +138,14 @@ input:disabled {
   padding: 0 12px;
 }
 
+.renderer-list-row input:focus,
 .renderer-field-row input:focus {
   border-color: #7dd3fc;
   outline: none;
 }
 
 .renderer-folder-row,
+.renderer-mode-row,
 .renderer-action-row {
   display: flex;
   flex-wrap: wrap;
@@ -150,9 +154,26 @@ input:disabled {
 }
 
 .renderer-folder-row span,
+.renderer-mode-row span,
 .renderer-action-row span {
   color: rgba(255, 255, 255, 0.58);
   font-size: 13px;
+}
+
+.renderer-check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.renderer-check-row input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: #0ea5e9;
 }
 
 .renderer-primary-button,
@@ -201,6 +222,32 @@ input:disabled {
 .renderer-card-preview {
   width: min(100%, 430px, calc((100svh - 120px) * var(--interactive-card-aspect, 0.7142857143)));
   max-height: calc(100svh - 120px);
+}
+
+.renderer-card-preview--canvas {
+  width: min(100%, 430px, calc((100svh - 120px) * 0.8574040219));
+  aspect-ratio: 938 / 1094;
+  max-height: calc(100svh - 120px);
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background-color: #000;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+}
+
+.renderer-preview-card-inner {
+  width: 100%;
+}
+
+.renderer-card-preview--canvas .renderer-preview-card-inner {
+  position: absolute;
+  width: var(--renderer-canvas-card-width);
+  left: var(--renderer-canvas-card-x);
+  top: var(--renderer-canvas-card-y);
+  transform: translate(-50%, -50%);
 }
 
 .renderer-card-preview .drif-effect-card {
@@ -310,6 +357,10 @@ input:disabled {
 
   .renderer-card-preview {
     width: min(100%, 360px);
+  }
+
+  .renderer-card-preview--canvas {
+    width: min(100%, 360px, calc((100svh - 120px) * 0.8574040219));
   }
 
   .renderer-queue {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import WipInteractiveCard from '../components/WipInteractiveCard';
 import { CARD_NFT_2_MAX_CARD_ID, normalizeCardNft2CardId } from '../lib/cardNft2Assets';
@@ -37,9 +37,29 @@ type QueueEntry = {
 
 const DEFAULT_START_ID = 1;
 const DEFAULT_END_ID = 4;
+const DEFAULT_ID_LIST_INPUT = '';
 const CARD_READY_TIMEOUT_MS = 20_000;
 const CARD_READY_POLL_MS = 100;
 const CARD_SETTLE_DELAY_MS = 300;
+const ON_CANVAS_LAYOUT = {
+  background: '/card_nft_2/canvas.jpeg',
+  // Use an even coded width so H.264/MP4 encoders accept the canvas render.
+  outputSize: {
+    width: 938,
+    height: 1094,
+  },
+  cardWidth: 0.15,
+  cardPosition: {
+    x: 0.374,
+    y: 0.13,
+  },
+} as const;
+
+type CanvasPreviewStyle = CSSProperties & {
+  '--renderer-canvas-card-width'?: string;
+  '--renderer-canvas-card-x'?: string;
+  '--renderer-canvas-card-y'?: string;
+};
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -57,6 +77,52 @@ function buildRange(startId: number, endId: number) {
   const first = Math.min(startId, endId);
   const last = Math.max(startId, endId);
   return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+}
+
+function uniqueIds(ids: readonly number[]) {
+  const seen = new Set<number>();
+  return ids.filter((id) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function parseIdListInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const tokens = trimmed.split(',');
+  if (tokens.some((token) => !token.trim())) {
+    return {
+      valid: false,
+      ids: [] as number[],
+      message: `Use comma-separated IDs from 1 to ${CARD_NFT_2_MAX_CARD_ID}.`,
+      mode: 'list' as const,
+    };
+  }
+
+  const ids: number[] = [];
+  for (const token of tokens) {
+    const id = normalizeInputId(token);
+    if (!id) {
+      return {
+        valid: false,
+        ids: [] as number[],
+        message: `Use comma-separated IDs from 1 to ${CARD_NFT_2_MAX_CARD_ID}.`,
+        mode: 'list' as const,
+      };
+    }
+    ids.push(id);
+  }
+
+  const unique = uniqueIds(ids);
+  return {
+    valid: true,
+    ids: unique,
+    message: `${unique.length} card${unique.length === 1 ? '' : 's'} from list`,
+    mode: 'list' as const,
+  };
 }
 
 async function decodeBlobAsImage(blob: Blob, src: string) {
@@ -114,6 +180,7 @@ function progressLabel(entry: QueueEntry) {
 }
 
 export default function RendererApp() {
+  const [idListInput, setIdListInput] = useState(DEFAULT_ID_LIST_INPUT);
   const [startIdInput, setStartIdInput] = useState(String(DEFAULT_START_ID));
   const [endIdInput, setEndIdInput] = useState(String(DEFAULT_END_ID));
   const [outputDirectory, setOutputDirectory] = useState<OutputDirectoryHandle | null>(null);
@@ -121,6 +188,7 @@ export default function RendererApp() {
   const [currentCard, setCurrentCard] = useState<DrifCardConfig>(() => cardForId(DEFAULT_START_ID));
   const [previewRevision, setPreviewRevision] = useState(0);
   const [imageReady, setImageReady] = useState(false);
+  const [renderOnCanvas, setRenderOnCanvas] = useState(false);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [lastError, setLastError] = useState('');
@@ -128,7 +196,10 @@ export default function RendererApp() {
   const imageReadyRef = useRef(false);
   const runningRef = useRef(false);
 
-  const rangeState = useMemo(() => {
+  const renderSelection = useMemo(() => {
+    const parsedList = parseIdListInput(idListInput);
+    if (parsedList) return parsedList;
+
     const startId = normalizeInputId(startIdInput);
     const endId = normalizeInputId(endIdInput);
     if (!startId || !endId) {
@@ -136,6 +207,7 @@ export default function RendererApp() {
         valid: false,
         ids: [] as number[],
         message: `Use IDs from 1 to ${CARD_NFT_2_MAX_CARD_ID}.`,
+        mode: 'range' as const,
       };
     }
     const ids = buildRange(startId, endId);
@@ -143,10 +215,21 @@ export default function RendererApp() {
       valid: true,
       ids,
       message: `${ids.length} card${ids.length === 1 ? '' : 's'}`,
+      mode: 'range' as const,
     };
-  }, [endIdInput, startIdInput]);
+  }, [endIdInput, idListInput, startIdInput]);
 
   const currentCardKey = useMemo(() => `${drifCardIdentityKey(currentCard)}:${previewRevision}`, [currentCard, previewRevision]);
+
+  const previewStyle = useMemo<CanvasPreviewStyle | undefined>(() => {
+    if (!renderOnCanvas) return undefined;
+    return {
+      backgroundImage: `url("${ON_CANVAS_LAYOUT.background}")`,
+      '--renderer-canvas-card-width': `${ON_CANVAS_LAYOUT.cardWidth * 100}%`,
+      '--renderer-canvas-card-x': `${ON_CANVAS_LAYOUT.cardPosition.x * 100}%`,
+      '--renderer-canvas-card-y': `${ON_CANVAS_LAYOUT.cardPosition.y * 100}%`,
+    };
+  }, [renderOnCanvas]);
 
   const setQueueEntry = useCallback((id: number, patch: Partial<QueueEntry>) => {
     setQueue((entries) => entries.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
@@ -241,8 +324,12 @@ export default function RendererApp() {
                 filename: `card-nft-2-${id}.mp4`,
                 createWritable: output.createWritable,
                 saveBlob: output.saveBlob,
-                canvasBackground: 'none',
-                cardSize: 'default',
+                canvasBackground: renderOnCanvas ? ON_CANVAS_LAYOUT.background : 'none',
+                cardSize: renderOnCanvas ? 'custom' : 'default',
+                customCardWidth: renderOnCanvas ? ON_CANVAS_LAYOUT.cardWidth : undefined,
+                outputSize: renderOnCanvas ? ON_CANVAS_LAYOUT.outputSize : undefined,
+                cardPosition: renderOnCanvas ? ON_CANVAS_LAYOUT.cardPosition : undefined,
+                requireMp4: renderOnCanvas,
                 verticalOffset: 0,
                 speed: 1,
               },
@@ -267,12 +354,12 @@ export default function RendererApp() {
         setRunning(false);
       }
     },
-    [preparePreviewCard, setQueueEntry],
+    [preparePreviewCard, renderOnCanvas, setQueueEntry],
   );
 
   const renderToDirectory = useCallback(async () => {
-    if (!rangeState.valid || !rangeState.ids.length) {
-      setLastError(rangeState.message);
+    if (!renderSelection.valid || !renderSelection.ids.length) {
+      setLastError(renderSelection.message);
       return;
     }
     if (!outputDirectory) {
@@ -281,7 +368,7 @@ export default function RendererApp() {
     }
 
     try {
-      await renderIds(rangeState.ids, {
+      await renderIds(renderSelection.ids, {
         createWritable: async (name) => {
           const fileHandle = await outputDirectory.getFileHandle(name, { create: true });
           return fileHandle.createWritable();
@@ -290,7 +377,7 @@ export default function RendererApp() {
     } catch {
       // renderIds stores the user-facing error.
     }
-  }, [outputDirectory, rangeState, renderIds]);
+  }, [outputDirectory, renderIds, renderSelection]);
 
   const stopRendering = useCallback(() => {
     runningRef.current = false;
@@ -336,6 +423,19 @@ export default function RendererApp() {
 
         <div className="renderer-layout">
           <section className="renderer-controls" aria-label="Renderer controls">
+            <div className="renderer-list-row">
+              <label>
+                <span>IDs</span>
+                <input
+                  type="text"
+                  placeholder="1584,1665,2102"
+                  value={idListInput}
+                  disabled={running}
+                  onChange={(event) => setIdListInput(event.currentTarget.value)}
+                />
+              </label>
+            </div>
+
             <div className="renderer-field-row">
               <label>
                 <span>Start ID</span>
@@ -370,30 +470,53 @@ export default function RendererApp() {
               <span>{outputDirectory?.name || 'No folder selected'}</span>
             </div>
 
+            <div className="renderer-mode-row">
+              <label className="renderer-check-row">
+                <input
+                  type="checkbox"
+                  checked={renderOnCanvas}
+                  disabled={running}
+                  onChange={(event) => setRenderOnCanvas(event.currentTarget.checked)}
+                />
+                <span>On canvas</span>
+              </label>
+              {renderOnCanvas && (
+                <span>
+                  {ON_CANVAS_LAYOUT.outputSize.width} x {ON_CANVAS_LAYOUT.outputSize.height}
+                </span>
+              )}
+            </div>
+
             <div className="renderer-action-row">
-              <button type="button" className="renderer-primary-button" disabled={running || !rangeState.valid} onClick={renderToDirectory}>
-                Render range
+              <button type="button" className="renderer-primary-button" disabled={running || !renderSelection.valid} onClick={renderToDirectory}>
+                {renderSelection.mode === 'list' ? 'Render list' : 'Render range'}
               </button>
               <button type="button" className="renderer-secondary-button" disabled={!running} onClick={stopRendering}>
                 Stop after current
               </button>
-              <span>{rangeState.message}</span>
+              <span>{renderSelection.message}</span>
             </div>
 
             {lastError && <p className="renderer-error">{lastError}</p>}
           </section>
 
           <section className="renderer-preview-panel" aria-label="Current card preview">
-            <div ref={previewRef} className="renderer-card-preview">
-              <WipInteractiveCard
-                key={currentCardKey}
-                card={currentCard}
-                interactive={false}
-                wakeOnInteractiveUnlock={false}
-                onImageReadyChange={handleImageReadyChange}
-                ariaLabel={`card_nft_2 ${currentCardId}`}
-                imageAlt={`card_nft_2 ${currentCardId}`}
-              />
+            <div
+              ref={previewRef}
+              className={`renderer-card-preview${renderOnCanvas ? ' renderer-card-preview--canvas' : ''}`}
+              style={previewStyle}
+            >
+              <div className="renderer-preview-card-inner">
+                <WipInteractiveCard
+                  key={currentCardKey}
+                  card={currentCard}
+                  interactive={false}
+                  wakeOnInteractiveUnlock={false}
+                  onImageReadyChange={handleImageReadyChange}
+                  ariaLabel={`card_nft_2 ${currentCardId}`}
+                  imageAlt={`card_nft_2 ${currentCardId}`}
+                />
+              </div>
             </div>
           </section>
         </div>
