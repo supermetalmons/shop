@@ -105,6 +105,7 @@ export default function CardNft2UnrevealedApp() {
   const imageCacheRef = useRef(createPonchoDrifellaImageCache());
   const resizeRafRef = useRef<number | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const nextPageRequestInFlightRef = useRef(false);
   const blockedAutoLoadKeyRef = useRef<string | null>(null);
   const autoLoadStateRef = useRef<UnrevealedAutoLoadState>({
@@ -118,6 +119,7 @@ export default function CardNft2UnrevealedApp() {
   } = useCardNft2UnrevealedCards();
   const [viewer, setViewer] = useState<UnrevealedCardViewerState | null>(null);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<number>>(() => readCardNft2UnrevealedSelection());
+  const [selectionCopied, setSelectionCopied] = useState(false);
   const viewerOpen = Boolean(viewer);
   const cardIds = useMemo(() => data?.pages.flatMap((page) => page.ids) || [], [data]);
   const items = useMemo(() => cardIds.map(cardNft2UnrevealedItem), [cardIds]);
@@ -129,6 +131,9 @@ export default function CardNft2UnrevealedApp() {
   useEffect(() => {
     return () => {
       clearPonchoDrifellaImageCache(imageCacheRef.current);
+      if (copyFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -221,6 +226,14 @@ export default function CardNft2UnrevealedApp() {
 
     try {
       await navigator.clipboard.writeText(selectedIdsText);
+      setSelectionCopied(true);
+      if (copyFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimeoutRef.current);
+      }
+      copyFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setSelectionCopied(false);
+        copyFeedbackTimeoutRef.current = null;
+      }, 700);
     } catch (err) {
       console.warn('[mons] failed to copy unrevealed card selection', err);
     }
@@ -283,7 +296,9 @@ export default function CardNft2UnrevealedApp() {
   const renderHeaderRight = useCallback(
     ({ interactive }: { interactive: boolean }) => (
       <div className="card-nft2-unrevealed-selection">
-        <span className="card-nft2-unrevealed-selection__count">{formatSelectedCardCount(selectedCardCount)}</span>
+        <span className="card-nft2-unrevealed-selection__count" aria-live={interactive ? 'polite' : undefined}>
+          {selectionCopied ? 'Copied' : formatSelectedCardCount(selectedCardCount)}
+        </span>
         <button
           type="button"
           className="card-nft2-unrevealed-selection__copy"
@@ -296,7 +311,7 @@ export default function CardNft2UnrevealedApp() {
         </button>
       </div>
     ),
-    [copySelectedCardIds, selectedCardCount],
+    [copySelectedCardIds, selectedCardCount, selectionCopied],
   );
 
   const viewerOverlayStyle: CSSProperties | undefined = viewer
