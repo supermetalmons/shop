@@ -16,7 +16,7 @@ const DEFAULT_OUTPUT_SIZE = {
   width: 1080,
   height: 1080,
 } as const;
-const FRAME_RATE = 60;
+const FRAME_RATE = 30;
 const CYCLE_DURATION_MS = 4_600;
 const FLOAT_RADIUS_X = 22;
 const FLOAT_RADIUS_Y = 16;
