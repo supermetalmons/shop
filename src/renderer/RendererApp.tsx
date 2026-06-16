@@ -42,16 +42,16 @@ const CARD_READY_TIMEOUT_MS = 20_000;
 const CARD_READY_POLL_MS = 100;
 const CARD_SETTLE_DELAY_MS = 300;
 const ON_CANVAS_LAYOUT = {
-  background: '/card_nft_2/canvas.jpeg',
-  // Use an even coded width so H.264/MP4 encoders accept the canvas render.
+  background: '/card_nft_2/canvas_h.jpeg',
+  // Keep the horizontal canvas MP4-friendly for browser H.264 encoders.
   outputSize: {
-    width: 938,
-    height: 1094,
+    width: 1872,
+    height: 1408,
   },
   cardWidth: 0.15,
   cardPosition: {
     x: 0.374,
-    y: 0.13,
+    y: 0.202,
   },
 } as const;
 

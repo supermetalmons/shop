@@ -225,8 +225,8 @@ input:disabled {
 }
 
 .renderer-card-preview--canvas {
-  width: min(100%, 430px, calc((100svh - 120px) * 0.8574040219));
-  aspect-ratio: 938 / 1094;
+  width: min(100%, 430px, calc((100svh - 120px) * 1.3295454545));
+  aspect-ratio: 1872 / 1408;
   max-height: calc(100svh - 120px);
   position: relative;
   overflow: hidden;
@@ -360,7 +360,7 @@ input:disabled {
   }
 
   .renderer-card-preview--canvas {
-    width: min(100%, 360px, calc((100svh - 120px) * 0.8574040219));
+    width: min(100%, 360px, calc((100svh - 120px) * 1.3295454545));
   }
 
   .renderer-queue {

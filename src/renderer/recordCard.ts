@@ -52,6 +52,16 @@ const MP4_ENCODER_CANDIDATES = [
     muxerCodec: 'avc',
     extraConfig: { avc: { format: 'avc' } },
   },
+  {
+    codec: 'avc1.640033',
+    muxerCodec: 'avc',
+    extraConfig: { avc: { format: 'avc' } },
+  },
+  {
+    codec: 'avc1.4d0033',
+    muxerCodec: 'avc',
+    extraConfig: { avc: { format: 'avc' } },
+  },
 ] as const;
 
 type RenderPhase = 'preparing' | 'capturing' | 'encoding' | 'done';
