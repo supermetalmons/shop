@@ -2438,6 +2438,11 @@ button.no-focus-style:focus-visible {
   user-select: none;
 }
 
+.card-nft2-unrevealed-page .poncho-card-viewer-overlay__card-id {
+  top: auto;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px));
+}
+
 .reveal-overlay--closing {
   pointer-events: none;
 }

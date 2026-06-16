@@ -227,7 +227,7 @@ export default function CardNft2UnrevealedApp() {
           active={viewer.active}
           closing={viewer.closing}
           card={viewer.card}
-          cardIdLabel={`#${viewer.figureId}`}
+          cardIdLabel={viewer.closing ? undefined : String(viewer.figureId)}
           loadingImageSrc={viewer.loadingImageSrc}
           onDismiss={dismissViewer}
           onTransitionEnd={handleViewerTransitionEnd}
