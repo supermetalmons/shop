@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type TransitionEvent } from 'react';
+import { FaBookmark, FaRegBookmark, FaRegCopy } from 'react-icons/fa';
 import { InventoryGrid } from './components/InventoryGrid';
 import { PonchoCardViewerOverlay } from './components/PonchoRevealOverlay';
 import { ShopHeader } from './components/ShopHeader';
 import { useCardNft2UnrevealedCards } from './hooks/useCardNft2UnrevealedCards';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
-import { cardNft2AssetUrl } from './lib/cardNft2Assets';
+import { cardNft2AssetUrl, normalizeCardNft2CardId } from './lib/cardNft2Assets';
 import { getInteractiveCardPackCardByFigureId } from './lib/interactiveCardPackReveal';
 import {
   calcAspectLockedRevealOriginRect,
@@ -26,6 +27,7 @@ import type { InventoryItem } from './types';
 
 const CARD_NFT_2_DROP_ID = 'card_nft_2';
 const CARD_NFT_2_AUTO_LOAD_ROOT_MARGIN = '720px 0px';
+const CARD_NFT_2_UNREVEALED_SELECTION_STORAGE_KEY = 'mons.shop:card_nft_2:unrevealed:selected-card-ids';
 
 type UnrevealedAutoLoadState = {
   cardCount: number;
@@ -60,6 +62,45 @@ function cardNft2UnrevealedLoadingImageSrc(image: string | undefined): string | 
   return trimmed ? `${trimmed}#unrevealed-grid-preview` : undefined;
 }
 
+function sortedCardIds(ids: ReadonlySet<number>): number[] {
+  return Array.from(ids).sort((a, b) => a - b);
+}
+
+function readCardNft2UnrevealedSelection(): Set<number> {
+  if (typeof window === 'undefined') return new Set();
+
+  try {
+    const stored = window.localStorage.getItem(CARD_NFT_2_UNREVEALED_SELECTION_STORAGE_KEY);
+    if (!stored) return new Set();
+
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return new Set();
+
+    const cardIds = new Set<number>();
+    parsed.forEach((value) => {
+      const cardId = normalizeCardNft2CardId(value);
+      if (cardId) cardIds.add(cardId);
+    });
+    return cardIds;
+  } catch {
+    return new Set();
+  }
+}
+
+function persistCardNft2UnrevealedSelection(cardIds: readonly number[]): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(CARD_NFT_2_UNREVEALED_SELECTION_STORAGE_KEY, JSON.stringify(cardIds));
+  } catch (err) {
+    console.warn('[mons] failed to persist unrevealed card selection', err);
+  }
+}
+
+function formatSelectedCardCount(count: number): string {
+  return `${count} selected`;
+}
+
 export default function CardNft2UnrevealedApp() {
   const imageCacheRef = useRef(createPonchoDrifellaImageCache());
   const resizeRafRef = useRef<number | null>(null);
@@ -76,9 +117,13 @@ export default function CardNft2UnrevealedApp() {
     hasNextPage,
   } = useCardNft2UnrevealedCards();
   const [viewer, setViewer] = useState<UnrevealedCardViewerState | null>(null);
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<number>>(() => readCardNft2UnrevealedSelection());
   const viewerOpen = Boolean(viewer);
   const cardIds = useMemo(() => data?.pages.flatMap((page) => page.ids) || [], [data]);
   const items = useMemo(() => cardIds.map(cardNft2UnrevealedItem), [cardIds]);
+  const selectedIds = useMemo(() => sortedCardIds(selectedCardIds), [selectedCardIds]);
+  const selectedIdsText = useMemo(() => selectedIds.join(','), [selectedIds]);
+  const selectedCardCount = selectedIds.length;
   const nextCursor = data?.pages[data.pages.length - 1]?.nextCursor;
 
   useEffect(() => {
@@ -86,6 +131,10 @@ export default function CardNft2UnrevealedApp() {
       clearPonchoDrifellaImageCache(imageCacheRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    persistCardNft2UnrevealedSelection(selectedIds);
+  }, [selectedIds]);
 
   useEffect(() => {
     if (!viewer || viewer.active || viewer.closing) return undefined;
@@ -155,6 +204,28 @@ export default function CardNft2UnrevealedApp() {
     setViewer((current) => (current && !current.closing ? { ...current, active: false, closing: true } : current));
   }, []);
 
+  const toggleSelectedCardId = useCallback((cardId: number) => {
+    setSelectedCardIds((current) => {
+      const next = new Set(current);
+      if (next.has(cardId)) {
+        next.delete(cardId);
+      } else {
+        next.add(cardId);
+      }
+      return next;
+    });
+  }, []);
+
+  const copySelectedCardIds = useCallback(async () => {
+    if (!selectedIdsText || typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return;
+
+    try {
+      await navigator.clipboard.writeText(selectedIdsText);
+    } catch (err) {
+      console.warn('[mons] failed to copy unrevealed card selection', err);
+    }
+  }, [selectedIdsText]);
+
   useEffect(() => {
     autoLoadStateRef.current = {
       cardCount: cardIds.length,
@@ -209,6 +280,25 @@ export default function CardNft2UnrevealedApp() {
     setViewer((current) => (current?.closing ? null : current));
   }, []);
 
+  const renderHeaderRight = useCallback(
+    ({ interactive }: { interactive: boolean }) => (
+      <div className="card-nft2-unrevealed-selection">
+        <span className="card-nft2-unrevealed-selection__count">{formatSelectedCardCount(selectedCardCount)}</span>
+        <button
+          type="button"
+          className="card-nft2-unrevealed-selection__copy"
+          aria-label={selectedCardCount > 0 ? 'Copy selected card IDs' : 'No selected cards to copy'}
+          title={selectedCardCount > 0 ? 'Copy selected card IDs' : 'No selected cards to copy'}
+          disabled={!interactive || selectedCardCount === 0}
+          onClick={interactive ? copySelectedCardIds : undefined}
+        >
+          <FaRegCopy aria-hidden="true" focusable="false" />
+        </button>
+      </div>
+    ),
+    [copySelectedCardIds, selectedCardCount],
+  );
+
   const viewerOverlayStyle: CSSProperties | undefined = viewer
     ? (ponchoDrifellaRevealOverlayStyleVars({
         originRect: viewer.originRect,
@@ -218,6 +308,7 @@ export default function CardNft2UnrevealedApp() {
         cardCount: 1,
       }) as CSSProperties)
     : undefined;
+  const viewerCardIsSelected = viewer ? selectedCardIds.has(viewer.figureId) : false;
 
   return (
     <div className="page card-nft2-unrevealed-page">
@@ -227,13 +318,42 @@ export default function CardNft2UnrevealedApp() {
           active={viewer.active}
           closing={viewer.closing}
           card={viewer.card}
-          cardIdLabel={viewer.closing ? undefined : String(viewer.figureId)}
           loadingImageSrc={viewer.loadingImageSrc}
           onDismiss={dismissViewer}
           onTransitionEnd={handleViewerTransitionEnd}
         />
       ) : null}
-      <ShopHeader scrollHomeToTop />
+      {viewer && !viewer.closing ? (
+        <div className="card-nft2-unrevealed-viewer-controls">
+          <span className="card-nft2-unrevealed-viewer-controls__id">{viewer.figureId}</span>
+          <button
+            type="button"
+            className={`card-nft2-unrevealed-viewer-controls__bookmark${
+              viewerCardIsSelected ? ' card-nft2-unrevealed-viewer-controls__bookmark--selected' : ''
+            }`}
+            aria-label={
+              viewerCardIsSelected
+                ? `Remove Card #${viewer.figureId} from selected cards`
+                : `Add Card #${viewer.figureId} to selected cards`
+            }
+            aria-pressed={viewerCardIsSelected}
+            onClick={(evt) => {
+              evt.stopPropagation();
+              toggleSelectedCardId(viewer.figureId);
+            }}
+            onPointerDown={(evt) => {
+              evt.stopPropagation();
+            }}
+          >
+            {viewerCardIsSelected ? (
+              <FaBookmark aria-hidden="true" focusable="false" />
+            ) : (
+              <FaRegBookmark aria-hidden="true" focusable="false" />
+            )}
+          </button>
+        </div>
+      ) : null}
+      <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
       <main className="card-nft2-unrevealed-gallery" aria-label="Unrevealed cards">
         <InventoryGrid
           items={items}
