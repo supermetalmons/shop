@@ -23,6 +23,8 @@ const RELATIVE_CARD_WIDTH_RATIO_551 = 551.72 / 1600;
 const VIDEO_BITRATE = 20_000_000;
 const KEYFRAME_INTERVAL = FRAME_RATE;
 const ENCODER_QUEUE_LIMIT = 4;
+const VIDEO_CANVAS_COLOR_SPACE: PredefinedColorSpace = 'srgb';
+const RECORDING_CAPTURE_CLASS = 'renderer-recording-card';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
@@ -106,21 +108,6 @@ function adjust(value: number, fromMin: number, fromMax: number, toMin: number, 
 function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error));
 }
-
-function getCanvasColorSpace(): PredefinedColorSpace {
-  if (!window.matchMedia('(color-gamut: p3)').matches) return 'srgb';
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 1;
-    const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
-    if (ctx?.getContextAttributes().colorSpace === 'display-p3') return 'display-p3';
-  } catch {
-    // Fall back to sRGB below.
-  }
-  return 'srgb';
-}
-
-const CANVAS_COLOR_SPACE = getCanvasColorSpace();
 
 function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -359,6 +346,11 @@ function computeFrameOverrides(frameIndex: number, totalFrames: number) {
   const glareX = round(percentX);
   const glareY = round(percentY);
   const pointerFromCenter = clamp(Math.sqrt((glareY - 50) ** 2 + (glareX - 50) ** 2) / 50, 0, 1);
+  const negativeBgX = round(-bgX);
+  const negativeBgY = round(-bgY);
+  const rareUltraShiftX = round(bgX + bgY * 0.2);
+  const amazingRareBgX = round(50 + (50 - bgX) * 3);
+  const amazingRareBgY = round(50 + (50 - bgY) * 3);
 
   return [
     `--pointer-x:${clamp(glareX)}%`,
@@ -371,6 +363,12 @@ function computeFrameOverrides(frameIndex: number, totalFrames: number) {
     `--rotate-y:${rotY}deg`,
     `--background-x:${clamp(bgX)}%`,
     `--background-y:${clamp(bgY)}%`,
+    `--renderer-background-x-negative:${negativeBgX}%`,
+    `--renderer-background-y-negative:${negativeBgY}%`,
+    `--renderer-rare-ultra-shift-x:${rareUltraShiftX}%`,
+    `--renderer-rare-ultra-shift-x-negative:${round(-rareUltraShiftX)}%`,
+    `--renderer-amazing-rare-background-x:${amazingRareBgX}%`,
+    `--renderer-amazing-rare-background-y:${amazingRareBgY}%`,
     '--rotate-delta:0deg',
     '--card-scale:1',
     '--translate-x:0px',
@@ -766,7 +764,7 @@ export async function recordCard(
   const cache = new Map<string, string>();
 
   const clone = cardElement.cloneNode(true) as HTMLElement;
-  clone.classList.add('interacting');
+  clone.classList.add('interacting', RECORDING_CAPTURE_CLASS);
   clone.classList.remove('loading', 'active', 'is-scaled');
   clone.querySelectorAll('img[loading="lazy"]').forEach((img) => img.removeAttribute('loading'));
   await embedImagesInElement(clone, cache);
@@ -787,7 +785,7 @@ export async function recordCard(
     canvas.height = VIDEO_SIZE;
     const ctx = canvas.getContext('2d', {
       alpha: false,
-      colorSpace: CANVAS_COLOR_SPACE,
+      colorSpace: VIDEO_CANVAS_COLOR_SPACE,
     });
     if (!ctx) throw new Error('Failed to create recording canvas');
 
