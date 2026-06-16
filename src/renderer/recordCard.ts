@@ -26,6 +26,7 @@ const RELATIVE_CARD_WIDTH_RATIO_551 = 551.72 / 1600;
 const VIDEO_BITRATE = 20_000_000;
 const KEYFRAME_INTERVAL = FRAME_RATE;
 const ENCODER_QUEUE_LIMIT = 4;
+const DEFAULT_RECORDING_BACKGROUND_COLOR = '#000';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
@@ -90,6 +91,7 @@ export type RecordCardOptions = {
   createWritable?: CreateWritable | null;
   saveBlob?: SaveBlob | null;
   canvasBackground?: string | null;
+  backgroundColor?: string | null;
   cardSize?: 'default' | 'ratio_669' | 'ratio_551' | 'custom';
   customCardWidth?: number;
   outputSize?: OutputSize;
@@ -631,6 +633,7 @@ async function embedImagesInElement(el: Element, cache: Map<string, string>) {
 function createRecordingViewport(
   cardClone: Element,
   backgroundDataUrl: string | null,
+  backgroundColor: string,
   outputSize: OutputSize,
   cardWidthPx: number,
   cardOffsetYPx = 0,
@@ -656,7 +659,7 @@ function createRecordingViewport(
   Object.assign(stage.style, {
     width: `${outputSize.width}px`,
     height: `${outputSize.height}px`,
-    backgroundColor: '#000',
+    backgroundColor,
     backgroundImage: backgroundDataUrl ? `url("${backgroundDataUrl}")` : 'none',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
@@ -684,6 +687,7 @@ function buildSVGDocument(
   rootVarsInline: string,
   cardClone: Element,
   backgroundDataUrl: string | null,
+  backgroundColor: string,
   outputSize: OutputSize,
   cardWidthPx: number,
   cardOffsetYPx = 0,
@@ -704,7 +708,7 @@ function buildSVGDocument(
   const container = document.createElementNS(XHTML_NS, 'div');
   container.setAttribute(
     'style',
-    `width:${outputSize.width}px;height:${outputSize.height}px;background-color:#000;` +
+    `width:${outputSize.width}px;height:${outputSize.height}px;background-color:${backgroundColor};` +
       (backgroundDataUrl
         ? `background-image:url("${backgroundDataUrl}");background-position:center;background-repeat:no-repeat;background-size:cover;`
         : '') +
@@ -790,6 +794,7 @@ function normalizeRecordOptions(options: RecordCardOptions = {}) {
     saveBlob: options.saveBlob || null,
     createWritable: options.createWritable || null,
     canvasBackground: options.canvasBackground || null,
+    backgroundColor: options.backgroundColor || DEFAULT_RECORDING_BACKGROUND_COLOR,
     cardSize: options.cardSize || 'default',
     customCardWidth: normalizeRelativeCardWidth(options.customCardWidth),
     outputSize,
@@ -869,6 +874,7 @@ export async function recordCard(
   const { viewport } = createRecordingViewport(
     clone,
     recordingBackgroundDataUrl,
+    normalizedOptions.backgroundColor,
     outputSize,
     cardWidthPx,
     cardOffsetYPx,
@@ -926,6 +932,7 @@ export async function recordCard(
         rootVarsInline,
         svgClone,
         recordingBackgroundDataUrl,
+        normalizedOptions.backgroundColor,
         outputSize,
         cardWidthPx,
         cardOffsetYPx,

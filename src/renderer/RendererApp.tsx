@@ -31,8 +31,15 @@ type QueueEntry = {
   status: QueueEntryStatus;
   phase?: string;
   progress?: number;
-  filename?: string;
+  filenames?: string[];
   error?: string;
+};
+
+type NonCanvasBackgroundVariant = {
+  key: 'black' | 'white';
+  label: string;
+  filenameSuffix: string;
+  backgroundColor: string;
 };
 
 const DEFAULT_START_ID = 1;
@@ -41,6 +48,20 @@ const DEFAULT_ID_LIST_INPUT = '';
 const CARD_READY_TIMEOUT_MS = 20_000;
 const CARD_READY_POLL_MS = 100;
 const CARD_SETTLE_DELAY_MS = 300;
+const NON_CANVAS_BACKGROUND_VARIANTS = {
+  black: {
+    key: 'black',
+    label: 'black',
+    filenameSuffix: '',
+    backgroundColor: '#000',
+  },
+  white: {
+    key: 'white',
+    label: 'white',
+    filenameSuffix: '-light',
+    backgroundColor: '#fff',
+  },
+} as const satisfies Record<NonCanvasBackgroundVariant['key'], NonCanvasBackgroundVariant>;
 const ON_CANVAS_LAYOUT = {
   background: '/card_nft_2/canvas_h.jpeg',
   // Keep the horizontal canvas MP4-friendly for browser H.264 encoders.
@@ -170,7 +191,7 @@ function statusLabel(status: QueueEntryStatus) {
 }
 
 function progressLabel(entry: QueueEntry) {
-  if (entry.status === 'done') return entry.filename || 'done';
+  if (entry.status === 'done') return entry.filenames?.length ? entry.filenames.join(', ') : 'done';
   if (entry.status === 'failed') return entry.error || 'failed';
   if (entry.phase) {
     const pct = typeof entry.progress === 'number' ? ` ${Math.round(entry.progress * 100)}%` : '';
@@ -189,6 +210,8 @@ export default function RendererApp() {
   const [previewRevision, setPreviewRevision] = useState(0);
   const [imageReady, setImageReady] = useState(false);
   const [renderOnCanvas, setRenderOnCanvas] = useState(false);
+  const [renderBlackBackground, setRenderBlackBackground] = useState(true);
+  const [renderWhiteBackground, setRenderWhiteBackground] = useState(false);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [lastError, setLastError] = useState('');
@@ -218,6 +241,13 @@ export default function RendererApp() {
       mode: 'range' as const,
     };
   }, [endIdInput, idListInput, startIdInput]);
+
+  const selectedNonCanvasBackgrounds = useMemo(() => {
+    const variants: NonCanvasBackgroundVariant[] = [];
+    if (renderBlackBackground) variants.push(NON_CANVAS_BACKGROUND_VARIANTS.black);
+    if (renderWhiteBackground) variants.push(NON_CANVAS_BACKGROUND_VARIANTS.white);
+    return variants;
+  }, [renderBlackBackground, renderWhiteBackground]);
 
   const currentCardKey = useMemo(() => `${drifCardIdentityKey(currentCard)}:${previewRevision}`, [currentCard, previewRevision]);
 
@@ -298,6 +328,26 @@ export default function RendererApp() {
         saveBlob?: (blob: Blob, name: string) => Promise<void> | void;
       },
     ) => {
+      const renderVariants = renderOnCanvas
+        ? [
+            {
+              label: 'canvas',
+              filenameSuffix: '',
+              backgroundColor: '#000',
+              canvasBackground: ON_CANVAS_LAYOUT.background,
+            },
+          ]
+        : selectedNonCanvasBackgrounds.map((variant) => ({
+            ...variant,
+            canvasBackground: 'none',
+          }));
+
+      if (!renderVariants.length) {
+        const error = new Error('Select at least one background.');
+        setLastError(error.message);
+        throw error;
+      }
+
       runningRef.current = true;
       setRunning(true);
       setLastError('');
@@ -311,32 +361,56 @@ export default function RendererApp() {
             const cardElement = await preparePreviewCard(id);
             setQueueEntry(id, { status: 'rendering', phase: 'preparing', progress: 0 });
 
-            const result = await recordCard(
-              cardElement,
-              ({ phase, current, total }: RecordProgress) => {
-                setQueueEntry(id, {
-                  status: phase === 'done' ? 'done' : 'rendering',
-                  phase,
-                  progress: total > 0 ? current / total : undefined,
-                });
-              },
-              {
-                filename: `card-nft-2-${id}.mp4`,
-                createWritable: output.createWritable,
-                saveBlob: output.saveBlob,
-                canvasBackground: renderOnCanvas ? ON_CANVAS_LAYOUT.background : 'none',
-                cardSize: renderOnCanvas ? 'custom' : 'default',
-                customCardWidth: renderOnCanvas ? ON_CANVAS_LAYOUT.cardWidth : undefined,
-                outputSize: renderOnCanvas ? ON_CANVAS_LAYOUT.outputSize : undefined,
-                cardPosition: renderOnCanvas ? ON_CANVAS_LAYOUT.cardPosition : undefined,
-                requireMp4: renderOnCanvas,
-                verticalOffset: 0,
-                speed: 1,
-              },
-            );
+            const filenames: string[] = [];
+            for (const [variantIndex, variant] of renderVariants.entries()) {
+              const variantProgressBase = variantIndex / renderVariants.length;
+              const variantLabelPrefix = renderVariants.length > 1 ? `${variant.label} ` : '';
 
-            renderedFiles.push(result.filename);
-            setQueueEntry(id, { status: 'done', phase: 'done', progress: 1, filename: result.filename });
+              const result = await recordCard(
+                cardElement,
+                ({ phase, current, total }: RecordProgress) => {
+                  const isLastVariant = variantIndex === renderVariants.length - 1;
+                  const variantProgress =
+                    total > 0
+                      ? (variantIndex + current / total) / renderVariants.length
+                      : phase === 'done'
+                        ? (variantIndex + 1) / renderVariants.length
+                        : variantProgressBase;
+
+                  setQueueEntry(id, {
+                    status: phase === 'done' && isLastVariant ? 'done' : 'rendering',
+                    phase: `${variantLabelPrefix}${phase}`,
+                    progress: variantProgress,
+                    filenames: filenames.length ? [...filenames] : undefined,
+                  });
+                },
+                {
+                  filename: `card-nft-2-${id}${variant.filenameSuffix}.mp4`,
+                  createWritable: output.createWritable,
+                  saveBlob: output.saveBlob,
+                  canvasBackground: variant.canvasBackground,
+                  backgroundColor: variant.backgroundColor,
+                  cardSize: renderOnCanvas ? 'custom' : 'default',
+                  customCardWidth: renderOnCanvas ? ON_CANVAS_LAYOUT.cardWidth : undefined,
+                  outputSize: renderOnCanvas ? ON_CANVAS_LAYOUT.outputSize : undefined,
+                  cardPosition: renderOnCanvas ? ON_CANVAS_LAYOUT.cardPosition : undefined,
+                  requireMp4: renderOnCanvas,
+                  verticalOffset: 0,
+                  speed: 1,
+                },
+              );
+
+              filenames.push(result.filename);
+              renderedFiles.push(result.filename);
+              setQueueEntry(id, {
+                status: variantIndex === renderVariants.length - 1 ? 'done' : 'rendering',
+                phase: variantIndex === renderVariants.length - 1 ? 'done' : `${variant.label} done`,
+                progress: (variantIndex + 1) / renderVariants.length,
+                filenames: [...filenames],
+              });
+            }
+
+            setQueueEntry(id, { status: 'done', phase: 'done', progress: 1, filenames });
             await sleep(200);
           } catch (error) {
             const message = formatError(error);
@@ -354,12 +428,16 @@ export default function RendererApp() {
         setRunning(false);
       }
     },
-    [preparePreviewCard, renderOnCanvas, setQueueEntry],
+    [preparePreviewCard, renderOnCanvas, selectedNonCanvasBackgrounds, setQueueEntry],
   );
 
   const renderToDirectory = useCallback(async () => {
     if (!renderSelection.valid || !renderSelection.ids.length) {
       setLastError(renderSelection.message);
+      return;
+    }
+    if (!renderOnCanvas && !selectedNonCanvasBackgrounds.length) {
+      setLastError('Select at least one background.');
       return;
     }
     if (!outputDirectory) {
@@ -377,7 +455,7 @@ export default function RendererApp() {
     } catch {
       // renderIds stores the user-facing error.
     }
-  }, [outputDirectory, renderIds, renderSelection]);
+  }, [outputDirectory, renderIds, renderOnCanvas, renderSelection, selectedNonCanvasBackgrounds]);
 
   const stopRendering = useCallback(() => {
     runningRef.current = false;
@@ -486,6 +564,29 @@ export default function RendererApp() {
                 </span>
               )}
             </div>
+
+            {!renderOnCanvas && (
+              <div className="renderer-mode-row" aria-label="Non-canvas backgrounds">
+                <label className="renderer-check-row">
+                  <input
+                    type="checkbox"
+                    checked={renderBlackBackground}
+                    disabled={running}
+                    onChange={(event) => setRenderBlackBackground(event.currentTarget.checked)}
+                  />
+                  <span>Black</span>
+                </label>
+                <label className="renderer-check-row">
+                  <input
+                    type="checkbox"
+                    checked={renderWhiteBackground}
+                    disabled={running}
+                    onChange={(event) => setRenderWhiteBackground(event.currentTarget.checked)}
+                  />
+                  <span>White</span>
+                </label>
+              </div>
+            )}
 
             <div className="renderer-action-row">
               <button type="button" className="renderer-primary-button" disabled={running || !renderSelection.valid} onClick={renderToDirectory}>
