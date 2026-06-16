@@ -259,6 +259,30 @@ input:disabled {
   display: block;
 }
 
+.renderer-hidden-slots {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 560px;
+  min-height: 1px;
+  overflow: visible;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.renderer-hidden-slot {
+  width: 560px;
+}
+
+.renderer-hidden-slot .drif-effect-card {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: var(--card-radius);
+  padding: 0;
+  display: block;
+}
+
 .renderer-queue {
   align-self: stretch;
   min-height: 0;
@@ -297,7 +321,7 @@ input:disabled {
 
 .renderer-queue-entry {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 82px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   min-height: 42px;

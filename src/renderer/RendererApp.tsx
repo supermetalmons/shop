@@ -27,41 +27,52 @@ type DirectoryPickerWindow = Window &
 type QueueEntryStatus = 'queued' | 'preloading' | 'ready' | 'rendering' | 'done' | 'failed';
 
 type QueueEntry = {
+  key: string;
   id: number;
+  label: string;
   status: QueueEntryStatus;
   phase?: string;
   progress?: number;
-  filenames?: string[];
+  filename?: string;
   error?: string;
 };
 
-type NonCanvasBackgroundVariant = {
-  key: 'black' | 'white';
+type RenderVariant = {
+  key: 'canvas' | 'black';
   label: string;
   filenameSuffix: string;
   backgroundColor: string;
+  canvasBackground: string;
+};
+
+type RenderJob = {
+  key: string;
+  id: number;
+  label: string;
+  filename: string;
+  card: DrifCardConfig;
+  variant: RenderVariant;
+};
+
+type RenderSlot = {
+  job: RenderJob;
+  card: DrifCardConfig;
 };
 
 const DEFAULT_START_ID = 1;
 const DEFAULT_END_ID = 4;
 const DEFAULT_ID_LIST_INPUT = '';
+const RENDER_BATCH_SIZE = 4;
 const CARD_READY_TIMEOUT_MS = 20_000;
 const CARD_READY_POLL_MS = 100;
 const CARD_SETTLE_DELAY_MS = 300;
-const NON_CANVAS_BACKGROUND_VARIANTS = {
-  black: {
-    key: 'black',
-    label: 'black',
-    filenameSuffix: '',
-    backgroundColor: '#000',
-  },
-  white: {
-    key: 'white',
-    label: 'white',
-    filenameSuffix: '-light',
-    backgroundColor: '#fff',
-  },
-} as const satisfies Record<NonCanvasBackgroundVariant['key'], NonCanvasBackgroundVariant>;
+const BLACK_BACKGROUND_VARIANT = {
+  key: 'black',
+  label: 'black',
+  filenameSuffix: '',
+  backgroundColor: '#000',
+  canvasBackground: 'none',
+} as const satisfies RenderVariant;
 const ON_CANVAS_LAYOUT = {
   background: '/card_nft_2/canvas_h.jpeg',
   // Keep the horizontal canvas MP4-friendly for browser H.264 encoders.
@@ -181,6 +192,37 @@ function cardForId(id: number) {
   return card;
 }
 
+function buildRenderJobKey(id: number, variant: RenderVariant) {
+  return `${id}:${variant.key}`;
+}
+
+function buildRenderJobs(ids: readonly number[], renderVariants: readonly RenderVariant[]) {
+  const cardsById = new Map<number, DrifCardConfig>();
+  const showVariantLabels = renderVariants.length > 1;
+  const jobs: RenderJob[] = [];
+
+  for (const id of ids) {
+    let card = cardsById.get(id);
+    if (!card) {
+      card = cardForId(id);
+      cardsById.set(id, card);
+    }
+
+    for (const variant of renderVariants) {
+      jobs.push({
+        key: buildRenderJobKey(id, variant),
+        id,
+        label: showVariantLabels ? `${id} ${variant.label}` : String(id),
+        filename: `card-nft-2-${id}${variant.filenameSuffix}.mp4`,
+        card,
+        variant,
+      });
+    }
+  }
+
+  return jobs;
+}
+
 function statusLabel(status: QueueEntryStatus) {
   if (status === 'preloading') return 'preloading';
   if (status === 'ready') return 'ready';
@@ -191,7 +233,7 @@ function statusLabel(status: QueueEntryStatus) {
 }
 
 function progressLabel(entry: QueueEntry) {
-  if (entry.status === 'done') return entry.filenames?.length ? entry.filenames.join(', ') : 'done';
+  if (entry.status === 'done') return entry.filename || 'done';
   if (entry.status === 'failed') return entry.error || 'failed';
   if (entry.phase) {
     const pct = typeof entry.progress === 'number' ? ` ${Math.round(entry.progress * 100)}%` : '';
@@ -210,13 +252,12 @@ export default function RendererApp() {
   const [previewRevision, setPreviewRevision] = useState(0);
   const [imageReady, setImageReady] = useState(false);
   const [renderOnCanvas, setRenderOnCanvas] = useState(false);
-  const [renderBlackBackground, setRenderBlackBackground] = useState(true);
-  const [renderWhiteBackground, setRenderWhiteBackground] = useState(false);
   const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [renderSlots, setRenderSlots] = useState<RenderSlot[]>([]);
   const [running, setRunning] = useState(false);
   const [lastError, setLastError] = useState('');
-  const previewRef = useRef<HTMLDivElement | null>(null);
-  const imageReadyRef = useRef(false);
+  const renderSlotElementsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const renderSlotReadyRef = useRef<Map<string, boolean>>(new Map());
   const runningRef = useRef(false);
 
   const renderSelection = useMemo(() => {
@@ -242,13 +283,6 @@ export default function RendererApp() {
     };
   }, [endIdInput, idListInput, startIdInput]);
 
-  const selectedNonCanvasBackgrounds = useMemo(() => {
-    const variants: NonCanvasBackgroundVariant[] = [];
-    if (renderBlackBackground) variants.push(NON_CANVAS_BACKGROUND_VARIANTS.black);
-    if (renderWhiteBackground) variants.push(NON_CANVAS_BACKGROUND_VARIANTS.white);
-    return variants;
-  }, [renderBlackBackground, renderWhiteBackground]);
-
   const currentCardKey = useMemo(() => `${drifCardIdentityKey(currentCard)}:${previewRevision}`, [currentCard, previewRevision]);
 
   const previewStyle = useMemo<CanvasPreviewStyle | undefined>(() => {
@@ -261,13 +295,21 @@ export default function RendererApp() {
     };
   }, [renderOnCanvas]);
 
-  const setQueueEntry = useCallback((id: number, patch: Partial<QueueEntry>) => {
-    setQueue((entries) => entries.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+  const setQueueEntry = useCallback((key: string, patch: Partial<QueueEntry>) => {
+    setQueue((entries) => entries.map((entry) => (entry.key === key ? { ...entry, ...patch } : entry)));
+  }, []);
+
+  const setQueueEntries = useCallback((keys: readonly string[], patch: Partial<QueueEntry>) => {
+    const keySet = new Set(keys);
+    setQueue((entries) => entries.map((entry) => (keySet.has(entry.key) ? { ...entry, ...patch } : entry)));
   }, []);
 
   const handleImageReadyChange = useCallback((ready: boolean) => {
-    imageReadyRef.current = ready;
     setImageReady(ready);
+  }, []);
+
+  const handleRenderSlotImageReadyChange = useCallback((key: string, ready: boolean) => {
+    renderSlotReadyRef.current.set(key, ready);
   }, []);
 
   const chooseOutputDirectory = useCallback(async () => {
@@ -287,38 +329,48 @@ export default function RendererApp() {
     }
   }, []);
 
-  const waitForPreviewCardReady = useCallback(async (id: number) => {
+  const waitForRenderSlotReady = useCallback(async (job: RenderJob) => {
     const startedAt = performance.now();
     while (performance.now() - startedAt < CARD_READY_TIMEOUT_MS) {
-      const cardElement = previewRef.current?.querySelector<HTMLElement>('.drif-effect-card');
-      if (cardElement && imageReadyRef.current && !cardElement.classList.contains('loading')) {
+      const cardElement = renderSlotElementsRef.current.get(job.key)?.querySelector<HTMLElement>('.drif-effect-card');
+      if (cardElement && renderSlotReadyRef.current.get(job.key) && !cardElement.classList.contains('loading')) {
         return cardElement;
       }
       await sleep(CARD_READY_POLL_MS);
     }
-    throw new Error(`Timed out waiting for card ${id} to become ready`);
+    throw new Error(`Timed out waiting for ${job.label} to become ready`);
   }, []);
 
-  const preparePreviewCard = useCallback(
-    async (id: number) => {
-      const card = cardForId(id);
-      setQueueEntry(id, { status: 'preloading', phase: 'preloading', progress: undefined, error: undefined });
-      await preloadCardAssets(card);
-      flushSync(() => {
-        imageReadyRef.current = false;
+  const mountRenderSlots = useCallback((jobs: readonly RenderJob[]) => {
+    for (const job of jobs) {
+      renderSlotReadyRef.current.set(job.key, false);
+    }
+
+    flushSync(() => {
+      const firstJob = jobs[0];
+      if (firstJob) {
         setImageReady(false);
-        setCurrentCardId(id);
-        setCurrentCard(card);
+        setCurrentCardId(firstJob.id);
+        setCurrentCard(firstJob.card);
         setPreviewRevision((value) => value + 1);
-      });
-      setQueueEntry(id, { status: 'ready', phase: 'ready' });
-      await sleep(0);
-      const element = await waitForPreviewCardReady(id);
-      await sleep(CARD_SETTLE_DELAY_MS);
-      return element;
-    },
-    [setQueueEntry, waitForPreviewCardReady],
-  );
+      }
+      setRenderSlots(jobs.map((job) => ({ job, card: job.card })));
+    });
+  }, []);
+
+  const clearRenderSlots = useCallback((jobs?: readonly RenderJob[]) => {
+    const keys = jobs?.map((job) => job.key);
+    if (keys) {
+      for (const key of keys) {
+        renderSlotReadyRef.current.delete(key);
+        renderSlotElementsRef.current.delete(key);
+      }
+    } else {
+      renderSlotReadyRef.current.clear();
+      renderSlotElementsRef.current.clear();
+    }
+    setRenderSlots([]);
+  }, []);
 
   const renderIds = useCallback(
     async (
@@ -328,68 +380,117 @@ export default function RendererApp() {
         saveBlob?: (blob: Blob, name: string) => Promise<void> | void;
       },
     ) => {
-      const renderVariants = renderOnCanvas
+      const renderVariants: RenderVariant[] = renderOnCanvas
         ? [
             {
+              key: 'canvas',
               label: 'canvas',
               filenameSuffix: '',
               backgroundColor: '#000',
               canvasBackground: ON_CANVAS_LAYOUT.background,
             },
           ]
-        : selectedNonCanvasBackgrounds.map((variant) => ({
-            ...variant,
-            canvasBackground: 'none',
-          }));
+        : [BLACK_BACKGROUND_VARIANT];
 
-      if (!renderVariants.length) {
-        const error = new Error('Select at least one background.');
-        setLastError(error.message);
-        throw error;
-      }
-
-      runningRef.current = true;
-      setRunning(true);
-      setLastError('');
-      setQueue(ids.map((id) => ({ id, status: 'queued' as const })));
+      const renderJobs = buildRenderJobs(ids, renderVariants);
 
       const renderedFiles: string[] = [];
       try {
-        for (const id of ids) {
+        runningRef.current = true;
+        setRunning(true);
+        setLastError('');
+        setQueue(renderJobs.map((job) => ({ key: job.key, id: job.id, label: job.label, status: 'queued' as const })));
+        clearRenderSlots();
+
+        for (let batchStart = 0; batchStart < renderJobs.length; batchStart += RENDER_BATCH_SIZE) {
           if (!runningRef.current) break;
+          const batch = renderJobs.slice(batchStart, batchStart + RENDER_BATCH_SIZE);
+          const batchKeys = batch.map((job) => job.key);
+          const batchResourceCache = new Map<string, string>();
+
           try {
-            const cardElement = await preparePreviewCard(id);
-            setQueueEntry(id, { status: 'rendering', phase: 'preparing', progress: 0 });
+            setQueueEntries(batchKeys, {
+              status: 'preloading',
+              phase: 'preloading',
+              progress: undefined,
+              filename: undefined,
+              error: undefined,
+            });
 
-            const filenames: string[] = [];
-            for (const [variantIndex, variant] of renderVariants.entries()) {
-              const variantProgressBase = variantIndex / renderVariants.length;
-              const variantLabelPrefix = renderVariants.length > 1 ? `${variant.label} ` : '';
+            const preloadById = new Map<number, Promise<void>>();
+            const preloadResults = await Promise.allSettled(
+              batch.map((job) => {
+                let preloadPromise = preloadById.get(job.id);
+                if (!preloadPromise) {
+                  preloadPromise = preloadCardAssets(job.card);
+                  preloadById.set(job.id, preloadPromise);
+                }
+                return preloadPromise;
+              }),
+            );
+            let firstPreloadError: unknown = null;
+            preloadResults.forEach((result, index) => {
+              if (result.status === 'fulfilled') return;
+              firstPreloadError ??= result.reason;
+              setQueueEntry(batch[index].key, {
+                status: 'failed',
+                phase: 'failed',
+                error: formatError(result.reason),
+              });
+            });
+            if (firstPreloadError) throw firstPreloadError;
 
-              const result = await recordCard(
-                cardElement,
-                ({ phase, current, total }: RecordProgress) => {
-                  const isLastVariant = variantIndex === renderVariants.length - 1;
-                  const variantProgress =
-                    total > 0
-                      ? (variantIndex + current / total) / renderVariants.length
-                      : phase === 'done'
-                        ? (variantIndex + 1) / renderVariants.length
-                        : variantProgressBase;
+            setQueueEntries(batchKeys, { status: 'ready', phase: 'ready' });
+            mountRenderSlots(batch);
+            await sleep(0);
 
-                  setQueueEntry(id, {
-                    status: phase === 'done' && isLastVariant ? 'done' : 'rendering',
-                    phase: `${variantLabelPrefix}${phase}`,
-                    progress: variantProgress,
-                    filenames: filenames.length ? [...filenames] : undefined,
+            const readyResults = await Promise.allSettled(
+              batch.map(async (job) => [job.key, await waitForRenderSlotReady(job)] as const),
+            );
+            const readyElements = new Map<string, HTMLElement>();
+            let firstReadyError: unknown = null;
+            readyResults.forEach((result, index) => {
+              if (result.status === 'fulfilled') {
+                readyElements.set(result.value[0], result.value[1]);
+                return;
+              }
+              firstReadyError ??= result.reason;
+              setQueueEntry(batch[index].key, {
+                status: 'failed',
+                phase: 'failed',
+                error: formatError(result.reason),
+              });
+            });
+            if (firstReadyError) throw firstReadyError;
+
+            await sleep(CARD_SETTLE_DELAY_MS);
+
+            const recordResults = await Promise.allSettled(
+              batch.map(async (job) => {
+                const cardElement = readyElements.get(job.key);
+                if (!cardElement) throw new Error(`No ready card element for ${job.label}`);
+
+                let lastPhase: RecordProgress['phase'] | null = null;
+                let lastProgress = -1;
+                const reportProgress = ({ phase, current, total }: RecordProgress) => {
+                  const progress = total > 0 ? current / total : phase === 'done' ? 1 : 0;
+                  if (phase === lastPhase && progress < 1 && progress - lastProgress < 0.02) return;
+                  lastPhase = phase;
+                  lastProgress = progress;
+                  setQueueEntry(job.key, {
+                    status: phase === 'done' ? 'done' : 'rendering',
+                    phase,
+                    progress,
                   });
-                },
-                {
-                  filename: `card-nft-2-${id}${variant.filenameSuffix}.mp4`,
+                };
+
+                setQueueEntry(job.key, { status: 'rendering', phase: 'preparing', progress: 0 });
+                const result = await recordCard(cardElement, reportProgress, {
+                  filename: job.filename,
                   createWritable: output.createWritable,
                   saveBlob: output.saveBlob,
-                  canvasBackground: variant.canvasBackground,
-                  backgroundColor: variant.backgroundColor,
+                  canvasBackground: job.variant.canvasBackground,
+                  backgroundColor: job.variant.backgroundColor,
                   cardSize: renderOnCanvas ? 'custom' : 'default',
                   customCardWidth: renderOnCanvas ? ON_CANVAS_LAYOUT.cardWidth : undefined,
                   outputSize: renderOnCanvas ? ON_CANVAS_LAYOUT.outputSize : undefined,
@@ -397,25 +498,35 @@ export default function RendererApp() {
                   requireMp4: renderOnCanvas,
                   verticalOffset: 0,
                   speed: 1,
-                },
-              );
+                  resourceCache: batchResourceCache,
+                });
 
-              filenames.push(result.filename);
-              renderedFiles.push(result.filename);
-              setQueueEntry(id, {
-                status: variantIndex === renderVariants.length - 1 ? 'done' : 'rendering',
-                phase: variantIndex === renderVariants.length - 1 ? 'done' : `${variant.label} done`,
-                progress: (variantIndex + 1) / renderVariants.length,
-                filenames: [...filenames],
+                setQueueEntry(job.key, {
+                  status: 'done',
+                  phase: 'done',
+                  progress: 1,
+                  filename: result.filename,
+                });
+                return result.filename;
+              }),
+            );
+
+            let firstRecordError: unknown = null;
+            recordResults.forEach((result, index) => {
+              if (result.status === 'fulfilled') {
+                renderedFiles.push(result.value);
+                return;
+              }
+              firstRecordError ??= result.reason;
+              setQueueEntry(batch[index].key, {
+                status: 'failed',
+                phase: 'failed',
+                error: formatError(result.reason),
               });
-            }
-
-            setQueueEntry(id, { status: 'done', phase: 'done', progress: 1, filenames });
-            await sleep(200);
-          } catch (error) {
-            const message = formatError(error);
-            setQueueEntry(id, { status: 'failed', phase: 'failed', error: message });
-            throw error;
+            });
+            if (firstRecordError) throw firstRecordError;
+          } finally {
+            clearRenderSlots(batch);
           }
         }
         return renderedFiles;
@@ -426,18 +537,15 @@ export default function RendererApp() {
       } finally {
         runningRef.current = false;
         setRunning(false);
+        clearRenderSlots();
       }
     },
-    [preparePreviewCard, renderOnCanvas, selectedNonCanvasBackgrounds, setQueueEntry],
+    [clearRenderSlots, mountRenderSlots, renderOnCanvas, setQueueEntries, setQueueEntry, waitForRenderSlotReady],
   );
 
   const renderToDirectory = useCallback(async () => {
     if (!renderSelection.valid || !renderSelection.ids.length) {
       setLastError(renderSelection.message);
-      return;
-    }
-    if (!renderOnCanvas && !selectedNonCanvasBackgrounds.length) {
-      setLastError('Select at least one background.');
       return;
     }
     if (!outputDirectory) {
@@ -455,7 +563,7 @@ export default function RendererApp() {
     } catch {
       // renderIds stores the user-facing error.
     }
-  }, [outputDirectory, renderIds, renderOnCanvas, renderSelection, selectedNonCanvasBackgrounds]);
+  }, [outputDirectory, renderIds, renderSelection]);
 
   const stopRendering = useCallback(() => {
     runningRef.current = false;
@@ -486,6 +594,13 @@ export default function RendererApp() {
     };
   }, [renderIds]);
 
+  const completedVideoCount = queue.filter((entry) => entry.status === 'done').length;
+  const rendererStatusText = running
+    ? `${completedVideoCount}/${queue.length} videos`
+    : imageReady
+      ? `Card ${currentCardId} ready`
+      : `Loading ${currentCardId}`;
+
   return (
     <main className="renderer-shell">
       <section className="renderer-workspace">
@@ -494,8 +609,8 @@ export default function RendererApp() {
             <p className="renderer-kicker">card_nft_2</p>
             <h1>Video renderer</h1>
           </div>
-          <div className="renderer-status" data-ready={imageReady ? 'true' : 'false'}>
-            {running ? `Rendering ${currentCardId}` : imageReady ? `Card ${currentCardId} ready` : `Loading ${currentCardId}`}
+          <div className="renderer-status" data-ready={running || imageReady ? 'true' : 'false'}>
+            {rendererStatusText}
           </div>
         </header>
 
@@ -565,35 +680,12 @@ export default function RendererApp() {
               )}
             </div>
 
-            {!renderOnCanvas && (
-              <div className="renderer-mode-row" aria-label="Non-canvas backgrounds">
-                <label className="renderer-check-row">
-                  <input
-                    type="checkbox"
-                    checked={renderBlackBackground}
-                    disabled={running}
-                    onChange={(event) => setRenderBlackBackground(event.currentTarget.checked)}
-                  />
-                  <span>Black</span>
-                </label>
-                <label className="renderer-check-row">
-                  <input
-                    type="checkbox"
-                    checked={renderWhiteBackground}
-                    disabled={running}
-                    onChange={(event) => setRenderWhiteBackground(event.currentTarget.checked)}
-                  />
-                  <span>White</span>
-                </label>
-              </div>
-            )}
-
             <div className="renderer-action-row">
               <button type="button" className="renderer-primary-button" disabled={running || !renderSelection.valid} onClick={renderToDirectory}>
                 {renderSelection.mode === 'list' ? 'Render list' : 'Render range'}
               </button>
               <button type="button" className="renderer-secondary-button" disabled={!running} onClick={stopRendering}>
-                Stop after current
+                Stop after batch
               </button>
               <span>{renderSelection.message}</span>
             </div>
@@ -603,7 +695,6 @@ export default function RendererApp() {
 
           <section className="renderer-preview-panel" aria-label="Current card preview">
             <div
-              ref={previewRef}
               className={`renderer-card-preview${renderOnCanvas ? ' renderer-card-preview--canvas' : ''}`}
               style={previewStyle}
             >
@@ -623,16 +714,41 @@ export default function RendererApp() {
         </div>
       </section>
 
+      <div className="renderer-hidden-slots" aria-hidden="true">
+        {renderSlots.map((slot) => (
+          <div
+            key={slot.job.key}
+            ref={(element) => {
+              if (element) {
+                renderSlotElementsRef.current.set(slot.job.key, element);
+              } else {
+                renderSlotElementsRef.current.delete(slot.job.key);
+              }
+            }}
+            className="renderer-hidden-slot"
+          >
+            <WipInteractiveCard
+              card={slot.card}
+              interactive={false}
+              wakeOnInteractiveUnlock={false}
+              onImageReadyChange={(ready) => handleRenderSlotImageReadyChange(slot.job.key, ready)}
+              ariaLabel={`card_nft_2 ${slot.job.label}`}
+              imageAlt={`card_nft_2 ${slot.job.label}`}
+            />
+          </div>
+        ))}
+      </div>
+
       <section className="renderer-queue" aria-label="Render queue">
         <div className="renderer-queue-header">
           <h2>Queue</h2>
-          <span>{queue.filter((entry) => entry.status === 'done').length} complete</span>
+          <span>{completedVideoCount} complete</span>
         </div>
         <div className="renderer-queue-list">
           {queue.length ? (
             queue.map((entry) => (
-              <div key={entry.id} className="renderer-queue-entry" data-status={entry.status}>
-                <span className="renderer-queue-id">{entry.id}</span>
+              <div key={entry.key} className="renderer-queue-entry" data-status={entry.status}>
+                <span className="renderer-queue-id">{entry.label}</span>
                 <span className="renderer-queue-status">{progressLabel(entry)}</span>
               </div>
             ))

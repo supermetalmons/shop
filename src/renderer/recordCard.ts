@@ -90,6 +90,7 @@ export type RecordCardOptions = {
   filename?: string;
   createWritable?: CreateWritable | null;
   saveBlob?: SaveBlob | null;
+  resourceCache?: Map<string, string> | null;
   canvasBackground?: string | null;
   backgroundColor?: string | null;
   cardSize?: 'default' | 'ratio_669' | 'ratio_551' | 'custom';
@@ -118,6 +119,7 @@ let embeddedCssSnapshotPromise: Promise<{ embeddedCSS: string; rootVarsInline: s
 const mp4EncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
 const webmEncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
 const recordingBackgroundPromises = new Map<string, Promise<string | null>>();
+const dataUrlPendingPromises = new WeakMap<Map<string, string>, Map<string, Promise<string>>>();
 
 function clamp(value: number, min = 0, max = 100) {
   return Math.min(Math.max(value, min), max);
@@ -500,6 +502,37 @@ export async function fetchAsDataUrl(absUrl: string) {
   });
 }
 
+function getDataUrlPendingPromises(cache: Map<string, string>) {
+  let pending = dataUrlPendingPromises.get(cache);
+  if (!pending) {
+    pending = new Map<string, Promise<string>>();
+    dataUrlPendingPromises.set(cache, pending);
+  }
+  return pending;
+}
+
+async function fetchCachedDataUrl(absUrl: string, cache: Map<string, string>) {
+  const cached = cache.get(absUrl);
+  if (cached) return cached;
+
+  const pending = getDataUrlPendingPromises(cache);
+  let promise = pending.get(absUrl);
+  if (!promise) {
+    promise = fetchAsDataUrl(absUrl)
+      .then((dataUrl) => {
+        cache.set(absUrl, dataUrl);
+        pending.delete(absUrl);
+        return dataUrl;
+      })
+      .catch((error) => {
+        pending.delete(absUrl);
+        throw error;
+      });
+    pending.set(absUrl, promise);
+  }
+  return promise;
+}
+
 async function embedUrlsInText(text: string, cache: Map<string, string>, baseUrl = location.href) {
   const toFetch = new Set<string>();
   let match: RegExpExecArray | null;
@@ -515,7 +548,7 @@ async function embedUrlsInText(text: string, cache: Map<string, string>, baseUrl
   await Promise.all(
     Array.from(toFetch).map(async (abs) => {
       try {
-        cache.set(abs, await fetchAsDataUrl(abs));
+        await fetchCachedDataUrl(abs, cache);
       } catch (error) {
         console.warn('Failed to embed renderer resource:', abs, error);
       }
@@ -619,8 +652,7 @@ async function embedImagesInElement(el: Element, cache: Map<string, string>) {
     let dataUrl = cache.get(abs);
     if (!dataUrl) {
       try {
-        dataUrl = await fetchAsDataUrl(abs);
-        cache.set(abs, dataUrl);
+        dataUrl = await fetchCachedDataUrl(abs, cache);
       } catch (error) {
         console.warn('Failed to embed card image:', abs, error);
         continue;
@@ -793,6 +825,7 @@ function normalizeRecordOptions(options: RecordCardOptions = {}) {
     filename: options.filename || null,
     saveBlob: options.saveBlob || null,
     createWritable: options.createWritable || null,
+    resourceCache: options.resourceCache || null,
     canvasBackground: options.canvasBackground || null,
     backgroundColor: options.backgroundColor || DEFAULT_RECORDING_BACKGROUND_COLOR,
     cardSize: options.cardSize || 'default',
@@ -860,7 +893,7 @@ export async function recordCard(
 
   const { embeddedCSS, rootVarsInline } = await getEmbeddedCssSnapshot();
   const recordingBackgroundDataUrl = await getRecordingBackgroundDataUrl(normalizedOptions.canvasBackground);
-  const cache = new Map<string, string>();
+  const cache = normalizedOptions.resourceCache || new Map<string, string>();
 
   const baseClone = cardElement.cloneNode(true) as HTMLElement;
   baseClone.classList.add('interacting');
