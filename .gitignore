@@ -23,6 +23,7 @@ node_modules/
 dist/
 .vite/
 .cache/
+renderer-samples/
 *.tsbuildinfo
 
 npm-debug.log*
