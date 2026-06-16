@@ -2207,14 +2207,21 @@ button.no-focus-style:focus-visible {
   gap: 12px;
 }
 
-.inventory--card-nft2-unrevealed {
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
+.card-nft2-unrevealed-page .inventory--card-nft2-unrevealed {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(18px, 2.2vw, 28px);
 }
 
-.inventory--card-nft2-unrevealed .inventory__item {
+.card-nft2-unrevealed-page .inventory--card-nft2-unrevealed .inventory__item {
   content-visibility: auto;
-  contain-intrinsic-size: 150px 150px;
+  contain-intrinsic-size: 250px 250px;
+}
+
+@media (max-width: 920px) {
+  .card-nft2-unrevealed-page .inventory--card-nft2-unrevealed {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -2224,9 +2231,10 @@ button.no-focus-style:focus-visible {
     gap: 8px;
   }
 
-  .inventory--card-nft2-unrevealed {
+  .card-nft2-unrevealed-page .inventory--card-nft2-unrevealed {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
-    gap: 8px;
+    gap: 10px;
   }
 
   .inventory--receipts {
@@ -2256,7 +2264,7 @@ button.no-focus-style:focus-visible {
     gap: 4px;
   }
 
-  .inventory--card-nft2-unrevealed {
+  .card-nft2-unrevealed-page .inventory--card-nft2-unrevealed {
     gap: 6px;
   }
 }
