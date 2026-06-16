@@ -16,7 +16,7 @@ const DEFAULT_OUTPUT_SIZE = {
   width: 1080,
   height: 1080,
 } as const;
-const FRAME_RATE = 30;
+const FRAME_RATE = 60;
 const CYCLE_DURATION_MS = 4_600;
 const FLOAT_RADIUS_X = 22;
 const FLOAT_RADIUS_Y = 16;
@@ -25,7 +25,7 @@ const RELATIVE_CARD_WIDTH_RATIO_669 = 669.49 / 1600;
 const RELATIVE_CARD_WIDTH_RATIO_551 = 551.72 / 1600;
 const VIDEO_BITRATE = 20_000_000;
 const KEYFRAME_INTERVAL = FRAME_RATE;
-const ENCODER_QUEUE_LIMIT = 4;
+const ENCODER_QUEUE_LIMIT = 12;
 const DEFAULT_RECORDING_BACKGROUND_COLOR = '#000';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -862,17 +862,30 @@ export async function recordCard(
   const recordingBackgroundDataUrl = await getRecordingBackgroundDataUrl(normalizedOptions.canvasBackground);
   const cache = new Map<string, string>();
 
-  const clone = cardElement.cloneNode(true) as HTMLElement;
-  clone.classList.add('interacting');
-  clone.classList.remove('loading', 'active', 'is-scaled');
-  clone.querySelectorAll('img[loading="lazy"]').forEach((img) => img.removeAttribute('loading'));
-  await embedImagesInElement(clone, cache);
+  const baseClone = cardElement.cloneNode(true) as HTMLElement;
+  baseClone.classList.add('interacting');
+  baseClone.classList.remove('loading', 'active', 'is-scaled');
+  baseClone.querySelectorAll('img[loading="lazy"]').forEach((img) => img.removeAttribute('loading'));
+  await embedImagesInElement(baseClone, cache);
 
   const origStyle = cardElement.getAttribute('style') || '';
   const embeddedOrigStyle = await embedUrlsInText(origStyle, cache);
   const staticStyle = extractStaticStyle(embeddedOrigStyle);
+  const viewportClone = baseClone.cloneNode(true) as HTMLElement;
+  const frameClone = baseClone.cloneNode(true) as HTMLElement;
+  const svgDoc = buildSVGDocument(
+    embeddedCSS,
+    rootVarsInline,
+    frameClone,
+    recordingBackgroundDataUrl,
+    normalizedOptions.backgroundColor,
+    outputSize,
+    cardWidthPx,
+    cardOffsetYPx,
+    normalizedOptions.cardPosition,
+  );
   const { viewport } = createRecordingViewport(
-    clone,
+    viewportClone,
     recordingBackgroundDataUrl,
     normalizedOptions.backgroundColor,
     outputSize,
@@ -923,21 +936,7 @@ export async function recordCard(
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
       if (encoderError) throw encoderError;
 
-      clone.setAttribute('style', `${staticStyle};${computeFrameOverrides(frameIndex, totalFrames)}`);
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-
-      const svgClone = clone.cloneNode(true) as HTMLElement;
-      const svgDoc = buildSVGDocument(
-        embeddedCSS,
-        rootVarsInline,
-        svgClone,
-        recordingBackgroundDataUrl,
-        normalizedOptions.backgroundColor,
-        outputSize,
-        cardWidthPx,
-        cardOffsetYPx,
-        normalizedOptions.cardPosition,
-      );
+      frameClone.setAttribute('style', `${staticStyle};${computeFrameOverrides(frameIndex, totalFrames)}`);
       const renderedFrame = await svgToImage(svgDoc, outputSize);
 
       try {
