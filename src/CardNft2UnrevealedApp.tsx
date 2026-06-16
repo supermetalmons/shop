@@ -37,6 +37,7 @@ type UnrevealedCardViewerState = {
   overlayId: string;
   figureId: number;
   card: DrifCardConfig;
+  loadingImageSrc?: string;
   originRect: PonchoDrifellaFrameRect;
   targetRect: PonchoDrifellaFrameRect;
   active: boolean;
@@ -52,6 +53,11 @@ function cardNft2UnrevealedItem(cardId: number): InventoryItem {
     dudeId: cardId,
     image: cardNft2AssetUrl('img', cardId),
   };
+}
+
+function cardNft2UnrevealedLoadingImageSrc(image: string | undefined): string | undefined {
+  const trimmed = String(image || '').trim();
+  return trimmed ? `${trimmed}#unrevealed-grid-preview` : undefined;
 }
 
 export default function CardNft2UnrevealedApp() {
@@ -83,8 +89,10 @@ export default function CardNft2UnrevealedApp() {
 
   useEffect(() => {
     if (!viewer || viewer.active || viewer.closing) return undefined;
-    const raf = window.requestAnimationFrame(() => {
-      setViewer((current) => (current?.overlayId === viewer.overlayId ? { ...current, active: true } : current));
+    let raf = window.requestAnimationFrame(() => {
+      raf = window.requestAnimationFrame(() => {
+        setViewer((current) => (current?.overlayId === viewer.overlayId ? { ...current, active: true } : current));
+      });
     });
     return () => window.cancelAnimationFrame(raf);
   }, [viewer]);
@@ -135,6 +143,7 @@ export default function CardNft2UnrevealedApp() {
       overlayId: item.id,
       figureId,
       card,
+      loadingImageSrc: cardNft2UnrevealedLoadingImageSrc(item.image),
       originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
       active: false,
@@ -219,6 +228,7 @@ export default function CardNft2UnrevealedApp() {
           closing={viewer.closing}
           card={viewer.card}
           cardIdLabel={`#${viewer.figureId}`}
+          loadingImageSrc={viewer.loadingImageSrc}
           onDismiss={dismissViewer}
           onTransitionEnd={handleViewerTransitionEnd}
         />
