@@ -212,45 +212,6 @@ input:disabled {
   display: block;
 }
 
-.renderer-recording-card,
-.renderer-recording-card .drif-effect-card__front {
-  isolation: isolate;
-}
-
-.renderer-recording-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__shine,
-.renderer-recording-card[data-source='card_nft_2'][data-effect='lighting-only'] .drif-effect-card__glitter {
-  display: none !important;
-}
-
-.renderer-recording-card[data-rarity='rare holo v'] .drif-effect-card__shine:after {
-  background-position:
-    center,
-    0% var(--background-y),
-    var(--renderer-background-x-negative) var(--renderer-background-y-negative),
-    var(--background-x) var(--background-y);
-}
-
-.renderer-recording-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine,
-.renderer-recording-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:after {
-  background-position:
-    center center,
-    0% var(--background-y),
-    var(--renderer-rare-ultra-shift-x) var(--background-y),
-    var(--background-x) var(--background-y);
-}
-
-.renderer-recording-card[data-rarity='rare ultra'][data-subtypes*='supporter'] .drif-effect-card__shine:after {
-  background-position:
-    center center,
-    0% var(--background-y),
-    var(--renderer-rare-ultra-shift-x-negative) var(--renderer-background-y-negative),
-    var(--background-x) var(--background-y);
-}
-
-.renderer-recording-card[data-rarity='amazing rare'] .drif-effect-card__shine:after {
-  background-position: var(--renderer-amazing-rare-background-x) var(--renderer-amazing-rare-background-y);
-}
-
 .renderer-queue {
   align-self: stretch;
   min-height: 0;
