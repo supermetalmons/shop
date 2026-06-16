@@ -50,7 +50,7 @@ const ON_CANVAS_LAYOUT = {
   },
   cardWidth: 0.15,
   cardPosition: {
-    x: 0.374,
+    x: 0.362,
     y: 0.202,
   },
 } as const;
