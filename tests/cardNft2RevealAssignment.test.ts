@@ -17,10 +17,10 @@ import {
 type CardNft2Category = 'common' | 'neither' | 'pixel_mosaic' | 'super_rare';
 
 const EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS = [
-  38, 51, 54, 60, 62, 65, 69, 70, 75, 110, 111, 130, 131, 133, 200, 202, 218, 236, 239, 240,
+  38, 51, 60, 62, 65, 69, 70, 75, 110, 111, 130, 131, 133, 200, 202, 218, 236, 239, 240,
   258, 296, 306, 307, 312, 325, 330, 341, 349, 350, 351, 358, 359, 360, 363, 364, 366, 368,
-  376, 378, 380, 381, 382, 386, 387, 388, 398, 400, 402, 461, 519, 537, 569, 584, 588, 607,
-  610, 635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014,
+  376, 378, 380, 381, 382, 386, 387, 388, 398, 400, 402, 461, 537, 569, 584, 588, 607,
+  635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014,
 ];
 
 function sequenceRandomInt(values: number[]): (maxExclusive: number) => number {
@@ -83,7 +83,7 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
   );
   assert.deepEqual([...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS], generatedPixelMosaicIds());
   assert.deepEqual([...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS], EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);
-  assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 70);
+  assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 67);
 
   assert.equal(CARD_NFT_2_COMMON_CARD_ID_SET.size, CARD_NFT_2_COMMON_CARD_IDS.length);
   assert.equal(CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.size, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length);
@@ -389,8 +389,8 @@ test('card_nft_2 assignment can drain the current live-shaped pool without requi
   const expectedAssignedCounts = countCategories(assignablePool);
   const assignedCounts = { common: 0, neither: 0, pixel_mosaic: 0, super_rare: 0 };
 
-  assert.equal(pool.length - assignablePool.length, 3);
-  assert.equal(packCount, 2421);
+  assert.equal(pool.length - assignablePool.length, 0);
+  assert.equal(packCount, 2422);
   assert.equal(assignablePool.length % 3, 0);
   const curatedPoolIds = pool.filter((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id));
 
