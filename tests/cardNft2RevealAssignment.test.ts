@@ -5,6 +5,8 @@ import { pickDudeIdsForAssignment } from '../functions/src/assignDudesPicker.ts'
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
   CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
+  CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS,
+  CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET,
   CARD_NFT_2_COMMON_CARD_IDS,
   CARD_NFT_2_COMMON_CARD_ID_SET,
   CARD_NFT_2_MAX_CARD_ID,
@@ -14,13 +16,14 @@ import {
   CARD_NFT_2_SUPER_RARE_CARD_ID_SET,
 } from '../functions/src/cardNft2RevealIds.ts';
 
-type CardNft2Category = 'common' | 'neither' | 'pixel_mosaic' | 'super_rare';
+type CardNft2AssignmentCategory = 'as_good_as_super_rare' | 'common' | 'neither';
 
 const EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS = [
   38, 51, 60, 62, 65, 69, 70, 75, 110, 111, 130, 131, 133, 200, 202, 218, 236, 239, 240,
   258, 296, 306, 307, 312, 325, 330, 341, 349, 350, 351, 358, 359, 360, 363, 364, 366, 368,
   376, 378, 380, 381, 382, 386, 387, 388, 398, 400, 402, 461, 537, 569, 584, 588, 607,
-  635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014,
+  635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014, 1092, 1100, 1104,
+  1117, 1183, 3300,
 ];
 
 function sequenceRandomInt(values: number[]): (maxExclusive: number) => number {
@@ -33,9 +36,7 @@ function firstNNonBucketIds(count: number): number[] {
   for (let id = 1; id <= CARD_NFT_2_MAX_CARD_ID && ids.length < count; id += 1) {
     if (
       !CARD_NFT_2_COMMON_CARD_ID_SET.has(id) &&
-      !CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.has(id) &&
-      !CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(id) &&
-      !CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id)
+      !CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(id)
     ) {
       ids.push(id);
     }
@@ -48,17 +49,16 @@ function firstNonBucketId(): number {
   return firstNNonBucketIds(1)[0]!;
 }
 
-function cardNft2Category(id: number): CardNft2Category {
-  if (CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.has(id)) return 'pixel_mosaic';
-  if (CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(id)) return 'super_rare';
+function cardNft2AssignmentCategory(id: number): CardNft2AssignmentCategory {
+  if (CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(id)) return 'as_good_as_super_rare';
   if (CARD_NFT_2_COMMON_CARD_ID_SET.has(id)) return 'common';
   return 'neither';
 }
 
-function countCategories(ids: readonly number[]): Record<CardNft2Category, number> {
-  const counts = { common: 0, neither: 0, pixel_mosaic: 0, super_rare: 0 };
+function countAssignmentCategories(ids: readonly number[]): Record<CardNft2AssignmentCategory, number> {
+  const counts = { as_good_as_super_rare: 0, common: 0, neither: 0 };
   for (const id of ids) {
-    counts[cardNft2Category(id)] += 1;
+    counts[cardNft2AssignmentCategory(id)] += 1;
   }
   return counts;
 }
@@ -73,6 +73,14 @@ function readCanonicalIdList(path: string): number[] {
 }
 
 test('function-local card_nft_2 reveal ids match canonical sources and are valid', () => {
+  const expectedAsGoodAsSuperRareIds = [
+    ...new Set([
+      ...CARD_NFT_2_SUPER_RARE_CARD_IDS,
+      ...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS,
+      ...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
+    ]),
+  ];
+
   assert.deepEqual(
     [...CARD_NFT_2_COMMON_CARD_IDS],
     readCanonicalIdList('../src/lib/cardNft2CommonIds.json'),
@@ -83,12 +91,20 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
   );
   assert.deepEqual([...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS], generatedPixelMosaicIds());
   assert.deepEqual([...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS], EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);
-  assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 67);
+  assert.deepEqual([...CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS], expectedAsGoodAsSuperRareIds);
+  assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 73);
 
   assert.equal(CARD_NFT_2_COMMON_CARD_ID_SET.size, CARD_NFT_2_COMMON_CARD_IDS.length);
   assert.equal(CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.size, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length);
   assert.equal(CARD_NFT_2_SUPER_RARE_CARD_ID_SET.size, CARD_NFT_2_SUPER_RARE_CARD_IDS.length);
   assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.size, CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length);
+  assert.equal(CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.size, CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS.length);
+  assert.equal(
+    CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS.length,
+    CARD_NFT_2_SUPER_RARE_CARD_IDS.length +
+      CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length +
+      CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length,
+  );
   for (const cardId of [
     ...CARD_NFT_2_COMMON_CARD_IDS,
     ...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS,
@@ -99,6 +115,9 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
     assert.equal(cardId >= 1, true);
     assert.equal(cardId <= CARD_NFT_2_MAX_CARD_ID, true);
   }
+  for (const cardId of CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS) {
+    assert.equal(CARD_NFT_2_COMMON_CARD_ID_SET.has(cardId), false);
+  }
   for (const cardId of CARD_NFT_2_SUPER_RARE_CARD_IDS) {
     assert.equal(CARD_NFT_2_COMMON_CARD_ID_SET.has(cardId), false);
   }
@@ -108,7 +127,7 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
   }
 });
 
-test('card_nft_2 assignment skips ad hoc curated ids without removing them from the pool', async () => {
+test('card_nft_2 assignment can pick ad hoc curated ids for the as-good first slot', async () => {
   const curatedA = CARD_NFT_2_AD_HOC_CURATED_CARD_IDS[0]!;
   const curatedB = CARD_NFT_2_AD_HOC_CURATED_CARD_IDS[1]!;
   const curatedC = CARD_NFT_2_AD_HOC_CURATED_CARD_IDS[2]!;
@@ -126,13 +145,14 @@ test('card_nft_2 assignment skips ad hoc curated ids without removing them from 
     randomInt: sequenceRandomInt([0, 0, 0, 2, 1]),
   });
 
-  assert.deepEqual(result.chosen, [superRareId, commonId, neitherId]);
-  assert.equal(result.chosen.some((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id)), false);
+  assert.deepEqual(result.chosen, [curatedA, commonId, neitherId]);
+  assert.equal(result.chosen.some((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id)), true);
+  assert.equal(result.chosen.includes(superRareId), false);
   assert.equal(result.candidatesChecked, 3);
-  assert.deepEqual(pool, [curatedA, curatedB, curatedC]);
+  assert.deepEqual(pool, [superRareId, curatedB, curatedC]);
 });
 
-test('card_nft_2 assignment picks common, super rare, and neither ids first, then shuffles', async () => {
+test('card_nft_2 assignment picks as-good, common, and neither ids first, then shuffles', async () => {
   const commonId = CARD_NFT_2_COMMON_CARD_IDS[0]!;
   const superRareId = CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!;
   const extraSuperRareId = CARD_NFT_2_SUPER_RARE_CARD_IDS[1]!;
@@ -150,8 +170,8 @@ test('card_nft_2 assignment picks common, super rare, and neither ids first, the
 
   assert.deepEqual(result.chosen, [superRareId, commonId, neitherId]);
   assert.equal(result.chosen.some((id) => CARD_NFT_2_COMMON_CARD_ID_SET.has(id)), true);
-  assert.equal(result.chosen.filter((id) => CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(id)).length, 1);
-  assert.equal(result.chosen.some((id) => cardNft2Category(id) === 'neither'), true);
+  assert.equal(result.chosen.filter((id) => CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(id)).length, 1);
+  assert.equal(result.chosen.some((id) => cardNft2AssignmentCategory(id) === 'neither'), true);
   assert.deepEqual(pool, [extraSuperRareId]);
 });
 
@@ -180,7 +200,7 @@ test('card_nft_2 assignment skips stale assigned ids and removes them from the p
   assert.deepEqual(pool, []);
 });
 
-test('card_nft_2 assignment uses common surplus before super rare surplus after neither is exhausted', async () => {
+test('card_nft_2 assignment uses common surplus before as-good surplus after neither is exhausted', async () => {
   const pool = [
     CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!,
     CARD_NFT_2_COMMON_CARD_IDS[0]!,
@@ -199,8 +219,8 @@ test('card_nft_2 assignment uses common surplus before super rare surplus after 
     randomInt: sequenceRandomInt([0, 0, 0, 2, 1]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 2, neither: 0, pixel_mosaic: 0, super_rare: 1 });
-  assert.deepEqual(countCategories(pool), { common: 2, neither: 0, pixel_mosaic: 0, super_rare: 1 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 2, neither: 0 });
+  assert.deepEqual(countAssignmentCategories(pool), { as_good_as_super_rare: 1, common: 2, neither: 0 });
 });
 
 test('card_nft_2 assignment uses common extras before rare-like extras', async () => {
@@ -223,11 +243,11 @@ test('card_nft_2 assignment uses common extras before rare-like extras', async (
     randomInt: sequenceRandomInt([0, 0, 0, 0, 0]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 2, neither: 0, pixel_mosaic: 0, super_rare: 1 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 2, neither: 0 });
   assert.deepEqual(pool, [extraSuperRareId, pixelMosaicId]);
 });
 
-test('card_nft_2 assignment uses super rare surplus when neither and common extras are exhausted', async () => {
+test('card_nft_2 assignment uses as-good surplus when neither and common extras are exhausted', async () => {
   const pool = [
     CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!,
     CARD_NFT_2_COMMON_CARD_IDS[0]!,
@@ -243,11 +263,11 @@ test('card_nft_2 assignment uses super rare surplus when neither and common extr
     randomInt: sequenceRandomInt([0, 0, 0, 2, 1]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 0, pixel_mosaic: 0, super_rare: 2 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 2, common: 1, neither: 0 });
   assert.deepEqual(pool, []);
 });
 
-test('card_nft_2 assignment continues when no super rare ids remain', async () => {
+test('card_nft_2 assignment continues when no as-good ids remain', async () => {
   const [firstNeitherId, secondNeitherId] = firstNNonBucketIds(2);
   const pool = [CARD_NFT_2_COMMON_CARD_IDS[0]!, firstNeitherId!, secondNeitherId!];
 
@@ -260,11 +280,11 @@ test('card_nft_2 assignment continues when no super rare ids remain', async () =
     randomInt: sequenceRandomInt([0, 0, 0, 2, 1]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 2, pixel_mosaic: 0, super_rare: 0 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 0, common: 1, neither: 2 });
   assert.deepEqual(pool, []);
 });
 
-test('card_nft_2 assignment keeps pixel mosaic out of the rare slot while super rares remain', async () => {
+test('card_nft_2 assignment can pick pixel mosaic for the as-good slot while super rares remain', async () => {
   const superRareId = CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!;
   const pixelMosaicId = CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS[0]!;
   const pool = [superRareId, CARD_NFT_2_COMMON_CARD_IDS[0]!, firstNonBucketId(), pixelMosaicId];
@@ -275,16 +295,16 @@ test('card_nft_2 assignment keeps pixel mosaic out of the rare slot while super 
     maxDudeId: CARD_NFT_2_MAX_CARD_ID,
     pool,
     isAssigned: () => false,
-    randomInt: sequenceRandomInt([0, 0, 0, 1]),
+    randomInt: sequenceRandomInt([1, 0, 0, 2, 1]),
   });
 
-  assert.equal(result.chosen.includes(superRareId), true);
-  assert.equal(result.chosen.includes(pixelMosaicId), false);
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 1, pixel_mosaic: 0, super_rare: 1 });
-  assert.deepEqual(pool, [pixelMosaicId]);
+  assert.equal(result.chosen.includes(superRareId), false);
+  assert.equal(result.chosen.includes(pixelMosaicId), true);
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });
+  assert.deepEqual(pool, [superRareId]);
 });
 
-test('card_nft_2 assignment uses pixel mosaic for the rare slot when super rares are depleted', async () => {
+test('card_nft_2 assignment uses pixel mosaic for the as-good slot when it is the only as-good id', async () => {
   const pixelMosaicId = CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS[0]!;
   const neitherId = firstNonBucketId();
   const pool = [pixelMosaicId, CARD_NFT_2_COMMON_CARD_IDS[0]!, neitherId];
@@ -299,7 +319,7 @@ test('card_nft_2 assignment uses pixel mosaic for the rare slot when super rares
   });
 
   assert.equal(result.chosen.includes(pixelMosaicId), true);
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 1, pixel_mosaic: 1, super_rare: 0 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });
   assert.deepEqual(pool, []);
 });
 
@@ -319,7 +339,7 @@ test('card_nft_2 assignment uses pixel mosaic extras only after other buckets ar
     randomInt: sequenceRandomInt([0, 0, 0, 0, 0]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 0, pixel_mosaic: 2, super_rare: 0 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 2, common: 1, neither: 0 });
   assert.deepEqual(pool, []);
 });
 
@@ -347,8 +367,8 @@ test('card_nft_2 assignment skips stale neither ids and falls back to surplus', 
   assert.equal(result.staleAssigned, 1);
   assert.equal(result.chosen.includes(staleNeitherId), false);
   assert.equal(pool.includes(staleNeitherId), false);
-  assert.deepEqual(countCategories(result.chosen), { common: 2, neither: 0, pixel_mosaic: 0, super_rare: 1 });
-  assert.deepEqual(countCategories(pool), { common: 2, neither: 0, pixel_mosaic: 0, super_rare: 1 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 2, neither: 0 });
+  assert.deepEqual(countAssignmentCategories(pool), { as_good_as_super_rare: 1, common: 2, neither: 0 });
 });
 
 test('card_nft_2 assignment only uses rare-like extras after stale normal extras are removed', async () => {
@@ -374,25 +394,23 @@ test('card_nft_2 assignment only uses rare-like extras after stale normal extras
   assert.equal(result.staleAssigned, 2);
   assert.equal(result.chosen.includes(staleNeitherId), false);
   assert.equal(result.chosen.includes(staleCommonId), false);
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 0, pixel_mosaic: 0, super_rare: 2 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 2, common: 1, neither: 0 });
   assert.deepEqual(pool, []);
 });
 
-test('card_nft_2 assignment can drain the current live-shaped pool without requiring extra super rares', async () => {
+test('card_nft_2 assignment can drain a live-shaped pool with curated as-good ids', async () => {
   const pool = [
     ...CARD_NFT_2_SUPER_RARE_CARD_IDS.slice(0, 2272),
+    ...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
     ...CARD_NFT_2_COMMON_CARD_IDS.slice(0, 3142),
-    ...firstNNonBucketIds(1852),
+    ...firstNNonBucketIds(1851),
   ];
-  const assignablePool = pool.filter((id) => !CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id));
-  const packCount = Math.floor(assignablePool.length / 3);
-  const expectedAssignedCounts = countCategories(assignablePool);
-  const assignedCounts = { common: 0, neither: 0, pixel_mosaic: 0, super_rare: 0 };
+  const packCount = Math.floor(pool.length / 3);
+  const expectedAssignedCounts = countAssignmentCategories(pool);
+  const assignedCounts = { as_good_as_super_rare: 0, common: 0, neither: 0 };
 
-  assert.equal(pool.length - assignablePool.length, 0);
-  assert.equal(packCount, 2422);
-  assert.equal(assignablePool.length % 3, 0);
-  const curatedPoolIds = pool.filter((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id));
+  assert.equal(packCount, 2446);
+  assert.equal(pool.length % 3, 0);
 
   for (let packIndex = 0; packIndex < packCount; packIndex += 1) {
     const result = await pickDudeIdsForAssignment({
@@ -404,17 +422,20 @@ test('card_nft_2 assignment can drain the current live-shaped pool without requi
       randomInt: () => 0,
     });
 
-    const packCounts = countCategories(result.chosen);
-    assert.equal(packCounts.super_rare <= 1, true, `pack ${packIndex} used super rare outside the reserved slot`);
+    const packCounts = countAssignmentCategories(result.chosen);
+    assert.equal(
+      packCounts.as_good_as_super_rare <= 1,
+      true,
+      `pack ${packIndex} used as-good outside the reserved slot`,
+    );
     assert.equal(packCounts.common >= 1, true, `pack ${packIndex} missing common`);
+    assignedCounts.as_good_as_super_rare += packCounts.as_good_as_super_rare;
     assignedCounts.common += packCounts.common;
     assignedCounts.neither += packCounts.neither;
-    assignedCounts.pixel_mosaic += packCounts.pixel_mosaic;
-    assignedCounts.super_rare += packCounts.super_rare;
   }
 
   assert.deepEqual(assignedCounts, expectedAssignedCounts);
-  assert.deepEqual(pool, curatedPoolIds);
+  assert.deepEqual(pool, []);
 });
 
 test('non-card_nft_2 assignment keeps existing fully random pick order', async () => {
@@ -468,7 +489,7 @@ test('card_nft_2 assignment skips stale super rare ids and falls through to pixe
   assert.equal(result.staleAssigned, 1);
   assert.equal(result.chosen.includes(staleSuperRareId), false);
   assert.equal(result.chosen.includes(pixelMosaicId), true);
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 1, pixel_mosaic: 1, super_rare: 0 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });
   assert.deepEqual(pool, []);
 });
 
@@ -491,7 +512,7 @@ test('card_nft_2 assignment skips stale pixel mosaic ids left in an existing liv
   assert.equal(result.staleAssigned, 1);
   assert.equal(result.chosen.includes(stalePixelMosaicId), false);
   assert.equal(result.chosen.includes(livePixelMosaicId), true);
-  assert.deepEqual(countCategories(result.chosen), { common: 1, neither: 1, pixel_mosaic: 1, super_rare: 0 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });
   assert.deepEqual(pool, []);
 });
 
@@ -507,6 +528,6 @@ test('card_nft_2 assignment falls back to any remaining card when common ids are
     randomInt: sequenceRandomInt([0, 0, 0, 2, 1]),
   });
 
-  assert.deepEqual(countCategories(result.chosen), { common: 0, neither: 1, pixel_mosaic: 1, super_rare: 1 });
+  assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 2, common: 0, neither: 1 });
   assert.deepEqual(pool, []);
 });

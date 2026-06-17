@@ -1,7 +1,6 @@
 import {
+  CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET,
   CARD_NFT_2_MAX_CARD_ID,
-  CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET,
-  CARD_NFT_2_SUPER_RARE_CARD_ID_SET,
 } from './cardNft2RevealIds.js';
 
 export const CARD_NFT_2_UNREVEALED_DEFAULT_LIMIT = 240;
@@ -46,7 +45,7 @@ function normalizeCardNft2CardId(value: unknown, maxCardId: number): number | nu
 }
 
 function isCardNft2UnrevealedCandidateId(id: number): boolean {
-  return !CARD_NFT_2_SUPER_RARE_CARD_ID_SET.has(id) && !CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.has(id);
+  return !CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(id);
 }
 
 function cardNft2UnrevealedCandidatePresence(rawPool: unknown, maxCardId: number): Set<number> | null {
