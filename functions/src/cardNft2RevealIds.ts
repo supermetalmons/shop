@@ -35,10 +35,15 @@ export const CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS = readCardNft2IdList(
   'card_nft_2 pixel mosaic ids',
   '../src/cardNft2PixelMosaicIds.json',
 );
+export const CARD_NFT_2_AD_HOC_CURATED_CARD_IDS = readCardNft2IdList(
+  'card_nft_2 ad hoc curated ids',
+  '../src/cardNft2AdHocCuratedIds.json',
+);
 
 export const CARD_NFT_2_COMMON_CARD_ID_SET = new Set(CARD_NFT_2_COMMON_CARD_IDS);
 export const CARD_NFT_2_SUPER_RARE_CARD_ID_SET = new Set(CARD_NFT_2_SUPER_RARE_CARD_IDS);
 export const CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET = new Set(CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS);
+export const CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET = new Set(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);
 
 for (const cardId of CARD_NFT_2_SUPER_RARE_CARD_IDS) {
   if (CARD_NFT_2_COMMON_CARD_ID_SET.has(cardId)) {
