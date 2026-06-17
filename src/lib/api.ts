@@ -163,6 +163,8 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 const heliusApiKey = getHeliusApiKey();
 const MIN_OPENABLE_ITEMS_PER_BOX = 1;
 const MAX_ITEMS_PER_BOX = 5;
+const HELIUS_SEARCH_ASSETS_LIMIT = 1000;
+const HELIUS_SEARCH_ASSETS_MAX_PAGES = 50;
 
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
@@ -341,6 +343,31 @@ export function rememberPendingOpenDropId(solanaCluster: SolanaCluster, boxAsset
 type DasAsset = Record<string, any>;
 const ASSET_DROP_ID_FIELD = '__monsDropId';
 
+type HeliusSearchAssetsContext = {
+  cluster: SolanaCluster;
+  dropId?: string;
+  mode: 'grouped';
+};
+
+function heliusSearchAssetsItems(result: any): DasAsset[] {
+  return Array.isArray(result?.items) ? result.items : [];
+}
+
+function heliusSearchAssetsHasNextPage(result: any, page: number, items: DasAsset[], fallbackLimit: number): boolean {
+  if (!items.length) return false;
+  const responseLimit = Number(result?.limit);
+  const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : fallbackLimit;
+  if (items.length < limit) return false;
+
+  const total = Number(result?.total);
+  const resultPage = Number(result?.page ?? page);
+  if (Number.isFinite(total) && total >= 0 && Number.isFinite(resultPage)) {
+    return resultPage * limit < total;
+  }
+
+  return true;
+}
+
 function readU32(buf: Uint8Array, offset: number): number {
   return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset, true);
 }
@@ -485,6 +512,43 @@ async function heliusRpc<T>(cluster: SolanaCluster, method: string, params: unkn
     throw new Error(message);
   }
   return (json as any).result as T;
+}
+
+async function fetchHeliusSearchAssetPages(
+  cluster: SolanaCluster,
+  params: Record<string, unknown>,
+  context: HeliusSearchAssetsContext,
+): Promise<DasAsset[]> {
+  const requestedLimit = Number(params.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : HELIUS_SEARCH_ASSETS_LIMIT;
+  const out: DasAsset[] = [];
+  for (let page = 1; page <= HELIUS_SEARCH_ASSETS_MAX_PAGES; page += 1) {
+    let result: any;
+    try {
+      result = await heliusRpc<any>(cluster, 'searchAssets', {
+        ...params,
+        page,
+      });
+    } catch (err) {
+      if (!out.length) throw err;
+      console.warn('[mons/helius] searchAssets page failed after partial results', {
+        ...context,
+        page,
+        error: err,
+      });
+      return out;
+    }
+
+    const items = heliusSearchAssetsItems(result);
+    out.push(...items);
+    if (!heliusSearchAssetsHasNextPage(result, page, items, limit)) return out;
+  }
+
+  console.warn('[mons/helius] searchAssets page cap reached', {
+    ...context,
+    maxPages: HELIUS_SEARCH_ASSETS_MAX_PAGES,
+  });
+  return out;
 }
 
 function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
@@ -763,8 +827,8 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
 async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Promise<DasAsset[]> {
   const baseParams = {
     ownerAddress: owner,
-    page: 1,
-    limit: 1000,
+    limit: HELIUS_SEARCH_ASSETS_LIMIT,
+    burnt: false,
     displayOptions: {
       showCollectionMetadata: true,
       showUnverifiedCollections: true,
@@ -780,11 +844,18 @@ async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Prom
     let usedFallback = false;
 
     try {
-      const grouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', {
-        ...baseParams,
-        grouping: ['collection', drop.collectionMint],
-      });
-      items = Array.isArray(grouped?.items) ? grouped.items : [];
+      items = await fetchHeliusSearchAssetPages(
+        drop.solanaCluster,
+        {
+          ...baseParams,
+          grouping: ['collection', drop.collectionMint],
+        },
+        {
+          cluster: drop.solanaCluster,
+          dropId: drop.dropId,
+          mode: 'grouped',
+        },
+      );
     } catch (err) {
       console.warn('[mons/helius] grouped search failed, will try fallback', {
         dropId: drop.dropId,
@@ -797,8 +868,9 @@ async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Prom
       usedFallback = true;
       if (!ungroupedByCluster.has(drop.solanaCluster)) {
         try {
-          const ungrouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', baseParams);
-          const ungroupedItems = Array.isArray(ungrouped?.items) ? ungrouped.items : [];
+          // Ungrouped search scans the owner's whole wallet; keep this fallback bounded.
+          const ungrouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', { ...baseParams, page: 1 });
+          const ungroupedItems = heliusSearchAssetsItems(ungrouped);
           ungroupedByCluster.set(drop.solanaCluster, ungroupedItems);
         } catch (err) {
           console.warn('[mons/helius] ungrouped search failed', {
