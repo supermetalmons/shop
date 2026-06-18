@@ -148,6 +148,79 @@ export function stripeReceiptClaimBoxMapKey(boxId: number): string {
   return `box_${boxId}`;
 }
 
+export type StripeReceiptClaimSummary = { code?: string; status?: string };
+
+function plainObject(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function positiveBoxIdOrNull(value: unknown): number | null {
+  const boxId = Math.floor(Number(value));
+  return Number.isFinite(boxId) && boxId > 0 ? boxId : null;
+}
+
+export function stripeReceiptClaimCodeMaybe(rawClaim: any): string {
+  return typeof rawClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(rawClaim.code) : '';
+}
+
+export function stripeReceiptClaimSummary(rawClaim: any): StripeReceiptClaimSummary {
+  const code = stripeReceiptClaimCodeMaybe(rawClaim);
+  const status = typeof rawClaim?.status === 'string' ? rawClaim.status : undefined;
+  return { ...(code ? { code } : {}), ...(status ? { status } : {}) };
+}
+
+export function orderStripeReceiptClaimByBoxId(
+  order: any,
+  boxId: number,
+  options: { includeSingularFallback?: boolean; acceptClaim?: (claim: any) => boolean } = {},
+): any | null {
+  const normalizedBoxId = positiveBoxIdOrNull(boxId);
+  if (!normalizedBoxId) return null;
+  const acceptClaim = options.acceptClaim || (() => true);
+
+  const byBoxId = order?.stripeReceiptClaimsByBoxId;
+  if (plainObject(byBoxId)) {
+    const claim = byBoxId[stripeReceiptClaimBoxMapKey(normalizedBoxId)] || byBoxId[String(normalizedBoxId)];
+    if (plainObject(claim) && acceptClaim(claim)) return claim;
+  }
+
+  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
+  const pluralClaim = claims.find((claim: any) => positiveBoxIdOrNull(claim?.boxId) === normalizedBoxId && acceptClaim(claim));
+  if (pluralClaim) return pluralClaim;
+
+  if (!options.includeSingularFallback || !plainObject(order?.stripeReceiptClaim)) return null;
+  const singularBoxId = positiveBoxIdOrNull(order.stripeReceiptClaim.boxId) || positiveBoxIdOrNull(order?.items?.[0]?.refId);
+  return singularBoxId === normalizedBoxId && acceptClaim(order.stripeReceiptClaim) ? order.stripeReceiptClaim : null;
+}
+
+export function hasPluralStripeReceiptClaims(order: any): boolean {
+  const byBoxId = order?.stripeReceiptClaimsByBoxId;
+  if (plainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
+  return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
+}
+
+export function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
+  const claimsByBoxId = new Map<number, StripeReceiptClaimSummary>();
+  const addClaim = (rawBoxId: unknown, rawClaim: any) => {
+    const boxId = positiveBoxIdOrNull(rawBoxId);
+    if (!boxId || claimsByBoxId.has(boxId)) return;
+    claimsByBoxId.set(boxId, stripeReceiptClaimSummary(rawClaim));
+  };
+
+  const claimsByBoxIdRaw = order?.stripeReceiptClaimsByBoxId;
+  if (plainObject(claimsByBoxIdRaw)) {
+    Object.entries(claimsByBoxIdRaw).forEach(([rawBoxId, rawClaim]) => {
+      addClaim((rawClaim as any)?.boxId ?? rawBoxId, rawClaim);
+    });
+  }
+  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
+  claims.forEach((rawClaim: any) => addClaim(rawClaim?.boxId, rawClaim));
+  if (order?.stripeReceiptClaim) {
+    addClaim(order.stripeReceiptClaim.boxId, order.stripeReceiptClaim);
+  }
+  return claimsByBoxId;
+}
+
 function normalizedHttpOrigin(value: unknown): string {
   const candidate = normalizedString(value);
   if (!candidate) return '';

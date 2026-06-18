@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { pickDudeIdsForAssignment } from '../functions/src/assignDudesPicker.ts';
+import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../functions/src/assignDudesPicker.ts';
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
   CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
@@ -192,6 +192,7 @@ test('card_nft_2 assignment skips stale assigned ids and removes them from the p
   });
 
   assert.equal(result.staleAssigned, 1);
+  assert.deepEqual(result.staleDudeIds, [staleSuperRareId]);
   assert.equal(result.candidatesChecked, 4);
   assert.equal(result.chosen.includes(staleSuperRareId), false);
   assert.equal(result.chosen.includes(liveSuperRareId), true);
@@ -221,6 +222,89 @@ test('card_nft_2 assignment uses common surplus before as-good surplus after nei
 
   assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 2, neither: 0 });
   assert.deepEqual(countAssignmentCategories(pool), { as_good_as_super_rare: 1, common: 2, neither: 0 });
+});
+
+test('card_nft_2 manifest validation accepts picker output across slot fallback shapes', async () => {
+  const [neitherA, neitherB, staleNeither] = firstNNonBucketIds(3);
+  const scenarios = [
+    {
+      name: 'all preferred buckets available',
+      pool: [CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!, CARD_NFT_2_COMMON_CARD_IDS[0]!, neitherA!],
+      assigned: () => false,
+      random: [0, 0, 0, 2, 1],
+    },
+    {
+      name: 'as-good slot unavailable',
+      pool: [CARD_NFT_2_COMMON_CARD_IDS[0]!, neitherA!, neitherB!],
+      assigned: () => false,
+      random: [0, 0, 0, 2, 1],
+    },
+    {
+      name: 'common slot falls back to any card',
+      pool: [CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!, neitherA!, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS[0]!],
+      assigned: () => false,
+      random: [0, 0, 0, 2, 1],
+    },
+    {
+      name: 'stale preferred extra is skipped',
+      pool: [
+        CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!,
+        CARD_NFT_2_COMMON_CARD_IDS[0]!,
+        staleNeither!,
+        CARD_NFT_2_COMMON_CARD_IDS[1]!,
+        CARD_NFT_2_SUPER_RARE_CARD_IDS[1]!,
+      ],
+      assigned: (id: number) => id === staleNeither,
+      random: [0, 0, 0, 0, 2, 1],
+      staleDudeIds: [staleNeither],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const pool = [...scenario.pool];
+    const result = await pickDudeIdsForAssignment({
+      dropFamily: 'card_nft_2',
+      itemsPerBox: 3,
+      maxDudeId: CARD_NFT_2_MAX_CARD_ID,
+      pool,
+      isAssigned: scenario.assigned,
+      randomInt: sequenceRandomInt(scenario.random),
+    });
+    assert.deepEqual(result.staleDudeIds, scenario.staleDudeIds || [], scenario.name);
+
+    await validateDudeIdsForAssignment({
+      dropFamily: 'card_nft_2',
+      itemsPerBox: 3,
+      maxDudeId: CARD_NFT_2_MAX_CARD_ID,
+      pool: [...scenario.pool],
+      dudeIds: result.chosen,
+      isAssigned: scenario.assigned,
+    });
+    assert.equal(result.chosen.length, 3, scenario.name);
+  }
+});
+
+test('card_nft_2 manifest validation skips reads for verified stale ids', async () => {
+  const staleNeitherId = firstNonBucketId();
+  const superRareId = CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!;
+  const commonId = CARD_NFT_2_COMMON_CARD_IDS[0]!;
+  const commonExtraId = CARD_NFT_2_COMMON_CARD_IDS[1]!;
+  const reads: number[] = [];
+
+  await validateDudeIdsForAssignment({
+    dropFamily: 'card_nft_2',
+    itemsPerBox: 3,
+    maxDudeId: CARD_NFT_2_MAX_CARD_ID,
+    pool: [superRareId, commonId, staleNeitherId, commonExtraId],
+    dudeIds: [superRareId, commonId, commonExtraId],
+    knownAssignedDudeIds: [staleNeitherId],
+    isAssigned: (id) => {
+      reads.push(id);
+      return false;
+    },
+  });
+
+  assert.equal(reads.includes(staleNeitherId), false);
 });
 
 test('card_nft_2 assignment uses common extras before rare-like extras', async () => {
@@ -365,6 +449,7 @@ test('card_nft_2 assignment skips stale neither ids and falls back to surplus', 
   });
 
   assert.equal(result.staleAssigned, 1);
+  assert.deepEqual(result.staleDudeIds, [staleNeitherId]);
   assert.equal(result.chosen.includes(staleNeitherId), false);
   assert.equal(pool.includes(staleNeitherId), false);
   assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 2, neither: 0 });
@@ -392,6 +477,7 @@ test('card_nft_2 assignment only uses rare-like extras after stale normal extras
   });
 
   assert.equal(result.staleAssigned, 2);
+  assert.deepEqual(result.staleDudeIds, [staleNeitherId, staleCommonId]);
   assert.equal(result.chosen.includes(staleNeitherId), false);
   assert.equal(result.chosen.includes(staleCommonId), false);
   assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 2, common: 1, neither: 0 });
@@ -487,6 +573,7 @@ test('card_nft_2 assignment skips stale super rare ids and falls through to pixe
   });
 
   assert.equal(result.staleAssigned, 1);
+  assert.deepEqual(result.staleDudeIds, [staleSuperRareId]);
   assert.equal(result.chosen.includes(staleSuperRareId), false);
   assert.equal(result.chosen.includes(pixelMosaicId), true);
   assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });
@@ -510,6 +597,7 @@ test('card_nft_2 assignment skips stale pixel mosaic ids left in an existing liv
   });
 
   assert.equal(result.staleAssigned, 1);
+  assert.deepEqual(result.staleDudeIds, [stalePixelMosaicId]);
   assert.equal(result.chosen.includes(stalePixelMosaicId), false);
   assert.equal(result.chosen.includes(livePixelMosaicId), true);
   assert.deepEqual(countAssignmentCategories(result.chosen), { as_good_as_super_rare: 1, common: 1, neither: 1 });

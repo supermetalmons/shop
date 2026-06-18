@@ -25,6 +25,7 @@ import {
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
+  orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
@@ -101,6 +102,28 @@ test('Stripe receipt claim codes use canonical letters-dash-digits format', () =
   assert.equal(normalizeStripeReceiptClaimCode('  abcdef-0123456789  '), 'ABCDEF-0123456789');
   assert.equal(requireStripeReceiptClaimCode('abcdef-0123456789'), 'ABCDEF-0123456789');
   assert.throws(() => requireStripeReceiptClaimCode('ABCDEF0123456789'), /Invalid Stripe receipt claim code/);
+});
+
+test('Stripe receipt claim lookup can fall back from invalid plural data to a singular claim', () => {
+  const order = {
+    items: [{ kind: 'box', refId: 16 }],
+    stripeReceiptClaimsByBoxId: {
+      box_16: { code: 'bad-code', boxId: 16 },
+    },
+    stripeReceiptClaim: {
+      code: 'ABCDEF-0123456789',
+      status: 'unclaimed',
+    },
+  };
+
+  assert.equal(orderStripeReceiptClaimByBoxId(order, 16)?.code, 'bad-code');
+  assert.equal(
+    orderStripeReceiptClaimByBoxId(order, 16, {
+      includeSingularFallback: true,
+      acceptClaim: (claim) => /^[A-Z]{6}-\d{10}$/.test(String(claim?.code || '')),
+    })?.code,
+    'ABCDEF-0123456789',
+  );
 });
 
 test('IRL claim code normalization rejects Stripe-formatted alphabetic codes', () => {

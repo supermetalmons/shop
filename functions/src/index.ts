@@ -35,10 +35,8 @@ import {
   selectMetadataUri,
 } from './dropMetadataUri.js';
 import {
-  dropBoxAssignmentPath,
   dropDeliveryOrderPath,
   dropDeliveryOrdersCollectionPath,
-  dropDudeAssignmentPath,
   dropDudePoolPath,
   dropRootPath,
 } from './dropPaths.js';
@@ -48,21 +46,29 @@ import {
   countNormalIrlPackStatus,
   countOnlineRevealPackStatus,
 } from './packStatus.js';
-import { DudeAssignmentPoolExhaustedError, pickDudeIdsForAssignment } from './assignDudesPicker.js';
+import {
+  assignDudesForBox,
+  ensureIrlClaimCodeForBox as ensureIrlClaimCodeForBoxShared,
+} from './cardAssignment.js';
 import { decodePendingOpenBox } from './pendingOpenBox.js';
 import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   STRIPE_CHECKOUT_STATUS,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+  collectStripeReceiptClaimsByBoxId,
+  hasPluralStripeReceiptClaims,
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
+  orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
+  stripeReceiptClaimCodeMaybe,
   stripeReceiptClaimBoxMapKey,
   stripeCheckoutOwnerId,
+  type StripeReceiptClaimSummary,
 } from './stripeCheckout/contract.js';
 import { bubblegumTransferV2Ix } from './bubblegum.js';
 import {
@@ -92,7 +98,7 @@ import {
 } from './stripeCheckout/service.js';
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
 import { toMillisMaybe } from './time.js';
-import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from './claimCodes.js';
+import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
 import {
   paginateCardNft2UnrevealedCandidateIds,
   type ListCardNft2UnrevealedCardsRequest,
@@ -2443,204 +2449,13 @@ function decodeDeliveryRecord(data: Buffer): {
 }
 
 async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]> {
-  const dropRuntime = getDropRuntime(dropId);
-  const itemsPerBox = dropRuntime.itemsPerBox;
-  assertOpenableDrop(dropRuntime, 'This drop does not support figure assignment.');
-  const maxDudeId = dropRuntime.maxDudeId;
-  const ref = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
-  const poolRef = db.doc(dropDudePoolPath(dropId));
-
-  // Firestore `runTransaction` retries internally on contention, but under heavy concurrency it can still
-  // surface transient gRPC errors. Add a small outer retry/backoff layer so callers get a clean
-  // "try again" experience instead of occasional hard failures.
-  const MAX_OUTER_ATTEMPTS = 6;
-  for (let outerAttempt = 1; outerAttempt <= MAX_OUTER_ATTEMPTS; outerAttempt += 1) {
-    let internalAttempts = 0;
-    let lastAttemptMeta:
-      | null
-      | {
-          boxAssetId: string;
-          outerAttempt: number;
-          internalAttempts: number;
-          poolDocExists: boolean;
-          usedDefaultPool: boolean;
-          rawPoolLen: number | null;
-          poolInitLen: number;
-          invalidRemoved: number;
-          dupRemoved: number;
-          poolLenAfterSanitize: number;
-          poolLenAfterWrite: number;
-          candidatesChecked: number;
-          staleAssigned: number;
-          chosen: number[];
-        } = null;
-
-    try {
-      const result = await db.runTransaction(async (tx) => {
-        internalAttempts += 1;
-
-        const existing = await tx.get(ref);
-        if (existing.exists) {
-          const dudeIdsRaw = (existing.data() as any)?.dudeIds;
-          const dudeIds = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n) => Math.floor(Number(n))) : [];
-          if (dudeIds.length !== itemsPerBox) {
-            throw new HttpsError('failed-precondition', `Invalid stored dudeIds (expected ${itemsPerBox})`, {
-              boxAssetId,
-              dudeIds,
-            });
-          }
-          dudeIds.forEach((id) => {
-            if (!Number.isFinite(id) || id < 1 || id > maxDudeId) {
-              throw new HttpsError('failed-precondition', 'Invalid stored dude id', { boxAssetId, dudeId: id });
-            }
-          });
-          if (new Set(dudeIds).size !== dudeIds.length) {
-            throw new HttpsError('failed-precondition', 'Duplicate stored dudeIds for box', { boxAssetId, dudeIds });
-          }
-
-          return dudeIds;
-        }
-
-        const poolSnap = await tx.get(poolRef);
-        const rawPool = (poolSnap.data() as any)?.available;
-        const usedDefaultPool = !Array.isArray(rawPool);
-        const rawPoolLen = Array.isArray(rawPool) ? rawPool.length : null;
-
-        let pool: number[] = Array.isArray(rawPool) ? rawPool.map((n) => Math.floor(Number(n))) : Array.from({ length: maxDudeId }, (_, i) => i + 1);
-        const poolInitLen = pool.length;
-
-        // Sanitize + de-dupe (in case the pool doc was manually edited/corrupted).
-        const sanitized = pool.filter((id) => Number.isFinite(id) && id >= 1 && id <= maxDudeId);
-        const invalidRemoved = poolInitLen - sanitized.length;
-        pool = Array.from(new Set(sanitized));
-        const dupRemoved = sanitized.length - pool.length;
-        const poolLenAfterSanitize = pool.length;
-
-        if (pool.length < itemsPerBox) {
-          throw new HttpsError('resource-exhausted', 'No dudes remaining to assign', {
-            boxAssetId,
-            poolDocExists: poolSnap.exists,
-            poolLen: pool.length,
-            required: itemsPerBox,
-          });
-        }
-
-        // NOTE: Firestore transactions automatically retry on contention. We also defensively guard uniqueness
-        // across boxes *within the same drop* by reserving `dudeAssignments/{dudeId}` docs inside this transaction.
-        let chosen: number[];
-        let candidatesChecked = 0;
-        let staleAssigned = 0;
-        try {
-          const picked = await pickDudeIdsForAssignment({
-            dropFamily: dropRuntime.config.dropFamily,
-            itemsPerBox,
-            maxDudeId,
-            pool,
-            isAssigned: async (candidate) => {
-              const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
-              const dudeSnap = await tx.get(dudeRef);
-              return dudeSnap.exists;
-            },
-          });
-          chosen = picked.chosen;
-          candidatesChecked = picked.candidatesChecked;
-          staleAssigned = picked.staleAssigned;
-        } catch (err) {
-          if (err instanceof DudeAssignmentPoolExhaustedError) {
-            throw new HttpsError('resource-exhausted', err.message, {
-              boxAssetId,
-              dropId,
-              bucket: err.bucket,
-              chosen: err.chosen,
-              candidatesChecked: err.candidatesChecked,
-              staleAssigned: err.staleAssigned,
-              poolLen: err.poolLen,
-              required: itemsPerBox,
-            });
-          }
-          throw err;
-        }
-
-        // Reserve dudes (uniqueness across boxes, even if the pool doc is corrupted).
-        for (const dudeId of chosen) {
-          const dudeRef = db.doc(dropDudeAssignmentPath(dropId, dudeId));
-          tx.create(dudeRef, {
-            dudeId,
-            boxAssetId,
-            assignedAt: FieldValue.serverTimestamp(),
-          });
-        }
-
-        tx.set(poolRef, { available: pool, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-        tx.set(ref, { dudeIds: chosen, createdAt: FieldValue.serverTimestamp() });
-
-        // Capture high-signal debug meta for post-commit logging (only logged when something looks off).
-        lastAttemptMeta = {
-          boxAssetId,
-          outerAttempt,
-          internalAttempts,
-          poolDocExists: poolSnap.exists,
-          usedDefaultPool,
-          rawPoolLen,
-          poolInitLen,
-          invalidRemoved,
-          dupRemoved,
-          poolLenAfterSanitize,
-          poolLenAfterWrite: pool.length,
-          candidatesChecked,
-          staleAssigned,
-          chosen,
-        };
-        return chosen;
-      });
-
-      // Log only on "interesting" paths to avoid noisy logs in normal operation.
-      if (lastAttemptMeta) {
-        const selfHealed =
-          (lastAttemptMeta.poolDocExists && lastAttemptMeta.usedDefaultPool) ||
-          lastAttemptMeta.invalidRemoved > 0 ||
-          lastAttemptMeta.dupRemoved > 0 ||
-          lastAttemptMeta.staleAssigned > 0;
-        const retried = lastAttemptMeta.internalAttempts > 1 || lastAttemptMeta.outerAttempt > 1;
-        if (selfHealed) {
-          logger.warn('assignDudes:pool_self_heal', lastAttemptMeta);
-        } else if (retried) {
-          logger.info('assignDudes:retry', {
-            boxAssetId,
-            outerAttempt: lastAttemptMeta.outerAttempt,
-            internalAttempts: lastAttemptMeta.internalAttempts,
-          });
-        }
-      } else if (internalAttempts > 1 || outerAttempt > 1) {
-        // The "existing assignment" fast-path doesn't populate `lastAttemptMeta`.
-        logger.info('assignDudes:retry', { boxAssetId, outerAttempt, internalAttempts, path: 'existing_assignment' });
-      }
-
-      return result;
-    } catch (err) {
-      const retryable =
-        isGrpcAlreadyExists(err) ||
-        isGrpcAborted(err) ||
-        isGrpcUnavailable(err) ||
-        isGrpcDeadlineExceeded(err) ||
-        isGrpcResourceExhausted(err);
-      if (retryable && outerAttempt < MAX_OUTER_ATTEMPTS) {
-        const delayMs = Math.min(150 * 2 ** Math.min(outerAttempt - 1, 4) + randomInt(0, 120), 2_500);
-        logger.warn('assignDudes:transient_error_retrying', {
-          boxAssetId,
-          outerAttempt,
-          internalAttempts,
-          delayMs,
-          error: summarizeError(err),
-        });
-        await sleep(delayMs);
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  throw new HttpsError('unavailable', 'Failed to assign dudes (try again)', { boxAssetId });
+  return assignDudesForBox({
+    db,
+    dropRuntime: getDropRuntime(dropId),
+    boxAssetId,
+    logger,
+    summarizeError,
+  });
 }
 
 const CARD_NFT_2_UNREVEALED_DROP_ID = 'card_nft_2';
@@ -2667,13 +2482,6 @@ async function listCardNft2UnrevealedCardIds(
   });
 }
 
-function generateIrlClaimCode(): string {
-  // 10 digits, including leading zeros.
-  const max = 10 ** IRL_CLAIM_CODE_DIGITS;
-  const n = randomInt(0, max);
-  return String(n).padStart(IRL_CLAIM_CODE_DIGITS, '0');
-}
-
 function normalizeDropIdMaybe(rawDropId: unknown): string | null {
   if (typeof rawDropId !== 'string' || !rawDropId.trim()) return null;
   try {
@@ -2681,57 +2489,6 @@ function normalizeDropIdMaybe(rawDropId: unknown): string | null {
   } catch {
     return null;
   }
-}
-
-function claimCodeDocMatchesBox(claim: any, expected: { dropId: string; boxAssetId: string; boxId: number }): boolean {
-  const claimDropId = normalizeDropIdMaybe(claim?.dropId);
-  const claimBoxAssetId = typeof claim?.boxAssetId === 'string' ? String(claim.boxAssetId) : '';
-  const claimBoxId = Number(claim?.boxId);
-  return (
-    claimDropId === expected.dropId &&
-    claimBoxAssetId === expected.boxAssetId &&
-    Number.isFinite(claimBoxId) &&
-    Math.floor(claimBoxId) === Math.floor(expected.boxId)
-  );
-}
-
-function buildIrlClaimCodeDoc(params: {
-  code: string;
-  dropId: string;
-  boxId: number;
-  boxAssetId: string;
-  ownerWallet: string;
-  deliveryId: number;
-  dudeIds: number[];
-}) {
-  return {
-    version: 2,
-    namespace: IRL_CLAIM_CODE_NAMESPACE,
-    code: params.code,
-    dropId: params.dropId,
-    boxId: params.boxId,
-    boxAssetId: params.boxAssetId,
-    owner: params.ownerWallet,
-    deliveryId: params.deliveryId,
-    dudeIds: params.dudeIds,
-    createdAt: FieldValue.serverTimestamp(),
-  };
-}
-
-function buildIrlClaimAssignment(code: string, params: { dropId: string; boxId: number; deliveryId: number; ownerWallet: string; dudeIds: number[] }) {
-  return {
-    irlClaimCode: code,
-    irlClaim: {
-      namespace: IRL_CLAIM_CODE_NAMESPACE,
-      code,
-      dropId: params.dropId,
-      boxId: params.boxId,
-      deliveryId: params.deliveryId,
-      owner: params.ownerWallet,
-      dudeIds: params.dudeIds,
-      createdAt: FieldValue.serverTimestamp(),
-    },
-  };
 }
 
 function dropIdFromBoxAssignmentPath(path: string): string | null {
@@ -2767,92 +2524,15 @@ async function ensureIrlClaimCodeForBox(params: {
   boxId: number;
   dudeIds: number[];
 }): Promise<string> {
-  const dropId = normalizeDropId(params.dropId);
-  const dropRuntime = getDropRuntime(dropId);
-  const ownerWallet = normalizeWallet(params.ownerWallet);
-  const deliveryId = Number(params.deliveryId);
-  const boxAssetId = String(params.boxAssetId || '');
-  const boxId = Number(params.boxId);
-  const dudeIds = Array.isArray(params.dudeIds) ? params.dudeIds.map((n) => Number(n)) : [];
-
-  assertOpenableDrop(dropRuntime, 'This drop does not use IRL claim codes.');
-  if (!boxAssetId) throw new HttpsError('failed-precondition', 'Missing boxAssetId for IRL claim code');
-  if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
-    throw new HttpsError('failed-precondition', 'Invalid deliveryId for IRL claim code');
-  }
-  if (!Number.isFinite(boxId) || boxId <= 0 || boxId > 0xffff_ffff) {
-    throw new HttpsError('failed-precondition', 'Invalid box id for IRL claim code');
-  }
-  if (dudeIds.length !== dropRuntime.itemsPerBox) {
-    throw new HttpsError('failed-precondition', `Invalid dudeIds (expected ${dropRuntime.itemsPerBox})`);
-  }
-  dudeIds.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > dropRuntime.maxDudeId) {
-      throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
-    }
-  });
-  if (new Set(dudeIds).size !== dudeIds.length) {
-    throw new HttpsError('failed-precondition', 'Duplicate dude ids for IRL claim code');
-  }
-
-  const assignmentRef = db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
-
-  return db.runTransaction(async (tx) => {
-    const assignmentSnap = await tx.get(assignmentRef);
-    const assignment = assignmentSnap.exists ? (assignmentSnap.data() as any) : {};
-
-    const existingCodeRaw = assignment?.irlClaimCode;
-    const existingCodeNormalized = typeof existingCodeRaw === 'string' ? normalizeIrlClaimCode(existingCodeRaw) : '';
-    const existingCode = existingCodeNormalized.length === IRL_CLAIM_CODE_DIGITS ? existingCodeNormalized : '';
-    if (existingCodeNormalized && !existingCode) {
-      logger.warn('ensureIrlClaimCodeForBox:invalid_existing_claim_code_format', {
-        dropId,
-        boxAssetId,
-        boxId,
-        existingCodeRaw: String(existingCodeRaw),
-      });
-    }
-    if (existingCode) {
-      const existingRef = db.doc(`claimCodes/${existingCode}`);
-      const existingSnap = await tx.get(existingRef);
-      if (!existingSnap.exists) {
-        // Backfill if the assignment doc was written but claimCodes doc was not.
-        tx.set(existingRef, buildIrlClaimCodeDoc({ code: existingCode, dropId, boxId, boxAssetId, ownerWallet, deliveryId, dudeIds }));
-        tx.set(assignmentRef, buildIrlClaimAssignment(existingCode, { dropId, boxId, deliveryId, ownerWallet, dudeIds }), { merge: true });
-      }
-      if (existingSnap.exists) {
-        const existingClaim = existingSnap.data() as any;
-        if (!claimCodeDocMatchesBox(existingClaim, { dropId, boxAssetId, boxId })) {
-          logger.warn('ensureIrlClaimCodeForBox:mismatched_existing_claim_code', {
-            dropId,
-            boxAssetId,
-            boxId,
-            existingCode,
-            claimDropId: normalizeDropIdMaybe(existingClaim?.dropId),
-            claimBoxAssetId: typeof existingClaim?.boxAssetId === 'string' ? existingClaim.boxAssetId : null,
-            claimBoxId: existingClaim?.boxId ?? null,
-          });
-        } else {
-          return existingCode;
-        }
-      } else {
-        return existingCode;
-      }
-    }
-
-    // Allocate a unique 10-digit claim code.
-    for (let claimAttempt = 0; claimAttempt < 40; claimAttempt += 1) {
-      const code = generateIrlClaimCode();
-      const claimRef = db.doc(`claimCodes/${code}`);
-      const snap = await tx.get(claimRef);
-      if (snap.exists) continue;
-
-      tx.set(claimRef, buildIrlClaimCodeDoc({ code, dropId, boxId, boxAssetId, ownerWallet, deliveryId, dudeIds }));
-      tx.set(assignmentRef, buildIrlClaimAssignment(code, { dropId, boxId, deliveryId, ownerWallet, dudeIds }), { merge: true });
-      return code;
-    }
-
-    throw new HttpsError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
+  return ensureIrlClaimCodeForBoxShared({
+    db,
+    dropRuntime: getDropRuntime(params.dropId),
+    ownerWallet: params.ownerWallet,
+    deliveryId: params.deliveryId,
+    boxAssetId: params.boxAssetId,
+    boxId: params.boxId,
+    dudeIds: params.dudeIds,
+    logger,
   });
 }
 
@@ -6567,61 +6247,6 @@ function requirePositiveBoxId(rawBoxId: unknown): number {
 
 function stripeReceiptClaimAttemptId(nowMs: number): string {
   return `${nowMs.toString(36)}:${randomInt(0, 2 ** 32).toString(36)}`;
-}
-
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function stripeReceiptClaimCodeMaybe(rawClaim: any): string {
-  return typeof rawClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(rawClaim.code) : '';
-}
-
-type StripeReceiptClaimSummary = { code?: string; status?: string };
-
-function stripeReceiptClaimSummary(rawClaim: any): StripeReceiptClaimSummary {
-  const code = stripeReceiptClaimCodeMaybe(rawClaim);
-  const status = typeof rawClaim?.status === 'string' ? rawClaim.status : undefined;
-  return { ...(code ? { code } : {}), ...(status ? { status } : {}) };
-}
-
-function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
-  const claimsByBoxId = new Map<number, StripeReceiptClaimSummary>();
-  const addClaim = (rawBoxId: unknown, rawClaim: any) => {
-    const boxId = Math.floor(Number(rawBoxId));
-    if (!Number.isFinite(boxId) || boxId <= 0 || claimsByBoxId.has(boxId)) return;
-    claimsByBoxId.set(boxId, stripeReceiptClaimSummary(rawClaim));
-  };
-
-  const claimsByBoxIdRaw = order?.stripeReceiptClaimsByBoxId;
-  if (isPlainObject(claimsByBoxIdRaw)) {
-    Object.entries(claimsByBoxIdRaw).forEach(([rawBoxId, rawClaim]) => {
-      addClaim((rawClaim as any)?.boxId ?? rawBoxId, rawClaim);
-    });
-  }
-  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
-  claims.forEach((rawClaim: any) => addClaim(rawClaim?.boxId, rawClaim));
-  if (order?.stripeReceiptClaim) {
-    addClaim(order.stripeReceiptClaim.boxId, order.stripeReceiptClaim);
-  }
-  return claimsByBoxId;
-}
-
-function orderStripeReceiptClaimByBoxId(order: any, boxId: number): any | null {
-  const byBoxId = order?.stripeReceiptClaimsByBoxId;
-  if (isPlainObject(byBoxId)) {
-    const claim = byBoxId[stripeReceiptClaimBoxMapKey(boxId)] || byBoxId[String(boxId)];
-    if (isPlainObject(claim)) return claim;
-  }
-
-  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
-  return claims.find((claim: any) => Math.floor(Number(claim?.boxId)) === boxId) || null;
-}
-
-function hasPluralStripeReceiptClaims(order: any): boolean {
-  const byBoxId = order?.stripeReceiptClaimsByBoxId;
-  if (isPlainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
-  return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
 }
 
 function resolveStripeReceiptClaimOrderTarget(params: {

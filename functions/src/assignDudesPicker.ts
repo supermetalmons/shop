@@ -10,6 +10,7 @@ export type DudeAssignmentPickResult = {
   chosen: number[];
   candidatesChecked: number;
   staleAssigned: number;
+  staleDudeIds: number[];
 };
 
 export type DudeAssignmentPickerArgs = {
@@ -20,6 +21,18 @@ export type DudeAssignmentPickerArgs = {
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
   randomInt?: (maxExclusive: number) => number;
 };
+
+export type DudeAssignmentValidationArgs = Omit<DudeAssignmentPickerArgs, 'randomInt'> & {
+  dudeIds: readonly number[];
+  knownAssignedDudeIds?: readonly number[];
+};
+
+export class DudeAssignmentValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DudeAssignmentValidationError';
+  }
+}
 
 export class DudeAssignmentPoolExhaustedError extends Error {
   readonly bucket: DudeAssignmentBucket;
@@ -51,6 +64,11 @@ export class DudeAssignmentPoolExhaustedError extends Error {
   }
 }
 
+type DudeAssignmentStats = {
+  candidatesChecked: number;
+  staleDudeIds: number[];
+};
+
 function defaultRandomInt(maxExclusive: number): number {
   return cryptoRandomInt(0, maxExclusive);
 }
@@ -67,6 +85,16 @@ function bucketDisplayName(bucket: DudeAssignmentBucket): string {
   return bucket;
 }
 
+function dudeMatchesBucket(dudeId: number, bucket: DudeAssignmentBucket, maxDudeId: number): boolean {
+  if (!Number.isFinite(dudeId) || dudeId < 1 || dudeId > maxDudeId) return false;
+  if (bucket === 'as_good_as_super_rare') return CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(dudeId);
+  if (bucket === 'common') return CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId);
+  if (bucket === 'neither') {
+    return !CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(dudeId) && !CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId);
+  }
+  return true;
+}
+
 function indexesForBucket(
   pool: readonly number[],
   bucket: DudeAssignmentBucket,
@@ -75,18 +103,7 @@ function indexesForBucket(
   const indexes: number[] = [];
   for (let i = 0; i < pool.length; i += 1) {
     const dudeId = pool[i];
-    if (!Number.isFinite(dudeId) || dudeId < 1 || dudeId > maxDudeId) continue;
-    if (bucket === 'as_good_as_super_rare' && !CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(dudeId)) {
-      continue;
-    }
-    if (bucket === 'common' && !CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId)) continue;
-    if (
-      bucket === 'neither' &&
-      (CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.has(dudeId) || CARD_NFT_2_COMMON_CARD_ID_SET.has(dudeId))
-    ) {
-      continue;
-    }
-    indexes.push(i);
+    if (dudeMatchesBucket(dudeId, bucket, maxDudeId)) indexes.push(i);
   }
   return indexes;
 }
@@ -98,7 +115,7 @@ async function takeRandomAvailableDude(args: {
   pool: number[];
   randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-  stats: { candidatesChecked: number; staleAssigned: number };
+  stats: DudeAssignmentStats;
 }): Promise<number> {
   while (true) {
     const candidateIndexes = indexesForBucket(args.pool, args.bucket, args.maxDudeId);
@@ -107,7 +124,7 @@ async function takeRandomAvailableDude(args: {
         bucket: args.bucket,
         chosen: args.chosen,
         candidatesChecked: args.stats.candidatesChecked,
-        staleAssigned: args.stats.staleAssigned,
+        staleAssigned: args.stats.staleDudeIds.length,
         poolLen: args.pool.length,
       });
     }
@@ -118,7 +135,7 @@ async function takeRandomAvailableDude(args: {
 
     if (!Number.isFinite(candidate) || candidate < 1 || candidate > args.maxDudeId) continue;
     if (await args.isAssigned(candidate)) {
-      args.stats.staleAssigned += 1;
+      args.stats.staleDudeIds.push(candidate);
       continue;
     }
 
@@ -144,16 +161,41 @@ const CARD_NFT_2_EXTRA_BUCKET_PRIORITY: readonly CardNft2AssignableBucket[] = [
   'as_good_as_super_rare',
 ];
 
+async function runCardNft2AssignmentRules(args: {
+  itemsPerBox: number;
+  remainingSlots: () => number;
+  rejectTooFewSlots: () => never;
+  consumeBucketIfAvailable: (bucket: CardNft2AssignableBucket) => Promise<boolean>;
+  consumeAny: (slot: string) => Promise<void>;
+  rejectExtraExhausted: () => never;
+}): Promise<void> {
+  if (args.itemsPerBox < 2) args.rejectTooFewSlots();
+
+  await args.consumeBucketIfAvailable('as_good_as_super_rare');
+
+  const consumedCommon = await args.consumeBucketIfAvailable('common');
+  if (!consumedCommon) await args.consumeAny('common fallback');
+
+  while (args.remainingSlots() > 0) {
+    let consumedExtra = false;
+    for (const bucket of CARD_NFT_2_EXTRA_BUCKET_PRIORITY) {
+      consumedExtra = await args.consumeBucketIfAvailable(bucket);
+      if (consumedExtra) break;
+    }
+    if (!consumedExtra) args.rejectExtraExhausted();
+  }
+}
+
 function throwCardNft2FlexibleExtraExhausted(args: {
   chosen: readonly number[];
   pool: readonly number[];
-  stats: { candidatesChecked: number; staleAssigned: number };
+  stats: DudeAssignmentStats;
 }): never {
   throw new DudeAssignmentPoolExhaustedError({
     bucket: 'any',
     chosen: args.chosen,
     candidatesChecked: args.stats.candidatesChecked,
-    staleAssigned: args.stats.staleAssigned,
+    staleAssigned: args.stats.staleDudeIds.length,
     poolLen: args.pool.length,
   });
 }
@@ -165,7 +207,7 @@ async function takeCardNft2BucketIfAvailable(args: {
   pool: number[];
   randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-  stats: { candidatesChecked: number; staleAssigned: number };
+  stats: DudeAssignmentStats;
 }): Promise<number | null> {
   try {
     return await takeRandomAvailableDude({
@@ -183,134 +225,149 @@ async function takeCardNft2BucketIfAvailable(args: {
   }
 }
 
-async function takeCardNft2AsGoodAsSuperRareSlotDudeIfAvailable(args: {
-  chosen: number[];
+async function pruneAssignedAndCheckBucketAvailability(args: {
+  bucket: DudeAssignmentBucket;
   maxDudeId: number;
   pool: number[];
-  randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-  stats: { candidatesChecked: number; staleAssigned: number };
-}): Promise<number | null> {
-  return takeCardNft2BucketIfAvailable({
-    bucket: 'as_good_as_super_rare',
-    chosen: args.chosen,
-    maxDudeId: args.maxDudeId,
-    pool: args.pool,
-    randomInt: args.randomInt,
-    isAssigned: args.isAssigned,
-    stats: args.stats,
-  });
+}): Promise<boolean> {
+  for (let index = 0; index < args.pool.length; index += 1) {
+    const dudeId = args.pool[index];
+    if (!dudeMatchesBucket(dudeId, args.bucket, args.maxDudeId)) continue;
+    if (await args.isAssigned(dudeId)) {
+      args.pool.splice(index, 1);
+      index -= 1;
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
-async function takeCardNft2CommonSlotDude(args: {
-  chosen: number[];
-  maxDudeId: number;
+async function takeManifestDudeByIndex(args: {
+  slot: string;
+  remaining: number[];
+  remainingIndex: number;
   pool: number[];
-  randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-  stats: { candidatesChecked: number; staleAssigned: number };
-}): Promise<number> {
-  const common = await takeCardNft2BucketIfAvailable({
-    bucket: 'common',
-    chosen: args.chosen,
-    maxDudeId: args.maxDudeId,
-    pool: args.pool,
-    randomInt: args.randomInt,
-    isAssigned: args.isAssigned,
-    stats: args.stats,
-  });
-  if (common !== null) return common;
-  return takeRandomAvailableDude({
-    bucket: 'any',
-    chosen: args.chosen,
-    maxDudeId: args.maxDudeId,
-    pool: args.pool,
-    randomInt: args.randomInt,
-    isAssigned: args.isAssigned,
-    stats: args.stats,
-  });
+}): Promise<void> {
+  const dudeId = args.remaining[args.remainingIndex];
+  const poolIndex = args.pool.indexOf(dudeId);
+  if (poolIndex < 0) {
+    throw new DudeAssignmentValidationError(`Manifest dude ${dudeId} is not available for the ${args.slot} slot`);
+  }
+  if (await args.isAssigned(dudeId)) {
+    throw new DudeAssignmentValidationError(`Manifest dude ${dudeId} is already assigned`);
+  }
+  args.remaining.splice(args.remainingIndex, 1);
+  args.pool.splice(poolIndex, 1);
 }
 
-async function takeCardNft2FlexibleExtraDude(args: {
-  chosen: number[];
+async function takeManifestDudeForBucket(args: {
+  bucket: DudeAssignmentBucket;
   maxDudeId: number;
+  remaining: number[];
   pool: number[];
-  randomInt: (maxExclusive: number) => number;
   isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-  stats: { candidatesChecked: number; staleAssigned: number };
-}): Promise<number> {
-  for (const bucket of CARD_NFT_2_EXTRA_BUCKET_PRIORITY) {
-    const dude = await takeCardNft2BucketIfAvailable({
-      bucket,
-      chosen: args.chosen,
-      maxDudeId: args.maxDudeId,
+}): Promise<boolean> {
+  const remainingIndex = args.remaining.findIndex((dudeId) => dudeMatchesBucket(dudeId, args.bucket, args.maxDudeId));
+  if (remainingIndex >= 0) {
+    await takeManifestDudeByIndex({
+      slot: bucketDisplayName(args.bucket),
+      remaining: args.remaining,
+      remainingIndex,
       pool: args.pool,
-      randomInt: args.randomInt,
       isAssigned: args.isAssigned,
-      stats: args.stats,
     });
-    if (dude !== null) return dude;
+    return true;
   }
 
-  throwCardNft2FlexibleExtraExhausted({
-    chosen: args.chosen,
+  if (
+    await pruneAssignedAndCheckBucketAvailability({
+      bucket: args.bucket,
+      maxDudeId: args.maxDudeId,
+      pool: args.pool,
+      isAssigned: args.isAssigned,
+    })
+  ) {
+    throw new DudeAssignmentValidationError(`Manifest dudeIds are missing an available ${bucketDisplayName(args.bucket)} dude`);
+  }
+  return false;
+}
+
+async function takeManifestAnyDude(args: {
+  slot: string;
+  remaining: number[];
+  pool: number[];
+  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
+}): Promise<void> {
+  if (!args.remaining.length) {
+    throw new DudeAssignmentValidationError(`Manifest dudeIds are missing a dude for the ${args.slot} slot`);
+  }
+  await takeManifestDudeByIndex({
+    slot: args.slot,
+    remaining: args.remaining,
+    remainingIndex: 0,
     pool: args.pool,
-    stats: args.stats,
+    isAssigned: args.isAssigned,
   });
 }
 
 export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): Promise<DudeAssignmentPickResult> {
   const randomInt = args.randomInt || defaultRandomInt;
   const chosen: number[] = [];
-  const stats = { candidatesChecked: 0, staleAssigned: 0 };
+  const stats: DudeAssignmentStats = { candidatesChecked: 0, staleDudeIds: [] };
   const isCardNft2 = args.dropFamily === 'card_nft_2';
 
   if (isCardNft2) {
-    if (args.itemsPerBox < 2) {
-      throw new DudeAssignmentPoolExhaustedError({
-        bucket: 'as_good_as_super_rare',
-        chosen,
-        candidatesChecked: stats.candidatesChecked,
-        staleAssigned: stats.staleAssigned,
-        poolLen: args.pool.length,
-      });
-    }
-
-    const asGoodAsSuperRareSlotDude = await takeCardNft2AsGoodAsSuperRareSlotDudeIfAvailable({
-      chosen,
-      maxDudeId: args.maxDudeId,
-      pool: args.pool,
-      randomInt,
-      isAssigned: args.isAssigned,
-      stats,
-    });
-    if (asGoodAsSuperRareSlotDude !== null) chosen.push(asGoodAsSuperRareSlotDude);
-
-    chosen.push(
-      await takeCardNft2CommonSlotDude({
-        chosen,
-        maxDudeId: args.maxDudeId,
-        pool: args.pool,
-        randomInt,
-        isAssigned: args.isAssigned,
-        stats,
-      }),
-    );
-  }
-
-  while (chosen.length < args.itemsPerBox) {
-    if (isCardNft2) {
-      chosen.push(
-        await takeCardNft2FlexibleExtraDude({
+    await runCardNft2AssignmentRules({
+      itemsPerBox: args.itemsPerBox,
+      remainingSlots: () => args.itemsPerBox - chosen.length,
+      rejectTooFewSlots: () => {
+        throw new DudeAssignmentPoolExhaustedError({
+          bucket: 'as_good_as_super_rare',
+          chosen,
+          candidatesChecked: stats.candidatesChecked,
+          staleAssigned: stats.staleDudeIds.length,
+          poolLen: args.pool.length,
+        });
+      },
+      consumeBucketIfAvailable: async (bucket) => {
+        const dude = await takeCardNft2BucketIfAvailable({
+          bucket,
           chosen,
           maxDudeId: args.maxDudeId,
           pool: args.pool,
           randomInt,
           isAssigned: args.isAssigned,
           stats,
+        });
+        if (dude === null) return false;
+        chosen.push(dude);
+        return true;
+      },
+      consumeAny: async () => {
+        chosen.push(
+          await takeRandomAvailableDude({
+            bucket: 'any',
+            chosen,
+            maxDudeId: args.maxDudeId,
+            pool: args.pool,
+            randomInt,
+            isAssigned: args.isAssigned,
+            stats,
+          }),
+        );
+      },
+      rejectExtraExhausted: () =>
+        throwCardNft2FlexibleExtraExhausted({
+          chosen,
+          pool: args.pool,
+          stats,
         }),
-      );
-    } else {
+    });
+  } else {
+    while (chosen.length < args.itemsPerBox) {
       chosen.push(
         await takeRandomAvailableDude({
           bucket: 'any',
@@ -332,6 +389,52 @@ export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): 
   return {
     chosen,
     candidatesChecked: stats.candidatesChecked,
-    staleAssigned: stats.staleAssigned,
+    staleAssigned: stats.staleDudeIds.length,
+    staleDudeIds: [...stats.staleDudeIds],
   };
+}
+
+export async function validateDudeIdsForAssignment(args: DudeAssignmentValidationArgs): Promise<void> {
+  if (args.dudeIds.length !== args.itemsPerBox) {
+    throw new DudeAssignmentValidationError(`Manifest dudeIds must contain exactly ${args.itemsPerBox} ids`);
+  }
+
+  const pool = [...args.pool];
+  const remaining = [...args.dudeIds];
+  const knownAssignedDudeIds = new Set(args.knownAssignedDudeIds || []);
+  if (knownAssignedDudeIds.size) {
+    for (let index = 0; index < pool.length; index += 1) {
+      if (!knownAssignedDudeIds.has(pool[index]!)) continue;
+      pool.splice(index, 1);
+      index -= 1;
+    }
+  }
+  const isCardNft2 = args.dropFamily === 'card_nft_2';
+
+  if (!isCardNft2) {
+    while (remaining.length) {
+      await takeManifestAnyDude({ slot: 'assignment', remaining, pool, isAssigned: args.isAssigned });
+    }
+    return;
+  }
+
+  await runCardNft2AssignmentRules({
+    itemsPerBox: args.itemsPerBox,
+    remainingSlots: () => remaining.length,
+    rejectTooFewSlots: () => {
+      throw new DudeAssignmentValidationError('card_nft_2 assignments require at least two card ids');
+    },
+    consumeBucketIfAvailable: (bucket) =>
+      takeManifestDudeForBucket({
+        bucket,
+        maxDudeId: args.maxDudeId,
+        remaining,
+        pool,
+        isAssigned: args.isAssigned,
+      }),
+    consumeAny: (slot) => takeManifestAnyDude({ slot, remaining, pool, isAssigned: args.isAssigned }),
+    rejectExtraExhausted: () => {
+      throw new DudeAssignmentValidationError('Manifest dudeIds contain more card ids than the available assignment rules allow');
+    },
+  });
 }
