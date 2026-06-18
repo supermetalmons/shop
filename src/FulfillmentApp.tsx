@@ -21,10 +21,11 @@ import {
   loadFigureMetadataBatch,
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
-import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveDropContent } from './lib/dropContent';
+import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './lib/dropLabels';
 import { fulfillmentBoxSecretCode } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
+import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { ShopHeader } from './components/ShopHeader';
 import {
@@ -495,9 +496,16 @@ function renderFulfillmentPackSecretImage(args: {
   boxId: number;
 }) {
   const { dropId, boxId } = args;
-  const imageSrc = normalizeBoxDisplayImage({ dropId, boxId });
+  const cardNft2PackMediaId = isDropFamily(dropId, 'card_nft_2') ? resolveBoxMediaIdForDrop(dropId, boxId) : null;
+  const imageSrc =
+    (cardNft2PackMediaId ? CARD_NFT_2_PACK_IMAGES[cardNft2PackMediaId - 1]?.src : undefined) ||
+    normalizeBoxDisplayImage({ dropId, boxId });
   if (!imageSrc) return null;
   return <img src={imageSrc} alt="" aria-hidden="true" loading="lazy" className="fulfillment-pack-secret-image" />;
+}
+
+function cardNft2FulfillmentFigureLabel(args: { figureId: number }) {
+  return String(args.figureId);
 }
 
 type FulfillmentAppProps = {
@@ -1156,6 +1164,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
     const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
+    const orderFigureLabelOverride = orderShowsFulfillmentPackPreview ? cardNft2FulfillmentFigureLabel : undefined;
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
@@ -1260,6 +1269,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           figureMedia: orderDrop.figureMedia,
                           figureMetadataByKey,
                           onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                          labelOverride: orderFigureLabelOverride,
                         })
                       ) : null}
                     </div>
@@ -1280,6 +1290,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 figureMedia: orderDrop.figureMedia,
                 figureMetadataByKey,
                 onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                labelOverride: orderFigureLabelOverride,
               })
             : null}
         </div>
