@@ -521,13 +521,10 @@ function heliusSearchAssetsHasNextPage(result: any, page: number, items: DasAsse
   if (!items.length) return false;
   const responseLimit = Number(result?.limit);
   const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : HELIUS_ASSETS_PAGE_LIMIT;
-  if (items.length < limit) return false;
-  const total = Number(result?.total);
-  const resultPage = Number(result?.page ?? page);
-  if (Number.isFinite(total) && total >= 0 && Number.isFinite(limit) && limit > 0 && Number.isFinite(resultPage)) {
-    return resultPage * limit < total;
-  }
-  return true;
+  // Helius can return a capped/stale `total` equal to the page limit while later pages still exist.
+  // Keep paging while full pages are returned; the hard page cap prevents unbounded scans.
+  void page;
+  return items.length >= limit;
 }
 
 const ownerGroupedAssetsCache = new Map<string, Promise<DasAsset[]>>();
@@ -1410,6 +1407,7 @@ function isDirectRun(): boolean {
 
 export const assignStripeOrderCardsTestHooks = {
   existingIrlClaimsByBoxId,
+  heliusSearchAssetsHasNextPage,
   preflightManifestAssignments,
   validateManifestShape,
   validateManifestTotals,

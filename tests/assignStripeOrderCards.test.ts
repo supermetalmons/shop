@@ -262,6 +262,25 @@ test('Stripe card assignment validates dry-run manifest envelope and totals', ()
   );
 });
 
+test('Stripe card assignment keeps scanning full Helius pages when total is capped', () => {
+  assert.equal(
+    assignStripeOrderCardsTestHooks.heliusSearchAssetsHasNextPage(
+      { limit: 1000, page: 1, total: 1000 },
+      1,
+      Array.from({ length: 1000 }, () => ({})),
+    ),
+    true,
+  );
+  assert.equal(
+    assignStripeOrderCardsTestHooks.heliusSearchAssetsHasNextPage(
+      { limit: 1000, page: 3, total: 768 },
+      3,
+      Array.from({ length: 768 }, () => ({})),
+    ),
+    false,
+  );
+});
+
 test('Stripe card assignment preflight rejects hand-edited assignments before writes can start', async () => {
   const commonId = CARD_NFT_2_COMMON_CARD_IDS[0]!;
   const [neitherA, neitherB, neitherC] = firstNNonBucketIds(3);
