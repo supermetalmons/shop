@@ -9,9 +9,11 @@ import {
 import type { FulfillmentOrder } from '../src/types.ts';
 
 const cardDrop = FRONTEND_DROPS.card_nft_2;
+const littleSwagBoxesDrop = FRONTEND_DROPS.little_swag_boxes;
 const hoodieDrop = FRONTEND_DROPS.little_swag_hoodies;
 const dropById = new Map([
   [cardDrop.dropId, cardDrop],
+  [littleSwagBoxesDrop.dropId, littleSwagBoxesDrop],
   [hoodieDrop.dropId, hoodieDrop],
 ]);
 
@@ -56,24 +58,14 @@ test('buildFulfillmentOrdersExport keeps fulfillment-visible data without addres
   assert.deepEqual(payload, [
     {
       orderId: 'card_nft_2:7',
-      dropId: 'card_nft_2',
-      deliveryId: 7,
-      date: '2026-01-02T03:04:05.000Z',
-      fulfillmentStatus: 'Preparing',
       country: 'United States',
-      countryCode: 'US',
       boxes: [
         {
-          boxId: 11,
-          label: 'Pack Secret PACK-SECRET-1',
           secretCode: 'PACK-SECRET-1',
-          assignedFigures: [
-            { figureId: 11133, label: '11133' },
-            { figureId: 11134, label: '11134' },
-          ],
+          assignedFigures: [11133, 11134],
         },
       ],
-      looseFigures: [{ figureId: 42, label: '42' }],
+      looseFigures: [42],
     },
   ]);
 
@@ -86,9 +78,15 @@ test('buildFulfillmentOrdersExport keeps fulfillment-visible data without addres
   assert.doesNotMatch(serialized, /owner-wallet/);
   assert.doesNotMatch(serialized, /ready_to_ship/);
   assert.doesNotMatch(serialized, /internal-note/);
+  assert.doesNotMatch(serialized, /fulfillmentStatus/);
+  assert.doesNotMatch(serialized, /countryCode/);
+  assert.doesNotMatch(serialized, /deliveryId/);
+  assert.doesNotMatch(serialized, /dropId/);
+  assert.doesNotMatch(serialized, /boxId/);
+  assert.doesNotMatch(serialized, /label/);
 });
 
-test('buildFulfillmentOrdersExport mirrors direct-delivery box labels without hidden assigned figures', () => {
+test('buildFulfillmentOrdersExport keeps direct-delivery box secrets without hidden assigned figures', () => {
   const payload = buildFulfillmentOrdersExport(
     [
       cardOrder({
@@ -106,17 +104,11 @@ test('buildFulfillmentOrdersExport mirrors direct-delivery box labels without hi
   assert.deepEqual(payload, [
     {
       orderId: 'little_swag_hoodies:8',
-      dropId: 'little_swag_hoodies',
-      deliveryId: 8,
-      date: '2026-01-02T03:04:05.000Z',
-      fulfillmentStatus: null,
       country: 'Turkey',
-      countryCode: 'TR',
       boxes: [
         {
-          boxId: 16,
-          label: 'XL',
           secretCode: 'HOODIE-SECRET',
+          variant: 'XL',
         },
       ],
       looseFigures: [],
@@ -125,6 +117,30 @@ test('buildFulfillmentOrdersExport mirrors direct-delivery box labels without hi
   assert.equal('email' in payload[0], false);
   assert.equal('phone' in payload[0], false);
   assert.equal('assignedFigures' in payload[0].boxes[0], false);
+  assert.equal('variant' in buildFulfillmentOrdersExport([cardOrder()], { dropById })[0].boxes[0], false);
+});
+
+test('buildFulfillmentOrdersExport exports numeric fulfillment labels for figures', () => {
+  const payload = buildFulfillmentOrdersExport(
+    [
+      cardOrder({
+        dropId: littleSwagBoxesDrop.dropId,
+        boxes: [
+          {
+            boxId: 11,
+            claimCode: 'LSB-SECRET-1',
+            assetId: 'asset-11',
+            dudeIds: [344, 353],
+          },
+        ],
+        looseDudes: [360],
+      }),
+    ],
+    { dropById },
+  );
+
+  assert.deepEqual(payload[0].boxes[0].assignedFigures, [1, 90]);
+  assert.deepEqual(payload[0].looseFigures, [3]);
 });
 
 test('buildFulfillmentAddressExport maps unique order ids to sensitive address contact entries', () => {

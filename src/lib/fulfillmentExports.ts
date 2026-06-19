@@ -1,40 +1,24 @@
 import type { FrontendDeploymentConfig } from '../config/deployment';
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
-import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox, FulfillmentStatus } from '../types';
+import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox } from '../types';
 import type { FigureMetadataRecord } from './figureMetadata';
 import { fulfillmentBoxSecretCode } from './fulfillmentCodes';
 import { resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from './shipping';
 import { findCountryByCode } from './countries';
-import {
-  fulfillmentBoxContentsLabel,
-  resolveFulfillmentDirectDeliveryBoxLabel,
-  resolveFulfillmentFigureLabel,
-} from './fulfillmentLabels';
-import { normalizeFulfillmentStatusOrNull } from './fulfillmentStatus';
-
-export type FulfillmentExportFigure = {
-  figureId: number;
-  label: string;
-};
+import { resolveFulfillmentDirectDeliveryBoxLabel, resolveFulfillmentFigureLabel } from './fulfillmentLabels';
 
 export type FulfillmentExportBox = {
-  boxId: number;
-  label: string;
   secretCode?: string;
-  assignedFigures?: FulfillmentExportFigure[];
+  variant?: string;
+  assignedFigures?: number[];
 };
 
 export type FulfillmentOrderExport = {
   orderId: string;
-  dropId: string;
-  deliveryId: number;
-  date: string | null;
-  fulfillmentStatus: FulfillmentStatus | null;
   country?: string;
-  countryCode?: string;
   boxes: FulfillmentExportBox[];
-  looseFigures: FulfillmentExportFigure[];
+  looseFigures: number[];
 };
 
 export type FulfillmentAddressExportEntry = {
@@ -65,12 +49,6 @@ export function fulfillmentExportOrderId(order: Pick<FulfillmentOrder, 'dropId' 
   return `${order.dropId}:${order.deliveryId}`;
 }
 
-function formatIsoDate(ts?: number): string | null {
-  if (typeof ts !== 'number' || !Number.isFinite(ts)) return null;
-  const date = new Date(ts);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
 export function formatFulfillmentCountry(country?: string, countryCode?: string): string {
   const countryCodeName = findCountryByCode(countryCode)?.name;
   if (countryCodeName) return countryCodeName;
@@ -97,41 +75,31 @@ export function formatFulfillmentAddressText(address: FulfillmentOrderAddress): 
   return nextLines.join('\n');
 }
 
-function countryExportFields(address: FulfillmentOrderAddress): Pick<FulfillmentOrderExport, 'country' | 'countryCode'> {
+function countryExportFields(address: FulfillmentOrderAddress): Pick<FulfillmentOrderExport, 'country'> {
   const country = normalizeOptionalString(formatFulfillmentCountry(address.country, address.countryCode));
-  const rawCountryCode = normalizeOptionalString(address.countryCode);
-  const rawCountry = normalizeOptionalString(address.country);
-  const countryCode = rawCountryCode
-    ? rawCountryCode.toUpperCase()
-    : rawCountry && findCountryByCode(rawCountry)
-      ? rawCountry.toUpperCase()
-      : undefined;
   return {
     ...(country ? { country } : {}),
-    ...(countryCode ? { countryCode } : {}),
   };
 }
 
-function figureExportItem(args: {
+function figureExportLabel(args: {
   dropId: string;
   drop: FrontendDeploymentConfig | null;
   figureId: number;
   previewMode: DropFigureFulfillmentPreviewMode;
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
-}): FulfillmentExportFigure | null {
+}): number | null {
   const figureId = normalizePositiveInteger(args.figureId);
   if (!figureId) return null;
 
-  return {
+  const label = resolveFulfillmentFigureLabel({
+    dropId: args.dropId,
+    drop: args.drop,
     figureId,
-    label: resolveFulfillmentFigureLabel({
-      dropId: args.dropId,
-      drop: args.drop,
-      figureId,
-      previewMode: args.previewMode,
-      figureMetadataByKey: args.figureMetadataByKey,
-    }).label,
-  };
+    previewMode: args.previewMode,
+    figureMetadataByKey: args.figureMetadataByKey,
+  }).label;
+  return normalizePositiveInteger(label);
 }
 
 function buildFigureExports(args: {
@@ -140,15 +108,15 @@ function buildFigureExports(args: {
   previewMode: DropFigureFulfillmentPreviewMode;
   figureIds: number[];
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
-}): FulfillmentExportFigure[] {
+}): number[] {
   return args.figureIds
     .map((figureId) =>
-      figureExportItem({
+      figureExportLabel({
         ...args,
         figureId,
       }),
     )
-    .filter((entry): entry is FulfillmentExportFigure => Boolean(entry));
+    .filter((entry): entry is number => Boolean(entry));
 }
 
 function boxExportItem(args: {
@@ -158,17 +126,14 @@ function boxExportItem(args: {
   box: FulfillmentOrderBox;
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
 }): FulfillmentExportBox {
-  const boxId = Math.floor(Number(args.box.boxId));
   const secretCode = fulfillmentBoxSecretCode(args.box);
   const isDirectDelivery = isDirectDeliveryItemsPerBox(args.drop?.itemsPerBox);
-  const label = isDirectDelivery
-    ? resolveFulfillmentDirectDeliveryBoxLabel(args.drop, boxId).label
-    : fulfillmentBoxContentsLabel(args.drop, boxId, secretCode);
+  const boxId = normalizePositiveInteger(args.box.boxId);
+  const variant = isDirectDelivery && boxId ? resolveFulfillmentDirectDeliveryBoxLabel(args.drop, boxId).sizeLabel : undefined;
 
   return {
-    boxId,
-    label,
     ...(secretCode ? { secretCode } : {}),
+    ...(variant ? { variant } : {}),
     ...(!isDirectDelivery
       ? {
           assignedFigures: buildFigureExports({
@@ -192,10 +157,6 @@ export function buildFulfillmentOrdersExport(
     const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;
     return {
       orderId: fulfillmentExportOrderId(order),
-      dropId: order.dropId,
-      deliveryId: order.deliveryId,
-      date: formatIsoDate(order.processedAt || order.createdAt),
-      fulfillmentStatus: normalizeFulfillmentStatusOrNull(order.fulfillmentStatus),
       ...countryExportFields(order.address),
       boxes: order.boxes.map((box) =>
         boxExportItem({
