@@ -62,7 +62,8 @@ test('buildFulfillmentOrdersExport keeps fulfillment-visible data without addres
       boxes: [
         {
           secretCode: 'PACK-SECRET-1',
-          assignedFigures: [11133, 11134],
+          style: 'yellow',
+          figures: [11133, 11134],
         },
       ],
       looseFigures: [42],
@@ -111,13 +112,38 @@ test('buildFulfillmentOrdersExport keeps direct-delivery box secrets without hid
           variant: 'XL',
         },
       ],
-      looseFigures: [],
     },
   ]);
   assert.equal('email' in payload[0], false);
   assert.equal('phone' in payload[0], false);
-  assert.equal('assignedFigures' in payload[0].boxes[0], false);
-  assert.equal('variant' in buildFulfillmentOrdersExport([cardOrder()], { dropById })[0].boxes[0], false);
+  assert.equal('looseFigures' in payload[0], false);
+  const directDeliveryBox = payload[0].boxes?.[0];
+  assert.ok(directDeliveryBox);
+  assert.equal('figures' in directDeliveryBox, false);
+
+  const standardBox = buildFulfillmentOrdersExport([cardOrder()], { dropById })[0].boxes?.[0];
+  assert.ok(standardBox);
+  assert.equal('variant' in standardBox, false);
+  assert.equal('style' in directDeliveryBox, false);
+});
+
+test('buildFulfillmentOrdersExport omits empty boxes and loose figure fields', () => {
+  const payload = buildFulfillmentOrdersExport(
+    [
+      cardOrder({
+        boxes: [],
+        looseDudes: [],
+      }),
+    ],
+    { dropById },
+  );
+
+  assert.deepEqual(payload, [
+    {
+      orderId: 'card_nft_2:7',
+      country: 'United States',
+    },
+  ]);
 });
 
 test('buildFulfillmentOrdersExport exports numeric fulfillment labels for figures', () => {
@@ -139,7 +165,10 @@ test('buildFulfillmentOrdersExport exports numeric fulfillment labels for figure
     { dropById },
   );
 
-  assert.deepEqual(payload[0].boxes[0].assignedFigures, [1, 90]);
+  const box = payload[0].boxes?.[0];
+  assert.ok(box);
+  assert.deepEqual(box.figures, [1, 90]);
+  assert.equal('style' in box, false);
   assert.deepEqual(payload[0].looseFigures, [3]);
 });
 

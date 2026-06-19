@@ -1,24 +1,25 @@
-import type { FrontendDeploymentConfig } from '../config/deployment';
+import { isDropFamily, type FrontendDeploymentConfig } from '../config/deployment';
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
 import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox } from '../types';
 import type { FigureMetadataRecord } from './figureMetadata';
 import { fulfillmentBoxSecretCode } from './fulfillmentCodes';
-import { resolveDropContent } from './dropContent';
+import { resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from './shipping';
 import { findCountryByCode } from './countries';
 import { resolveFulfillmentDirectDeliveryBoxLabel, resolveFulfillmentFigureLabel } from './fulfillmentLabels';
 
 export type FulfillmentExportBox = {
   secretCode?: string;
+  style?: string;
   variant?: string;
-  assignedFigures?: number[];
+  figures?: number[];
 };
 
 export type FulfillmentOrderExport = {
   orderId: string;
   country?: string;
-  boxes: FulfillmentExportBox[];
-  looseFigures: number[];
+  boxes?: FulfillmentExportBox[];
+  looseFigures?: number[];
 };
 
 export type FulfillmentAddressExportEntry = {
@@ -119,6 +120,21 @@ function buildFigureExports(args: {
     .filter((entry): entry is number => Boolean(entry));
 }
 
+function cardNft2PackStyleName(styleId: number | null): string | undefined {
+  switch (styleId) {
+    case 1:
+      return 'blue';
+    case 2:
+      return 'red';
+    case 3:
+      return 'yellow';
+    case 4:
+      return 'purple';
+    default:
+      return undefined;
+  }
+}
+
 function boxExportItem(args: {
   dropId: string;
   drop: FrontendDeploymentConfig | null;
@@ -129,14 +145,19 @@ function boxExportItem(args: {
   const secretCode = fulfillmentBoxSecretCode(args.box);
   const isDirectDelivery = isDirectDeliveryItemsPerBox(args.drop?.itemsPerBox);
   const boxId = normalizePositiveInteger(args.box.boxId);
+  const style =
+    boxId && isDropFamily(args.drop?.dropId || args.dropId, 'card_nft_2')
+      ? cardNft2PackStyleName(resolveBoxMediaIdForDrop(args.dropId, boxId))
+      : undefined;
   const variant = isDirectDelivery && boxId ? resolveFulfillmentDirectDeliveryBoxLabel(args.drop, boxId).sizeLabel : undefined;
 
   return {
     ...(secretCode ? { secretCode } : {}),
+    ...(style ? { style } : {}),
     ...(variant ? { variant } : {}),
     ...(!isDirectDelivery
       ? {
-          assignedFigures: buildFigureExports({
+          figures: buildFigureExports({
             dropId: args.dropId,
             drop: args.drop,
             previewMode: args.previewMode,
@@ -155,25 +176,27 @@ export function buildFulfillmentOrdersExport(
   return orders.map((order) => {
     const drop = options.dropById.get(order.dropId) || null;
     const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;
-    return {
-      orderId: fulfillmentExportOrderId(order),
-      ...countryExportFields(order.address),
-      boxes: order.boxes.map((box) =>
-        boxExportItem({
-          dropId: order.dropId,
-          drop,
-          previewMode,
-          box,
-          figureMetadataByKey: options.figureMetadataByKey,
-        }),
-      ),
-      looseFigures: buildFigureExports({
+    const boxes = order.boxes.map((box) =>
+      boxExportItem({
         dropId: order.dropId,
         drop,
         previewMode,
-        figureIds: order.looseDudes,
+        box,
         figureMetadataByKey: options.figureMetadataByKey,
       }),
+    );
+    const looseFigures = buildFigureExports({
+      dropId: order.dropId,
+      drop,
+      previewMode,
+      figureIds: order.looseDudes,
+      figureMetadataByKey: options.figureMetadataByKey,
+    });
+    return {
+      orderId: fulfillmentExportOrderId(order),
+      ...countryExportFields(order.address),
+      ...(boxes.length > 0 ? { boxes } : {}),
+      ...(looseFigures.length > 0 ? { looseFigures } : {}),
     };
   });
 }
