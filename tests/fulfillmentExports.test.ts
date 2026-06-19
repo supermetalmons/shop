@@ -159,11 +159,21 @@ test('buildFulfillmentAddressExport maps unique order ids to sensitive address c
 test('buildFulfillmentExportFilename includes kind, selection, status, and date', () => {
   assert.equal(
     buildFulfillmentExportFilename({
+      kind: 'orders',
+      selectedDropId: 'card_nft_2',
+      orderVisibilityFilter: 'all',
+      now: new Date('2026-06-19T12:00:00Z'),
+    }),
+    'orders-card-nft-2-all-2026-06-19.json',
+  );
+
+  assert.equal(
+    buildFulfillmentExportFilename({
       kind: 'addresses-sensitive',
       selectedDropId: '',
       orderVisibilityFilter: 'not_shipped',
       now: new Date('2026-06-19T12:00:00Z'),
     }),
-    'fulfillment-addresses-SENSITIVE-all-drops-not-shipped-2026-06-19.json',
+    'addresses-SENSITIVE-all-drops-not-shipped-2026-06-19.json',
   );
 });

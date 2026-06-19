@@ -261,7 +261,7 @@ export function buildFulfillmentExportFilename(args: {
   orderVisibilityFilter: string;
   now?: Date;
 }): string {
-  const prefix = args.kind === 'orders' ? 'fulfillment-orders' : 'fulfillment-addresses-SENSITIVE';
+  const prefix = args.kind === 'orders' ? 'orders' : 'addresses-SENSITIVE';
   const dropSegment = sanitizeFilenameSegment(args.selectedDropId, 'all-drops');
   const statusSegment = sanitizeFilenameSegment(args.orderVisibilityFilter, 'all');
   const dateSegment = formatDateStamp(args.now || new Date());
