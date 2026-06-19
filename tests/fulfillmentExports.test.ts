@@ -147,13 +147,14 @@ test('buildFulfillmentAddressExport maps unique order ids to sensitive address c
 
   assert.deepEqual(sensitivePayload, {
     'card_nft_2:7': {
-      address: 'Ada Lovelace\n123 Main St\nUnited States',
+      address: ['Ada Lovelace', '123 Main St', 'United States'],
       email: 'ada@example.com',
       phone: '+1 555 0100',
     },
     'little_swag_hoodies:7': { address: null },
     'card_nft_2:9': { address: null },
   });
+  assert.doesNotMatch(JSON.stringify(sensitivePayload), /\\n/);
 });
 
 test('buildFulfillmentExportFilename includes kind, selection, status, and date', () => {

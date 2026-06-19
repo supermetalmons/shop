@@ -38,7 +38,7 @@ export type FulfillmentOrderExport = {
 };
 
 export type FulfillmentAddressExportEntry = {
-  address: string | null;
+  address: string[] | null;
   email?: string;
   phone?: string;
 };
@@ -222,13 +222,14 @@ export function buildFulfillmentAddressExport(orders: FulfillmentOrder[]): Recor
     orders.map((order) => {
       const fullAddress = typeof order.address.full === 'string' ? order.address.full.trim() : '';
       const addressText = fullAddress && fullAddress !== '***' ? formatFulfillmentAddressText(order.address) : null;
+      const addressLines = addressText ? addressText.replace(/\r\n?/g, '\n').split('\n') : null;
       const showContact = order.address.full !== '***';
       const email = showContact ? normalizeOptionalString(order.address.email) : undefined;
       const phone = showContact ? normalizeOptionalString(order.address.phone) : undefined;
       return [
         fulfillmentExportOrderId(order),
         {
-          address: addressText || null,
+          address: addressLines,
           ...(email ? { email } : {}),
           ...(phone ? { phone } : {}),
         },
