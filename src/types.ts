@@ -1,3 +1,7 @@
+import type { FulfillmentStatus } from './lib/fulfillmentStatus';
+
+export type { FulfillmentStatus } from './lib/fulfillmentStatus';
+
 export type AssetKind = 'box' | 'dude' | 'certificate';
 
 export type PreviewVideoSource = {
@@ -84,8 +88,6 @@ export interface DeliveryOrderItemSummary {
   kind: 'box' | 'dude';
   refId: number;
 }
-
-export type FulfillmentStatus = 'Preparing' | 'Shipped';
 
 export interface DeliveryOrderSummary {
   dropId: string;

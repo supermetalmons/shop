@@ -3682,6 +3682,13 @@ button.inventory__open:focus-visible {
   margin-left: auto;
 }
 
+.fulfillment-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .manual-review-menu-wrap {
   position: relative;
   flex: 0 0 auto;
@@ -3715,6 +3722,87 @@ button.manual-review-button svg {
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
+}
+
+.fulfillment-export-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+button.fulfillment-more-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+button.fulfillment-more-button:hover:not(:disabled),
+button.fulfillment-more-button:focus-visible,
+button.fulfillment-more-button--active {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+button.fulfillment-more-button svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.fulfillment-export-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: min(260px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.14);
+  letter-spacing: 0;
+}
+
+button.fulfillment-export-menu__item {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: left;
+}
+
+button.fulfillment-export-menu__item svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+button.fulfillment-export-menu__item:hover:not(:disabled),
+button.fulfillment-export-menu__item:focus-visible {
+  background: var(--surface);
+  color: var(--accent-hover);
+  outline: none;
 }
 
 .manual-review-menu {
@@ -3825,7 +3913,7 @@ button.manual-review-button svg {
     margin-left: 0;
   }
 
-  .manual-review-menu-wrap {
+  .fulfillment-toolbar-actions {
     margin-left: auto;
   }
 

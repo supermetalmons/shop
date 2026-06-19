@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { FiAlertTriangle } from 'react-icons/fi';
+import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import { listFulfillmentManualReviewCheckouts, listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
 import {
   FulfillmentManualReviewCheckout,
   FulfillmentOrder,
-  FulfillmentOrderAddress,
   FulfillmentOrdersCursor,
   FulfillmentStatus,
 } from './types';
@@ -22,12 +21,26 @@ import {
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
 import { joinDropAssetUrl, normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
-import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './lib/dropLabels';
+import { dropAssetLabel } from './lib/dropLabels';
 import { fulfillmentBoxSecretCode } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { ShopHeader } from './components/ShopHeader';
+import {
+  buildFulfillmentAddressExport,
+  buildFulfillmentExportFilename,
+  buildFulfillmentOrdersExport,
+  formatFulfillmentAddressText,
+} from './lib/fulfillmentExports';
+import {
+  fulfillmentBoxContentsLabel,
+  fulfillmentBoxSecretLabelPrefix,
+  resolveFulfillmentDirectDeliveryBoxLabel,
+  resolveFulfillmentFigureLabel,
+  type FulfillmentFigureLabelOverrideArgs,
+} from './lib/fulfillmentLabels';
+import { FULFILLMENT_STATUS_OPTIONS, normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
 import {
   isDropFamily,
   listFrontendDrops,
@@ -36,7 +49,6 @@ import {
   type FrontendDeploymentConfig,
 } from './config/deployment';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
-import { findCountryByCode } from './lib/countries';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
@@ -44,7 +56,6 @@ const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
 const BOX_CONTENTS_FIGURE_GAP = 12;
 const BOX_CONTENTS_HORIZONTAL_CHROME = 54;
-const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
 const ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
   { value: 'shipped', label: 'Shipped' },
@@ -53,10 +64,6 @@ const ORDER_VISIBILITY_OPTIONS = [
 
 type OrderVisibilityFilter = (typeof ORDER_VISIBILITY_OPTIONS)[number]['value'];
 const DEFAULT_ORDER_VISIBILITY_FILTER: OrderVisibilityFilter = 'not_shipped';
-
-function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
-  return value === 'Preparing' || value === 'Shipped' ? value : '';
-}
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -67,32 +74,6 @@ function formatOrderStatus(status: string) {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
   if (!normalized) return 'Unknown';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-}
-
-function formatFulfillmentCountry(country?: string, countryCode?: string) {
-  const countryCodeName = findCountryByCode(countryCode)?.name;
-  if (countryCodeName) return countryCodeName;
-
-  const countryValue = typeof country === 'string' ? country.trim() : '';
-  const countryValueName = findCountryByCode(countryValue)?.name;
-  return countryValueName || countryValue || (typeof countryCode === 'string' ? countryCode.trim().toUpperCase() : '');
-}
-
-function formatFulfillmentAddressText(address: FulfillmentOrderAddress) {
-  const formattedCountry = formatFulfillmentCountry(address.country, address.countryCode);
-  if (address.full === '***') return formattedCountry || '***';
-  if (typeof address.full !== 'string') return '';
-
-  const countryCode = (address.countryCode || address.country || '').trim().toUpperCase();
-  if (!countryCode || !formattedCountry) return address.full;
-
-  const lines = address.full.split('\n');
-  const finalLineIndex = lines.length - 1;
-  if (lines[finalLineIndex]?.trim().toUpperCase() !== countryCode) return address.full;
-
-  const nextLines = [...lines];
-  nextLines[finalLineIndex] = formattedCountry;
-  return nextLines.join('\n');
 }
 
 function formatManualReviewAmount(amountTotal?: number, currency?: string) {
@@ -193,6 +174,46 @@ function getBoxContentsStyle(itemCount: number): CSSProperties {
   const columns = Math.max(1, Math.min(itemCount, 3));
   const contentWidth = columns * BOX_CONTENTS_FIGURE_WIDTH + Math.max(0, columns - 1) * BOX_CONTENTS_FIGURE_GAP;
   return { width: `min(100%, ${contentWidth + BOX_CONTENTS_HORIZONTAL_CHROME}px)` };
+}
+
+function downloadJsonFile(filename: string, data: unknown) {
+  if (typeof document === 'undefined' || typeof URL === 'undefined') return;
+  const blob = new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
+}
+
+function useDismissibleMenu<T extends HTMLElement>(
+  open: boolean,
+  menuRef: RefObject<T | null>,
+  setOpen: (open: boolean) => void,
+) {
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const handlePointerDown = (evt: MouseEvent | TouchEvent) => {
+      const node = menuRef.current;
+      if (!node || node.contains(evt.target as Node)) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (evt: KeyboardEvent) => {
+      if (evt.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [menuRef, open, setOpen]);
 }
 
 function dedupeOrdersByKey(orders: FulfillmentOrder[], existingOrderKeys?: Set<string>): FulfillmentOrder[] {
@@ -390,6 +411,7 @@ function FigureTileImage(props: {
 }
 
 function renderFigureTiles(args: {
+  drop?: FrontendDeploymentConfig | null;
   dropId: string;
   figureIds: number[];
   keyPrefix: string;
@@ -399,12 +421,13 @@ function renderFigureTiles(args: {
   figureMediaBase?: string;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
-  labelOverride?: (args: { figureId: number; index: number; mediaId: number | null; fallbackName: string }) => string;
+  labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
 }) {
   const {
     dropId,
     figureIds,
     keyPrefix,
+    drop,
     figureNamePrefix,
     previewMode,
     figureMedia,
@@ -413,15 +436,19 @@ function renderFigureTiles(args: {
     onMetadataResolved,
     labelOverride,
   } = args;
-  const labelSource = { namePrefix: undefined, figureNamePrefix };
   return (
     <div className="figure-grid">
       {figureIds.map((figureId, index) => {
-        const metadata = figureMetadataByKey[figureMetadataCacheKey(dropId, figureId)] || getCachedFigureMetadata(dropId, figureId);
+        const { label, mediaId, fallbackName, metadata } = resolveFulfillmentFigureLabel({
+          dropId,
+          drop: drop || { dropId, figureNamePrefix, figureMedia },
+          figureId,
+          index,
+          previewMode,
+          figureMetadataByKey,
+          labelOverride,
+        });
         const metadataImage = figureMetadataHasImage(metadata) ? metadata.image : undefined;
-        const fallbackName = metadata?.name || dropAssetReference(labelSource, 'figure', figureId);
-        const mediaId = previewMode === 'media_map_folder' ? getMediaIdForFigureId(figureId, figureMedia) : null;
-        const label = labelOverride?.({ figureId, index, mediaId, fallbackName }) || (mediaId ? String(mediaId) : fallbackName);
         if (previewMode === 'media_map_folder') {
           const src = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
           return (
@@ -466,8 +493,7 @@ function renderBoxTiles(args: {
   return (
     <div className="figure-grid">
       {boxIds.map((boxId, index) => {
-        const sizeLabel = dropMintSelectionLabel(labelSource, boxId);
-        const label = sizeLabel || dropAssetReference(labelSource, 'box', boxId);
+        const { label, sizeLabel } = resolveFulfillmentDirectDeliveryBoxLabel(labelSource, boxId);
         const secretCode = secretCodeByBoxId?.get(boxId);
         const imageSrc = getPreviewSrc?.(boxId);
         return (
@@ -480,7 +506,7 @@ function renderBoxTiles(args: {
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
             {secretCode ? (
               <div className="muted small">
-                {dropAssetLabel(labelSource, 'box', 1, { capitalize: true })} Secret{' '}
+                {fulfillmentBoxSecretLabelPrefix(labelSource)}{' '}
                 <span className="fulfillment-secret-code">{secretCode}</span>
               </div>
             ) : null}
@@ -502,10 +528,6 @@ function renderFulfillmentPackSecretImage(args: {
     normalizeBoxDisplayImage({ dropId, boxId });
   if (!imageSrc) return null;
   return <img src={imageSrc} alt="" aria-hidden="true" loading="lazy" className="fulfillment-pack-secret-image" />;
-}
-
-function cardNft2FulfillmentFigureLabel(args: { figureId: number }) {
-  return String(args.figureId);
 }
 
 type FulfillmentAppProps = {
@@ -567,6 +589,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   );
   const [manualReviewCheckouts, setManualReviewCheckouts] = useState<FulfillmentManualReviewCheckout[]>([]);
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
@@ -578,7 +601,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [authReady, setAuthReady] = useState(() => !walletAddress);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const manualReviewMenuRef = useRef<HTMLDivElement | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const orderRequestEpochRef = useRef(0);
+
+  useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
+  useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
 
   useEffect(() => {
     walletConnectingSeenRef.current = false;
@@ -794,26 +821,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setManualReviewMenuOpen(false);
     }
   }, [manualReviewCheckouts.length, manualReviewMenuOpen]);
-
-  useEffect(() => {
-    if (!manualReviewMenuOpen || typeof document === 'undefined') return;
-    const handlePointerDown = (evt: MouseEvent | TouchEvent) => {
-      const node = manualReviewMenuRef.current;
-      if (!node || node.contains(evt.target as Node)) return;
-      setManualReviewMenuOpen(false);
-    };
-    const handleKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') setManualReviewMenuOpen(false);
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [manualReviewMenuOpen]);
 
   const mergeLoadedFigureMetadata = useCallback((records: FigureMetadataRecord[]) => {
     if (!records.length) return;
@@ -1116,6 +1123,28 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
   const showManualReviewDropId = selectedDropIds.length > 1;
 
+  const downloadDisplayedOrders = useCallback(() => {
+    const filename = buildFulfillmentExportFilename({
+      kind: 'orders',
+      selectedDropId,
+      orderVisibilityFilter,
+    });
+    const payload = buildFulfillmentOrdersExport(displayedOrders, { dropById, figureMetadataByKey });
+    downloadJsonFile(filename, payload);
+    setExportMenuOpen(false);
+  }, [displayedOrders, dropById, figureMetadataByKey, orderVisibilityFilter, selectedDropId]);
+
+  const downloadDisplayedAddresses = useCallback(() => {
+    const filename = buildFulfillmentExportFilename({
+      kind: 'addresses-sensitive',
+      selectedDropId,
+      orderVisibilityFilter,
+    });
+    const payload = buildFulfillmentAddressExport(displayedOrders);
+    downloadJsonFile(filename, payload);
+    setExportMenuOpen(false);
+  }, [displayedOrders, orderVisibilityFilter, selectedDropId]);
+
   const renderManualReviewMenu = () => (
     <div className="manual-review-menu" role="dialog" aria-label="Needs manual review">
       <div className="manual-review-menu__head">
@@ -1153,6 +1182,29 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     </div>
   );
 
+  const renderExportMenu = () => (
+    <div className="fulfillment-export-menu" role="menu" aria-label="Fulfillment exports">
+      <button
+        type="button"
+        className="fulfillment-export-menu__item"
+        role="menuitem"
+        onClick={downloadDisplayedOrders}
+      >
+        <FiDownload aria-hidden="true" />
+        <span>Download Orders</span>
+      </button>
+      <button
+        type="button"
+        className="fulfillment-export-menu__item"
+        role="menuitem"
+        onClick={downloadDisplayedAddresses}
+      >
+        <FiDownload aria-hidden="true" />
+        <span>Download Addresses [SENSITIVE]</span>
+      </button>
+    </div>
+  );
+
   const renderFulfillmentOrderSection = (
     order: FulfillmentOrder,
     options?: { showContactInfo?: boolean; showFullAddress?: boolean },
@@ -1164,7 +1216,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
     const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
-    const orderFigureLabelOverride = orderShowsFulfillmentPackPreview ? cardNft2FulfillmentFigureLabel : undefined;
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
@@ -1245,12 +1296,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           <span className="fulfillment-pack-secret">
                             {packSecretImage}
                             <span>
-                              {dropAssetLabel(orderDrop, 'box', 1, { capitalize: true })} Secret{' '}
+                              {fulfillmentBoxSecretLabelPrefix(orderDrop)}{' '}
                               <span className="fulfillment-secret-code">{secretCode}</span>
                             </span>
                           </span>
                         ) : (
-                          dropAssetReference(orderDrop, 'box', box.boxId, { capitalize: true })
+                          fulfillmentBoxContentsLabel(orderDrop, box.boxId, '')
                         )}
                       </div>
                       {!secretCode ? (
@@ -1261,6 +1312,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                       {box.dudeIds.length ? (
                         renderFigureTiles({
                           dropId: orderDrop.dropId,
+                          drop: orderDrop,
                           figureIds: box.dudeIds,
                           keyPrefix: `${orderKey}:${box.boxId}`,
                           figureNamePrefix: orderDrop.figureNamePrefix,
@@ -1269,7 +1321,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           figureMedia: orderDrop.figureMedia,
                           figureMetadataByKey,
                           onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                          labelOverride: orderFigureLabelOverride,
                         })
                       ) : null}
                     </div>
@@ -1282,6 +1333,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           {order.looseDudes.length
             ? renderFigureTiles({
                 dropId: orderDrop.dropId,
+                drop: orderDrop,
                 figureIds: order.looseDudes,
                 keyPrefix: `${orderKey}:dude`,
                 figureNamePrefix: orderDrop.figureNamePrefix,
@@ -1290,7 +1342,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 figureMedia: orderDrop.figureMedia,
                 figureMetadataByKey,
                 onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                labelOverride: orderFigureLabelOverride,
               })
             : null}
         </div>
@@ -1357,23 +1408,47 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   ))}
                 </select>
               ) : null}
-              {manualReviewCheckouts.length ? (
-                <div className="manual-review-menu-wrap" ref={manualReviewMenuRef}>
-                  <button
-                    type="button"
-                    className="manual-review-button"
-                    aria-label={`Needs manual review, ${manualReviewCheckouts.length} ${
-                      manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'
-                    }`}
-                    aria-haspopup="dialog"
-                    aria-expanded={manualReviewMenuOpen}
-                    title="Needs manual review"
-                    onClick={() => setManualReviewMenuOpen((open) => !open)}
-                  >
-                    <FiAlertTriangle aria-hidden="true" />
-                    <span>{manualReviewCheckouts.length}</span>
-                  </button>
-                  {manualReviewMenuOpen ? renderManualReviewMenu() : null}
+              {selectedDropIds.length ? (
+                <div className="fulfillment-toolbar-actions">
+                  {manualReviewCheckouts.length ? (
+                    <div className="manual-review-menu-wrap" ref={manualReviewMenuRef}>
+                      <button
+                        type="button"
+                        className="manual-review-button"
+                        aria-label={`Needs manual review, ${manualReviewCheckouts.length} ${
+                          manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'
+                        }`}
+                        aria-haspopup="dialog"
+                        aria-expanded={manualReviewMenuOpen}
+                        title="Needs manual review"
+                        onClick={() => {
+                          setExportMenuOpen(false);
+                          setManualReviewMenuOpen((open) => !open);
+                        }}
+                      >
+                        <FiAlertTriangle aria-hidden="true" />
+                        <span>{manualReviewCheckouts.length}</span>
+                      </button>
+                      {manualReviewMenuOpen ? renderManualReviewMenu() : null}
+                    </div>
+                  ) : null}
+                  <div className="fulfillment-export-menu-wrap" ref={exportMenuRef}>
+                    <button
+                      type="button"
+                      className={`fulfillment-more-button${exportMenuOpen ? ' fulfillment-more-button--active' : ''}`}
+                      aria-label="Fulfillment export menu"
+                      aria-haspopup="menu"
+                      aria-expanded={exportMenuOpen}
+                      title="More"
+                      onClick={() => {
+                        setManualReviewMenuOpen(false);
+                        setExportMenuOpen((open) => !open);
+                      }}
+                    >
+                      <FiMoreHorizontal aria-hidden="true" />
+                    </button>
+                    {exportMenuOpen ? renderExportMenu() : null}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1389,6 +1464,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     <div className="order-items">
                       {renderFigureTiles({
                         dropId: duplicateDrop.dropId,
+                        drop: duplicateDrop,
                         figureIds: duplicateFigures.map((entry) => entry.figureId),
                         keyPrefix: 'duplicates',
                         figureNamePrefix: duplicateDrop.figureNamePrefix,
