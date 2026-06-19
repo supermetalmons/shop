@@ -5147,6 +5147,7 @@ function App({ currentPath }: AppProps) {
         >
           Sign in
         </button>
+        {' '}
         <span>to view your shipments.</span>
       </span>
     );

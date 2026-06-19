@@ -2217,9 +2217,7 @@ button.no-focus-style:focus-visible {
 }
 
 .shipments-signin {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  display: inline;
 }
 
 @media (prefers-color-scheme: dark) {
