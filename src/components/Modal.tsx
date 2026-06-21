@@ -1,5 +1,24 @@
 import { ReactNode, useEffect } from 'react';
 
+let activeModalScrollLocks = 0;
+let previousBodyOverflow: string | undefined;
+
+function acquireModalScrollLock() {
+  if (activeModalScrollLocks === 0) {
+    previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  }
+  activeModalScrollLocks += 1;
+}
+
+function releaseModalScrollLock() {
+  if (activeModalScrollLocks === 0) return;
+  activeModalScrollLocks -= 1;
+  if (activeModalScrollLocks !== 0) return;
+  document.body.style.overflow = previousBodyOverflow ?? '';
+  previousBodyOverflow = undefined;
+}
+
 interface ModalProps {
   open: boolean;
   title: string;
@@ -21,11 +40,11 @@ export function Modal({ open, title, onClose, showCloseButton = true, closeOnEsc
     };
 
     document.addEventListener('keydown', onKeyDown);
-    document.body.style.overflow = 'hidden';
+    acquireModalScrollLock();
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = '';
+      releaseModalScrollLock();
     };
   }, [closeOnEscape, open, onClose]);
 

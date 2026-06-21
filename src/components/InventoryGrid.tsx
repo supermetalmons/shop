@@ -26,6 +26,7 @@ type InventoryGridSharedProps = {
   revealLoadingId?: string | null;
   revealDisabled?: boolean;
   emptyStateVisibility?: 'visible' | 'hidden' | 'none';
+  emptyStateContent?: string;
   figureMediaMode?: 'background' | 'image';
 };
 
@@ -387,6 +388,7 @@ export function InventoryGrid({
   revealLoadingId,
   revealDisabled,
   emptyStateVisibility = 'visible',
+  emptyStateContent = 'No items yet.',
   figureMediaMode = 'background',
 }: InventoryGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -499,7 +501,7 @@ export function InventoryGrid({
     const isHidden = emptyStateVisibility === 'hidden';
     return (
       <div className={`muted small${isHidden ? ' empty-state--hidden' : ''}`} aria-hidden={isHidden}>
-        No items yet.
+        {emptyStateContent}
       </div>
     );
   }

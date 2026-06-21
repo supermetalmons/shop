@@ -1887,6 +1887,7 @@ function App({ currentPath }: AppProps) {
   const [shipmentsReady, setShipmentsReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
   const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
+  const [pendingClaimSignIn, setPendingClaimSignIn] = useState(false);
   const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
   const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
   const [stripeCheckoutHistoryNow, setStripeCheckoutHistoryNow] = useState(() => Date.now());
@@ -2378,6 +2379,26 @@ function App({ currentPath }: AppProps) {
     if (!pendingHeaderWalletSignIn || walletModalVisible || publicKey || wallet.connecting) return;
     setPendingHeaderWalletSignIn(false);
   }, [pendingHeaderWalletSignIn, publicKey, wallet.connecting, walletModalVisible]);
+
+  useEffect(() => {
+    if (!pendingClaimSignIn || !publicKey) return;
+    if (isSignedInWallet) {
+      setPendingClaimSignIn(false);
+      return;
+    }
+    if (!authReady || authLoading) return;
+    setPendingClaimSignIn(false);
+    void ensureSignedIn();
+  }, [authLoading, authReady, isSignedInWallet, pendingClaimSignIn, publicKey]);
+
+  useEffect(() => {
+    if (!pendingClaimSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    setPendingClaimSignIn(false);
+  }, [pendingClaimSignIn, publicKey, wallet.connecting, walletModalVisible]);
+
+  useEffect(() => {
+    if (!claimOpen) setPendingClaimSignIn(false);
+  }, [claimOpen]);
 
   useEffect(() => {
     if (isSignedInWallet) {
@@ -3106,7 +3127,6 @@ function App({ currentPath }: AppProps) {
     }
     setSelected(new Set());
     setDeliveryOpen(false);
-    setClaimOpen(false);
   }, [closeRevealOverlay, connectedWallet, discardRevealOverlay, owner]);
 
   useEffect(() => {
@@ -4988,13 +5008,11 @@ function App({ currentPath }: AppProps) {
   };
 
   const handleClaim = async ({ code }: { code: string }) => {
-    if (blockViewerModeAction()) return;
-    if (!publicKey) throw new Error('Connect wallet to claim');
+    if (blockViewerModeAction()) return { deferred: true };
+    if (!publicKey) setPendingClaimSignIn(true);
+    const signedIn = await ensureSignedIn();
+    if (!signedIn || !publicKey) return { deferred: true };
     const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
-    // Ensure wallet session exists for authenticated callable.
-    if (!isSignedInWallet) {
-      await signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined);
-    }
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
     let claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
@@ -5161,6 +5179,19 @@ function App({ currentPath }: AppProps) {
       : 'hidden';
   const shipmentsContentVisible =
     shipmentsReady && (deliveryOrders.length > 0 || shipmentsEmptyStateVisibility === 'visible');
+  const shipmentsLookupPendingForReceipts =
+    (!viewedProfile && profileLoadingForView) ||
+    (anonymousStripeHistoryVisible &&
+      (anonymousStripeHistoryInitialLoading || anonymousStripeHistoryWaitingForFulfillment));
+  const shipmentsLookupFailedForReceipts =
+    Boolean(!viewedProfile && viewedProfileError) ||
+    Boolean(anonymousStripeHistoryVisible && !anonymousStripeHistoryHasOrders && anonymousStripeHistoryError);
+  const receiptsContentVisible =
+    shipmentsReady &&
+    (deliveryOrders.length > 0 ||
+      (shipmentsEmptyStateVisibility === 'visible' &&
+        !shipmentsLookupPendingForReceipts &&
+        !shipmentsLookupFailedForReceipts));
   const closeClaimModal = useCallback(() => {
     setClaimOpen(false);
   }, []);
@@ -5172,11 +5203,6 @@ function App({ currentPath }: AppProps) {
     }
     setShipmentsReady(true);
   }, [inventoryReadyForShipments]);
-  useEffect(() => {
-    if (!deliveryOrders.length) {
-      setClaimOpen(false);
-    }
-  }, [deliveryOrders.length]);
   useEffect(() => {
     if (!shipmentFigureTargetsNeedingMetadata.length) return;
     if (typeof window === 'undefined') return;
@@ -6064,32 +6090,33 @@ function App({ currentPath }: AppProps) {
         )}
       </section>
 
-      {receiptItems.length && shipmentsContentVisible ? (
-        <section className="app-section receipts-section">
-          <div className="app-section__head receipts-section__head">
-            <div className="app-section__title">Receipts</div>
-            <div className="app-section__actions">
-              <button
-                type="button"
-                className="receipts-section__code-button"
-                onClick={() => {
-                  if (blockViewerModeAction()) return;
-                  setClaimOpen(true);
-                }}
-              >
-                Enter code
-              </button>
-            </div>
+      <section className="app-section receipts-section">
+        <div className="app-section__head receipts-section__head">
+          <div className="app-section__title">Receipts</div>
+          <div className="app-section__actions">
+            <button
+              type="button"
+              className="receipts-section__code-button"
+              onClick={() => {
+                if (blockViewerModeAction()) return;
+                setClaimOpen(true);
+              }}
+            >
+              Enter code
+            </button>
           </div>
+        </div>
+        {receiptsContentVisible ? (
           <InventoryGrid
             items={receiptItems}
             selected={selected}
             onToggle={toggleSelected}
             onViewItem={openReceiptImageViewer}
             className="inventory--receipts"
+            emptyStateContent="No receipts yet."
           />
-        </section>
-      ) : null}
+        ) : null}
+      </section>
 
       {selectedCount ? (
         <div className="selection-panel">

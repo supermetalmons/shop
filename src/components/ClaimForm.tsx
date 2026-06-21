@@ -4,6 +4,7 @@ type ClaimFormResult = {
   itemsPerBox?: number;
   boxNamePrefix?: string;
   figureNamePrefix?: string;
+  deferred?: boolean;
 };
 
 interface ClaimFormProps {
@@ -98,6 +99,7 @@ export function ClaimForm({
     setSuccess(null);
     try {
       const result = await onClaim({ code: code.trim() });
+      if (result?.deferred) return;
       if (onSuccess) {
         onSuccess();
       } else {
