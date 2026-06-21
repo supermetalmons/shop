@@ -112,40 +112,6 @@ body.wip-scroll-lock #root {
   max-width: 1120px;
 }
 
-.route-loading-page {
-  min-height: 100vh;
-  min-height: 100svh;
-  align-items: center;
-  justify-content: center;
-}
-
-.route-loading-indicator {
-  width: 42px;
-  height: 2px;
-  border-radius: 999px;
-  background: rgba(60, 60, 67, 0.32);
-  animation: route-loading-pulse 900ms ease-in-out infinite;
-}
-
-@keyframes route-loading-pulse {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: scaleX(0.62);
-  }
-
-  50% {
-    opacity: 0.9;
-    transform: scaleX(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .route-loading-indicator {
-    animation: none;
-  }
-}
-
 .drop-page-frame,
 .app-section,
 .toast {
@@ -3733,7 +3699,7 @@ button.fulfillment-more-button {
   height: 44px;
   padding: 0;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: none;
   background: var(--surface);
   color: var(--muted);
   display: inline-flex;
@@ -3900,18 +3866,22 @@ button.fulfillment-export-menu__item:focus-visible {
 
 @media (max-width: 560px) {
   .row.fulfillment-orders-toolbar {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    gap: 8px;
   }
 
   .fulfillment-orders-toolbar > .fulfillment-drop-picker:not(.fulfillment-orders-filter-picker) {
-    flex: 1 1 100%;
+    flex: 1 1 0;
+    max-width: none;
   }
 
   .fulfillment-orders-filter-picker {
-    margin-left: 0;
+    flex: 0 1 auto;
+    max-width: min(44vw, 220px);
   }
 
   .fulfillment-toolbar-actions {
+    gap: 6px;
     margin-left: auto;
   }
 

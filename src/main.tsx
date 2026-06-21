@@ -91,14 +91,6 @@ type RoutedContentProps = {
   path: string;
 };
 
-function RouteFallback() {
-  return (
-    <div className="page route-loading-page" aria-label="Loading" aria-busy="true">
-      <div className="route-loading-indicator" aria-hidden="true" />
-    </div>
-  );
-}
-
 function RoutedContent({ path }: RoutedContentProps) {
   const isDrifRoute = drifPaths.has(path);
   const isWipRoute = path === '/wip';
@@ -109,7 +101,7 @@ function RoutedContent({ path }: RoutedContentProps) {
 
   if (isDrifRoute) {
     return (
-      <React.Suspense fallback={<RouteFallback />}>
+      <React.Suspense fallback={null}>
         <DrifApp />
       </React.Suspense>
     );
@@ -117,7 +109,7 @@ function RoutedContent({ path }: RoutedContentProps) {
 
   if (isFulfillmentRoute) {
     return (
-      <React.Suspense fallback={<RouteFallback />}>
+      <React.Suspense fallback={null}>
         <FulfillmentRoute />
       </React.Suspense>
     );
@@ -125,7 +117,7 @@ function RoutedContent({ path }: RoutedContentProps) {
 
   if (isCardNft2UnrevealedRoute) {
     return (
-      <React.Suspense fallback={<RouteFallback />}>
+      <React.Suspense fallback={null}>
         <CardNft2UnrevealedApp />
       </React.Suspense>
     );
