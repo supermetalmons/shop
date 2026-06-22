@@ -1503,9 +1503,10 @@ async function recoverConnectionSendError(
 
 type AppProps = {
   currentPath?: string;
+  claimDeepLinkCode?: string | null;
 };
 
-function App({ currentPath }: AppProps) {
+function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
@@ -1925,6 +1926,8 @@ function App({ currentPath }: AppProps) {
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
+  const [claimInitialCode, setClaimInitialCode] = useState('');
+  const [claimOpenedFromDeepLink, setClaimOpenedFromDeepLink] = useState(false);
   const [discountUsedCount, setDiscountUsedCount] = useState<number>(() =>
     loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet),
   );
@@ -2399,6 +2402,20 @@ function App({ currentPath }: AppProps) {
   useEffect(() => {
     if (!claimOpen) setPendingClaimSignIn(false);
   }, [claimOpen]);
+
+  useEffect(() => {
+    if (claimDeepLinkCode === null) return;
+    setClaimInitialCode(claimDeepLinkCode);
+    setClaimOpenedFromDeepLink(true);
+    setClaimOpen(true);
+  }, [claimDeepLinkCode]);
+
+  useEffect(() => {
+    if (claimDeepLinkCode !== null || !claimOpenedFromDeepLink) return;
+    setClaimOpenedFromDeepLink(false);
+    setClaimInitialCode('');
+    setClaimOpen(false);
+  }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
 
   useEffect(() => {
     if (isSignedInWallet) {
@@ -5194,7 +5211,12 @@ function App({ currentPath }: AppProps) {
         !shipmentsLookupFailedForReceipts));
   const closeClaimModal = useCallback(() => {
     setClaimOpen(false);
-  }, []);
+    setClaimInitialCode('');
+    setClaimOpenedFromDeepLink(false);
+    if (claimOpenedFromDeepLink || claimDeepLinkCode !== null) {
+      navigate('/', { replace: true });
+    }
+  }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
 
   useEffect(() => {
     if (!inventoryReadyForShipments) {
@@ -6045,6 +6067,7 @@ function App({ currentPath }: AppProps) {
           itemsPerBox={routeDrop?.itemsPerBox}
           boxNamePrefix={routeDrop?.namePrefix}
           figureNamePrefix={routeDrop?.figureNamePrefix}
+          initialCode={claimInitialCode}
         />
       </Modal>
 
@@ -6099,6 +6122,8 @@ function App({ currentPath }: AppProps) {
               className="receipts-section__code-button"
               onClick={() => {
                 if (blockViewerModeAction()) return;
+                setClaimInitialCode('');
+                setClaimOpenedFromDeepLink(false);
                 setClaimOpen(true);
               }}
             >

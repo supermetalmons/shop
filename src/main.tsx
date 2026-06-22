@@ -22,6 +22,7 @@ const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
 const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
+const canonicalClaimPath = '/claim';
 const drifPaths = new Set([canonicalDrifPath]);
 const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));
 const DrifApp = React.lazy(() => import('./DrifApp'));
@@ -37,12 +38,24 @@ const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
   '/fullfillment': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
   '/notify-me': { targetPath: canonicalDrifPath, replaceUrl: true },
+  [canonicalClaimPath]: { targetPath: '/', replaceUrl: false },
 };
 
-const resolveCurrentPath = (): string => {
+type CurrentRoute = {
+  path: string;
+  claimDeepLinkCode: string | null;
+};
+
+const claimDeepLinkCodeFromSearch = (): string => new URLSearchParams(window.location.search).get('code') ?? '';
+
+const routesEqual = (a: CurrentRoute, b: CurrentRoute): boolean =>
+  a.path === b.path && a.claimDeepLinkCode === b.claimDeepLinkCode;
+
+const resolveCurrentRoute = (): CurrentRoute => {
   const path = getNormalizedPathname();
   const alias = ROUTE_ALIASES[path];
   const normalizedPath = alias ? alias.targetPath : path;
+  const claimDeepLinkCode = path === canonicalClaimPath ? claimDeepLinkCodeFromSearch() : null;
 
   if (alias?.replaceUrl) {
     const search = window.location.search || '';
@@ -59,39 +72,43 @@ const resolveCurrentPath = (): string => {
     resolveUpcomingDropRouteByPath(normalizedPath) ||
     resolveFrontendDropByPath(normalizedPath)
   ) {
-    return normalizedPath;
+    return { path: normalizedPath, claimDeepLinkCode };
   }
 
   const search = window.location.search || '';
   const hash = window.location.hash || '';
   window.history.replaceState(window.history.state, '', `/${search}${hash}`);
-  return '/';
+  return { path: '/', claimDeepLinkCode: null };
 };
 
 function RoutedApp() {
-  const [path, setPath] = React.useState(() => resolveCurrentPath());
+  const [route, setRoute] = React.useState(() => resolveCurrentRoute());
 
   React.useEffect(() => {
     const handleNavigation = () => {
-      setPath(resolveCurrentPath());
+      const nextRoute = resolveCurrentRoute();
+      setRoute((currentRoute) => {
+        return routesEqual(currentRoute, nextRoute) ? currentRoute : nextRoute;
+      });
     };
 
     return subscribeToNavigation(handleNavigation);
   }, []);
 
   React.useEffect(() => {
-    if (drifPaths.has(path)) return;
+    if (drifPaths.has(route.path)) return;
     document.body.classList.remove('drif-body');
-  }, [path]);
+  }, [route.path]);
 
-  return <RoutedContent path={path} />;
+  return <RoutedContent route={route} />;
 }
 
 type RoutedContentProps = {
-  path: string;
+  route: CurrentRoute;
 };
 
-function RoutedContent({ path }: RoutedContentProps) {
+function RoutedContent({ route }: RoutedContentProps) {
+  const { path } = route;
   const isDrifRoute = drifPaths.has(path);
   const isWipRoute = path === '/wip';
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
@@ -127,6 +144,7 @@ function RoutedContent({ path }: RoutedContentProps) {
     <ShopRoute
       cluster={routeDrop?.solanaCluster || upcomingRoute?.solanaCluster || NEUTRAL_WALLET_CLUSTER}
       currentPath={path}
+      claimDeepLinkCode={route.claimDeepLinkCode}
       isWipRoute={isWipRoute}
     />
   );

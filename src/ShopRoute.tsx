@@ -8,13 +8,14 @@ const WipApp = React.lazy(() => import('./WipApp'));
 type ShopRouteProps = {
   cluster: SolanaCluster;
   currentPath: string;
+  claimDeepLinkCode?: string | null;
   isWipRoute?: boolean;
 };
 
-export default function ShopRoute({ cluster, currentPath, isWipRoute = false }: ShopRouteProps) {
+export default function ShopRoute({ cluster, currentPath, claimDeepLinkCode = null, isWipRoute = false }: ShopRouteProps) {
   return (
     <WalletContextProvider cluster={cluster}>
-      <App currentPath={isWipRoute ? '/' : currentPath} />
+      <App currentPath={isWipRoute ? '/' : currentPath} claimDeepLinkCode={claimDeepLinkCode} />
       {isWipRoute ? (
         <React.Suspense fallback={null}>
           <WipApp />

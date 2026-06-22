@@ -16,6 +16,7 @@ interface ClaimFormProps {
   itemsPerBox?: number;
   boxNamePrefix?: string;
   figureNamePrefix?: string;
+  initialCode?: string;
 }
 
 function resolveReceiptWord(value: string | undefined, fallback: string): string {
@@ -46,16 +47,23 @@ export function ClaimForm({
   itemsPerBox,
   boxNamePrefix,
   figureNamePrefix,
+  initialCode = '',
 }: ClaimFormProps) {
   const codeInputRef = useRef<HTMLInputElement | null>(null);
   const shouldAutoFocusCodeInput = shouldAutoFocusClaimCodeInput();
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState(initialCode);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const figuresPerBox = normalizeItemsPerBoxCount(itemsPerBox);
   const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
   const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, 'figure');
+
+  useEffect(() => {
+    setCode(initialCode);
+    setError(null);
+    setSuccess(null);
+  }, [initialCode]);
 
   useEffect(() => {
     if (!onDismiss) return;
@@ -121,10 +129,7 @@ export function ClaimForm({
           autoFocus={shouldAutoFocusCodeInput}
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="10 digits"
-          inputMode="numeric"
-          pattern="[0-9]{10}"
-          maxLength={10}
+          placeholder="Code"
           required
         />
       </label>
