@@ -3,10 +3,14 @@ import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraConte
 import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox } from '../types';
 import type { FigureMetadataRecord } from './figureMetadata';
 import { fulfillmentBoxSecretCode } from './fulfillmentCodes';
-import { resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
+import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from './shipping';
 import { findCountryByCode } from './countries';
-import { resolveFulfillmentDirectDeliveryBoxLabel, resolveFulfillmentFigureLabel } from './fulfillmentLabels';
+import {
+  resolveFulfillmentDirectDeliveryBoxLabel,
+  resolveFulfillmentFigureLabel,
+  resolveFulfillmentFigurePreview,
+} from './fulfillmentLabels';
 
 export type FulfillmentExportBox = {
   secretCode?: string;
@@ -28,6 +32,10 @@ export type FulfillmentAddressExportEntry = {
   phone?: string;
 };
 
+export type FulfillmentSecretCodePreviewImage = {
+  src: string;
+};
+
 export type FulfillmentSecretCodeExportEntry = {
   orderId: string;
   boxId: number;
@@ -35,12 +43,16 @@ export type FulfillmentSecretCodeExportEntry = {
   secretCode: string;
   claimUrl: string;
   filename: string;
+  previewImages?: FulfillmentSecretCodePreviewImage[];
 };
 
-export type FulfillmentOrdersExportOptions = {
+export type FulfillmentExportOptions = {
   dropById: ReadonlyMap<string, FrontendDeploymentConfig>;
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
 };
+
+export type FulfillmentOrdersExportOptions = FulfillmentExportOptions;
+export type FulfillmentSecretCodeExportOptions = FulfillmentExportOptions;
 
 export type FulfillmentExportFilenameKind = 'orders' | 'addresses-sensitive' | 'secret-codes';
 
@@ -235,6 +247,13 @@ export function buildFulfillmentAddressExport(orders: FulfillmentOrder[]): Recor
   );
 }
 
+export function countFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder[]): number {
+  return orders.reduce(
+    (total, order) => total + order.boxes.reduce((boxTotal, box) => boxTotal + (fulfillmentBoxSecretCode(box) ? 1 : 0), 0),
+    0,
+  );
+}
+
 function uniqueFilename(filename: string, usedFilenames: Set<string>): string {
   if (!usedFilenames.has(filename)) {
     usedFilenames.add(filename);
@@ -253,9 +272,62 @@ function uniqueFilename(filename: string, usedFilenames: Set<string>): string {
   return nextFilename;
 }
 
-export function buildFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder[]): FulfillmentSecretCodeExportEntry[] {
+function buildSecretCodePreviewImages(args: {
+  dropId: string;
+  drop: FrontendDeploymentConfig | null;
+  previewMode: DropFigureFulfillmentPreviewMode;
+  box: FulfillmentOrderBox;
+  figureMetadataByKey?: Record<string, FigureMetadataRecord>;
+}): FulfillmentSecretCodePreviewImage[] {
+  const isDirectDelivery = isDirectDeliveryItemsPerBox(args.drop?.itemsPerBox);
+  const boxId = normalizePositiveInteger(args.box.boxId);
+  if (isDirectDelivery) {
+    if (!boxId) {
+      throw new Error(`Missing direct-delivery box id for secret code preview: ${args.dropId}`);
+    }
+    const src = normalizeBoxDisplayImage({ dropId: args.dropId, boxId });
+    if (!src) {
+      throw new Error(`Missing direct-delivery preview image for secret code preview: ${args.dropId} box ${boxId}`);
+    }
+    return [{ src }];
+  }
+
+  if (!args.box.dudeIds.length) {
+    throw new Error(`Missing assigned figures for secret code preview: ${args.dropId} box ${args.box.boxId}`);
+  }
+
+  const figureMediaBase = resolveDropContent(args.drop || args.dropId).figures.fulfillmentMediaBaseUrl;
+  return args.box.dudeIds.map((figureIdRaw, index) => {
+    const figureId = normalizePositiveInteger(figureIdRaw);
+    if (!figureId) {
+      throw new Error(`Missing figure id for secret code preview: ${args.dropId} box ${args.box.boxId}`);
+    }
+
+    const preview = resolveFulfillmentFigurePreview({
+      dropId: args.dropId,
+      drop: args.drop,
+      figureId,
+      index,
+      previewMode: args.previewMode,
+      figureMediaBase,
+      figureMetadataByKey: args.figureMetadataByKey,
+    });
+    if (!preview.imageSrc) {
+      throw new Error(`Missing figure preview image for secret code preview: ${args.dropId} figure ${figureId}`);
+    }
+
+    return { src: preview.imageSrc };
+  });
+}
+
+export function buildFulfillmentSecretCodeExportEntries(
+  orders: FulfillmentOrder[],
+  options?: FulfillmentSecretCodeExportOptions,
+): FulfillmentSecretCodeExportEntry[] {
   const usedFilenames = new Set<string>();
   return orders.flatMap((order) => {
+    const drop = options?.dropById.get(order.dropId) || null;
+    const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;
     const orderId = fulfillmentExportOrderId(order);
     let secretCodeIndex = 0;
     return order.boxes.flatMap((box, boxIndex) => {
@@ -265,6 +337,15 @@ export function buildFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder
       secretCodeIndex += 1;
       const orderSegment = sanitizeFilenameSegment(String(order.deliveryId), 'order');
       const filename = uniqueFilename(`${orderSegment}-${secretCodeIndex}.png`, usedFilenames);
+      const previewImages = options
+        ? buildSecretCodePreviewImages({
+            dropId: order.dropId,
+            drop,
+            previewMode,
+            box,
+            figureMetadataByKey: options.figureMetadataByKey,
+          })
+        : [];
 
       return [
         {
@@ -274,6 +355,7 @@ export function buildFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder
           secretCode,
           claimUrl: fulfillmentSecretCodeClaimUrl(secretCode),
           filename,
+          ...(previewImages.length ? { previewImages } : {}),
         },
       ];
     });

@@ -7,6 +7,8 @@ import {
   buildFulfillmentOrdersExport,
   buildFulfillmentSecretCodeExportEntries,
 } from '../src/lib/fulfillmentExports.ts';
+import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
+import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
 import type { FulfillmentOrder } from '../src/types.ts';
 
 const cardDrop = FRONTEND_DROPS.card_nft_2;
@@ -240,6 +242,108 @@ test('buildFulfillmentSecretCodeExportEntries maps box secret codes to png jobs'
       filename: '7-2.png',
     },
   ]);
+});
+
+test('buildFulfillmentSecretCodeExportEntries adds direct-delivery box preview images', () => {
+  const previewSrc = normalizeBoxDisplayImage({ dropId: hoodieDrop.dropId, boxId: 16 });
+  assert.ok(previewSrc);
+
+  const entries = buildFulfillmentSecretCodeExportEntries(
+    [
+      cardOrder({
+        dropId: hoodieDrop.dropId,
+        deliveryId: 8,
+        boxes: [{ boxId: 16, claimCode: 'HOODIE-SECRET', dudeIds: [99] }],
+        looseDudes: [],
+      }),
+    ],
+    { dropById },
+  );
+
+  assert.deepEqual(entries[0].previewImages, [{ src: previewSrc }]);
+});
+
+test('buildFulfillmentSecretCodeExportEntries maps pack item ids to fulfillment media previews', () => {
+  const entries = buildFulfillmentSecretCodeExportEntries(
+    [
+      cardOrder({
+        dropId: littleSwagBoxesDrop.dropId,
+        boxes: [
+          {
+            boxId: 11,
+            receiptClaimCode: 'LSB-SECRET-1',
+            dudeIds: [344, 353, 360],
+          },
+        ],
+        looseDudes: [],
+      }),
+    ],
+    { dropById },
+  );
+
+  assert.deepEqual(entries[0].previewImages, [
+    { src: 'https://assets.mons.link/drops/lsb/figures/clean/1.webp' },
+    { src: 'https://assets.mons.link/drops/lsb/figures/clean/90.webp' },
+    { src: 'https://assets.mons.link/drops/lsb/figures/clean/3.webp' },
+  ]);
+});
+
+test('buildFulfillmentSecretCodeExportEntries uses metadata-backed card preview images', () => {
+  const figureMetadataByKey = {
+    [figureMetadataCacheKey(cardDrop.dropId, 101)]: {
+      dropId: cardDrop.dropId,
+      id: 101,
+      image: 'https://assets.example.com/card-101.webp',
+    },
+    [figureMetadataCacheKey(cardDrop.dropId, 102)]: {
+      dropId: cardDrop.dropId,
+      id: 102,
+      image: 'https://assets.example.com/card-102.webp',
+    },
+  };
+
+  const entries = buildFulfillmentSecretCodeExportEntries(
+    [
+      cardOrder({
+        boxes: [
+          {
+            boxId: 11,
+            receiptClaimCode: 'PACK-SECRET-1',
+            dudeIds: [101, 102],
+          },
+        ],
+        looseDudes: [],
+      }),
+    ],
+    { dropById, figureMetadataByKey },
+  );
+
+  assert.deepEqual(entries[0].previewImages, [
+    { src: 'https://assets.example.com/card-101.webp' },
+    { src: 'https://assets.example.com/card-102.webp' },
+  ]);
+});
+
+test('buildFulfillmentSecretCodeExportEntries requires metadata-backed card preview images when export options are provided', () => {
+  assert.throws(
+    () =>
+      buildFulfillmentSecretCodeExportEntries(
+        [
+          cardOrder({
+            boxes: [
+              {
+                boxId: 11,
+                receiptClaimCode: 'PACK-SECRET-1',
+                dudeIds: [101],
+              },
+            ],
+            looseDudes: [],
+          }),
+        ],
+        { dropById },
+      ),
+    /Missing figure preview image/,
+  );
 });
 
 test('buildFulfillmentSecretCodeExportEntries omits blank codes and numbers nonblank codes within each order', () => {

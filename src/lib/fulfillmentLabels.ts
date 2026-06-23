@@ -2,7 +2,8 @@ import type { FrontendDeploymentConfig } from '../config/deployment';
 import { isDropFamily } from '../config/deployment';
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
 import { getMediaIdForFigureId } from './figureMediaMap';
-import { figureMetadataCacheKey, getCachedFigureMetadata, type FigureMetadataRecord } from './figureMetadata';
+import { figureMetadataCacheKey, figureMetadataHasImage, getCachedFigureMetadata, type FigureMetadataRecord } from './figureMetadata';
+import { joinDropAssetUrl } from './dropContent';
 import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './dropLabels';
 
 type FulfillmentLabelSource =
@@ -22,6 +23,13 @@ export type FulfillmentFigureLabelOverrideArgs = {
 export type FulfillmentFigureLabel = FulfillmentFigureLabelOverrideArgs & {
   label: string;
   metadata?: FigureMetadataRecord;
+};
+
+export type FulfillmentFigurePreview = FulfillmentFigureLabel & {
+  primarySrc?: string;
+  fallbackSrc?: string;
+  imageSrc?: string;
+  alt: string;
 };
 
 export function resolveFulfillmentFigureLabel(args: {
@@ -55,6 +63,36 @@ export function resolveFulfillmentFigureLabel(args: {
     ...overrideArgs,
     label: args.labelOverride?.(overrideArgs) || defaultLabel,
     ...(metadata ? { metadata } : {}),
+  };
+}
+
+export function resolveFulfillmentFigurePreview(args: {
+  dropId: string;
+  drop?: FulfillmentLabelSource;
+  figureId: number;
+  index?: number;
+  previewMode: DropFigureFulfillmentPreviewMode;
+  figureMediaBase?: string;
+  figureMetadataByKey?: Record<string, FigureMetadataRecord>;
+  labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
+}): FulfillmentFigurePreview {
+  const resolved = resolveFulfillmentFigureLabel(args);
+  const fallbackSrc = figureMetadataHasImage(resolved.metadata) ? resolved.metadata.image : undefined;
+  if (args.previewMode === 'media_map_folder') {
+    const primarySrc = resolved.mediaId ? joinDropAssetUrl(args.figureMediaBase, `${resolved.mediaId}.webp`) : undefined;
+    return {
+      ...resolved,
+      ...(primarySrc ? { primarySrc } : {}),
+      ...(fallbackSrc ? { fallbackSrc } : {}),
+      ...(primarySrc || fallbackSrc ? { imageSrc: primarySrc || fallbackSrc } : {}),
+      alt: resolved.mediaId ? `Media ${resolved.mediaId}` : resolved.fallbackName,
+    };
+  }
+
+  return {
+    ...resolved,
+    ...(fallbackSrc ? { fallbackSrc, imageSrc: fallbackSrc } : {}),
+    alt: resolved.fallbackName,
   };
 }
 
