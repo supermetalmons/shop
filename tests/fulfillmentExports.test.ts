@@ -5,6 +5,7 @@ import {
   buildFulfillmentAddressExport,
   buildFulfillmentExportFilename,
   buildFulfillmentOrdersExport,
+  buildFulfillmentSecretCodeExportEntries,
 } from '../src/lib/fulfillmentExports.ts';
 import type { FulfillmentOrder } from '../src/types.ts';
 
@@ -202,6 +203,75 @@ test('buildFulfillmentAddressExport maps unique order ids to sensitive address c
   assert.doesNotMatch(JSON.stringify(sensitivePayload), /\\n/);
 });
 
+test('buildFulfillmentSecretCodeExportEntries maps box secret codes to png jobs', () => {
+  const entries = buildFulfillmentSecretCodeExportEntries([
+    cardOrder({
+      boxes: [
+        {
+          boxId: 11,
+          claimCode: 'legacy-code',
+          receiptClaimCode: 'PACK-SECRET-1',
+          dudeIds: [],
+        },
+        {
+          boxId: 12,
+          claimCode: 'A/B C',
+          dudeIds: [],
+        },
+      ],
+    }),
+  ]);
+
+  assert.deepEqual(entries, [
+    {
+      orderId: 'card_nft_2:7',
+      boxId: 11,
+      boxIndex: 0,
+      secretCode: 'PACK-SECRET-1',
+      claimUrl: 'https://mons.shop/claim/?code=PACK-SECRET-1',
+      filename: '7-1.png',
+    },
+    {
+      orderId: 'card_nft_2:7',
+      boxId: 12,
+      boxIndex: 1,
+      secretCode: 'A/B C',
+      claimUrl: 'https://mons.shop/claim/?code=A%2FB%20C',
+      filename: '7-2.png',
+    },
+  ]);
+});
+
+test('buildFulfillmentSecretCodeExportEntries omits blank codes and numbers nonblank codes within each order', () => {
+  const entries = buildFulfillmentSecretCodeExportEntries([
+    cardOrder({
+      boxes: [
+        { boxId: 11, receiptClaimCode: '   ', claimCode: '   ', dudeIds: [] },
+        { boxId: 12, receiptClaimCode: 'SAME-SECRET', dudeIds: [] },
+        { boxId: 12, receiptClaimCode: 'SAME-SECRET', dudeIds: [] },
+      ],
+    }),
+  ]);
+
+  assert.deepEqual(
+    entries.map((entry) => entry.filename),
+    ['7-1.png', '7-2.png'],
+  );
+  assert.deepEqual(entries.map((entry) => entry.secretCode), ['SAME-SECRET', 'SAME-SECRET']);
+});
+
+test('buildFulfillmentSecretCodeExportEntries keeps duplicate order-number filenames unique', () => {
+  const entries = buildFulfillmentSecretCodeExportEntries([
+    cardOrder({ boxes: [{ boxId: 11, receiptClaimCode: 'FIRST', dudeIds: [] }] }),
+    cardOrder({ boxes: [{ boxId: 12, receiptClaimCode: 'SECOND', dudeIds: [] }] }),
+  ]);
+
+  assert.deepEqual(
+    entries.map((entry) => entry.filename),
+    ['7-1.png', '7-1-2.png'],
+  );
+});
+
 test('buildFulfillmentExportFilename includes kind, selection, status, and date', () => {
   assert.equal(
     buildFulfillmentExportFilename({
@@ -221,5 +291,15 @@ test('buildFulfillmentExportFilename includes kind, selection, status, and date'
       now: new Date('2026-06-19T12:00:00Z'),
     }),
     'addresses-SENSITIVE-all-drops-not-shipped-2026-06-19.json',
+  );
+
+  assert.equal(
+    buildFulfillmentExportFilename({
+      kind: 'secret-codes',
+      selectedDropId: 'little_swag_hoodies',
+      orderVisibilityFilter: 'not_shipped',
+      now: new Date('2026-06-19T12:00:00Z'),
+    }),
+    'secret-codes-little-swag-hoodies-not-shipped-2026-06-19.zip',
   );
 });

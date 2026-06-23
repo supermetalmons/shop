@@ -3769,6 +3769,49 @@ button.fulfillment-export-menu__item:focus-visible {
   outline: none;
 }
 
+.fulfillment-export-progress {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.fulfillment-export-progress__panel {
+  width: min(320px, 100%);
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.14);
+  color: var(--fg);
+  text-align: center;
+}
+
+.fulfillment-export-progress__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.fulfillment-export-progress__percent {
+  margin-top: 8px;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fulfillment-export-progress {
+    background: rgba(0, 0, 0, 0.58);
+  }
+}
+
 .manual-review-menu {
   position: absolute;
   top: calc(100% + 8px);

@@ -28,12 +28,21 @@ export type FulfillmentAddressExportEntry = {
   phone?: string;
 };
 
+export type FulfillmentSecretCodeExportEntry = {
+  orderId: string;
+  boxId: number;
+  boxIndex: number;
+  secretCode: string;
+  claimUrl: string;
+  filename: string;
+};
+
 export type FulfillmentOrdersExportOptions = {
   dropById: ReadonlyMap<string, FrontendDeploymentConfig>;
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
 };
 
-export type FulfillmentExportFilenameKind = 'orders' | 'addresses-sensitive';
+export type FulfillmentExportFilenameKind = 'orders' | 'addresses-sensitive' | 'secret-codes';
 
 function normalizeOptionalString(value: unknown): string | undefined {
   const normalized = String(value ?? '').trim();
@@ -48,6 +57,10 @@ function normalizePositiveInteger(value: unknown): number | null {
 
 export function fulfillmentExportOrderId(order: Pick<FulfillmentOrder, 'dropId' | 'deliveryId'>): string {
   return `${order.dropId}:${order.deliveryId}`;
+}
+
+export function fulfillmentSecretCodeClaimUrl(secretCode: string): string {
+  return `https://mons.shop/claim/?code=${encodeURIComponent(secretCode)}`;
 }
 
 export function formatFulfillmentCountry(country?: string, countryCode?: string): string {
@@ -222,6 +235,51 @@ export function buildFulfillmentAddressExport(orders: FulfillmentOrder[]): Recor
   );
 }
 
+function uniqueFilename(filename: string, usedFilenames: Set<string>): string {
+  if (!usedFilenames.has(filename)) {
+    usedFilenames.add(filename);
+    return filename;
+  }
+
+  const dotIndex = filename.lastIndexOf('.');
+  const basename = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
+  const extension = dotIndex > 0 ? filename.slice(dotIndex) : '';
+  let index = 2;
+  while (usedFilenames.has(`${basename}-${index}${extension}`)) {
+    index += 1;
+  }
+  const nextFilename = `${basename}-${index}${extension}`;
+  usedFilenames.add(nextFilename);
+  return nextFilename;
+}
+
+export function buildFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder[]): FulfillmentSecretCodeExportEntry[] {
+  const usedFilenames = new Set<string>();
+  return orders.flatMap((order) => {
+    const orderId = fulfillmentExportOrderId(order);
+    let secretCodeIndex = 0;
+    return order.boxes.flatMap((box, boxIndex) => {
+      const secretCode = fulfillmentBoxSecretCode(box);
+      if (!secretCode) return [];
+
+      secretCodeIndex += 1;
+      const orderSegment = sanitizeFilenameSegment(String(order.deliveryId), 'order');
+      const filename = uniqueFilename(`${orderSegment}-${secretCodeIndex}.png`, usedFilenames);
+
+      return [
+        {
+          orderId,
+          boxId: box.boxId,
+          boxIndex,
+          secretCode,
+          claimUrl: fulfillmentSecretCodeClaimUrl(secretCode),
+          filename,
+        },
+      ];
+    });
+  });
+}
+
 function sanitizeFilenameSegment(value: string, fallback: string): string {
   const normalized = String(value || '')
     .trim()
@@ -246,9 +304,13 @@ export function buildFulfillmentExportFilename(args: {
   orderVisibilityFilter: string;
   now?: Date;
 }): string {
-  const prefix = args.kind === 'orders' ? 'orders' : 'addresses-SENSITIVE';
+  const exportKind = {
+    orders: { prefix: 'orders', extension: 'json' },
+    'addresses-sensitive': { prefix: 'addresses-SENSITIVE', extension: 'json' },
+    'secret-codes': { prefix: 'secret-codes', extension: 'zip' },
+  }[args.kind];
   const dropSegment = sanitizeFilenameSegment(args.selectedDropId, 'all-drops');
   const statusSegment = sanitizeFilenameSegment(args.orderVisibilityFilter, 'all');
   const dateSegment = formatDateStamp(args.now || new Date());
-  return `${prefix}-${dropSegment}-${statusSegment}-${dateSegment}.json`;
+  return `${exportKind.prefix}-${dropSegment}-${statusSegment}-${dateSegment}.${exportKind.extension}`;
 }
