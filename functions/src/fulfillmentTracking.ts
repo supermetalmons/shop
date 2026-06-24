@@ -1,5 +1,5 @@
 export function sanitizeFulfillmentTrackingCode(value: unknown): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, '') : '';
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 export function normalizeOptionalFulfillmentTrackingCode(value: unknown): string | undefined {

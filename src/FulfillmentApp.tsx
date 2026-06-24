@@ -57,6 +57,7 @@ import {
 import { FULFILLMENT_STATUS_OPTIONS, normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
 import {
   normalizeOptionalFulfillmentTrackingCode,
+  resolveFulfillmentTrackingHref,
   sanitizeFulfillmentTrackingCode,
   shouldDisplayFulfillmentTrackingCode,
 } from './lib/fulfillmentTracking';
@@ -1822,10 +1823,19 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               const trackingCode = shouldDisplayFulfillmentTrackingCode(order.fulfillmentStatus, order.fulfillmentTrackingCode)
                 ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
                 : '';
+              const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
               return statusText ? (
                 <>
                   <div className="status-readout small">{statusText}</div>
-                  {trackingCode ? <div className="tracking-code-readout mono small">{trackingCode}</div> : null}
+                  {trackingCode ? (
+                    trackingHref ? (
+                      <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
+                        Tracking
+                      </a>
+                    ) : (
+                      <div className="tracking-code-readout mono small">{trackingCode}</div>
+                    )
+                  ) : null}
                 </>
               ) : (
                 <em className="muted small">Not set</em>
@@ -2169,8 +2179,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   [fulfillmentOrderKey(activeUpdateOrder)]: evt.target.value,
                 }));
               }}
-              placeholder="Tracking code"
-              aria-label="Tracking code"
+              placeholder="Tracking link"
+              aria-label="Tracking link"
               autoComplete="off"
             />
           ) : null}

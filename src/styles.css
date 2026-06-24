@@ -4194,6 +4194,17 @@ button.order-status-option:hover:not(:disabled) {
   white-space: pre-wrap;
 }
 
+.tracking-link {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.tracking-link:hover,
+.tracking-link:focus-visible {
+  text-decoration: underline;
+}
+
 .tracking-code-readout {
   color: var(--fg);
   overflow-wrap: anywhere;

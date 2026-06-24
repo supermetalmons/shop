@@ -117,7 +117,11 @@ import {
   shortAddress,
 } from './lib/solana';
 import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
-import { normalizeOptionalFulfillmentTrackingCode, shouldDisplayFulfillmentTrackingCode } from './lib/fulfillmentTracking';
+import {
+  normalizeOptionalFulfillmentTrackingCode,
+  resolveFulfillmentTrackingHref,
+  shouldDisplayFulfillmentTrackingCode,
+} from './lib/fulfillmentTracking';
 import {
   DeliveryOrderSummary,
   InventoryItem,
@@ -6088,6 +6092,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               const trackingCode = shouldShowDeliveryTrackingCode(order)
                 ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
                 : '';
+              const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
               return (
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="delivery-row__head">
@@ -6097,7 +6102,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
                     </div>
                     <div className="delivery-status">
                       <div>{displayOrderStatus(order)}</div>
-                      {trackingCode ? <div className="tracking-code-readout mono small">{trackingCode}</div> : null}
+                      {trackingCode ? (
+                        trackingHref ? (
+                          <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
+                            Tracking
+                          </a>
+                        ) : (
+                          <div className="tracking-code-readout mono small">{trackingCode}</div>
+                        )
+                      ) : null}
                     </div>
                   </div>
                   {order.items.length ? (
