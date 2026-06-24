@@ -78,6 +78,7 @@ import {
   type ResendNotificationEmailKind,
 } from './notifications.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
+import { normalizeOptionalFulfillmentTrackingCode, sanitizeFulfillmentTrackingCode } from './fulfillmentTracking.js';
 import { parseRequest } from './request.js';
 import {
   buildStripeCheckoutManualReviewSummary,
@@ -2637,6 +2638,7 @@ type DeliveryOrderSummary = {
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
   fulfillmentStatus?: FulfillmentStatus;
+  fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
 };
 
@@ -3402,6 +3404,7 @@ function toDeliveryOrderSummary(docId: string, order: any, docPath: string): Del
     processedAt: toMillisMaybe(order?.processedAt),
     items,
     fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
+    fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order?.fulfillmentTrackingCode),
     fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
   };
 }
@@ -3416,6 +3419,7 @@ const DELIVERY_ORDER_SUMMARY_FIELDS = [
   'processedAt',
   'items',
   'fulfillmentStatus',
+  'fulfillmentTrackingCode',
   'fulfillmentUpdatedAt',
 ] as const;
 
@@ -3493,6 +3497,7 @@ type FulfillmentOrder = {
   createdAt?: number;
   processedAt?: number;
   fulfillmentStatus?: FulfillmentStatus;
+  fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
   fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;
@@ -3595,6 +3600,7 @@ function toFulfillmentOrder(
     createdAt: toMillisMaybe(order?.createdAt),
     processedAt: toMillisMaybe(order?.processedAt),
     fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
+    fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order?.fulfillmentTrackingCode),
     fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
     fulfillmentInternalStatus: typeof order?.fulfillmentInternalStatus === 'string' ? order.fulfillmentInternalStatus : undefined,
     address,
@@ -4582,8 +4588,9 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
     dropId: z.string().min(1).max(64),
     deliveryId: z.number().int().positive(),
     status: z.union([z.enum(FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
+    trackingCode: z.string().optional(),
   });
-  const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
+  const { dropId: requestDropId, deliveryId, status, trackingCode } = parseRequest(schema, request.data);
   const dropId = requireDropId(requestDropId);
   const { wallet } = await requireFulfillmentDropAccess(request, dropId);
   const nextStatus = status || '';
@@ -4604,9 +4611,14 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
   } else {
     update.fulfillmentStatus = FieldValue.delete();
   }
+  let nextTrackingCode = normalizeOptionalFulfillmentTrackingCode((snap.data() as any)?.fulfillmentTrackingCode);
+  if (nextStatus === 'Shipped') {
+    nextTrackingCode = sanitizeFulfillmentTrackingCode(trackingCode);
+    update.fulfillmentTrackingCode = nextTrackingCode || FieldValue.delete();
+  }
 
   await orderRef.set(update, { merge: true });
-  return { deliveryId, fulfillmentStatus: nextStatus };
+  return { deliveryId, fulfillmentStatus: nextStatus, ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}) };
 });
 
 export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {

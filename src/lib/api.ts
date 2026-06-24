@@ -1216,11 +1216,12 @@ export async function updateFulfillmentStatus(
   deliveryId: number,
   status: FulfillmentStatus | '' | null,
   dropId: string,
-): Promise<{ deliveryId: number; fulfillmentStatus: FulfillmentStatus | '' }> {
+  trackingCode?: string,
+): Promise<{ deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }> {
   return callFunction<
-    { deliveryId: number; status: FulfillmentStatus | '' | null; dropId: string },
-    { deliveryId: number; fulfillmentStatus: FulfillmentStatus | '' }
-  >('updateFulfillmentStatus', { deliveryId, status, dropId });
+    { deliveryId: number; status: FulfillmentStatus | '' | null; dropId: string; trackingCode?: string },
+    { deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }
+  >('updateFulfillmentStatus', { deliveryId, status, dropId, ...(trackingCode != null ? { trackingCode } : {}) });
 }
 
 export async function updateFulfillmentInternalStatus(

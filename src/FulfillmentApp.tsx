@@ -56,6 +56,11 @@ import {
 } from './lib/fulfillmentLabels';
 import { FULFILLMENT_STATUS_OPTIONS, normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
 import {
+  normalizeOptionalFulfillmentTrackingCode,
+  sanitizeFulfillmentTrackingCode,
+  shouldDisplayFulfillmentTrackingCode,
+} from './lib/fulfillmentTracking';
+import {
   isDropFamily,
   listFrontendDrops,
   normalizeDropId,
@@ -943,6 +948,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [secretCodesExporting, setSecretCodesExporting] = useState(false);
   const [secretCodesExportProgress, setSecretCodesExportProgress] = useState(0);
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
+  const [trackingCodeEdits, setTrackingCodeEdits] = useState<Record<string, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const [cardViewer, setCardViewer] = useState<FulfillmentInteractiveCardViewerState | null>(null);
@@ -1137,6 +1143,16 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       });
       return next;
     });
+    setTrackingCodeEdits((prev) => {
+      const next = { ...prev };
+      incoming.forEach((order) => {
+        const key = fulfillmentOrderKey(order);
+        if (!(key in next)) {
+          next[key] = normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode) || '';
+        }
+      });
+      return next;
+    });
   }, []);
 
   const loadInitial = useCallback(async () => {
@@ -1152,6 +1168,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setManualReviewCheckouts([]);
       setManualReviewMenuOpen(false);
       setStatusEdits({});
+      setTrackingCodeEdits({});
       setStatusSaving({});
       setActiveUpdateOrderKey(null);
       return;
@@ -1168,6 +1185,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setManualReviewCheckouts([]);
     setManualReviewMenuOpen(false);
     setStatusEdits({});
+    setTrackingCodeEdits({});
     setStatusSaving({});
     setActiveUpdateOrderKey(null);
     try {
@@ -1493,15 +1511,39 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setOrdersError(null);
       try {
         const nextStatus = normalizeFulfillmentStatus(statusEdits[key]);
-        const resp = await updateFulfillmentStatus(orderToUpdate.deliveryId, nextStatus, orderToUpdate.dropId);
+        const nextTrackingCode =
+          nextStatus === 'Shipped' ? sanitizeFulfillmentTrackingCode(trackingCodeEdits[key]) : undefined;
+        const resp = await updateFulfillmentStatus(
+          orderToUpdate.deliveryId,
+          nextStatus,
+          orderToUpdate.dropId,
+          nextTrackingCode,
+        );
         if (orderRequestEpochRef.current !== requestEpoch) return false;
         const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
+        const responseTrackingCode = normalizeOptionalFulfillmentTrackingCode(resp.fulfillmentTrackingCode);
         setOrders((prev) =>
           prev.map((order) =>
-            fulfillmentOrderKey(order) === key ? { ...order, fulfillmentStatus: normalized || undefined } : order,
+            fulfillmentOrderKey(order) === key
+              ? {
+                  ...order,
+                  fulfillmentStatus: normalized || undefined,
+                  fulfillmentTrackingCode:
+                    normalized === 'Shipped'
+                      ? responseTrackingCode
+                      : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
+                }
+              : order,
           ),
         );
         setStatusEdits((prev) => ({ ...prev, [key]: normalized }));
+        setTrackingCodeEdits((prev) => ({
+          ...prev,
+          [key]:
+            normalized === 'Shipped'
+              ? responseTrackingCode || ''
+              : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(orderToUpdate.fulfillmentTrackingCode) || '',
+        }));
         return true;
       } catch (err) {
         if (orderRequestEpochRef.current !== requestEpoch) return false;
@@ -1514,7 +1556,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         }
       }
     },
-    [hasFulfillmentAccess, signedIn, statusEdits],
+    [hasFulfillmentAccess, signedIn, statusEdits, trackingCodeEdits],
   );
 
   const statusDirty = useMemo(() => {
@@ -1523,10 +1565,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       const key = fulfillmentOrderKey(order);
       const current = normalizeFulfillmentStatus(order.fulfillmentStatus);
       const edited = statusEdits[key] ?? '';
-      if (current !== edited) dirty.add(key);
+      const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode) || '';
+      const editedTrackingCode = sanitizeFulfillmentTrackingCode(trackingCodeEdits[key]);
+      if (current !== edited || (edited === 'Shipped' && currentTrackingCode !== editedTrackingCode)) dirty.add(key);
     });
     return dirty;
-  }, [orders, statusEdits]);
+  }, [orders, statusEdits, trackingCodeEdits]);
 
   const activeUpdateOrder = useMemo(
     () => orders.find((order) => fulfillmentOrderKey(order) === activeUpdateOrderKey) ?? null,
@@ -1535,6 +1579,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const activeUpdateOrderKeyResolved = activeUpdateOrder ? fulfillmentOrderKey(activeUpdateOrder) : '';
   const activeUpdateText = activeUpdateOrder
     ? statusEdits[activeUpdateOrderKeyResolved] ?? normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus)
+    : '';
+  const activeUpdateTrackingCode = activeUpdateOrder
+    ? trackingCodeEdits[activeUpdateOrderKeyResolved] ??
+      normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) ??
+      ''
     : '';
   const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
@@ -1552,6 +1601,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setStatusEdits((prev) => ({
       ...prev,
       [key]: normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus),
+    }));
+    setTrackingCodeEdits((prev) => ({
+      ...prev,
+      [key]: normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) || '',
     }));
     setActiveUpdateOrderKey(null);
   }, [activeUpdateOrder]);
@@ -1766,7 +1819,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           <div className="order-update">
             {(() => {
               const statusText = normalizeFulfillmentStatus(order.fulfillmentStatus);
-              return statusText ? <div className="status-readout small">{statusText}</div> : <em className="muted small">Not set</em>;
+              const trackingCode = shouldDisplayFulfillmentTrackingCode(order.fulfillmentStatus, order.fulfillmentTrackingCode)
+                ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
+                : '';
+              return statusText ? (
+                <>
+                  <div className="status-readout small">{statusText}</div>
+                  {trackingCode ? <div className="tracking-code-readout mono small">{trackingCode}</div> : null}
+                </>
+              ) : (
+                <em className="muted small">Not set</em>
+              );
             })()}
             <button
               type="button"
@@ -2095,6 +2158,22 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               </option>
             ))}
           </select>
+          {activeUpdateText === 'Shipped' ? (
+            <input
+              className="tracking-input"
+              value={activeUpdateTrackingCode}
+              onChange={(evt) => {
+                if (!activeUpdateOrder) return;
+                setTrackingCodeEdits((prev) => ({
+                  ...prev,
+                  [fulfillmentOrderKey(activeUpdateOrder)]: evt.target.value,
+                }));
+              }}
+              placeholder="Tracking code"
+              aria-label="Tracking code"
+              autoComplete="off"
+            />
+          ) : null}
           <div className="row row--end">
             <button type="button" className="ghost" onClick={handleCancelUpdate}>
               Cancel

@@ -99,6 +99,7 @@ export interface DeliveryOrderSummary {
   processedAt?: number;
   items: DeliveryOrderItemSummary[];
   fulfillmentStatus?: FulfillmentStatus;
+  fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
 }
 
@@ -183,6 +184,7 @@ export interface FulfillmentOrder {
   createdAt?: number;
   processedAt?: number;
   fulfillmentStatus?: FulfillmentStatus;
+  fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
   fulfillmentInternalStatus?: string;
   address: FulfillmentOrderAddress;

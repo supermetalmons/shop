@@ -4113,6 +4113,10 @@ button.fulfillment-export-menu__item:focus-visible {
   box-shadow: none;
 }
 
+.tracking-input {
+  width: 100%;
+}
+
 .order-update {
   display: flex;
   flex-direction: column;
@@ -4188,6 +4192,11 @@ button.order-status-option:hover:not(:disabled) {
 
 .status-readout {
   white-space: pre-wrap;
+}
+
+.tracking-code-readout {
+  color: var(--fg);
+  overflow-wrap: anywhere;
 }
 
 .figure-grid {

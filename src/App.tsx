@@ -117,6 +117,7 @@ import {
   shortAddress,
 } from './lib/solana';
 import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
+import { normalizeOptionalFulfillmentTrackingCode, shouldDisplayFulfillmentTrackingCode } from './lib/fulfillmentTracking';
 import {
   DeliveryOrderSummary,
   InventoryItem,
@@ -958,6 +959,10 @@ function displayOrderStatus(order: DeliveryOrderSummary): string {
   const fulfillmentStatus = typeof order.fulfillmentStatus === 'string' ? order.fulfillmentStatus.trim() : '';
   if (fulfillmentStatus) return fulfillmentStatus;
   return formatOrderStatus(order.status === 'ready_to_ship' ? 'Preparing' : order.status);
+}
+
+function shouldShowDeliveryTrackingCode(order: DeliveryOrderSummary): boolean {
+  return shouldDisplayFulfillmentTrackingCode(order.fulfillmentStatus, order.fulfillmentTrackingCode);
 }
 
 function normalizeClaimedReceiptIds(ids: number[] | undefined): number[] {
@@ -6080,6 +6085,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           deliveryOrders.length ? (
           <div className="delivery-list">
             {deliveryOrders.map((order) => {
+              const trackingCode = shouldShowDeliveryTrackingCode(order)
+                ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
+                : '';
               return (
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="delivery-row__head">
@@ -6087,7 +6095,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
                       <div className="delivery-row__title">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
                       <div className="muted small">{formatOrderDate(order)}</div>
                     </div>
-                    <div className="delivery-status">{displayOrderStatus(order)}</div>
+                    <div className="delivery-status">
+                      <div>{displayOrderStatus(order)}</div>
+                      {trackingCode ? <div className="tracking-code-readout mono small">{trackingCode}</div> : null}
+                    </div>
                   </div>
                   {order.items.length ? (
                     renderShipmentItems(order)
