@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+  type TransitionEvent,
+} from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -26,7 +35,9 @@ import { fulfillmentBoxSecretCode } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
+import { PonchoCardViewerOverlay } from './components/PonchoRevealOverlay';
 import { ShopHeader } from './components/ShopHeader';
+import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
   buildFulfillmentAddressExport,
   buildFulfillmentExportFilename,
@@ -51,11 +62,31 @@ import {
   type FigureMediaConfig,
   type FrontendDeploymentConfig,
 } from './config/deployment';
+import { usesInteractiveCardPackRevealFlow } from './config/dropsExtraContent';
 import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
+import { getInteractiveCardPackCardByFigureId } from './lib/interactiveCardPackReveal';
+import {
+  calcAspectLockedRevealOriginRect,
+  calcPonchoDrifellaAbsoluteCardRect,
+  calcPonchoDrifellaRevealTargetRectInViewport,
+  getRevealOverlayViewport,
+  ponchoDrifellaRevealOverlayStyleVars,
+  sameRevealOverlayRect,
+  toRevealOverlayRect,
+  type PonchoDrifellaFrameRect,
+} from './lib/revealOverlayLayout';
+import {
+  clearPonchoDrifellaImageCache,
+  createPonchoDrifellaImageCache,
+  preloadPonchoDrifellaCardAssets,
+  type PonchoDrifellaImageCache,
+} from './lib/ponchoDrifellaReveal';
+import type { DrifCardConfig } from './drifCards';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
+const FULFILLMENT_CARD_VIEWER_CLOSE_FALLBACK_MS = 380;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
 const BOX_CONTENTS_FIGURE_GAP = 12;
 const BOX_CONTENTS_HORIZONTAL_CHROME = 54;
@@ -88,6 +119,21 @@ const DEFAULT_ORDER_VISIBILITY_FILTER: OrderVisibilityFilter = 'not_shipped';
 type QRCodeModule = typeof import('qrcode');
 type SecretCodesZipProgressHandler = (percent: number) => void;
 type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
+type FulfillmentInteractiveCardViewerHandler = (args: {
+  dropId: string;
+  figureId: number;
+  loadingImageSrc?: string;
+  originRect?: DOMRect | null;
+}) => void;
+type FulfillmentInteractiveCardViewerState = {
+  overlayId: string;
+  card: DrifCardConfig;
+  loadingImageSrc?: string;
+  originRect: PonchoDrifellaFrameRect;
+  targetRect: PonchoDrifellaFrameRect;
+  active: boolean;
+  closing: boolean;
+};
 
 function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -587,6 +633,38 @@ function mergeFigureMetadataRecords(
   return changed ? next : prev;
 }
 
+function supportsFulfillmentInteractiveCardViewer(dropOrId: FrontendDeploymentConfig | string | undefined): boolean {
+  return usesInteractiveCardPackRevealFlow(resolveDropContent(dropOrId).reveal.renderer);
+}
+
+function getFulfillmentInteractiveCard(
+  dropOrId: FrontendDeploymentConfig | string | undefined,
+  figureId: number,
+): DrifCardConfig | undefined {
+  if (!supportsFulfillmentInteractiveCardViewer(dropOrId)) return undefined;
+  const lookupDropId = typeof dropOrId === 'string' ? dropOrId : dropOrId?.dropId;
+  return getInteractiveCardPackCardByFigureId(lookupDropId, figureId);
+}
+
+function getFigureTileImageElement(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>('.figure-image');
+}
+
+function getFigureTileImageRect(root: HTMLElement): DOMRect {
+  return (getFigureTileImageElement(root) || root).getBoundingClientRect();
+}
+
+function getFigureTileRenderedImageSrc(root: HTMLElement, fallback?: string): string | undefined {
+  const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden])');
+  const src = String(image?.currentSrc || image?.src || '').trim();
+  return src || fallback;
+}
+
+function fulfillmentInteractiveCardLoadingImageSrc(image: string | undefined): string | undefined {
+  const trimmed = String(image || '').trim();
+  return trimmed ? `${trimmed.split('#')[0]}#fulfillment-card-preview` : undefined;
+}
+
 function FigureTileImage(props: {
   dropId: string;
   figureId: number;
@@ -656,7 +734,7 @@ function FigureTileImage(props: {
   }, [dropId, fallbackSrc, figureId, onMetadataResolved, primarySrc, usingFallback]);
 
   if (!activeSrc) {
-    return <div className="figure-image figure-image--placeholder" aria-hidden="true" />;
+    return <span className="figure-image figure-image--placeholder" aria-hidden="true" />;
   }
 
   return <img src={activeSrc} alt={alt} loading="lazy" className="figure-image" onError={handleError} />;
@@ -673,6 +751,7 @@ function renderFigureTiles(args: {
   figureMediaBase?: string;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
+  onViewInteractiveCard?: FulfillmentInteractiveCardViewerHandler;
   labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
 }) {
   const {
@@ -686,6 +765,7 @@ function renderFigureTiles(args: {
     figureMediaBase,
     figureMetadataByKey,
     onMetadataResolved,
+    onViewInteractiveCard,
     labelOverride,
   } = args;
   return (
@@ -701,8 +781,9 @@ function renderFigureTiles(args: {
           figureMetadataByKey,
           labelOverride,
         });
-        return (
-          <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
+        const canViewInteractiveCard = Boolean(getFulfillmentInteractiveCard(drop || dropId, figureId) && onViewInteractiveCard);
+        const tileContent = (
+          <>
             <FigureTileImage
               dropId={dropId}
               figureId={figureId}
@@ -711,7 +792,39 @@ function renderFigureTiles(args: {
               alt={preview.alt}
               onMetadataResolved={onMetadataResolved}
             />
-            <div className="muted small">{preview.label}</div>
+            <span className="muted small">{preview.label}</span>
+          </>
+        );
+        if (canViewInteractiveCard) {
+          const viewInteractiveCard = (target: HTMLElement) => {
+            onViewInteractiveCard?.({
+              dropId,
+              figureId,
+              loadingImageSrc: getFigureTileRenderedImageSrc(target, preview.imageSrc),
+              originRect: getFigureTileImageRect(target),
+            });
+          };
+          return (
+            <div
+              key={`${keyPrefix}:${figureId}:${index}`}
+              className="figure-tile"
+              role="button"
+              tabIndex={0}
+              aria-label={`View ${preview.label}`}
+              onClick={(evt) => viewInteractiveCard(evt.currentTarget)}
+              onKeyDown={(evt) => {
+                if (evt.key !== 'Enter' && evt.key !== ' ') return;
+                evt.preventDefault();
+                viewInteractiveCard(evt.currentTarget);
+              }}
+            >
+              {tileContent}
+            </div>
+          );
+        }
+        return (
+          <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
+            {tileContent}
           </div>
         );
       })}
@@ -832,6 +945,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
+  const [cardViewer, setCardViewer] = useState<FulfillmentInteractiveCardViewerState | null>(null);
+  const cardViewerImageCacheRef = useRef<PonchoDrifellaImageCache | null>(null);
+  const cardViewerResizeRafRef = useRef<number | null>(null);
+  if (!cardViewerImageCacheRef.current) {
+    cardViewerImageCacheRef.current = createPonchoDrifellaImageCache();
+  }
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const walletConnectingSeenRef = useRef(false);
@@ -845,6 +964,117 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
   useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
+
+  const dismissCardViewer = useCallback(() => {
+    setCardViewer((current) => (current && !current.closing ? { ...current, active: false, closing: true } : current));
+  }, []);
+
+  useOverlayScrollLock({ active: Boolean(cardViewer), onEscape: dismissCardViewer });
+
+  useEffect(() => {
+    return () => {
+      if (cardViewerImageCacheRef.current) {
+        clearPonchoDrifellaImageCache(cardViewerImageCacheRef.current);
+      }
+      if (cardViewerResizeRafRef.current !== null) {
+        window.cancelAnimationFrame(cardViewerResizeRafRef.current);
+        cardViewerResizeRafRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cardViewer || cardViewer.active || cardViewer.closing || typeof window === 'undefined') return undefined;
+    let raf = window.requestAnimationFrame(() => {
+      raf = window.requestAnimationFrame(() => {
+        setCardViewer((current) => (
+          current?.overlayId === cardViewer.overlayId ? { ...current, active: true } : current
+        ));
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [cardViewer]);
+
+  useEffect(() => {
+    if (!cardViewer?.closing || typeof window === 'undefined') return undefined;
+    const { overlayId } = cardViewer;
+    const closeTimeout = window.setTimeout(() => {
+      setCardViewer((current) => (current?.overlayId === overlayId && current.closing ? null : current));
+    }, FULFILLMENT_CARD_VIEWER_CLOSE_FALLBACK_MS);
+    return () => window.clearTimeout(closeTimeout);
+  }, [cardViewer?.closing, cardViewer?.overlayId]);
+
+  useEffect(() => {
+    if (!cardViewer || cardViewer.closing || typeof window === 'undefined') return undefined;
+    const { overlayId } = cardViewer;
+    const updateTargetRect = () => {
+      if (cardViewerResizeRafRef.current !== null) return;
+      cardViewerResizeRafRef.current = window.requestAnimationFrame(() => {
+        cardViewerResizeRafRef.current = null;
+        const targetRect = calcPonchoDrifellaAbsoluteCardRect(calcPonchoDrifellaRevealTargetRectInViewport());
+        setCardViewer((current) => {
+          if (!current || current.overlayId !== overlayId || current.closing) return current;
+          return sameRevealOverlayRect(current.targetRect, targetRect) ? current : { ...current, targetRect };
+        });
+      });
+    };
+
+    window.addEventListener('resize', updateTargetRect);
+    window.addEventListener('orientationchange', updateTargetRect);
+    window.visualViewport?.addEventListener('resize', updateTargetRect);
+    window.visualViewport?.addEventListener('scroll', updateTargetRect);
+    return () => {
+      window.removeEventListener('resize', updateTargetRect);
+      window.removeEventListener('orientationchange', updateTargetRect);
+      window.visualViewport?.removeEventListener('resize', updateTargetRect);
+      window.visualViewport?.removeEventListener('scroll', updateTargetRect);
+      if (cardViewerResizeRafRef.current !== null) {
+        window.cancelAnimationFrame(cardViewerResizeRafRef.current);
+        cardViewerResizeRafRef.current = null;
+      }
+    };
+  }, [cardViewer?.overlayId, cardViewer?.closing]);
+
+  const openInteractiveCardViewer = useCallback<FulfillmentInteractiveCardViewerHandler>(
+    ({ dropId, figureId, loadingImageSrc, originRect }) => {
+      if (typeof window === 'undefined' || !cardViewerImageCacheRef.current) return;
+      const drop = dropById.get(dropId);
+      const card = getFulfillmentInteractiveCard(drop || dropId, figureId);
+      if (!card) return;
+
+      preloadPonchoDrifellaCardAssets(card, cardViewerImageCacheRef.current, { mode: 'warm', priority: 'low' });
+      const targetRect = calcPonchoDrifellaAbsoluteCardRect(calcPonchoDrifellaRevealTargetRectInViewport());
+      const resolvedOriginRect = originRect
+        ? calcAspectLockedRevealOriginRect(originRect, targetRect)
+        : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
+
+      setCardViewer({
+        overlayId: `${dropId}:${figureId}:${Date.now()}`,
+        card,
+        loadingImageSrc: fulfillmentInteractiveCardLoadingImageSrc(loadingImageSrc || card.imageSrc),
+        originRect: toRevealOverlayRect(resolvedOriginRect),
+        targetRect,
+        active: false,
+        closing: false,
+      });
+    },
+    [dropById],
+  );
+
+  const handleCardViewerTransitionEnd = useCallback((evt: TransitionEvent<HTMLDivElement>) => {
+    if (evt.target !== evt.currentTarget || evt.propertyName !== 'opacity') return;
+    setCardViewer((current) => (current?.closing ? null : current));
+  }, []);
+
+  const cardViewerOverlayStyle: CSSProperties | undefined = cardViewer
+    ? (ponchoDrifellaRevealOverlayStyleVars({
+        originRect: cardViewer.originRect,
+        targetRect: cardViewer.targetRect,
+        mode: 'poncho-card',
+        viewport: getRevealOverlayViewport(),
+        cardCount: 1,
+      }) as CSSProperties)
+    : undefined;
 
   useEffect(() => {
     walletConnectingSeenRef.current = false;
@@ -1623,6 +1853,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           figureMedia: orderDrop.figureMedia,
                           figureMetadataByKey,
                           onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                          onViewInteractiveCard: openInteractiveCardViewer,
                         })
                       ) : null}
                     </div>
@@ -1644,6 +1875,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 figureMedia: orderDrop.figureMedia,
                 figureMetadataByKey,
                 onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                onViewInteractiveCard: openInteractiveCardViewer,
               })
             : null}
         </div>
@@ -1653,6 +1885,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   return (
     <div className="page fulfillment-page">
+      {cardViewer ? (
+        <PonchoCardViewerOverlay
+          overlayStyle={cardViewerOverlayStyle}
+          active={cardViewer.active}
+          closing={cardViewer.closing}
+          card={cardViewer.card}
+          loadingImageSrc={cardViewer.loadingImageSrc}
+          onDismiss={dismissCardViewer}
+          onTransitionEnd={handleCardViewerTransitionEnd}
+        />
+      ) : null}
       <ShopHeader scrollHomeToTop />
 
       {!walletBusy && walletReady && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : true) ? (
@@ -1775,6 +2018,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         figureMedia: duplicateDrop.figureMedia,
                         figureMetadataByKey,
                         onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                        onViewInteractiveCard: openInteractiveCardViewer,
                         labelOverride: ({ figureId, mediaId }) => {
                           const duplicate = duplicateFigureByFigureId.get(figureId);
                           const labelId = duplicate?.labelId || (mediaId ? String(mediaId) : String(figureId));
