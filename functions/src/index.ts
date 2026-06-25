@@ -49,6 +49,8 @@ import {
 import {
   assignDudesForBox,
   ensureIrlClaimCodeForBox as ensureIrlClaimCodeForBoxShared,
+  stripeAssignedIrlClaimForBox,
+  type StripeAssignedIrlClaim,
 } from './cardAssignment.js';
 import { decodePendingOpenBox } from './pendingOpenBox.js';
 import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
@@ -1278,7 +1280,12 @@ async function sendAndConfirmSignedTx(
     // Unclear if it was submitted; wait briefly for it to land anyway.
     const maybe = await waitForSignature(conn, sig, { timeoutMs: 12_000, pollMs: TX_CONFIRM_POLL_MS });
     if (maybe.ok) return sig;
-    throw sendErr;
+    const code = (sendErr as any)?.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'unavailable';
+    throw new HttpsError(code, `${label} transaction submission status unknown (try again)`, {
+      signature: sig,
+      lastError: txErrMessage(sendErr),
+      maybeSubmitted: true,
+    });
   }
 
   const confirmed = await waitForSignature(conn, sig, { timeoutMs: confirmTimeoutMs, pollMs: TX_CONFIRM_POLL_MS });
@@ -1564,6 +1571,28 @@ async function findOwnedAssetByPredicate(params: {
   grouping?: readonly [string, string];
   label: string;
 }): Promise<{ asset: any | null; sawItems: boolean }> {
+  let asset: any | null = null;
+  const { sawItems } = await scanOwnedAssets({
+    owner: params.owner,
+    dropRuntime: params.dropRuntime,
+    grouping: params.grouping,
+    label: params.label,
+    visit: (candidate) => {
+      if (!params.matches(candidate)) return false;
+      asset = candidate;
+      return true;
+    },
+  });
+  return { asset, sawItems };
+}
+
+async function scanOwnedAssets(params: {
+  owner: string;
+  dropRuntime: DropRuntime;
+  grouping?: readonly [string, string];
+  label: string;
+  visit: (asset: any) => boolean;
+}): Promise<{ sawItems: boolean; stopped: boolean }> {
   let sawItems = false;
   for (let page = 1; page <= HELIUS_ASSETS_MAX_SEARCH_PAGES; page += 1) {
     const result = await heliusRpc<any>(
@@ -1575,9 +1604,8 @@ async function findOwnedAssetByPredicate(params: {
     const items = heliusSearchAssetsItems(result);
     sawItems ||= items.length > 0;
 
-    const match = items.find(params.matches);
-    if (match) return { asset: match, sawItems };
-    if (!heliusSearchAssetsHasNextPage(result, page, items)) return { asset: null, sawItems };
+    if (items.some(params.visit)) return { sawItems, stopped: true };
+    if (!heliusSearchAssetsHasNextPage(result, page, items)) return { sawItems, stopped: false };
   }
 
   logger.warn('Helius searchAssets page cap reached while finding asset', {
@@ -2571,6 +2599,87 @@ async function getDeliveryLookupTable(conn: Connection, dropRuntime: DropRuntime
   }
   cachedDeliveryLutByDrop.set(dropRuntime.dropId, { lut, cachedAtMs: now });
   return [lut];
+}
+
+const SOLANA_MAX_RAW_TX_BYTES = 1232;
+
+function transactionEncodingTooLarge(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    err instanceof RangeError &&
+    (/encoding overruns Uint8Array/i.test(msg) ||
+      /offset.*out of range/i.test(msg) ||
+      String((err as any)?.code || '') === 'ERR_OUT_OF_RANGE')
+  );
+}
+
+async function buildTxWithOptionalDeliveryLookupTable(params: {
+  conn: Connection;
+  dropRuntime: DropRuntime;
+  build: (luts: AddressLookupTableAccount[]) => VersionedTransaction;
+  encodeTooLargeMessage: string;
+  encodeTooLargeDetails: Record<string, unknown>;
+  packetTooLargeMessage: (rawBytes: number, maxRawBytes: number) => string;
+  packetTooLargeDetails: Record<string, unknown>;
+}): Promise<{ tx: VersionedTransaction; raw: Uint8Array }> {
+  let addressLookupTables: AddressLookupTableAccount[] | null = null;
+  const loadLookupTables = async () => {
+    if (addressLookupTables) return addressLookupTables;
+    try {
+      addressLookupTables = await getDeliveryLookupTable(params.conn, params.dropRuntime);
+    } catch {
+      addressLookupTables = [];
+    }
+    return addressLookupTables;
+  };
+  const buildAndSerialize = (luts: AddressLookupTableAccount[]) => {
+    const tx = params.build(luts);
+    return { tx, raw: tx.serialize() };
+  };
+  const throwEncodeTooLarge = (): never => {
+    throw new HttpsError('failed-precondition', params.encodeTooLargeMessage, params.encodeTooLargeDetails);
+  };
+
+  let tx: VersionedTransaction;
+  let raw: Uint8Array;
+  try {
+    ({ tx, raw } = buildAndSerialize([]));
+  } catch (err) {
+    if (!transactionEncodingTooLarge(err)) throw err;
+    const luts = await loadLookupTables();
+    if (!luts.length) throwEncodeTooLarge();
+    try {
+      ({ tx, raw } = buildAndSerialize(luts));
+    } catch (lutErr) {
+      if (!transactionEncodingTooLarge(lutErr)) throw lutErr;
+      throwEncodeTooLarge();
+    }
+  }
+
+  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
+    const luts = await loadLookupTables();
+    if (luts.length) {
+      try {
+        ({ tx, raw } = buildAndSerialize(luts));
+      } catch (err) {
+        if (!transactionEncodingTooLarge(err)) throw err;
+        throwEncodeTooLarge();
+      }
+    }
+  }
+  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
+    throw new HttpsError(
+      'failed-precondition',
+      params.packetTooLargeMessage(raw.length, SOLANA_MAX_RAW_TX_BYTES),
+      {
+        rawBytes: raw.length,
+        maxRawBytes: SOLANA_MAX_RAW_TX_BYTES,
+        ...params.packetTooLargeDetails,
+      },
+    );
+  }
+
+  return { tx, raw };
 }
 
 function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBox: number): number {
@@ -4944,7 +5053,6 @@ export const prepareDeliveryTx = onCallLogged(
 
   // Allocate a unique, compact delivery id and its on-chain PDA.
   // IMPORTANT: we atomically reserve the Firestore doc via `create()` to avoid TOCTOU collisions under concurrency.
-  const MAX_RAW_TX_BYTES = 1232;
   const MAX_DELIVERY_ID_ATTEMPTS = 16;
   const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 
@@ -4985,7 +5093,7 @@ export const prepareDeliveryTx = onCallLogged(
     const sizeTx = buildTx(instructions, ownerPk, DUMMY_BLOCKHASH, [signer], addressLookupTables);
     const raw = sizeTx.serialize();
 
-    if (raw.length > MAX_RAW_TX_BYTES) {
+    if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
       let maxFit = 0;
       for (let n = assetPks.length - 1; n >= 1; n -= 1) {
         const candidateIx = new TransactionInstruction({
@@ -5011,16 +5119,16 @@ export const prepareDeliveryTx = onCallLogged(
           [signer],
           addressLookupTables,
         );
-        if (candidateTx.serialize().length <= MAX_RAW_TX_BYTES) {
+        if (candidateTx.serialize().length <= SOLANA_MAX_RAW_TX_BYTES) {
           maxFit = n;
           break;
         }
       }
       throw new HttpsError(
         'failed-precondition',
-        `Delivery transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}). Try fewer items.` +
+        `Delivery transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}). Try fewer items.` +
           (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 item.'),
-        { rawBytes: raw.length, maxRawBytes: MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
+        { rawBytes: raw.length, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
       );
     }
 
@@ -5662,24 +5770,13 @@ export async function retryIssueReceiptsForDeliveryOrder(
       );
       const boxIds = batch.filter((it) => it.kind === 'box').map((it) => Math.floor(it.refId));
       const dudeIds = batch.filter((it) => it.kind === 'dude').map((it) => Math.floor(it.refId));
-      const treeConfig = deriveTreeConfigPda(dropRuntime.receiptsMerkleTree);
-      const mintReceiptsIx = new TransactionInstruction({
-        programId: dropRuntime.boxMinterProgramId,
-        keys: [
-          { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false }, // config
-          { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
-          { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
-          { pubkey: dropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
-          { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
-          { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
-          { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
-          { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
-          { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compression_program
-          { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mpl_core_program
-          { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
-        ],
-        data: encodeMintReceiptsArgs({ boxIds, dudeIds }, dropRuntime),
+      const mintReceiptsIx = buildMintReceiptsIx({
+        dropRuntime,
+        cosignerPk: signer.publicKey,
+        recipientPk: ownerPk,
+        coreCollection: cfgCoreCollection,
+        boxIds,
+        dudeIds,
       });
       const instructions: TransactionInstruction[] = [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -5702,19 +5799,12 @@ export async function retryIssueReceiptsForDeliveryOrder(
         try {
           txCandidate = buildTx(instructions, signer.publicKey, blockhash, [signer]);
           rawLen = txCandidate.serialize().length;
-          if (rawLen > 1232) {
+          if (rawLen > SOLANA_MAX_RAW_TX_BYTES) {
             lastErr = new RangeError(`Receipt issuance transaction too large (${rawLen} bytes)`);
             break; // shrink `n`
           }
         } catch (err) {
-          const msg = txErrMessage(err);
-          const anyErr = err as any;
-          const tooLarge =
-            err instanceof RangeError &&
-            (/encoding overruns Uint8Array/i.test(msg) ||
-              /offset.*out of range/i.test(msg) ||
-              String(anyErr?.code || '') === 'ERR_OUT_OF_RANGE');
-          if (!tooLarge) throw err;
+          if (!transactionEncodingTooLarge(err)) throw err;
           lastErr = err;
           break; // shrink `n`
         }
@@ -6225,6 +6315,9 @@ type StripeReceiptClaimStart =
       deliveryId: number;
       boxId: number;
       receiptTxs: string[];
+      receiptKind?: StripeReceiptClaimReceiptKind;
+      receiptsTransferred?: number;
+      figureIds?: number[];
     }
   | {
       status: 'started';
@@ -6233,12 +6326,82 @@ type StripeReceiptClaimStart =
       boxId: number;
       attemptId: string;
       orderRef: DocumentReference;
+      orderIrlClaims: any[];
+      resumingPreviousProcessingClaim: boolean;
+      hasPreviousClaimFailure: boolean;
       updatePluralOrderClaim: boolean;
       updateSingularOrderClaim: boolean;
     };
 
 function normalizeReceiptTxs(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((tx): tx is string => typeof tx === 'string' && !!tx.trim()) : [];
+}
+
+type StripeReceiptClaimReceiptKind = 'box' | 'figure';
+
+type StripeReceiptClaimStoredResult = {
+  receiptKind?: StripeReceiptClaimReceiptKind;
+  receiptsTransferred?: number;
+  figureIds?: number[];
+};
+
+function stripeReceiptClaimMaybeSubmittedTx(err: unknown): string | null {
+  const anyErr = err as any;
+  const details = anyErr?.details || {};
+  const signature = typeof details.signature === 'string' ? details.signature.trim() : '';
+  if (!signature) return null;
+
+  const message = txErrMessage(err);
+  const maybeSubmitted = details.maybeSubmitted === true;
+  const confirmationTimedOut = anyErr?.code === 'deadline-exceeded' && /transaction not confirmed/i.test(message);
+  if (!/claimStripeReceipt/.test(message) || (!maybeSubmitted && !confirmationTimedOut)) return null;
+  return signature;
+}
+
+function normalizePositiveIntegerArray(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0 && value <= 0xffff_ffff);
+}
+
+function normalizeStripeReceiptClaimStoredResult(raw: any): StripeReceiptClaimStoredResult {
+  const receiptKind = raw?.receiptKind === 'box' || raw?.receiptKind === 'figure' ? raw.receiptKind : undefined;
+  const receiptsTransferredRaw = Math.floor(Number(raw?.receiptsTransferred));
+  const receiptsTransferred =
+    Number.isFinite(receiptsTransferredRaw) && receiptsTransferredRaw > 0 ? receiptsTransferredRaw : undefined;
+  const figureIds = normalizePositiveIntegerArray(raw?.figureIds);
+  return {
+    ...(receiptKind ? { receiptKind } : {}),
+    ...(receiptsTransferred ? { receiptsTransferred } : {}),
+    ...(figureIds.length ? { figureIds } : {}),
+  };
+}
+
+function stripeReceiptClaimResponse(params: {
+  dropId: string;
+  deliveryId: number;
+  receiptTxs: string[];
+  receiptKind?: StripeReceiptClaimReceiptKind;
+  receiptsTransferred?: number;
+  figureIds?: number[];
+}) {
+  const figureIds = params.figureIds?.length ? params.figureIds : undefined;
+  const receiptsTransferred =
+    params.receiptsTransferred && params.receiptsTransferred > 0
+      ? params.receiptsTransferred
+      : params.receiptKind === 'figure' && figureIds
+        ? figureIds.length
+        : 1;
+  return {
+    processed: true,
+    dropId: params.dropId,
+    deliveryId: params.deliveryId,
+    receiptsTransferred,
+    receiptTxs: params.receiptTxs,
+    ...(params.receiptKind ? { receiptKind: params.receiptKind } : {}),
+    ...(figureIds ? { figureIds } : {}),
+  };
 }
 
 function requireStripeReceiptClaimCodeForRequest(rawCode: unknown): string {
@@ -6388,6 +6551,9 @@ function stripeReceiptClaimFinalOrderUpdate(params: {
   recipientWallet: string;
   receiptTxs: string[];
   claimedAt: FieldValue;
+  receiptKind: StripeReceiptClaimReceiptKind;
+  receiptsTransferred: number;
+  figureIds?: number[];
   updatePluralOrderClaim: boolean;
   updateSingularOrderClaim: boolean;
 }): Record<string, unknown> {
@@ -6400,6 +6566,9 @@ function stripeReceiptClaimFinalOrderUpdate(params: {
       fields: {
         recipient: params.recipientWallet,
         receiptTxs: params.receiptTxs,
+        receiptKind: params.receiptKind,
+        receiptsTransferred: params.receiptsTransferred,
+        figureIds: params.figureIds?.length ? params.figureIds : FieldValue.delete(),
         claimedAt: params.claimedAt,
         processingStartedAt: FieldValue.delete(),
         processingLeaseExpiresAt: FieldValue.delete(),
@@ -6439,10 +6608,11 @@ async function startStripeReceiptClaim(params: {
     const status = typeof claim?.status === 'string' ? claim.status : 'unclaimed';
     const claimedRecipient = typeof claim?.recipient === 'string' ? claim.recipient : '';
     const receiptTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    const storedResult = normalizeStripeReceiptClaimStoredResult(claim);
 
     if (status === 'claimed') {
       if (claimedRecipient === params.recipientWallet) {
-        return { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs };
+        return { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult };
       }
       throw new HttpsError('failed-precondition', 'This Stripe receipt claim code has already been used');
     }
@@ -6450,6 +6620,13 @@ async function startStripeReceiptClaim(params: {
     const processingLeaseExpiresAt = toMillisMaybe(claim?.processingLeaseExpiresAt) ?? 0;
     if (status === 'processing' && processingLeaseExpiresAt > params.nowMs) {
       throw new HttpsError('aborted', 'This Stripe receipt claim code is already being processed');
+    }
+    // Keep retries bound to the first receiver so maybe-submitted admin transactions can be finalized safely.
+    if (status === 'processing' && claimedRecipient && claimedRecipient !== params.recipientWallet) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This Stripe receipt claim code is locked to the receiver address from the previous attempt. Retry with that same address.',
+      );
     }
 
     const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
@@ -6487,7 +6664,18 @@ async function startStripeReceiptClaim(params: {
       }),
     );
 
-    return { status: 'started' as const, dropId, deliveryId, boxId, attemptId: params.attemptId, orderRef, ...orderClaimTarget };
+    return {
+      status: 'started' as const,
+      dropId,
+      deliveryId,
+      boxId,
+      attemptId: params.attemptId,
+      orderRef,
+      orderIrlClaims: Array.isArray(order?.irlClaims) ? order.irlClaims : [],
+      resumingPreviousProcessingClaim: status === 'processing' && claimedRecipient === params.recipientWallet,
+      hasPreviousClaimFailure: Boolean(claim?.lastClaimError || claim?.lastClaimErrorAt),
+      ...orderClaimTarget,
+    };
   });
 }
 
@@ -6551,6 +6739,9 @@ async function finalizeStripeReceiptClaim(params: {
   recipientWallet: string;
   attemptId: string;
   receiptTx: string | null;
+  receiptKind: StripeReceiptClaimReceiptKind;
+  receiptsTransferred: number;
+  figureIds?: number[];
   updatePluralOrderClaim: boolean;
   updateSingularOrderClaim: boolean;
 }): Promise<string[]> {
@@ -6578,6 +6769,9 @@ async function finalizeStripeReceiptClaim(params: {
         status: 'claimed',
         recipient: params.recipientWallet,
         receiptTxs,
+        receiptKind: params.receiptKind,
+        receiptsTransferred: params.receiptsTransferred,
+        figureIds: params.figureIds?.length ? params.figureIds : FieldValue.delete(),
         claimedAt,
         processingAttemptId: FieldValue.delete(),
         processingStartedAt: FieldValue.delete(),
@@ -6595,6 +6789,9 @@ async function finalizeStripeReceiptClaim(params: {
         recipientWallet: params.recipientWallet,
         receiptTxs,
         claimedAt,
+        receiptKind: params.receiptKind,
+        receiptsTransferred: params.receiptsTransferred,
+        figureIds: params.figureIds,
         updatePluralOrderClaim: params.updatePluralOrderClaim,
         updateSingularOrderClaim: params.updateSingularOrderClaim,
       }),
@@ -6641,35 +6838,189 @@ async function findStripeReceiptAssetOwnedBy(ownerWallet: string, dropRuntime: D
   return ungrouped.asset;
 }
 
+async function findStripeReceiptAssetByIdOwnedBy(
+  ownerWallet: string,
+  dropRuntime: DropRuntime,
+  boxId: number,
+  assetId: string,
+): Promise<any | null> {
+  let asset: any;
+  try {
+    asset = await fetchAsset(assetId, dropRuntime);
+  } catch (err) {
+    if ((err as any)?.code === 'not-found') return null;
+    throw err;
+  }
+  if (!asset || looksBurntOrClosedInHelius(asset)) return null;
+  if (asset?.ownership?.owner !== ownerWallet) return null;
+  if (getAssetKind(asset) !== 'certificate') {
+    throw new HttpsError('failed-precondition', 'Stripe receipt claim is not ready yet; assigned pack receipt is not a receipt');
+  }
+  if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
+    throw new HttpsError('failed-precondition', 'Stripe receipt claim is not ready yet; assigned pack receipt belongs to a different drop');
+  }
+  if (String(getBoxIdFromAsset(asset) || '') !== String(boxId)) {
+    throw new HttpsError('failed-precondition', 'Stripe receipt claim is not ready yet; assigned pack receipt does not match claim box', {
+      dropId: dropRuntime.dropId,
+      boxId,
+      assignedBoxAssetId: assetId,
+    });
+  }
+  return asset;
+}
+
+function requireStripeOpenableClaimAssignment(order: any, dropRuntime: DropRuntime, boxId: number): StripeAssignedIrlClaim {
+  let assignment: StripeAssignedIrlClaim | null = null;
+  try {
+    assignment = stripeAssignedIrlClaimForBox(order, boxId, {
+      itemsPerBox: dropRuntime.itemsPerBox,
+      maxDudeId: dropRuntime.maxDudeId,
+    });
+  } catch (err) {
+    throw new HttpsError(
+      'failed-precondition',
+      err instanceof Error ? err.message : 'Stripe receipt claim is not ready yet; assigned receipts are invalid',
+      { dropId: dropRuntime.dropId, boxId },
+    );
+  }
+  if (!assignment) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Stripe receipt claim is not ready yet; assigned card receipts are missing',
+      { dropId: dropRuntime.dropId, boxId },
+    );
+  }
+  return assignment;
+}
+
+function stripeFigureReceiptDudeIdOwnedBy(asset: any, dropRuntime: DropRuntime, ownerWallet: string): number | null {
+  if (looksBurntOrClosedInHelius(asset)) return null;
+  if (asset?.ownership?.owner !== ownerWallet) return null;
+  if (getAssetKind(asset) !== 'certificate') return null;
+  if (!assetMatchesRequestedDrop(asset, dropRuntime)) return null;
+  const dudeId = Number(getDudeIdFromAsset(asset));
+  return Number.isFinite(dudeId) ? dudeId : null;
+}
+
+async function findOwnedStripeFigureReceiptDudeIds(
+  ownerWallet: string,
+  dropRuntime: DropRuntime,
+  dudeIds: number[],
+): Promise<Set<number>> {
+  const expected = new Set(dudeIds.map((dudeId) => Number(dudeId)));
+  const found = new Set<number>();
+  const visit = (asset: any) => {
+    const dudeId = stripeFigureReceiptDudeIdOwnedBy(asset, dropRuntime, ownerWallet);
+    if (dudeId != null && expected.has(dudeId)) found.add(dudeId);
+    return found.size === expected.size;
+  };
+
+  if (dropRuntime.collectionMintStr) {
+    const grouping = ['collection', dropRuntime.collectionMintStr] as const;
+    const grouped = await scanOwnedAssets({
+      owner: ownerWallet,
+      dropRuntime,
+      visit,
+      grouping,
+      label: 'Helius figure receipt assets error',
+    });
+    if (grouped.stopped) return found;
+    if (grouped.sawItems) {
+      if (found.size >= expected.size) return found;
+      logger.warn('Helius collection-grouped search did not find every expected Stripe figure receipt; falling back to ungrouped search', {
+        owner: ownerWallet,
+        dropId: dropRuntime.dropId,
+        collection: dropRuntime.collectionMintStr,
+        expectedDudeIds: Array.from(expected),
+        foundDudeIds: Array.from(found),
+      });
+    } else {
+      logger.warn('Helius searchAssets returned 0 items for figure receipt collection grouping; falling back to ungrouped search', {
+        owner: ownerWallet,
+        dropId: dropRuntime.dropId,
+        collection: dropRuntime.collectionMintStr,
+      });
+    }
+  }
+
+  await scanOwnedAssets({
+    owner: ownerWallet,
+    dropRuntime,
+    visit,
+    label: 'Helius figure receipt assets error',
+  });
+  return found;
+}
+
+async function ownsAllStripeFigureReceipts(ownerWallet: string, dropRuntime: DropRuntime, dudeIds: number[]): Promise<boolean> {
+  const ownedDudeIds = await findOwnedStripeFigureReceiptDudeIds(ownerWallet, dropRuntime, dudeIds);
+  return dudeIds.every((dudeId) => ownedDudeIds.has(Number(dudeId)));
+}
+
+function buildMintReceiptsIx(args: {
+  dropRuntime: DropRuntime;
+  cosignerPk: PublicKey;
+  recipientPk: PublicKey;
+  coreCollection: PublicKey;
+  boxIds: number[];
+  dudeIds: number[];
+}): TransactionInstruction {
+  const treeConfig = deriveTreeConfigPda(args.dropRuntime.receiptsMerkleTree);
+  return new TransactionInstruction({
+    programId: args.dropRuntime.boxMinterProgramId,
+    keys: [
+      { pubkey: args.dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false }, // config
+      { pubkey: args.cosignerPk, isSigner: true, isWritable: true }, // cosigner
+      { pubkey: args.recipientPk, isSigner: false, isWritable: false }, // user
+      { pubkey: args.dropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
+      { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true }, // core_collection
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
+      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
+      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compression_program
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mpl_core_program
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+    ],
+    data: encodeMintReceiptsArgs({ boxIds: args.boxIds, dudeIds: args.dudeIds }, args.dropRuntime),
+  });
+}
+
 function parseCompressedReceiptProof(params: {
   asset: any;
   proof: any;
   dropRuntime: DropRuntime;
   expectedOwner: string;
+  proofMissingMessage?: string;
+  treeMismatchMessage?: string;
+  treeMismatchActualKey?: string;
+  treeMismatchExpectedKey?: string;
+  leafIdMessage?: string;
+  leafIndexMessage?: string;
 }) {
   const compression = params.asset?.compression || {};
   const proofPath: string[] = Array.isArray(params.proof?.proof) ? params.proof.proof : [];
   const treeId = String(params.proof?.tree_id ?? params.proof?.treeId ?? '');
   const rootStr = String(params.proof?.root || '');
   if (!treeId || !rootStr) {
-    throw new HttpsError('failed-precondition', 'Unable to fetch receipt proof for transfer');
+    throw new HttpsError('failed-precondition', params.proofMissingMessage || 'Unable to fetch receipt proof for transfer');
   }
   const merkleTree = new PublicKey(treeId);
   if (!merkleTree.equals(params.dropRuntime.receiptsMerkleTree)) {
-    throw new HttpsError('failed-precondition', 'Receipt does not belong to the configured receipts tree', {
-      receiptTree: merkleTree.toBase58(),
-      receiptsTree: params.dropRuntime.receiptsMerkleTree.toBase58(),
+    throw new HttpsError('failed-precondition', params.treeMismatchMessage || 'Receipt does not belong to the configured receipts tree', {
+      [params.treeMismatchActualKey || 'receiptTree']: merkleTree.toBase58(),
+      [params.treeMismatchExpectedKey || 'receiptsTree']: params.dropRuntime.receiptsMerkleTree.toBase58(),
       dropId: params.dropRuntime.dropId,
     });
   }
 
   const nonce = Number(compression?.leaf_id ?? compression?.leafId);
   if (!Number.isFinite(nonce) || nonce < 0) {
-    throw new HttpsError('failed-precondition', 'Unable to parse receipt leaf id');
+    throw new HttpsError('failed-precondition', params.leafIdMessage || 'Unable to parse receipt leaf id');
   }
   const index = Math.floor(nonce);
   if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
-    throw new HttpsError('failed-precondition', 'Receipt leaf index out of range');
+    throw new HttpsError('failed-precondition', params.leafIndexMessage || 'Receipt leaf index out of range');
   }
 
   return {
@@ -6690,6 +7041,81 @@ function parseCompressedReceiptProof(params: {
   };
 }
 
+async function sendOpenableStripeReceiptClaimTx(params: {
+  conn: Connection;
+  dropRuntime: DropRuntime;
+  signer: Keypair;
+  recipientPk: PublicKey;
+  coreCollection: PublicKey;
+  adminReceipt: any;
+  dudeIds: number[];
+}): Promise<string> {
+  const receiptId = String(params.adminReceipt?.id || '');
+  if (!receiptId) throw new HttpsError('failed-precondition', 'Matching Stripe receipt is missing an asset id');
+  const proof = await fetchAssetProof(receiptId, params.dropRuntime);
+  const proofContext = parseCompressedReceiptProof({
+    asset: params.adminReceipt,
+    proof,
+    dropRuntime: params.dropRuntime,
+    expectedOwner: params.signer.publicKey.toBase58(),
+  });
+  const burnIx = bubblegumBurnV2Ix({
+    payer: params.signer.publicKey,
+    authority: params.signer.publicKey,
+    leafOwner: proofContext.leafOwner,
+    leafDelegate: proofContext.leafDelegate,
+    merkleTree: proofContext.merkleTree,
+    coreCollection: params.coreCollection,
+    root: proofContext.root,
+    dataHash: proofContext.dataHash,
+    creatorHash: proofContext.creatorHash,
+    assetDataHash: proofContext.assetDataHash,
+    flags: proofContext.flags,
+    nonce: proofContext.nonce,
+    index: proofContext.index,
+    proof: proofContext.proofAccounts,
+  });
+  const mintIx = buildMintReceiptsIx({
+    dropRuntime: params.dropRuntime,
+    cosignerPk: params.signer.publicKey,
+    recipientPk: params.recipientPk,
+    coreCollection: params.coreCollection,
+    boxIds: [],
+    dudeIds: params.dudeIds,
+  });
+  const instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), burnIx, mintIx];
+
+  const { blockhash } = await withTimeout(
+    params.conn.getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash:claimStripeReceipt:openable',
+  );
+  const buildClaimTx = (luts: AddressLookupTableAccount[]) => buildTx(instructions, params.signer.publicKey, blockhash, [params.signer], luts);
+  const { tx } = await buildTxWithOptionalDeliveryLookupTable({
+    conn: params.conn,
+    dropRuntime: params.dropRuntime,
+    build: buildClaimTx,
+    encodeTooLargeMessage:
+      'Stripe receipt claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
+    encodeTooLargeDetails: {
+      receiptsMerkleTree: params.dropRuntime.receiptsMerkleTreeStr,
+      dropId: params.dropRuntime.dropId,
+    },
+    packetTooLargeMessage: (rawBytes, maxRawBytes) =>
+      `Stripe receipt claim transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
+    packetTooLargeDetails: {
+      deliveryLookupTable: params.dropRuntime.deliveryLookupTableStr,
+      receiptsMerkleTree: params.dropRuntime.receiptsMerkleTreeStr,
+      dropId: params.dropRuntime.dropId,
+    },
+  });
+
+  return sendAndConfirmSignedTx(params.conn, tx, 'claimStripeReceipt:openable', {
+    sendTimeoutMs: TX_SEND_TIMEOUT_MS,
+    confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+  });
+}
+
 export const claimStripeReceipt = onCallLogged(
   'claimStripeReceipt',
   async (request) => {
@@ -6706,6 +7132,7 @@ export const claimStripeReceipt = onCallLogged(
     const attemptId = stripeReceiptClaimAttemptId(nowMs);
 
     let startedClaim: Extract<StripeReceiptClaimStart, { status: 'started' }> | null = null;
+    let sentReceiptTx: string | null = null;
     try {
       const started = await startStripeReceiptClaim({
         claimRef,
@@ -6715,17 +7142,68 @@ export const claimStripeReceipt = onCallLogged(
         nowMs,
       });
       if (started.status === 'already_claimed') {
-        return {
-          processed: true,
+        if (started.receiptKind) {
+          return stripeReceiptClaimResponse({
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            receiptTxs: started.receiptTxs,
+            receiptKind: started.receiptKind,
+            receiptsTransferred: started.receiptsTransferred,
+            figureIds: started.figureIds,
+          });
+        }
+        let dropRuntime: DropRuntime | null = null;
+        try {
+          dropRuntime = getDropRuntime(started.dropId);
+        } catch (err) {
+          logger.warn('claimStripeReceipt:already_claimed_drop_runtime_lookup_failed', {
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            boxId: started.boxId,
+            error: summarizeError(err),
+          });
+        }
+        if (dropRuntime && isOpenableDrop(dropRuntime)) {
+          try {
+            const orderSnap = await db.doc(dropDeliveryOrderPath(started.dropId, started.deliveryId)).get();
+            const assignment = orderSnap.exists
+              ? stripeAssignedIrlClaimForBox(orderSnap.data(), started.boxId, {
+                  itemsPerBox: dropRuntime.itemsPerBox,
+                  maxDudeId: dropRuntime.maxDudeId,
+                })
+              : null;
+            if (assignment && (await ownsAllStripeFigureReceipts(recipientWallet, dropRuntime, assignment.dudeIds))) {
+              return stripeReceiptClaimResponse({
+                dropId: started.dropId,
+                deliveryId: started.deliveryId,
+                receiptTxs: started.receiptTxs,
+                receiptKind: 'figure',
+                receiptsTransferred: assignment.dudeIds.length,
+                figureIds: assignment.dudeIds,
+              });
+            }
+          } catch (err) {
+            logger.warn('claimStripeReceipt:already_claimed_assignment_lookup_failed', {
+              dropId: started.dropId,
+              deliveryId: started.deliveryId,
+              boxId: started.boxId,
+              error: summarizeError(err),
+            });
+          }
+        }
+        return stripeReceiptClaimResponse({
           dropId: started.dropId,
           deliveryId: started.deliveryId,
-          receiptsTransferred: 1,
           receiptTxs: started.receiptTxs,
-        };
+          ...(dropRuntime ? { receiptKind: 'box' as const } : {}),
+        });
       }
       startedClaim = started;
 
       const dropRuntime = getDropRuntime(started.dropId);
+      const openableAssignment = isOpenableDrop(dropRuntime)
+        ? requireStripeOpenableClaimAssignment({ irlClaims: started.orderIrlClaims }, dropRuntime, started.boxId)
+        : null;
       const cfg = await ensureOnchainCoreConfig(dropRuntime, true);
       if (!dropRuntime.receiptsMerkleTreeStr) {
         throw new HttpsError(
@@ -6753,10 +7231,12 @@ export const claimStripeReceipt = onCallLogged(
       }
 
       const adminWallet = signer.publicKey.toBase58();
-      const adminReceipt = await findStripeReceiptAssetOwnedBy(adminWallet, dropRuntime, started.boxId);
-      if (!adminReceipt) {
-        const recipientReceipt = await findStripeReceiptAssetOwnedBy(recipientWallet, dropRuntime, started.boxId);
-        if (recipientReceipt) {
+      const adminReceipt = openableAssignment
+        ? await findStripeReceiptAssetByIdOwnedBy(adminWallet, dropRuntime, started.boxId, openableAssignment.boxAssetId)
+        : await findStripeReceiptAssetOwnedBy(adminWallet, dropRuntime, started.boxId);
+      if (openableAssignment) {
+        const assignment = openableAssignment;
+        const finalizeOpenableFigureClaim = async (receiptTx: string | null) => {
           const receiptTxs = await finalizeStripeReceiptClaim({
             claimRef,
             orderRef: started.orderRef,
@@ -6766,11 +7246,111 @@ export const claimStripeReceipt = onCallLogged(
             boxId: started.boxId,
             recipientWallet,
             attemptId,
-            receiptTx: null,
+            receiptTx,
+            receiptKind: 'figure',
+            receiptsTransferred: assignment.dudeIds.length,
+            figureIds: assignment.dudeIds,
             updatePluralOrderClaim: started.updatePluralOrderClaim,
             updateSingularOrderClaim: started.updateSingularOrderClaim,
           });
-          return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
+          return stripeReceiptClaimResponse({
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            receiptTxs,
+            receiptKind: 'figure',
+            receiptsTransferred: assignment.dudeIds.length,
+            figureIds: assignment.dudeIds,
+          });
+        };
+        let ownsAssignedFigures: boolean | null = null;
+        const receiverOwnsAssignedFigures = async () => {
+          if (ownsAssignedFigures == null) {
+            ownsAssignedFigures = await ownsAllStripeFigureReceipts(recipientWallet, dropRuntime, assignment.dudeIds);
+          }
+          return ownsAssignedFigures;
+        };
+
+        if (
+          (started.resumingPreviousProcessingClaim || started.hasPreviousClaimFailure) &&
+          (await receiverOwnsAssignedFigures())
+        ) {
+          return finalizeOpenableFigureClaim(null);
+        }
+
+        if (!adminReceipt) {
+          if (await receiverOwnsAssignedFigures()) {
+            return finalizeOpenableFigureClaim(null);
+          }
+          throw new HttpsError('failed-precondition', 'Matching admin-owned Stripe receipt not found');
+        }
+
+        const adminReceiptId = String(adminReceipt.id || '');
+        if (!adminReceiptId) throw new HttpsError('failed-precondition', 'Matching Stripe receipt is missing an asset id');
+        if (assignment.boxAssetId !== adminReceiptId) {
+          throw new HttpsError(
+            'failed-precondition',
+            'Stripe receipt claim is not ready yet; assigned pack receipt does not match admin receipt',
+            {
+              dropId: started.dropId,
+              deliveryId: started.deliveryId,
+              boxId: started.boxId,
+              assignedBoxAssetId: assignment.boxAssetId,
+              adminReceiptId,
+            },
+          );
+        }
+
+        const receiptTx = await sendOpenableStripeReceiptClaimTx({
+          conn,
+          dropRuntime,
+          signer,
+          recipientPk,
+          coreCollection: cfg.coreCollection,
+          adminReceipt,
+          dudeIds: assignment.dudeIds,
+        });
+        sentReceiptTx = receiptTx;
+        return finalizeOpenableFigureClaim(receiptTx);
+      }
+
+      let recipientReceipt: any | null | undefined;
+      const findRecipientReceipt = async () => {
+        if (recipientReceipt === undefined) {
+          recipientReceipt = await findStripeReceiptAssetOwnedBy(recipientWallet, dropRuntime, started.boxId);
+        }
+        return recipientReceipt;
+      };
+      const finalizeBoxClaim = async (receiptTx: string | null) => {
+        const receiptTxs = await finalizeStripeReceiptClaim({
+          claimRef,
+          orderRef: started.orderRef,
+          code,
+          dropId: started.dropId,
+          deliveryId: started.deliveryId,
+          boxId: started.boxId,
+          recipientWallet,
+          attemptId,
+          receiptTx,
+          receiptKind: 'box',
+          receiptsTransferred: 1,
+          updatePluralOrderClaim: started.updatePluralOrderClaim,
+          updateSingularOrderClaim: started.updateSingularOrderClaim,
+        });
+        return stripeReceiptClaimResponse({
+          dropId: started.dropId,
+          deliveryId: started.deliveryId,
+          receiptTxs,
+          receiptKind: 'box',
+          receiptsTransferred: 1,
+        });
+      };
+      if ((started.resumingPreviousProcessingClaim || started.hasPreviousClaimFailure) && (await findRecipientReceipt())) {
+        return finalizeBoxClaim(null);
+      }
+
+      if (!adminReceipt) {
+        if (await findRecipientReceipt()) {
+          return finalizeBoxClaim(null);
         }
         throw new HttpsError('failed-precondition', 'Matching admin-owned Stripe receipt not found');
       }
@@ -6816,23 +7396,19 @@ export const claimStripeReceipt = onCallLogged(
         sendTimeoutMs: TX_SEND_TIMEOUT_MS,
         confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
       });
-      const receiptTxs = await finalizeStripeReceiptClaim({
-        claimRef,
-        orderRef: started.orderRef,
-        code,
-        dropId: started.dropId,
-        deliveryId: started.deliveryId,
-        boxId: started.boxId,
-        recipientWallet,
-        attemptId,
-        receiptTx,
-        updatePluralOrderClaim: started.updatePluralOrderClaim,
-        updateSingularOrderClaim: started.updateSingularOrderClaim,
-      });
-
-      return { processed: true, dropId: started.dropId, deliveryId: started.deliveryId, receiptsTransferred: 1, receiptTxs };
+      sentReceiptTx = receiptTx;
+      return finalizeBoxClaim(receiptTx);
     } catch (err) {
-      if (startedClaim) {
+      const maybeSentReceiptTx = sentReceiptTx || stripeReceiptClaimMaybeSubmittedTx(err);
+      if (startedClaim && maybeSentReceiptTx) {
+        logger.warn('claimStripeReceipt:post_send_error_left_processing_for_retry', {
+          dropId: startedClaim.dropId,
+          deliveryId: startedClaim.deliveryId,
+          boxId: startedClaim.boxId,
+          receiptTx: maybeSentReceiptTx,
+          error: summarizeError(err),
+        });
+      } else if (startedClaim) {
         await clearStripeReceiptClaimProcessing({
           claimRef,
           orderRef: startedClaim.orderRef,
@@ -6984,137 +7560,70 @@ export const prepareIrlClaimTx = onCallLogged(
 
   // All receipts/certificates in this repo are Bubblegum v2 compressed cNFTs.
   // (We intentionally do NOT support uncompressed receipt assets anymore.)
-  const compression = (certificate as any)?.compression || {};
   const proof = await fetchAssetProof(certificateId, claimDropRuntime);
-  const proofPath: string[] = Array.isArray(proof?.proof) ? proof.proof : [];
-  const treeId = String(proof?.tree_id ?? proof?.treeId ?? '');
-  const rootStr = String(proof?.root || '');
-  if (!treeId || !rootStr) {
-    throw new HttpsError('failed-precondition', 'Unable to fetch certificate proof for burn');
-  }
-  const merkleTree = new PublicKey(treeId);
-  if (!merkleTree.equals(claimDropRuntime.receiptsMerkleTree)) {
-    throw new HttpsError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
-      certificateTree: merkleTree.toBase58(),
-      receiptsTree: claimDropRuntime.receiptsMerkleTree.toBase58(),
-      dropId: claimDropId,
-    });
-  }
-  const root = bs58Bytes32(rootStr, 'assetProof.root');
-  const dataHash = bs58Bytes32(String(compression?.data_hash || compression?.dataHash || ''), 'asset.compression.data_hash');
-  const creatorHash = bs58Bytes32(String(compression?.creator_hash || compression?.creatorHash || ''), 'asset.compression.creator_hash');
-  const assetDataHashStr = compression?.asset_data_hash || compression?.assetDataHash || '';
-  const assetDataHash = assetDataHashStr ? bs58Bytes32(String(assetDataHashStr), 'asset.compression.asset_data_hash') : null;
-  const flagsNum = compression?.flags == null ? null : Number(compression.flags);
-  const nonce = Number(compression?.leaf_id ?? compression?.leafId);
-  if (!Number.isFinite(nonce) || nonce < 0) {
-    throw new HttpsError('failed-precondition', 'Unable to parse certificate leaf id');
-  }
-  const index = Math.floor(nonce);
-  if (!Number.isFinite(index) || index < 0 || index > 0xffff_ffff) {
-    throw new HttpsError('failed-precondition', 'Certificate leaf index out of range');
-  }
-  const proofAccountsFull = proofPath.map((p) => new PublicKey(p));
-  const proofAccounts = proofAccountsFull;
-  const leafOwner = new PublicKey(String(certificate?.ownership?.owner || ownerWallet));
-  const leafDelegate = new PublicKey(String(certificate?.ownership?.delegate || certificate?.ownership?.owner || ownerWallet));
+  const proofContext = parseCompressedReceiptProof({
+    asset: certificate,
+    proof,
+    dropRuntime: claimDropRuntime,
+    expectedOwner: ownerWallet,
+    proofMissingMessage: 'Unable to fetch certificate proof for burn',
+    treeMismatchMessage: 'Certificate does not belong to the configured receipts tree',
+    treeMismatchActualKey: 'certificateTree',
+    treeMismatchExpectedKey: 'receiptsTree',
+    leafIdMessage: 'Unable to parse certificate leaf id',
+    leafIndexMessage: 'Certificate leaf index out of range',
+  });
 
   // 1) Burn the box certificate cNFT (user-signed).
   instructions.push(
     bubblegumBurnV2Ix({
       payer: ownerPk,
       authority: ownerPk,
-      leafOwner,
-      leafDelegate,
-      merkleTree,
+      leafOwner: proofContext.leafOwner,
+      leafDelegate: proofContext.leafDelegate,
+      merkleTree: proofContext.merkleTree,
       coreCollection: cfgCoreCollection,
-      root,
-      dataHash,
-      creatorHash,
-      assetDataHash,
-      flags: flagsNum,
-      nonce,
-      index,
-      proof: proofAccounts,
+      root: proofContext.root,
+      dataHash: proofContext.dataHash,
+      creatorHash: proofContext.creatorHash,
+      assetDataHash: proofContext.assetDataHash,
+      flags: proofContext.flags,
+      nonce: proofContext.nonce,
+      index: proofContext.index,
+      proof: proofContext.proofAccounts,
     }),
   );
 
   // 2) Mint the configured figure receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
-  const treeConfig = deriveTreeConfigPda(claimDropRuntime.receiptsMerkleTree);
   instructions.push(
-    new TransactionInstruction({
-      programId: claimDropRuntime.boxMinterProgramId,
-      keys: [
-        { pubkey: claimDropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false }, // config
-        { pubkey: signer.publicKey, isSigner: true, isWritable: true }, // cosigner
-        { pubkey: ownerPk, isSigner: false, isWritable: false }, // user
-        { pubkey: claimDropRuntime.receiptsMerkleTree, isSigner: false, isWritable: true }, // merkle_tree
-        { pubkey: treeConfig, isSigner: false, isWritable: true }, // tree_config
-        { pubkey: cfgCoreCollection, isSigner: false, isWritable: true }, // core_collection
-        { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false }, // bubblegum_program
-        { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false }, // log_wrapper
-        { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false }, // compression_program
-        { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false }, // mpl_core_program
-        { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false }, // mpl_core_cpi_signer
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
-      ],
-      data: encodeMintReceiptsArgs({ boxIds: [], dudeIds }, claimDropRuntime),
+    buildMintReceiptsIx({
+      dropRuntime: claimDropRuntime,
+      cosignerPk: signer.publicKey,
+      recipientPk: ownerPk,
+      coreCollection: cfgCoreCollection,
+      boxIds: [],
+      dudeIds,
     }),
   );
 
   // Prefer building without LUT first (wallet UX / preview tends to behave better),
   // but fall back to the delivery ALT if needed to fit under Solana's packet limit.
-  let addressLookupTables: AddressLookupTableAccount[] = [];
-  try {
-    addressLookupTables = await getDeliveryLookupTable(conn, claimDropRuntime);
-  } catch {
-    addressLookupTables = [];
-  }
   const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:claimIrl');
-  const MAX_RAW_TX_BYTES = 1232;
-
   const buildClaimTx = (luts: AddressLookupTableAccount[]) => buildTx(instructions, ownerPk, blockhash, [signer], luts);
-
-  let tx: VersionedTransaction;
-  try {
-    // Try without LUT first.
-    tx = buildClaimTx([]);
-  } catch (err) {
-    // web3.js can throw RangeError when the v0 message exceeds the fixed 1232-byte buffer.
-    const msg = err instanceof Error ? err.message : String(err);
-    if (err instanceof RangeError && /encoding overruns Uint8Array/i.test(msg)) {
-      if (!addressLookupTables.length) {
-        throw new HttpsError(
-          'failed-precondition',
-          'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
-          { receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr, dropId: claimDropId },
-        );
-      }
-      tx = buildClaimTx(addressLookupTables);
-    } else {
-      throw err;
-    }
-  }
-
-  let raw = tx.serialize();
-  if (raw.length > MAX_RAW_TX_BYTES && addressLookupTables.length) {
-    // If the no-LUT build encoded but exceeded the packet limit, retry with LUT.
-    tx = buildClaimTx(addressLookupTables);
-    raw = tx.serialize();
-  }
-  if (raw.length > MAX_RAW_TX_BYTES) {
-    throw new HttpsError(
-      'failed-precondition',
-      `Claim transaction too large (${raw.length} bytes > ${MAX_RAW_TX_BYTES}).`,
-      {
-        rawBytes: raw.length,
-        maxRawBytes: MAX_RAW_TX_BYTES,
-        deliveryLookupTable: claimDropRuntime.deliveryLookupTableStr,
-        receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr,
-        dropId: claimDropId,
-      },
-    );
-  }
+  const { raw } = await buildTxWithOptionalDeliveryLookupTable({
+    conn,
+    dropRuntime: claimDropRuntime,
+    build: buildClaimTx,
+    encodeTooLargeMessage:
+      'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
+    encodeTooLargeDetails: { receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr, dropId: claimDropId },
+    packetTooLargeMessage: (rawBytes, maxRawBytes) => `Claim transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
+    packetTooLargeDetails: {
+      deliveryLookupTable: claimDropRuntime.deliveryLookupTableStr,
+      receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr,
+      dropId: claimDropId,
+    },
+  });
 
   return {
     encodedTx: Buffer.from(raw).toString('base64'),

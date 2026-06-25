@@ -20,6 +20,7 @@ import {
   ProfileAddress,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
+  StripeReceiptClaimResult,
 } from '../types';
 import { getHeliusApiKey } from './helius';
 import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
@@ -1278,6 +1279,13 @@ export async function requestClaimTx(
   code: string,
 ): Promise<PreparedTxResponse> {
   return callFunction<{ owner: string; code: string }, PreparedTxResponse>('prepareIrlClaimTx', { owner, code });
+}
+
+export async function claimStripeReceipt(args: { code: string; recipient: string }): Promise<StripeReceiptClaimResult> {
+  return callFunction<{ code: string; recipient: string }, StripeReceiptClaimResult>('claimStripeReceipt', {
+    code: args.code,
+    recipient: args.recipient,
+  });
 }
 
 export async function solanaAuth(

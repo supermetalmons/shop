@@ -228,6 +228,16 @@ export interface PreparedTxResponse {
   certificateId?: string;
 }
 
+export interface StripeReceiptClaimResult {
+  processed: boolean;
+  dropId?: string;
+  deliveryId?: number;
+  receiptsTransferred?: number;
+  receiptTxs?: string[];
+  receiptKind?: 'box' | 'figure';
+  figureIds?: number[];
+}
+
 export interface DeliverySelection {
   itemIds: string[];
   addressId: string;

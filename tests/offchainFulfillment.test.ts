@@ -29,6 +29,7 @@ import {
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
+  stripeAssignedIrlClaimForBox,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
@@ -130,6 +131,83 @@ test('IRL claim code normalization rejects Stripe-formatted alphabetic codes', (
   assert.equal(normalizeIrlClaimCode('123-456 7890'), '1234567890');
   assert.equal(normalizeIrlClaimCode('ABCDEF-0123456789'), '');
   assert.equal(IRL_CLAIM_CODE_DIGITS, 10);
+});
+
+test('Stripe assigned IRL claim helper returns specific receipt ids for a box', () => {
+  const order = {
+    irlClaims: [
+      { boxId: 9, boxAssetId: 'receipt-9', dudeIds: [101, 102, 103] },
+      { boxId: 10, boxAssetId: 'receipt-10', dudeIds: [104, 105, 106] },
+    ],
+  };
+
+  assert.deepEqual(stripeAssignedIrlClaimForBox(order, 10, { itemsPerBox: 3, maxDudeId: 999 }), {
+    boxId: 10,
+    boxAssetId: 'receipt-10',
+    dudeIds: [104, 105, 106],
+  });
+  assert.equal(stripeAssignedIrlClaimForBox(order, 11, { itemsPerBox: 3, maxDudeId: 999 }), null);
+});
+
+test('Stripe assigned IRL claim helper rejects incomplete receipt assignments', () => {
+  assert.throws(
+    () =>
+      stripeAssignedIrlClaimForBox(
+        {
+          irlClaims: [{ boxId: 9, dudeIds: [101, 102] }],
+        },
+        9,
+        { itemsPerBox: 3, maxDudeId: 999 },
+      ),
+    /invalid assigned receipt count/,
+  );
+  assert.throws(
+    () =>
+      stripeAssignedIrlClaimForBox(
+        {
+          irlClaims: [{ boxId: 9, dudeIds: [101, 102, 103] }],
+        },
+        9,
+        { itemsPerBox: 3, maxDudeId: 999 },
+      ),
+    /missing assigned pack receipt asset id/,
+  );
+  assert.throws(
+    () =>
+      stripeAssignedIrlClaimForBox(
+        {
+          irlClaims: [{ boxId: 9, dudeIds: [101, 101, 103] }],
+        },
+        9,
+        { itemsPerBox: 3, maxDudeId: 999 },
+      ),
+    /duplicate assigned receipt ids/,
+  );
+  assert.throws(
+    () =>
+      stripeAssignedIrlClaimForBox(
+        {
+          irlClaims: [{ boxId: 9, dudeIds: [101, 102.5, 103] }],
+        },
+        9,
+        { itemsPerBox: 3, maxDudeId: 999 },
+      ),
+    /invalid assigned receipt id/,
+  );
+  assert.throws(
+    () =>
+      stripeAssignedIrlClaimForBox(
+        {
+          irlClaims: [
+            { boxId: 9, boxAssetId: 'receipt-9a', dudeIds: [101, 102, 103] },
+            { boxId: 9, boxAssetId: 'receipt-9b', dudeIds: [104, 105, 106] },
+          ],
+        },
+        9,
+        { itemsPerBox: 3, maxDudeId: 999 },
+      ),
+    /duplicate assigned box entries/,
+  );
 });
 
 test('Bubblegum transferV2 helper uses expected discriminator and account order', () => {

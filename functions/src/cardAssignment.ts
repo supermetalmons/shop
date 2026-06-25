@@ -33,6 +33,12 @@ export type SpecificDudeAssignmentResult = {
   created: boolean;
 };
 
+export type StripeAssignedIrlClaim = {
+  boxId: number;
+  boxAssetId: string;
+  dudeIds: number[];
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -123,6 +129,60 @@ function normalizeWallet(wallet: string): string {
   } catch {
     throw new HttpsError('invalid-argument', 'Invalid wallet address');
   }
+}
+
+function positiveBoxIdOrNull(value: unknown): number | null {
+  const boxId = Math.floor(Number(value));
+  return Number.isFinite(boxId) && boxId > 0 ? boxId : null;
+}
+
+export function stripeAssignedIrlClaimForBox(
+  order: any,
+  boxId: number,
+  options: { itemsPerBox: number; maxDudeId: number },
+): StripeAssignedIrlClaim | null {
+  const normalizedBoxId = positiveBoxIdOrNull(boxId);
+  if (!normalizedBoxId) throw new Error('Stripe IRL claim box id is invalid');
+
+  const expectedCount = Math.floor(Number(options.itemsPerBox));
+  if (!Number.isFinite(expectedCount) || expectedCount < 1) {
+    throw new Error('Stripe IRL claim itemsPerBox is invalid');
+  }
+  const maxDudeId = Math.floor(Number(options.maxDudeId));
+  if (!Number.isFinite(maxDudeId) || maxDudeId < 1) {
+    throw new Error('Stripe IRL claim maxDudeId is invalid');
+  }
+
+  const claims = Array.isArray(order?.irlClaims) ? order.irlClaims : [];
+  const matchingClaims = claims.filter((entry: any) => positiveBoxIdOrNull(entry?.boxId) === normalizedBoxId);
+  if (matchingClaims.length > 1) {
+    throw new Error('Stripe IRL claim has duplicate assigned box entries');
+  }
+  const claim = matchingClaims[0];
+  if (!claim) return null;
+
+  const rawDudeIds = claim?.dudeIds;
+  if (!Array.isArray(rawDudeIds)) throw new Error('Stripe IRL claim is missing assigned receipt ids');
+  const dudeIds = rawDudeIds.map((value: unknown) => Number(value));
+  if (dudeIds.length !== expectedCount) {
+    throw new Error(`Stripe IRL claim has invalid assigned receipt count (expected ${expectedCount})`);
+  }
+  dudeIds.forEach((dudeId) => {
+    if (!Number.isInteger(dudeId) || dudeId < 1 || dudeId > maxDudeId) {
+      throw new Error(`Stripe IRL claim has invalid assigned receipt id: ${dudeId}`);
+    }
+  });
+  if (new Set(dudeIds).size !== dudeIds.length) {
+    throw new Error('Stripe IRL claim has duplicate assigned receipt ids');
+  }
+
+  const boxAssetId = typeof claim?.boxAssetId === 'string' ? claim.boxAssetId.trim() : '';
+  if (!boxAssetId) throw new Error('Stripe IRL claim is missing assigned pack receipt asset id');
+  return {
+    boxId: normalizedBoxId,
+    boxAssetId,
+    dudeIds,
+  };
 }
 
 type DudeIdsForAssignmentParams = {

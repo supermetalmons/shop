@@ -2,6 +2,15 @@ import { createHash, randomInt } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
 import type { MintSelectionConfig } from '../config/deployment.js';
 import { normalizeCountryCode } from '../normalizers.js';
+import {
+  normalizeStripeReceiptClaimCode,
+  requireStripeReceiptClaimCode,
+} from '../shared/stripeReceiptClaims.js';
+export {
+  normalizeStripeReceiptClaimCode,
+  requireStripeReceiptClaimCode,
+} from '../shared/stripeReceiptClaims.js';
+export { stripeAssignedIrlClaimForBox, type StripeAssignedIrlClaim } from '../cardAssignment.js';
 
 export const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
@@ -120,7 +129,6 @@ function normalizedString(value: unknown): string {
   return String(value || '').trim();
 }
 
-const STRIPE_RECEIPT_CLAIM_CODE_RE = /^[A-Z]{6}-\d{10}$/;
 const STRIPE_RECEIPT_CLAIM_CODE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const STRIPE_RECEIPT_CLAIM_DIGIT_MAX = 10 ** 10;
 
@@ -130,18 +138,6 @@ export function generateStripeReceiptClaimCode(): string {
     prefix += STRIPE_RECEIPT_CLAIM_CODE_LETTERS[randomInt(0, STRIPE_RECEIPT_CLAIM_CODE_LETTERS.length)];
   }
   return `${prefix}-${String(randomInt(0, STRIPE_RECEIPT_CLAIM_DIGIT_MAX)).padStart(10, '0')}`;
-}
-
-export function normalizeStripeReceiptClaimCode(code: unknown): string {
-  return normalizedString(code).toUpperCase();
-}
-
-export function requireStripeReceiptClaimCode(code: unknown): string {
-  const normalized = normalizeStripeReceiptClaimCode(code);
-  if (!STRIPE_RECEIPT_CLAIM_CODE_RE.test(normalized)) {
-    throw new Error('Invalid Stripe receipt claim code');
-  }
-  return normalized;
 }
 
 export function stripeReceiptClaimBoxMapKey(boxId: number): string {

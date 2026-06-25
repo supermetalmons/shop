@@ -20,6 +20,7 @@ import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
+  claimStripeReceipt,
   createStripeCheckoutSession,
   getAnonymousStripeDeliveryHistory,
   getDropPackStatus,
@@ -122,6 +123,7 @@ import {
   resolveFulfillmentTrackingHref,
   shouldDisplayFulfillmentTrackingCode,
 } from './lib/fulfillmentTracking';
+import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from './lib/stripeReceiptClaims';
 import {
   DeliveryOrderSummary,
   InventoryItem,
@@ -5033,8 +5035,33 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     await ensureSignedIn();
   };
 
-  const handleClaim = async ({ code }: { code: string }) => {
+  const handleClaim = async ({ code, recipient }: { code: string; recipient?: string }) => {
     if (blockViewerModeAction()) return { deferred: true };
+    if (isStripeReceiptClaimCode(code)) {
+      let recipientWallet: string;
+      try {
+        recipientWallet = new PublicKey(String(recipient || '').trim()).toBase58();
+      } catch {
+        throw new Error('Invalid receiver address');
+      }
+
+      const result = await claimStripeReceipt({ code, recipient: recipientWallet });
+      closeClaimModal();
+      const count = Math.max(0, Math.floor(Number(result.receiptsTransferred || 0)));
+      const displayCount = count || 1;
+      const receiptBaseLabel = result.receiptKind === 'figure' ? 'card receipt' : 'receipt';
+      const receiptLabel = displayCount === 1 ? receiptBaseLabel : `${receiptBaseLabel}s`;
+      showToast(`Claim submitted · ${displayCount} ${receiptLabel} sent to ${shortAddress(recipientWallet)}`);
+      if (owner === recipientWallet) {
+        void refetchInventory().catch((err) => {
+          console.warn('[mons] failed to refresh inventory after Stripe receipt claim', err);
+        });
+      }
+      return { deferred: true };
+    }
+    if (hasAlphabeticClaimCodeCharacters(code)) {
+      throw new Error('Invalid Stripe receipt claim code');
+    }
     if (!publicKey) setPendingClaimSignIn(true);
     const signedIn = await ensureSignedIn();
     if (!signedIn || !publicKey) return { deferred: true };

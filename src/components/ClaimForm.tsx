@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -8,7 +9,7 @@ type ClaimFormResult = {
 };
 
 interface ClaimFormProps {
-  onClaim: (payload: { code: string }) => Promise<ClaimFormResult | void>;
+  onClaim: (payload: { code: string; recipient?: string }) => Promise<ClaimFormResult | void>;
   onSuccess?: () => void;
   onDismiss?: () => void;
   mode?: 'card' | 'modal';
@@ -50,17 +51,21 @@ export function ClaimForm({
   initialCode = '',
 }: ClaimFormProps) {
   const codeInputRef = useRef<HTMLInputElement | null>(null);
+  const recipientInputRef = useRef<HTMLInputElement | null>(null);
   const shouldAutoFocusCodeInput = shouldAutoFocusClaimCodeInput();
   const [code, setCode] = useState(initialCode);
+  const [recipient, setRecipient] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const figuresPerBox = normalizeItemsPerBoxCount(itemsPerBox);
   const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
   const defaultFigureReceiptWord = resolveReceiptWord(figureNamePrefix, 'figure');
+  const isStripeCode = isStripeReceiptClaimCode(code);
 
   useEffect(() => {
     setCode(initialCode);
+    setRecipient('');
     setError(null);
     setSuccess(null);
   }, [initialCode]);
@@ -101,12 +106,16 @@ export function ClaimForm({
     event.preventDefault();
     if (!shouldAutoFocusCodeInput) {
       codeInputRef.current?.blur();
+      recipientInputRef.current?.blur();
     }
     setLoading(true);
     setError(null);
     setSuccess(null);
     try {
-      const result = await onClaim({ code: code.trim() });
+      const result = await onClaim({
+        code: code.trim(),
+        ...(isStripeCode ? { recipient: recipient.trim() } : {}),
+      });
       if (result?.deferred) return;
       if (onSuccess) {
         onSuccess();
@@ -133,6 +142,18 @@ export function ClaimForm({
           required
         />
       </label>
+      {isStripeCode ? (
+        <label>
+          <input
+            ref={recipientInputRef}
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
+            placeholder="Receiver address"
+            aria-label="Receiver address"
+            required
+          />
+        </label>
+      ) : null}
       {error ? <div className="error">{error}</div> : null}
       {success ? <div className="success">{success}</div> : null}
       <button type="submit" disabled={loading}>
