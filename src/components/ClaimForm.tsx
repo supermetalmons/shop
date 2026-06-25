@@ -148,8 +148,8 @@ export function ClaimForm({
             ref={recipientInputRef}
             value={recipient}
             onChange={(e) => setRecipient(e.target.value)}
-            placeholder="Receiver address"
-            aria-label="Receiver address"
+            placeholder="Receiver Solana address"
+            aria-label="Receiver Solana address"
             required
           />
         </label>
