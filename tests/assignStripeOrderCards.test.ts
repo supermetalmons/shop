@@ -262,6 +262,47 @@ test('Stripe card assignment validates dry-run manifest envelope and totals', ()
   );
 });
 
+test('Stripe card assignment validates manifest paths against the requested drop id', () => {
+  const devnetRuntime = {
+    ...scriptRuntime,
+    dropId: 'card_nft_2_devnet_final',
+    cluster: 'devnet' as const,
+  };
+  const manifest = {
+    version: 1,
+    dropId: 'card_nft_2_devnet_final',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    generatedByDryRun: true,
+    orders: [
+      {
+        docPath: 'drops/card_nft_2_devnet_final/deliveryOrders/1',
+        deliveryId: 1,
+        boxes: [
+          {
+            boxId: 8,
+            receiptClaimCode: 'ABCDEF-0123456789',
+            receiptOwner: '11111111111111111111111111111111',
+            receiptOwnerSource: 'receipt_owner',
+            receiptClaimStatus: 'unclaimed',
+            receiptAssetId: 'receipt-asset',
+            assignmentStatus: 'planned',
+            dudeIds: [1, 2, 3],
+          },
+        ],
+      },
+    ],
+    totals: {
+      orders: 1,
+      boxes: 1,
+      plannedAssignments: 1,
+      existingAssignments: 0,
+    },
+  };
+
+  assert.doesNotThrow(() => assignStripeOrderCardsTestHooks.validateManifestShape(manifest as any, devnetRuntime));
+  assert.throws(() => assignStripeOrderCardsTestHooks.validateManifestShape(manifest as any, scriptRuntime), /Manifest dropId must be card_nft_2/);
+});
+
 test('Stripe card assignment keeps scanning full Helius pages when total is capped', () => {
   assert.equal(
     assignStripeOrderCardsTestHooks.heliusSearchAssetsHasNextPage(

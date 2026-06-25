@@ -45,7 +45,6 @@ import {
   requireStripeReceiptClaimCode,
 } from '../src/stripeCheckout/contract.ts';
 
-const TARGET_DROP_ID = 'card_nft_2';
 const MANIFEST_VERSION = 1;
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
@@ -54,6 +53,7 @@ const RPC_TIMEOUT_MS = 20_000;
 
 type Args = {
   execute: boolean;
+  dropId: string;
   manifest?: string;
   deliveryId?: number;
   limit?: number;
@@ -103,7 +103,7 @@ type ManifestOrder = {
 
 type Manifest = {
   version: typeof MANIFEST_VERSION;
-  dropId: typeof TARGET_DROP_ID;
+  dropId: string;
   createdAt: string;
   generatedByDryRun: true;
   orders: ManifestOrder[];
@@ -127,15 +127,16 @@ type ExecutePlanOrder = {
 
 function usage(): string {
   return [
-    'Assign card ids to card_nft_2 Stripe offchain delivery orders that are missing FF card assignments.',
+    'Assign card ids to Stripe offchain delivery orders that are missing FF card assignments.',
     '',
     'Usage:',
-    '  npm run assign-stripe-order-cards',
-    '  npm run assign-stripe-order-cards -- --delivery-id <id>',
-    '  npm run assign-stripe-order-cards -- --limit 10',
-    '  npm run assign-stripe-order-cards -- --execute --manifest <path>',
+    '  npm run assign-stripe-order-cards -- --drop-id <dropId>',
+    '  npm run assign-stripe-order-cards -- --drop-id <dropId> --delivery-id <id>',
+    '  npm run assign-stripe-order-cards -- --drop-id <dropId> --limit 10',
+    '  npm run assign-stripe-order-cards -- --drop-id <dropId> --execute --manifest <path>',
     '',
     'Options:',
+    '  --drop-id <dropId>  Required drop id, e.g. card_nft_2_devnet_final',
     '  --delivery-id <id>  Dry-run one delivery order',
     '  --limit <n>         Dry-run at most n matching orders',
     '  --execute           Apply an existing dry-run manifest',
@@ -149,8 +150,14 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function normalizeScriptDropId(rawDropId: unknown): string {
+  const dropId = String(rawDropId || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId)) fail(`Invalid --drop-id: ${String(rawDropId || '')}`);
+  return dropId;
+}
+
 function parseArgs(argv: string[]): Args {
-  const args: Args = { execute: false, json: false };
+  const args: Omit<Args, 'dropId'> & { dropId?: string } = { execute: false, json: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') {
@@ -163,6 +170,13 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === '--json') {
       args.json = true;
+      continue;
+    }
+    if (arg === '--drop-id') {
+      const value = argv[index + 1];
+      if (!value) fail(`Missing value for ${arg}\n\n${usage()}`);
+      args.dropId = normalizeScriptDropId(value);
+      index += 1;
       continue;
     }
     if (arg === '--manifest') {
@@ -188,9 +202,10 @@ function parseArgs(argv: string[]): Args {
     }
     fail(`Unknown arg: ${arg}\n\n${usage()}`);
   }
+  if (!args.dropId) fail(`--drop-id is required\n\n${usage()}`);
   if (args.execute && !args.manifest) fail(`--manifest is required with --execute\n\n${usage()}`);
   if (args.execute && (args.deliveryId || args.limit)) fail('--delivery-id/--limit are dry-run options and cannot be used with --execute');
-  return args;
+  return args as Args;
 }
 
 function loadLocalEnvFile(filePath: string) {
@@ -258,15 +273,16 @@ function collectionMintSharedOnCluster(config: FunctionsDropConfig, collectionMi
 }
 
 function buildScriptDropRuntime(config: FunctionsDropConfig): ScriptDropRuntime {
+  const dropId = normalizeScriptDropId(config.dropId);
   const itemsPerBox = Math.floor(Number(config.itemsPerBox));
   const maxSupply = Math.floor(Number(config.maxSupply));
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < 1) fail(`${TARGET_DROP_ID} must be an openable drop`);
-  if (!Number.isInteger(maxSupply) || maxSupply < 1) fail(`${TARGET_DROP_ID} has invalid maxSupply`);
+  if (!Number.isInteger(itemsPerBox) || itemsPerBox < 1) fail(`${dropId} must be an openable drop`);
+  if (!Number.isInteger(maxSupply) || maxSupply < 1) fail(`${dropId} has invalid maxSupply`);
   const maxDudeId = maxSupply * itemsPerBox;
-  if (!Number.isFinite(maxDudeId) || maxDudeId <= 0 || maxDudeId > 0xffff) fail(`${TARGET_DROP_ID} has invalid max card id`);
+  if (!Number.isFinite(maxDudeId) || maxDudeId <= 0 || maxDudeId > 0xffff) fail(`${dropId} has invalid max card id`);
   const collectionMintStr = pubkeyString('COLLECTION_MINT', config.collectionMint);
   return {
-    dropId: TARGET_DROP_ID,
+    dropId,
     config: { dropFamily: config.dropFamily },
     itemsPerBox,
     maxDudeId,
@@ -839,27 +855,27 @@ async function writeManifest(manifest: Manifest): Promise<string> {
   return filePath;
 }
 
-async function loadManifest(filePath: string): Promise<Manifest> {
+async function loadManifest(filePath: string, expectedDropId: string): Promise<Manifest> {
   const resolved = path.resolve(process.cwd(), filePath);
   const parsed = JSON.parse(await readFile(resolved, 'utf8')) as Manifest;
   if (parsed?.version !== MANIFEST_VERSION) fail(`Unsupported manifest version in ${resolved}`);
-  if (parsed?.dropId !== TARGET_DROP_ID) fail(`Manifest dropId must be ${TARGET_DROP_ID}`);
+  if (normalizeScriptDropId(parsed?.dropId) !== expectedDropId) fail(`Manifest dropId must be ${expectedDropId}`);
   if (parsed?.generatedByDryRun !== true) fail(`Manifest was not generated by this dry-run script: ${resolved}`);
   if (!Array.isArray(parsed?.orders)) fail(`Manifest is missing orders: ${resolved}`);
   validateManifestTotals(parsed, resolved);
   return parsed;
 }
 
-async function* loadOrderDocs(db: Firestore, args: Args): AsyncGenerator<QueryDocumentSnapshot> {
+async function* loadOrderDocs(db: Firestore, runtime: ScriptDropRuntime, args: Args): AsyncGenerator<QueryDocumentSnapshot> {
   if (args.deliveryId) {
-    const snap = await db.doc(dropDeliveryOrderPath(TARGET_DROP_ID, args.deliveryId)).get();
-    if (!snap.exists) fail(`Delivery order not found: ${dropDeliveryOrderPath(TARGET_DROP_ID, args.deliveryId)}`);
+    const snap = await db.doc(dropDeliveryOrderPath(runtime.dropId, args.deliveryId)).get();
+    if (!snap.exists) fail(`Delivery order not found: ${dropDeliveryOrderPath(runtime.dropId, args.deliveryId)}`);
     yield snap as QueryDocumentSnapshot;
     return;
   }
 
   const baseQuery = db
-    .collection(dropDeliveryOrdersCollectionPath(TARGET_DROP_ID))
+    .collection(dropDeliveryOrdersCollectionPath(runtime.dropId))
     .where('status', '==', 'ready_to_ship')
     .where('source', '==', 'stripe_offchain');
   let cursor: QueryDocumentSnapshot | undefined;
@@ -889,7 +905,7 @@ async function buildDryRunManifest(db: Firestore, runtime: ScriptDropRuntime, ar
     return cached;
   };
 
-  for await (const doc of loadOrderDocs(db, args)) {
+  for await (const doc of loadOrderDocs(db, runtime, args)) {
     const order = doc.data() as any;
     if (order?.source !== 'stripe_offchain' || order?.status !== 'ready_to_ship') continue;
     const deliveryId = getOrderDeliveryId(doc, order);
@@ -980,7 +996,7 @@ async function buildDryRunManifest(db: Firestore, runtime: ScriptDropRuntime, ar
 
   return {
     version: MANIFEST_VERSION,
-    dropId: TARGET_DROP_ID,
+    dropId: runtime.dropId,
     createdAt: new Date().toISOString(),
     generatedByDryRun: true,
     orders,
@@ -1034,11 +1050,12 @@ function validateManifestTotals(manifest: Manifest, context: string): void {
 
 function validateManifestShape(manifest: Manifest, runtime: ScriptDropRuntime): void {
   if (manifest.generatedByDryRun !== true) fail('Manifest was not generated by this dry-run script');
+  if (normalizeScriptDropId(manifest.dropId) !== runtime.dropId) fail(`Manifest dropId must be ${runtime.dropId}`);
   validateManifestTotals(manifest, 'manifest');
   const seenAssets = new Set<string>();
   const seenDudeIds = new Map<number, string>();
   for (const order of manifest.orders) {
-    if (!order.docPath || !order.docPath.startsWith(`drops/${TARGET_DROP_ID}/deliveryOrders/`)) fail(`Invalid manifest order path: ${order.docPath}`);
+    if (!order.docPath || !order.docPath.startsWith(`drops/${runtime.dropId}/deliveryOrders/`)) fail(`Invalid manifest order path: ${order.docPath}`);
     if (!positiveInteger(order.deliveryId)) fail(`Invalid manifest deliveryId for ${order.docPath}`);
     if (!Array.isArray(order.boxes)) fail(`Manifest order ${order.docPath} is missing boxes`);
     for (const box of order.boxes) {
@@ -1371,12 +1388,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   requireEnv('HELIUS_API_KEY', 'Set it in functions/.env.local or export it before running this script.');
   const db = initDb();
-  const config = requireFunctionsDrop(TARGET_DROP_ID);
-  if (config.dropFamily !== 'card_nft_2') fail(`${TARGET_DROP_ID} config is not a card_nft_2 drop`);
+  const config = requireFunctionsDrop(args.dropId);
+  if (config.dropFamily !== 'card_nft_2') fail(`${args.dropId} config is not a card_nft_2 drop`);
   const runtime = buildScriptDropRuntime(config);
 
   if (args.execute) {
-    const manifest = await loadManifest(args.manifest!);
+    const manifest = await loadManifest(args.manifest!, runtime.dropId);
     const result = await executeManifest(db, runtime, manifest);
     if (args.json) {
       console.log(JSON.stringify({ mode: 'execute', result }, null, 2));
