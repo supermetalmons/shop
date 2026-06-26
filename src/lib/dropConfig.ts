@@ -26,7 +26,6 @@ export type UpcomingDropRouteConfig = {
   solanaCluster: SolanaCluster;
   label: string;
   title: string;
-  notifyPath: string;
   previewDropId?: string;
   previewImageUrl?: string;
   previewAspectRatio?: number;
@@ -40,7 +39,6 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Card NFT 2',
     title: 'Card NFT 2',
-    notifyPath: '/notify_me',
     previewImageUrl: CARD_NFT_2_PACK_PREVIEW_IMAGE_URL,
     previewAspectRatio: CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO,
     boxNamePrefix: 'pack',
@@ -51,7 +49,6 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Little Swag Hoodies',
     title: 'Little Swag Hoodies',
-    notifyPath: '/notify_me',
     previewDropId: 'little_swag_hoodies_devnet',
     boxNamePrefix: 'hoodie',
   },

@@ -20,8 +20,6 @@
 }
 
 .drif-page {
-  --drif-notify-bottom-gap: clamp(24px, 4vh, 60px);
-  --drif-notify-clearance: calc(var(--drif-notify-bottom-gap) + 88px);
   --bg: #000;
   --fg: #fff;
   --muted: rgba(255, 255, 255, 0.62);
@@ -55,7 +53,7 @@
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  padding: 0 0 var(--drif-notify-clearance);
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -91,76 +89,10 @@
   gap: 0;
 }
 
-.drif-notify-area {
-  position: fixed;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2;
-  width: min(600px, 92vw);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin: 0;
-  padding-bottom: 12px;
-  gap: 12px;
-  touch-action: auto;
-  user-select: auto;
-  pointer-events: auto;
-}
-
-.drif-notify-btn {
-  margin: 0 0 var(--drif-notify-bottom-gap);
-  padding: 14px 36px;
-  border: none;
-  border-radius: 980px;
-  background: #0b84ff;
-  color: #fff;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  cursor: pointer;
-  pointer-events: auto;
-  touch-action: auto;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.drif-notify-btn:active {
-  opacity: 0.75;
-}
-
-.drif-signup {
-  width: 100%;
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.drif-signup > * {
-  max-width: 100%;
-}
-
-.drif-signup--visible {
-  display: flex;
-}
-
-.drif-signup *,
-.drif-notify-area * {
-  touch-action: auto;
-  user-select: auto;
-  pointer-events: auto;
-}
-
 @media (max-width: 480px), (max-height: 760px) {
   .drif-card-showcase {
     width: min(100%, 340px);
     padding-inline: 4px;
-  }
-
-  .drif-notify-btn {
-    padding: 12px 28px;
-    font-size: 16px;
   }
 }
 

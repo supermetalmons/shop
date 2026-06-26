@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ShopHeader } from './components/ShopHeader';
 import DrifEffectCard from './components/DrifEffectCard';
 import { DRIF_SHOWCASE_CARDS } from './drifCards';
@@ -8,8 +8,6 @@ const DRIF_SHOWCASE_PRELOAD_WINDOW = 6;
 export default function DrifApp() {
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_SHOWCASE_CARDS.length));
   const currentCard = DRIF_SHOWCASE_CARDS[cardIndex];
-  const signupRef = useRef<HTMLDivElement | null>(null);
-  const [showForm, setShowForm] = useState(false);
   const preloadCards = useMemo(
     () =>
       Array.from(
@@ -31,21 +29,6 @@ export default function DrifApp() {
     };
   }, []);
 
-  useLayoutEffect(() => {
-    const container = signupRef.current;
-    if (!container) return;
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = 'https://eomail5.com/form/578237fe-8fb4-11f0-8bba-a35988c2be69.js';
-    script.dataset.form = '578237fe-8fb4-11f0-8bba-a35988c2be69';
-    container.appendChild(script);
-    return () => {
-      if (script.parentNode === container) {
-        container.removeChild(script);
-      }
-    };
-  }, []);
-
   return (
     <div className="drif-page">
       <ShopHeader scrollHomeToTop />
@@ -61,14 +44,6 @@ export default function DrifApp() {
           />
         </div>
       </main>
-      <div className="drif-notify-area">
-        {!showForm && (
-          <button type="button" className="drif-notify-btn" onClick={() => setShowForm(true)}>
-            notify me
-          </button>
-        )}
-        <div id="signup" ref={signupRef} className={`drif-signup${showForm ? ' drif-signup--visible' : ''}`} />
-      </div>
     </div>
   );
 }
