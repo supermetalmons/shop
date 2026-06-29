@@ -2761,7 +2761,7 @@ const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manua
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
-const SHIPPER_READY_FROM_EMAIL = 'notifications@mons.academy';
+const SHIPPER_READY_FROM_EMAIL = 'notifications@support.mons.shop';
 
 type ShipperReadyOrderSummary = {
   itemCount: number;
