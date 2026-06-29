@@ -114,6 +114,7 @@ const SECRET_CODE_TEXT_Y = 2525;
 const SECRET_CODE_TEXT_MAX_WIDTH = 1800;
 const SECRET_CODE_TEXT_MAX_FONT_SIZE = 132;
 const SECRET_CODE_TEXT_MIN_FONT_SIZE = 12;
+const FULFILLMENT_INTERACTIVE_CARD_CLICK_ENABLED = false;
 const ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
   { value: 'shipped', label: 'Shipped' },
@@ -743,7 +744,7 @@ function FigureTileImage(props: {
     return <span className="figure-image figure-image--placeholder" aria-hidden="true" />;
   }
 
-  return <img src={activeSrc} alt={alt} loading="lazy" className="figure-image" onError={handleError} />;
+  return <img src={activeSrc} alt={alt} loading="lazy" draggable={false} className="figure-image" onError={handleError} />;
 }
 
 function renderFigureTiles(args: {
@@ -787,7 +788,11 @@ function renderFigureTiles(args: {
           figureMetadataByKey,
           labelOverride,
         });
-        const canViewInteractiveCard = Boolean(getFulfillmentInteractiveCard(drop || dropId, figureId) && onViewInteractiveCard);
+        const canViewInteractiveCard = Boolean(
+          FULFILLMENT_INTERACTIVE_CARD_CLICK_ENABLED &&
+            getFulfillmentInteractiveCard(drop || dropId, figureId) &&
+            onViewInteractiveCard,
+        );
         const tileContent = (
           <>
             <FigureTileImage
@@ -855,7 +860,7 @@ function renderBoxTiles(args: {
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
             {imageSrc ? (
-              <img src={imageSrc} alt={label} loading="lazy" className="figure-image" />
+              <img src={imageSrc} alt={label} loading="lazy" draggable={false} className="figure-image" />
             ) : (
               <div className="figure-image figure-image--placeholder" aria-hidden="true" />
             )}
@@ -883,7 +888,16 @@ function renderFulfillmentPackSecretImage(args: {
     (cardNft2PackMediaId ? CARD_NFT_2_PACK_IMAGES[cardNft2PackMediaId - 1]?.src : undefined) ||
     normalizeBoxDisplayImage({ dropId, boxId });
   if (!imageSrc) return null;
-  return <img src={imageSrc} alt="" aria-hidden="true" loading="lazy" className="fulfillment-pack-secret-image" />;
+  return (
+    <img
+      src={imageSrc}
+      alt=""
+      aria-hidden="true"
+      loading="lazy"
+      draggable={false}
+      className="fulfillment-pack-secret-image"
+    />
+  );
 }
 
 type FulfillmentAppProps = {
@@ -1809,7 +1823,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         <div className="card__head">
           <div>
             <div className="card__title">Order {order.deliveryId}</div>
-            <div className="muted small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
+            <div className="muted fulfillment-order-date small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
             {showContactInfo && order.address.full !== '***' && order.address.email ? (
               <div className="muted small">{order.address.email}</div>
             ) : null}
@@ -1826,7 +1840,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
               return statusText ? (
                 <>
-                  <div className="status-readout small">{statusText}</div>
+                  <div className="status-readout fulfillment-order-status-text small">{statusText}</div>
                   {trackingCode ? (
                     trackingHref ? (
                       <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
@@ -1838,12 +1852,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   ) : null}
                 </>
               ) : (
-                <em className="muted small">Not set</em>
+                <em className="muted fulfillment-order-status-text small">Not set</em>
               );
             })()}
             <button
               type="button"
-              className="link small no-focus-style"
+              className="link fulfillment-order-status-action small no-focus-style"
               onClick={() => handleOpenUpdateModal(orderKey)}
             >
               {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}

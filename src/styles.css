@@ -4126,6 +4126,14 @@ button.fulfillment-export-menu__item:focus-visible {
   text-align: right;
 }
 
+.fulfillment-order-date,
+.fulfillment-order-status-text,
+.fulfillment-order-status-action {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .order-title-row {
   display: flex;
   align-items: center;
@@ -4237,6 +4245,14 @@ button.order-status-option:hover:not(:disabled) {
   border-radius: var(--radius-sm);
   padding: 6px;
   box-sizing: border-box;
+}
+
+.fulfillment-page .figure-image,
+.fulfillment-page .fulfillment-pack-secret-image {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
 }
 
 .figure-image--placeholder {
