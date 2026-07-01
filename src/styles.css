@@ -4289,6 +4289,24 @@ button.order-status-option:hover:not(:disabled) {
   flex-wrap: wrap;
 }
 
+.fulfillment-secret-code-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.fulfillment-secret-code-line > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fulfillment-pack-secret .fulfillment-secret-code-line {
+  justify-content: flex-start;
+}
+
 .fulfillment-pack-secret-image {
   width: 58px;
   height: 58px;
@@ -4300,6 +4318,34 @@ button.order-status-option:hover:not(:disabled) {
 
 .fulfillment-secret-code {
   color: #ff3b30;
+}
+
+button.fulfillment-secret-code-download {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+button.fulfillment-secret-code-download:hover:not(:disabled),
+button.fulfillment-secret-code-download:focus-visible {
+  background: var(--surface);
+  color: var(--accent-hover);
+  outline: none;
+}
+
+button.fulfillment-secret-code-download svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
 .address-lines {

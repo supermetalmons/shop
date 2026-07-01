@@ -254,6 +254,14 @@ export function countFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder
   );
 }
 
+function countFulfillmentSecretCodesThroughBox(order: FulfillmentOrder, boxIndex: number): number {
+  let total = 0;
+  for (let index = 0; index <= boxIndex && index < order.boxes.length; index += 1) {
+    if (fulfillmentBoxSecretCode(order.boxes[index])) total += 1;
+  }
+  return total;
+}
+
 function uniqueFilename(filename: string, usedFilenames: Set<string>): string {
   if (!usedFilenames.has(filename)) {
     usedFilenames.add(filename);
@@ -320,43 +328,86 @@ function buildSecretCodePreviewImages(args: {
   });
 }
 
+function buildFulfillmentSecretCodeExportEntryFromBox(args: {
+  order: FulfillmentOrder;
+  box: FulfillmentOrderBox;
+  boxIndex: number;
+  secretCode: string;
+  secretCodeOrdinal: number;
+  options?: FulfillmentSecretCodeExportOptions;
+  usedFilenames?: Set<string>;
+}): FulfillmentSecretCodeExportEntry {
+  const drop = args.options?.dropById.get(args.order.dropId) || null;
+  const previewMode = resolveDropContent(drop || args.order.dropId).figures.fulfillmentPreviewMode;
+  const orderSegment = sanitizeFilenameSegment(String(args.order.deliveryId), 'order');
+  const filenameBase = `${orderSegment}-${args.secretCodeOrdinal}.png`;
+  const filename = args.usedFilenames ? uniqueFilename(filenameBase, args.usedFilenames) : filenameBase;
+  const previewImages = args.options
+    ? buildSecretCodePreviewImages({
+        dropId: args.order.dropId,
+        drop,
+        previewMode,
+        box: args.box,
+        figureMetadataByKey: args.options.figureMetadataByKey,
+      })
+    : [];
+
+  return {
+    orderId: fulfillmentExportOrderId(args.order),
+    boxId: args.box.boxId,
+    boxIndex: args.boxIndex,
+    secretCode: args.secretCode,
+    claimUrl: fulfillmentSecretCodeClaimUrl(args.secretCode),
+    filename,
+    ...(previewImages.length ? { previewImages } : {}),
+  };
+}
+
+export function buildFulfillmentSecretCodeExportEntry(args: {
+  order: FulfillmentOrder;
+  boxIndex: number;
+  options?: FulfillmentSecretCodeExportOptions;
+  usedFilenames?: Set<string>;
+}): FulfillmentSecretCodeExportEntry | null {
+  const box = args.order.boxes[args.boxIndex];
+  if (!box) return null;
+
+  const secretCode = fulfillmentBoxSecretCode(box);
+  if (!secretCode) return null;
+
+  return buildFulfillmentSecretCodeExportEntryFromBox({
+    order: args.order,
+    box,
+    boxIndex: args.boxIndex,
+    secretCode,
+    secretCodeOrdinal: countFulfillmentSecretCodesThroughBox(args.order, args.boxIndex),
+    options: args.options,
+    usedFilenames: args.usedFilenames,
+  });
+}
+
 export function buildFulfillmentSecretCodeExportEntries(
   orders: FulfillmentOrder[],
   options?: FulfillmentSecretCodeExportOptions,
 ): FulfillmentSecretCodeExportEntry[] {
   const usedFilenames = new Set<string>();
   return orders.flatMap((order) => {
-    const drop = options?.dropById.get(order.dropId) || null;
-    const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;
-    const orderId = fulfillmentExportOrderId(order);
-    let secretCodeIndex = 0;
+    let secretCodeOrdinal = 0;
     return order.boxes.flatMap((box, boxIndex) => {
       const secretCode = fulfillmentBoxSecretCode(box);
       if (!secretCode) return [];
 
-      secretCodeIndex += 1;
-      const orderSegment = sanitizeFilenameSegment(String(order.deliveryId), 'order');
-      const filename = uniqueFilename(`${orderSegment}-${secretCodeIndex}.png`, usedFilenames);
-      const previewImages = options
-        ? buildSecretCodePreviewImages({
-            dropId: order.dropId,
-            drop,
-            previewMode,
-            box,
-            figureMetadataByKey: options.figureMetadataByKey,
-          })
-        : [];
-
+      secretCodeOrdinal += 1;
       return [
-        {
-          orderId,
-          boxId: box.boxId,
+        buildFulfillmentSecretCodeExportEntryFromBox({
+          order,
+          box,
           boxIndex,
           secretCode,
-          claimUrl: fulfillmentSecretCodeClaimUrl(secretCode),
-          filename,
-          ...(previewImages.length ? { previewImages } : {}),
-        },
+          secretCodeOrdinal,
+          options,
+          usedFilenames,
+        }),
       ];
     });
   });

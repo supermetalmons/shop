@@ -28,6 +28,7 @@ import {
   loadFigureMetadata,
   loadFigureMetadataBatch,
   type FigureMetadataRecord,
+  type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -42,6 +43,7 @@ import {
   buildFulfillmentAddressExport,
   buildFulfillmentExportFilename,
   buildFulfillmentOrdersExport,
+  buildFulfillmentSecretCodeExportEntry,
   buildFulfillmentSecretCodeExportEntries,
   countFulfillmentSecretCodeExportEntries,
   formatFulfillmentAddressText,
@@ -206,6 +208,34 @@ function manualReviewIssueText(checkout: FulfillmentManualReviewCheckout): strin
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)];
+}
+
+function collectFulfillmentFigureMetadataTargets(args: {
+  entries: Array<{ drop: FrontendDeploymentConfig; figureIds: readonly number[] }>;
+  figureMetadataByKey: Record<string, FigureMetadataRecord>;
+}): FigureMetadataTarget[] {
+  const targets = new Map<string, FigureMetadataTarget>();
+  args.entries.forEach(({ drop, figureIds }) => {
+    if (isDirectDeliveryItemsPerBox(drop.itemsPerBox)) return;
+
+    const dropContent = resolveDropContent(drop);
+    const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
+    figureIds.forEach((figureIdRaw) => {
+      const figureId = Math.floor(Number(figureIdRaw));
+      if (!Number.isFinite(figureId) || figureId <= 0) return;
+      if (!shouldUseMetadataFallback) {
+        const hasMappedMedia = Boolean(
+          dropContent.figures.fulfillmentMediaBaseUrl && getMediaIdForFigureId(figureId, drop.figureMedia),
+        );
+        if (hasMappedMedia) return;
+      }
+      const key = figureMetadataCacheKey(drop.dropId, figureId);
+      const cached = args.figureMetadataByKey[key] || getCachedFigureMetadata(drop.dropId, figureId);
+      if (figureMetadataHasImage(cached)) return;
+      targets.set(key, { dropId: drop.dropId, figureId });
+    });
+  });
+  return Array.from(targets.values());
 }
 
 type DuplicateFigureSummary = {
@@ -472,12 +502,25 @@ async function renderSecretCodePngBlob(
   return canvasToPngBlob(canvas);
 }
 
+async function loadQRCodeModule(): Promise<QRCodeModule> {
+  const qrCodeImport = await import('qrcode');
+  return ((qrCodeImport as QRCodeModule & { default?: QRCodeModule }).default || qrCodeImport) as QRCodeModule;
+}
+
+async function buildSecretCodePngBlob(
+  entry: FulfillmentSecretCodeExportEntry,
+  previewImageCache?: SecretCodePreviewImageCache,
+  qrCode?: QRCodeModule,
+): Promise<Blob> {
+  const resolvedQrCode = qrCode || (await loadQRCodeModule());
+  return renderSecretCodePngBlob(resolvedQrCode, entry, previewImageCache || new Map());
+}
+
 async function buildSecretCodesZipBlob(
   entries: FulfillmentSecretCodeExportEntry[],
   onProgress?: SecretCodesZipProgressHandler,
 ): Promise<Blob> {
-  const [{ default: JSZip }, qrCodeImport] = await Promise.all([import('jszip'), import('qrcode')]);
-  const qrCode = ((qrCodeImport as QRCodeModule & { default?: QRCodeModule }).default || qrCodeImport) as QRCodeModule;
+  const [{ default: JSZip }, qrCode] = await Promise.all([import('jszip'), loadQRCodeModule()]);
   const zip = new JSZip();
   const totalEntries = entries.length;
   const previewImageCache: SecretCodePreviewImageCache = new Map();
@@ -485,7 +528,7 @@ async function buildSecretCodesZipBlob(
   onProgress?.(0);
 
   for (const [index, entry] of entries.entries()) {
-    const pngBlob = await renderSecretCodePngBlob(qrCode, entry, previewImageCache);
+    const pngBlob = await buildSecretCodePngBlob(entry, previewImageCache, qrCode);
     zip.file(entry.filename, pngBlob);
     onProgress?.(Math.min(95, Math.round(((index + 1) / Math.max(1, totalEntries)) * 95)));
   }
@@ -843,19 +886,47 @@ function renderFigureTiles(args: {
   );
 }
 
+function SecretCodeDownloadButton(props: {
+  secretCode: string;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  if (!props.onClick) return null;
+
+  return (
+    <button
+      type="button"
+      className="fulfillment-secret-code-download"
+      aria-label={`Download PNG for secret code ${props.secretCode}`}
+      title="Download PNG"
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      <FiDownload aria-hidden="true" />
+    </button>
+  );
+}
+
 function renderBoxTiles(args: {
-  boxIds: number[];
+  boxes: Array<{ boxId: number; boxIndex: number; secretCode: string }>;
   keyPrefix: string;
   labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
   getPreviewSrc?: (boxId: number) => string | undefined;
-  secretCodeByBoxId?: ReadonlyMap<number, string>;
+  secretCodeDownloadDisabled?: boolean;
+  onDownloadSecretCode?: (boxIndex: number) => void;
 }) {
-  const { boxIds, keyPrefix, labelSource, getPreviewSrc, secretCodeByBoxId } = args;
+  const {
+    boxes,
+    keyPrefix,
+    labelSource,
+    getPreviewSrc,
+    secretCodeDownloadDisabled,
+    onDownloadSecretCode,
+  } = args;
   return (
     <div className="figure-grid">
-      {boxIds.map((boxId, index) => {
+      {boxes.map(({ boxId, boxIndex, secretCode }, index) => {
         const { label, sizeLabel } = resolveFulfillmentDirectDeliveryBoxLabel(labelSource, boxId);
-        const secretCode = secretCodeByBoxId?.get(boxId);
         const imageSrc = getPreviewSrc?.(boxId);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
@@ -866,9 +937,16 @@ function renderBoxTiles(args: {
             )}
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
             {secretCode ? (
-              <div className="muted small">
-                {fulfillmentBoxSecretLabelPrefix(labelSource)}{' '}
-                <span className="fulfillment-secret-code">{secretCode}</span>
+              <div className="muted small fulfillment-secret-code-line">
+                <span>
+                  {fulfillmentBoxSecretLabelPrefix(labelSource)}{' '}
+                  <span className="fulfillment-secret-code">{secretCode}</span>
+                </span>
+                <SecretCodeDownloadButton
+                  secretCode={secretCode}
+                  disabled={secretCodeDownloadDisabled}
+                  onClick={onDownloadSecretCode ? () => onDownloadSecretCode(boxIndex) : undefined}
+                />
               </div>
             ) : null}
           </div>
@@ -962,6 +1040,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [secretCodesExporting, setSecretCodesExporting] = useState(false);
   const [secretCodesExportProgress, setSecretCodesExportProgress] = useState(0);
+  const [secretCodePngExportingKey, setSecretCodePngExportingKey] = useState<string | null>(null);
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
   const [trackingCodeEdits, setTrackingCodeEdits] = useState<Record<string, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
@@ -1437,39 +1516,16 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   );
 
   const fulfillmentFigureMetadataTargets = useMemo(() => {
-    const targets = new Map<string, { dropId: string; figureId: number }>();
-    const addFigureTarget = (drop: FrontendDeploymentConfig, figureId: number) => {
-      const dropContent = resolveDropContent(drop);
-      const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
-      if (!shouldUseMetadataFallback) {
-        const hasMappedMedia = Boolean(
-          dropContent.figures.fulfillmentMediaBaseUrl && getMediaIdForFigureId(figureId, drop.figureMedia),
-        );
-        if (hasMappedMedia) return;
-      }
-      const key = figureMetadataCacheKey(drop.dropId, figureId);
-      const cached = figureMetadataByKey[key] || getCachedFigureMetadata(drop.dropId, figureId);
-      if (figureMetadataHasImage(cached)) return;
-      targets.set(key, { dropId: drop.dropId, figureId });
-    };
-
+    const entries: Array<{ drop: FrontendDeploymentConfig; figureIds: number[] }> = [];
     displayedOrders.forEach((order) => {
       const drop = dropById.get(order.dropId);
       if (!drop) return;
-      listOrderFigureIds(order).forEach((figureId) => {
-        const normalizedFigureId = Math.floor(Number(figureId));
-        if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
-        addFigureTarget(drop, normalizedFigureId);
-      });
+      entries.push({ drop, figureIds: listOrderFigureIds(order) });
     });
     if (duplicateDrop) {
-      duplicateFigures.forEach(({ figureId }) => {
-        const normalizedFigureId = Math.floor(Number(figureId));
-        if (!Number.isFinite(normalizedFigureId) || normalizedFigureId <= 0) return;
-        addFigureTarget(duplicateDrop, normalizedFigureId);
-      });
+      entries.push({ drop: duplicateDrop, figureIds: duplicateFigures.map(({ figureId }) => figureId) });
     }
-    return Array.from(targets.values());
+    return collectFulfillmentFigureMetadataTargets({ entries, figureMetadataByKey });
   }, [
     duplicateFigures,
     displayedOrders,
@@ -1686,9 +1742,64 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setExportMenuOpen(false);
   }, [displayedOrders, orderVisibilityFilter, selectedDropId]);
 
+  const loadFulfillmentExportFigureMetadata = useCallback(async (targets = fulfillmentFigureMetadataTargets) => {
+    let exportFigureMetadataByKey = figureMetadataByKey;
+    if (targets.length) {
+      const records = await loadFigureMetadataBatch(targets);
+      if (records.length) {
+        mergeLoadedFigureMetadata(records);
+        exportFigureMetadataByKey = mergeFigureMetadataRecords(exportFigureMetadataByKey, records);
+      }
+    }
+    return exportFigureMetadataByKey;
+  }, [figureMetadataByKey, fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
+
+  const downloadSecretCodePng = useCallback(
+    async (order: FulfillmentOrder, boxIndex: number) => {
+      if (secretCodesExporting || secretCodePngExportingKey) return;
+
+      const box = order.boxes[boxIndex];
+      const secretCode = box ? fulfillmentBoxSecretCode(box) : '';
+      if (!secretCode) return;
+
+      const exportKey = `${fulfillmentOrderKey(order)}:${boxIndex}`;
+      setSecretCodePngExportingKey(exportKey);
+      setOrdersError(null);
+      try {
+        const orderDrop = dropById.get(order.dropId);
+        const exportFigureMetadataByKey = await loadFulfillmentExportFigureMetadata(
+          orderDrop
+            ? collectFulfillmentFigureMetadataTargets({
+                entries: [{ drop: orderDrop, figureIds: box.dudeIds }],
+                figureMetadataByKey,
+              })
+            : [],
+        );
+        const entry = buildFulfillmentSecretCodeExportEntry({
+          order,
+          boxIndex,
+          options: {
+            dropById,
+            figureMetadataByKey: exportFigureMetadataByKey,
+          },
+        });
+        if (!entry) throw new Error('Secret code unavailable');
+
+        const pngBlob = await buildSecretCodePngBlob(entry);
+        downloadBlobFile(entry.filename, pngBlob);
+      } catch (err) {
+        console.error('[mons] failed to export fulfillment secret code PNG', err);
+        setOrdersError(err instanceof Error ? err.message : 'Failed to export fulfillment secret code PNG');
+      } finally {
+        setSecretCodePngExportingKey((current) => (current === exportKey ? null : current));
+      }
+    },
+    [dropById, figureMetadataByKey, loadFulfillmentExportFigureMetadata, secretCodePngExportingKey, secretCodesExporting],
+  );
+
   const downloadDisplayedSecretCodes = useCallback(async () => {
     setExportMenuOpen(false);
-    if (secretCodesExporting || !displayedSecretCodeCount) return;
+    if (secretCodesExporting || secretCodePngExportingKey || !displayedSecretCodeCount) return;
 
     setSecretCodesExporting(true);
     setSecretCodesExportProgress(0);
@@ -1699,14 +1810,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         selectedDropId,
         orderVisibilityFilter,
       });
-      let exportFigureMetadataByKey = figureMetadataByKey;
-      if (fulfillmentFigureMetadataTargets.length) {
-        const records = await loadFigureMetadataBatch(fulfillmentFigureMetadataTargets);
-        if (records.length) {
-          mergeLoadedFigureMetadata(records);
-          exportFigureMetadataByKey = mergeFigureMetadataRecords(exportFigureMetadataByKey, records);
-        }
-      }
+      const exportFigureMetadataByKey = await loadFulfillmentExportFigureMetadata();
       const exportEntries = buildFulfillmentSecretCodeExportEntries(displayedOrders, {
         dropById,
         figureMetadataByKey: exportFigureMetadataByKey,
@@ -1725,15 +1829,15 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     displayedSecretCodeCount,
     displayedOrders,
     dropById,
-    figureMetadataByKey,
-    fulfillmentFigureMetadataTargets,
-    mergeLoadedFigureMetadata,
+    loadFulfillmentExportFigureMetadata,
     orderVisibilityFilter,
+    secretCodePngExportingKey,
     secretCodesExporting,
     selectedDropId,
   ]);
 
   const secretCodesExportPercent = Math.max(0, Math.min(100, Math.round(secretCodesExportProgress)));
+  const secretCodeDownloadDisabled = secretCodesExporting || Boolean(secretCodePngExportingKey);
 
   const renderManualReviewMenu = () => (
     <div className="manual-review-menu" role="dialog" aria-label="Needs manual review">
@@ -1788,7 +1892,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         className="fulfillment-export-menu__item"
         role="menuitem"
         onClick={downloadDisplayedSecretCodes}
-        disabled={secretCodesExporting || !displayedSecretCodeCount}
+        disabled={secretCodeDownloadDisabled || !displayedSecretCodeCount}
       >
         <FiDownload aria-hidden="true" />
         <span>{secretCodesExporting ? 'Preparing Secret Codes ZIP…' : 'Download Secret Codes ZIP'}</span>
@@ -1884,19 +1988,20 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           {order.boxes.length ? (
             orderIsDirectDeliveryDrop ? (
               renderBoxTiles({
-                boxIds: order.boxes.map((box) => box.boxId),
+                boxes: order.boxes.map((box, boxIndex) => ({
+                  boxId: box.boxId,
+                  boxIndex,
+                  secretCode: fulfillmentBoxSecretCode(box),
+                })),
                 keyPrefix: `${orderKey}:box`,
                 labelSource: orderDrop,
                 getPreviewSrc: (boxId) => normalizeBoxDisplayImage({ dropId: orderDrop.dropId, boxId }),
-                secretCodeByBoxId: new Map(
-                  order.boxes
-                    .map((box) => [box.boxId, fulfillmentBoxSecretCode(box)] as const)
-                    .filter(([, secretCode]) => secretCode),
-                ),
+                secretCodeDownloadDisabled,
+                onDownloadSecretCode: (boxIndex) => void downloadSecretCodePng(order, boxIndex),
               })
             ) : (
               <div className="box-contents-list">
-                {order.boxes.map((box) => {
+                {order.boxes.map((box, boxIndex) => {
                   const secretCode = fulfillmentBoxSecretCode(box);
                   const packSecretImage = orderShowsFulfillmentPackPreview
                     ? renderFulfillmentPackSecretImage({
@@ -1914,9 +2019,16 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         {secretCode ? (
                           <span className="fulfillment-pack-secret">
                             {packSecretImage}
-                            <span>
-                              {fulfillmentBoxSecretLabelPrefix(orderDrop)}{' '}
-                              <span className="fulfillment-secret-code">{secretCode}</span>
+                            <span className="fulfillment-secret-code-line">
+                              <span>
+                                {fulfillmentBoxSecretLabelPrefix(orderDrop)}{' '}
+                                <span className="fulfillment-secret-code">{secretCode}</span>
+                              </span>
+                              <SecretCodeDownloadButton
+                                secretCode={secretCode}
+                                disabled={secretCodeDownloadDisabled}
+                                onClick={() => void downloadSecretCodePng(order, boxIndex)}
+                              />
                             </span>
                           </span>
                         ) : (

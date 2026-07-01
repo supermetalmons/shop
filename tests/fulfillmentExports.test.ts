@@ -5,6 +5,7 @@ import {
   buildFulfillmentAddressExport,
   buildFulfillmentExportFilename,
   buildFulfillmentOrdersExport,
+  buildFulfillmentSecretCodeExportEntry,
   buildFulfillmentSecretCodeExportEntries,
 } from '../src/lib/fulfillmentExports.ts';
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
@@ -242,6 +243,25 @@ test('buildFulfillmentSecretCodeExportEntries maps box secret codes to png jobs'
       filename: '7-2.png',
     },
   ]);
+});
+
+test('buildFulfillmentSecretCodeExportEntry maps one box secret code to a png job', () => {
+  const order = cardOrder({
+    boxes: [
+      { boxId: 11, receiptClaimCode: '   ', claimCode: '   ', dudeIds: [] },
+      { boxId: 12, receiptClaimCode: 'FIRST-SECRET', dudeIds: [] },
+      { boxId: 13, receiptClaimCode: 'SECOND-SECRET', dudeIds: [] },
+    ],
+  });
+
+  assert.deepEqual(buildFulfillmentSecretCodeExportEntry({ order, boxIndex: 2 }), {
+    orderId: 'card_nft_2:7',
+    boxId: 13,
+    boxIndex: 2,
+    secretCode: 'SECOND-SECRET',
+    claimUrl: 'https://mons.shop/claim/?code=SECOND-SECRET',
+    filename: '7-2.png',
+  });
 });
 
 test('buildFulfillmentSecretCodeExportEntries adds direct-delivery box preview images', () => {
