@@ -79,6 +79,15 @@ import {
   shouldSendResendNotificationEmail,
   type ResendNotificationEmailKind,
 } from './notifications.js';
+import {
+  NOTIFICATION_EMAIL_FROM,
+  buildShipperReadyToShipEmailContent,
+  buildStripeCheckoutManualReviewEmailContent,
+  fulfillmentAppUrlForOrder,
+  summarizeShipperReadyOrderItems,
+  type ShipperReadyToShipEmailMessage,
+  type StripeCheckoutManualReviewEmailMessage,
+} from './notificationEmails.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { normalizeOptionalFulfillmentTrackingCode, sanitizeFulfillmentTrackingCode } from './fulfillmentTracking.js';
 import { parseRequest } from './request.js';
@@ -2760,49 +2769,6 @@ const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manual-review';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
-const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
-const SHIPPER_READY_FROM_EMAIL = 'notifications@support.mons.shop';
-
-type ShipperReadyOrderSummary = {
-  itemCount: number;
-  boxCount: number;
-  dudeCount: number;
-};
-
-type ShipperReadyToShipEmailMessage = {
-  idempotencyKey: string;
-  recipients: string[];
-  dropId: string;
-  dropName: string;
-  deliveryId: number;
-  owner: string;
-  items: ShipperReadyOrderSummary;
-  fulfillmentUrl: string;
-};
-
-type StripeCheckoutManualReviewEmailMessage = {
-  idempotencyKey: string;
-  recipients: string[];
-  dropId: string;
-  dropName: string;
-  sessionId: string;
-  checkoutPath: string;
-  livemode: boolean;
-  variantKey?: string;
-  owner?: string;
-  firebaseUid?: string;
-  manualRefundReviewReason?: string;
-  lastFulfillmentError?: unknown;
-  createdAt?: number;
-  fulfillmentRequestedAt?: number;
-  processingStartedAt?: number;
-  failedAt?: number;
-};
-
-type NotificationEmailDetail = {
-  label: string;
-  value: string;
-};
 
 type EmailNotificationReservation =
   | { reserved: true; reason: 'reserved' }
@@ -2849,76 +2815,6 @@ function isRetryableNotificationEmailError(err: unknown): err is RetryableNotifi
   return err instanceof RetryableNotificationEmailError && typeof err.reason === 'string';
 }
 
-function summarizeShipperReadyOrderItems(order: any): ShipperReadyOrderSummary {
-  const items = Array.isArray(order?.items) ? order.items : [];
-  let boxCount = 0;
-  let dudeCount = 0;
-  for (const item of items) {
-    if (item?.kind === 'box') {
-      boxCount += 1;
-    } else if (item?.kind === 'dude') {
-      dudeCount += 1;
-    }
-  }
-  return {
-    itemCount: items.length,
-    boxCount,
-    dudeCount,
-  };
-}
-
-function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): string {
-  const url = new URL(FULFILLMENT_APP_URL);
-  url.searchParams.set('dropId', dropId);
-  url.searchParams.set('deliveryId', String(deliveryId));
-  return url.toString();
-}
-
-function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): NotificationEmailDetail[] {
-  return [
-    { label: 'Drop', value: `${message.dropName}` },
-    { label: 'Delivery ID', value: String(message.deliveryId) },
-    { label: 'Owner', value: message.owner || 'unknown' },
-    {
-      label: 'Items',
-      value: `${message.items.itemCount} total`,
-    },
-  ];
-}
-
-function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
-  const details = shipperReadyEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
-  return [
-    'New order received.',
-    '',
-    ...details,
-    '',
-    `Open fulfillment: ${message.fulfillmentUrl}`,
-  ].join('\n');
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
-  const details = shipperReadyEmailDetails(message)
-    .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
-    .join('');
-  return [
-    '<p>New order received.</p>',
-    '<ul>',
-    details,
-    '</ul>',
-    `<p><a href="${escapeHtml(message.fulfillmentUrl)}">Open fulfillment</a></p>`,
-  ].join('');
-}
-
 let cachedResend: ResendClient | null = null;
 
 function resendApiKey(): string {
@@ -2951,16 +2847,14 @@ function isRetryableResendError(error: ResendErrorSummary): boolean {
 async function sendShipperReadyToShipEmail(
   message: ShipperReadyToShipEmailMessage,
 ): Promise<NotificationEmailResult> {
-  const subject = `New Order — ${message.dropName}`;
-  const text = buildShipperReadyEmailText(message);
-  const html = buildShipperReadyEmailHtml(message);
+  const email = buildShipperReadyToShipEmailContent(message);
   return sendResendNotificationEmail({
     notificationKind: 'shipper_ready_to_ship',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
-    subject,
-    text,
-    html,
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
     retryableErrorName: 'RetryableShipperReadyEmailError',
     missingApiKeyMessage: 'RESEND_API_KEY is not configured for shipper ready-to-ship email',
     missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
@@ -2972,74 +2866,17 @@ function optionalTrimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function timestampEmailValue(value: number | undefined): string {
-  return value ? new Date(value).toISOString() : 'unknown';
-}
-
-function stringifyEmailValue(value: unknown): string {
-  if (value == null) return 'unknown';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function stripeCheckoutManualReviewEmailDetails(message: StripeCheckoutManualReviewEmailMessage): NotificationEmailDetail[] {
-  return [
-    { label: 'Drop', value: message.dropName || message.dropId },
-    { label: 'Drop ID', value: message.dropId },
-    { label: 'Session ID', value: message.sessionId },
-    { label: 'Mode', value: message.livemode ? 'live' : 'test' },
-    { label: 'Variant', value: message.variantKey || 'unknown' },
-    { label: 'Owner', value: message.owner || 'unknown' },
-    { label: 'Firebase UID', value: message.firebaseUid || 'unknown' },
-    { label: 'Review reason', value: message.manualRefundReviewReason || 'unknown' },
-    { label: 'Checkout path', value: message.checkoutPath },
-    { label: 'Created at', value: timestampEmailValue(message.createdAt) },
-    { label: 'Fulfillment requested at', value: timestampEmailValue(message.fulfillmentRequestedAt) },
-    { label: 'Processing started at', value: timestampEmailValue(message.processingStartedAt) },
-    { label: 'Failed at', value: timestampEmailValue(message.failedAt) },
-  ];
-}
-
-function buildStripeCheckoutManualReviewEmailText(message: StripeCheckoutManualReviewEmailMessage): string {
-  const details = stripeCheckoutManualReviewEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
-  return [
-    'Stripe checkout fulfillment needs manual review.',
-    '',
-    ...details,
-    '',
-    'Last fulfillment error:',
-    stringifyEmailValue(message.lastFulfillmentError),
-  ].join('\n');
-}
-
-function buildStripeCheckoutManualReviewEmailHtml(message: StripeCheckoutManualReviewEmailMessage): string {
-  const details = stripeCheckoutManualReviewEmailDetails(message)
-    .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
-    .join('');
-  return [
-    '<p>Stripe checkout fulfillment needs manual review.</p>',
-    '<ul>',
-    details,
-    '</ul>',
-    '<p><strong>Last fulfillment error:</strong></p>',
-    `<pre>${escapeHtml(stringifyEmailValue(message.lastFulfillmentError))}</pre>`,
-  ].join('');
-}
-
 async function sendStripeCheckoutManualReviewEmail(
   message: StripeCheckoutManualReviewEmailMessage,
 ): Promise<NotificationEmailResult> {
+  const email = buildStripeCheckoutManualReviewEmailContent(message);
   return sendResendNotificationEmail({
     notificationKind: 'stripe_checkout_manual_review',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
-    subject: `Stripe Checkout Manual Review — ${message.dropName || message.dropId}`,
-    text: buildStripeCheckoutManualReviewEmailText(message),
-    html: buildStripeCheckoutManualReviewEmailHtml(message),
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
     retryableErrorName: 'RetryableStripeCheckoutManualReviewEmailError',
     missingApiKeyMessage: 'RESEND_API_KEY is not configured for Stripe checkout manual review email',
     missingApiKeyDetails: { dropId: message.dropId, sessionId: message.sessionId, recipientCount: message.recipients.length },
@@ -3079,7 +2916,7 @@ async function sendResendNotificationEmail(params: {
 
   const result = await resend.emails.send(
     {
-      from: SHIPPER_READY_FROM_EMAIL,
+      from: NOTIFICATION_EMAIL_FROM,
       to: params.recipients,
       subject: params.subject,
       text: params.text,

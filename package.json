@@ -15,6 +15,7 @@
     "assign-stripe-order-cards": "tsx functions/scripts/assignStripeOrderCards.ts",
     "unstuck-processing-orders": "npm --prefix functions run build && node --experimental-strip-types functions/scripts/unstuckProcessingOrders.ts",
     "rebuild-pack-status": "tsx functions/scripts/rebuildPackStatus.ts",
+    "test-resend-notification-email": "tsx functions/scripts/sendTestResendNotificationEmail.ts",
     "wipe-drop": "node --experimental-strip-types functions/scripts/wipeDrop.ts",
     "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
