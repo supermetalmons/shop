@@ -362,7 +362,7 @@ const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   heightRatio: 555 / 371,
 };
 const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: '/backdrops/little_swag_boxes',
+  baseUrl: 'https://cdn.lil.org/nft/little_swag_boxes/thumbs',
   maxId: 333,
   sizeBase: 5.2,
   sizeRange: 3.2,
