@@ -353,7 +353,7 @@ const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
   heightRatio: 500 / 357,
 };
 const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: '/hoodie',
+  baseUrl: 'https://cdn.lil.org/nft/little_swag_hoodie/thumbs',
   maxId: 7,
   allowRepeats: true,
   sizeBase: 5.2,
