@@ -348,7 +348,7 @@ function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBa
 }
 
 const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: '/backdrops/poncho_drifella',
+  baseUrl: 'https://cdn.lil.org/nft/poncho_drifella/thumbs',
   maxId: 207,
   heightRatio: 500 / 357,
 };
