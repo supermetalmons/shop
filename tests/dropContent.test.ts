@@ -42,6 +42,8 @@ import {
 } from '../src/lib/interactiveCardPackRevealSounds.ts';
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
+const CARD_NFT_2_PACK_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/pack';
+
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
 
@@ -58,8 +60,8 @@ test('media map helper cycles ids and honors overrides', () => {
 
 test('card_nft_2 box inventory images resolve from token id', () => {
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS.length, CARD_NFT_2_PACK_INITIAL_COUNT);
-  assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], '/card_nft_2/pack/1/tight.webp');
-  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], '/card_nft_2/pack/1/initial.webp');
+  assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/tight.webp`);
+  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/initial.webp`);
   assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet_final.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
   assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImagePathMode, 'folder_initial');
@@ -155,13 +157,16 @@ test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls
 
   const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 1);
   const cardPack4 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 4);
-  assert.equal(cardPack1.initialFrameUrl, '/card_nft_2/pack/1/initial.webp');
-  assert.equal(cardPack1.segment11FrameUrls[0], '/card_nft_2/pack/1/final_sequence/1/1.webp');
-  assert.equal(cardPack4.initialFrameUrl, '/card_nft_2/pack/4/initial.webp');
-  assert.equal(cardPack4.punchFrameUrlsByVariant[1]?.[2], '/card_nft_2/pack/4/recoverable_punches/2/3.webp');
+  assert.equal(cardPack1.initialFrameUrl, `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/initial.webp`);
+  assert.equal(cardPack1.segment11FrameUrls[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/final_sequence/1/1.webp`);
+  assert.equal(cardPack4.initialFrameUrl, `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/initial.webp`);
+  assert.equal(
+    cardPack4.punchFrameUrlsByVariant[1]?.[2],
+    `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/recoverable_punches/2/3.webp`,
+  );
   assert.equal(
     cardPack4.segmentAutoplayOvertopFrameUrls[9],
-    '/card_nft_2/pack/4/final_sequence/autoplay/overtop/10.webp',
+    `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/final_sequence/autoplay/overtop/10.webp`,
   );
 });
 
