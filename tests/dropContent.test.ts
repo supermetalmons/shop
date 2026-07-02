@@ -43,6 +43,7 @@ import {
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
 const CARD_NFT_2_PACK_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/pack';
+const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/fronts';
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -270,8 +271,13 @@ test('card_nft_2 figure and receipt display images prefer padded IPFS assets', (
 });
 
 test('poncho interactive card lookup still returns drif card configs', () => {
+  const firstDrifCard = getDrifCardByFigureId(1);
+  assert.ok(firstDrifCard);
+  assert.equal(firstDrifCard.imageSrc, `${PONCHO_DRIFELLA_FRONT_CDN_BASE_URL}/1.webp`);
+  assert.equal(firstDrifCard.foilSrc, '/Poncho_Drifella/foils/1.webp');
+  assert.equal(firstDrifCard.textureSrc, '/Poncho_Drifella/textures/1.webp');
   assert.equal(
     getInteractiveCardPackCardByFigureId('poncho_drifella', 1),
-    getDrifCardByFigureId(1),
+    firstDrifCard,
   );
 });
