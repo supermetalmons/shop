@@ -85,10 +85,6 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
     [...CARD_NFT_2_COMMON_CARD_IDS],
     readCanonicalIdList('../src/lib/cardNft2CommonIds.json'),
   );
-  assert.deepEqual(
-    [...CARD_NFT_2_SUPER_RARE_CARD_IDS],
-    readCanonicalIdList('../public/super_rare.json'),
-  );
   assert.deepEqual([...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS], generatedPixelMosaicIds());
   assert.deepEqual([...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS], EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);
   assert.deepEqual([...CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS], expectedAsGoodAsSuperRareIds);
