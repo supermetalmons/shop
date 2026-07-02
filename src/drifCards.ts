@@ -104,7 +104,8 @@ export const DRIF_EFFECTS = EFFECTS;
 export const DRIF_CARD_COUNT = 207;
 export const DRIF_SHOWCASE_CARD_COUNT = 200;
 
-const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/fronts';
+const PONCHO_DRIFELLA_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella';
+const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/fronts`;
 const DEFAULT_DRIF_GLOW_TYPE: GlowType = 'metal';
 
 export const DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS = Object.freeze({
@@ -346,7 +347,7 @@ function getDrifFrontAssetSrc(assetId: number) {
 
 function getDrifAssetSrc(assetType: 'drifs' | 'foils' | 'textures', assetId: number) {
   if (assetType === 'drifs') return getDrifFrontAssetSrc(assetId);
-  return `/Poncho_Drifella/${assetType}/${assetId}.webp`;
+  return `${PONCHO_DRIFELLA_CDN_BASE_URL}/${assetType}/${assetId}.webp`;
 }
 
 function normalizeDrifCardAssetSrc(assetSrc: string | undefined) {

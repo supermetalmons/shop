@@ -43,7 +43,10 @@ import {
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
 const CARD_NFT_2_PACK_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/pack';
-const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/fronts';
+const PONCHO_DRIFELLA_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella';
+const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/fronts`;
+const PONCHO_DRIFELLA_PACK_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack`;
+const PONCHO_DRIFELLA_SOUND_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/sounds`;
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -146,14 +149,14 @@ test('card_nft_2 bundled common ids are valid and unique', () => {
 });
 
 test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls', () => {
-  assert.equal(PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.initialFrameUrl, '/Poncho_Drifella/pack/initial.webp');
+  assert.equal(PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.initialFrameUrl, `${PONCHO_DRIFELLA_PACK_CDN_BASE_URL}/initial.webp`);
   assert.equal(
     PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.punchFrameUrlsByVariant[2]?.[2],
-    '/Poncho_Drifella/pack/recoverable_punches/3/3.webp',
+    `${PONCHO_DRIFELLA_PACK_CDN_BASE_URL}/recoverable_punches/3/3.webp`,
   );
   assert.equal(
     PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segmentAutoplayOvertopFrameUrls[9],
-    '/Poncho_Drifella/pack/final_sequence/autoplay/overtop/10.webp',
+    `${PONCHO_DRIFELLA_PACK_CDN_BASE_URL}/final_sequence/autoplay/overtop/10.webp`,
   );
 
   const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 1);
@@ -207,11 +210,11 @@ test('interactive pack reveal sounds resolve by drop family', () => {
     reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   });
   assert.deepEqual(PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS, [
-    '/Poncho_Drifella/sounds/hit1.mp3',
-    '/Poncho_Drifella/sounds/hit2.mp3',
-    '/Poncho_Drifella/sounds/hit3.mp3',
+    `${PONCHO_DRIFELLA_SOUND_CDN_BASE_URL}/hit1.mp3`,
+    `${PONCHO_DRIFELLA_SOUND_CDN_BASE_URL}/hit2.mp3`,
+    `${PONCHO_DRIFELLA_SOUND_CDN_BASE_URL}/hit3.mp3`,
   ]);
-  assert.equal(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, '/Poncho_Drifella/sounds/crash.mp3');
+  assert.equal(PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL, `${PONCHO_DRIFELLA_SOUND_CDN_BASE_URL}/crash.mp3`);
 });
 
 function assertCardNft2HoloCard(cardId: number, effectId: string) {
@@ -274,8 +277,8 @@ test('poncho interactive card lookup still returns drif card configs', () => {
   const firstDrifCard = getDrifCardByFigureId(1);
   assert.ok(firstDrifCard);
   assert.equal(firstDrifCard.imageSrc, `${PONCHO_DRIFELLA_FRONT_CDN_BASE_URL}/1.webp`);
-  assert.equal(firstDrifCard.foilSrc, '/Poncho_Drifella/foils/1.webp');
-  assert.equal(firstDrifCard.textureSrc, '/Poncho_Drifella/textures/1.webp');
+  assert.equal(firstDrifCard.foilSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/foils/1.webp`);
+  assert.equal(firstDrifCard.textureSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/textures/1.webp`);
   assert.equal(
     getInteractiveCardPackCardByFigureId('poncho_drifella', 1),
     firstDrifCard,

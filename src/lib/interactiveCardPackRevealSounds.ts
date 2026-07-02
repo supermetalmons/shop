@@ -1,10 +1,12 @@
 import { isDropFamily } from '../config/deployment';
 
-export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = '/Poncho_Drifella/sounds/crash.mp3';
+const PONCHO_DRIFELLA_SOUND_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/sounds';
+
+export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = `${PONCHO_DRIFELLA_SOUND_BASE_URL}/crash.mp3`;
 export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS = [
-  '/Poncho_Drifella/sounds/hit1.mp3',
-  '/Poncho_Drifella/sounds/hit2.mp3',
-  '/Poncho_Drifella/sounds/hit3.mp3',
+  `${PONCHO_DRIFELLA_SOUND_BASE_URL}/hit1.mp3`,
+  `${PONCHO_DRIFELLA_SOUND_BASE_URL}/hit2.mp3`,
+  `${PONCHO_DRIFELLA_SOUND_BASE_URL}/hit3.mp3`,
 ] as const;
 
 const CARD_NFT_2_SOUND_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/sounds';

@@ -8,7 +8,7 @@ const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_1_1_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_1_2_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_AUTOPLAY_FRAME_COUNT = 10;
-const PONCHO_DRIFELLA_PACK_BASE_URL = '/Poncho_Drifella/pack';
+const PONCHO_DRIFELLA_PACK_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/pack';
 const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
   id: 'card-nft-2-neutral',
   effectKey: DRIF_EFFECT_KEYS.lightingOnly,
