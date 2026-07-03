@@ -40,7 +40,7 @@ function ShopHeaderBrand({
         }}
       >
         <h1>
-          <img src="https://assets.mons.link/shop/logo.webp" alt="" className="brand-icon" draggable={false} />
+          <img src="https://cdn.lil.org/mons/shop/favicon/logo.webp" alt="" className="brand-icon" draggable={false} />
           <span>mons.shop</span>
         </h1>
       </a>

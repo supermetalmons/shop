@@ -1150,8 +1150,8 @@ const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
 const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
 const FIGURE_METADATA_RETRY_MS = 3000;
-const DEFAULT_BOX_SOUND_REVEAL_URL = 'https://assets.mons.link/sounds/shop/unbox1p.mp3';
-const DEFAULT_BOX_SOUND_CLICK_URL = 'https://assets.mons.link/sounds/shop/click.mp3';
+const DEFAULT_BOX_SOUND_REVEAL_URL = 'https://cdn.lil.org/nft/little_swag_boxes/sounds/unbox1p.mp3';
+const DEFAULT_BOX_SOUND_CLICK_URL = 'https://cdn.lil.org/nft/little_swag_boxes/sounds/click.mp3';
 const ADMIN_OWNER_DOC_PAGE_SIZE = 200;
 const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
 
