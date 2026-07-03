@@ -20,7 +20,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Card NFT 2',
       description: 'card nft 2 · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/cardnft2/img/cover.gif',
+      image: 'https://cdn.lil.org/nft/card_nft_2/pack/cover.gif',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/card_nft_2.csv',
     receiptsTree: {

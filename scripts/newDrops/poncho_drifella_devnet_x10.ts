@@ -19,7 +19,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Poncho Drifella',
       description: 'poncho drifella cards · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/poncho/pack.webp',
+      image: 'https://cdn.lil.org/nft/poncho_drifella/pack.webp',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/poncho_drifella.csv',
     receiptsTree: {

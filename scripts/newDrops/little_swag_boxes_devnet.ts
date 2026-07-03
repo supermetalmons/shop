@@ -19,7 +19,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Little Swag Boxes',
       description: 'a collection of little swag boxes, figures and receipts',
       externalUrl: 'https://mons.shop',
-      image: 'https://assets.mons.link/drops/lsb/box/default.webp',
+      image: 'https://cdn.lil.org/nft/little_swag_boxes/box/default.webp',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_boxes.csv',
     receiptsTree: {
