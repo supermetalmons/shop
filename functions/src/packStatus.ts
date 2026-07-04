@@ -2,6 +2,7 @@ import { FieldValue, type DocumentReference, type Firestore } from 'firebase-adm
 import type { SolanaCluster } from './config/deployment.js';
 import { dropBoxAssignmentPath, dropPackStatusPath, dropRootPath } from './dropPaths.js';
 import { IRL_CLAIM_CODE_NAMESPACE } from './claimCodes.js';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from './stripeCheckout/contract.js';
 
 export const PACK_STATUS_SCHEMA_VERSION = 1;
 export const PACK_STATUS_DEFAULT_DROP_ID = 'card_nft_2';
@@ -67,6 +68,7 @@ export type PackStatusRebuildInputs = {
   dropRuntime: PackStatusDropRuntime;
   assignmentCount: unknown;
   irlClaimAssignmentCount: unknown;
+  adminIrlAssignmentCount?: unknown;
   inFlightNormalAssignments: unknown;
   deliveryOrders: PackStatusDeliveryOrderRecord[];
 };
@@ -159,7 +161,7 @@ export function stripeIrlPackQuantityFromOrder(order: any): number {
 }
 
 function isStripeOffchainOrder(order: any): boolean {
-  return order?.source === 'stripe_offchain';
+  return order?.source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE;
 }
 
 export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStatusBreakdown {
@@ -236,6 +238,7 @@ export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebui
       0,
       safeNonNegativeInteger(params.assignmentCount) -
         safeNonNegativeInteger(params.irlClaimAssignmentCount) -
+        safeNonNegativeInteger(params.adminIrlAssignmentCount) -
         safeNonNegativeInteger(params.inFlightNormalAssignments),
     ),
     redeemedIrlNormal,

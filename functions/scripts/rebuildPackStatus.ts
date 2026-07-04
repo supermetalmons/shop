@@ -5,6 +5,10 @@ import { normalizeDropId, requireFunctionsDrop } from '../src/config/deployment.
 import { dropDeliveryOrdersCollectionPath, dropRootPath } from '../src/dropPaths.ts';
 import { IRL_CLAIM_CODE_NAMESPACE } from '../src/claimCodes.ts';
 import {
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+} from '../src/stripeCheckout/contract.ts';
+import {
   PACK_STATUS_DEFAULT_DROP_ID,
   PACK_STATUS_SUPPORTED_DROP_IDS,
   assignmentHasNormalInFlightPackStatusClaim,
@@ -124,13 +128,18 @@ async function fetchDeliveryOrders(db: Firestore, dropId: string): Promise<PackS
   return (snap.docs || []).map((doc: any) => doc.data());
 }
 
-async function countAssignedInFlightNormalBoxes(db: Firestore, dropId: string, boxAssetIds: Set<string>): Promise<number> {
-  if (!boxAssetIds.size) return 0;
+async function fetchAssignmentSnaps(db: Firestore, dropId: string, boxAssetIds: Set<string>): Promise<DocumentSnapshot[]> {
+  if (!boxAssetIds.size) return [];
   const refs = [...boxAssetIds].map((boxAssetId) => packStatusAssignmentRef(db, dropId, boxAssetId));
   const snaps: DocumentSnapshot[] = [];
   for (let i = 0; i < refs.length; i += ASSIGNMENT_READ_BATCH_SIZE) {
     snaps.push(...(await db.getAll(...refs.slice(i, i + ASSIGNMENT_READ_BATCH_SIZE))));
   }
+  return snaps;
+}
+
+async function countAssignedInFlightNormalBoxes(db: Firestore, dropId: string, boxAssetIds: Set<string>): Promise<number> {
+  const snaps = await fetchAssignmentSnaps(db, dropId, boxAssetIds);
   return snaps.filter((snap) => snap.exists && assignmentHasNormalInFlightPackStatusClaim(snap.data())).length;
 }
 
@@ -139,6 +148,7 @@ export async function rebuildPackStatusCounters(db: Firestore, dropRuntime: Pack
   historicalAssignmentCounts: {
     boxAssignments: number;
     irlClaimAssignments: number;
+    adminIrlAssignments: number;
     inFlightNormalAssignments: number;
   };
 }> {
@@ -150,15 +160,22 @@ export async function rebuildPackStatusCounters(db: Firestore, dropRuntime: Pack
   ]);
 
   const inFlightNormalBoxAssetIds = new Set<string>();
+  const adminIrlReceiptAssetIds = new Set<string>();
   for (const order of deliveryOrders) {
-    if (order?.status === 'ready_to_ship' || order?.source === 'stripe_offchain') continue;
+    if (order?.status === 'ready_to_ship' && order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
+      deliveryOrderBoxAssetIds(order?.items).forEach((assetId) => adminIrlReceiptAssetIds.add(assetId));
+      continue;
+    }
+    if (order?.status === 'ready_to_ship' || order?.source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE) continue;
     deliveryOrderBoxAssetIds(order?.items).forEach((assetId) => inFlightNormalBoxAssetIds.add(assetId));
   }
+  const adminIrlAssignments = adminIrlReceiptAssetIds.size;
   const inFlightNormalAssignments = await countAssignedInFlightNormalBoxes(db, dropRuntime.dropId, inFlightNormalBoxAssetIds);
   const counters = buildPackStatusCountersFromRebuildInputs({
     dropRuntime,
     assignmentCount,
     irlClaimAssignmentCount,
+    adminIrlAssignmentCount: adminIrlAssignments,
     inFlightNormalAssignments,
     deliveryOrders,
   });
@@ -167,6 +184,7 @@ export async function rebuildPackStatusCounters(db: Firestore, dropRuntime: Pack
     historicalAssignmentCounts: {
       boxAssignments: assignmentCount,
       irlClaimAssignments: irlClaimAssignmentCount,
+      adminIrlAssignments,
       inFlightNormalAssignments,
     },
   };
@@ -205,6 +223,7 @@ async function main(): Promise<void> {
     console.log(`  Redeemed unsealed ${itemPlural}: ${breakdown.redeemedUnsealedCards}`);
     console.log(`  Assignments:             ${result.historicalAssignmentCounts.boxAssignments}`);
     console.log(`  IRL assignments:         ${result.historicalAssignmentCounts.irlClaimAssignments}`);
+    console.log(`  Admin IRL assignments:   ${result.historicalAssignmentCounts.adminIrlAssignments}`);
     console.log(`  In-flight boxes:         ${result.historicalAssignmentCounts.inFlightNormalAssignments}`);
   }
 

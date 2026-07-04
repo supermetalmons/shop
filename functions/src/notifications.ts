@@ -1,5 +1,6 @@
 export type DeliveryReadyToShipStatusSnapshot = {
   status?: unknown;
+  source?: unknown;
 } | null | undefined;
 
 export type ResendNotificationEmailKind = 'shipper_ready_to_ship' | 'stripe_checkout_manual_review';
@@ -16,6 +17,9 @@ export function shouldSendResendNotificationEmail(kind: ResendNotificationEmailK
 export function shouldNotifyShippersForDeliveryReadyToShipWrite(args: {
   before?: DeliveryReadyToShipStatusSnapshot;
   after?: DeliveryReadyToShipStatusSnapshot;
+  ignoredSources?: readonly string[];
 }): boolean {
+  const source = typeof args.after?.source === 'string' ? args.after.source : '';
+  if (source && args.ignoredSources?.includes(source)) return false;
   return args.after?.status === 'ready_to_ship' && args.before?.status !== 'ready_to_ship';
 }

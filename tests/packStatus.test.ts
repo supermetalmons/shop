@@ -8,6 +8,7 @@ import {
   countNormalIrlPackStatus,
   type PackStatusDropRuntime,
 } from '../functions/src/packStatus.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
 import { requireSupportedPackStatusDrop } from '../functions/scripts/rebuildPackStatus.ts';
 
 const CARD_NFT_2_RUNTIME: PackStatusDropRuntime = {
@@ -137,11 +138,12 @@ test('pack status breakdown treats missing raw counter fields safely without sea
   assert.equal(excessive.redeemedCards, 24);
 });
 
-test('historical pack status counting separates online reveals, normal IRL, and Stripe IRL', () => {
+test('historical pack status counting separates online reveals, normal/Admin IRL, and Stripe IRL', () => {
   const counters = buildPackStatusCountersFromRebuildInputs({
     dropRuntime: CARD_NFT_2_RUNTIME,
     assignmentCount: 10,
     irlClaimAssignmentCount: 2,
+    adminIrlAssignmentCount: 1,
     inFlightNormalAssignments: 1,
     deliveryOrders: [
       {
@@ -151,6 +153,11 @@ test('historical pack status counting separates online reveals, normal IRL, and 
           { kind: 'box', assetId: 'box-b' },
           { kind: 'dude', assetId: 'dude-a' },
         ],
+      },
+      {
+        status: 'ready_to_ship',
+        source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+        items: [{ kind: 'box', assetId: 'admin-irl-receipt-box' }],
       },
       {
         status: 'ready_to_ship',
@@ -169,8 +176,8 @@ test('historical pack status counting separates online reveals, normal IRL, and 
     totalInitialSupply: 12_000,
     totalCards: 36_000,
     cardsPerPack: 3,
-    unsealedOnline: 7,
-    redeemedIrlNormal: 2,
+    unsealedOnline: 6,
+    redeemedIrlNormal: 3,
     redeemedIrlStripe: 3,
     redeemedUnsealedCards: 1,
   });

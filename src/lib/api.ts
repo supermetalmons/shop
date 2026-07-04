@@ -4,6 +4,8 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
 import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp, firestore } from './firebase';
 import {
+  AdminIrlRedeemFinalizeResult,
+  AdminIrlRedeemPreparedTxResponse,
   DeliverySelection,
   FulfillmentManualReviewCheckout,
   FulfillmentStatus,
@@ -1246,6 +1248,28 @@ export async function requestDeliveryTx(
     ...selection,
     dropId,
   });
+}
+
+export async function prepareAdminIrlRedeemTx(args: {
+  owner: string;
+  dropId: string;
+  itemIds: string[];
+}): Promise<AdminIrlRedeemPreparedTxResponse> {
+  return callFunction<
+    { owner: string; dropId: string; itemIds: string[] },
+    AdminIrlRedeemPreparedTxResponse
+  >('prepareAdminIrlRedeemTx', args);
+}
+
+export async function finalizeAdminIrlRedeem(args: {
+  requestId: string;
+  dropId: string;
+  transferSignature: string;
+}): Promise<AdminIrlRedeemFinalizeResult> {
+  return callFunction<
+    { requestId: string; dropId: string; transferSignature: string },
+    AdminIrlRedeemFinalizeResult
+  >('finalizeAdminIrlRedeem', args);
 }
 
 export async function issueReceipts(

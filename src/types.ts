@@ -228,6 +228,28 @@ export interface PreparedTxResponse {
   certificateId?: string;
 }
 
+export interface AdminIrlRedeemPreparedTxResponse extends PreparedTxResponse {
+  requestId: string;
+  dropId: string;
+  adminWallet: string;
+  itemCount: number;
+}
+
+export interface AdminIrlRedeemFinalizeResult {
+  processed: boolean;
+  dropId?: string;
+  requestId?: string;
+  deliveryId?: number;
+  receiptTxs?: string[];
+  claimCodes?: string[];
+  boxes?: Array<{
+    boxId: number;
+    receiptAssetId?: string;
+    claimCode?: string;
+    dudeIds?: number[];
+  }>;
+}
+
 export interface StripeReceiptClaimResult {
   processed: boolean;
   dropId?: string;

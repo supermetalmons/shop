@@ -155,6 +155,24 @@ function describeSignatureStatusError(err: unknown): string {
   }
 }
 
+export class SubmittedTransactionFailureError extends Error {
+  readonly signature: string;
+  readonly transactionError: unknown;
+
+  constructor(signature: string, transactionError: unknown) {
+    super(`Transaction failed: ${describeSignatureStatusError(transactionError)}`);
+    this.name = 'SubmittedTransactionFailureError';
+    this.signature = signature;
+    this.transactionError = transactionError;
+  }
+}
+
+export function isSubmittedTransactionFailureError(err: unknown): err is SubmittedTransactionFailureError {
+  if (err instanceof SubmittedTransactionFailureError) return true;
+  const anyErr = err as any;
+  return anyErr?.name === 'SubmittedTransactionFailureError' && typeof anyErr?.signature === 'string';
+}
+
 async function getSignatureStatusValue(
   connection: Connection,
   signature: string,
@@ -174,9 +192,9 @@ function isConfirmedSignatureStatus(status: SignatureStatus | null): boolean {
   );
 }
 
-function assertSignatureStatusSucceeded(status: SignatureStatus | null) {
+function assertSignatureStatusSucceeded(signature: string, status: SignatureStatus | null) {
   if (status?.err) {
-    throw new Error(`Transaction failed: ${describeSignatureStatusError(status.err)}`);
+    throw new SubmittedTransactionFailureError(signature, status.err);
   }
 }
 
@@ -190,7 +208,7 @@ async function waitForSuccessfulSignature(
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const status = await getSignatureStatusValue(connection, signature, false).catch(() => null);
-    assertSignatureStatusSucceeded(status);
+    assertSignatureStatusSucceeded(signature, status);
     if (isConfirmedSignatureStatus(status)) return true;
 
     if (attempt < attempts - 1 && delayMs > 0) {
@@ -199,7 +217,7 @@ async function waitForSuccessfulSignature(
   }
 
   const historicalStatus = await getSignatureStatusValue(connection, signature, true).catch(() => null);
-  assertSignatureStatusSucceeded(historicalStatus);
+  assertSignatureStatusSucceeded(signature, historicalStatus);
   return isConfirmedSignatureStatus(historicalStatus);
 }
 
@@ -277,10 +295,15 @@ export function normalizeCountryCode(country?: string) {
   return '';
 }
 
+type SendPreparedTransactionOptions = {
+  onSubmitted?: (signature: string, tx: VersionedTransaction) => void | Promise<void>;
+};
+
 export async function sendPreparedTransaction(
   encodedTx: string,
   connection: Connection,
   signer: (tx: VersionedTransaction) => Promise<string>,
+  options: SendPreparedTransactionOptions = {},
 ): Promise<string> {
   let tx: VersionedTransaction;
   try {
@@ -296,8 +319,16 @@ export async function sendPreparedTransaction(
     console.error('[mons/solana] prepared transaction is missing required server signatures', signerInfo);
   }
 
+  let submittedNotified = false;
+  const notifySubmitted = async (signature: string) => {
+    if (submittedNotified) return;
+    submittedNotified = true;
+    await options.onSubmitted?.(signature, tx);
+  };
+
   try {
     const signature = await signer(tx);
+    await notifySubmitted(signature);
     const submitted = await waitForSuccessfulSignature(connection, signature, SUBMITTED_SIGNATURE_WAIT);
     if (!submitted) {
       throw new Error(
@@ -308,7 +339,16 @@ export async function sendPreparedTransaction(
   } catch (err) {
     const recoveredSignature = await recoverAlreadyProcessedSignature(tx, connection, err);
     if (recoveredSignature) {
+      await notifySubmitted(recoveredSignature);
       return recoveredSignature;
+    }
+    if (isSubmittedTransactionFailureError(err)) {
+      console.error('[mons/solana] transaction failed', {
+        signature: err.signature,
+        error: err.transactionError,
+        ...(signerInfo ? { signerInfo } : {}),
+      });
+      throw err;
     }
     const logs = await extractSendTransactionLogs(err);
     let msg = unwrapTxErrorMessage(err);

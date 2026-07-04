@@ -24,7 +24,7 @@ import {
   decodeAdminDeliveryOrderRecord,
   deriveAdminOrderPda,
   encodeAdminDeliverVariantOrderArgs,
-  generateStripeReceiptClaimCode,
+  generateUniqueStripeReceiptClaimCodes,
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutReturnUrl,
   normalizeStripeCheckoutQuantity,
@@ -1096,15 +1096,6 @@ async function fetchStripeOffchainDeliveryOrderMarker(params: {
 }): Promise<StripeOffchainDeliveryOrderMarker | null> {
   const marker = await params.db.doc(`${dropRootPath(params.dropId)}/offchainOrders/${params.orderHashHex}`).get();
   return marker.exists ? readStripeOffchainDeliveryOrderMarker(marker) : null;
-}
-
-function generateUniqueStripeReceiptClaimCodes(quantity: number): string[] {
-  const normalizedQuantity = normalizeStripeCheckoutQuantity(quantity);
-  const codes = new Set<string>();
-  while (codes.size < normalizedQuantity) {
-    codes.add(requireStripeReceiptClaimCode(generateStripeReceiptClaimCode()));
-  }
-  return [...codes];
 }
 
 export async function createOrGetStripeOffchainDeliveryOrder(params: {

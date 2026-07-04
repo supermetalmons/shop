@@ -11,6 +11,7 @@ import {
   fulfillmentAppUrlForOrder,
   summarizeShipperReadyOrderItems,
 } from '../functions/src/notificationEmails.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
 
 test('Resend non-checkout error notification emails are enabled', () => {
   assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, true);
@@ -122,6 +123,17 @@ test('shouldNotifyShippersForDeliveryReadyToShipWrite ignores non-ready creates'
     shouldNotifyShippersForDeliveryReadyToShipWrite({
       before: null,
       after: { status: 'processing' },
+    }),
+    false,
+  );
+});
+
+test('shouldNotifyShippersForDeliveryReadyToShipWrite ignores configured sources', () => {
+  assert.equal(
+    shouldNotifyShippersForDeliveryReadyToShipWrite({
+      before: null,
+      after: { status: 'ready_to_ship', source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE },
+      ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
     }),
     false,
   );

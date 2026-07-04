@@ -25,3 +25,19 @@ export function dropDeliveryOrdersCollectionPath(dropId: string): string {
 export function dropDeliveryOrderPath(dropId: string, deliveryId: number): string {
   return `${dropDeliveryOrdersCollectionPath(dropId)}/${deliveryId}`;
 }
+
+export function dropAdminIrlRedeemRequestsCollectionPath(dropId: string): string {
+  return `${dropRootPath(dropId)}/adminIrlRedeemRequests`;
+}
+
+export function dropAdminIrlRedeemRequestPath(dropId: string, requestId: string): string {
+  return `${dropAdminIrlRedeemRequestsCollectionPath(dropId)}/${requestId}`;
+}
+
+export function dropAdminIrlRedeemPackMarkerPath(dropId: string, originalAssetId: string): string {
+  return `${dropRootPath(dropId)}/adminIrlRedeemPackMarkers/${originalAssetId}`;
+}
+
+export function dropAdminIrlRedeemReceiptMarkerPath(dropId: string, receiptAssetId: string): string {
+  return `${dropRootPath(dropId)}/adminIrlRedeemReceiptMarkers/${receiptAssetId}`;
+}

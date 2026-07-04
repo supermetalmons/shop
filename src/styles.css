@@ -4604,6 +4604,17 @@ button.fulfillment-secret-code-download svg {
   flex-wrap: wrap;
 }
 
+.delivery-modal__admin-irl {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.delivery-modal__admin-irl-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .selection-panel {
   position: fixed;
   left: 50%;

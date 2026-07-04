@@ -16,6 +16,8 @@ export const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
 export const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
+export const STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE = 'stripe_offchain';
+export const ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE = 'admin_irl_redeem';
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
@@ -140,6 +142,18 @@ export function generateStripeReceiptClaimCode(): string {
   return `${prefix}-${String(randomInt(0, STRIPE_RECEIPT_CLAIM_DIGIT_MAX)).padStart(10, '0')}`;
 }
 
+export function generateUniqueStripeReceiptClaimCodes(quantity: number): string[] {
+  const normalizedQuantity = Math.floor(Number(quantity));
+  if (!Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) {
+    throw new Error('Stripe receipt claim code quantity must be positive');
+  }
+  const codes = new Set<string>();
+  while (codes.size < normalizedQuantity) {
+    codes.add(requireStripeReceiptClaimCode(generateStripeReceiptClaimCode()));
+  }
+  return [...codes];
+}
+
 export function stripeReceiptClaimBoxMapKey(boxId: number): string {
   return `box_${boxId}`;
 }
@@ -193,6 +207,10 @@ export function hasPluralStripeReceiptClaims(order: any): boolean {
   const byBoxId = order?.stripeReceiptClaimsByBoxId;
   if (plainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
   return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
+}
+
+export function isReceiptClaimDeliveryOrderSource(source: unknown): boolean {
+  return source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
 }
 
 export function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
@@ -687,7 +705,7 @@ function normalizeStripeReceiptClaims(
   return claims;
 }
 
-function buildStripeReceiptClaimsByBoxId(
+export function buildStripeReceiptClaimsByBoxId(
   claims: Array<{ namespace: string; code: string; boxId: number; status: string }>,
 ): Record<string, { namespace: string; code: string; boxId: number; status: string }> {
   return Object.fromEntries(claims.map((claim) => [stripeReceiptClaimBoxMapKey(claim.boxId), claim]));
@@ -702,7 +720,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
 
   return {
     dropId: args.dropId,
-    source: 'stripe_offchain',
+    source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
     status: 'ready_to_ship',
     owner: args.owner,
     ...(args.ownerKind ? { ownerKind: args.ownerKind } : {}),

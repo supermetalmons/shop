@@ -21,11 +21,13 @@ import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
   claimStripeReceipt,
   createStripeCheckoutSession,
+  finalizeAdminIrlRedeem,
   getAnonymousStripeDeliveryHistory,
   getDropPackStatus,
   getProfile,
   listDeliveryOrderOwners,
   packStatusDisplayLabelsForDropId,
+  prepareAdminIrlRedeemTx,
   recoverMyDeliveryOrders,
   rememberPendingOpenDropId,
   requestClaimTx,
@@ -35,6 +37,11 @@ import {
   supportsFrontendPackStatus,
   issueReceipts,
 } from './lib/api';
+import {
+  canAdminIrlRedeemSelection,
+  forgetPendingAdminIrlRedeem,
+  rememberPendingAdminIrlRedeem,
+} from './lib/adminIrlRedeem';
 import { auth } from './lib/firebase';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
 import {
@@ -111,6 +118,7 @@ import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSeq
 import {
   encryptAddressPayload,
   isBlockhashExpiredError,
+  isSubmittedTransactionFailureError,
   recoverAlreadyProcessedAccounts,
   recoverAlreadyProcessedSignature,
   sendPreparedTransaction,
@@ -1476,6 +1484,32 @@ function isUserRejectedError(err: unknown): boolean {
   );
 }
 
+function shouldRetryAdminIrlRedeemFinalizeError(err: unknown): boolean {
+  const message = errorMessage(err);
+  return isRetryableCallableError(err) || /not uniquely indexed yet|already being finalized|transfer transaction not found yet/i.test(message);
+}
+
+async function finalizeAdminIrlRedeemWithRetry(args: {
+  dropId: string;
+  requestId: string;
+  transferSignature: string;
+}) {
+  return retryWithBackoff(
+    () =>
+      finalizeAdminIrlRedeem({
+        dropId: args.dropId,
+        requestId: args.requestId,
+        transferSignature: args.transferSignature,
+      }),
+    {
+      maxAttempts: 5,
+      baseDelayMs: 1_000,
+      maxDelayMs: 5_000,
+      shouldRetry: shouldRetryAdminIrlRedeemFinalizeError,
+    },
+  );
+}
+
 function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingReveal[]): boolean {
   if (left.length !== right.length) return false;
   for (let i = 0; i < left.length; i += 1) {
@@ -1930,6 +1964,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     staleTime: 10_000,
   });
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [adminIrlRedeeming, setAdminIrlRedeeming] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [claimOpen, setClaimOpen] = useState(false);
   const [claimInitialCode, setClaimInitialCode] = useState('');
@@ -3826,6 +3861,26 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     () => (selectedDropId ? getDropConfig(selectedDropId) : undefined),
     [getDropConfig, selectedDropId],
   );
+  const adminIrlRedeemSelection = useMemo(
+    () => ({
+      selectedCount,
+      selectedDropIds,
+      selectedItems,
+      deliverableItems,
+      selectionOwner: owner,
+      selectedDropFamily: selectedDropConfig?.dropFamily,
+    }),
+    [deliverableItems, owner, selectedCount, selectedDropConfig?.dropFamily, selectedDropIds, selectedItems],
+  );
+  const canShowAdminIrlRedeem = useMemo(
+    () =>
+      canAdminIrlRedeemSelection({
+        wallet: connectedWallet,
+        isSignedInWallet,
+        ...adminIrlRedeemSelection,
+      }),
+    [adminIrlRedeemSelection, connectedWallet, isSignedInWallet],
+  );
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
@@ -5010,6 +5065,122 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     }
   };
 
+  const handleAdminIrlRedeem = async () => {
+    if (blockViewerModeAction()) return;
+    if (adminIrlRedeeming) return;
+    if (!publicKey) {
+      setVisible(true);
+      showToast('Connect a wallet to redeem packs');
+      return;
+    }
+    const signedIn = isSignedInWallet ? true : await ensureSignedIn();
+    if (!signedIn) return;
+    const wallet = publicKey.toBase58();
+    const eligible = canAdminIrlRedeemSelection({
+      wallet,
+      isSignedInWallet: true,
+      ...adminIrlRedeemSelection,
+    });
+    if (!eligible) {
+      showToast('Select only card_nft_2 packs for Admin IRL Redeem');
+      return;
+    }
+
+    const adminIrlDropId = selectedDropId;
+    const redeemIds = deliverableItems.map((item) => item.id);
+    let pendingFinalizeRequestId = '';
+    let pendingFinalizeTransferSignature = '';
+    try {
+      setAdminIrlRedeeming(true);
+      const adminIrlDrop = requireKnownDropConfig(adminIrlDropId, 'Admin IRL redeem selection');
+      const adminIrlConnection = getDropConnection(adminIrlDrop.dropId);
+      const requestTx = () =>
+        prepareAdminIrlRedeemTx({
+          owner: wallet,
+          dropId: adminIrlDrop.dropId,
+          itemIds: redeemIds,
+        });
+
+      const submitTransfer = (encodedTx: string, requestId: string): Promise<string> =>
+        sendPreparedTransaction(
+          encodedTx,
+          adminIrlConnection,
+          (tx) => signAndSendPreparedViaConnection(tx, adminIrlConnection),
+          {
+            onSubmitted: (submittedSig) => {
+              rememberPendingAdminIrlRedeem(wallet, {
+                dropId: adminIrlDrop.dropId,
+                requestId,
+                transferSignature: submittedSig,
+                itemIds: redeemIds,
+              });
+              pendingFinalizeRequestId = requestId;
+              pendingFinalizeTransferSignature = submittedSig;
+            },
+          },
+        );
+
+      let resp = await requestTx();
+      let sig: string;
+      try {
+        sig = await submitTransfer(resp.encodedTx, resp.requestId);
+      } catch (err) {
+        if (pendingFinalizeRequestId || !isBlockhashExpiredError(err)) throw err;
+        showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        resp = await requestTx();
+        sig = await submitTransfer(resp.encodedTx, resp.requestId);
+      }
+
+      markAssetsHidden(redeemIds);
+      setSelected(new Set());
+      showToast(`Admin IRL transfer confirmed · finalizing…`);
+      const finalized = await finalizeAdminIrlRedeemWithRetry({
+        dropId: adminIrlDrop.dropId,
+        requestId: resp.requestId,
+        transferSignature: sig,
+      });
+      forgetPendingAdminIrlRedeem(wallet, resp.requestId);
+
+      const codeCount = Math.max(0, finalized.claimCodes?.length || finalized.boxes?.length || redeemIds.length);
+      const codeLabel = codeCount === 1 ? 'code' : 'codes';
+      const orderSuffix = finalized.deliveryId ? ` · order ${finalized.deliveryId}` : '';
+      showToast(`Admin IRL redeem ready${orderSuffix} · ${codeCount} ${codeLabel}`);
+      setDeliveryOpen(false);
+      await Promise.all([refetchInventory(), refreshProfile().catch(() => null)]);
+    } catch (err) {
+      console.error(err);
+      if (!isUserRejectedError(err)) {
+        if (pendingFinalizeRequestId && isSubmittedTransactionFailureError(err)) {
+          forgetPendingAdminIrlRedeem(wallet, pendingFinalizeRequestId);
+          pendingFinalizeRequestId = '';
+          pendingFinalizeTransferSignature = '';
+        }
+        if (pendingFinalizeRequestId) {
+          console.warn('[mons] Admin IRL redeem transfer submitted but finalization did not complete', {
+            dropId: adminIrlDropId,
+            requestId: pendingFinalizeRequestId,
+            transferSignature: pendingFinalizeTransferSignature,
+            error: err,
+          });
+          setSelected(new Set());
+          setDeliveryOpen(false);
+          void refetchInventory().catch((refreshErr) => {
+            console.warn('[mons] failed to refresh inventory after pending Admin IRL redeem transfer', refreshErr);
+          });
+        }
+        showToast(
+          pendingFinalizeRequestId
+            ? 'Admin IRL transfer submitted; finalization details saved locally for support'
+            : err instanceof Error
+              ? err.message
+              : 'Failed to run Admin IRL Redeem',
+        );
+      }
+    } finally {
+      setAdminIrlRedeeming(false);
+    }
+  };
+
   const handleSignInForShipments = async () => {
     if (!publicKey) {
       setPendingShipmentsSignIn(true);
@@ -5049,13 +5220,13 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       showToast(`Claim submitted · ${displayCount} ${receiptLabel} sent to ${shortAddress(recipientWallet)}`);
       if (owner === recipientWallet) {
         void refetchInventory().catch((err) => {
-          console.warn('[mons] failed to refresh inventory after Stripe receipt claim', err);
+          console.warn('[mons] failed to refresh inventory after receipt claim', err);
         });
       }
       return { deferred: true };
     }
     if (hasAlphabeticClaimCodeCharacters(code)) {
-      throw new Error('Invalid Stripe receipt claim code');
+      throw new Error('Invalid receipt claim code');
     }
     if (!publicKey) setPendingClaimSignIn(true);
     const signedIn = await ensureSignedIn();
@@ -6069,11 +6240,24 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             boxNamePrefix={selectedDropConfig?.namePrefix}
             figureNamePrefix={selectedDropConfig?.figureNamePrefix}
             dropFamily={selectedDropConfig?.dropFamily}
-            submitDisabled={!deliverableItems.length || !publicKey}
+            submitDisabled={!deliverableItems.length || !publicKey || adminIrlRedeeming}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
             submitLabel={deliveryCtaLabel}
           />
+          {canShowAdminIrlRedeem ? (
+            <div className="delivery-modal__admin-irl">
+              <button
+                type="button"
+                className="ghost delivery-modal__admin-irl-button"
+                onClick={handleAdminIrlRedeem}
+                disabled={adminIrlRedeeming}
+              >
+                <FaBoxOpen aria-hidden="true" focusable="false" size={16} />
+                <span>{adminIrlRedeeming ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
+              </button>
+            </div>
+          ) : null}
         </div>
       </Modal>
 
