@@ -4320,6 +4320,12 @@ button.order-status-option:hover:not(:disabled) {
   color: #ff3b30;
 }
 
+.fulfillment-secret-code--used {
+  color: #22c55e;
+  font-style: italic;
+  text-decoration: line-through;
+}
+
 button.fulfillment-secret-code-download {
   width: 22px;
   min-width: 22px;

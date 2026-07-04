@@ -7,3 +7,7 @@ export function fulfillmentBoxSecretCode(
   if (receiptClaimCode) return receiptClaimCode;
   return String(box.claimCode || '').trim();
 }
+
+export function isUsedReceiptClaimStatus(status: string | undefined): boolean {
+  return status === 'processing' || status === 'claimed';
+}

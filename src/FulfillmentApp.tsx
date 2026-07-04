@@ -32,7 +32,7 @@ import {
 } from './lib/figureMetadata';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
-import { fulfillmentBoxSecretCode } from './lib/fulfillmentCodes';
+import { fulfillmentBoxSecretCode, isUsedReceiptClaimStatus } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
@@ -907,8 +907,14 @@ function SecretCodeDownloadButton(props: {
   );
 }
 
+function fulfillmentSecretCodeClassName(receiptClaimStatus: string | undefined): string {
+  return isUsedReceiptClaimStatus(receiptClaimStatus)
+    ? 'fulfillment-secret-code fulfillment-secret-code--used'
+    : 'fulfillment-secret-code';
+}
+
 function renderBoxTiles(args: {
-  boxes: Array<{ boxId: number; boxIndex: number; secretCode: string }>;
+  boxes: Array<{ boxId: number; boxIndex: number; secretCode: string; receiptClaimStatus?: string }>;
   keyPrefix: string;
   labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
   getPreviewSrc?: (boxId: number) => string | undefined;
@@ -925,9 +931,10 @@ function renderBoxTiles(args: {
   } = args;
   return (
     <div className="figure-grid">
-      {boxes.map(({ boxId, boxIndex, secretCode }, index) => {
+      {boxes.map(({ boxId, boxIndex, secretCode, receiptClaimStatus }, index) => {
         const { label, sizeLabel } = resolveFulfillmentDirectDeliveryBoxLabel(labelSource, boxId);
         const imageSrc = getPreviewSrc?.(boxId);
+        const hideSecretCodeDownload = isUsedReceiptClaimStatus(receiptClaimStatus);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
             {imageSrc ? (
@@ -940,12 +947,14 @@ function renderBoxTiles(args: {
               <div className="muted small fulfillment-secret-code-line">
                 <span>
                   {fulfillmentBoxSecretLabelPrefix(labelSource)}{' '}
-                  <span className="fulfillment-secret-code">{secretCode}</span>
+                  <span className={fulfillmentSecretCodeClassName(receiptClaimStatus)}>{secretCode}</span>
                 </span>
                 <SecretCodeDownloadButton
                   secretCode={secretCode}
                   disabled={secretCodeDownloadDisabled}
-                  onClick={onDownloadSecretCode ? () => onDownloadSecretCode(boxIndex) : undefined}
+                  onClick={
+                    onDownloadSecretCode && !hideSecretCodeDownload ? () => onDownloadSecretCode(boxIndex) : undefined
+                  }
                 />
               </div>
             ) : null}
@@ -1992,6 +2001,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   boxId: box.boxId,
                   boxIndex,
                   secretCode: fulfillmentBoxSecretCode(box),
+                  receiptClaimStatus: box.receiptClaimStatus,
                 })),
                 keyPrefix: `${orderKey}:box`,
                 labelSource: orderDrop,
@@ -2003,6 +2013,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               <div className="box-contents-list">
                 {order.boxes.map((box, boxIndex) => {
                   const secretCode = fulfillmentBoxSecretCode(box);
+                  const hideSecretCodeDownload = isUsedReceiptClaimStatus(box.receiptClaimStatus);
                   const packSecretImage = orderShowsFulfillmentPackPreview
                     ? renderFulfillmentPackSecretImage({
                         dropId: orderDrop.dropId,
@@ -2022,12 +2033,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                             <span className="fulfillment-secret-code-line">
                               <span>
                                 {fulfillmentBoxSecretLabelPrefix(orderDrop)}{' '}
-                                <span className="fulfillment-secret-code">{secretCode}</span>
+                                <span className={fulfillmentSecretCodeClassName(box.receiptClaimStatus)}>{secretCode}</span>
                               </span>
                               <SecretCodeDownloadButton
                                 secretCode={secretCode}
                                 disabled={secretCodeDownloadDisabled}
-                                onClick={() => void downloadSecretCodePng(order, boxIndex)}
+                                onClick={
+                                  hideSecretCodeDownload ? undefined : () => void downloadSecretCodePng(order, boxIndex)
+                                }
                               />
                             </span>
                           </span>

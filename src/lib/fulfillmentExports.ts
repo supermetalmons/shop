@@ -2,7 +2,7 @@ import { isDropFamily, type FrontendDeploymentConfig } from '../config/deploymen
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
 import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox } from '../types';
 import type { FigureMetadataRecord } from './figureMetadata';
-import { fulfillmentBoxSecretCode } from './fulfillmentCodes';
+import { fulfillmentBoxSecretCode, isUsedReceiptClaimStatus } from './fulfillmentCodes';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from './shipping';
 import { findCountryByCode } from './countries';
@@ -249,15 +249,20 @@ export function buildFulfillmentAddressExport(orders: FulfillmentOrder[]): Recor
 
 export function countFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder[]): number {
   return orders.reduce(
-    (total, order) => total + order.boxes.reduce((boxTotal, box) => boxTotal + (fulfillmentBoxSecretCode(box) ? 1 : 0), 0),
+    (total, order) => total + order.boxes.reduce((boxTotal, box) => boxTotal + (exportableSecretCode(box) ? 1 : 0), 0),
     0,
   );
+}
+
+function exportableSecretCode(box: FulfillmentOrderBox): string {
+  if (isUsedReceiptClaimStatus(box.receiptClaimStatus)) return '';
+  return fulfillmentBoxSecretCode(box);
 }
 
 function countFulfillmentSecretCodesThroughBox(order: FulfillmentOrder, boxIndex: number): number {
   let total = 0;
   for (let index = 0; index <= boxIndex && index < order.boxes.length; index += 1) {
-    if (fulfillmentBoxSecretCode(order.boxes[index])) total += 1;
+    if (exportableSecretCode(order.boxes[index])) total += 1;
   }
   return total;
 }
@@ -372,7 +377,7 @@ export function buildFulfillmentSecretCodeExportEntry(args: {
   const box = args.order.boxes[args.boxIndex];
   if (!box) return null;
 
-  const secretCode = fulfillmentBoxSecretCode(box);
+  const secretCode = exportableSecretCode(box);
   if (!secretCode) return null;
 
   return buildFulfillmentSecretCodeExportEntryFromBox({
@@ -394,7 +399,7 @@ export function buildFulfillmentSecretCodeExportEntries(
   return orders.flatMap((order) => {
     let secretCodeOrdinal = 0;
     return order.boxes.flatMap((box, boxIndex) => {
-      const secretCode = fulfillmentBoxSecretCode(box);
+      const secretCode = exportableSecretCode(box);
       if (!secretCode) return [];
 
       secretCodeOrdinal += 1;
