@@ -3,45 +3,59 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldPath, getFirestore, type DocumentSnapshot, type Firestore } from 'firebase-admin/firestore';
+import { FieldPath, getFirestore, type DocumentSnapshot, type Firestore, type Query } from 'firebase-admin/firestore';
 import { Resend } from 'resend';
 import { FUNCTIONS_DROPS, normalizeDropId, requireFunctionsDrop } from '../src/config/deployment.ts';
 import { dropDeliveryOrdersCollectionPath } from '../src/dropPaths.ts';
 import {
   NOTIFICATION_EMAIL_FROM,
+  buildBuyerOrderReceivedEmailContent,
+  buildBuyerOrderShippedEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   fulfillmentAppUrlForOrder,
   summarizeShipperReadyOrderItems,
+  type BuyerOrderEmailMessageBase,
   type NotificationEmailContent,
 } from '../src/notificationEmails.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../src/stripeCheckout/contract.ts';
 import { toMillisMaybe } from '../src/time.ts';
+import { buildBuyerOrderEmailItems } from './buyerOrderEmailItems.ts';
+import { normalizeFulfillmentStatusOrNull, type FulfillmentStatus } from '../../src/lib/fulfillmentStatus.ts';
+import { resolveFulfillmentTrackingHref } from '../../src/lib/fulfillmentTracking.ts';
 
-type TestEmailKind = 'shipper-ready' | 'stripe-manual-review';
+const ORDER_BACKED_TEST_EMAIL_KINDS = ['shipper-ready', 'order-received', 'order-shipped'] as const;
+const TEST_EMAIL_KINDS = [...ORDER_BACKED_TEST_EMAIL_KINDS, 'stripe-manual-review'] as const;
+
+type OrderBackedTestEmailKind = (typeof ORDER_BACKED_TEST_EMAIL_KINDS)[number];
+type TestEmailKind = (typeof TEST_EMAIL_KINDS)[number];
+type BuyerOrderBackedTestEmailKind = Extract<OrderBackedTestEmailKind, 'order-received' | 'order-shipped'>;
 
 type Args = {
   kind: TestEmailKind;
   dropId?: string;
 };
 
-type SelectedShipperReadyOrder = {
+type SelectedDeliveryOrder = {
   docPath: string;
   dropId: string;
   dropName: string;
   deliveryId: number;
   owner: string;
+  status: string;
+  fulfillmentStatus?: FulfillmentStatus;
+  trackingUrl?: string;
   sortTimeMs?: number;
   storedDropIdMismatch?: string;
 };
 
-type ShipperReadyOrderCandidate = SelectedShipperReadyOrder & {
+type DeliveryOrderCandidate = SelectedDeliveryOrder & {
   order: any;
 };
 
 type BuiltTestEmail = {
   content: NotificationEmailContent;
-  selectedOrder?: SelectedShipperReadyOrder;
+  selectedOrder?: SelectedDeliveryOrder;
 };
 
 const PROJECT_ID = 'mons-shop';
@@ -49,15 +63,20 @@ const RESEND_SECRET_NAME = 'RESEND_API_KEY';
 const TEST_RECIPIENT = 'ivan@ivan.lol';
 const TEST_DROP_ID = 'local_resend_test';
 const TEST_DROP_NAME = 'Local Resend Test';
-const DEFAULT_SHIPPER_READY_DROP_IDS = ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'];
-const LATEST_ORDER_QUERY_LIMIT = 50;
-const DELIVERY_ORDER_FIELDS = [
+const DEFAULT_ORDER_BACKED_DROP_IDS = ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'];
+const ORDER_LOOKUP_PAGE_SIZE = 50;
+const ORDER_LOOKUP_MAX_PAGES = 5;
+const ORDER_LOOKUP_MAX_DOCS = ORDER_LOOKUP_PAGE_SIZE * ORDER_LOOKUP_MAX_PAGES;
+const SHIPPED_FULFILLMENT_STATUS: FulfillmentStatus = 'Shipped';
+const DELIVERY_ORDER_LOOKUP_FIELDS = [
   'dropId',
   'deliveryId',
   'source',
   'status',
   'owner',
-  'items',
+  'fulfillmentStatus',
+  'fulfillmentTrackingCode',
+  'fulfillmentUpdatedAt',
   'createdAt',
   'processingAt',
   'processedAt',
@@ -73,10 +92,12 @@ function usage(): string {
     '  npm run test-resend-notification-email -- --kind shipper-ready',
     '  npm run test-resend-notification-email -- --kind shipper-ready --drop-id little_swag_hoodies',
     '  npm run test-resend-notification-email -- --kind stripe-manual-review',
+    '  npm run test-resend-notification-email -- --kind order-received --drop-id card_nft_2',
+    '  npm run test-resend-notification-email -- --kind order-shipped --drop-id card_nft_2',
     '',
     'Options:',
-    '  --kind <kind>    shipper-ready or stripe-manual-review (default: shipper-ready)',
-    '  --drop-id <id>   Restrict shipper-ready to one drop',
+    '  --kind <kind>    shipper-ready, stripe-manual-review, order-received, or order-shipped (default: shipper-ready)',
+    '  --drop-id <id>   Restrict order-backed tests to one drop',
     '  --drop_id <id>   Alias for --drop-id',
     '  -h, --help       Show this help',
   ].join('\n');
@@ -86,10 +107,22 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function assertNever(value: never): never {
+  fail(`Unhandled test email kind: ${String(value)}`);
+}
+
+function isTestEmailKind(kind: string): kind is TestEmailKind {
+  return (TEST_EMAIL_KINDS as readonly string[]).includes(kind);
+}
+
 function normalizeKind(raw: string): TestEmailKind {
   const kind = raw.trim();
-  if (kind === 'shipper-ready' || kind === 'stripe-manual-review') return kind;
+  if (isTestEmailKind(kind)) return kind;
   fail(`Invalid --kind: ${raw}\n\n${usage()}`);
+}
+
+function isOrderBackedKind(kind: TestEmailKind): kind is OrderBackedTestEmailKind {
+  return (ORDER_BACKED_TEST_EMAIL_KINDS as readonly string[]).includes(kind);
 }
 
 function knownDropIds(): string[] {
@@ -154,8 +187,8 @@ function parseArgs(argv: string[]): Args {
     fail(`Unknown arg: ${arg}\n\n${usage()}`);
   }
 
-  if (args.kind === 'stripe-manual-review' && rawDropId != null) {
-    fail(`--drop-id/--drop_id is only supported with --kind shipper-ready\n\n${usage()}`);
+  if (!isOrderBackedKind(args.kind) && rawDropId != null) {
+    fail(`--drop-id/--drop_id is only supported with order-backed email kinds\n\n${usage()}`);
   }
   if (rawDropId != null) args.dropId = resolveDropIdArg(rawDropId);
 
@@ -243,13 +276,29 @@ function dropIdFromDeliveryOrderPath(path: string): string | undefined {
   return dropId || undefined;
 }
 
-function deliveryOrderSortTimeMs(order: any): number | undefined {
+function deliveryOrderSortTimeMs(order: any, kind: OrderBackedTestEmailKind): number | undefined {
+  if (kind === 'order-shipped') {
+    return (
+      toMillisMaybe(order?.fulfillmentUpdatedAt) ??
+      toMillisMaybe(order?.processedAt) ??
+      toMillisMaybe(order?.processingAt) ??
+      toMillisMaybe(order?.createdAt)
+    );
+  }
   return toMillisMaybe(order?.processedAt) ?? toMillisMaybe(order?.processingAt) ?? toMillisMaybe(order?.createdAt);
 }
 
-function selectedOrderFromDoc(doc: DocumentSnapshot): ShipperReadyOrderCandidate | null {
+type DeliveryOrderLookupOptions = {
+  kind: OrderBackedTestEmailKind;
+  statuses: readonly string[];
+  requireShippedTracking?: boolean;
+  noMatchMessage: string;
+};
+
+function selectedOrderFromDoc(doc: DocumentSnapshot, options: DeliveryOrderLookupOptions): DeliveryOrderCandidate | null {
   const order = doc.data() || {};
-  if (order.status !== 'ready_to_ship') return null;
+  const status = typeof order.status === 'string' ? order.status : '';
+  if (!options.statuses.includes(status)) return null;
   if (order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) return null;
 
   const pathDropId = dropIdFromDeliveryOrderPath(doc.ref.path);
@@ -260,6 +309,10 @@ function selectedOrderFromDoc(doc: DocumentSnapshot): ShipperReadyOrderCandidate
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) return null;
 
   const drop = requireFunctionsDrop(pathDropId);
+  const fulfillmentStatus = normalizeFulfillmentStatusOrNull(order.fulfillmentStatus) || undefined;
+  const trackingUrl = resolveFulfillmentTrackingHref(order.fulfillmentTrackingCode);
+  if (options.requireShippedTracking && (fulfillmentStatus !== SHIPPED_FULFILLMENT_STATUS || !trackingUrl)) return null;
+
   return {
     order,
     docPath: doc.ref.path,
@@ -267,12 +320,15 @@ function selectedOrderFromDoc(doc: DocumentSnapshot): ShipperReadyOrderCandidate
     dropName: drop.collectionName || pathDropId,
     deliveryId,
     owner: typeof order.owner === 'string' ? order.owner : '',
-    sortTimeMs: deliveryOrderSortTimeMs(order),
+    status,
+    ...(fulfillmentStatus ? { fulfillmentStatus } : {}),
+    ...(trackingUrl ? { trackingUrl } : {}),
+    sortTimeMs: deliveryOrderSortTimeMs(order, options.kind),
     ...(storedDropId && storedDropId !== pathDropId ? { storedDropIdMismatch: storedDropId } : {}),
   };
 }
 
-function compareSelectedOrders(a: SelectedShipperReadyOrder, b: SelectedShipperReadyOrder): number {
+function compareSelectedOrders(a: SelectedDeliveryOrder, b: SelectedDeliveryOrder): number {
   const timeDelta = (b.sortTimeMs || 0) - (a.sortTimeMs || 0);
   if (timeDelta !== 0) return timeDelta;
 
@@ -289,65 +345,141 @@ function summarizeFetchError(err: unknown): string {
   return [code, message].filter(Boolean).join(': ');
 }
 
-function docsToShipperReadyCandidates(docs: DocumentSnapshot[]): ShipperReadyOrderCandidate[] {
+function docsToDeliveryOrderCandidates(docs: DocumentSnapshot[], options: DeliveryOrderLookupOptions): DeliveryOrderCandidate[] {
   return docs
-    .map((doc) => selectedOrderFromDoc(doc))
-    .filter((order): order is ShipperReadyOrderCandidate => Boolean(order));
+    .map((doc) => selectedOrderFromDoc(doc, options))
+    .filter((order): order is DeliveryOrderCandidate => Boolean(order));
 }
 
-async function fetchAllShipperReadyCandidates(db: Firestore, dropId: string): Promise<ShipperReadyOrderCandidate[]> {
-  const snap = await db
-    .collection(dropDeliveryOrdersCollectionPath(dropId))
-    .where('status', '==', 'ready_to_ship')
-    .select(...DELIVERY_ORDER_FIELDS)
-    .get();
-  return docsToShipperReadyCandidates(snap.docs);
+function deliveryOrderLookupOptions(kind: OrderBackedTestEmailKind): DeliveryOrderLookupOptions {
+  switch (kind) {
+    case 'order-received':
+      return {
+        kind,
+        statuses: ['processing', 'ready_to_ship'],
+        noMatchMessage: 'No matching real processing or ready_to_ship delivery order found for order-received test email.',
+      };
+    case 'order-shipped':
+      return {
+        kind,
+        statuses: ['ready_to_ship'],
+        requireShippedTracking: true,
+        noMatchMessage: 'No matching real shipped delivery order with HTTPS tracking link found for order-shipped test email.',
+      };
+    case 'shipper-ready':
+      return {
+        kind,
+        statuses: ['ready_to_ship'],
+        noMatchMessage: 'No matching real ready_to_ship delivery order found for shipper-ready test email.',
+      };
+    default:
+      return assertNever(kind);
+  }
 }
 
-async function fetchLatestShipperReadyCandidates(
+function deliveryOrderQuery(
   db: Firestore,
   dropId: string,
-): Promise<ShipperReadyOrderCandidate[]> {
-  try {
-    const snap = await db
-      .collection(dropDeliveryOrdersCollectionPath(dropId))
-      .where('status', '==', 'ready_to_ship')
-      .orderBy('processedAt', 'desc')
-      .orderBy(FieldPath.documentId(), 'desc')
-      .limit(LATEST_ORDER_QUERY_LIMIT)
-      .select(...DELIVERY_ORDER_FIELDS)
-      .get();
-    const candidates = docsToShipperReadyCandidates(snap.docs);
-    if (candidates.length) return candidates;
-  } catch (err) {
-    console.warn(
-      `Optimized latest ready-to-ship lookup failed for ${dropId}; falling back to full ready-order scan. ${summarizeFetchError(err)}`,
-    );
-  }
-
-  return fetchAllShipperReadyCandidates(db, dropId);
+  status: string,
+  options: DeliveryOrderLookupOptions,
+): Query {
+  let query: Query = db.collection(dropDeliveryOrdersCollectionPath(dropId)).where('status', '==', status);
+  if (options.requireShippedTracking) query = query.where('fulfillmentStatus', '==', SHIPPED_FULFILLMENT_STATUS);
+  const sortField =
+    options.kind === 'order-shipped' ? 'fulfillmentUpdatedAt' : status === 'processing' ? 'processingAt' : 'processedAt';
+  query = query.orderBy(sortField, 'desc').orderBy(FieldPath.documentId(), 'desc');
+  return query.select(...DELIVERY_ORDER_LOOKUP_FIELDS);
 }
 
-async function latestShipperReadyOrder(dropId?: string): Promise<ShipperReadyOrderCandidate> {
-  const searchedDropIds = dropId ? [dropId] : DEFAULT_SHIPPER_READY_DROP_IDS;
+async function fetchLatestDeliveryOrderCandidatesForStatus(
+  db: Firestore,
+  dropId: string,
+  status: string,
+  options: DeliveryOrderLookupOptions,
+): Promise<DeliveryOrderCandidate[]> {
+  let cursor: DocumentSnapshot | undefined;
+  for (let pageIndex = 0; pageIndex < ORDER_LOOKUP_MAX_PAGES; pageIndex += 1) {
+    let query = deliveryOrderQuery(db, dropId, status, options).limit(ORDER_LOOKUP_PAGE_SIZE);
+    if (cursor) query = query.startAfter(cursor);
+
+    let snap;
+    try {
+      snap = await query.get();
+    } catch (err) {
+      fail(
+        [
+          `Indexed ${options.kind} lookup failed for drop ${dropId}, status ${status}.`,
+          `Error: ${summarizeFetchError(err)}`,
+          'Required Firestore indexes are declared in firestore.indexes.json.',
+          'Deploy them with: firebase deploy --only firestore:indexes',
+        ].join('\n'),
+      );
+    }
+
+    const candidates = docsToDeliveryOrderCandidates(snap.docs, options);
+    if (candidates.length) return candidates;
+
+    const lastDoc = snap.docs[snap.docs.length - 1];
+    if (!lastDoc || snap.docs.length < ORDER_LOOKUP_PAGE_SIZE) break;
+    cursor = lastDoc;
+  }
+
+  return [];
+}
+
+async function fetchLatestDeliveryOrderCandidates(
+  db: Firestore,
+  dropId: string,
+  options: DeliveryOrderLookupOptions,
+): Promise<DeliveryOrderCandidate[]> {
+  const candidatesByStatus = await Promise.all(
+    options.statuses.map((status) => fetchLatestDeliveryOrderCandidatesForStatus(db, dropId, status, options)),
+  );
+  return candidatesByStatus.flat();
+}
+
+async function hydrateDeliveryOrderCandidate(
+  db: Firestore,
+  candidate: DeliveryOrderCandidate,
+): Promise<DeliveryOrderCandidate> {
+  const snap = await db.doc(candidate.docPath).get();
+  return {
+    ...candidate,
+    order: {
+      ...candidate.order,
+      ...(snap.data() || {}),
+    },
+  };
+}
+
+async function latestDeliveryOrder(kind: OrderBackedTestEmailKind, dropId?: string): Promise<DeliveryOrderCandidate> {
+  const options = deliveryOrderLookupOptions(kind);
+  const searchedDropIds = dropId ? [dropId] : DEFAULT_ORDER_BACKED_DROP_IDS;
   const db = firestore();
-  const candidates = (await Promise.all(searchedDropIds.map((searchedDropId) => fetchLatestShipperReadyCandidates(db, searchedDropId)))).flat();
+  const candidates = (
+    await Promise.all(searchedDropIds.map((searchedDropId) => fetchLatestDeliveryOrderCandidates(db, searchedDropId, options)))
+  ).flat();
   candidates.sort(compareSelectedOrders);
 
   const found = candidates[0];
-  if (found) return found;
+  if (found) return hydrateDeliveryOrderCandidate(db, found);
 
   fail(
     [
-      'No matching real ready_to_ship delivery order found for shipper-ready test email.',
+      options.noMatchMessage,
       `Searched drops: ${searchedDropIds.join(', ')}`,
+      `Statuses: ${options.statuses.join(', ')}`,
+      options.requireShippedTracking ? 'Required: fulfillmentStatus Shipped with HTTPS fulfillmentTrackingCode' : undefined,
+      `Lookup cap: ${ORDER_LOOKUP_MAX_DOCS} docs per status/drop`,
       `Ignored sources: ${ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE}`,
-    ].join('\n'),
+    ]
+      .filter(Boolean)
+      .join('\n'),
   );
 }
 
 async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
-  const { order, ...selectedOrder } = await latestShipperReadyOrder(args.dropId);
+  const { order, ...selectedOrder } = await latestDeliveryOrder('shipper-ready', args.dropId);
   return {
     selectedOrder,
     content: buildShipperReadyToShipEmailContent(
@@ -363,6 +495,46 @@ async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): P
       },
       { subjectPrefix: '[TEST] ' },
     ),
+  };
+}
+
+async function buildBuyerOrderTestEmailMessage(
+  kind: BuyerOrderBackedTestEmailKind,
+  args: Args,
+  idempotencyKey: string,
+): Promise<{ selectedOrder: SelectedDeliveryOrder; message: BuyerOrderEmailMessageBase }> {
+  const { order, ...selectedOrder } = await latestDeliveryOrder(kind, args.dropId);
+  const items = await buildBuyerOrderEmailItems(order, selectedOrder);
+  return {
+    selectedOrder,
+    message: {
+      idempotencyKey,
+      recipients: [TEST_RECIPIENT],
+      dropId: selectedOrder.dropId,
+      dropName: selectedOrder.dropName,
+      deliveryId: selectedOrder.deliveryId,
+      items,
+    },
+  };
+}
+
+async function buildBuyerOrderReceivedTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
+  const { selectedOrder, message } = await buildBuyerOrderTestEmailMessage('order-received', args, idempotencyKey);
+  return {
+    selectedOrder,
+    content: buildBuyerOrderReceivedEmailContent(message, { subjectPrefix: '[TEST] ' }),
+  };
+}
+
+async function buildBuyerOrderShippedTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
+  const { selectedOrder, message } = await buildBuyerOrderTestEmailMessage('order-shipped', args, idempotencyKey);
+  const trackingUrl = selectedOrder.trackingUrl;
+  if (!trackingUrl) {
+    fail(`Selected order is missing an HTTPS tracking URL: ${selectedOrder.docPath}`);
+  }
+  return {
+    selectedOrder,
+    content: buildBuyerOrderShippedEmailContent({ ...message, trackingUrl }, { subjectPrefix: '[TEST] ' }),
   };
 }
 
@@ -398,8 +570,18 @@ function buildStripeManualReviewTestEmail(idempotencyKey: string): BuiltTestEmai
 }
 
 async function buildTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
-  if (args.kind === 'stripe-manual-review') return buildStripeManualReviewTestEmail(idempotencyKey);
-  return buildShipperReadyTestEmail(args, idempotencyKey);
+  switch (args.kind) {
+    case 'stripe-manual-review':
+      return buildStripeManualReviewTestEmail(idempotencyKey);
+    case 'order-received':
+      return buildBuyerOrderReceivedTestEmail(args, idempotencyKey);
+    case 'order-shipped':
+      return buildBuyerOrderShippedTestEmail(args, idempotencyKey);
+    case 'shipper-ready':
+      return buildShipperReadyTestEmail(args, idempotencyKey);
+    default:
+      return assertNever(args.kind);
+  }
 }
 
 function summarizeResendError(error: any): string {
@@ -445,6 +627,9 @@ async function main() {
         ? `Stored order dropId mismatch: ${selectedOrder.storedDropIdMismatch} (using path drop ${selectedOrder.dropId})`
         : undefined,
       selectedOrder ? `Selected delivery ID: ${selectedOrder.deliveryId}` : undefined,
+      selectedOrder ? `Selected order status: ${selectedOrder.status}` : undefined,
+      selectedOrder?.fulfillmentStatus ? `Selected fulfillment status: ${selectedOrder.fulfillmentStatus}` : undefined,
+      selectedOrder?.trackingUrl ? `Selected tracking URL: ${selectedOrder.trackingUrl}` : undefined,
       selectedOrder
         ? `Selected order timestamp: ${selectedOrder.sortTimeMs ? new Date(selectedOrder.sortTimeMs).toISOString() : 'unknown'}`
         : undefined,
