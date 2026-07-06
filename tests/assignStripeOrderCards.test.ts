@@ -20,7 +20,6 @@ const scriptRuntime = {
   cluster: 'mainnet-beta' as const,
   heliusRpcBase: 'https://mainnet.helius-rpc.com',
   collectionMintStr: 'collection-1',
-  canonicalMetadataBase: 'https://metadata.example/drop',
   collectionMintSharedOnCluster: false,
 };
 
@@ -48,6 +47,47 @@ function fakeDb(initial: Record<string, any>) {
       get: async () => snap(path),
     }),
   };
+}
+
+type ReceiptAssetOptions = {
+  owner?: string;
+  grouping?: { group_key: string; group_value: string }[] | null;
+  jsonUri?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function receiptCertificateAsset(options: ReceiptAssetOptions = {}) {
+  const {
+    owner = 'owner-wallet',
+    grouping = [{ group_key: 'collection', group_value: 'collection-1' }],
+    jsonUri = 'https://metadata.example/drop/json/receipts/boxes/8.json',
+    metadata = {},
+  } = options;
+  const asset: any = {
+    id: 'receipt-asset',
+    ownership: { owner },
+    content: {
+      json_uri: jsonUri,
+      metadata: {
+        attributes: [{ trait_type: 'type', value: 'certificate' }],
+        ...metadata,
+      },
+    },
+  };
+  if (grouping) asset.grouping = grouping;
+  return asset;
+}
+
+function validateReceiptAssetForManifest(asset: any, overrides: Record<string, unknown> = {}) {
+  return assignStripeOrderCardsTestHooks.validateReceiptAssetForManifest({
+    asset,
+    assetId: 'receipt-asset',
+    owner: 'owner-wallet',
+    runtime: scriptRuntime,
+    boxId: 8,
+    context: 'test context',
+    ...overrides,
+  });
 }
 
 test('Stripe card assignment treats empty existing IRL claims as repairable pending state', () => {
@@ -136,48 +176,88 @@ test('Stripe card assignment fails on non-finite IRL claim ids instead of filter
 
 test('Stripe card assignment validates receipt asset by exact manifest asset', () => {
   assert.doesNotThrow(() =>
-    assignStripeOrderCardsTestHooks.validateReceiptAssetForManifest({
-      asset: {
-        id: 'receipt-asset',
-        ownership: { owner: 'owner-wallet' },
-        grouping: [{ group_key: 'collection', group_value: 'collection-1' }],
-        content: {
-          json_uri: 'https://metadata.example/drop/json/receipts/boxes/8.json',
-          metadata: {
-            attributes: [{ trait_type: 'type', value: 'certificate' }],
-          },
-        },
-      },
-      assetId: 'receipt-asset',
-      owner: 'owner-wallet',
-      runtime: scriptRuntime,
-      boxId: 8,
-      context: 'test context',
-    }),
+    validateReceiptAssetForManifest(
+      receiptCertificateAsset({
+        jsonUri: 'https://cdn.example/migrated-drop/json/receipts/boxes/8.json',
+      }),
+    ),
+  );
+
+  assert.throws(
+    () => validateReceiptAssetForManifest(receiptCertificateAsset({ owner: 'different-owner' })),
+    /not owned by owner-wallet/,
   );
 
   assert.throws(
     () =>
-      assignStripeOrderCardsTestHooks.validateReceiptAssetForManifest({
-        asset: {
-          id: 'receipt-asset',
-          ownership: { owner: 'different-owner' },
-          grouping: [{ group_key: 'collection', group_value: 'collection-1' }],
-          content: {
-            json_uri: 'https://metadata.example/drop/json/receipts/boxes/8.json',
-            metadata: {
-              attributes: [{ trait_type: 'type', value: 'certificate' }],
-            },
-          },
-        },
-        assetId: 'receipt-asset',
-        owner: 'owner-wallet',
-        runtime: scriptRuntime,
-        boxId: 8,
-        context: 'test context',
-      }),
-    /not owned by owner-wallet/,
+      validateReceiptAssetForManifest(
+        receiptCertificateAsset({
+          grouping: [{ group_key: 'collection', group_value: 'different-collection' }],
+        }),
+      ),
+    /does not match card_nft_2/,
   );
+
+  assert.throws(
+    () =>
+      validateReceiptAssetForManifest(
+        receiptCertificateAsset({
+          grouping: null,
+          metadata: { collection: { key: 'collection-1' } },
+        }),
+      ),
+    /does not match card_nft_2/,
+  );
+
+  assert.throws(
+    () =>
+      validateReceiptAssetForManifest(
+        receiptCertificateAsset({
+          grouping: [
+            { group_key: 'collection', group_value: 'collection-1' },
+            { group_key: 'collection', group_value: 'different-collection' },
+          ],
+        }),
+      ),
+    /does not match card_nft_2/,
+  );
+
+  assert.throws(
+    () =>
+      validateReceiptAssetForManifest(receiptCertificateAsset(), {
+        runtime: { ...scriptRuntime, collectionMintSharedOnCluster: true },
+      }),
+    /does not match card_nft_2/,
+  );
+});
+
+test('Stripe card assignment skips receipt search when collection mint is shared', async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls += 1;
+    throw new Error('unexpected fetch');
+  }) as typeof fetch;
+
+  try {
+    const candidates = await assignStripeOrderCardsTestHooks.findReceiptAssetCandidatesOwnedBy({
+      owner: 'owner-wallet',
+      runtime: { ...scriptRuntime, collectionMintSharedOnCluster: true },
+      boxId: 8,
+    });
+
+    assert.deepEqual(candidates, []);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Stripe card assignment sends DAS collection grouping options under options', () => {
+  const params = assignStripeOrderCardsTestHooks.heliusSearchAssetsParams('owner-wallet', 1, ['collection', 'collection-1']);
+
+  assert.deepEqual(params.options, { showUnverifiedCollections: true });
+  assert.equal(Object.hasOwn(params, 'displayOptions'), false);
 });
 
 test('Stripe card assignment fails when receipt snapshot changed after dry-run', () => {

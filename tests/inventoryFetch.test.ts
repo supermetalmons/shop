@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { fetchInventory } from '../src/lib/api.ts';
 
 const CARD_NFT_2_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
+const LITTLE_SWAG_BOXES_COLLECTION = '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr';
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
 type SearchAssetsParams = {
@@ -38,6 +39,15 @@ async function withMockedFetch(
   }
 }
 
+function assertSearchAssetsUsesCollectionGroupingOptions(calls: SearchAssetsParams[]) {
+  const searchCalls = calls.filter((call) => call.method === 'searchAssets');
+  assert.ok(searchCalls.length > 0);
+  for (const call of searchCalls) {
+    assert.deepEqual(call.params?.options, { showUnverifiedCollections: true });
+    assert.equal(Object.hasOwn(call.params || {}, 'displayOptions'), false);
+  }
+}
+
 function cardNft2PackAsset(id: string, packId: number) {
   return {
     id,
@@ -51,6 +61,28 @@ function cardNft2PackAsset(id: string, packId: number) {
       },
       links: {
         image: `https://assets.mons.link/drops/cardnft2/images/b${packId}.webp`,
+      },
+    },
+  };
+}
+
+function cardNft2PackAssetWithCollections(id: string, packId: number, collections: string[]) {
+  return {
+    ...cardNft2PackAsset(id, packId),
+    grouping: collections.map((collection) => ({ group_key: 'collection', group_value: collection })),
+  };
+}
+
+function cardNft2PackAssetWithMetadataCollectionOnly(id: string, packId: number) {
+  const base = cardNft2PackAsset(id, packId);
+  const { grouping: _grouping, ...asset } = base;
+  return {
+    ...asset,
+    content: {
+      ...base.content,
+      metadata: {
+        ...base.content.metadata,
+        collection: { key: CARD_NFT_2_COLLECTION },
       },
     },
   };
@@ -130,6 +162,52 @@ test('fetchInventory requests unburned Helius assets and includes paginated boxe
       [1, 2],
     );
     assert.equal(calls.every((call) => call.method !== 'searchAssets' || call.params?.burnt === false), true);
+    assertSearchAssetsUsesCollectionGroupingOptions(calls);
+  });
+});
+
+test('fetchInventory does not use metadata URLs to disambiguate multiple collection candidates', async () => {
+  const ambiguousAsset = cardNft2PackAssetWithCollections('ambiguous-pack', 184, [
+    CARD_NFT_2_COLLECTION,
+    LITTLE_SWAG_BOXES_COLLECTION,
+  ]);
+
+  await withMockedFetch(async (body) => {
+    if (body.method !== 'searchAssets') {
+      return rpcResult(body.id, null);
+    }
+
+    const params = body.params || {};
+    const collection = Array.isArray(params.grouping) ? params.grouping[1] : undefined;
+    if (collection === CARD_NFT_2_COLLECTION || collection === LITTLE_SWAG_BOXES_COLLECTION) {
+      return rpcResult(body.id, { items: [ambiguousAsset] });
+    }
+
+    return rpcResult(body.id, { items: [] });
+  }, async () => {
+    const inventory = await fetchInventory(OWNER);
+    assert.deepEqual(inventory, []);
+  });
+});
+
+test('fetchInventory ignores metadata collection keys without Helius grouping', async () => {
+  const metadataOnlyAsset = cardNft2PackAssetWithMetadataCollectionOnly('metadata-only-pack', 184);
+
+  await withMockedFetch(async (body) => {
+    if (body.method !== 'searchAssets') {
+      return rpcResult(body.id, null);
+    }
+
+    const params = body.params || {};
+    const collection = Array.isArray(params.grouping) ? params.grouping[1] : undefined;
+    if (collection === CARD_NFT_2_COLLECTION) {
+      return rpcResult(body.id, { items: [metadataOnlyAsset] });
+    }
+
+    return rpcResult(body.id, { items: [] });
+  }, async () => {
+    const inventory = await fetchInventory(OWNER);
+    assert.deepEqual(inventory, []);
   });
 });
 

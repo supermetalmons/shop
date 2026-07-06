@@ -5,6 +5,7 @@ import {
   buildAdminIrlRedeemDeliveryOrderDocument,
   buildAdminIrlRedeemMarkerDocument,
   buildAdminIrlRedeemSelectionKey,
+  getAdminIrlRedeemUnsupportedReason,
   resolveAdminIrlRedeemMarkerReuse,
 } from '../functions/src/adminIrlRedeem.ts';
 import {
@@ -67,6 +68,41 @@ test('Admin IRL Redeem eligibility is only true for signed-in admin wallets sele
       selectedCount: 3,
     } as any),
     false,
+  );
+});
+
+test('Admin IRL Redeem unsupported reason mirrors server drop capability checks', () => {
+  assert.equal(
+    getAdminIrlRedeemUnsupportedReason({
+      dropFamily: 'card_nft_2',
+      itemsPerBox: 3,
+      sharesCollectionMint: false,
+    }),
+    null,
+  );
+  assert.equal(
+    getAdminIrlRedeemUnsupportedReason({
+      dropFamily: 'little_swag_boxes',
+      itemsPerBox: 3,
+      sharesCollectionMint: false,
+    }),
+    'Admin IRL redeem is only available for card_nft_2 packs.',
+  );
+  assert.equal(
+    getAdminIrlRedeemUnsupportedReason({
+      dropFamily: 'card_nft_2',
+      itemsPerBox: 0,
+      sharesCollectionMint: false,
+    }),
+    'Admin IRL redeem requires pack-based drops.',
+  );
+  assert.equal(
+    getAdminIrlRedeemUnsupportedReason({
+      dropFamily: 'card_nft_2',
+      itemsPerBox: 3,
+      sharesCollectionMint: true,
+    }),
+    'Admin IRL redeem cannot be disambiguated for a shared collection mint.',
   );
 });
 

@@ -5,6 +5,7 @@ import {
   buildStripeReceiptClaimsByBoxId,
   requireStripeReceiptClaimCode,
 } from './stripeCheckout/contract.js';
+import type { DropFamily } from './config/deployment.js';
 
 export const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
   label: 'Admin IRL event',
@@ -62,6 +63,17 @@ export type AdminIrlRedeemMarkerReuseResolution =
       claimCodes: string[];
       boxes: AdminIrlRedeemMarkerReuseBox[];
     };
+
+export function getAdminIrlRedeemUnsupportedReason(args: {
+  dropFamily: DropFamily;
+  itemsPerBox: number;
+  sharesCollectionMint: boolean;
+}): string | null {
+  if (args.dropFamily !== 'card_nft_2') return 'Admin IRL redeem is only available for card_nft_2 packs.';
+  if (!Number.isFinite(args.itemsPerBox) || args.itemsPerBox < 1) return 'Admin IRL redeem requires pack-based drops.';
+  if (args.sharesCollectionMint) return 'Admin IRL redeem cannot be disambiguated for a shared collection mint.';
+  return null;
+}
 
 function normalizePositiveU32(value: unknown, label: string): number {
   const normalized = Math.floor(Number(value));

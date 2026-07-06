@@ -27,11 +27,10 @@ import { FUNCTIONS_DROPS, requireFunctionsDrop, type FunctionsDropConfig, type S
 import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from '../src/claimCodes.ts';
 import {
   boxIdFromMetadataUri,
-  canonicalMetadataBase,
-  metadataBaseFromMetadataUri,
   metadataKindFromUri,
   selectMetadataUri,
 } from '../src/dropMetadataUri.ts';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS, uniqueAssetGroupingCollectionMint } from '../src/dasAssetCollections.ts';
 import {
   dropBoxAssignmentPath,
   dropDeliveryOrderPath,
@@ -76,7 +75,6 @@ type ScriptDropRuntime = CardAssignmentDropRuntime & {
   cluster: SolanaCluster;
   heliusRpcBase: string;
   collectionMintStr: string;
-  canonicalMetadataBase: string;
   collectionMintSharedOnCluster: boolean;
 };
 
@@ -289,7 +287,6 @@ function buildScriptDropRuntime(config: FunctionsDropConfig): ScriptDropRuntime 
     cluster: config.solanaCluster,
     heliusRpcBase: heliusRpcBaseForCluster(config.solanaCluster),
     collectionMintStr,
-    canonicalMetadataBase: canonicalMetadataBase(config.metadataBase),
     collectionMintSharedOnCluster: collectionMintSharedOnCluster(config, collectionMintStr),
   };
 }
@@ -520,10 +517,7 @@ function heliusSearchAssetsParams(owner: string, page: number, grouping?: readon
     ownerAddress: owner,
     page,
     limit: HELIUS_ASSETS_PAGE_LIMIT,
-    displayOptions: {
-      showCollectionMetadata: true,
-      showUnverifiedCollections: true,
-    },
+    options: HELIUS_COLLECTION_GROUPING_OPTIONS,
   };
   if (grouping) params.grouping = grouping;
   return params;
@@ -631,28 +625,10 @@ function getBoxIdFromAsset(asset: DasAsset): string | undefined {
   return match?.[2];
 }
 
-function assetCollectionMints(asset: DasAsset): string[] {
-  const out = new Set<string>();
-  const grouped = asset?.grouping;
-  if (Array.isArray(grouped)) {
-    for (const group of grouped) {
-      if (group?.group_key === 'collection' && typeof group?.group_value === 'string' && group.group_value) {
-        out.add(group.group_value);
-      }
-    }
-  }
-  const collectionKey = asset?.content?.metadata?.collection?.key;
-  if (typeof collectionKey === 'string' && collectionKey) out.add(collectionKey);
-  return Array.from(out);
-}
-
 function assetMatchesRequestedDrop(asset: DasAsset, runtime: ScriptDropRuntime): boolean {
   if (getAssetKind(asset) !== 'certificate') return false;
-  const collectionMatches = Boolean(runtime.collectionMintStr) && assetCollectionMints(asset).includes(runtime.collectionMintStr);
-  if (!collectionMatches) return false;
-  const assetMetadataBase = metadataBaseFromMetadataUri(assetMetadataUri(asset));
-  if (assetMetadataBase) return assetMetadataBase === runtime.canonicalMetadataBase;
-  return !runtime.collectionMintSharedOnCluster;
+  const collectionMatches = Boolean(runtime.collectionMintStr) && uniqueAssetGroupingCollectionMint(asset) === runtime.collectionMintStr;
+  return collectionMatches && !runtime.collectionMintSharedOnCluster;
 }
 
 function looksBurntOrClosedInHelius(asset: DasAsset | null | undefined): boolean {
@@ -695,6 +671,8 @@ async function findReceiptAssetCandidatesOwnedBy(params: {
   runtime: ScriptDropRuntime;
   boxId: number;
 }): Promise<DasAsset[]> {
+  if (params.runtime.collectionMintSharedOnCluster) return [];
+
   const matches = (asset: DasAsset) => {
     if (looksBurntOrClosedInHelius(asset)) return false;
     if (asset?.ownership?.owner !== params.owner) return false;
@@ -714,10 +692,7 @@ async function findReceiptAssetCandidatesOwnedBy(params: {
 async function fetchAssetById(runtime: ScriptDropRuntime, assetId: string): Promise<DasAsset | null> {
   const result = await heliusRpc<any>(runtime, 'getAsset', {
     id: assetId,
-    displayOptions: {
-      showCollectionMetadata: true,
-      showUnverifiedCollections: true,
-    },
+    options: HELIUS_COLLECTION_GROUPING_OPTIONS,
   });
   return result && typeof result === 'object' ? result : null;
 }
@@ -1424,7 +1399,9 @@ function isDirectRun(): boolean {
 
 export const assignStripeOrderCardsTestHooks = {
   existingIrlClaimsByBoxId,
+  findReceiptAssetCandidatesOwnedBy,
   heliusSearchAssetsHasNextPage,
+  heliusSearchAssetsParams,
   preflightManifestAssignments,
   validateManifestShape,
   validateManifestTotals,

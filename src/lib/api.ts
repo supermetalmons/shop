@@ -29,12 +29,11 @@ import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from '.
 import { dropAssetLabel } from './dropLabels';
 import {
   boxIdFromMetadataUri,
-  canonicalMetadataBase,
   dudeIdFromMetadataUri,
-  metadataBaseFromMetadataUri,
   metadataKindFromUri,
   selectMetadataUri,
 } from './dropMetadataUri';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS, uniqueAssetGroupingCollectionMint } from './dasAssetCollections';
 import {
   FRONTEND_DROPS,
   normalizeDropId,
@@ -172,9 +171,7 @@ const HELIUS_SEARCH_ASSETS_MAX_PAGES = 50;
 type FrontendDropRuntime = Pick<
   FrontendDeploymentConfig,
   'dropId' | 'solanaCluster' | 'collectionMint' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'itemsPerBox'
-> & {
-  canonicalMetadataBase: string;
-};
+>;
 
 type PendingOpenProgramScope = Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'> & {
   drops: FrontendDropRuntime[];
@@ -215,7 +212,6 @@ const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS
       collectionMint: drop.collectionMint,
       boxMinterProgramId: drop.boxMinterProgramId,
       boxMinterConfigPda: typeof drop.boxMinterConfigPda === 'string' ? drop.boxMinterConfigPda.trim() || undefined : undefined,
-      canonicalMetadataBase: canonicalMetadataBase(drop.metadataBase),
       itemsPerBox: drop.itemsPerBox,
     };
   });
@@ -257,6 +253,26 @@ const MAINNET_PENDING_OPEN_PROGRAM_SCOPES = PENDING_OPEN_PROGRAM_SCOPES.filter((
 
 function listFrontendDropRuntimes(options?: DropFetchOptions): FrontendDropRuntime[] {
   return options?.includeDevnet === true ? FRONTEND_DROP_RUNTIMES : MAINNET_FRONTEND_DROP_RUNTIMES;
+}
+
+function frontendDropCollectionKey(drop: Pick<FrontendDropRuntime, 'solanaCluster' | 'collectionMint'>): string {
+  return `${drop.solanaCluster}:${drop.collectionMint}`;
+}
+
+function listResolvableCollectionDropRuntimes(options?: DropFetchOptions): FrontendDropRuntime[] {
+  const runtimes: FrontendDropRuntime[] = [];
+  const seen = new Set<string>();
+
+  for (const drop of listFrontendDropRuntimes(options)) {
+    const key = frontendDropCollectionKey(drop);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const collectionDrop = resolveSingleDropRuntime(FRONTEND_DROPS_BY_COLLECTION_MINT.get(drop.collectionMint) || [], drop.solanaCluster);
+    if (collectionDrop) runtimes.push(collectionDrop);
+  }
+
+  return runtimes;
 }
 
 function frontendDropProgramScopeKey(drop: Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'>): string {
@@ -608,21 +624,6 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   return undefined;
 }
 
-function assetCollectionMints(asset: DasAsset): string[] {
-  const out = new Set<string>();
-  const grouped = asset?.grouping;
-  if (Array.isArray(grouped)) {
-    for (const g of grouped) {
-      if (g?.group_key === 'collection' && typeof g?.group_value === 'string' && g.group_value) {
-        out.add(g.group_value);
-      }
-    }
-  }
-  const contentCollectionKey = asset?.content?.metadata?.collection?.key;
-  if (typeof contentCollectionKey === 'string' && contentCollectionKey) out.add(contentCollectionKey);
-  return Array.from(out);
-}
-
 function assetMetadataUri(asset: DasAsset): string {
   return selectMetadataUri(
     asset?.content?.json_uri,
@@ -631,11 +632,6 @@ function assetMetadataUri(asset: DasAsset): string {
     asset?.content?.metadata?.jsonUri,
     asset?.content?.metadata?.uri,
   );
-}
-
-function metadataBaseFromAsset(asset: DasAsset): string | null {
-  const uri = assetMetadataUri(asset);
-  return metadataBaseFromMetadataUri(uri);
 }
 
 function isBurntAsset(asset: DasAsset): boolean {
@@ -668,30 +664,22 @@ function cacheAssetDropId(asset: DasAsset, dropId: string): string {
   return dropId;
 }
 
+function collectionMintResolvesToCandidateDrop(collectionMint: string, entry: PendingOpenRecordCandidate): boolean {
+  const collectionDrop = resolveSingleDropRuntime(FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [], entry.solanaCluster);
+  return Boolean(collectionDrop && isCandidateDropId(entry, collectionDrop.dropId));
+}
+
 function resolveAssetDropId(asset: DasAsset, solanaCluster?: SolanaCluster): string | null {
   const cached = (asset as any)?.[ASSET_DROP_ID_FIELD];
-  if (typeof cached === 'string' && FRONTEND_DROP_BY_ID.has(cached)) return cached;
-
-  const collectionCandidates: FrontendDropRuntime[] = [];
-  for (const collectionMint of assetCollectionMints(asset)) {
-    const matches = FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [];
-    for (const drop of matches) {
-      if (solanaCluster && drop.solanaCluster !== solanaCluster) continue;
-      collectionCandidates.push(drop);
-    }
+  if (typeof cached === 'string') {
+    const cachedDrop = FRONTEND_DROP_BY_ID.get(cached);
+    if (cachedDrop && (!solanaCluster || cachedDrop.solanaCluster === solanaCluster)) return cached;
   }
-  if (!collectionCandidates.length) return null;
 
-  const uniqueCollectionCandidates = Array.from(new Map(collectionCandidates.map((drop) => [drop.dropId, drop])).values());
-  const collectionDrop = resolveSingleDropRuntime(uniqueCollectionCandidates, solanaCluster);
+  const collectionMint = uniqueAssetGroupingCollectionMint(asset);
+  if (!collectionMint) return null;
+  const collectionDrop = resolveSingleDropRuntime(FRONTEND_DROPS_BY_COLLECTION_MINT.get(collectionMint) || [], solanaCluster);
   if (collectionDrop) return cacheAssetDropId(asset, collectionDrop.dropId);
-
-  const metadataBase = metadataBaseFromAsset(asset);
-  if (metadataBase) {
-    const metadataCandidates = uniqueCollectionCandidates.filter((drop) => drop.canonicalMetadataBase === metadataBase);
-    const drop = resolveSingleDropRuntime(metadataCandidates, solanaCluster);
-    if (drop) return cacheAssetDropId(asset, drop.dropId);
-  }
 
   return null;
 }
@@ -699,7 +687,10 @@ function resolveAssetDropId(asset: DasAsset, solanaCluster?: SolanaCluster): str
 async function fetchAssetById(assetId: string, solanaCluster: SolanaCluster): Promise<DasAsset | null> {
   if (!assetId) return null;
   try {
-    const asset = await heliusRpc<any>(solanaCluster, 'getAsset', { id: assetId });
+    const asset = await heliusRpc<any>(solanaCluster, 'getAsset', {
+      id: assetId,
+      options: HELIUS_COLLECTION_GROUPING_OPTIONS,
+    });
     return asset && typeof asset === 'object' ? (asset as DasAsset) : null;
   } catch {
     return null;
@@ -723,6 +714,10 @@ function resolvePendingOpenDropIdByPlaceholderCount(entry: PendingOpenRecordCand
   return matches.length === 1 ? matches[0].dropId : null;
 }
 
+function pendingOpenCanResolveFromAssetCollection(entry: PendingOpenRecordCandidate): boolean {
+  return entry.candidateDrops.some((drop) => collectionMintResolvesToCandidateDrop(drop.collectionMint, entry));
+}
+
 async function resolvePendingOpenDropId(entry: PendingOpenRecordCandidate): Promise<string | null> {
   const configDropId = resolvePendingOpenDropIdByConfigPda(entry);
   if (configDropId) return cachePendingOpenDropId(entry, configDropId);
@@ -744,6 +739,8 @@ async function resolvePendingOpenDropId(entry: PendingOpenRecordCandidate): Prom
   if (cachedDropId && isCandidateDropId(entry, cachedDropId)) {
     return cachedDropId;
   }
+
+  if (!pendingOpenCanResolveFromAssetCollection(entry)) return null;
 
   const asset = await fetchAssetById(entry.boxAssetId, entry.solanaCluster);
   if (!asset) return null;
@@ -832,15 +829,12 @@ async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Prom
     ownerAddress: owner,
     limit: HELIUS_SEARCH_ASSETS_LIMIT,
     burnt: false,
-    displayOptions: {
-      showCollectionMetadata: true,
-      showUnverifiedCollections: true,
-    },
+    options: HELIUS_COLLECTION_GROUPING_OPTIONS,
   };
 
   const mergedByAssetId = new Map<string, DasAsset>();
   const ungroupedByCluster = new Map<SolanaCluster, DasAsset[]>();
-  const runtimes = listFrontendDropRuntimes(options);
+  const runtimes = listResolvableCollectionDropRuntimes(options);
 
   for (const drop of runtimes) {
     let items: DasAsset[] = [];
