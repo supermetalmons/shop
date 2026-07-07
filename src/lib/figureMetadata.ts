@@ -60,6 +60,17 @@ export function figureMetadataHasImage(
   return Boolean(record?.image && String(record.image).trim());
 }
 
+function canResolveFigureMetadataImageDirectly(
+  drop: NonNullable<ReturnType<typeof getFrontendDrop>>,
+  figureId: number,
+): boolean {
+  if (drop.dropFamily === 'card_nft_2') return true;
+  if (drop.dropFamily !== 'little_swag_boxes') return false;
+
+  const maxFigureId = Math.floor(Number(drop.maxSupply)) * Math.floor(Number(drop.itemsPerBox));
+  return Number.isFinite(maxFigureId) && maxFigureId > 0 && figureId <= maxFigureId;
+}
+
 export async function loadFigureMetadata(dropId: string, figureId: number): Promise<FigureMetadataRecord | null> {
   const normalizedDropId = normalizeDropId(dropId);
   const normalizedFigureId = normalizePositiveInteger(figureId);
@@ -76,7 +87,7 @@ export async function loadFigureMetadata(dropId: string, figureId: number): Prom
   const drop = getFrontendDrop(normalizedDropId);
   if (!drop) return null;
 
-  if (drop.dropFamily === 'card_nft_2') {
+  if (canResolveFigureMetadataImageDirectly(drop, normalizedFigureId)) {
     const image = normalizeFigureDisplayImage(normalizedDropId, undefined, normalizedFigureId);
     if (image) {
       const record: FigureMetadataRecord = {
