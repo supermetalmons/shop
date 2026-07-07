@@ -1,4 +1,5 @@
 import { defineNewDropConfig } from '../shared/newDropConfig.ts';
+import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../../src/config/dropMediaDefaults.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {
@@ -27,7 +28,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Little Swag Hoodies',
       description: 'lsw cobalt blue hoodie · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'ipfs://bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/hoodie.webp',
+      image: LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL,
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/little_swag_hoodies.csv',
     receiptsTree: {

@@ -25,7 +25,7 @@ import {
   StripeReceiptClaimResult,
 } from '../types';
 import { getHeliusApiKey } from './helius';
-import { normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
+import { normalizeBoxDisplayImage, normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
 import { dropAssetLabel } from './dropLabels';
 import {
   boxIdFromMetadataUri,
@@ -810,8 +810,8 @@ function transformInventoryItem(asset: DasAsset): InventoryItem | null {
     kind === 'dude'
       ? normalizeFigureDisplayImage(dropId, imageRaw, dudeId)
       : kind === 'certificate'
-        ? normalizeCertificateDisplayImage(dropId, imageRaw, dudeId)
-        : imageRaw;
+        ? normalizeCertificateDisplayImage({ dropId, imageRaw, figureId: dudeId, boxId })
+        : normalizeBoxDisplayImage({ dropId, imageRaw, boxId });
   return {
     id: asset.id,
     dropId,

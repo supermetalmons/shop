@@ -3,7 +3,7 @@ import { isDropFamily } from '../config/deployment';
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
 import { getMediaIdForFigureId } from './figureMediaMap';
 import { figureMetadataCacheKey, figureMetadataHasImage, getCachedFigureMetadata, type FigureMetadataRecord } from './figureMetadata';
-import { joinDropAssetUrl } from './dropContent';
+import { resolveFigureMediaImageUrlForMediaId } from './dropContent';
 import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './dropLabels';
 
 type FulfillmentLabelSource =
@@ -79,7 +79,7 @@ export function resolveFulfillmentFigurePreview(args: {
   const resolved = resolveFulfillmentFigureLabel(args);
   const fallbackSrc = figureMetadataHasImage(resolved.metadata) ? resolved.metadata.image : undefined;
   if (args.previewMode === 'media_map_folder') {
-    const primarySrc = resolved.mediaId ? joinDropAssetUrl(args.figureMediaBase, `${resolved.mediaId}.webp`) : undefined;
+    const primarySrc = resolveFigureMediaImageUrlForMediaId(args.figureMediaBase, resolved.mediaId);
     return {
       ...resolved,
       ...(primarySrc ? { primarySrc } : {}),

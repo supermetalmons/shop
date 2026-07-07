@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CARD_NFT_2_PACK_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import { fetchInventory } from '../src/lib/api.ts';
 
 const CARD_NFT_2_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
@@ -152,6 +153,10 @@ test('fetchInventory requests unburned Helius assets and includes paginated boxe
     assert.deepEqual(
       inventory.map((item) => item.boxId),
       ['184', '823'],
+    );
+    assert.deepEqual(
+      inventory.map((item) => item.image),
+      [`${CARD_NFT_2_PACK_BASE_URL}/4/initial.webp`, `${CARD_NFT_2_PACK_BASE_URL}/3/initial.webp`],
     );
 
     const cardNft2Calls = calls.filter(

@@ -1,11 +1,17 @@
-import { type FrontendDropConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
+import {
+  type FrontendDropConfig,
+  getFrontendDrop,
+  isDropFamily,
+  normalizeDropId,
+  resolveDropAssetUrl,
+} from '../config/deployment.ts';
 import {
   getDropExtraContentOverride,
   usesInteractiveCardPackRevealFlow,
   type DropBoxInventoryImagePathMode,
+  type DropCertificateBoxInventoryImagePathMode,
   type DropExtraContentOverride,
   type DropFigureFulfillmentPreviewMode,
-  type DropFigureInventoryImageMode,
   type DropFigureRevealPresentation,
   type DropRevealFrameSequence,
   type DropRevealFrameSourceSequence,
@@ -13,9 +19,11 @@ import {
   type DropRevealMode,
   type DropRevealRenderer,
   type DropRevealSoundProfile,
-} from '../config/dropsExtraContent';
-import { cardNft2AssetUrl } from './cardNft2Assets';
-import { getMediaIdForTokenId } from './mediaMap';
+} from '../config/dropsExtraContent.ts';
+import { cardNft2AssetUrl } from './cardNft2Assets.ts';
+import { getMediaIdForFigureId } from './figureMediaMap.ts';
+import { isKnownCdnUrl, rewriteLegacyDisplayMediaUrl } from './legacyDisplayMediaPaths.ts';
+import { getMediaIdForTokenId } from './mediaMap.ts';
 
 export type ResolvedDropContent = {
   box: {
@@ -36,7 +44,6 @@ export type ResolvedDropContent = {
     sound: DropRevealSoundProfile;
   };
   figures: {
-    inventoryImageMode: DropFigureInventoryImageMode;
     inventoryImageBaseUrl?: string;
     inventoryImageUrl?: string;
     revealPresentation: DropFigureRevealPresentation;
@@ -45,7 +52,12 @@ export type ResolvedDropContent = {
     fulfillmentMediaBaseUrl?: string;
   };
   certificates: {
+    inventoryImageBaseUrl?: string;
     inventoryImageUrl?: string;
+    boxInventoryImageBaseUrl?: string;
+    boxInventoryImagePathMode?: DropCertificateBoxInventoryImagePathMode;
+    boxInventoryImageUrl?: string;
+    boxInventoryMedia?: FrontendDropConfig['boxMedia'];
   };
 };
 
@@ -84,6 +96,15 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+export function resolveDisplayMediaUrl(url: string | undefined): string | undefined {
+  const normalizedUrl = asOptionalString(url);
+  if (!normalizedUrl) return undefined;
+  if (isKnownCdnUrl(normalizedUrl)) return normalizedUrl;
+  const rewrittenUrl = rewriteLegacyDisplayMediaUrl(normalizedUrl);
+  if (rewrittenUrl) return rewrittenUrl;
+  return resolveDropAssetUrl(normalizedUrl);
+}
+
 export function joinDropAssetUrl(baseUrl: string | undefined, path: string): string | undefined {
   const normalizedBaseUrl = asOptionalString(baseUrl);
   const normalizedPath = String(path || '').trim();
@@ -91,7 +112,72 @@ export function joinDropAssetUrl(baseUrl: string | undefined, path: string): str
   const joined = !normalizedPath
     ? trimTrailingSlashes(normalizedBaseUrl)
     : `${trimTrailingSlashes(normalizedBaseUrl)}/${trimLeadingSlashes(normalizedPath)}`;
-  return resolveDropAssetUrl(joined);
+  return resolveDisplayMediaUrl(joined);
+}
+
+export function resolveFigureMediaImageUrl(
+  baseUrl: string | undefined,
+  figureId: number | undefined,
+  figureMedia: FrontendDropConfig['figureMedia'] | undefined,
+): string | undefined {
+  const normalizedFigureId = asPositiveInteger(figureId);
+  if (!normalizedFigureId) return undefined;
+  const mediaId = getMediaIdForFigureId(normalizedFigureId, figureMedia) || normalizedFigureId;
+  return resolveFigureMediaImageUrlForMediaId(baseUrl, mediaId);
+}
+
+export function resolveFigureMediaImageUrlForMediaId(
+  baseUrl: string | undefined,
+  mediaId: number | null | undefined,
+): string | undefined {
+  const normalizedMediaId = asPositiveInteger(mediaId);
+  if (!normalizedMediaId) return undefined;
+  return joinDropAssetUrl(baseUrl, `${normalizedMediaId}.webp`);
+}
+
+function certificateBoxImagePath(mediaId: number, mode: DropCertificateBoxInventoryImagePathMode | undefined): string {
+  if (mode === 'receipt_file') return `receipt_${mediaId}.webp`;
+  if (mode === 'receipt_pack_file') return `receipt_pack_${mediaId}.webp`;
+  return `${mediaId}.webp`;
+}
+
+function resolveCertificateBoxMediaImageUrl(args: {
+  baseUrl: string | undefined;
+  boxId?: string | number;
+  boxMedia?: FrontendDropConfig['boxMedia'];
+  pathMode?: DropCertificateBoxInventoryImagePathMode;
+}): string | undefined {
+  const mediaId = getMediaIdForTokenId(args.boxId, args.boxMedia);
+  if (!mediaId) return undefined;
+  return joinDropAssetUrl(args.baseUrl, certificateBoxImagePath(mediaId, args.pathMode));
+}
+
+function resolveCertificateMediaImageUrl(args: {
+  baseUrl: string | undefined;
+  boxImageBaseUrl?: string;
+  boxImagePathMode?: DropCertificateBoxInventoryImagePathMode;
+  boxImageUrl?: string;
+  boxMedia?: FrontendDropConfig['boxMedia'];
+  figureId?: number;
+  boxId?: string | number;
+  figureMedia?: FrontendDropConfig['figureMedia'];
+}): string | undefined {
+  const figureImage = resolveFigureMediaImageUrl(args.baseUrl, args.figureId, args.figureMedia);
+  if (figureImage) return figureImage;
+
+  const mappedBoxImage = resolveCertificateBoxMediaImageUrl({
+    baseUrl: args.boxImageBaseUrl,
+    boxId: args.boxId,
+    boxMedia: args.boxMedia,
+    pathMode: args.boxImagePathMode,
+  });
+  if (mappedBoxImage) return mappedBoxImage;
+
+  const boxImage = resolveDisplayMediaUrl(args.boxImageUrl);
+  if (!boxImage) return undefined;
+  const hasFigureCertificateId = Boolean(asPositiveInteger(args.figureId));
+  const hasBoxCertificateId = Boolean(asPositiveInteger(args.boxId));
+  return !hasFigureCertificateId || hasBoxCertificateId ? boxImage : undefined;
 }
 
 function mergeFrameSequence(
@@ -157,8 +243,8 @@ function hasFrameSources(frameSequence: DropRevealFrameSequence | undefined): fr
   return Boolean(frameSequence?.frames?.length || (frameSequence?.baseUrl && frameSequence.ext));
 }
 
-function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropContent {
-  const base = drop.paths.base;
+function defaultAnimatedDropContent(drop: FrontendDropConfig, mediaBaseUrl?: string): ResolvedDropContent {
+  const base = resolveDisplayMediaUrl(mediaBaseUrl) || drop.paths.base;
   const frameSequence = {
     baseUrl: joinDropAssetUrl(base, 'box/'),
     ext: 'webp',
@@ -186,7 +272,6 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
       sound: DEFAULT_DROP_REVEAL_SOUND_PROFILE,
     },
     figures: {
-      inventoryImageMode: 'clean_variant',
       inventoryImageBaseUrl: undefined,
       inventoryImageUrl: undefined,
       revealPresentation: 'videos',
@@ -195,7 +280,12 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig): ResolvedDropConte
       fulfillmentMediaBaseUrl: joinDropAssetUrl(base, 'figures/clean'),
     },
     certificates: {
+      inventoryImageBaseUrl: undefined,
       inventoryImageUrl: undefined,
+      boxInventoryImageBaseUrl: undefined,
+      boxInventoryImagePathMode: undefined,
+      boxInventoryImageUrl: undefined,
+      boxInventoryMedia: undefined,
     },
   };
 }
@@ -219,7 +309,6 @@ function defaultStaticDropContent(): ResolvedDropContent {
       sound: DEFAULT_DROP_REVEAL_SOUND_PROFILE,
     },
     figures: {
-      inventoryImageMode: 'metadata_raw',
       inventoryImageBaseUrl: undefined,
       inventoryImageUrl: undefined,
       revealPresentation: 'metadata_stills',
@@ -228,7 +317,12 @@ function defaultStaticDropContent(): ResolvedDropContent {
       fulfillmentMediaBaseUrl: undefined,
     },
     certificates: {
+      inventoryImageBaseUrl: undefined,
       inventoryImageUrl: undefined,
+      boxInventoryImageBaseUrl: undefined,
+      boxInventoryImagePathMode: undefined,
+      boxInventoryImageUrl: undefined,
+      boxInventoryMedia: undefined,
     },
   };
 }
@@ -251,13 +345,13 @@ function applyDropExtraContentOverride(
   const nextFrameSequence = hasFrameSources(nextFrameTimingAndSources) ? nextFrameTimingAndSources : undefined;
   return {
     box: {
-      previewImageUrl: asOptionalString(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
-      inventoryImageBaseUrl: asOptionalString(override.box?.inventoryImageBaseUrl) ?? base.box.inventoryImageBaseUrl,
+      previewImageUrl: resolveDisplayMediaUrl(override.box?.previewImageUrl) ?? base.box.previewImageUrl,
+      inventoryImageBaseUrl: resolveDisplayMediaUrl(override.box?.inventoryImageBaseUrl) ?? base.box.inventoryImageBaseUrl,
       inventoryImagePathMode: override.box?.inventoryImagePathMode || base.box.inventoryImagePathMode,
       aspectRatio: asPositiveNumber(override.box?.aspectRatio, base.box.aspectRatio),
     },
     mintPanel: {
-      previewImageUrl: asOptionalString(override.mintPanel?.previewImageUrl) ?? base.mintPanel.previewImageUrl,
+      previewImageUrl: resolveDisplayMediaUrl(override.mintPanel?.previewImageUrl) ?? base.mintPanel.previewImageUrl,
       aspectRatio: asPositiveNumber(override.mintPanel?.aspectRatio, base.mintPanel.aspectRatio),
     },
     reveal: {
@@ -273,18 +367,28 @@ function applyDropExtraContentOverride(
       ...(nextMode === 'animated' && nextFrameSequence ? { frameSequence: nextFrameSequence } : {}),
     },
     figures: {
-      inventoryImageMode: override.figures?.inventoryImageMode || base.figures.inventoryImageMode,
-      inventoryImageBaseUrl: asOptionalString(override.figures?.inventoryImageBaseUrl) ?? base.figures.inventoryImageBaseUrl,
-      inventoryImageUrl: asOptionalString(override.figures?.inventoryImageUrl) ?? base.figures.inventoryImageUrl,
+      inventoryImageBaseUrl:
+        resolveDisplayMediaUrl(override.figures?.inventoryImageBaseUrl) ?? base.figures.inventoryImageBaseUrl,
+      inventoryImageUrl: resolveDisplayMediaUrl(override.figures?.inventoryImageUrl) ?? base.figures.inventoryImageUrl,
       revealPresentation: override.figures?.revealPresentation || base.figures.revealPresentation,
       fulfillmentPreviewMode: override.figures?.fulfillmentPreviewMode || base.figures.fulfillmentPreviewMode,
-      revealVideoBaseUrl: asOptionalString(override.figures?.revealVideoBaseUrl) ?? base.figures.revealVideoBaseUrl,
+      revealVideoBaseUrl: resolveDisplayMediaUrl(override.figures?.revealVideoBaseUrl) ?? base.figures.revealVideoBaseUrl,
       fulfillmentMediaBaseUrl:
-        asOptionalString(override.figures?.fulfillmentMediaBaseUrl) ?? base.figures.fulfillmentMediaBaseUrl,
+        resolveDisplayMediaUrl(override.figures?.fulfillmentMediaBaseUrl) ?? base.figures.fulfillmentMediaBaseUrl,
     },
     certificates: {
+      inventoryImageBaseUrl:
+        resolveDisplayMediaUrl(override.certificates?.inventoryImageBaseUrl) ?? base.certificates.inventoryImageBaseUrl,
       inventoryImageUrl:
-        asOptionalString(override.certificates?.inventoryImageUrl) ?? base.certificates.inventoryImageUrl,
+        resolveDisplayMediaUrl(override.certificates?.inventoryImageUrl) ?? base.certificates.inventoryImageUrl,
+      boxInventoryImageBaseUrl:
+        resolveDisplayMediaUrl(override.certificates?.boxInventoryImageBaseUrl) ??
+        base.certificates.boxInventoryImageBaseUrl,
+      boxInventoryImagePathMode:
+        override.certificates?.boxInventoryImagePathMode || base.certificates.boxInventoryImagePathMode,
+      boxInventoryImageUrl:
+        resolveDisplayMediaUrl(override.certificates?.boxInventoryImageUrl) ?? base.certificates.boxInventoryImageUrl,
+      boxInventoryMedia: override.certificates?.boxInventoryMedia || base.certificates.boxInventoryMedia,
     },
   };
 }
@@ -300,13 +404,14 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
   const cached = resolvedContentByDropId.get(normalizedDropId);
   if (cached) return cached;
 
+  const override = getDropExtraContentOverride(normalizedDropId);
   const base = drop
     ? isDropFamily(drop, 'little_swag_boxes')
-      ? defaultAnimatedDropContent(drop)
+      ? defaultAnimatedDropContent(drop, override?.mediaBaseUrl)
       : defaultStaticDropContent()
     : defaultStaticDropContent();
 
-  const resolved = applyDropExtraContentOverride(base, getDropExtraContentOverride(normalizedDropId));
+  const resolved = applyDropExtraContentOverride(base, override);
   if (normalizedDropId) {
     resolvedContentByDropId.set(normalizedDropId, resolved);
   }
@@ -316,6 +421,13 @@ export function resolveDropContent(dropOrId?: FrontendDropConfig | string): Reso
 export type BoxDisplayImageInput = {
   dropId: string;
   imageRaw?: string;
+  boxId?: string | number;
+};
+
+export type CertificateDisplayImageInput = {
+  dropId: string;
+  imageRaw?: string;
+  figureId?: number;
   boxId?: string | number;
 };
 
@@ -339,16 +451,16 @@ export function resolveBoxMediaIdForDrop(
 export function normalizeBoxDisplayImage({ dropId, imageRaw, boxId }: BoxDisplayImageInput): string | undefined {
   const drop = getFrontendDrop(dropId);
   const content = resolveDropContent(drop || dropId);
-  const fallbackImage = content.box.previewImageUrl || resolveDropAssetUrl(imageRaw || '') || undefined;
   const boxMediaId = content.box.inventoryImageBaseUrl ? resolveBoxMediaId(drop, boxId) : null;
   if (boxMediaId) {
     const boxImagePath =
       content.box.inventoryImagePathMode === 'folder_initial'
         ? `${boxMediaId}/initial.webp`
         : `${boxMediaId}.webp`;
-    return joinDropAssetUrl(content.box.inventoryImageBaseUrl, boxImagePath) || fallbackImage;
+    const resolvedBoxImage = joinDropAssetUrl(content.box.inventoryImageBaseUrl, boxImagePath);
+    if (resolvedBoxImage) return resolvedBoxImage;
   }
-  return fallbackImage;
+  return content.box.previewImageUrl || resolveDisplayMediaUrl(imageRaw) || undefined;
 }
 
 export function mintPanelPreviewImage(dropId: string): string | undefined {
@@ -362,31 +474,51 @@ export function mintPanelPreviewAspectRatio(dropId: string): number {
 }
 
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
-  const content = resolveDropContent(dropId);
   const cardNft2Image = isDropFamily(dropId, 'card_nft_2')
     ? cardNft2AssetUrl('img', figureId)
     : undefined;
   if (cardNft2Image) return cardNft2Image;
-  const normalizedFigureId = asPositiveInteger(figureId);
-  if (content.figures.inventoryImageUrl) {
-    return resolveDropAssetUrl(content.figures.inventoryImageUrl);
-  }
-  if (content.figures.inventoryImageBaseUrl && normalizedFigureId) {
-    return joinDropAssetUrl(content.figures.inventoryImageBaseUrl, `${normalizedFigureId}.webp`) || imageRaw;
-  }
-  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
-  if (!resolvedImage) return undefined;
-  if (content.figures.inventoryImageMode !== 'clean_variant') return resolvedImage;
-  if (resolvedImage.includes('/figures/clean/')) return resolvedImage;
-  return resolvedImage.includes('/figures/') ? resolvedImage.replace('/figures/', '/figures/clean/') : resolvedImage;
+
+  const drop = getFrontendDrop(dropId);
+  const content = resolveDropContent(drop || dropId);
+  if (content.figures.inventoryImageUrl) return content.figures.inventoryImageUrl;
+
+  const mappedFigureImage = resolveFigureMediaImageUrl(
+    content.figures.inventoryImageBaseUrl,
+    figureId,
+    drop?.figureMedia,
+  );
+  if (mappedFigureImage) return mappedFigureImage;
+
+  return resolveDisplayMediaUrl(imageRaw);
 }
 
-export function normalizeCertificateDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
-  const content = resolveDropContent(dropId);
+export function normalizeCertificateDisplayImage({
+  dropId,
+  imageRaw,
+  figureId,
+  boxId,
+}: CertificateDisplayImageInput): string | undefined {
   const cardNft2Receipt = isDropFamily(dropId, 'card_nft_2')
     ? cardNft2AssetUrl('receipt', figureId)
     : undefined;
   if (cardNft2Receipt) return cardNft2Receipt;
-  const resolvedImage = resolveDropAssetUrl(imageRaw || '');
-  return content.certificates.inventoryImageUrl || resolvedImage || undefined;
+
+  const drop = getFrontendDrop(dropId);
+  const content = resolveDropContent(drop || dropId);
+  if (content.certificates.inventoryImageUrl) return content.certificates.inventoryImageUrl;
+
+  const certificateImage = resolveCertificateMediaImageUrl({
+    baseUrl: content.certificates.inventoryImageBaseUrl,
+    boxImageBaseUrl: content.certificates.boxInventoryImageBaseUrl,
+    boxImagePathMode: content.certificates.boxInventoryImagePathMode,
+    boxImageUrl: content.certificates.boxInventoryImageUrl,
+    boxMedia: content.certificates.boxInventoryMedia || drop?.boxMedia,
+    figureId,
+    boxId,
+    figureMedia: drop?.figureMedia,
+  });
+  if (certificateImage) return certificateImage;
+
+  return resolveDisplayMediaUrl(imageRaw);
 }

@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
-import { getDrifCardAssetSources, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
+import { getDrifCardAssetSources, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards.ts';
 import {
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
   type InteractiveCardPackRevealSequence,
-} from './interactiveCardPackReveal';
+} from './interactiveCardPackReveal.ts';
 import {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-} from './interactiveCardPackRevealSounds';
+} from './interactiveCardPackRevealSounds.ts';
 export {
   PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
   PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-} from './interactiveCardPackRevealSounds';
+} from './interactiveCardPackRevealSounds.ts';
 export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
 export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 50;
 export const PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS = 420;

@@ -1,4 +1,4 @@
-import { isDropFamily } from '../config/deployment';
+import { isDropFamily } from '../config/deployment.ts';
 
 const PONCHO_DRIFELLA_SOUND_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/sounds';
 

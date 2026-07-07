@@ -1,7 +1,7 @@
-import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards';
-import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults';
-import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment';
-import { cardNft2AssetUrl, isCardNft2CommonCardId, normalizeCardNft2CardId } from './cardNft2Assets';
+import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards.ts';
+import { CARD_NFT_2_PACK_BASE_URL } from '../config/dropMediaDefaults.ts';
+import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment.ts';
+import { cardNft2AssetUrl, isCardNft2CommonCardId, normalizeCardNft2CardId } from './cardNft2Assets.ts';
 
 const INTERACTIVE_CARD_PACK_PUNCH_VARIANT_COUNT = 3;
 const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;

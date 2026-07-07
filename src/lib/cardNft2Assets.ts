@@ -1,16 +1,15 @@
-import cardNft2CommonIdsRaw from './cardNft2CommonIds.json';
+import cardNft2CommonIdsRaw from './cardNft2CommonIds.json' with { type: 'json' };
+import { CARD_NFT_2_CDN_BASE_URL } from '../config/dropMediaDefaults.ts';
 
 export type CardNft2AssetKind = 'foil' | 'mask' | 'receipt' | 'img';
 
 export const CARD_NFT_2_MAX_CARD_ID = 11133;
 
-const CARD_NFT_2_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs';
-
-const CARD_NFT_2_ASSET_CIDS: Record<CardNft2AssetKind, string> = {
-  foil: 'bafybeigzyk3qd7brxfd3uinftdywhwao65gdxuleqirv5zje3okftmxczy',
-  mask: 'bafybeiapwcv66aqu2wzh3f5mp4j4j6h7zej3no7paae4qcqxpu3mg436ia',
-  receipt: 'bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq',
-  img: 'bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq',
+export const CARD_NFT_2_ASSET_CDN_BASES: Record<CardNft2AssetKind, string> = {
+  foil: `${CARD_NFT_2_CDN_BASE_URL}/foils`,
+  mask: `${CARD_NFT_2_CDN_BASE_URL}/masks`,
+  receipt: `${CARD_NFT_2_CDN_BASE_URL}/receipts`,
+  img: `${CARD_NFT_2_CDN_BASE_URL}/fronts_1400`,
 };
 
 function buildCardNft2CommonCardIds(values: readonly unknown[]): ReadonlySet<number> {
@@ -48,5 +47,5 @@ export function formatCardNft2AssetId(cardId: unknown): string | undefined {
 export function cardNft2AssetUrl(kind: CardNft2AssetKind, cardId: unknown): string | undefined {
   const formattedCardId = formatCardNft2AssetId(cardId);
   if (!formattedCardId) return undefined;
-  return `${CARD_NFT_2_IPFS_GATEWAY}/${CARD_NFT_2_ASSET_CIDS[kind]}/${formattedCardId}.webp`;
+  return `${CARD_NFT_2_ASSET_CDN_BASES[kind]}/${formattedCardId}.webp`;
 }

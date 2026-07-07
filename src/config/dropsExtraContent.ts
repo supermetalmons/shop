@@ -1,12 +1,25 @@
-import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal';
-import { INTERACTIVE_CARD_PACK_REVEAL_TIMING } from '../lib/interactiveCardPackReveal';
-import { CARD_NFT_2_PACK_BASE_URL } from './dropMediaDefaults.ts';
-import { isDropFamily, normalizeDropId } from './deployment';
+import { PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE } from '../lib/ponchoDrifellaReveal.ts';
+import { INTERACTIVE_CARD_PACK_REVEAL_TIMING } from '../lib/interactiveCardPackReveal.ts';
+import {
+  CARD_NFT_2_PACK_BASE_URL,
+  CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
+  LITTLE_SWAG_BOXES_CDN_BASE_URL,
+  LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
+  LITTLE_SWAG_BOXES_RECEIPT_BASE_URL,
+  LITTLE_SWAG_HOODIE_CDN_BASE_URL,
+  LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
+  LITTLE_SWAG_HOODIE_RECEIPT_MEDIA,
+  PONCHO_DRIFELLA_CDN_BASE_URL,
+  PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
+  PONCHO_DRIFELLA_RECEIPT_BASE_URL,
+} from './dropMediaDefaults.ts';
+import { isDropFamily, normalizeDropId, type MediaMapConfig } from './deployment.ts';
 
 export type DropRevealMode = 'animated' | 'static';
 export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack';
 export type DropBoxInventoryImagePathMode = 'file' | 'folder_initial';
-export type DropFigureInventoryImageMode = 'clean_variant' | 'metadata_raw';
+export type DropCertificateBoxInventoryImagePathMode = 'file' | 'receipt_file' | 'receipt_pack_file';
 export type DropFigureRevealPresentation = 'videos' | 'metadata_stills';
 export type DropFigureFulfillmentPreviewMode = 'media_map_folder' | 'metadata_stills';
 
@@ -43,6 +56,7 @@ const INTERACTIVE_CARD_PACK_REVEAL_RENDERERS = new Set<DropRevealRenderer>([
 ]);
 
 export type DropExtraContentOverride = {
+  mediaBaseUrl?: string;
   box?: {
     previewImageUrl?: string;
     inventoryImageBaseUrl?: string;
@@ -61,7 +75,6 @@ export type DropExtraContentOverride = {
     sound?: Partial<DropRevealSoundProfile>;
   };
   figures?: {
-    inventoryImageMode?: DropFigureInventoryImageMode;
     inventoryImageBaseUrl?: string;
     inventoryImageUrl?: string;
     revealPresentation?: DropFigureRevealPresentation;
@@ -70,15 +83,20 @@ export type DropExtraContentOverride = {
     fulfillmentMediaBaseUrl?: string;
   };
   certificates?: {
+    inventoryImageBaseUrl?: string;
     inventoryImageUrl?: string;
+    boxInventoryImageBaseUrl?: string;
+    boxInventoryImagePathMode?: DropCertificateBoxInventoryImagePathMode;
+    boxInventoryImageUrl?: string;
+    boxInventoryMedia?: MediaMapConfig;
   };
 };
 
-const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = 'https://cdn.lil.org/nft/poncho_drifella/items/clean';
-const PONCHO_DRIFELLA_PACK_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/pack';
+const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = `${PONCHO_DRIFELLA_CDN_BASE_URL}/items/clean`;
+const PONCHO_DRIFELLA_PACK_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack`;
 const PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL = `${PONCHO_DRIFELLA_PACK_BASE_URL}/tight.webp`;
 const PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO = 637 / 1092;
-const HOODIE_CLEAN_IMAGE_URL = 'https://cdn.lil.org/nft/little_swag_hoodie/images/hoodie_clean.webp';
+const HOODIE_CLEAN_IMAGE_URL = `${LITTLE_SWAG_HOODIE_CDN_BASE_URL}/images/hoodie_clean.webp`;
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 877;
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
@@ -98,10 +116,13 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     },
   },
   figures: {
-    inventoryImageMode: 'clean_variant',
     inventoryImageBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
     fulfillmentPreviewMode: 'media_map_folder',
     fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
+  },
+  certificates: {
+    inventoryImageBaseUrl: PONCHO_DRIFELLA_RECEIPT_BASE_URL,
+    boxInventoryImageUrl: PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
   },
 };
 const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
@@ -116,6 +137,21 @@ const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   figures: {
     inventoryImageUrl: HOODIE_CLEAN_IMAGE_URL,
   },
+  certificates: {
+    boxInventoryImageBaseUrl: LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
+    boxInventoryImagePathMode: 'receipt_file',
+    boxInventoryMedia: LITTLE_SWAG_HOODIE_RECEIPT_MEDIA,
+  },
+};
+const LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  mediaBaseUrl: LITTLE_SWAG_BOXES_CDN_BASE_URL,
+  figures: {
+    inventoryImageBaseUrl: LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
+  },
+  certificates: {
+    inventoryImageBaseUrl: LITTLE_SWAG_BOXES_RECEIPT_BASE_URL,
+    boxInventoryImageUrl: LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
+  },
 };
 const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
@@ -128,18 +164,91 @@ const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     renderer: 'interactive_card_pack',
     frameTiming: INTERACTIVE_CARD_PACK_REVEAL_TIMING,
   },
+  certificates: {
+    boxInventoryImageBaseUrl: CARD_NFT_2_PACK_BASE_URL,
+    boxInventoryImagePathMode: 'receipt_pack_file',
+    boxInventoryMedia: CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  },
 };
 
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
 };
 
+function mergeOverrideSection<T extends object>(base: T | undefined, override: T | undefined): T | undefined {
+  if (!base) return override;
+  if (!override) return base;
+  return { ...base, ...override };
+}
+
+function mergeRevealOverride(
+  base: DropExtraContentOverride['reveal'] | undefined,
+  override: DropExtraContentOverride['reveal'] | undefined,
+): DropExtraContentOverride['reveal'] | undefined {
+  const merged = mergeOverrideSection(base, override);
+  if (!merged) return undefined;
+  return {
+    ...merged,
+    frameTiming: mergeOverrideSection(base?.frameTiming, override?.frameTiming),
+    frameSequence: mergeOverrideSection(base?.frameSequence, override?.frameSequence),
+    sound: mergeOverrideSection(base?.sound, override?.sound),
+  };
+}
+
+function mergeMediaMapConfig(base: MediaMapConfig | undefined, override: MediaMapConfig | undefined): MediaMapConfig | undefined {
+  if (!base) return override;
+  if (!override) return base;
+  const overrides = {
+    ...(base.overrides || {}),
+    ...(override.overrides || {}),
+  };
+  return {
+    ...base,
+    ...override,
+    ...(Object.keys(overrides).length ? { overrides } : {}),
+  };
+}
+
+function mergeCertificateOverride(
+  base: DropExtraContentOverride['certificates'] | undefined,
+  override: DropExtraContentOverride['certificates'] | undefined,
+): DropExtraContentOverride['certificates'] | undefined {
+  const merged = mergeOverrideSection(base, override);
+  if (!merged) return undefined;
+  const boxInventoryMedia = mergeMediaMapConfig(base?.boxInventoryMedia, override?.boxInventoryMedia);
+  return {
+    ...merged,
+    ...(boxInventoryMedia ? { boxInventoryMedia } : {}),
+  };
+}
+
+function mergeDropExtraContentOverrides(
+  familyOverride: DropExtraContentOverride | undefined,
+  dropOverride: DropExtraContentOverride | undefined,
+): DropExtraContentOverride | undefined {
+  if (!familyOverride) return dropOverride;
+  if (!dropOverride) return familyOverride;
+  return {
+    ...familyOverride,
+    ...dropOverride,
+    box: mergeOverrideSection(familyOverride.box, dropOverride.box),
+    mintPanel: mergeOverrideSection(familyOverride.mintPanel, dropOverride.mintPanel),
+    reveal: mergeRevealOverride(familyOverride.reveal, dropOverride.reveal),
+    figures: mergeOverrideSection(familyOverride.figures, dropOverride.figures),
+    certificates: mergeCertificateOverride(familyOverride.certificates, dropOverride.certificates),
+  };
+}
+
+function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraContentOverride | undefined {
+  if (isDropFamily(normalizedDropId, 'poncho_drifella')) return PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'little_swag_boxes')) return LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'card_nft_2')) return CARD_NFT_2_FAMILY_EXTRA_CONTENT;
+  return undefined;
+}
+
 export function getDropExtraContentOverride(dropId?: string): DropExtraContentOverride | undefined {
   const normalizedDropId = normalizeDropId(dropId || '');
   if (!normalizedDropId) return undefined;
   const dropOverride = DROPS_EXTRA_CONTENT[normalizedDropId];
-  if (dropOverride) return dropOverride;
-  if (isDropFamily(normalizedDropId, 'poncho_drifella')) return PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT;
-  if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;
-  if (isDropFamily(normalizedDropId, 'card_nft_2')) return CARD_NFT_2_FAMILY_EXTRA_CONTENT;
-  return undefined;
+  return mergeDropExtraContentOverrides(getDropFamilyExtraContentOverride(normalizedDropId), dropOverride);
 }

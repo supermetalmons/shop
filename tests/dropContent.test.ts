@@ -4,8 +4,21 @@ import { readFileSync } from 'node:fs';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
+  CARD_NFT_2_CDN_BASE_URL,
+  CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
+  CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
+  LITTLE_SWAG_BOXES_CDN_BASE_URL,
+  LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
+  LITTLE_SWAG_BOXES_RECEIPT_BASE_URL,
+  LITTLE_SWAG_HOODIE_IMAGE_BASE_URL,
+  LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
+  PONCHO_DRIFELLA_CDN_BASE_URL,
+  PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
+  PONCHO_DRIFELLA_RECEIPT_BASE_URL,
 } from '../src/config/dropMediaDefaults.ts';
+import { DROPS_EXTRA_CONTENT, getDropExtraContentOverride } from '../src/config/dropsExtraContent.ts';
 import {
   CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_IMAGE_SRCS,
@@ -15,11 +28,13 @@ import {
   normalizeBoxDisplayImage,
   normalizeCertificateDisplayImage,
   normalizeFigureDisplayImage,
+  resolveDisplayMediaUrl,
   resolveBoxMediaIdForDrop,
   resolveDropContent,
 } from '../src/lib/dropContent.ts';
 import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
 import {
+  CARD_NFT_2_ASSET_CDN_BASES,
   CARD_NFT_2_COMMON_CARD_IDS,
   CARD_NFT_2_MAX_CARD_ID,
   cardNft2AssetUrl,
@@ -42,11 +57,18 @@ import {
 } from '../src/lib/interactiveCardPackRevealSounds.ts';
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
-const CARD_NFT_2_PACK_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/pack';
-const PONCHO_DRIFELLA_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella';
+const CARD_NFT_2_FRONT_CDN_BASE_URL = `${CARD_NFT_2_CDN_BASE_URL}/fronts`;
+const CARD_NFT_2_FRONTS_1400_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.img;
+const CARD_NFT_2_FOILS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.foil;
+const CARD_NFT_2_MASKS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.mask;
+const CARD_NFT_2_RECEIPTS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.receipt;
+const CARD_NFT_2_VIDEO_CDN_BASE_URL = `${CARD_NFT_2_CDN_BASE_URL}/videos`;
 const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/fronts`;
 const PONCHO_DRIFELLA_PACK_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack`;
 const PONCHO_DRIFELLA_SOUND_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/sounds`;
+const PONCHO_DRIFELLA_RECEIPTS_VIDEO_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/receipts_videos`;
+const PONCHO_DRIFELLA_VIDEO_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/videos`;
+const LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL = LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL;
 
 test('media map helper cycles ids and honors overrides', () => {
   const cyclic = { strategy: 'cyclic' as const, count: 4 };
@@ -64,9 +86,10 @@ test('media map helper cycles ids and honors overrides', () => {
 
 test('card_nft_2 box inventory images resolve from token id', () => {
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS.length, CARD_NFT_2_PACK_INITIAL_COUNT);
-  assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/tight.webp`);
-  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/initial.webp`);
+  assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp`);
+  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
   assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet_final.boxMedia, CARD_NFT_2_BOX_MEDIA);
+  assert.equal(CARD_NFT_2_PACK_RECEIPT_MEDIA, CARD_NFT_2_BOX_MEDIA);
   assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
   assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImagePathMode, 'folder_initial');
   assert.equal(resolveBoxMediaIdForDrop('card_nft_2_devnet_final', 5), 1);
@@ -106,30 +129,260 @@ test('card_nft_2 box inventory images resolve from token id', () => {
 test('card_nft_2 asset helper pads ids and enforces range', () => {
   assert.equal(
     cardNft2AssetUrl('img', 1),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/0001.webp',
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0001.webp`,
   );
   assert.equal(
     cardNft2AssetUrl('foil', 2),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeigzyk3qd7brxfd3uinftdywhwao65gdxuleqirv5zje3okftmxczy/0002.webp',
+    `${CARD_NFT_2_FOILS_CDN_BASE_URL}/0002.webp`,
   );
   assert.equal(
     cardNft2AssetUrl('mask', 100),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiapwcv66aqu2wzh3f5mp4j4j6h7zej3no7paae4qcqxpu3mg436ia/0100.webp',
+    `${CARD_NFT_2_MASKS_CDN_BASE_URL}/0100.webp`,
   );
   assert.equal(
     cardNft2AssetUrl('receipt', 9999),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/9999.webp',
+    `${CARD_NFT_2_RECEIPTS_CDN_BASE_URL}/9999.webp`,
   );
   assert.equal(
     cardNft2AssetUrl('receipt', 10000),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/10000.webp',
+    `${CARD_NFT_2_RECEIPTS_CDN_BASE_URL}/10000.webp`,
   );
   assert.equal(
     cardNft2AssetUrl('img', 11133),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/11133.webp',
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/11133.webp`,
   );
   assert.equal(cardNft2AssetUrl('img', 11134), undefined);
   assert.equal(cardNft2AssetUrl('img', 1.5), undefined);
+});
+
+test('legacy display media urls rewrite to CDN paths with metadata fallback preserved', () => {
+  const cases = [
+    {
+      input: 'https://assets.mons.link/drops/cardnft2/img/receipt_pack_1.webp',
+      expected: `${CARD_NFT_2_PACK_BASE_URL}/receipt_pack_1.webp`,
+    },
+    {
+      input: 'https://assets.mons.link/drops/lsb/figures/1.mp4',
+      expected: `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/figures/1.mp4`,
+    },
+    {
+      input: 'https://assets.mons.link/drops/lsb/json/figures/1.json',
+      expected: 'https://assets.mons.link/drops/lsb/json/figures/1.json',
+    },
+    {
+      input: 'https://assets.mons.link/drops/poncho/pack_receipt.webp',
+      expected: PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/0001.webp',
+      expected: `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0001.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiapwcv66aqu2wzh3f5mp4j4j6h7zej3no7paae4qcqxpu3mg436ia/0001.webp',
+      expected: `${CARD_NFT_2_MASKS_CDN_BASE_URL}/0001.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeigzyk3qd7brxfd3uinftdywhwao65gdxuleqirv5zje3okftmxczy/0001.webp',
+      expected: `${CARD_NFT_2_FOILS_CDN_BASE_URL}/0001.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/0001.webp',
+      expected: `${CARD_NFT_2_RECEIPTS_CDN_BASE_URL}/0001.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeied2ho6ufy7piamk5vb722shwn7xdghnrjwfg5skd2wjuakyt2qee/0101.webp',
+      expected: `${CARD_NFT_2_FRONT_CDN_BASE_URL}/0101.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeibyekgydzallz3fy4mdmpi72mht2kxaglvdu5cfdc54lzhqbdcnqi/1.mp4',
+      expected: `${CARD_NFT_2_VIDEO_CDN_BASE_URL}/1.mp4`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/hoodie_back.webp',
+      expected: `${LITTLE_SWAG_HOODIE_IMAGE_BASE_URL}/hoodie_back.webp`,
+    },
+    {
+      input:
+        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/receipt_1.webp',
+      expected: `${LITTLE_SWAG_HOODIE_IMAGE_BASE_URL}/receipt_1.webp`,
+    },
+    {
+      input: 'https://ipfs.io/ipfs/bafybeiamzyimzf77yvlmz5qevbk2looxjmmswyjxzvxqdnooihuderjvkq/1.mp4',
+      expected: `${PONCHO_DRIFELLA_RECEIPTS_VIDEO_CDN_BASE_URL}/1.mp4`,
+    },
+    {
+      input: 'https://ipfs.io/ipfs/bafybeihhtllco3nhn2vau3ezqu7zpzfjij4x7n7tcxz63k6fkq55jljram/1.mp4',
+      expected: `${PONCHO_DRIFELLA_VIDEO_CDN_BASE_URL}/1.mp4`,
+    },
+    {
+      input: 'https://legacy.example.com/metadata-pack.webp',
+      expected: 'https://legacy.example.com/metadata-pack.webp',
+    },
+  ];
+
+  for (const { input, expected } of cases) {
+    assert.equal(resolveDisplayMediaUrl(input), expected);
+  }
+});
+
+test('certificate box media overrides merge with family media defaults', () => {
+  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet;
+  try {
+    DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet = {
+      certificates: {
+        boxInventoryMedia: {
+          overrides: {
+            5: 2,
+          },
+        },
+      },
+    };
+
+    const override = getDropExtraContentOverride('little_swag_hoodies_devnet');
+    assert.deepEqual(override?.certificates?.boxInventoryMedia, {
+      strategy: 'cyclic',
+      count: 8,
+      overrides: {
+        5: 2,
+      },
+    });
+    assert.equal(getMediaIdForTokenId(5, override?.certificates?.boxInventoryMedia), 2);
+    assert.equal(getMediaIdForTokenId(9, override?.certificates?.boxInventoryMedia), 1);
+    assert.equal(
+      normalizeCertificateDisplayImage({ dropId: 'little_swag_hoodies_devnet', boxId: 5 }),
+      `${LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL}/receipt_2.webp`,
+    );
+  } finally {
+    if (previousOverride) {
+      DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet = previousOverride;
+    } else {
+      delete DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet;
+    }
+  }
+});
+
+test('little_swag_boxes display media resolves from CDN overrides', () => {
+  const content = resolveDropContent('little_swag_boxes');
+
+  assert.equal(content.box.previewImageUrl, `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/box/tight.webp`);
+  assert.equal(content.box.inventoryImageBaseUrl, undefined);
+  assert.equal(content.mintPanel.previewImageUrl, `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/box/tight.webp`);
+  assert.equal(content.reveal.frameSequence?.baseUrl, `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/box/`);
+  assert.equal(content.reveal.frameSequence?.ext, 'webp');
+  assert.equal(content.figures.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL);
+  assert.equal(content.figures.revealVideoBaseUrl, `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/figures/small-rotating/`);
+  assert.equal(content.figures.fulfillmentMediaBaseUrl, LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL);
+  assert.equal(content.certificates.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_RECEIPT_BASE_URL);
+  assert.equal(content.certificates.boxInventoryImageUrl, LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL);
+
+  assert.equal(
+    normalizeBoxDisplayImage({ dropId: 'little_swag_boxes', boxId: 184 }),
+    `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/box/tight.webp`,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage('little_swag_boxes', 'https://legacy.example.com/metadata-figure.webp', 344),
+    `${LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL}/1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'little_swag_boxes',
+      imageRaw: 'https://legacy.example.com/metadata-receipt.webp',
+      figureId: 344,
+    }),
+    `${LITTLE_SWAG_BOXES_RECEIPT_BASE_URL}/1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({ dropId: 'little_swag_boxes', boxId: 12 }),
+    LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
+  );
+});
+
+test('drop-specific extra content overrides preserve family CDN defaults', () => {
+  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_boxes_devnet;
+  try {
+    DROPS_EXTRA_CONTENT.little_swag_boxes_devnet = {
+      box: {
+        aspectRatio: 2,
+      },
+      certificates: {
+        boxInventoryImageUrl: 'https://cdn.example.com/custom-box-receipt.webp',
+      },
+    };
+
+    const override = getDropExtraContentOverride('little_swag_boxes_devnet');
+    assert.equal(override?.mediaBaseUrl, LITTLE_SWAG_BOXES_CDN_BASE_URL);
+    assert.equal(override?.box?.aspectRatio, 2);
+    assert.equal(override?.figures?.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL);
+    assert.equal(override?.certificates?.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_RECEIPT_BASE_URL);
+    assert.equal(override?.certificates?.boxInventoryImageUrl, 'https://cdn.example.com/custom-box-receipt.webp');
+  } finally {
+    if (previousOverride) {
+      DROPS_EXTRA_CONTENT.little_swag_boxes_devnet = previousOverride;
+    } else {
+      delete DROPS_EXTRA_CONTENT.little_swag_boxes_devnet;
+    }
+  }
+});
+
+test('poncho and hoodie receipt display images resolve from CDN overrides', () => {
+  const ponchoContent = resolveDropContent('poncho_drifella');
+  assert.equal(ponchoContent.certificates.inventoryImageBaseUrl, PONCHO_DRIFELLA_RECEIPT_BASE_URL);
+  assert.equal(ponchoContent.certificates.boxInventoryImageUrl, PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL);
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'poncho_drifella',
+      imageRaw: 'https://assets.example.com/old-receipt.webp',
+      figureId: 1,
+    }),
+    `${PONCHO_DRIFELLA_RECEIPT_BASE_URL}/1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'poncho_drifella',
+      imageRaw: 'https://assets.example.com/old-pack-receipt.webp',
+    }),
+    PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
+  );
+
+  const hoodieContent = resolveDropContent('little_swag_hoodies');
+  assert.equal(hoodieContent.certificates.inventoryImageUrl, undefined);
+  assert.equal(hoodieContent.certificates.boxInventoryImageBaseUrl, LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL);
+  assert.deepEqual(hoodieContent.certificates.boxInventoryMedia, { strategy: 'cyclic', count: 8 });
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'little_swag_hoodies',
+      imageRaw: 'https://legacy.example.com/receipt.webp',
+      boxId: 1,
+    }),
+    `${LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL}/receipt_1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'little_swag_hoodies',
+      imageRaw: 'https://legacy.example.com/receipt.webp',
+      boxId: 8,
+    }),
+    `${LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL}/receipt_8.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'little_swag_hoodies',
+      imageRaw: 'https://legacy.example.com/receipt.webp',
+      boxId: 9,
+    }),
+    `${LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL}/receipt_1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({ dropId: 'little_swag_hoodies', imageRaw: 'https://legacy.example.com/receipt.webp' }),
+    'https://legacy.example.com/receipt.webp',
+  );
 });
 
 test('card_nft_2 bundled common ids are valid and unique', () => {
@@ -161,16 +414,16 @@ test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls
 
   const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 1);
   const cardPack4 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 4);
-  assert.equal(cardPack1.initialFrameUrl, `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/initial.webp`);
-  assert.equal(cardPack1.segment11FrameUrls[0], `${CARD_NFT_2_PACK_CDN_BASE_URL}/1/final_sequence/1/1.webp`);
-  assert.equal(cardPack4.initialFrameUrl, `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/initial.webp`);
+  assert.equal(cardPack1.initialFrameUrl, `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
+  assert.equal(cardPack1.segment11FrameUrls[0], `${CARD_NFT_2_PACK_BASE_URL}/1/final_sequence/1/1.webp`);
+  assert.equal(cardPack4.initialFrameUrl, `${CARD_NFT_2_PACK_BASE_URL}/4/initial.webp`);
   assert.equal(
     cardPack4.punchFrameUrlsByVariant[1]?.[2],
-    `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/recoverable_punches/2/3.webp`,
+    `${CARD_NFT_2_PACK_BASE_URL}/4/recoverable_punches/2/3.webp`,
   );
   assert.equal(
     cardPack4.segmentAutoplayOvertopFrameUrls[9],
-    `${CARD_NFT_2_PACK_CDN_BASE_URL}/4/final_sequence/autoplay/overtop/10.webp`,
+    `${CARD_NFT_2_PACK_BASE_URL}/4/final_sequence/autoplay/overtop/10.webp`,
   );
 });
 
@@ -258,18 +511,49 @@ test('card_nft_2 interactive cards assign deterministic modulo holo effects for 
   assert.equal(getInteractiveCardPackCardByFigureId('card_nft_2_devnet_final', 11134), undefined);
 });
 
-test('card_nft_2 figure and receipt display images prefer padded IPFS assets', () => {
+test('card_nft_2 figure and receipt display images prefer padded CDN assets', () => {
   assert.equal(
     normalizeFigureDisplayImage('card_nft_2_devnet_final', 'https://assets.example.com/old-card.webp', 2),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeib7tmlzh7tcolyurmbm2p7vcv5pcqdcbiaqyx2c2handx3y2ilpaq/0002.webp',
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0002.webp`,
   );
   assert.equal(
-    normalizeCertificateDisplayImage('card_nft_2_devnet_final', 'https://assets.example.com/old-receipt.webp', 2),
-    'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeif3ydbiydtyj6b3eonlzvmz3esojlfsvwcb3bynlwjg6vtbwvangq/0002.webp',
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_2_devnet_final',
+      imageRaw: 'https://assets.example.com/old-receipt.webp',
+      figureId: 2,
+    }),
+    `${CARD_NFT_2_RECEIPTS_CDN_BASE_URL}/0002.webp`,
   );
   assert.equal(
-    normalizeCertificateDisplayImage('card_nft_2_devnet_final', 'https://assets.example.com/box-receipt.webp'),
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_2_devnet_final',
+      imageRaw: 'https://assets.example.com/box-receipt.webp',
+    }),
     'https://assets.example.com/box-receipt.webp',
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_2_devnet_final',
+      imageRaw: 'https://assets.example.com/box-receipt.webp',
+      boxId: 5,
+    }),
+    `${CARD_NFT_2_PACK_BASE_URL}/receipt_pack_1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_2_devnet_final',
+      imageRaw: 'https://assets.example.com/box-receipt.webp',
+      boxId: 184,
+    }),
+    `${CARD_NFT_2_PACK_BASE_URL}/receipt_pack_4.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_2_devnet_final',
+      imageRaw: 'https://assets.example.com/box-receipt.webp',
+      boxId: 823,
+    }),
+    `${CARD_NFT_2_PACK_BASE_URL}/receipt_pack_3.webp`,
   );
 });
 

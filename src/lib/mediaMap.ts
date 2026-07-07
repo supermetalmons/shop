@@ -1,4 +1,4 @@
-import type { MediaMapConfig } from '../config/deployment';
+import type { MediaMapConfig } from '../config/deployment.ts';
 
 function normalizePositiveInteger(value: unknown): number | null {
   const normalized = Math.floor(Number(value));

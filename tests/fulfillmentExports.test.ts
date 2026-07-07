@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   buildFulfillmentAddressExport,
@@ -302,9 +303,9 @@ test('buildFulfillmentSecretCodeExportEntries maps pack item ids to fulfillment 
   );
 
   assert.deepEqual(entries[0].previewImages, [
-    { src: 'https://assets.mons.link/drops/lsb/figures/clean/1.webp' },
-    { src: 'https://assets.mons.link/drops/lsb/figures/clean/90.webp' },
-    { src: 'https://assets.mons.link/drops/lsb/figures/clean/3.webp' },
+    { src: `${LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL}/1.webp` },
+    { src: `${LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL}/90.webp` },
+    { src: `${LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL}/3.webp` },
   ]);
 });
 

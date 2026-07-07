@@ -7,7 +7,10 @@ import {
   formatFreshProgramKeypairNotice,
   prepareStripeCheckoutConfig,
 } from '../scripts/deploy-all-onchain.ts';
+import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
 import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
+import { NEW_DROP as LITTLE_SWAG_HOODIES_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies.ts';
+import { NEW_DROP as LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies_devnet.ts';
 
 function u8(value: number): Buffer {
   return Buffer.from([value & 0xff]);
@@ -154,6 +157,13 @@ test('formatFreshProgramKeypairNotice warns to back up non-git fresh shared prog
 test('card_nft_2 new drop config enables live Stripe Checkout at $44', () => {
   assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeCheckoutEnabled, true);
   assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeLiveUnitAmountCents, 4400);
+});
+
+test('little_swag_hoodies new drop configs use CDN collection image', () => {
+  for (const drop of [LITTLE_SWAG_HOODIES_NEW_DROP, LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP]) {
+    assert.equal(drop.onchain.collectionMetadata.image, LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL);
+    assert.match(drop.onchain.collectionMetadata.image || '', /^https:\/\/cdn\.lil\.org\//);
+  }
 });
 
 test('prepareStripeCheckoutConfig fails preflight for Stripe-enabled mainnet drops without live pricing', () => {
