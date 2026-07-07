@@ -76,6 +76,19 @@ export async function loadFigureMetadata(dropId: string, figureId: number): Prom
   const drop = getFrontendDrop(normalizedDropId);
   if (!drop) return null;
 
+  if (drop.dropFamily === 'card_nft_2') {
+    const image = normalizeFigureDisplayImage(normalizedDropId, undefined, normalizedFigureId);
+    if (image) {
+      const record: FigureMetadataRecord = {
+        id: normalizedFigureId,
+        dropId: normalizedDropId,
+        image,
+      };
+      metadataByKey.set(cacheKey, record);
+      return record;
+    }
+  }
+
   const metadataPromise = (async () => {
     const metadataUrl = resolveDropAssetUrl(`${drop.paths.figuresJsonBase}${normalizedFigureId}.json`);
     if (!metadataUrl) {
