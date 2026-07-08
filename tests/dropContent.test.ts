@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FRONTEND_DROPS } from '../src/config/deployment.ts';
+import { DROP_METADATA_IPFS_GATEWAY, FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
-  CARD_NFT_2_CDN_BASE_URL,
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
@@ -57,12 +56,12 @@ import {
 } from '../src/lib/interactiveCardPackRevealSounds.ts';
 import { DRIF_EFFECT_KEYS, getDrifCardByFigureId } from '../src/drifCards.ts';
 
-const CARD_NFT_2_FRONT_CDN_BASE_URL = `${CARD_NFT_2_CDN_BASE_URL}/fronts`;
 const CARD_NFT_2_FRONTS_1400_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.img;
 const CARD_NFT_2_FOILS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.foil;
 const CARD_NFT_2_MASKS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.mask;
 const CARD_NFT_2_RECEIPTS_CDN_BASE_URL = CARD_NFT_2_ASSET_CDN_BASES.receipt;
-const CARD_NFT_2_VIDEO_CDN_BASE_URL = `${CARD_NFT_2_CDN_BASE_URL}/videos`;
+const CARD_NFT_2_LEGACY_FRONT_IPFS_CID = 'bafybeied2ho6ufy7piamk5vb722shwn7xdghnrjwfg5skd2wjuakyt2qee';
+const CARD_NFT_2_LEGACY_VIDEO_IPFS_CID = 'bafybeibyekgydzallz3fy4mdmpi72mht2kxaglvdu5cfdc54lzhqbdcnqi';
 const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/fronts`;
 const PONCHO_DRIFELLA_PACK_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack`;
 const PONCHO_DRIFELLA_SOUND_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/sounds`;
@@ -195,16 +194,6 @@ test('legacy display media urls rewrite to CDN paths with metadata fallback pres
     },
     {
       input:
-        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeied2ho6ufy7piamk5vb722shwn7xdghnrjwfg5skd2wjuakyt2qee/0101.webp',
-      expected: `${CARD_NFT_2_FRONT_CDN_BASE_URL}/0101.webp`,
-    },
-    {
-      input:
-        'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeibyekgydzallz3fy4mdmpi72mht2kxaglvdu5cfdc54lzhqbdcnqi/1.mp4',
-      expected: `${CARD_NFT_2_VIDEO_CDN_BASE_URL}/1.mp4`,
-    },
-    {
-      input:
         'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/bafybeiaka2o45fhcmufpvthgp53xslhnblmqzeg4dri2rqozd7yqndjck4/hoodie_back.webp',
       expected: `${LITTLE_SWAG_HOODIE_IMAGE_BASE_URL}/hoodie_back.webp`,
     },
@@ -230,6 +219,12 @@ test('legacy display media urls rewrite to CDN paths with metadata fallback pres
   for (const { input, expected } of cases) {
     assert.equal(resolveDisplayMediaUrl(input), expected);
   }
+
+  const legacyCardNft2VideoUrl = `https://ipfs.io/ipfs/${CARD_NFT_2_LEGACY_VIDEO_IPFS_CID}/1.mp4`;
+  assert.equal(
+    resolveDisplayMediaUrl(legacyCardNft2VideoUrl),
+    `${DROP_METADATA_IPFS_GATEWAY}${CARD_NFT_2_LEGACY_VIDEO_IPFS_CID}/1.mp4`,
+  );
 });
 
 test('certificate box media overrides merge with family media defaults', () => {
@@ -515,6 +510,39 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   assert.equal(
     normalizeFigureDisplayImage('card_nft_2_devnet_final', 'https://assets.example.com/old-card.webp', 2),
     `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0002.webp`,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage(
+      'card_nft_2_devnet_final',
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp`,
+    ),
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0101.webp`,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage(
+      'card_nft_2_devnet_final',
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp/?cache=1`,
+    ),
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0101.webp`,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage('card_nft_2_devnet_final', 'https://legacy.example.com/view?asset=/0101.webp'),
+    undefined,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage(
+      'card_nft_2_devnet_final',
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp`,
+      2,
+    ),
+    `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0002.webp`,
+  );
+  assert.equal(
+    normalizeFigureDisplayImage(
+      'card_nft_2_devnet_final',
+      `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_VIDEO_IPFS_CID}/1.mp4`,
+    ),
+    undefined,
   );
   assert.equal(
     normalizeCertificateDisplayImage({

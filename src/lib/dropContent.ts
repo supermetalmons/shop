@@ -62,6 +62,7 @@ export type ResolvedDropContent = {
 };
 
 const LEGACY_BOX_ASPECT_RATIO = 1440 / 1030;
+const CARD_NFT_2_IMAGE_FILENAME_RE = /^(\d+)\.webp$/i;
 const DEFAULT_DROP_REVEAL_SOUND_PROFILE: DropRevealSoundProfile = {
   clickVolume: 0.42,
   revealVolume: 0.42,
@@ -94,6 +95,24 @@ function trimLeadingSlashes(value: string): string {
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function pathFromRawDisplayMediaUrl(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.replace(/[?#].*$/, '');
+  }
+}
+
+function cardNft2ImageUrlFromRawDisplayMediaUrl(url: string | undefined): string | undefined {
+  const normalizedUrl = asOptionalString(url);
+  if (!normalizedUrl) return undefined;
+  const path = trimTrailingSlashes(pathFromRawDisplayMediaUrl(normalizedUrl));
+  const filename = path.split('/').pop() || '';
+  const match = filename.match(CARD_NFT_2_IMAGE_FILENAME_RE);
+  if (!match?.[1]) return undefined;
+  return cardNft2AssetUrl('img', Number(match[1]));
 }
 
 export function resolveDisplayMediaUrl(url: string | undefined): string | undefined {
@@ -474,10 +493,9 @@ export function mintPanelPreviewAspectRatio(dropId: string): number {
 }
 
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
-  const cardNft2Image = isDropFamily(dropId, 'card_nft_2')
-    ? cardNft2AssetUrl('img', figureId)
-    : undefined;
-  if (cardNft2Image) return cardNft2Image;
+  if (isDropFamily(dropId, 'card_nft_2')) {
+    return cardNft2AssetUrl('img', figureId) || cardNft2ImageUrlFromRawDisplayMediaUrl(imageRaw);
+  }
 
   const drop = getFrontendDrop(dropId);
   const content = resolveDropContent(drop || dropId);
