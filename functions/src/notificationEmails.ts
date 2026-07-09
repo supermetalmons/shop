@@ -15,6 +15,7 @@ export type ShipperReadyToShipEmailMessage = {
   deliveryId: number;
   owner: string;
   items: ShipperReadyOrderSummary;
+  itemPreviews?: NotificationEmailItem[];
   fulfillmentUrl: string;
 };
 
@@ -37,10 +38,12 @@ export type StripeCheckoutManualReviewEmailMessage = {
   failedAt?: number;
 };
 
-export type BuyerOrderEmailItem = {
+export type NotificationEmailItem = {
   label: string;
   thumbnailUrl?: string;
 };
+
+export type BuyerOrderEmailItem = NotificationEmailItem;
 
 export type BuyerOrderEmailMessageBase = {
   idempotencyKey: string;
@@ -100,13 +103,27 @@ export function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): s
 function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): NotificationEmailDetail[] {
   return [
     { label: 'Drop', value: `${message.dropName}` },
-    { label: 'Delivery ID', value: String(message.deliveryId) },
+    { label: 'Order', value: String(message.deliveryId) },
     { label: 'Owner', value: message.owner || 'unknown' },
     {
       label: 'Items',
-      value: `${message.items.itemCount} total`,
+      value: shipperReadyItemSummaryText(message.items),
     },
   ];
+}
+
+function shipperReadyItemSummaryText(items: ShipperReadyOrderSummary): string {
+  const parts = [
+    items.boxCount ? `${items.boxCount} ${items.boxCount === 1 ? 'box' : 'boxes'}` : '',
+    items.dudeCount ? `${items.dudeCount} ${items.dudeCount === 1 ? 'figure' : 'figures'}` : '',
+  ].filter(Boolean);
+  return parts.length ? `${items.itemCount} total (${parts.join(', ')})` : `${items.itemCount} total`;
+}
+
+function shipperReadyItemsText(message: ShipperReadyToShipEmailMessage): string[] {
+  if (message.itemPreviews?.length) return notificationEmailItemsText(message.itemPreviews);
+  if (message.items.itemCount > 0) return [`- ${shipperReadyItemSummaryText(message.items)}`];
+  return ['- Items pending'];
 }
 
 export function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
@@ -115,6 +132,9 @@ export function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessa
     'New order received.',
     '',
     ...details,
+    '',
+    'Items:',
+    ...shipperReadyItemsText(message),
     '',
     `Open fulfillment: ${message.fulfillmentUrl}`,
   ].join('\n');
@@ -130,16 +150,17 @@ export function escapeHtml(value: unknown): string {
 }
 
 export function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
-  const details = shipperReadyEmailDetails(message)
-    .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
-    .join('');
-  return [
-    '<p>New order received.</p>',
-    '<ul>',
-    details,
-    '</ul>',
-    `<p><a href="${escapeHtml(message.fulfillmentUrl)}">Open fulfillment</a></p>`,
-  ].join('');
+  return notificationEmailHtmlShell({
+    title: 'New order',
+    intro: 'A new order is ready for fulfillment.',
+    details: shipperReadyEmailDetails(message),
+    items: message.itemPreviews || [],
+    emptyItemsLabel: message.items.itemCount > 0 ? shipperReadyItemSummaryText(message.items) : 'Items pending',
+    action: {
+      label: 'Open fulfillment',
+      url: message.fulfillmentUrl,
+    },
+  });
 }
 
 function subjectPrefix(options?: NotificationEmailContentOptions): string {
@@ -236,9 +257,9 @@ function buyerOrderEmailDetails(message: BuyerOrderEmailMessageBase): Notificati
   ];
 }
 
-function buyerOrderItemsText(message: BuyerOrderEmailMessageBase): string[] {
-  if (!message.items.length) return ['- Items pending'];
-  return message.items.map((item) => `- ${item.label || 'Item'}`);
+function notificationEmailItemsText(items: NotificationEmailItem[]): string[] {
+  if (!items.length) return ['- Items pending'];
+  return items.map((item) => `- ${item.label || 'Item'}`);
 }
 
 function buyerOrderEmailText(args: {
@@ -247,7 +268,7 @@ function buyerOrderEmailText(args: {
   trackingUrl?: string;
 }): string {
   const details = buyerOrderEmailDetails(args.message).map(({ label, value }) => `${label}: ${value}`);
-  const lines = [args.intro, '', ...details, '', 'Items:', ...buyerOrderItemsText(args.message)];
+  const lines = [args.intro, '', ...details, '', 'Items:', ...notificationEmailItemsText(args.message.items)];
   if (args.trackingUrl) lines.push('', `Tracking: ${args.trackingUrl}`);
   return lines.join('\n');
 }
@@ -267,8 +288,8 @@ export function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailM
   });
 }
 
-function buyerOrderDetailsHtml(message: BuyerOrderEmailMessageBase): string {
-  return buyerOrderEmailDetails(message)
+function notificationEmailDetailsHtml(details: NotificationEmailDetail[]): string {
+  return details
     .map(
       ({ label, value }) =>
         `<div style="margin:0 0 4px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`,
@@ -276,7 +297,7 @@ function buyerOrderDetailsHtml(message: BuyerOrderEmailMessageBase): string {
     .join('');
 }
 
-function buyerOrderItemThumbnailHtml(item: BuyerOrderEmailItem): string {
+function notificationEmailItemThumbnailHtml(item: NotificationEmailItem): string {
   if (!item.thumbnailUrl) {
     return '<div style="width:56px;height:56px;border-radius:8px;background:#f1f3f5;"></div>';
   }
@@ -284,8 +305,8 @@ function buyerOrderItemThumbnailHtml(item: BuyerOrderEmailItem): string {
   return `<img src="${escapeHtml(item.thumbnailUrl)}" alt="${escapeHtml(item.label)}" width="56" height="56" style="display:block;width:56px;height:56px;object-fit:contain;background:#f8fafc;border-radius:8px;padding:4px;box-sizing:border-box;">`;
 }
 
-function buyerOrderItemRowHtml(item: BuyerOrderEmailItem): string {
-  const thumbnail = buyerOrderItemThumbnailHtml(item);
+function notificationEmailItemRowHtml(item: NotificationEmailItem): string {
+  const thumbnail = notificationEmailItemThumbnailHtml(item);
   return [
     '<tr>',
     `<td style="width:64px;padding:0 12px 12px 0;vertical-align:top;">${thumbnail}</td>`,
@@ -294,36 +315,41 @@ function buyerOrderItemRowHtml(item: BuyerOrderEmailItem): string {
   ].join('');
 }
 
-function buyerOrderItemsHtml(message: BuyerOrderEmailMessageBase): string {
-  if (!message.items.length) {
+function notificationEmailItemsHtml(items: NotificationEmailItem[], emptyLabel = 'Items pending'): string {
+  if (!items.length) {
     return [
       '<tr>',
-      '<td style="padding:0;font-size:14px;color:#52606d;">Items pending</td>',
+      `<td style="padding:0;font-size:14px;color:#52606d;">${escapeHtml(emptyLabel)}</td>`,
       '</tr>',
     ].join('');
   }
 
-  return message.items.map(buyerOrderItemRowHtml).join('');
+  return items.map(notificationEmailItemRowHtml).join('');
 }
 
-function buyerOrderTrackingHtml(trackingUrl: string | undefined): string {
-  if (!trackingUrl) return '';
+function notificationEmailActionHtml(action: { label: string; url: string } | undefined): string {
+  if (!action?.url) return '';
   return [
     '<div style="margin:22px 0 0 0;">',
-    `<a href="${escapeHtml(trackingUrl)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;">Track package</a>`,
+    `<a href="${escapeHtml(action.url)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;">${escapeHtml(action.label)}</a>`,
     '</div>',
   ].join('');
 }
 
-function buyerOrderHtmlShell(args: {
+function notificationEmailHtmlShell(args: {
   title: string;
   intro: string;
-  message: BuyerOrderEmailMessageBase;
-  trackingUrl?: string;
+  details: NotificationEmailDetail[];
+  items: NotificationEmailItem[];
+  emptyItemsLabel?: string;
+  action?: {
+    label: string;
+    url: string;
+  };
 }): string {
-  const details = buyerOrderDetailsHtml(args.message);
-  const itemRows = buyerOrderItemsHtml(args.message);
-  const trackingBlock = buyerOrderTrackingHtml(args.trackingUrl);
+  const details = notificationEmailDetailsHtml(args.details);
+  const itemRows = notificationEmailItemsHtml(args.items, args.emptyItemsLabel);
+  const actionBlock = notificationEmailActionHtml(args.action);
 
   return [
     '<div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;max-width:560px;margin:0 auto;padding:24px 16px;">',
@@ -332,25 +358,30 @@ function buyerOrderHtmlShell(args: {
     `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin:0 0 22px 0;font-size:14px;">${details}</div>`,
     '<h2 style="font-size:16px;line-height:1.3;margin:0 0 12px 0;">Items</h2>',
     `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">${itemRows}</table>`,
-    trackingBlock,
+    actionBlock,
     '</div>',
   ].join('');
 }
 
 export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmailMessage): string {
-  return buyerOrderHtmlShell({
+  return notificationEmailHtmlShell({
     title: 'Order received',
     intro: "Thanks for your order. We'll let you know when it ships.",
-    message,
+    details: buyerOrderEmailDetails(message),
+    items: message.items,
   });
 }
 
 export function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailMessage): string {
-  return buyerOrderHtmlShell({
+  return notificationEmailHtmlShell({
     title: 'Order shipped',
     intro: 'Your package is on the way.',
-    message,
-    trackingUrl: message.trackingUrl,
+    details: buyerOrderEmailDetails(message),
+    items: message.items,
+    action: {
+      label: 'Track package',
+      url: message.trackingUrl,
+    },
   });
 }
 

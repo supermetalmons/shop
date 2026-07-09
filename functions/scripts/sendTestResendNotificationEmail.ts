@@ -20,7 +20,7 @@ import {
 } from '../src/notificationEmails.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../src/stripeCheckout/contract.ts';
 import { toMillisMaybe } from '../src/time.ts';
-import { buildBuyerOrderEmailItems } from './buyerOrderEmailItems.ts';
+import { buildOrderEmailItems } from '../src/orderEmailItems.ts';
 import { normalizeFulfillmentStatusOrNull, type FulfillmentStatus } from '../../src/lib/fulfillmentStatus.ts';
 import { resolveFulfillmentTrackingHref } from '../../src/lib/fulfillmentTracking.ts';
 
@@ -480,6 +480,7 @@ async function latestDeliveryOrder(kind: OrderBackedTestEmailKind, dropId?: stri
 
 async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
   const { order, ...selectedOrder } = await latestDeliveryOrder('shipper-ready', args.dropId);
+  const itemPreviews = await buildOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
     content: buildShipperReadyToShipEmailContent(
@@ -491,6 +492,7 @@ async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): P
         deliveryId: selectedOrder.deliveryId,
         owner: selectedOrder.owner,
         items: summarizeShipperReadyOrderItems(order),
+        itemPreviews,
         fulfillmentUrl: fulfillmentAppUrlForOrder(selectedOrder.dropId, selectedOrder.deliveryId),
       },
       { subjectPrefix: '[TEST] ' },
@@ -504,7 +506,7 @@ async function buildBuyerOrderTestEmailMessage(
   idempotencyKey: string,
 ): Promise<{ selectedOrder: SelectedDeliveryOrder; message: BuyerOrderEmailMessageBase }> {
   const { order, ...selectedOrder } = await latestDeliveryOrder(kind, args.dropId);
-  const items = await buildBuyerOrderEmailItems(order, selectedOrder);
+  const items = await buildOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
     message: {
