@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { normalizeFulfillmentStatus } from './fulfillmentStatus.js';
+import { resolveFulfillmentTrackingHref } from './fulfillmentTracking.js';
 
 export type DeliveryReadyToShipStatusSnapshot = {
   status?: unknown;
@@ -7,6 +9,7 @@ export type DeliveryReadyToShipStatusSnapshot = {
 
 export type ResendNotificationEmailKind =
   | 'buyer_order_received'
+  | 'buyer_order_shipped'
   | 'shipper_ready_to_ship'
   | 'stripe_checkout_manual_review';
 
@@ -31,6 +34,30 @@ export function validateNotificationEmailRecipient(rawEmail: unknown): string | 
 
 export function normalizeNotificationEmailRecipient(rawEmail: unknown): string | null {
   return validateNotificationEmailRecipient(rawEmail)?.toLowerCase() || null;
+}
+
+function parseCanonicalPositiveSafeInteger(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value !== 'string') return null;
+
+  const normalized = value.trim();
+  if (!/^[1-9]\d*$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function resolveNotificationDeliveryId(args: {
+  deliveryDocId: unknown;
+  storedDeliveryId?: unknown;
+}): number | null {
+  const deliveryId = parseCanonicalPositiveSafeInteger(args.deliveryDocId);
+  if (!deliveryId) return null;
+  if (args.storedDeliveryId == null) return deliveryId;
+
+  const storedDeliveryId = parseCanonicalPositiveSafeInteger(args.storedDeliveryId);
+  return storedDeliveryId === deliveryId ? deliveryId : null;
 }
 
 export function planReadyToShipOrderNotifications(args: {
@@ -78,4 +105,30 @@ export function shouldNotifyShippersForDeliveryReadyToShipWrite(args: {
   const source = typeof args.after?.source === 'string' ? args.after.source : '';
   if (source && args.ignoredSources?.includes(source)) return false;
   return args.after?.status === 'ready_to_ship' && args.before?.status !== 'ready_to_ship';
+}
+
+export function shouldNotifyBuyerForDeliveryShippedWrite(args: {
+  before?: {
+    fulfillmentStatus?: unknown;
+    fulfillmentTrackingCode?: unknown;
+  } | null;
+  after?: {
+    fulfillmentStatus?: unknown;
+    fulfillmentTrackingCode?: unknown;
+    source?: unknown;
+  } | null;
+  ignoredSources?: readonly string[];
+}): boolean {
+  const source = typeof args.after?.source === 'string' ? args.after.source : '';
+  if (source && args.ignoredSources?.includes(source)) return false;
+
+  const afterIsShippedWithTracking =
+    normalizeFulfillmentStatus(args.after?.fulfillmentStatus) === 'Shipped' &&
+    Boolean(resolveFulfillmentTrackingHref(args.after.fulfillmentTrackingCode));
+  if (!afterIsShippedWithTracking) return false;
+
+  const beforeWasShippedWithTracking =
+    normalizeFulfillmentStatus(args.before?.fulfillmentStatus) === 'Shipped' &&
+    Boolean(resolveFulfillmentTrackingHref(args.before.fulfillmentTrackingCode));
+  return !beforeWasShippedWithTracking;
 }

@@ -8,6 +8,7 @@ import {
 } from '../src/lib/fulfillmentTracking.ts';
 import {
   normalizeOptionalFulfillmentTrackingCode as normalizeFunctionTrackingCode,
+  resolveFulfillmentTrackingHref as resolveFunctionTrackingHref,
   sanitizeFulfillmentTrackingCode as sanitizeFunctionTrackingCode,
 } from '../functions/src/fulfillmentTracking.ts';
 
@@ -23,13 +24,38 @@ test('fulfillment tracking code normalizers omit empty sanitized values', () => 
 });
 
 test('fulfillment tracking hrefs allow absolute https urls only', () => {
-  assert.equal(resolveFulfillmentTrackingHref(' https://carrier.example/track?id=AB123 '), 'https://carrier.example/track?id=AB123');
-  assert.equal(resolveFulfillmentTrackingHref('http://carrier.example/track?id=AB123'), undefined);
-  assert.equal(resolveFulfillmentTrackingHref('javascript:alert(1)'), undefined);
-  assert.equal(resolveFulfillmentTrackingHref('data:text/html,hello'), undefined);
-  assert.equal(resolveFulfillmentTrackingHref('//carrier.example/track?id=AB123'), undefined);
-  assert.equal(resolveFulfillmentTrackingHref('https:carrier.example/track?id=AB123'), undefined);
-  assert.equal(resolveFulfillmentTrackingHref('AB123'), undefined);
+  const resolvers = [
+    { name: 'client', resolve: resolveFulfillmentTrackingHref },
+    { name: 'functions', resolve: resolveFunctionTrackingHref },
+  ];
+  const cases: Array<{ name: string; value: unknown; expected: string | undefined }> = [
+    {
+      name: 'trimmed HTTPS URL',
+      value: ' https://carrier.example/track?id=AB123 ',
+      expected: 'https://carrier.example/track?id=AB123',
+    },
+    {
+      name: 'uppercase HTTPS scheme',
+      value: 'HTTPS://carrier.example/track?id=AB123',
+      expected: 'HTTPS://carrier.example/track?id=AB123',
+    },
+    { name: 'HTTP URL', value: 'http://carrier.example/track?id=AB123', expected: undefined },
+    { name: 'javascript URL', value: 'javascript:alert(1)', expected: undefined },
+    { name: 'data URL', value: 'data:text/html,hello', expected: undefined },
+    { name: 'protocol-relative URL', value: '//carrier.example/track?id=AB123', expected: undefined },
+    { name: 'malformed HTTPS URL', value: 'https:carrier.example/track?id=AB123', expected: undefined },
+    { name: 'hostless HTTPS URL', value: 'https://', expected: undefined },
+    { name: 'invalid port', value: 'https://carrier.example:99999/track', expected: undefined },
+    { name: 'plain tracking code', value: 'AB123', expected: undefined },
+    { name: 'empty value', value: '   ', expected: undefined },
+    { name: 'non-string value', value: null, expected: undefined },
+  ];
+
+  for (const resolver of resolvers) {
+    for (const entry of cases) {
+      assert.equal(resolver.resolve(entry.value), entry.expected, `${resolver.name}: ${entry.name}`);
+    }
+  }
 });
 
 test('fulfillment tracking code display requires Shipped status and a non-empty code', () => {

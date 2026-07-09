@@ -5,6 +5,8 @@ import {
   firstRejectedReadyToShipNotificationError,
   normalizeNotificationEmailRecipient,
   planReadyToShipOrderNotifications,
+  resolveNotificationDeliveryId,
+  shouldNotifyBuyerForDeliveryShippedWrite,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
   shouldSendResendNotificationEmail,
   validateNotificationEmailRecipient,
@@ -37,8 +39,84 @@ function buyerVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): B
 test('Resend non-checkout error notification emails are enabled', () => {
   assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, true);
   assert.equal(shouldSendResendNotificationEmail('buyer_order_received'), true);
+  assert.equal(shouldSendResendNotificationEmail('buyer_order_shipped'), true);
   assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), true);
   assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
+});
+
+test('shipped notification requires the first Shipped state with a valid HTTPS tracking link', () => {
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Preparing' },
+      after: {
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: ' https://carrier.example/track?id=AB123 ',
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Shipped' },
+      after: { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: 'https://carrier.example/track?id=AB123' },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Preparing' },
+      after: { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: '' },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Preparing' },
+      after: { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: 'http://carrier.example/track?id=AB123' },
+    }),
+    false,
+  );
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: 'https://carrier.example/track?id=AB123' },
+      after: { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: 'https://carrier.example/track?id=CD456' },
+    }),
+    false,
+  );
+});
+
+test('shipped notification ignores non-customer delivery order sources', () => {
+  assert.equal(
+    shouldNotifyBuyerForDeliveryShippedWrite({
+      before: { fulfillmentStatus: 'Preparing' },
+      after: {
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://carrier.example/track?id=AB123',
+        source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+      },
+      ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
+    }),
+    false,
+  );
+});
+
+test('notification delivery IDs are path-authoritative positive safe integers', () => {
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: 123 }), 123);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: '123' }), 123);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123' }), 123);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: null }), 123);
+
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: 999 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: 123.5 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '123', storedDeliveryId: true }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '0', storedDeliveryId: 0 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '-1', storedDeliveryId: -1 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '1.5', storedDeliveryId: 1.5 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '001', storedDeliveryId: 1 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '1e3', storedDeliveryId: 1000 }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: String(Number.MAX_SAFE_INTEGER + 1) }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: 'not-an-order' }), null);
+  assert.equal(resolveNotificationDeliveryId({ deliveryDocId: '' }), null);
 });
 
 test('notification email recipients are normalized and validated', () => {

@@ -6,3 +6,14 @@ export function normalizeOptionalFulfillmentTrackingCode(value: unknown): string
   const normalized = sanitizeFulfillmentTrackingCode(value);
   return normalized || undefined;
 }
+
+export function resolveFulfillmentTrackingHref(value: unknown): string | undefined {
+  const normalized = normalizeOptionalFulfillmentTrackingCode(value);
+  if (!normalized || !/^https:\/\//i.test(normalized)) return undefined;
+  try {
+    const url = new URL(normalized);
+    return url.protocol === 'https:' && url.hostname ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
+}
