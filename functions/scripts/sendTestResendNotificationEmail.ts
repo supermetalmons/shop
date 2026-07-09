@@ -6,7 +6,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldPath, getFirestore, type DocumentSnapshot, type Firestore, type Query } from 'firebase-admin/firestore';
 import { Resend } from 'resend';
 import { FUNCTIONS_DROPS, normalizeDropId, requireFunctionsDrop } from '../src/config/deployment.ts';
-import { dropDeliveryOrdersCollectionPath } from '../src/dropPaths.ts';
+import { dropDeliveryOrderPath, dropDeliveryOrdersCollectionPath } from '../src/dropPaths.ts';
 import {
   NOTIFICATION_EMAIL_FROM,
   buildBuyerOrderReceivedEmailContent,
@@ -34,6 +34,12 @@ type BuyerOrderBackedTestEmailKind = Extract<OrderBackedTestEmailKind, 'order-re
 type Args = {
   kind: TestEmailKind;
   dropId?: string;
+  orderId?: number;
+};
+
+type ParsedOrderIdArg = {
+  dropId?: string;
+  deliveryId: number;
 };
 
 type SelectedDeliveryOrder = {
@@ -52,6 +58,17 @@ type SelectedDeliveryOrder = {
 type DeliveryOrderCandidate = SelectedDeliveryOrder & {
   order: any;
 };
+
+type DeliveryOrderDocLike = {
+  exists?: boolean;
+  id: string;
+  ref: {
+    path: string;
+  };
+  data(): any;
+};
+
+type DeliveryOrderDocLoader = (docPath: string) => Promise<DeliveryOrderDocLike>;
 
 type BuiltTestEmail = {
   content: NotificationEmailContent;
@@ -93,12 +110,16 @@ function usage(): string {
     '  npm run test-resend-notification-email -- --kind shipper-ready --drop-id little_swag_hoodies',
     '  npm run test-resend-notification-email -- --kind stripe-manual-review',
     '  npm run test-resend-notification-email -- --kind order-received --drop-id card_nft_2',
+    '  npm run test-resend-notification-email -- --kind order-received --drop-id card_nft_2 --order-id 123',
+    '  npm run test-resend-notification-email -- --kind order-received --order-id card_nft_2:123',
     '  npm run test-resend-notification-email -- --kind order-shipped --drop-id card_nft_2',
     '',
     'Options:',
     '  --kind <kind>    shipper-ready, stripe-manual-review, order-received, or order-shipped (default: shipper-ready)',
     '  --drop-id <id>   Restrict order-backed tests to one drop',
     '  --drop_id <id>   Alias for --drop-id',
+    '  --order-id <id>  Target one order by delivery id, <dropId>:<id>, or drops/<dropId>/deliveryOrders/<id>',
+    '  --order_id <id>  Alias for --order-id',
     '  -h, --help       Show this help',
   ].join('\n');
 }
@@ -141,9 +162,48 @@ function resolveDropIdArg(raw: string): string {
   fail(`Unknown --drop-id: ${raw}. Known drop IDs: ${knownDropIds().join(', ')}\n\n${usage()}`);
 }
 
-function parseArgs(argv: string[]): Args {
+function resolveDeliveryIdArg(raw: string): number {
+  const normalized = String(raw || '').trim();
+  if (!normalized) fail(`Missing value for --order-id\n\n${usage()}`);
+  if (!/^\d+$/.test(normalized)) fail(`Invalid --order-id: ${raw}. Expected a positive integer.\n\n${usage()}`);
+
+  const deliveryId = Number(normalized);
+  if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0) {
+    fail(`Invalid --order-id: ${raw}. Expected a positive integer.\n\n${usage()}`);
+  }
+  return deliveryId;
+}
+
+function parseOrderIdArg(raw: string): ParsedOrderIdArg {
+  const normalized = String(raw || '').trim();
+  if (!normalized) fail(`Missing value for --order-id\n\n${usage()}`);
+
+  const pathMatch = normalized.match(/^drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
+  if (pathMatch) {
+    return {
+      dropId: resolveDropIdArg(pathMatch[1]),
+      deliveryId: resolveDeliveryIdArg(pathMatch[2]),
+    };
+  }
+
+  if (normalized.includes(':')) {
+    const parts = normalized.split(':');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      fail(`Invalid --order-id: ${raw}. Expected <dropId>:<id>.\n\n${usage()}`);
+    }
+    return {
+      dropId: resolveDropIdArg(parts[0]),
+      deliveryId: resolveDeliveryIdArg(parts[1]),
+    };
+  }
+
+  return { deliveryId: resolveDeliveryIdArg(normalized) };
+}
+
+export function parseArgs(argv: string[]): Args {
   const args: Args = { kind: 'shipper-ready' };
   let rawDropId: string | undefined;
+  let rawOrderId: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -184,13 +244,50 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
 
+    if (arg === '--order-id' || arg === '--order_id') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) fail(`Missing value for ${arg}\n\n${usage()}`);
+      rawOrderId = value;
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--order-id=')) {
+      rawOrderId = arg.slice('--order-id='.length);
+      continue;
+    }
+
+    if (arg.startsWith('--order_id=')) {
+      rawOrderId = arg.slice('--order_id='.length);
+      continue;
+    }
+
     fail(`Unknown arg: ${arg}\n\n${usage()}`);
   }
 
   if (!isOrderBackedKind(args.kind) && rawDropId != null) {
     fail(`--drop-id/--drop_id is only supported with order-backed email kinds\n\n${usage()}`);
   }
-  if (rawDropId != null) args.dropId = resolveDropIdArg(rawDropId);
+  if (!isOrderBackedKind(args.kind) && rawOrderId != null) {
+    fail(`--order-id/--order_id is only supported with order-backed email kinds\n\n${usage()}`);
+  }
+
+  const dropId = rawDropId != null ? resolveDropIdArg(rawDropId) : undefined;
+  const parsedOrderId = rawOrderId != null ? parseOrderIdArg(rawOrderId) : undefined;
+  if (dropId && parsedOrderId?.dropId && dropId !== parsedOrderId.dropId) {
+    fail(`--drop-id (${dropId}) does not match --order-id drop (${parsedOrderId.dropId})\n\n${usage()}`);
+  }
+
+  if (parsedOrderId) {
+    const orderDropId = parsedOrderId.dropId || dropId;
+    if (!orderDropId) {
+      fail(`--order-id ${rawOrderId} requires --drop-id unless it includes a drop id\n\n${usage()}`);
+    }
+    args.dropId = orderDropId;
+    args.orderId = parsedOrderId.deliveryId;
+  } else if (dropId) {
+    args.dropId = dropId;
+  }
 
   return args;
 }
@@ -295,7 +392,7 @@ type DeliveryOrderLookupOptions = {
   noMatchMessage: string;
 };
 
-function selectedOrderFromDoc(doc: DocumentSnapshot, options: DeliveryOrderLookupOptions): DeliveryOrderCandidate | null {
+function selectedOrderFromDoc(doc: DeliveryOrderDocLike, options: DeliveryOrderLookupOptions): DeliveryOrderCandidate | null {
   const order = doc.data() || {};
   const status = typeof order.status === 'string' ? order.status : '';
   if (!options.statuses.includes(status)) return null;
@@ -478,8 +575,53 @@ async function latestDeliveryOrder(kind: OrderBackedTestEmailKind, dropId?: stri
   );
 }
 
+async function loadDeliveryOrderDoc(docPath: string): Promise<DeliveryOrderDocLike> {
+  return firestore().doc(docPath).get();
+}
+
+export async function deliveryOrderById(
+  kind: OrderBackedTestEmailKind,
+  dropId: string,
+  deliveryId: number,
+  loadDoc: DeliveryOrderDocLoader = loadDeliveryOrderDoc,
+): Promise<DeliveryOrderCandidate> {
+  const options = deliveryOrderLookupOptions(kind);
+  const docPath = dropDeliveryOrderPath(dropId, deliveryId);
+  const snap = await loadDoc(docPath);
+  if (!snap.exists) {
+    fail(`Delivery order not found: ${docPath}`);
+  }
+
+  const selected = selectedOrderFromDoc(snap, options);
+  if (selected) {
+    if (selected.deliveryId !== deliveryId) {
+      fail(`Delivery order ${docPath} stores deliveryId ${selected.deliveryId}, which does not match requested --order-id ${deliveryId}.`);
+    }
+    return selected;
+  }
+
+  fail(
+    [
+      `Delivery order does not match ${kind} test email requirements: ${docPath}`,
+      `Statuses: ${options.statuses.join(', ')}`,
+      options.requireShippedTracking ? 'Required: fulfillmentStatus Shipped with HTTPS fulfillmentTrackingCode' : undefined,
+      `Ignored sources: ${ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE}`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
+async function deliveryOrderForArgs(kind: OrderBackedTestEmailKind, args: Args): Promise<DeliveryOrderCandidate> {
+  if (args.orderId != null) {
+    if (!args.dropId) fail('--order-id requires --drop-id or a composite order id');
+    return deliveryOrderById(kind, args.dropId, args.orderId);
+  }
+  return latestDeliveryOrder(kind, args.dropId);
+}
+
 async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
-  const { order, ...selectedOrder } = await latestDeliveryOrder('shipper-ready', args.dropId);
+  const { order, ...selectedOrder } = await deliveryOrderForArgs('shipper-ready', args);
   const itemPreviews = await buildOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
@@ -505,7 +647,7 @@ async function buildBuyerOrderTestEmailMessage(
   args: Args,
   idempotencyKey: string,
 ): Promise<{ selectedOrder: SelectedDeliveryOrder; message: BuyerOrderEmailMessageBase }> {
-  const { order, ...selectedOrder } = await latestDeliveryOrder(kind, args.dropId);
+  const { order, ...selectedOrder } = await deliveryOrderForArgs(kind, args);
   const items = await buildOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
@@ -642,7 +784,9 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}
