@@ -2,8 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED,
+  firstRejectedReadyToShipNotificationError,
+  normalizeNotificationEmailRecipient,
+  planReadyToShipOrderNotifications,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
   shouldSendResendNotificationEmail,
+  validateNotificationEmailRecipient,
 } from '../functions/src/notifications.ts';
 import {
   buildBuyerOrderReceivedEmailContent,
@@ -32,8 +36,90 @@ function buyerVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): B
 
 test('Resend non-checkout error notification emails are enabled', () => {
   assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, true);
+  assert.equal(shouldSendResendNotificationEmail('buyer_order_received'), true);
   assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), true);
   assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
+});
+
+test('notification email recipients are normalized and validated', () => {
+  assert.equal(normalizeNotificationEmailRecipient(' Buyer@Example.COM '), 'buyer@example.com');
+  assert.equal(normalizeNotificationEmailRecipient('not an email'), null);
+  assert.equal(normalizeNotificationEmailRecipient(''), null);
+  assert.equal(normalizeNotificationEmailRecipient(null), null);
+  assert.equal(validateNotificationEmailRecipient(' Buyer@Example.COM '), 'Buyer@Example.COM');
+  assert.equal(validateNotificationEmailRecipient('not an email'), null);
+});
+
+test('ready-to-ship notification plan keeps buyer email independent from shipper recipients', () => {
+  assert.deepEqual(
+    planReadyToShipOrderNotifications({
+      buyerEmail: ' Buyer@Example.COM ',
+      shipperRecipients: [],
+    }),
+    {
+      buyerRecipient: 'Buyer@Example.COM',
+      shipperRecipients: [],
+      shouldBuildOrderEmailItems: true,
+    },
+  );
+});
+
+test('ready-to-ship notification plan keeps shipper email independent from buyer recipient', () => {
+  assert.deepEqual(
+    planReadyToShipOrderNotifications({
+      buyerEmail: undefined,
+      shipperRecipients: [' Shipper@Example.COM ', 'shipper@example.com', 'not an email'],
+    }),
+    {
+      buyerRecipient: null,
+      shipperRecipients: ['shipper@example.com'],
+      shouldBuildOrderEmailItems: true,
+    },
+  );
+});
+
+test('ready-to-ship notification plan skips item previews when only buyer skip will be recorded', () => {
+  assert.deepEqual(
+    planReadyToShipOrderNotifications({
+      buyerEmail: 'invalid',
+      shipperRecipients: [],
+    }),
+    {
+      buyerRecipient: null,
+      shipperRecipients: [],
+      shouldBuildOrderEmailItems: false,
+    },
+  );
+});
+
+test('ready-to-ship notification rejection selection prefers retryable failures', () => {
+  const permanent = new Error('permanent');
+  const retryable = new Error('retryable');
+  const results: PromiseSettledResult<void>[] = [
+    { status: 'rejected', reason: permanent },
+    { status: 'fulfilled', value: undefined },
+    { status: 'rejected', reason: retryable },
+  ];
+
+  assert.equal(
+    firstRejectedReadyToShipNotificationError(results, (reason) => reason === retryable),
+    retryable,
+  );
+});
+
+test('ready-to-ship notification rejection selection falls back to first failure', () => {
+  const first = new Error('first');
+  const second = new Error('second');
+  const results: PromiseSettledResult<void>[] = [
+    { status: 'rejected', reason: first },
+    { status: 'rejected', reason: second },
+  ];
+
+  assert.equal(firstRejectedReadyToShipNotificationError(results, () => false), first);
+  assert.equal(
+    firstRejectedReadyToShipNotificationError([{ status: 'fulfilled', value: undefined }], () => true),
+    undefined,
+  );
 });
 
 test('shipper ready email builder includes details and escapes html', () => {

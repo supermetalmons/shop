@@ -97,16 +97,22 @@ import { assetProofMatchesTree, assetProofTreePublicKey } from './receiptProof.j
 import { bubblegumTransferV2Ix } from './bubblegum.js';
 import {
   RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
+  firstRejectedReadyToShipNotificationError,
+  normalizeNotificationEmailRecipient,
+  planReadyToShipOrderNotifications,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
   shouldSendResendNotificationEmail,
   type ResendNotificationEmailKind,
 } from './notifications.js';
 import {
   NOTIFICATION_EMAIL_FROM,
+  buildBuyerOrderReceivedEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   fulfillmentAppUrlForOrder,
   summarizeShipperReadyOrderItems,
+  type BuyerOrderReceivedEmailMessage,
+  type BuyerVisibleOrderEmailItem,
   type ShipperReadyToShipEmailMessage,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
@@ -493,15 +499,6 @@ type ShipperReadyToShipNotificationConfig = {
   emails: string[];
 };
 
-const SHIPPER_EMAIL_SCHEMA = z.string().email().max(254);
-
-function normalizeShipperEmail(rawEmail: unknown): string | null {
-  if (typeof rawEmail !== 'string') return null;
-  const email = rawEmail.trim().toLowerCase();
-  if (!email || !SHIPPER_EMAIL_SCHEMA.safeParse(email).success) return null;
-  return email;
-}
-
 const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
   {
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
@@ -546,7 +543,7 @@ SHIPPER_READY_TO_SHIP_NOTIFICATIONS.forEach(({ dropIds: rawDropIds, emails: rawE
   try {
     const emails = rawEmails
       .map((rawEmail) => {
-        const email = normalizeShipperEmail(rawEmail);
+        const email = normalizeNotificationEmailRecipient(rawEmail);
         if (!email) {
           console.error('[mons/functions] invalid shipper ready-to-ship notification email', { rawEmail });
         }
@@ -3971,6 +3968,9 @@ type DeliveryOrderOwnersCursor = {
 
 const SHIPPER_READY_NOTIFICATION_DOC_ID = 'shipper-ready-to-ship';
 const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
+const BUYER_ORDER_RECEIVED_NOTIFICATION_DOC_ID = 'order-received';
+const BUYER_ORDER_RECEIVED_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
+const BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON = 'buyer_order_received_email_recipient_missing_or_invalid';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manual-review';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
@@ -4001,6 +4001,7 @@ const RETRYABLE_RESEND_ERROR_NAMES = new Set([
 ]);
 
 type RetryableNotificationEmailErrorName =
+  | 'RetryableBuyerOrderReceivedEmailError'
   | 'RetryableShipperReadyEmailError'
   | 'RetryableStripeCheckoutManualReviewEmailError';
 
@@ -4047,6 +4048,24 @@ function isRetryableResendError(error: ResendErrorSummary): boolean {
   if (error.name !== 'unknown_resend_error') return false;
   if (error.statusCode === 408 || error.statusCode === 409 || error.statusCode === 429) return true;
   return Boolean(error.statusCode && error.statusCode >= 500);
+}
+
+async function sendBuyerOrderReceivedEmail(
+  message: BuyerOrderReceivedEmailMessage,
+): Promise<NotificationEmailResult> {
+  const email = buildBuyerOrderReceivedEmailContent(message);
+  return sendResendNotificationEmail({
+    notificationKind: 'buyer_order_received',
+    idempotencyKey: message.idempotencyKey,
+    recipients: message.recipients,
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
+    retryableErrorName: 'RetryableBuyerOrderReceivedEmailError',
+    missingApiKeyMessage: 'RESEND_API_KEY is not configured for buyer order-received email',
+    missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
+    retryableFailurePrefix: 'resend buyer order-received email failed',
+  });
 }
 
 async function sendShipperReadyToShipEmail(
@@ -4270,6 +4289,174 @@ async function recordEmailNotificationSendFailure(
   );
 }
 
+type ReservedEmailNotificationParams = {
+  notificationRef: FirebaseFirestore.DocumentReference;
+  leaseMs: number;
+  notification: Record<string, unknown>;
+  reservedElsewhereLogEvent: string;
+  failureLogEvent: string;
+  failureWriteFailedLogEvent: string;
+  logMeta: Record<string, unknown>;
+  retryableErrorName: RetryableNotificationEmailErrorName;
+  sendInProgressMessage: string;
+  send: () => Promise<NotificationEmailResult>;
+};
+
+async function runReservedEmailNotification(params: ReservedEmailNotificationParams): Promise<void> {
+  const reservation = await reserveEmailNotification({
+    notificationRef: params.notificationRef,
+    nowMs: Date.now(),
+    leaseMs: params.leaseMs,
+    notification: params.notification,
+  });
+
+  if (!reservation.reserved) {
+    logger.info(params.reservedElsewhereLogEvent, {
+      ...params.logMeta,
+      reason: reservation.reason,
+      ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
+    });
+    if (reservation.reason === 'send_in_progress') {
+      throw new RetryableNotificationEmailError(
+        params.retryableErrorName,
+        params.sendInProgressMessage,
+        'notification_send_in_progress',
+        { ...params.logMeta, leaseExpiresAt: reservation.leaseExpiresAt },
+      );
+    }
+    return;
+  }
+
+  try {
+    const result = await params.send();
+    await recordEmailNotificationSendResult(params.notificationRef, result);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    const errorSummary = summarizeError(err);
+    logger.error(params.failureLogEvent, error, {
+      ...params.logMeta,
+      error: errorSummary,
+    });
+    await recordEmailNotificationSendFailure(params.notificationRef, errorSummary).catch((writeErr) => {
+      const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
+      logger.error(params.failureWriteFailedLogEvent, writeError, {
+        ...params.logMeta,
+        error: summarizeError(writeErr),
+      });
+    });
+    throw err;
+  }
+}
+
+type ReadyToShipOrderEmailItems = BuyerVisibleOrderEmailItem[];
+
+async function sendShipperReadyToShipNotification(params: {
+  orderRef: DocumentReference;
+  order: any;
+  dropId: string;
+  dropName: string;
+  deliveryId: number;
+  deliveryDocId: string;
+  recipients: string[];
+  itemPreviews: ReadyToShipOrderEmailItems;
+}): Promise<void> {
+  const notificationRef = params.orderRef.collection('notifications').doc(SHIPPER_READY_NOTIFICATION_DOC_ID);
+  const idempotencyKey = `${params.dropId}:${params.deliveryDocId || params.deliveryId}:ready_to_ship`;
+  await runReservedEmailNotification({
+    notificationRef,
+    leaseMs: SHIPPER_READY_NOTIFICATION_LEASE_MS,
+    notification: {
+      type: 'shipper_ready_to_ship',
+      status: 'sending',
+      dropId: params.dropId,
+      deliveryId: params.deliveryId,
+      deliveryDocId: params.deliveryDocId || String(params.deliveryId),
+      orderPath: params.orderRef.path,
+      recipients: params.recipients,
+      recipientCount: params.recipients.length,
+      idempotencyKey,
+    },
+    reservedElsewhereLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyReservedElsewhere',
+    failureLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyFailed',
+    failureWriteFailedLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyFailureWriteFailed',
+    logMeta: { dropId: params.dropId, deliveryId: params.deliveryId },
+    retryableErrorName: 'RetryableShipperReadyEmailError',
+    sendInProgressMessage: 'shipper ready-to-ship notification send lease is still active',
+    send: () =>
+      sendShipperReadyToShipEmail({
+        idempotencyKey,
+        recipients: params.recipients,
+        dropId: params.dropId,
+        dropName: params.dropName,
+        deliveryId: params.deliveryId,
+        owner: typeof params.order.owner === 'string' ? params.order.owner : '',
+        items: summarizeShipperReadyOrderItems(params.order),
+        itemPreviews: params.itemPreviews,
+        fulfillmentUrl: fulfillmentAppUrlForOrder(params.dropId, params.deliveryId),
+      }),
+  });
+}
+
+async function sendBuyerOrderReceivedNotification(params: {
+  orderRef: DocumentReference;
+  order: any;
+  dropId: string;
+  dropName: string;
+  deliveryId: number;
+  deliveryDocId: string;
+  recipient: string | null;
+  items: ReadyToShipOrderEmailItems;
+}): Promise<void> {
+  const recipients = params.recipient ? [params.recipient] : [];
+  const notificationRef = params.orderRef.collection('notifications').doc(BUYER_ORDER_RECEIVED_NOTIFICATION_DOC_ID);
+  const idempotencyKey = `${params.dropId}:${params.deliveryDocId || params.deliveryId}:order_received`;
+  await runReservedEmailNotification({
+    notificationRef,
+    leaseMs: BUYER_ORDER_RECEIVED_NOTIFICATION_LEASE_MS,
+    notification: {
+      type: 'buyer_order_received',
+      status: 'sending',
+      dropId: params.dropId,
+      deliveryId: params.deliveryId,
+      deliveryDocId: params.deliveryDocId || String(params.deliveryId),
+      orderPath: params.orderRef.path,
+      recipients,
+      recipientCount: recipients.length,
+      idempotencyKey,
+    },
+    reservedElsewhereLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedReservedElsewhere',
+    failureLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedFailed',
+    failureWriteFailedLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedFailureWriteFailed',
+    logMeta: { dropId: params.dropId, deliveryId: params.deliveryId },
+    retryableErrorName: 'RetryableBuyerOrderReceivedEmailError',
+    sendInProgressMessage: 'buyer order-received notification send lease is still active',
+    send: async () => {
+      if (!params.recipient) {
+        logger.info('notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedSkipped', {
+          dropId: params.dropId,
+          deliveryId: params.deliveryId,
+          reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
+          hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
+        });
+        return {
+          status: 'skipped',
+          provider: 'resend',
+          reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
+        };
+      }
+
+      return sendBuyerOrderReceivedEmail({
+        idempotencyKey,
+        recipients,
+        dropId: params.dropId,
+        dropName: params.dropName,
+        deliveryId: params.deliveryId,
+        items: params.items,
+      });
+    },
+  });
+}
+
 export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
   {
     document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
@@ -4305,9 +4492,6 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
       return;
     }
 
-    const recipients = Array.from(SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || []).sort();
-    if (!recipients.length) return;
-
     const deliveryDocId = String(event.params.deliveryId || '').trim();
     const deliveryId = Number(after.deliveryId ?? deliveryDocId);
     if (!Number.isFinite(deliveryId) || deliveryId <= 0) {
@@ -4315,79 +4499,44 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
       return;
     }
 
-    const orderRef = afterSnap.ref;
-    const notificationRef = orderRef.collection('notifications').doc(SHIPPER_READY_NOTIFICATION_DOC_ID);
-    const idempotencyKey = `${dropId}:${deliveryDocId || deliveryId}:ready_to_ship`;
-    const nowMs = Date.now();
-
-    const reservation = await reserveEmailNotification({
-      notificationRef,
-      nowMs,
-      leaseMs: SHIPPER_READY_NOTIFICATION_LEASE_MS,
-      notification: {
-        type: 'shipper_ready_to_ship',
-        status: 'sending',
-        dropId,
-        deliveryId,
-        deliveryDocId: deliveryDocId || String(deliveryId),
-        orderPath: orderRef.path,
-        recipients,
-        recipientCount: recipients.length,
-        idempotencyKey,
-      },
+    const notificationPlan = planReadyToShipOrderNotifications({
+      buyerEmail: after?.addressSnapshot?.email,
+      shipperRecipients: Array.from(SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || []).sort(),
     });
-
-    if (!reservation.reserved) {
-      logger.info('notifyShippersOnDeliveryReadyToShip:reservedElsewhere', {
+    const orderEmailItems: ReadyToShipOrderEmailItems =
+      notificationPlan.shouldBuildOrderEmailItems ? await buildBuyerVisibleOrderEmailItems(after, { dropId }) : [];
+    const orderRef = afterSnap.ref;
+    const tasks: Promise<void>[] = [
+      sendBuyerOrderReceivedNotification({
+        orderRef,
+        order: after,
         dropId,
+        dropName,
         deliveryId,
-        reason: reservation.reason,
-        ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
-      });
-      if (reservation.reason === 'send_in_progress') {
-        throw new RetryableNotificationEmailError(
-          'RetryableShipperReadyEmailError',
-          'shipper ready-to-ship notification send lease is still active',
-          'notification_send_in_progress',
-          { dropId, deliveryId, leaseExpiresAt: reservation.leaseExpiresAt },
-        );
-      }
-      return;
-    }
+        deliveryDocId,
+        recipient: notificationPlan.buyerRecipient,
+        items: orderEmailItems,
+      }),
+    ];
 
-    const message: ShipperReadyToShipEmailMessage = {
-      idempotencyKey,
-      recipients,
-      dropId,
-      dropName,
-      deliveryId,
-      owner: typeof after.owner === 'string' ? after.owner : '',
-      items: summarizeShipperReadyOrderItems(after),
-      itemPreviews: await buildBuyerVisibleOrderEmailItems(after, { dropId }),
-      fulfillmentUrl: fulfillmentAppUrlForOrder(dropId, deliveryId),
-    };
-
-    try {
-      const result = await sendShipperReadyToShipEmail(message);
-      await recordEmailNotificationSendResult(notificationRef, result);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      const errorSummary = summarizeError(err);
-      logger.error('notifyShippersOnDeliveryReadyToShip:failed', error, {
-        dropId,
-        deliveryId,
-        error: errorSummary,
-      });
-      await recordEmailNotificationSendFailure(notificationRef, errorSummary).catch((writeErr) => {
-        const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
-        logger.error('notifyShippersOnDeliveryReadyToShip:failureWriteFailed', writeError, {
+    if (notificationPlan.shipperRecipients.length) {
+      tasks.push(
+        sendShipperReadyToShipNotification({
+          orderRef,
+          order: after,
           dropId,
+          dropName,
           deliveryId,
-          error: summarizeError(writeErr),
-        });
-      });
-      throw err;
+          deliveryDocId,
+          recipients: notificationPlan.shipperRecipients,
+          itemPreviews: orderEmailItems,
+        }),
+      );
     }
+
+    const results = await Promise.allSettled(tasks);
+    const rejected = firstRejectedReadyToShipNotificationError(results, isRetryableNotificationEmailError);
+    if (rejected) throw rejected;
   },
 );
 
@@ -4431,7 +4580,7 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
       return;
     }
 
-    const recipient = normalizeShipperEmail(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
+    const recipient = normalizeNotificationEmailRecipient(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
     if (!recipient) {
       logger.warn('notifyStripeCheckoutManualReview:invalidRecipient', { email: STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL });
       return;
@@ -4441,11 +4590,9 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
     const checkoutRef = afterSnap.ref;
     const notificationRef = checkoutRef.collection('notifications').doc(STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID);
     const idempotencyKey = `${dropId}:${sessionId}:stripe_manual_review`;
-    const nowMs = Date.now();
 
-    const reservation = await reserveEmailNotification({
+    await runReservedEmailNotification({
       notificationRef,
-      nowMs,
       leaseMs: STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS,
       notification: {
         type: 'stripe_checkout_manual_review',
@@ -4457,66 +4604,32 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
         recipientCount: recipients.length,
         idempotencyKey,
       },
-    });
-
-    if (!reservation.reserved) {
-      logger.info('notifyStripeCheckoutManualReview:reservedElsewhere', {
-        dropId,
-        sessionId,
-        reason: reservation.reason,
-        ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
-      });
-      if (reservation.reason === 'send_in_progress') {
-        throw new RetryableNotificationEmailError(
-          'RetryableStripeCheckoutManualReviewEmailError',
-          'Stripe checkout manual review notification send lease is still active',
-          'notification_send_in_progress',
-          { dropId, sessionId, leaseExpiresAt: reservation.leaseExpiresAt },
-        );
-      }
-      return;
-    }
-
-    const message: StripeCheckoutManualReviewEmailMessage = {
-      idempotencyKey,
-      recipients,
-      dropId,
-      dropName,
-      sessionId,
-      checkoutPath: checkoutRef.path,
-      livemode: checkout?.livemode === true,
-      variantKey: optionalTrimmedString(checkout?.variantKey),
-      owner: optionalTrimmedString(checkout?.owner),
-      firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
-      manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
-      lastFulfillmentError: checkout?.lastFulfillmentError,
-      createdAt: toMillisMaybe(checkout?.createdAt),
-      fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
-      processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
-      failedAt: toMillisMaybe(checkout?.failedAt),
-    };
-
-    try {
-      const result = await sendStripeCheckoutManualReviewEmail(message);
-      await recordEmailNotificationSendResult(notificationRef, result);
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      const errorSummary = summarizeError(err);
-      logger.error('notifyStripeCheckoutManualReview:failed', error, {
-        dropId,
-        sessionId,
-        error: errorSummary,
-      });
-      await recordEmailNotificationSendFailure(notificationRef, errorSummary).catch((writeErr) => {
-        const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
-        logger.error('notifyStripeCheckoutManualReview:failureWriteFailed', writeError, {
+      reservedElsewhereLogEvent: 'notifyStripeCheckoutManualReview:reservedElsewhere',
+      failureLogEvent: 'notifyStripeCheckoutManualReview:failed',
+      failureWriteFailedLogEvent: 'notifyStripeCheckoutManualReview:failureWriteFailed',
+      logMeta: { dropId, sessionId },
+      retryableErrorName: 'RetryableStripeCheckoutManualReviewEmailError',
+      sendInProgressMessage: 'Stripe checkout manual review notification send lease is still active',
+      send: () =>
+        sendStripeCheckoutManualReviewEmail({
+          idempotencyKey,
+          recipients,
           dropId,
+          dropName,
           sessionId,
-          error: summarizeError(writeErr),
-        });
-      });
-      throw err;
-    }
+          checkoutPath: checkoutRef.path,
+          livemode: checkout?.livemode === true,
+          variantKey: optionalTrimmedString(checkout?.variantKey),
+          owner: optionalTrimmedString(checkout?.owner),
+          firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
+          manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
+          lastFulfillmentError: checkout?.lastFulfillmentError,
+          createdAt: toMillisMaybe(checkout?.createdAt),
+          fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
+          processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
+          failedAt: toMillisMaybe(checkout?.failedAt),
+        }),
+    });
   },
 );
 
