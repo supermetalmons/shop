@@ -378,11 +378,26 @@ function loadSecretCodePreviewImageOnce(src: string): Promise<HTMLImageElement> 
   });
 }
 
+function secretCodePreviewImageExportSrc(src: string): string {
+  const normalizedSrc = String(src || '').trim();
+  if (!/^https?:\/\//i.test(normalizedSrc)) return normalizedSrc;
+
+  try {
+    const url = new URL(normalizedSrc);
+    if (url.hostname.toLowerCase() !== 'cdn.lil.org') return normalizedSrc;
+    url.searchParams.set('mons_export_cors', '1');
+    return url.toString();
+  } catch {
+    return normalizedSrc;
+  }
+}
+
 async function loadSecretCodePreviewImageWithRetry(src: string): Promise<HTMLImageElement> {
+  const exportSrc = secretCodePreviewImageExportSrc(src);
   let lastError: unknown;
   for (let attempt = 1; attempt <= SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await loadSecretCodePreviewImageOnce(src);
+      return await loadSecretCodePreviewImageOnce(exportSrc);
     } catch (err) {
       lastError = err;
       if (attempt === SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS) break;
