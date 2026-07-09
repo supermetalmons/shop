@@ -10,25 +10,13 @@ import {
   buildBuyerOrderShippedEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
-  type BuyerOrderEmailItem,
+  type BuyerVisibleOrderEmailItem,
   fulfillmentAppUrlForOrder,
+  type NotificationEmailItem,
   summarizeShipperReadyOrderItems,
 } from '../functions/src/notificationEmails.ts';
-import { buildOrderEmailItems } from '../functions/src/orderEmailItems.ts';
+import { buildBuyerVisibleOrderEmailItems } from '../functions/src/orderEmailItems.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
-import { getFrontendDrop, type FrontendDeploymentConfig } from '../src/config/deployment.ts';
-import { normalizeBoxDisplayImage, resolveDropContent } from '../src/lib/dropContent.ts';
-import { dropAssetReference } from '../src/lib/dropLabels.ts';
-import {
-  figureMetadataCacheKey,
-  loadFigureMetadataBatch,
-  type FigureMetadataRecord,
-} from '../src/lib/figureMetadata.ts';
-import {
-  resolveFulfillmentDirectDeliveryBoxLabel,
-  resolveFulfillmentFigurePreview,
-} from '../src/lib/fulfillmentLabels.ts';
-import { isDirectDeliveryItemsPerBox } from '../src/lib/shipping.ts';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -38,131 +26,8 @@ function countSubstring(value: string, substring: string): number {
   return value.split(substring).length - 1;
 }
 
-type TestDeliveryOrderItem = {
-  kind: 'box' | 'dude';
-  refId: number;
-};
-
-type TestOrderEmailContext = {
-  boxes: TestDeliveryOrderItem[];
-  looseFigureIds: number[];
-  assignedFigureIdsByBoxId: Map<number, number[]>;
-};
-
-function normalizePositiveInteger(value: unknown): number | null {
-  const normalized = Math.floor(Number(value));
-  if (!Number.isFinite(normalized) || normalized <= 0) return null;
-  return normalized;
-}
-
-function testOrderEmailContext(order: any): TestOrderEmailContext {
-  const items = (Array.isArray(order?.items) ? order.items : [])
-    .map((item: any) => {
-      if (!item || (item.kind !== 'box' && item.kind !== 'dude')) return null;
-      const refId = normalizePositiveInteger(item.refId);
-      return refId ? ({ kind: item.kind, refId } as TestDeliveryOrderItem) : null;
-    })
-    .filter((item: TestDeliveryOrderItem | null): item is TestDeliveryOrderItem => Boolean(item));
-  const assignedFigureIdsByBoxId = new Map<number, number[]>();
-  for (const claim of Array.isArray(order?.irlClaims) ? order.irlClaims : []) {
-    const boxId = normalizePositiveInteger(claim?.boxId);
-    if (!boxId) continue;
-    const dudeIds = (Array.isArray(claim?.dudeIds) ? claim.dudeIds : [])
-      .map((id: unknown) => normalizePositiveInteger(id))
-      .filter((id): id is number => Boolean(id))
-      .sort((a, b) => a - b);
-    if (dudeIds.length) assignedFigureIdsByBoxId.set(boxId, dudeIds);
-  }
-  return {
-    boxes: items.filter((item) => item.kind === 'box').sort((a, b) => a.refId - b.refId),
-    looseFigureIds: items
-      .filter((item) => item.kind === 'dude')
-      .map((item) => item.refId)
-      .sort((a, b) => a - b),
-    assignedFigureIdsByBoxId,
-  };
-}
-
-async function frontendFigureMetadataByKey(
-  dropId: string,
-  drop: FrontendDeploymentConfig | undefined,
-  context: TestOrderEmailContext,
-): Promise<Record<string, FigureMetadataRecord>> {
-  const content = resolveDropContent(drop || dropId);
-  if (content.figures.fulfillmentPreviewMode !== 'metadata_stills') return {};
-  const figureIds = isDirectDeliveryItemsPerBox(drop?.itemsPerBox)
-    ? context.looseFigureIds
-    : [
-        ...context.boxes.flatMap((box) => context.assignedFigureIdsByBoxId.get(box.refId) || []),
-        ...context.looseFigureIds,
-      ];
-  if (!figureIds.length) return {};
-  const records = await loadFigureMetadataBatch(figureIds.map((figureId) => ({ dropId, figureId })));
-  return Object.fromEntries(records.map((record) => [figureMetadataCacheKey(record.dropId, record.id), record]));
-}
-
-function frontendOrderFigureItem(args: {
-  dropId: string;
-  drop: FrontendDeploymentConfig | undefined;
-  figureId: number;
-  index: number;
-  figureMetadataByKey: Record<string, FigureMetadataRecord>;
-}): BuyerOrderEmailItem {
-  const content = resolveDropContent(args.drop || args.dropId);
-  const preview = resolveFulfillmentFigurePreview({
-    dropId: args.dropId,
-    drop: args.drop,
-    figureId: args.figureId,
-    index: args.index,
-    previewMode: content.figures.fulfillmentPreviewMode,
-    figureMediaBase: content.figures.fulfillmentMediaBaseUrl,
-    figureMetadataByKey: args.figureMetadataByKey,
-  });
-  const normalizedLabel = String(preview.label ?? '').trim();
-  return {
-    label:
-      normalizedLabel && !/^\d+$/.test(normalizedLabel)
-        ? normalizedLabel
-        : dropAssetReference(args.drop, 'figure', normalizedLabel || args.figureId),
-    ...(preview.imageSrc ? { thumbnailUrl: preview.imageSrc } : {}),
-  };
-}
-
-async function frontendOrderEmailItems(order: any, dropId: string): Promise<BuyerOrderEmailItem[]> {
-  const drop = getFrontendDrop(dropId);
-  const context = testOrderEmailContext(order);
-  const figureMetadataByKey = await frontendFigureMetadataByKey(dropId, drop, context);
-  const isDirectDelivery = isDirectDeliveryItemsPerBox(drop?.itemsPerBox);
-  const items: BuyerOrderEmailItem[] = [];
-  let figureIndex = 0;
-  const addFigure = (figureId: number) => {
-    items.push(frontendOrderFigureItem({ dropId, drop, figureId, index: figureIndex, figureMetadataByKey }));
-    figureIndex += 1;
-  };
-
-  if (isDirectDelivery) {
-    for (const box of context.boxes) {
-      const { label } = resolveFulfillmentDirectDeliveryBoxLabel(drop, box.refId);
-      const thumbnailUrl = normalizeBoxDisplayImage({ dropId, boxId: box.refId });
-      items.push({ label, ...(thumbnailUrl ? { thumbnailUrl } : {}) });
-    }
-  } else {
-    for (const box of context.boxes) {
-      const assignedFigureIds = context.assignedFigureIdsByBoxId.get(box.refId) || [];
-      if (!assignedFigureIds.length) {
-        const thumbnailUrl = normalizeBoxDisplayImage({ dropId, boxId: box.refId });
-        items.push({
-          label: dropAssetReference(drop, 'box', box.refId),
-          ...(thumbnailUrl ? { thumbnailUrl } : {}),
-        });
-        continue;
-      }
-      assignedFigureIds.forEach(addFigure);
-    }
-  }
-
-  context.looseFigureIds.forEach(addFigure);
-  return items;
+function buyerVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): BuyerVisibleOrderEmailItem[] {
+  return items as BuyerVisibleOrderEmailItem[];
 }
 
 test('Resend non-checkout error notification emails are enabled', () => {
@@ -185,13 +50,13 @@ test('shipper ready email builder includes details and escapes html', () => {
       deliveryId: 123,
       owner: 'owner<&>',
       items,
-      itemPreviews: [
+      itemPreviews: buyerVisibleItemsForEmailBuilderTest([
         {
           label: 'Card <111>',
           thumbnailUrl: 'https://cdn.example/card.jpg?x=<bad>&y="quote"',
         },
         { label: 'Pack & Box' },
-      ],
+      ]),
       fulfillmentUrl,
     },
     { subjectPrefix: '[TEST] ' },
@@ -253,7 +118,7 @@ test('buyer order received email builder includes item thumbnails and escapes ht
       dropId: 'card_nft_2',
       dropName: 'Card NFT 2 <Drop>',
       deliveryId: 123,
-      items: [
+      items: buyerVisibleItemsForEmailBuilderTest([
         {
           label: 'Card <111>',
           thumbnailUrl: 'https://cdn.example/card.jpg?x=<bad>&y="quote"',
@@ -262,7 +127,7 @@ test('buyer order received email builder includes item thumbnails and escapes ht
         { label: 'Figure 3', thumbnailUrl: 'https://cdn.example/figure-3.webp' },
         { label: 'Figure 4' },
         { label: 'Figure 5' },
-      ],
+      ]),
     },
     { subjectPrefix: '[TEST] ' },
   );
@@ -298,7 +163,9 @@ test('buyer order shipped email builder includes tracking link and escapes html'
       dropId: 'little_swag_hoodies',
       dropName: 'Little Swag Hoodies <Drop>',
       deliveryId: 456,
-      items: [{ label: 'Hoodie XL <special>', thumbnailUrl: 'https://cdn.example/hoodie.webp' }],
+      items: buyerVisibleItemsForEmailBuilderTest([
+        { label: 'Hoodie XL <special>', thumbnailUrl: 'https://cdn.example/hoodie.webp' },
+      ]),
       trackingUrl,
     },
     { subjectPrefix: '[TEST] ' },
@@ -315,7 +182,7 @@ test('buyer order shipped email builder includes tracking link and escapes html'
 });
 
 test('buyer order email items include direct-delivery size labels and thumbnails', async () => {
-  const items = await buildOrderEmailItems(
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
       items: [
         { kind: 'box', refId: 16 },
@@ -334,8 +201,8 @@ test('buyer order email items include direct-delivery size labels and thumbnails
   assert.match(items[1].thumbnailUrl || '', /hoodie_clean\.webp/);
 });
 
-test('order email items include assigned card thumbnails for card nft 2', async () => {
-  const items = await buildOrderEmailItems(
+test('order email items keep assigned card contents hidden for card nft 2 packs', async () => {
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
       items: [{ kind: 'box', refId: 8 }],
       irlClaims: [{ boxId: 8, dudeIds: [12, 1] }],
@@ -345,14 +212,16 @@ test('order email items include assigned card thumbnails for card nft 2', async 
 
   assert.deepEqual(
     items.map((item) => item.label),
-    ['Card 1', 'Card 12'],
+    ['Pack 8'],
   );
-  assert.match(items[0].thumbnailUrl || '', /\/fronts_1400\/0001\.webp/);
-  assert.match(items[1].thumbnailUrl || '', /\/fronts_1400\/0012\.webp/);
+  assert.equal(items.length, 1);
+  assert.match(items[0].thumbnailUrl || '', /\/pack\/4\/initial\.webp/);
+  assert.doesNotMatch(items.map((item) => item.label).join('\n'), /Card (1|12)/);
+  assert.doesNotMatch(items.map((item) => item.thumbnailUrl || '').join('\n'), /\/fronts_1400\//);
 });
 
-test('buyer order email items use assigned figures for openable boxes', async () => {
-  const items = await buildOrderEmailItems(
+test('buyer order email items keep assigned figures hidden for openable boxes', async () => {
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
       items: [{ kind: 'box', refId: 5 }],
       irlClaims: [{ boxId: 5, dudeIds: [3, 1, 2] }],
@@ -362,13 +231,16 @@ test('buyer order email items use assigned figures for openable boxes', async ()
 
   assert.deepEqual(
     items.map((item) => item.label),
-    ['Figure 1', 'Figure 2', 'Figure 3'],
+    ['Box 5'],
   );
-  assert.match(items[0].thumbnailUrl || '', /\/figures\/clean\/1\.webp/);
+  assert.equal(items.length, 1);
+  assert.match(items[0].thumbnailUrl || '', /\/little_swag_boxes\/box\/tight\.webp/);
+  assert.doesNotMatch(items.map((item) => item.label).join('\n'), /Figure [123]/);
+  assert.doesNotMatch(items.map((item) => item.thumbnailUrl || '').join('\n'), /\/figures\/clean\//);
 });
 
 test('buyer order email items preserve loose figures in sorted order', async () => {
-  const items = await buildOrderEmailItems(
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
       items: [
         { kind: 'dude', refId: 9 },
@@ -384,8 +256,8 @@ test('buyer order email items preserve loose figures in sorted order', async () 
   );
 });
 
-test('buyer order email items ignore malformed delivery item and claim ids', async () => {
-  const items = await buildOrderEmailItems(
+test('buyer order email items ignore malformed delivery items and sealed-box claim ids', async () => {
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
       items: [
         { kind: 'box', refId: 7 },
@@ -403,53 +275,33 @@ test('buyer order email items ignore malformed delivery item and claim ids', asy
 
   assert.deepEqual(
     items.map((item) => item.label),
-    ['Figure 3', 'Figure 4'],
+    ['Box 7'],
   );
+  assert.match(items[0].thumbnailUrl || '', /\/little_swag_boxes\/box\/tight\.webp/);
+  assert.doesNotMatch(items.map((item) => item.label).join('\n'), /Figure [34]/);
+  assert.doesNotMatch(items.map((item) => item.thumbnailUrl || '').join('\n'), /\/figures\/clean\//);
 });
 
-test('order email items stay aligned with fulfillment dashboard previews', async () => {
-  const cases = [
+test('order email items expose loose figures but keep boxed assignments sealed', async () => {
+  const items = await buildBuyerVisibleOrderEmailItems(
     {
-      dropId: 'card_nft_2',
-      order: {
-        items: [{ kind: 'box', refId: 8 }],
-        irlClaims: [{ boxId: 8, dudeIds: [12, 1] }],
-      },
+      items: [
+        { kind: 'box', refId: 7 },
+        { kind: 'dude', refId: 11 },
+      ],
+      irlClaims: [{ boxId: 7, dudeIds: [4] }],
     },
-    {
-      dropId: 'card_nft_2',
-      order: {
-        items: [{ kind: 'box', refId: 8 }],
-      },
-    },
-    {
-      dropId: 'little_swag_boxes',
-      order: {
-        items: [{ kind: 'box', refId: 5 }, { kind: 'dude', refId: 9 }],
-        irlClaims: [{ boxId: 5, dudeIds: [3, 1, 2] }],
-      },
-    },
-    {
-      dropId: 'little_swag_hoodies',
-      order: {
-        items: [
-          { kind: 'box', refId: 16 },
-          { kind: 'box', refId: 31 },
-        ],
-      },
-    },
-    {
-      dropId: 'poncho_drifella',
-      order: {
-        items: [{ kind: 'box', refId: 7 }, { kind: 'dude', refId: 11 }],
-        irlClaims: [{ boxId: 7, dudeIds: [4] }],
-      },
-    },
-  ];
+    { dropId: 'poncho_drifella' },
+  );
 
-  for (const { dropId, order } of cases) {
-    assert.deepEqual(await buildOrderEmailItems(order, { dropId }), await frontendOrderEmailItems(order, dropId), dropId);
-  }
+  assert.deepEqual(
+    items.map((item) => item.label),
+    ['Pack 7', 'Card 11'],
+  );
+  assert.match(items[0].thumbnailUrl || '', /\/poncho_drifella\/pack\/initial\.webp/);
+  assert.match(items[1].thumbnailUrl || '', /\/poncho_drifella\/items\/clean\/11\.webp/);
+  assert.doesNotMatch(items.map((item) => item.label).join('\n'), /Card 4/);
+  assert.doesNotMatch(items.map((item) => item.thumbnailUrl || '').join('\n'), /\/items\/clean\/4\.webp/);
 });
 
 test('shouldNotifyShippersForDeliveryReadyToShipWrite accepts create-ready delivery orders', () => {

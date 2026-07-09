@@ -20,7 +20,7 @@ import {
 } from '../src/notificationEmails.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../src/stripeCheckout/contract.ts';
 import { toMillisMaybe } from '../src/time.ts';
-import { buildOrderEmailItems } from '../src/orderEmailItems.ts';
+import { buildBuyerVisibleOrderEmailItems } from '../src/orderEmailItems.ts';
 import { normalizeFulfillmentStatusOrNull, type FulfillmentStatus } from '../../src/lib/fulfillmentStatus.ts';
 import { resolveFulfillmentTrackingHref } from '../../src/lib/fulfillmentTracking.ts';
 
@@ -622,7 +622,7 @@ async function deliveryOrderForArgs(kind: OrderBackedTestEmailKind, args: Args):
 
 async function buildShipperReadyTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
   const { order, ...selectedOrder } = await deliveryOrderForArgs('shipper-ready', args);
-  const itemPreviews = await buildOrderEmailItems(order, selectedOrder);
+  const itemPreviews = await buildBuyerVisibleOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
     content: buildShipperReadyToShipEmailContent(
@@ -648,7 +648,7 @@ async function buildBuyerOrderTestEmailMessage(
   idempotencyKey: string,
 ): Promise<{ selectedOrder: SelectedDeliveryOrder; message: BuyerOrderEmailMessageBase }> {
   const { order, ...selectedOrder } = await deliveryOrderForArgs(kind, args);
-  const items = await buildOrderEmailItems(order, selectedOrder);
+  const items = await buildBuyerVisibleOrderEmailItems(order, selectedOrder);
   return {
     selectedOrder,
     message: {

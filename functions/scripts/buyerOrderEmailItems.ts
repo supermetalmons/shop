@@ -1,1 +1,5 @@
-export { buildBuyerOrderEmailItems, buildOrderEmailItems } from '../src/orderEmailItems.ts';
+export {
+  buildBuyerOrderEmailItems,
+  buildBuyerVisibleOrderEmailItems,
+  buildOrderEmailItems,
+} from '../src/orderEmailItems.ts';

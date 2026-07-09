@@ -110,7 +110,7 @@ import {
   type ShipperReadyToShipEmailMessage,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
-import { buildOrderEmailItems } from './orderEmailItems.js';
+import { buildBuyerVisibleOrderEmailItems } from './orderEmailItems.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import { normalizeOptionalFulfillmentTrackingCode, sanitizeFulfillmentTrackingCode } from './fulfillmentTracking.js';
 import { parseRequest } from './request.js';
@@ -4363,7 +4363,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
       deliveryId,
       owner: typeof after.owner === 'string' ? after.owner : '',
       items: summarizeShipperReadyOrderItems(after),
-      itemPreviews: await buildOrderEmailItems(after, { dropId }),
+      itemPreviews: await buildBuyerVisibleOrderEmailItems(after, { dropId }),
       fulfillmentUrl: fulfillmentAppUrlForOrder(dropId, deliveryId),
     };
 

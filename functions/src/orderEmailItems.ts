@@ -3,10 +3,9 @@ import {
   normalizeDropId,
   type FunctionsDropConfig,
 } from './config/deployment.js';
-import type { BuyerOrderEmailItem } from './notificationEmails.js';
+import type { BuyerVisibleOrderEmailItem, NotificationEmailItem } from './notificationEmails.js';
 
-// Keep these production-safe preview rules aligned with the fulfillment dashboard.
-// tests/notifications.test.ts compares this resolver against the frontend helpers.
+// Keep these email previews limited to what the buyer could already see at order time.
 type DeliveryOrderItem = {
   kind: 'box' | 'dude';
   refId: number;
@@ -19,7 +18,6 @@ type OrderEmailSelection = {
 type OrderEmailItemContext = {
   boxes: DeliveryOrderItem[];
   looseFigureIds: number[];
-  assignedFigureIdsByBoxId: Map<number, number[]>;
 };
 
 type MediaMapConfig = {
@@ -110,21 +108,6 @@ function listDeliveryOrderItems(order: any): DeliveryOrderItem[] {
     .filter((item): item is DeliveryOrderItem => Boolean(item));
 }
 
-function assignedFigureIdsByBoxId(order: any): Map<number, number[]> {
-  const result = new Map<number, number[]>();
-  const claims = Array.isArray(order?.irlClaims) ? order.irlClaims : [];
-  for (const claim of claims) {
-    const boxId = normalizePositiveInteger(claim?.boxId);
-    if (!boxId) continue;
-    const dudeIds = (Array.isArray(claim?.dudeIds) ? claim.dudeIds : [])
-      .map((id: unknown) => normalizePositiveInteger(id))
-      .filter((id): id is number => Boolean(id))
-      .sort((a, b) => a - b);
-    if (dudeIds.length) result.set(boxId, dudeIds);
-  }
-  return result;
-}
-
 function orderEmailItemContext(order: any): OrderEmailItemContext {
   const deliveryItems = listDeliveryOrderItems(order);
   return {
@@ -135,7 +118,6 @@ function orderEmailItemContext(order: any): OrderEmailItemContext {
       .filter((item) => item.kind === 'dude')
       .map((item) => item.refId)
       .sort((a, b) => a - b),
-    assignedFigureIdsByBoxId: assignedFigureIdsByBoxId(order),
   };
 }
 
@@ -225,12 +207,16 @@ function orderFigureLabel(drop: FunctionsDropConfig | undefined, figureId: numbe
   return dropAssetReference(drop, 'figure', reference);
 }
 
-function orderFigureItem(dropId: string, drop: FunctionsDropConfig | undefined, figureId: number): BuyerOrderEmailItem {
+function orderFigureItem(dropId: string, drop: FunctionsDropConfig | undefined, figureId: number): BuyerVisibleOrderEmailItem {
   const thumbnailUrl = figureThumbnailUrl(dropId, drop, figureId);
-  return {
+  return asBuyerVisibleOrderEmailItem({
     label: orderFigureLabel(drop, figureId),
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
-  };
+  });
+}
+
+function asBuyerVisibleOrderEmailItem(item: NotificationEmailItem): BuyerVisibleOrderEmailItem {
+  return item as BuyerVisibleOrderEmailItem;
 }
 
 function orderBoxItem(
@@ -238,19 +224,19 @@ function orderBoxItem(
   drop: FunctionsDropConfig | undefined,
   boxId: number,
   label: string,
-): BuyerOrderEmailItem {
+): BuyerVisibleOrderEmailItem {
   const thumbnailUrl = boxThumbnailUrl(dropId, drop, boxId);
-  return {
+  return asBuyerVisibleOrderEmailItem({
     label,
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
-  };
+  });
 }
 
 function orderBoxFallbackItem(
   dropId: string,
   drop: FunctionsDropConfig | undefined,
   boxId: number,
-): BuyerOrderEmailItem {
+): BuyerVisibleOrderEmailItem {
   return orderBoxItem(dropId, drop, boxId, dropAssetReference(drop, 'box', boxId));
 }
 
@@ -258,19 +244,19 @@ function orderDirectDeliveryItem(
   dropId: string,
   drop: FunctionsDropConfig | undefined,
   boxId: number,
-): BuyerOrderEmailItem {
+): BuyerVisibleOrderEmailItem {
   return orderBoxItem(dropId, drop, boxId, dropMintSelectionLabel(drop, boxId) || dropAssetReference(drop, 'box', boxId));
 }
 
-export async function buildOrderEmailItems(
+export async function buildBuyerVisibleOrderEmailItems(
   order: any,
   selectedOrder: OrderEmailSelection,
-): Promise<BuyerOrderEmailItem[]> {
+): Promise<BuyerVisibleOrderEmailItem[]> {
   const dropId = normalizeDropId(selectedOrder.dropId);
   const drop = getFunctionsDrop(dropId);
   const context = orderEmailItemContext(order);
   const isDirectDelivery = isDirectDeliveryItemsPerBox(drop?.itemsPerBox);
-  const emailItems: BuyerOrderEmailItem[] = [];
+  const emailItems: BuyerVisibleOrderEmailItem[] = [];
 
   if (isDirectDelivery) {
     for (const box of context.boxes) {
@@ -278,12 +264,7 @@ export async function buildOrderEmailItems(
     }
   } else {
     for (const box of context.boxes) {
-      const assignedFigureIds = context.assignedFigureIdsByBoxId.get(box.refId) || [];
-      if (!assignedFigureIds.length) {
-        emailItems.push(orderBoxFallbackItem(dropId, drop, box.refId));
-        continue;
-      }
-      assignedFigureIds.forEach((figureId) => emailItems.push(orderFigureItem(dropId, drop, figureId)));
+      emailItems.push(orderBoxFallbackItem(dropId, drop, box.refId));
     }
   }
 
@@ -291,4 +272,10 @@ export async function buildOrderEmailItems(
   return emailItems;
 }
 
-export const buildBuyerOrderEmailItems = buildOrderEmailItems;
+export const buildBuyerOrderEmailItems = buildBuyerVisibleOrderEmailItems;
+
+/**
+ * @deprecated Use buildBuyerVisibleOrderEmailItems so the sealed-pack privacy
+ * boundary stays explicit at call sites.
+ */
+export const buildOrderEmailItems = buildBuyerVisibleOrderEmailItems;

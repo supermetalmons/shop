@@ -15,7 +15,7 @@ export type ShipperReadyToShipEmailMessage = {
   deliveryId: number;
   owner: string;
   items: ShipperReadyOrderSummary;
-  itemPreviews?: NotificationEmailItem[];
+  itemPreviews?: BuyerVisibleOrderEmailItem[];
   fulfillmentUrl: string;
 };
 
@@ -43,7 +43,21 @@ export type NotificationEmailItem = {
   thumbnailUrl?: string;
 };
 
-export type BuyerOrderEmailItem = NotificationEmailItem;
+declare const buyerVisibleOrderEmailItemBrand: unique symbol;
+
+// Order-backed notification emails must only use items produced by the
+// buyer-visible resolver in orderEmailItems.ts. The brand catches typed call
+// sites that try to pass fulfillment-only previews directly into buyer or
+// shipper notification emails.
+export type BuyerVisibleOrderEmailItem = NotificationEmailItem & {
+  readonly [buyerVisibleOrderEmailItemBrand]: true;
+};
+
+/**
+ * @deprecated Use BuyerVisibleOrderEmailItem so the sealed-pack privacy
+ * boundary stays explicit at call sites.
+ */
+export type BuyerOrderEmailItem = BuyerVisibleOrderEmailItem;
 
 export type BuyerOrderEmailMessageBase = {
   idempotencyKey: string;
@@ -51,7 +65,7 @@ export type BuyerOrderEmailMessageBase = {
   dropId: string;
   dropName: string;
   deliveryId: number;
-  items: BuyerOrderEmailItem[];
+  items: BuyerVisibleOrderEmailItem[];
 };
 
 export type BuyerOrderReceivedEmailMessage = BuyerOrderEmailMessageBase;
