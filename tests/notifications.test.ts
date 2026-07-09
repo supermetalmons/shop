@@ -34,6 +34,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function countSubstring(value: string, substring: string): number {
+  return value.split(substring).length - 1;
+}
+
 type TestDeliveryOrderItem = {
   kind: 'box' | 'dude';
   refId: number;
@@ -255,6 +259,9 @@ test('buyer order received email builder includes item thumbnails and escapes ht
           thumbnailUrl: 'https://cdn.example/card.jpg?x=<bad>&y="quote"',
         },
         { label: 'Pack & Box' },
+        { label: 'Figure 3', thumbnailUrl: 'https://cdn.example/figure-3.webp' },
+        { label: 'Figure 4' },
+        { label: 'Figure 5' },
       ],
     },
     { subjectPrefix: '[TEST] ' },
@@ -268,6 +275,17 @@ test('buyer order received email builder includes item thumbnails and escapes ht
   assert.match(content.html, /Card &lt;111&gt;/);
   assert.match(content.html, /Pack &amp; Box/);
   assert.match(content.html, /https:\/\/cdn\.example\/card\.jpg\?x=&lt;bad&gt;&amp;y=&quot;quote&quot;/);
+  assert.match(content.html, /table-layout:fixed/);
+  assert.match(content.html, /width="112"/);
+  assert.match(content.html, /width:100%;max-width:112px;height:auto;background:transparent;border:0;border-radius:0;padding:0/);
+  assert.match(content.html, /width:25%;padding:0 4px 16px 4px;vertical-align:top;text-align:center/);
+  assert.equal(countSubstring(content.html, '<tr>'), 2);
+  assert.equal(countSubstring(content.html, '<img '), 2);
+  assert.doesNotMatch(content.html, /width="100%"/);
+  assert.doesNotMatch(content.html, /height="112"/);
+  assert.doesNotMatch(content.html, /object-fit:/);
+  assert.doesNotMatch(content.html, /width:64px;padding:0 12px 12px 0/);
+  assert.doesNotMatch(content.html, /width:56px;height:56px;border-radius:8px;background:#f1f3f5/);
   assert.doesNotMatch(content.html, /Card <111>/);
 });
 

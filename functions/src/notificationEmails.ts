@@ -297,34 +297,53 @@ function notificationEmailDetailsHtml(details: NotificationEmailDetail[]): strin
     .join('');
 }
 
-function notificationEmailItemThumbnailHtml(item: NotificationEmailItem): string {
-  if (!item.thumbnailUrl) {
-    return '<div style="width:56px;height:56px;border-radius:8px;background:#f1f3f5;"></div>';
-  }
+const NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS = 4;
+const NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE = 112;
+const NOTIFICATION_EMAIL_ITEM_CELL_WIDTH_PERCENT = 100 / NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS;
+const NOTIFICATION_EMAIL_ITEM_CELL_STYLE = `width:${NOTIFICATION_EMAIL_ITEM_CELL_WIDTH_PERCENT}%;padding:0 4px 16px 4px;vertical-align:top;text-align:center;`;
 
-  return `<img src="${escapeHtml(item.thumbnailUrl)}" alt="${escapeHtml(item.label)}" width="56" height="56" style="display:block;width:56px;height:56px;object-fit:contain;background:#f8fafc;border-radius:8px;padding:4px;box-sizing:border-box;">`;
+function notificationEmailItemThumbnailHtml(item: NotificationEmailItem): string {
+  if (!item.thumbnailUrl) return '';
+
+  return `<img src="${escapeHtml(item.thumbnailUrl)}" alt="${escapeHtml(item.label)}" width="${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}" style="display:block;width:100%;max-width:${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}px;height:auto;background:transparent;border:0;border-radius:0;padding:0;margin:0 auto 8px auto;box-sizing:border-box;">`;
 }
 
-function notificationEmailItemRowHtml(item: NotificationEmailItem): string {
+function notificationEmailItemCellHtml(item: NotificationEmailItem): string {
   const thumbnail = notificationEmailItemThumbnailHtml(item);
   return [
-    '<tr>',
-    `<td style="width:64px;padding:0 12px 12px 0;vertical-align:top;">${thumbnail}</td>`,
-    `<td style="padding:0 0 12px 0;vertical-align:middle;font-size:14px;color:#1f2933;">${escapeHtml(item.label || 'Item')}</td>`,
-    '</tr>',
+    `<td style="${NOTIFICATION_EMAIL_ITEM_CELL_STYLE}">`,
+    thumbnail,
+    `<div style="font-size:13px;line-height:1.3;color:#1f2933;text-align:center;word-break:break-word;">${escapeHtml(item.label || 'Item')}</div>`,
+    '</td>',
   ].join('');
+}
+
+function notificationEmailEmptyItemCellHtml(): string {
+  return `<td style="${NOTIFICATION_EMAIL_ITEM_CELL_STYLE}">&nbsp;</td>`;
+}
+
+function notificationEmailItemGridRowHtml(items: NotificationEmailItem[]): string {
+  const cells = items.map(notificationEmailItemCellHtml);
+  while (cells.length < NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS) {
+    cells.push(notificationEmailEmptyItemCellHtml());
+  }
+  return `<tr>${cells.join('')}</tr>`;
 }
 
 function notificationEmailItemsHtml(items: NotificationEmailItem[], emptyLabel = 'Items pending'): string {
   if (!items.length) {
     return [
       '<tr>',
-      `<td style="padding:0;font-size:14px;color:#52606d;">${escapeHtml(emptyLabel)}</td>`,
+      `<td colspan="${NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS}" style="padding:0;font-size:14px;color:#52606d;">${escapeHtml(emptyLabel)}</td>`,
       '</tr>',
     ].join('');
   }
 
-  return items.map(notificationEmailItemRowHtml).join('');
+  const rows: string[] = [];
+  for (let index = 0; index < items.length; index += NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS) {
+    rows.push(notificationEmailItemGridRowHtml(items.slice(index, index + NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS)));
+  }
+  return rows.join('');
 }
 
 function notificationEmailActionHtml(action: { label: string; url: string } | undefined): string {
@@ -357,7 +376,7 @@ function notificationEmailHtmlShell(args: {
     `<p style="font-size:15px;margin:0 0 18px 0;color:#374151;">${escapeHtml(args.intro)}</p>`,
     `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin:0 0 22px 0;font-size:14px;">${details}</div>`,
     '<h2 style="font-size:16px;line-height:1.3;margin:0 0 12px 0;">Items</h2>',
-    `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">${itemRows}</table>`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">${itemRows}</table>`,
     actionBlock,
     '</div>',
   ].join('');
