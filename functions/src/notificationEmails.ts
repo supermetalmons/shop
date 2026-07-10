@@ -1,5 +1,6 @@
 export const NOTIFICATION_EMAIL_FROM = 'notifications@support.mons.shop';
 export const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
+const BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE = 'If you have any questions, reply to this email.';
 
 export type ShipperReadyOrderSummary = {
   itemCount: number;
@@ -262,6 +263,7 @@ function buyerOrderEmailText(args: {
   intro: string;
   message: BuyerOrderEmailMessageBase;
   trackingUrl?: string;
+  footnote?: string;
 }): string {
   const lines = [
     `${args.title} - ${args.message.deliveryId}`,
@@ -272,6 +274,7 @@ function buyerOrderEmailText(args: {
     ...notificationEmailItemsText(args.message.items),
   ];
   if (args.trackingUrl) lines.push('', `Tracking: ${args.trackingUrl}`);
+  if (args.footnote) lines.push('', args.footnote);
   return lines.join('\n');
 }
 
@@ -280,6 +283,7 @@ export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmai
     title: 'Order received',
     intro: 'We received your order.',
     message,
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
   });
 }
 
@@ -350,6 +354,11 @@ function notificationEmailActionHtml(action: { label: string; url: string } | un
   ].join('');
 }
 
+function notificationEmailFootnoteHtml(footnote: string | undefined): string {
+  if (!footnote) return '';
+  return `<p style="font-size:12px;line-height:1.5;margin:24px 0 0 0;color:#52606d;">${escapeHtml(footnote)}</p>`;
+}
+
 function notificationEmailHtmlShell(args: {
   title: string;
   intro?: string;
@@ -361,9 +370,11 @@ function notificationEmailHtmlShell(args: {
     label: string;
     url: string;
   };
+  footnote?: string;
 }): string {
   const itemRows = notificationEmailItemsHtml(args.items, args.emptyItemsLabel);
   const actionBlock = notificationEmailActionHtml(args.action);
+  const footnoteBlock = notificationEmailFootnoteHtml(args.footnote);
   const introBlock = args.intro
     ? `<p style="font-size:15px;margin:0 0 18px 0;color:#374151;">${escapeHtml(args.intro)}</p>`
     : '';
@@ -379,6 +390,7 @@ function notificationEmailHtmlShell(args: {
     itemsHeading,
     `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">${itemRows}</table>`,
     actionBlock,
+    footnoteBlock,
     '</div>',
   ].join('');
 }
@@ -389,6 +401,7 @@ export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmai
     intro: "Thanks for your order. We'll let you know when it ships.",
     orderNumber: message.deliveryId,
     items: message.items,
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
   });
 }
 
