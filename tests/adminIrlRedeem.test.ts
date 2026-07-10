@@ -17,9 +17,13 @@ import {
 import { canAdminIrlRedeemSelection } from '../src/lib/adminIrlRedeem.ts';
 
 const ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const SHIPPER_WALLET = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
+const IRL_REDEEM_WALLETS = [
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+  'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+];
+const SHIPPER_WITHOUT_IRL_REDEEM_ACCESS = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
-test('Admin IRL Redeem eligibility is only true for signed-in admin wallets selecting their own card_nft_2 packs', () => {
+test('Admin IRL Redeem eligibility is true for authorized wallets selecting their own card_nft_2 packs', () => {
   const selectedItems = [
     { dropId: 'card_nft_2', kind: 'box' as const },
     { dropId: 'card_nft_2', kind: 'box' as const },
@@ -36,8 +40,18 @@ test('Admin IRL Redeem eligibility is only true for signed-in admin wallets sele
   };
 
   assert.equal(canAdminIrlRedeemSelection(base), true);
-  assert.equal(canAdminIrlRedeemSelection({ ...base, wallet: SHIPPER_WALLET, selectionOwner: SHIPPER_WALLET }), false);
-  assert.equal(canAdminIrlRedeemSelection({ ...base, selectionOwner: SHIPPER_WALLET }), false);
+  IRL_REDEEM_WALLETS.forEach((wallet) => {
+    assert.equal(canAdminIrlRedeemSelection({ ...base, wallet, selectionOwner: wallet }), true);
+  });
+  assert.equal(
+    canAdminIrlRedeemSelection({
+      ...base,
+      wallet: SHIPPER_WITHOUT_IRL_REDEEM_ACCESS,
+      selectionOwner: SHIPPER_WITHOUT_IRL_REDEEM_ACCESS,
+    }),
+    false,
+  );
+  assert.equal(canAdminIrlRedeemSelection({ ...base, selectionOwner: IRL_REDEEM_WALLETS[0] }), false);
   assert.equal(canAdminIrlRedeemSelection({ ...base, selectionOwner: null }), false);
   assert.equal(canAdminIrlRedeemSelection({ ...base, wallet: '11111111111111111111111111111111' }), false);
   assert.equal(canAdminIrlRedeemSelection({ ...base, isSignedInWallet: false }), false);

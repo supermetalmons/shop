@@ -599,6 +599,18 @@ const ADMIN_WALLETS = new Set<string>();
   }
 });
 
+const ADMIN_IRL_REDEEM_WALLETS = new Set<string>(ADMIN_WALLETS);
+[
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+  'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+].forEach((raw) => {
+  try {
+    ADMIN_IRL_REDEEM_WALLETS.add(new PublicKey(raw).toBase58());
+  } catch (err) {
+    console.error('[mons/functions] invalid Admin IRL Redeem wallet', raw, summarizeError(err));
+  }
+});
+
 function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
   if (ADMIN_WALLETS.has(wallet)) return true;
   return Boolean(SHIPPER_DROP_IDS_BY_WALLET.get(wallet)?.has(dropId));
@@ -620,6 +632,14 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
   const { uid, wallet } = await requireWalletSession(request);
   if (!ADMIN_WALLETS.has(wallet)) {
     throw new HttpsError('permission-denied', 'Admin access denied.');
+  }
+  return { uid, wallet };
+}
+
+async function requireAdminIrlRedeemAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
+  const { uid, wallet } = await requireWalletSession(request);
+  if (!ADMIN_IRL_REDEEM_WALLETS.has(wallet)) {
+    throw new HttpsError('permission-denied', 'Admin IRL Redeem access denied.');
   }
   return { uid, wallet };
 }
@@ -6293,7 +6313,7 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
     const dropRuntime = getDropRuntime(dropId);
     requireCardNft2AdminIrlRedeemDrop(dropRuntime);
 
-    const { wallet } = await requireAdminAccess(request);
+    const { wallet } = await requireAdminIrlRedeemAccess(request);
     const ownerWallet = normalizeWallet(owner);
     if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
 
@@ -6470,7 +6490,7 @@ export const finalizeAdminIrlRedeem = onCallLogged(
       throw new HttpsError('invalid-argument', 'Invalid Admin IRL redeem transfer signature');
     }
 
-    const { wallet } = await requireAdminAccess(request);
+    const { wallet } = await requireAdminIrlRedeemAccess(request);
     const requestRef = db.doc(dropAdminIrlRedeemRequestPath(dropId, requestId));
     const nowMs = Date.now();
     const attemptId = `admin_irl:${stripeReceiptClaimAttemptId(nowMs)}`;

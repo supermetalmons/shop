@@ -1,6 +1,6 @@
 import type { DropFamily } from '../config/deployment';
 import type { InventoryItem } from '../types';
-import { ADMIN_WALLETS } from './fulfillmentAccess';
+import { hasAdminIrlRedeemAccess } from './fulfillmentAccess';
 
 type EligibilityItem = Pick<InventoryItem, 'dropId' | 'kind'>;
 
@@ -126,7 +126,7 @@ export function canAdminIrlRedeemSelection(args: {
   selectedDropFamily?: DropFamily;
   hasAdminAccess?: (wallet: string | null | undefined) => boolean;
 }): boolean {
-  const hasAdminAccess = args.hasAdminAccess || ((wallet) => Boolean(wallet && ADMIN_WALLETS.has(wallet)));
+  const hasAdminAccess = args.hasAdminAccess || hasAdminIrlRedeemAccess;
   if (!args.wallet || !args.isSignedInWallet || !hasAdminAccess(args.wallet)) return false;
   if (!args.selectionOwner || args.selectionOwner !== args.wallet) return false;
   if (args.selectedCount <= 0 || args.deliverableItems.length !== args.selectedCount) return false;
