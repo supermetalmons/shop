@@ -119,9 +119,13 @@ import {
   type BuyerOrderShippedEmailMessage,
   type BuyerVisibleOrderEmailItem,
   type ShipperReadyToShipEmailMessage,
+  type ShipperVisibleOrderEmailItem,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
-import { buildBuyerVisibleOrderEmailItems } from './orderEmailItems.js';
+import {
+  buildBuyerVisibleOrderEmailItems,
+  buildShipperVisibleOrderEmailItems,
+} from './orderEmailItems.js';
 import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
 import {
   normalizeOptionalFulfillmentTrackingCode,
@@ -4375,7 +4379,8 @@ async function runReservedEmailNotification(params: ReservedEmailNotificationPar
   }
 }
 
-type ReadyToShipOrderEmailItems = BuyerVisibleOrderEmailItem[];
+type BuyerOrderEmailItems = BuyerVisibleOrderEmailItem[];
+type ShipperOrderEmailItems = ShipperVisibleOrderEmailItem[];
 
 async function sendShipperReadyToShipNotification(params: {
   orderRef: DocumentReference;
@@ -4384,7 +4389,7 @@ async function sendShipperReadyToShipNotification(params: {
   dropName: string;
   deliveryId: number;
   recipients: string[];
-  itemPreviews: ReadyToShipOrderEmailItems;
+  itemPreviews: ShipperOrderEmailItems;
 }): Promise<void> {
   const notificationRef = params.orderRef.collection('notifications').doc(SHIPPER_READY_NOTIFICATION_DOC_ID);
   const idempotencyKey = `${params.dropId}:${params.deliveryId}:ready_to_ship`;
@@ -4430,7 +4435,7 @@ async function sendBuyerOrderReceivedNotification(params: {
   dropName: string;
   deliveryId: number;
   recipient: string | null;
-  items: ReadyToShipOrderEmailItems;
+  items: BuyerOrderEmailItems;
 }): Promise<void> {
   const recipients = params.recipient ? [params.recipient] : [];
   const notificationRef = params.orderRef.collection('notifications').doc(BUYER_ORDER_RECEIVED_NOTIFICATION_DOC_ID);
@@ -4489,7 +4494,7 @@ async function sendBuyerOrderShippedNotification(params: {
   dropName: string;
   deliveryId: number;
   recipient: string | null;
-  items: ReadyToShipOrderEmailItems;
+  items: BuyerOrderEmailItems;
   trackingUrl: string;
 }): Promise<void> {
   const recipients = params.recipient ? [params.recipient] : [];
@@ -4597,8 +4602,12 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
       buyerEmail: after?.addressSnapshot?.email,
       shipperRecipients: Array.from(SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || []).sort(),
     });
-    const orderEmailItems: ReadyToShipOrderEmailItems =
-      notificationPlan.shouldBuildOrderEmailItems ? await buildBuyerVisibleOrderEmailItems(after, { dropId }) : [];
+    const buyerOrderEmailItems: BuyerOrderEmailItems = notificationPlan.buyerRecipient
+      ? await buildBuyerVisibleOrderEmailItems(after, { dropId })
+      : [];
+    const shipperOrderEmailItems: ShipperOrderEmailItems = notificationPlan.shipperRecipients.length
+      ? await buildShipperVisibleOrderEmailItems(after, { dropId })
+      : [];
     const orderRef = afterSnap.ref;
     const tasks: Promise<void>[] = [
       sendBuyerOrderReceivedNotification({
@@ -4608,7 +4617,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
         dropName,
         deliveryId,
         recipient: notificationPlan.buyerRecipient,
-        items: orderEmailItems,
+        items: buyerOrderEmailItems,
       }),
     ];
 
@@ -4621,7 +4630,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
           dropName,
           deliveryId,
           recipients: notificationPlan.shipperRecipients,
-          itemPreviews: orderEmailItems,
+          itemPreviews: shipperOrderEmailItems,
         }),
       );
     }

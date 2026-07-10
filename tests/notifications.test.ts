@@ -19,9 +19,13 @@ import {
   type BuyerVisibleOrderEmailItem,
   fulfillmentAppUrlForOrder,
   type NotificationEmailItem,
+  type ShipperVisibleOrderEmailItem,
   summarizeShipperReadyOrderItems,
 } from '../functions/src/notificationEmails.ts';
-import { buildBuyerVisibleOrderEmailItems } from '../functions/src/orderEmailItems.ts';
+import {
+  buildBuyerVisibleOrderEmailItems,
+  buildShipperVisibleOrderEmailItems,
+} from '../functions/src/orderEmailItems.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
 
 function escapeRegExp(value: string): string {
@@ -34,6 +38,10 @@ function countSubstring(value: string, substring: string): number {
 
 function buyerVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): BuyerVisibleOrderEmailItem[] {
   return items as BuyerVisibleOrderEmailItem[];
+}
+
+function shipperVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): ShipperVisibleOrderEmailItem[] {
+  return items as ShipperVisibleOrderEmailItem[];
 }
 
 test('Resend non-checkout error notification emails are enabled', () => {
@@ -214,7 +222,7 @@ test('shipper ready email builder includes details and escapes html', () => {
       deliveryId: 123,
       owner: 'owner<&>',
       items,
-      itemPreviews: buyerVisibleItemsForEmailBuilderTest([
+      itemPreviews: shipperVisibleItemsForEmailBuilderTest([
         {
           label: 'Card <111>',
           thumbnailUrl: 'https://cdn.example/card.jpg?x=<bad>&y="quote"',
@@ -306,13 +314,16 @@ test('buyer order received email builder includes item thumbnails and escapes ht
   assert.match(content.html, /https:\/\/cdn\.example\/card\.jpg\?x=&lt;bad&gt;&amp;y=&quot;quote&quot;/);
   assert.match(content.html, /table-layout:fixed/);
   assert.match(content.html, /width="112"/);
-  assert.match(content.html, /width:100%;max-width:112px;height:auto;background:transparent;border:0;border-radius:0;padding:0/);
+  assert.match(content.html, /height="112"/);
+  assert.match(
+    content.html,
+    /width:112px;max-width:100%;height:112px;object-fit:contain;object-position:center;background:transparent;border:0;border-radius:0;padding:0/,
+  );
+  assert.match(content.html, /font-size:12px;line-height:1\.3;color:#52606d;text-align:center/);
   assert.match(content.html, /width:25%;padding:0 4px 16px 4px;vertical-align:top;text-align:center/);
   assert.equal(countSubstring(content.html, '<tr>'), 2);
   assert.equal(countSubstring(content.html, '<img '), 2);
   assert.doesNotMatch(content.html, /width="100%"/);
-  assert.doesNotMatch(content.html, /height="112"/);
-  assert.doesNotMatch(content.html, /object-fit:/);
   assert.doesNotMatch(content.html, /width:64px;padding:0 12px 12px 0/);
   assert.doesNotMatch(content.html, /width:56px;height:56px;border-radius:8px;background:#f1f3f5/);
   assert.doesNotMatch(content.html, /Card <111>/);
@@ -418,6 +429,29 @@ test('buyer order email items preserve loose figures in sorted order', async () 
     items.map((item) => item.label),
     ['Figure 2', 'Figure 9'],
   );
+});
+
+test('buyer and shipper order email captions use item and media ids with the same thumbnail', async () => {
+  const order = {
+    items: [{ kind: 'dude', refId: 344 }],
+  };
+  const selectedOrder = { dropId: 'little_swag_boxes' };
+
+  const [buyerItems, shipperItems] = await Promise.all([
+    buildBuyerVisibleOrderEmailItems(order, selectedOrder),
+    buildShipperVisibleOrderEmailItems(order, selectedOrder),
+  ]);
+
+  assert.deepEqual(
+    buyerItems.map((item) => item.label),
+    ['Figure 344'],
+  );
+  assert.deepEqual(
+    shipperItems.map((item) => item.label),
+    ['Figure 1'],
+  );
+  assert.match(buyerItems[0].thumbnailUrl || '', /\/little_swag_boxes\/figures\/clean\/1\.webp/);
+  assert.equal(shipperItems[0].thumbnailUrl, buyerItems[0].thumbnailUrl);
 });
 
 test('buyer order email items ignore malformed delivery items and sealed-box claim ids', async () => {

@@ -15,7 +15,7 @@ export type ShipperReadyToShipEmailMessage = {
   deliveryId: number;
   owner: string;
   items: ShipperReadyOrderSummary;
-  itemPreviews?: BuyerVisibleOrderEmailItem[];
+  itemPreviews?: ShipperVisibleOrderEmailItem[];
   fulfillmentUrl: string;
 };
 
@@ -44,13 +44,18 @@ export type NotificationEmailItem = {
 };
 
 declare const buyerVisibleOrderEmailItemBrand: unique symbol;
+declare const shipperVisibleOrderEmailItemBrand: unique symbol;
 
 // Order-backed notification emails must only use items produced by the
-// buyer-visible resolver in orderEmailItems.ts. The brand catches typed call
-// sites that try to pass fulfillment-only previews directly into buyer or
+// audience-specific resolvers in orderEmailItems.ts. These brands catch typed
+// call sites that try to pass fulfillment-only previews directly into buyer or
 // shipper notification emails.
 export type BuyerVisibleOrderEmailItem = NotificationEmailItem & {
   readonly [buyerVisibleOrderEmailItemBrand]: true;
+};
+
+export type ShipperVisibleOrderEmailItem = NotificationEmailItem & {
+  readonly [shipperVisibleOrderEmailItemBrand]: true;
 };
 
 /**
@@ -319,7 +324,7 @@ const NOTIFICATION_EMAIL_ITEM_CELL_STYLE = `width:${NOTIFICATION_EMAIL_ITEM_CELL
 function notificationEmailItemThumbnailHtml(item: NotificationEmailItem): string {
   if (!item.thumbnailUrl) return '';
 
-  return `<img src="${escapeHtml(item.thumbnailUrl)}" alt="${escapeHtml(item.label)}" width="${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}" style="display:block;width:100%;max-width:${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}px;height:auto;background:transparent;border:0;border-radius:0;padding:0;margin:0 auto 8px auto;box-sizing:border-box;">`;
+  return `<img src="${escapeHtml(item.thumbnailUrl)}" alt="${escapeHtml(item.label)}" width="${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}" height="${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}" style="display:block;width:${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}px;max-width:100%;height:${NOTIFICATION_EMAIL_ITEM_THUMBNAIL_MAX_SIZE}px;object-fit:contain;object-position:center;background:transparent;border:0;border-radius:0;padding:0;margin:0 auto 8px auto;box-sizing:border-box;">`;
 }
 
 function notificationEmailItemCellHtml(item: NotificationEmailItem): string {
@@ -327,7 +332,7 @@ function notificationEmailItemCellHtml(item: NotificationEmailItem): string {
   return [
     `<td style="${NOTIFICATION_EMAIL_ITEM_CELL_STYLE}">`,
     thumbnail,
-    `<div style="font-size:13px;line-height:1.3;color:#1f2933;text-align:center;word-break:break-word;">${escapeHtml(item.label || 'Item')}</div>`,
+    `<div style="font-size:12px;line-height:1.3;color:#52606d;text-align:center;word-break:break-word;">${escapeHtml(item.label || 'Item')}</div>`,
     '</td>',
   ].join('');
 }

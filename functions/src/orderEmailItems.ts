@@ -3,7 +3,11 @@ import {
   normalizeDropId,
   type FunctionsDropConfig,
 } from './config/deployment.js';
-import type { BuyerVisibleOrderEmailItem, NotificationEmailItem } from './notificationEmails.js';
+import type {
+  BuyerVisibleOrderEmailItem,
+  NotificationEmailItem,
+  ShipperVisibleOrderEmailItem,
+} from './notificationEmails.js';
 
 // Keep these email previews limited to what the buyer could already see at order time.
 type DeliveryOrderItem = {
@@ -14,6 +18,8 @@ type DeliveryOrderItem = {
 type OrderEmailSelection = {
   dropId: string;
 };
+
+type OrderEmailAudience = 'buyer' | 'shipper';
 
 type OrderEmailItemContext = {
   boxes: DeliveryOrderItem[];
@@ -198,25 +204,30 @@ function figureThumbnailUrl(dropId: string, drop: FunctionsDropConfig | undefine
   return undefined;
 }
 
-function orderFigureLabel(drop: FunctionsDropConfig | undefined, figureId: number): string {
+function orderFigureLabel(
+  drop: FunctionsDropConfig | undefined,
+  figureId: number,
+  audience: OrderEmailAudience,
+): string {
   const family = drop?.dropFamily;
   const reference =
-    family === 'little_swag_boxes'
+    audience === 'shipper' && family === 'little_swag_boxes'
       ? getMediaIdForTokenId(figureId, LITTLE_SWAG_BOXES_FIGURE_MEDIA) || figureId
       : figureId;
   return dropAssetReference(drop, 'figure', reference);
 }
 
-function orderFigureItem(dropId: string, drop: FunctionsDropConfig | undefined, figureId: number): BuyerVisibleOrderEmailItem {
+function orderFigureItem(
+  dropId: string,
+  drop: FunctionsDropConfig | undefined,
+  figureId: number,
+  audience: OrderEmailAudience,
+): NotificationEmailItem {
   const thumbnailUrl = figureThumbnailUrl(dropId, drop, figureId);
-  return asBuyerVisibleOrderEmailItem({
-    label: orderFigureLabel(drop, figureId),
+  return {
+    label: orderFigureLabel(drop, figureId, audience),
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
-  });
-}
-
-function asBuyerVisibleOrderEmailItem(item: NotificationEmailItem): BuyerVisibleOrderEmailItem {
-  return item as BuyerVisibleOrderEmailItem;
+  };
 }
 
 function orderBoxItem(
@@ -224,19 +235,19 @@ function orderBoxItem(
   drop: FunctionsDropConfig | undefined,
   boxId: number,
   label: string,
-): BuyerVisibleOrderEmailItem {
+): NotificationEmailItem {
   const thumbnailUrl = boxThumbnailUrl(dropId, drop, boxId);
-  return asBuyerVisibleOrderEmailItem({
+  return {
     label,
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
-  });
+  };
 }
 
 function orderBoxFallbackItem(
   dropId: string,
   drop: FunctionsDropConfig | undefined,
   boxId: number,
-): BuyerVisibleOrderEmailItem {
+): NotificationEmailItem {
   return orderBoxItem(dropId, drop, boxId, dropAssetReference(drop, 'box', boxId));
 }
 
@@ -244,19 +255,20 @@ function orderDirectDeliveryItem(
   dropId: string,
   drop: FunctionsDropConfig | undefined,
   boxId: number,
-): BuyerVisibleOrderEmailItem {
+): NotificationEmailItem {
   return orderBoxItem(dropId, drop, boxId, dropMintSelectionLabel(drop, boxId) || dropAssetReference(drop, 'box', boxId));
 }
 
-export async function buildBuyerVisibleOrderEmailItems(
+function buildAudienceVisibleOrderEmailItems(
   order: any,
   selectedOrder: OrderEmailSelection,
-): Promise<BuyerVisibleOrderEmailItem[]> {
+  audience: OrderEmailAudience,
+): NotificationEmailItem[] {
   const dropId = normalizeDropId(selectedOrder.dropId);
   const drop = getFunctionsDrop(dropId);
   const context = orderEmailItemContext(order);
   const isDirectDelivery = isDirectDeliveryItemsPerBox(drop?.itemsPerBox);
-  const emailItems: BuyerVisibleOrderEmailItem[] = [];
+  const emailItems: NotificationEmailItem[] = [];
 
   if (isDirectDelivery) {
     for (const box of context.boxes) {
@@ -268,8 +280,22 @@ export async function buildBuyerVisibleOrderEmailItems(
     }
   }
 
-  context.looseFigureIds.forEach((figureId) => emailItems.push(orderFigureItem(dropId, drop, figureId)));
+  context.looseFigureIds.forEach((figureId) => emailItems.push(orderFigureItem(dropId, drop, figureId, audience)));
   return emailItems;
+}
+
+export async function buildBuyerVisibleOrderEmailItems(
+  order: any,
+  selectedOrder: OrderEmailSelection,
+): Promise<BuyerVisibleOrderEmailItem[]> {
+  return buildAudienceVisibleOrderEmailItems(order, selectedOrder, 'buyer') as BuyerVisibleOrderEmailItem[];
+}
+
+export async function buildShipperVisibleOrderEmailItems(
+  order: any,
+  selectedOrder: OrderEmailSelection,
+): Promise<ShipperVisibleOrderEmailItem[]> {
+  return buildAudienceVisibleOrderEmailItems(order, selectedOrder, 'shipper') as ShipperVisibleOrderEmailItem[];
 }
 
 export const buildBuyerOrderEmailItems = buildBuyerVisibleOrderEmailItems;
