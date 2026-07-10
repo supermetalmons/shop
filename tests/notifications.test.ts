@@ -14,6 +14,7 @@ import {
 import {
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
+  buildBuyerOrderUpdateEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   type BuyerVisibleOrderEmailItem,
@@ -391,6 +392,34 @@ test('buyer order shipped email builder includes tracking link and escapes html'
   assert.doesNotMatch(content.html, /If you have any questions, reply to this email\.<\/p>/);
   assert.match(content.html, /href="https:\/\/carrier\.example\/track\?id=AB&lt;123&gt;&amp;ref=&quot;x&quot;"/);
   assert.doesNotMatch(content.html, /Hoodie XL <special>/);
+});
+
+test('buyer order update email builder includes the patience message and customer-safe items', () => {
+  const content = buildBuyerOrderUpdateEmailContent(
+    {
+      idempotencyKey: 'test-order-update',
+      recipients: ['ivan@ivan.lol'],
+      dropId: 'card_nft_2',
+      dropName: 'Card NFT 2',
+      deliveryId: 300026190,
+      items: buyerVisibleItemsForEmailBuilderTest([
+        { label: 'Card 111', thumbnailUrl: 'https://cdn.example/card-111.webp' },
+      ]),
+    },
+    { subjectPrefix: '[TEST] ' },
+  );
+
+  assert.equal(content.subject, '[TEST] Order update - Card NFT 2');
+  assert.match(content.text, /^Order update - 300026190/);
+  assert.match(content.text, /Thanks for your patience\. We'll let you know when your order ships\./);
+  assert.match(content.text, /- Card 111/);
+  assert.match(content.text, /If you have any questions, reply to this email\./);
+  assert.match(content.html, />Order update - 300026190<\/h1>/);
+  assert.match(content.html, /Thanks for your patience\. We&#39;ll let you know when your order ships\./);
+  assert.match(content.html, />Items<\/h2>/);
+  assert.match(content.html, /Card 111/);
+  assert.match(content.html, /If you have any questions, reply to this email\.<\/p>/);
+  assert.doesNotMatch(content.html, /Track package|Open fulfillment/);
 });
 
 test('buyer order email items include direct-delivery size labels and thumbnails', async () => {

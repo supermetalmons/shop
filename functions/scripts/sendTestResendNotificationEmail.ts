@@ -11,6 +11,7 @@ import {
   NOTIFICATION_EMAIL_FROM,
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
+  buildBuyerOrderUpdateEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   fulfillmentAppUrlForOrder,
@@ -27,12 +28,15 @@ import {
 import { normalizeFulfillmentStatusOrNull, type FulfillmentStatus } from '../../src/lib/fulfillmentStatus.ts';
 import { resolveFulfillmentTrackingHref } from '../../src/lib/fulfillmentTracking.ts';
 
-const ORDER_BACKED_TEST_EMAIL_KINDS = ['shipper-ready', 'order-received', 'order-shipped'] as const;
+const ORDER_BACKED_TEST_EMAIL_KINDS = ['shipper-ready', 'order-received', 'order-update', 'order-shipped'] as const;
 const TEST_EMAIL_KINDS = [...ORDER_BACKED_TEST_EMAIL_KINDS, 'stripe-manual-review'] as const;
 
 type OrderBackedTestEmailKind = (typeof ORDER_BACKED_TEST_EMAIL_KINDS)[number];
 type TestEmailKind = (typeof TEST_EMAIL_KINDS)[number];
-type BuyerOrderBackedTestEmailKind = Extract<OrderBackedTestEmailKind, 'order-received' | 'order-shipped'>;
+type BuyerOrderBackedTestEmailKind = Extract<
+  OrderBackedTestEmailKind,
+  'order-received' | 'order-update' | 'order-shipped'
+>;
 
 type Args = {
   kind: TestEmailKind;
@@ -115,10 +119,11 @@ function usage(): string {
     '  npm run test-resend-notification-email -- --kind order-received --drop-id card_nft_2',
     '  npm run test-resend-notification-email -- --kind order-received --drop-id card_nft_2 --order-id 123',
     '  npm run test-resend-notification-email -- --kind order-received --order-id card_nft_2:123',
+    '  npm run test-resend-notification-email -- --kind order-update --drop-id card_nft_2 --order-id 123',
     '  npm run test-resend-notification-email -- --kind order-shipped --drop-id card_nft_2',
     '',
     'Options:',
-    '  --kind <kind>    shipper-ready, stripe-manual-review, order-received, or order-shipped (default: shipper-ready)',
+    '  --kind <kind>    shipper-ready, stripe-manual-review, order-received, order-update, or order-shipped (default: shipper-ready)',
     '  --drop-id <id>   Restrict order-backed tests to one drop',
     '  --drop_id <id>   Alias for --drop-id',
     '  --order-id <id>  Target one order by delivery id, <dropId>:<id>, or drops/<dropId>/deliveryOrders/<id>',
@@ -454,10 +459,11 @@ function docsToDeliveryOrderCandidates(docs: DocumentSnapshot[], options: Delive
 function deliveryOrderLookupOptions(kind: OrderBackedTestEmailKind): DeliveryOrderLookupOptions {
   switch (kind) {
     case 'order-received':
+    case 'order-update':
       return {
         kind,
         statuses: ['processing', 'ready_to_ship'],
-        noMatchMessage: 'No matching real processing or ready_to_ship delivery order found for order-received test email.',
+        noMatchMessage: `No matching real processing or ready_to_ship delivery order found for ${kind} test email.`,
       };
     case 'order-shipped':
       return {
@@ -673,6 +679,14 @@ async function buildBuyerOrderReceivedTestEmail(args: Args, idempotencyKey: stri
   };
 }
 
+async function buildBuyerOrderUpdateTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
+  const { selectedOrder, message } = await buildBuyerOrderTestEmailMessage('order-update', args, idempotencyKey);
+  return {
+    selectedOrder,
+    content: buildBuyerOrderUpdateEmailContent(message, { subjectPrefix: '[TEST] ' }),
+  };
+}
+
 async function buildBuyerOrderShippedTestEmail(args: Args, idempotencyKey: string): Promise<BuiltTestEmail> {
   const { selectedOrder, message } = await buildBuyerOrderTestEmailMessage('order-shipped', args, idempotencyKey);
   const trackingUrl = selectedOrder.trackingUrl;
@@ -722,6 +736,8 @@ async function buildTestEmail(args: Args, idempotencyKey: string): Promise<Built
       return buildStripeManualReviewTestEmail(idempotencyKey);
     case 'order-received':
       return buildBuyerOrderReceivedTestEmail(args, idempotencyKey);
+    case 'order-update':
+      return buildBuyerOrderUpdateTestEmail(args, idempotencyKey);
     case 'order-shipped':
       return buildBuyerOrderShippedTestEmail(args, idempotencyKey);
     case 'shipper-ready':

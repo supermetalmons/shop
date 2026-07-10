@@ -23,6 +23,14 @@ test('Resend test email args accept numeric order id with explicit drop id', () 
   });
 });
 
+test('Resend test email args accept the order-update kind', () => {
+  assert.deepEqual(parseArgs(['--kind', 'order-update', '--drop-id', 'card_nft_2', '--order-id', '300026190']), {
+    kind: 'order-update',
+    dropId: 'card_nft_2',
+    orderId: 300026190,
+  });
+});
+
 test('Resend test email args require a drop for bare numeric order ids', () => {
   assert.throws(() => parseArgs(['--order-id', '123']), /requires --drop-id/);
 });
@@ -87,6 +95,19 @@ test('Resend test email exact lookup loads the requested delivery order document
   assert.equal(selected.deliveryId, 123);
   assert.equal(selected.status, 'processing');
   assert.equal(selected.owner, 'owner-wallet');
+});
+
+test('Resend order-update lookup uses order-received eligibility', async () => {
+  const selected = await deliveryOrderById('order-update', 'card_nft_2', 300026190, async (docPath) =>
+    deliveryOrderSnap(docPath, {
+      deliveryId: 300026190,
+      status: 'processing',
+      items: [],
+    }),
+  );
+
+  assert.equal(selected.deliveryId, 300026190);
+  assert.equal(selected.status, 'processing');
 });
 
 test('Resend test email exact lookup rejects missing delivery order documents', async () => {

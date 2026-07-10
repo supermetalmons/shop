@@ -75,6 +75,7 @@ export type BuyerOrderEmailMessageBase = {
 };
 
 export type BuyerOrderReceivedEmailMessage = BuyerOrderEmailMessageBase;
+export type BuyerOrderUpdateEmailMessage = BuyerOrderEmailMessageBase;
 
 export type BuyerOrderShippedEmailMessage = BuyerOrderEmailMessageBase & {
   trackingUrl: string;
@@ -287,6 +288,15 @@ export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmai
   });
 }
 
+export function buildBuyerOrderUpdateEmailText(message: BuyerOrderUpdateEmailMessage): string {
+  return buyerOrderEmailText({
+    title: 'Order update',
+    intro: "Thanks for your patience. We'll let you know when your order ships.",
+    message,
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
+  });
+}
+
 export function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailMessage): string {
   return buyerOrderEmailText({
     title: 'Order shipped',
@@ -405,6 +415,16 @@ export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmai
   });
 }
 
+export function buildBuyerOrderUpdateEmailHtml(message: BuyerOrderUpdateEmailMessage): string {
+  return notificationEmailHtmlShell({
+    title: 'Order update',
+    intro: "Thanks for your patience. We'll let you know when your order ships.",
+    orderNumber: message.deliveryId,
+    items: message.items,
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
+  });
+}
+
 export function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'Order shipped',
@@ -426,6 +446,17 @@ export function buildBuyerOrderReceivedEmailContent(
     subject: `${subjectPrefix(options)}Order received - ${message.dropName || message.dropId}`,
     text: buildBuyerOrderReceivedEmailText(message),
     html: buildBuyerOrderReceivedEmailHtml(message),
+  };
+}
+
+export function buildBuyerOrderUpdateEmailContent(
+  message: BuyerOrderUpdateEmailMessage,
+  options?: NotificationEmailContentOptions,
+): NotificationEmailContent {
+  return {
+    subject: `${subjectPrefix(options)}Order update - ${message.dropName || message.dropId}`,
+    text: buildBuyerOrderUpdateEmailText(message),
+    html: buildBuyerOrderUpdateEmailHtml(message),
   };
 }
 
