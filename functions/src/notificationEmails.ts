@@ -119,18 +119,6 @@ export function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): s
   return url.toString();
 }
 
-function shipperReadyEmailDetails(message: ShipperReadyToShipEmailMessage): NotificationEmailDetail[] {
-  return [
-    { label: 'Drop', value: `${message.dropName}` },
-    { label: 'Order', value: String(message.deliveryId) },
-    { label: 'Owner', value: message.owner || 'unknown' },
-    {
-      label: 'Items',
-      value: shipperReadyItemSummaryText(message.items),
-    },
-  ];
-}
-
 function shipperReadyItemSummaryText(items: ShipperReadyOrderSummary): string {
   const parts = [
     items.boxCount ? `${items.boxCount} ${items.boxCount === 1 ? 'box' : 'boxes'}` : '',
@@ -146,13 +134,9 @@ function shipperReadyItemsText(message: ShipperReadyToShipEmailMessage): string[
 }
 
 export function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
-  const details = shipperReadyEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
   return [
-    'New order received.',
+    `New order - ${message.deliveryId}`,
     '',
-    ...details,
-    '',
-    'Items:',
     ...shipperReadyItemsText(message),
     '',
     `Open fulfillment: ${message.fulfillmentUrl}`,
@@ -171,9 +155,9 @@ export function escapeHtml(value: unknown): string {
 export function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'New order',
-    intro: 'A new order is ready for fulfillment.',
-    details: shipperReadyEmailDetails(message),
+    orderNumber: message.deliveryId,
     items: message.itemPreviews || [],
+    showItemsHeading: false,
     emptyItemsLabel: message.items.itemCount > 0 ? shipperReadyItemSummaryText(message.items) : 'Items pending',
     action: {
       label: 'Open fulfillment',
@@ -191,7 +175,7 @@ export function buildShipperReadyToShipEmailContent(
   options?: NotificationEmailContentOptions,
 ): NotificationEmailContent {
   return {
-    subject: `${subjectPrefix(options)}New Order — ${message.dropName}`,
+    subject: `${subjectPrefix(options)}New order - ${message.dropName}`,
     text: buildShipperReadyEmailText(message),
     html: buildShipperReadyEmailHtml(message),
   };
@@ -268,32 +252,32 @@ export function buildStripeCheckoutManualReviewEmailContent(
   };
 }
 
-function buyerOrderEmailDetails(message: BuyerOrderEmailMessageBase): NotificationEmailDetail[] {
-  return [
-    { label: 'Drop', value: message.dropName || message.dropId },
-    { label: 'Order', value: String(message.deliveryId) },
-    { label: 'Items', value: `${message.items.length} total` },
-  ];
-}
-
 function notificationEmailItemsText(items: NotificationEmailItem[]): string[] {
   if (!items.length) return ['- Items pending'];
   return items.map((item) => `- ${item.label || 'Item'}`);
 }
 
 function buyerOrderEmailText(args: {
+  title: string;
   intro: string;
   message: BuyerOrderEmailMessageBase;
   trackingUrl?: string;
 }): string {
-  const details = buyerOrderEmailDetails(args.message).map(({ label, value }) => `${label}: ${value}`);
-  const lines = [args.intro, '', ...details, '', 'Items:', ...notificationEmailItemsText(args.message.items)];
+  const lines = [
+    `${args.title} - ${args.message.deliveryId}`,
+    '',
+    args.intro,
+    '',
+    'Items:',
+    ...notificationEmailItemsText(args.message.items),
+  ];
   if (args.trackingUrl) lines.push('', `Tracking: ${args.trackingUrl}`);
   return lines.join('\n');
 }
 
 export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmailMessage): string {
   return buyerOrderEmailText({
+    title: 'Order received',
     intro: 'We received your order.',
     message,
   });
@@ -301,19 +285,11 @@ export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmai
 
 export function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailMessage): string {
   return buyerOrderEmailText({
+    title: 'Order shipped',
     intro: 'Your order shipped.',
     message,
     trackingUrl: message.trackingUrl,
   });
-}
-
-function notificationEmailDetailsHtml(details: NotificationEmailDetail[]): string {
-  return details
-    .map(
-      ({ label, value }) =>
-        `<div style="margin:0 0 4px 0;"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</div>`,
-    )
-    .join('');
 }
 
 const NOTIFICATION_EMAIL_ITEM_GRID_COLUMNS = 4;
@@ -332,7 +308,7 @@ function notificationEmailItemCellHtml(item: NotificationEmailItem): string {
   return [
     `<td style="${NOTIFICATION_EMAIL_ITEM_CELL_STYLE}">`,
     thumbnail,
-    `<div style="font-size:12px;line-height:1.3;color:#52606d;text-align:center;word-break:break-word;">${escapeHtml(item.label || 'Item')}</div>`,
+    `<div style="font-size:11px;line-height:1.3;color:#111827;text-align:center;word-break:break-word;">${escapeHtml(item.label || 'Item')}</div>`,
     '</td>',
   ].join('');
 }
@@ -369,32 +345,38 @@ function notificationEmailActionHtml(action: { label: string; url: string } | un
   if (!action?.url) return '';
   return [
     '<div style="margin:22px 0 0 0;">',
-    `<a href="${escapeHtml(action.url)}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;">${escapeHtml(action.label)}</a>`,
+    `<a href="${escapeHtml(action.url)}" style="display:inline-block;min-width:200px;box-sizing:border-box;background:#0071e3;color:#ffffff;text-decoration:none;border:0;border-radius:980px;padding:14px 36px;font-size:18px;font-weight:700;letter-spacing:0.3px;line-height:1;text-align:center;">${escapeHtml(action.label)}</a>`,
     '</div>',
   ].join('');
 }
 
 function notificationEmailHtmlShell(args: {
   title: string;
-  intro: string;
-  details: NotificationEmailDetail[];
+  intro?: string;
+  orderNumber: number;
   items: NotificationEmailItem[];
+  showItemsHeading?: boolean;
   emptyItemsLabel?: string;
   action?: {
     label: string;
     url: string;
   };
 }): string {
-  const details = notificationEmailDetailsHtml(args.details);
   const itemRows = notificationEmailItemsHtml(args.items, args.emptyItemsLabel);
   const actionBlock = notificationEmailActionHtml(args.action);
+  const introBlock = args.intro
+    ? `<p style="font-size:15px;margin:0 0 18px 0;color:#374151;">${escapeHtml(args.intro)}</p>`
+    : '';
+  const itemsHeading = args.showItemsHeading === false
+    ? ''
+    : '<h2 style="font-size:16px;line-height:1.3;margin:0 0 12px 0;">Items</h2>';
+  const titleBottomMargin = args.intro ? 12 : 20;
 
   return [
     '<div style="font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.5;max-width:560px;margin:0 auto;padding:24px 16px;">',
-    `<h1 style="font-size:24px;line-height:1.2;margin:0 0 12px 0;">${escapeHtml(args.title)}</h1>`,
-    `<p style="font-size:15px;margin:0 0 18px 0;color:#374151;">${escapeHtml(args.intro)}</p>`,
-    `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin:0 0 22px 0;font-size:14px;">${details}</div>`,
-    '<h2 style="font-size:16px;line-height:1.3;margin:0 0 12px 0;">Items</h2>',
+    `<h1 style="font-size:24px;line-height:1.2;margin:0 0 ${titleBottomMargin}px 0;">${escapeHtml(args.title)} - ${escapeHtml(args.orderNumber)}</h1>`,
+    introBlock,
+    itemsHeading,
     `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">${itemRows}</table>`,
     actionBlock,
     '</div>',
@@ -405,7 +387,7 @@ export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmai
   return notificationEmailHtmlShell({
     title: 'Order received',
     intro: "Thanks for your order. We'll let you know when it ships.",
-    details: buyerOrderEmailDetails(message),
+    orderNumber: message.deliveryId,
     items: message.items,
   });
 }
@@ -414,7 +396,7 @@ export function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailM
   return notificationEmailHtmlShell({
     title: 'Order shipped',
     intro: 'Your package is on the way.',
-    details: buyerOrderEmailDetails(message),
+    orderNumber: message.deliveryId,
     items: message.items,
     action: {
       label: 'Track package',

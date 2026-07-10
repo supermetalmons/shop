@@ -208,7 +208,7 @@ test('ready-to-ship notification rejection selection falls back to first failure
   );
 });
 
-test('shipper ready email builder includes details and escapes html', () => {
+test('shipper ready email builder uses a compact order number and escapes html', () => {
   const items = summarizeShipperReadyOrderItems({
     items: [{ kind: 'box' }, { kind: 'dude' }, { kind: 'dude' }, { kind: 'other' }],
   });
@@ -235,18 +235,29 @@ test('shipper ready email builder includes details and escapes html', () => {
   );
 
   assert.deepEqual(items, { itemCount: 4, boxCount: 1, dudeCount: 2 });
-  assert.equal(content.subject, '[TEST] New Order — Card NFT 2 <Drop>');
-  assert.match(content.text, /Drop: Card NFT 2 <Drop>/);
-  assert.match(content.text, /Order: 123/);
-  assert.match(content.text, /Items: 4 total \(1 box, 2 figures\)/);
+  assert.equal(content.subject, '[TEST] New order - Card NFT 2 <Drop>');
+  assert.match(content.text, /^New order - 123/);
+  assert.doesNotMatch(content.text, /New order received\./);
+  assert.doesNotMatch(content.text, /^Items:$/m);
+  assert.doesNotMatch(content.text, /Drop: Card NFT 2 <Drop>/);
+  assert.doesNotMatch(content.text, /Owner: owner<&>/);
+  assert.doesNotMatch(content.text, /Items: 4 total \(1 box, 2 figures\)/);
   assert.match(content.text, /- Card <111>/);
   assert.match(content.text, new RegExp(`Open fulfillment: ${escapeRegExp(fulfillmentUrl)}`));
-  assert.match(content.html, /Card NFT 2 &lt;Drop&gt;/);
-  assert.match(content.html, /owner&lt;&amp;&gt;/);
+  assert.match(content.html, /margin:0 0 20px 0;">New order - 123<\/h1>/);
+  assert.doesNotMatch(content.html, /A new order is ready for fulfillment\./);
+  assert.doesNotMatch(content.html, />Items<\/h2>/);
+  assert.doesNotMatch(content.html, /Card NFT 2 &lt;Drop&gt;/);
+  assert.doesNotMatch(content.html, /owner&lt;&amp;&gt;/);
+  assert.doesNotMatch(content.html, /background:#f8fafc;border:1px solid #e5e7eb/);
   assert.match(content.html, /Card &lt;111&gt;/);
   assert.match(content.html, /Pack &amp; Box/);
   assert.match(content.html, /https:\/\/cdn\.example\/card\.jpg\?x=&lt;bad&gt;&amp;y=&quot;quote&quot;/);
   assert.match(content.html, /Open fulfillment/);
+  assert.match(
+    content.html,
+    /min-width:200px;box-sizing:border-box;background:#0071e3;color:#ffffff;text-decoration:none;border:0;border-radius:980px;padding:14px 36px;font-size:18px;font-weight:700;letter-spacing:0\.3px;line-height:1;text-align:center/,
+  );
   assert.doesNotMatch(content.html, /Card NFT 2 <Drop>/);
 });
 
@@ -306,9 +317,17 @@ test('buyer order received email builder includes item thumbnails and escapes ht
 
   assert.equal(content.subject, '[TEST] Order received - Card NFT 2 <Drop>');
   assert.match(content.text, /We received your order\./);
-  assert.match(content.text, /Order: 123/);
+  assert.match(content.text, /^Order received - 123/);
+  assert.doesNotMatch(content.text, /Drop: Card NFT 2 <Drop>/);
+  assert.doesNotMatch(content.text, /Items: 5 total/);
   assert.match(content.text, /- Card <111>/);
-  assert.match(content.html, /Card NFT 2 &lt;Drop&gt;/);
+  assert.match(content.html, />Order received - 123<\/h1>/);
+  assert.match(
+    content.html,
+    /font-size:15px;margin:0 0 18px 0;color:#374151;">Thanks for your order\. We&#39;ll let you know when it ships\.<\/p>/,
+  );
+  assert.doesNotMatch(content.html, /Card NFT 2 &lt;Drop&gt;/);
+  assert.doesNotMatch(content.html, /background:#f8fafc;border:1px solid #e5e7eb/);
   assert.match(content.html, /Card &lt;111&gt;/);
   assert.match(content.html, /Pack &amp; Box/);
   assert.match(content.html, /https:\/\/cdn\.example\/card\.jpg\?x=&lt;bad&gt;&amp;y=&quot;quote&quot;/);
@@ -319,7 +338,7 @@ test('buyer order received email builder includes item thumbnails and escapes ht
     content.html,
     /width:112px;max-width:100%;height:112px;object-fit:contain;object-position:center;background:transparent;border:0;border-radius:0;padding:0/,
   );
-  assert.match(content.html, /font-size:12px;line-height:1\.3;color:#52606d;text-align:center/);
+  assert.match(content.html, /font-size:11px;line-height:1\.3;color:#111827;text-align:center/);
   assert.match(content.html, /width:25%;padding:0 4px 16px 4px;vertical-align:top;text-align:center/);
   assert.equal(countSubstring(content.html, '<tr>'), 2);
   assert.equal(countSubstring(content.html, '<img '), 2);
@@ -348,10 +367,15 @@ test('buyer order shipped email builder includes tracking link and escapes html'
 
   assert.equal(content.subject, '[TEST] Order shipped - Little Swag Hoodies <Drop>');
   assert.match(content.text, /Your order shipped\./);
+  assert.match(content.text, /^Order shipped - 456/);
   assert.match(content.text, new RegExp(`Tracking: ${escapeRegExp(trackingUrl)}`));
-  assert.match(content.html, /Little Swag Hoodies &lt;Drop&gt;/);
+  assert.match(content.html, />Order shipped - 456<\/h1>/);
+  assert.doesNotMatch(content.html, /Little Swag Hoodies &lt;Drop&gt;/);
+  assert.doesNotMatch(content.html, /background:#f8fafc;border:1px solid #e5e7eb/);
   assert.match(content.html, /Hoodie XL &lt;special&gt;/);
   assert.match(content.html, /Track package/);
+  assert.match(content.html, /background:#0071e3/);
+  assert.match(content.html, /border-radius:980px/);
   assert.match(content.html, /href="https:\/\/carrier\.example\/track\?id=AB&lt;123&gt;&amp;ref=&quot;x&quot;"/);
   assert.doesNotMatch(content.html, /Hoodie XL <special>/);
 });
