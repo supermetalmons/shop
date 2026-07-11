@@ -123,6 +123,17 @@ import {
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
 import {
+  planResendInboundForward,
+  resendWebhookHeaders,
+  resendWebhookRawBody,
+  type ResendReceivedEventCompat,
+} from './resendInbound.js';
+import { createResendInboundProvider } from './resendInboundProvider.js';
+import { resendInboundHttpResponse } from './resendInboundHttp.js';
+import { processResendInboundForward } from './resendInboundService.js';
+import { FirestoreResendInboundStore } from './resendInboundStore.js';
+import { isRetryableResendError, summarizeResendError, type ResendErrorSummary } from './resendErrors.js';
+import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from './orderEmailItems.js';
@@ -170,6 +181,8 @@ const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+const RESEND_INBOUND_API_KEY = defineSecret('RESEND_INBOUND_API_KEY');
+const RESEND_WEBHOOK_SECRET = defineSecret('RESEND_WEBHOOK_SECRET');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
@@ -3092,6 +3105,32 @@ function compiledInstructionData(ix: any): Buffer {
   return typeof dataField === 'string' ? Buffer.from(bs58.decode(dataField)) : Buffer.from(dataField || []);
 }
 
+function bubblegumV2LeafAssetIdsFromTransaction(tx: any): string[] {
+  const keys = resolveInstructionAccounts(tx);
+  const assetIds = new Set<string>();
+  for (const group of tx?.meta?.innerInstructions || []) {
+    for (const ix of group?.instructions || []) {
+      const program = keys[ix.programIdIndex];
+      if (!program?.equals(MPL_NOOP_PROGRAM_ID)) continue;
+
+      const data = compiledInstructionData(ix);
+      // AccountCompressionEvent::ApplicationData(V1) wraps a Bubblegum
+      // LeafSchemaEvent. All three Borsh enum variants are 1 for a V2 leaf.
+      if (
+        data.length < 41 ||
+        data[0] !== 1 ||
+        data[1] !== 0 ||
+        data.readUInt32LE(2) !== data.length - 6
+      ) {
+        continue;
+      }
+      if (data[6] !== 1 || data[7] !== 1 || data[8] !== 1) continue;
+      assetIds.add(new PublicKey(data.subarray(9, 41)).toBase58());
+    }
+  }
+  return Array.from(assetIds);
+}
+
 async function verifyAdminIrlRedeemTransferSignature(params: {
   conn: Connection;
   dropRuntime: DropRuntime;
@@ -3164,12 +3203,18 @@ async function mintAdminIrlPackReceipts(params: {
 }): Promise<string[]> {
   const targetAssetPks = params.items.map((item) => new PublicKey(item.assetId));
   const infos = await withTimeout(
-    params.conn.getMultipleAccountsInfo(targetAssetPks, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+    params.conn.getMultipleAccountsInfo(targetAssetPks, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } }),
     RPC_TIMEOUT_MS,
     'getMultipleAccountsInfo:adminIrlRedeemPacks',
   );
   const pending = params.items
-    .map((item, index) => ({ ...item, assetPk: targetAssetPks[index], exists: Boolean(infos[index]) }))
+    // MPL Core leaves a one-byte tombstone account after Burn. Only accounts
+    // with asset data beyond that tombstone still need receipt processing.
+    .map((item, index) => ({
+      ...item,
+      assetPk: targetAssetPks[index],
+      exists: Boolean(infos[index] && infos[index].data.length > 1),
+    }))
     .filter((item) => item.exists);
   const receiptTxs: string[] = Array.from(new Set(normalizeReceiptTxs(params.existingReceiptTxs)));
   const recordReceiptProgress = async (sig: string, processedCount: number) => {
@@ -3194,12 +3239,12 @@ async function mintAdminIrlPackReceipts(params: {
         const postInfos = await withTimeout(
           params.conn.getMultipleAccountsInfo(batchAssetPks, {
             commitment: 'confirmed',
-            dataSlice: { offset: 0, length: 0 },
+            dataSlice: { offset: 0, length: 2 },
           }),
           RPC_TIMEOUT_MS,
           context,
         );
-        return postInfos.every((accountInfo) => !accountInfo);
+        return postInfos.every((accountInfo) => !accountInfo || accountInfo.data.length <= 1);
       };
       const instructions: TransactionInstruction[] = [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -3396,17 +3441,62 @@ async function findAdminIrlReceiptAssets(params: {
 }
 
 async function waitForAdminIrlReceiptAssets(params: {
+  conn: Connection;
   ownerWallet: string;
   dropRuntime: DropRuntime;
-  boxIds: number[];
+  items: AdminIrlRedeemRequestItem[];
+  receiptTxs: string[];
 }): Promise<Map<number, any[]>> {
   if (clusterSharesCollectionMint(params.dropRuntime)) return new Map<number, any[]>();
 
+  // Owner searches can lag or permanently omit an individual compressed asset.
+  // Read the canonical Bubblegum V2 leaf events from the receipt transactions,
+  // then fetch those assets directly and verify their box metadata.
+  try {
+    const signatures = normalizeReceiptTxs(params.receiptTxs);
+    const transactions = await withTimeout(
+      params.conn.getTransactions(signatures, { maxSupportedTransactionVersion: 0 }),
+      RPC_TIMEOUT_MS,
+      'getTransactions:adminIrlRedeemReceiptAssets',
+    );
+    const receiptAssetIds: string[] = [];
+    for (const tx of transactions) {
+      receiptAssetIds.push(...bubblegumV2LeafAssetIdsFromTransaction(tx));
+    }
+    if (receiptAssetIds.length === params.items.length) {
+      const assets = await mapWithConcurrency(receiptAssetIds, ADMIN_IRL_REDEEM_ASSET_FETCH_CONCURRENCY, (assetId) =>
+        fetchAssetRetry(assetId, params.dropRuntime),
+      );
+      const direct = new Map<number, any[]>();
+      const expectedBoxIds = new Set(params.items.map((item) => item.refId));
+      assets.forEach((asset) => {
+        const boxId = Math.floor(Number(getBoxIdFromAsset(asset)));
+        if (!Number.isFinite(boxId) || !expectedBoxIds.has(boxId)) return;
+        if (!stripeReceiptAssetMatches(asset, params.dropRuntime, boxId, params.ownerWallet)) return;
+
+        const entries = direct.get(boxId) || [];
+        if (!entries.some((entry) => String(entry?.id || '') === String(asset?.id || ''))) entries.push(asset);
+        direct.set(boxId, entries);
+      });
+      if (params.items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
+    }
+  } catch (err) {
+    logger.warn('Admin IRL receipt transaction fallback failed; using owner search', {
+      dropId: params.dropRuntime.dropId,
+      error: summarizeError(err),
+    });
+  }
+
+  const boxIds = params.items.map((item) => item.refId);
   const startedAt = Date.now();
   let last = new Map<number, any[]>();
   while (Date.now() - startedAt <= ADMIN_IRL_REDEEM_RECEIPT_INDEX_MAX_WAIT_MS) {
-    last = await findAdminIrlReceiptAssets(params);
-    const allFound = params.boxIds.every((boxId) => (last.get(boxId) || []).length === 1);
+    last = await findAdminIrlReceiptAssets({
+      ownerWallet: params.ownerWallet,
+      dropRuntime: params.dropRuntime,
+      boxIds,
+    });
+    const allFound = boxIds.every((boxId) => (last.get(boxId) || []).length === 1);
     if (allFound) return last;
     await sleep(ADMIN_IRL_REDEEM_RECEIPT_INDEX_POLL_MS);
   }
@@ -4019,21 +4109,6 @@ type NotificationEmailResult =
   | { status: 'skipped'; provider: string; reason: string }
   | { status: 'failed_permanent'; provider: string; reason: string; providerError: ResendErrorSummary };
 
-type ResendErrorSummary = {
-  name: string;
-  message: string;
-  statusCode: number | null;
-};
-
-const RETRYABLE_RESEND_ERROR_NAMES = new Set([
-  'application_error',
-  'concurrent_idempotent_requests',
-  'daily_quota_exceeded',
-  'internal_server_error',
-  'monthly_quota_exceeded',
-  'rate_limit_exceeded',
-]);
-
 type RetryableNotificationEmailErrorName =
   | 'RetryableBuyerOrderReceivedEmailError'
   | 'RetryableBuyerOrderShippedEmailError'
@@ -4057,6 +4132,7 @@ function isRetryableNotificationEmailError(err: unknown): err is RetryableNotifi
 }
 
 let cachedResend: ResendClient | null = null;
+let cachedInboundResend: ResendClient | null = null;
 
 function resendApiKey(): string {
   return envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY);
@@ -4071,18 +4147,21 @@ async function resendClient(): Promise<ResendClient | null> {
   return cachedResend;
 }
 
-function summarizeResendError(error: any): ResendErrorSummary {
-  const name = typeof error?.name === 'string' && error.name ? error.name : 'unknown_resend_error';
-  const message = typeof error?.message === 'string' && error.message ? error.message : 'Unknown Resend error';
-  const statusCode = typeof error?.statusCode === 'number' && Number.isFinite(error.statusCode) ? error.statusCode : null;
-  return { name, message, statusCode };
+function resendInboundApiKey(): string {
+  return envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY);
 }
 
-function isRetryableResendError(error: ResendErrorSummary): boolean {
-  if (RETRYABLE_RESEND_ERROR_NAMES.has(error.name)) return true;
-  if (error.name !== 'unknown_resend_error') return false;
-  if (error.statusCode === 408 || error.statusCode === 409 || error.statusCode === 429) return true;
-  return Boolean(error.statusCode && error.statusCode >= 500);
+async function resendInboundClient(): Promise<ResendClient | null> {
+  if (cachedInboundResend) return cachedInboundResend;
+  const apiKey = resendInboundApiKey();
+  if (!apiKey) return null;
+  const { Resend } = await import('resend');
+  cachedInboundResend = new Resend(apiKey);
+  return cachedInboundResend;
+}
+
+function resendWebhookSecret(): string {
+  return envOrSecretValue('RESEND_WEBHOOK_SECRET', RESEND_WEBHOOK_SECRET);
 }
 
 async function sendBuyerOrderReceivedEmail(
@@ -5746,6 +5825,113 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   return { id: addressId, removed: true };
 });
 
+export const resendInboundWebhook = onRequest(
+  {
+    secrets: [RESEND_INBOUND_API_KEY, RESEND_WEBHOOK_SECRET],
+    memory: '1GiB',
+    cpu: 1,
+    concurrency: 1,
+    maxInstances: 2,
+    timeoutSeconds: 120,
+  },
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (req.method !== 'POST') {
+      res.status(405).send('Method not allowed');
+      return;
+    }
+
+    const resend = await resendInboundClient();
+    const webhookSecret = resendWebhookSecret();
+    if (!resend || !webhookSecret) {
+      logger.error('resendInboundWebhook', { outcome: 'failed_retryable', reason: 'not_configured' });
+      res.status(500).send('Resend inbound webhook is not configured');
+      return;
+    }
+
+    let event: ReturnType<typeof resend.webhooks.verify>;
+    let webhookId: string;
+    try {
+      const headers = resendWebhookHeaders(req);
+      webhookId = headers.id;
+      event = resend.webhooks.verify({
+        payload: resendWebhookRawBody(req),
+        headers,
+        webhookSecret,
+      });
+    } catch (err) {
+      logger.warn('resendInboundWebhook', { outcome: 'rejected', reason: 'invalid_signature' });
+      res.status(400).send('Invalid Resend webhook signature');
+      return;
+    }
+
+    if (event.type !== 'email.received') {
+      res.json({ received: true, ignored: true, reason: 'unsupported_event_type' });
+      return;
+    }
+
+    let route;
+    try {
+      route = planResendInboundForward(event as ResendReceivedEventCompat);
+    } catch (err) {
+      logger.error('resendInboundWebhook', {
+        webhookId,
+        outcome: 'rejected',
+        reason: 'invalid_event',
+      });
+      res.status(400).send('Invalid Resend email.received event');
+      return;
+    }
+
+    if (route.kind === 'ignored') {
+      logger.info('resendInboundWebhook', {
+        webhookId,
+        emailId: event.data.email_id,
+        outcome: 'ignored',
+        reason: route.reason,
+      });
+      res.json({ received: true, ignored: true, reason: route.reason });
+      return;
+    }
+
+    let outcome;
+    try {
+      outcome = await processResendInboundForward({
+        plan: route.plan,
+        webhookId,
+        provider: createResendInboundProvider(resend),
+        store: new FirestoreResendInboundStore(db),
+      });
+    } catch (err) {
+      logger.error('resendInboundWebhook', {
+        webhookId,
+        emailId: route.plan.emailId,
+        outcome: 'failed_retryable',
+        reason: 'storage_or_processing_failure',
+      });
+      res.status(500).send('Unable to process Resend inbound email');
+      return;
+    }
+
+    logger.info('resendInboundWebhook', {
+      webhookId,
+      emailId: route.plan.emailId,
+      outcome: outcome.kind,
+      ...('reason' in outcome ? { reason: outcome.reason } : {}),
+      ...('attempts' in outcome ? { attempts: outcome.attempts } : {}),
+      ...('providerStatus' in outcome ? { providerStatus: outcome.providerStatus } : {}),
+    });
+
+    const httpResponse = resendInboundHttpResponse(outcome);
+    if (httpResponse.retryAfter) res.set('Retry-After', httpResponse.retryAfter);
+    if (typeof httpResponse.body === 'string') {
+      res.status(httpResponse.status).send(httpResponse.body);
+    } else {
+      res.status(httpResponse.status).json(httpResponse.body);
+    }
+  },
+);
+
 export const stripeWebhook = onRequest(
   { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },
   async (req, res) => {
@@ -6562,9 +6748,11 @@ export const finalizeAdminIrlRedeem = onCallLogged(
         existingReceiptTxs: started.request.receiptTxs,
       });
       const receiptAssetsByBoxId = await waitForAdminIrlReceiptAssets({
+        conn,
         ownerWallet: signer.publicKey.toBase58(),
         dropRuntime,
-        boxIds: started.request.items.map((item) => item.refId),
+        items: started.request.items,
+        receiptTxs,
       });
 
       const boxes: AdminIrlRedeemBoxBaseInput[] = [];
