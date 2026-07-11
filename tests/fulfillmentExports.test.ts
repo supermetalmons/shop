@@ -11,6 +11,10 @@ import {
 } from '../src/lib/fulfillmentExports.ts';
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
 import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
+import {
+  ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
+  filterFulfillmentOrdersByVisibility,
+} from '../src/lib/fulfillmentOrderVisibility.ts';
 import type { FulfillmentOrder } from '../src/types.ts';
 
 const cardDrop = FRONTEND_DROPS.card_nft_2;
@@ -90,6 +94,29 @@ test('buildFulfillmentOrdersExport keeps fulfillment-visible data without addres
   assert.doesNotMatch(serialized, /dropId/);
   assert.doesNotMatch(serialized, /boxId/);
   assert.doesNotMatch(serialized, /label/);
+});
+
+test('fulfillment exports contain only orders from the selected visibility list', () => {
+  const standardOrder = cardOrder({ deliveryId: 7 });
+  const redeemedOrder = cardOrder({
+    deliveryId: 8,
+    source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
+    fulfillmentStatus: 'Shipped',
+  });
+  const orders = [standardOrder, redeemedOrder];
+
+  assert.deepEqual(
+    buildFulfillmentOrdersExport(filterFulfillmentOrdersByVisibility(orders, 'redeemed_for_irl'), { dropById }).map(
+      (order) => order.orderId,
+    ),
+    ['card_nft_2:8'],
+  );
+  assert.deepEqual(
+    buildFulfillmentOrdersExport(filterFulfillmentOrdersByVisibility(orders, 'all'), { dropById }).map(
+      (order) => order.orderId,
+    ),
+    ['card_nft_2:7'],
+  );
 });
 
 test('buildFulfillmentOrdersExport keeps direct-delivery box secrets without hidden assigned figures', () => {

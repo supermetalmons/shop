@@ -84,6 +84,7 @@ import {
   type StripeReceiptClaimSummary,
 } from './stripeCheckout/contract.js';
 import {
+  ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
   buildAdminIrlRedeemMarkerDocument,
   buildAdminIrlRedeemClaimCodeDocument,
   buildAdminIrlRedeemDeliveryOrderDocument,
@@ -5036,6 +5037,7 @@ type FulfillmentOrder = {
   dropId: string;
   deliveryId: number;
   owner: string;
+  source?: string;
   status: string;
   createdAt?: number;
   processedAt?: number;
@@ -5057,7 +5059,9 @@ function toFulfillmentOrder(
   const deliveryId = Number(deliveryIdRaw);
   if (!Number.isFinite(deliveryId)) return null;
   const owner = typeof order?.owner === 'string' ? order.owner : '';
+  const source = typeof order?.source === 'string' ? order.source : undefined;
   const status = typeof order?.status === 'string' ? order.status : 'unknown';
+  const isAdminIrlRedeem = source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
 
   const addressSnapshot = order?.addressSnapshot || {};
   const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
@@ -5067,8 +5071,8 @@ function toFulfillmentOrder(
   let email = rawEmail;
   let phone = rawPhone;
   let encryptedPayload = encrypted || undefined;
-  if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
-    full = typeof addressSnapshot?.label === 'string' ? addressSnapshot.label : 'Admin IRL event';
+  if (isAdminIrlRedeem) {
+    full = ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.label;
     email = undefined;
     phone = undefined;
     encryptedPayload = undefined;
@@ -5084,10 +5088,18 @@ function toFulfillmentOrder(
   }
 
   const address: FulfillmentOrderAddress = {
-    label: typeof addressSnapshot?.label === 'string' ? addressSnapshot.label : undefined,
+    label: isAdminIrlRedeem
+      ? ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.label
+      : typeof addressSnapshot?.label === 'string'
+        ? addressSnapshot.label
+        : undefined,
     email,
     phone,
-    country: typeof addressSnapshot?.country === 'string' ? addressSnapshot.country : undefined,
+    country: isAdminIrlRedeem
+      ? ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.country
+      : typeof addressSnapshot?.country === 'string'
+        ? addressSnapshot.country
+        : undefined,
     countryCode: typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
     hint: typeof addressSnapshot?.hint === 'string' ? addressSnapshot.hint : undefined,
     encrypted: encryptedPayload,
@@ -5144,6 +5156,7 @@ function toFulfillmentOrder(
     dropId: options.dropId,
     deliveryId,
     owner,
+    source,
     status,
     createdAt: toMillisMaybe(order?.createdAt),
     processedAt: toMillisMaybe(order?.processedAt),

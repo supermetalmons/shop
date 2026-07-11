@@ -58,6 +58,12 @@ import {
 } from './lib/fulfillmentLabels';
 import { FULFILLMENT_STATUS_OPTIONS, normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
 import {
+  DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
+  FULFILLMENT_ORDER_VISIBILITY_OPTIONS,
+  filterFulfillmentOrdersByVisibility,
+  type FulfillmentOrderVisibilityFilter,
+} from './lib/fulfillmentOrderVisibility';
+import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
   sanitizeFulfillmentTrackingCode,
@@ -117,14 +123,6 @@ const SECRET_CODE_TEXT_MAX_WIDTH = 1800;
 const SECRET_CODE_TEXT_MAX_FONT_SIZE = 132;
 const SECRET_CODE_TEXT_MIN_FONT_SIZE = 12;
 const FULFILLMENT_INTERACTIVE_CARD_CLICK_ENABLED = false;
-const ORDER_VISIBILITY_OPTIONS = [
-  { value: 'not_shipped', label: 'Not shipped' },
-  { value: 'shipped', label: 'Shipped' },
-  { value: 'all', label: 'All' },
-] as const;
-
-type OrderVisibilityFilter = (typeof ORDER_VISIBILITY_OPTIONS)[number]['value'];
-const DEFAULT_ORDER_VISIBILITY_FILTER: OrderVisibilityFilter = 'not_shipped';
 type QRCodeModule = typeof import('qrcode');
 type SecretCodesZipProgressHandler = (percent: number) => void;
 type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
@@ -1056,8 +1054,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<OrderVisibilityFilter>(
-    DEFAULT_ORDER_VISIBILITY_FILTER,
+  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<FulfillmentOrderVisibilityFilter>(
+    DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
   );
   const [manualReviewCheckouts, setManualReviewCheckouts] = useState<FulfillmentManualReviewCheckout[]>([]);
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
@@ -1433,13 +1431,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, []);
 
   const displayedOrders = useMemo(
-    () => {
-      if (orderVisibilityFilter === 'all') return orders;
-      if (orderVisibilityFilter === 'shipped') {
-        return orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) === 'Shipped');
-      }
-      return orders.filter((order) => normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
-    },
+    () => filterFulfillmentOrdersByVisibility(orders, orderVisibilityFilter),
     [orderVisibilityFilter, orders],
   );
   const displayedSecretCodeCount = useMemo(
@@ -1480,7 +1472,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   const duplicateDropOrders = useMemo(() => {
     if (!duplicateDrop) return [];
-    return orders.filter((order) => normalizeDropId(order.dropId) === LITTLE_SWAG_BOXES_DROP_ID);
+    return filterFulfillmentOrdersByVisibility(orders, 'all').filter(
+      (order) => normalizeDropId(order.dropId) === LITTLE_SWAG_BOXES_DROP_ID,
+    );
   }, [duplicateDrop, orders]);
 
   const displayedDuplicateDropOrders = useMemo(() => {
@@ -2152,7 +2146,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 aria-label="Drop"
                 value={selectedDropId}
                 onChange={(evt) => {
-                  setOrderVisibilityFilter(DEFAULT_ORDER_VISIBILITY_FILTER);
+                  setOrderVisibilityFilter(DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER);
                   onSelectedDropIdChange(evt.target.value);
                 }}
               >
@@ -2170,10 +2164,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   aria-label="Order filter"
                   value={orderVisibilityFilter}
                   onChange={(evt) => {
-                    setOrderVisibilityFilter(evt.target.value as OrderVisibilityFilter);
+                    setOrderVisibilityFilter(evt.target.value as FulfillmentOrderVisibilityFilter);
                   }}
                 >
-                  {ORDER_VISIBILITY_OPTIONS.map((option) => (
+                  {FULFILLMENT_ORDER_VISIBILITY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -2276,7 +2270,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   ? 'No orders.'
                   : orderVisibilityFilter === 'shipped'
                     ? 'No shipped orders.'
-                    : 'No unshipped orders.'}
+                    : orderVisibilityFilter === 'redeemed_for_irl'
+                      ? 'No orders redeemed for IRL.'
+                      : 'No unshipped orders.'}
               </div>
             ) : null}
 

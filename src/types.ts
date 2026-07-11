@@ -180,6 +180,7 @@ export interface FulfillmentOrder {
   dropId: string;
   deliveryId: number;
   owner: string;
+  source?: string;
   status: string;
   createdAt?: number;
   processedAt?: number;

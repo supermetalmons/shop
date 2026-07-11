@@ -8,8 +8,8 @@ import {
 import type { DropFamily } from './config/deployment.js';
 
 export const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
-  label: 'Admin IRL event',
-  country: 'Admin IRL event',
+  label: 'Redeemed for IRL',
+  country: 'Redeemed for IRL',
 };
 
 export const ADMIN_IRL_REDEEM_MARKER_VERSION = 1;

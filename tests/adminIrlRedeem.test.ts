@@ -150,8 +150,8 @@ test('Admin IRL Redeem delivery order document exposes long receipt claim codes 
   assert.equal(doc.source, ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE);
   assert.equal(doc.status, 'ready_to_ship');
   assert.deepEqual(doc.addressSnapshot, {
-    label: 'Admin IRL event',
-    country: 'Admin IRL event',
+    label: 'Redeemed for IRL',
+    country: 'Redeemed for IRL',
   });
   assert.deepEqual(doc.itemIds, ['receipt-pack-11', 'receipt-pack-22']);
   assert.deepEqual(doc.originalItemIds, ['original-pack-11', 'original-pack-22']);
