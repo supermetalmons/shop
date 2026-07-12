@@ -2983,6 +2983,57 @@ button.no-focus-style:focus-visible {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.receipt-viewer-overlay__admin-irl {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px));
+  z-index: 2;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  width: min(100% - 32px, 360px);
+  opacity: 0;
+  transition: opacity 260ms ease;
+  pointer-events: none;
+  touch-action: manipulation;
+}
+
+.reveal-overlay--active .receipt-viewer-overlay__admin-irl {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reveal-overlay--closing .receipt-viewer-overlay__admin-irl {
+  opacity: 0;
+  pointer-events: none;
+}
+
+button.receipt-viewer-overlay__admin-irl-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(14px) saturate(1.12);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button.receipt-viewer-overlay__admin-irl-button:hover:not(:disabled),
+button.receipt-viewer-overlay__admin-irl-button:focus-visible {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+button.receipt-viewer-overlay__admin-irl-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .wip-reveal__media {
   z-index: 1;
   opacity: 0;
@@ -3401,7 +3452,8 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   .reveal-overlay__frame,
   .reveal-overlay__media,
   .reveal-overlay__shine,
-  .reveal-overlay__media-item {
+  .reveal-overlay__media-item,
+  .receipt-viewer-overlay__admin-irl {
     transition-duration: 1ms;
   }
 

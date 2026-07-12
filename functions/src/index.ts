@@ -80,11 +80,16 @@ import {
   shouldProcessStripeCheckoutFulfillmentWrite,
   stripeReceiptClaimCodeMaybe,
   stripeReceiptClaimBoxMapKey,
+  stripeReceiptClaimSummary,
   stripeCheckoutOwnerId,
   type StripeReceiptClaimSummary,
 } from './stripeCheckout/contract.js';
 import {
   ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
+  ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
+  buildAdminIrlRedeemCardClaimCodeDocument,
+  buildAdminIrlRedeemCardDeliveryOrderDocument,
+  buildAdminIrlRedeemCardMarkerDocument,
   buildAdminIrlRedeemMarkerDocument,
   buildAdminIrlRedeemClaimCodeDocument,
   buildAdminIrlRedeemDeliveryOrderDocument,
@@ -93,9 +98,23 @@ import {
   resolveAdminIrlRedeemMarkerReuse,
   type AdminIrlRedeemMarkerReuseResolution,
   type AdminIrlRedeemBoxBaseInput,
+  type AdminIrlRedeemCardInput,
 } from './adminIrlRedeem.js';
+import {
+  activeDirectCardReceiptClaimSignatures,
+  adminIrlCardReceiptProofHasIdentity,
+  classifyAdminIrlCardReceiptLookupError,
+  classifyDirectCardReceiptClaimSubmission,
+  classifyDirectCardReceiptClaimTransferVerificationError,
+  directCardReceiptClaimHasRecipientLock,
+  directCardReceiptClaimSubmissionProvesNoDelivery,
+  resolveDirectCardReceiptClaimRecoveryAction,
+  shouldKeepDirectCardReceiptClaimProcessing,
+  type DirectCardReceiptClaimSubmission,
+  type DirectCardReceiptClaimTransferEvidence,
+} from './adminIrlCardReceipt.js';
 import { assetProofMatchesTree, assetProofTreePublicKey } from './receiptProof.js';
-import { bubblegumTransferV2Ix } from './bubblegum.js';
+import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from './bubblegum.js';
 import {
   RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
   firstRejectedReadyToShipNotificationError,
@@ -701,6 +720,9 @@ const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS = [30_000, 2 * 60 * 1000, 10 * 60 * 1000] as const;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 const STRIPE_RECEIPT_CLAIM_PROCESSING_LEASE_MS = 90_000;
+const DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_MAX_WAIT_MS = 90_000;
+const DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_POLL_MS = 2_000;
+const DIRECT_CARD_RECEIPT_SUBMISSION_PROCESSING_LEASE_MS = 4 * 60 * 1000;
 const ADMIN_IRL_REDEEM_PREPARED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ADMIN_IRL_REDEEM_PROCESSING_LEASE_MS = 10 * 60 * 1000;
 const ADMIN_IRL_REDEEM_RECEIPT_INDEX_MAX_WAIT_MS = 30_000;
@@ -2671,59 +2693,83 @@ async function ensureIrlClaimCodeForBox(params: {
   });
 }
 
-type AdminIrlRedeemRequestItem = {
-  assetId: string;
-  kind: 'box';
-  refId: number;
-};
+type AdminIrlRedeemRequestItem =
+  | {
+      assetId: string;
+      kind: 'box';
+      refId: number;
+    }
+  | {
+      assetId: string;
+      kind: 'card_receipt';
+      refId: number;
+    };
+
+type AdminIrlRedeemTargetKind = 'pack' | 'card_receipt';
 
 function normalizeAdminIrlRedeemRequestItems(request: any): {
   itemIds: string[];
   items: AdminIrlRedeemRequestItem[];
+  targetKind: AdminIrlRedeemTargetKind;
 } {
   const itemsRaw = Array.isArray(request?.items) ? request.items : [];
   const items: AdminIrlRedeemRequestItem[] = itemsRaw
     .map((item: any) => {
       const assetId = typeof item?.assetId === 'string' ? item.assetId.trim() : '';
       const refId = Math.floor(Number(item?.refId));
-      return assetId && item?.kind === 'box' && Number.isFinite(refId) && refId > 0 && refId <= 0xffff_ffff
-        ? { assetId, kind: 'box' as const, refId }
-        : null;
+      if (!assetId || !Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) return null;
+      if (item?.kind === 'box') return { assetId, kind: 'box' as const, refId };
+      if (item?.kind === 'card_receipt') return { assetId, kind: 'card_receipt' as const, refId };
+      return null;
     })
     .filter((item: AdminIrlRedeemRequestItem | null): item is AdminIrlRedeemRequestItem => Boolean(item));
   if (!itemsRaw.length || items.length !== itemsRaw.length) {
-    throw new HttpsError('failed-precondition', 'Admin IRL redeem request is missing selected pack items');
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request is missing selected items');
+  }
+
+  const targetKinds = new Set(items.map((item) => (item.kind === 'box' ? 'pack' : 'card_receipt')));
+  if (targetKinds.size !== 1) {
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request cannot mix packs and card receipts');
+  }
+  const targetKind = Array.from(targetKinds)[0] as AdminIrlRedeemTargetKind;
+  const storedTargetKind = request?.targetKind === 'card_receipt' ? 'card_receipt' : 'pack';
+  if (storedTargetKind !== targetKind) {
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request target kind mismatch');
+  }
+  if (targetKind === 'card_receipt' && items.length !== 1) {
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem supports one card receipt at a time');
   }
 
   const itemIds = items.map((item) => item.assetId);
   if (new Set(itemIds).size !== itemIds.length) {
-    throw new HttpsError('failed-precondition', 'Admin IRL redeem request contains duplicate selected pack items');
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request contains duplicate selected items');
   }
-  const boxIds = items.map((item) => item.refId);
-  if (new Set(boxIds).size !== boxIds.length) {
-    throw new HttpsError('failed-precondition', 'Admin IRL redeem request contains duplicate box ids');
+  const refIds = items.map((item) => item.refId);
+  if (new Set(refIds).size !== refIds.length) {
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request contains duplicate item ids');
   }
 
   const storedItemIds = Array.isArray(request?.itemIds)
     ? request.itemIds.map((id: any) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)
     : [];
   if (!storedItemIds.length || storedItemIds.length !== itemIds.length) {
-    throw new HttpsError('failed-precondition', 'Admin IRL redeem request selected pack item mismatch');
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request selected item mismatch');
   }
   const mismatchIndex = storedItemIds.findIndex((assetId: string, index: number) => assetId !== itemIds[index]);
   if (mismatchIndex >= 0) {
-    throw new HttpsError('failed-precondition', 'Admin IRL redeem request selected pack item mismatch', {
+    throw new HttpsError('failed-precondition', 'Admin IRL redeem request selected item mismatch', {
       index: mismatchIndex,
     });
   }
 
-  return { itemIds, items };
+  return { itemIds, items, targetKind };
 }
 
 type AdminIrlRedeemStartedRequest = {
   requestId: string;
   dropId: string;
   owner: string;
+  targetKind: AdminIrlRedeemTargetKind;
   itemIds: string[];
   items: AdminIrlRedeemRequestItem[];
   receiptTxs: string[];
@@ -2744,6 +2790,12 @@ type CompletedAdminIrlRedeemResponseBox = {
   receiptAssetId?: string;
   claimCode?: string;
   dudeIds?: number[];
+};
+
+type CompletedAdminIrlRedeemResponseCard = {
+  figureId: number;
+  receiptAssetId: string;
+  claimCode?: string;
 };
 
 function requireAdminIrlRedeemRequestId(rawRequestId: unknown): string {
@@ -2787,6 +2839,14 @@ function normalizeCompletedAdminIrlRedeemBox(box: any): CompletedAdminIrlRedeemR
   };
 }
 
+function normalizeCompletedAdminIrlRedeemCard(card: any): CompletedAdminIrlRedeemResponseCard | null {
+  const figureId = Math.floor(Number(card?.figureId));
+  const receiptAssetId = typeof card?.receiptAssetId === 'string' ? card.receiptAssetId.trim() : '';
+  if (!Number.isFinite(figureId) || figureId <= 0 || !receiptAssetId) return null;
+  const claimCode = typeof card?.claimCode === 'string' ? normalizeStripeReceiptClaimCode(card.claimCode) : undefined;
+  return { figureId, receiptAssetId, ...(claimCode ? { claimCode } : {}) };
+}
+
 function adminIrlRedeemCompleteResponse(params: {
   dropId: string;
   requestId: string;
@@ -2799,6 +2859,7 @@ function adminIrlRedeemCompleteResponse(params: {
   receiptTxs: string[];
   claimCodes: string[];
   boxes: CompletedAdminIrlRedeemResponseBox[];
+  cards: CompletedAdminIrlRedeemResponseCard[];
 } {
   const request = params.request || {};
   return {
@@ -2814,6 +2875,11 @@ function adminIrlRedeemCompleteResponse(params: {
       ? request.boxes
           .map(normalizeCompletedAdminIrlRedeemBox)
           .filter((box): box is CompletedAdminIrlRedeemResponseBox => Boolean(box))
+      : [],
+    cards: Array.isArray(request.cards)
+      ? request.cards
+          .map(normalizeCompletedAdminIrlRedeemCard)
+          .filter((card): card is CompletedAdminIrlRedeemResponseCard => Boolean(card))
       : [],
   };
 }
@@ -2831,7 +2897,7 @@ function generateAdminIrlReceiptClaimCodes(quantity: number): string[] {
 }
 
 function adminIrlRedeemMarkerConflict(reason?: string): HttpsError {
-  return new HttpsError('failed-precondition', 'One or more selected packs already have Admin IRL claim codes', {
+  return new HttpsError('failed-precondition', 'One or more selected items already have Admin IRL claim codes', {
     ...(reason ? { reason } : {}),
   });
 }
@@ -3022,7 +3088,7 @@ async function startAdminIrlRedeemFinalize(params: {
       throw new HttpsError('aborted', 'This Admin IRL redeem request is already being finalized');
     }
 
-    const { itemIds, items } = normalizeAdminIrlRedeemRequestItems(request);
+    const { itemIds, items, targetKind } = normalizeAdminIrlRedeemRequestItems(request);
     const receiptTxs = normalizeReceiptTxs(request?.receiptTxs);
     const internalDeliveryIdRaw = Math.floor(Number(request?.internalDeliveryId));
     const internalDeliveryId = Number.isFinite(internalDeliveryIdRaw) && internalDeliveryIdRaw > 0 ? internalDeliveryIdRaw : undefined;
@@ -3050,6 +3116,7 @@ async function startAdminIrlRedeemFinalize(params: {
         requestId: params.requestId,
         dropId: params.dropId,
         owner,
+        targetKind,
         itemIds,
         items,
         receiptTxs,
@@ -3191,6 +3258,63 @@ async function verifyAdminIrlRedeemTransferSignature(params: {
       });
     }
   });
+}
+
+async function verifyDirectCardReceiptTransferSignature(params: {
+  conn: Connection;
+  dropRuntime: DropRuntime;
+  signature: string;
+  fromWallet: string;
+  toWallet: string;
+  coreCollection: PublicKey;
+  receiptAssetId: string;
+  rpcLabel: string;
+}): Promise<void> {
+  const tx = await withTimeout(
+    params.conn.getTransaction(params.signature, { maxSupportedTransactionVersion: 0 }),
+    RPC_TIMEOUT_MS,
+    params.rpcLabel,
+  );
+  if (!tx) throw new HttpsError('unavailable', 'Card receipt transfer transaction not found yet; retry shortly');
+  if (tx.meta?.err) {
+    throw new HttpsError('failed-precondition', 'Card receipt transfer transaction failed', { err: tx.meta.err });
+  }
+  const payer = getPayerFromTx(tx);
+  if (!payer || payer.toBase58() !== params.fromWallet) {
+    throw new HttpsError('failed-precondition', 'Card receipt transfer payer does not match sender');
+  }
+
+  const keys = resolveInstructionAccounts(tx);
+  let matchingTransfers = 0;
+  for (const ix of tx?.transaction?.message?.compiledInstructions || []) {
+    const program = keys[ix.programIdIndex];
+    if (!program?.equals(BUBBLEGUM_PROGRAM_ID)) continue;
+    const data = compiledInstructionData(ix);
+    if (!data.subarray(0, IX_BUBBLEGUM_TRANSFER_V2.length).equals(IX_BUBBLEGUM_TRANSFER_V2)) continue;
+    const accounts = compiledInstructionAccounts(ix, keys);
+    if (accounts.length < 8) continue;
+    const [, transferPayer, authority, leafOwner, , newOwner, merkleTree, collection] = accounts;
+    if (transferPayer?.toBase58() !== params.fromWallet) continue;
+    if (authority?.toBase58() !== params.fromWallet) continue;
+    if (leafOwner?.toBase58() !== params.fromWallet) continue;
+    if (newOwner?.toBase58() !== params.toWallet) continue;
+    if (!merkleTree?.equals(params.dropRuntime.receiptsMerkleTree)) continue;
+    if (!collection?.equals(params.coreCollection)) continue;
+    matchingTransfers += 1;
+  }
+  if (matchingTransfers !== 1) {
+    throw new HttpsError('failed-precondition', 'Card receipt transfer instruction mismatch', {
+      expected: 1,
+      got: matchingTransfers,
+    });
+  }
+  const transferredAssetIds = bubblegumV2LeafAssetIdsFromTransaction(tx);
+  if (transferredAssetIds.length !== 1 || transferredAssetIds[0] !== params.receiptAssetId) {
+    throw new HttpsError('failed-precondition', 'Card receipt transfer asset mismatch', {
+      expected: params.receiptAssetId,
+      got: transferredAssetIds,
+    });
+  }
 }
 
 async function mintAdminIrlPackReceipts(params: {
@@ -3899,9 +4023,298 @@ async function publishCompletedAdminIrlRedeem(params: {
         claimCode: box.receiptClaimCode,
         dudeIds: box.dudeIds,
       })),
+      cards: [],
     };
   }
   throw new HttpsError('unavailable', 'Failed to allocate Admin IRL redeem delivery id or claim codes');
+}
+
+async function waitForAdminIrlCardReceipt(params: {
+  dropRuntime: DropRuntime;
+  receiptAssetId: string;
+  figureId: number;
+  adminWallet: string;
+}): Promise<void> {
+  const startedAt = Date.now();
+  let lastOwner = '';
+  let lastTransientLookupError: unknown = null;
+  const recordLookupError = (err: unknown) => {
+    const disposition = classifyAdminIrlCardReceiptLookupError(err);
+    if (disposition === 'indexing') {
+      lastTransientLookupError = null;
+      return;
+    }
+    if (disposition === 'transient') {
+      lastTransientLookupError = err;
+      return;
+    }
+
+    const code = String((err as any)?.code || '').replace(/^functions\//, '');
+    if (code && code !== 'unavailable' && code !== 'resource-exhausted' && code !== 'deadline-exceeded') {
+      throw err;
+    }
+    throw new HttpsError('failed-precondition', 'Admin IRL card receipt lookup failed', {
+      receiptAssetId: params.receiptAssetId,
+      lastError: summarizeError(err),
+    });
+  };
+
+  while (Date.now() - startedAt <= ADMIN_IRL_REDEEM_RECEIPT_INDEX_MAX_WAIT_MS) {
+    let asset: any = null;
+    try {
+      asset = await fetchAsset(params.receiptAssetId, params.dropRuntime);
+      lastTransientLookupError = null;
+      lastOwner = typeof asset?.ownership?.owner === 'string' ? asset.ownership.owner : '';
+    } catch (err) {
+      recordLookupError(err);
+    }
+    if (asset && lastOwner === params.adminWallet) {
+      if (getAssetKind(asset) !== 'certificate') {
+        throw new HttpsError('failed-precondition', 'Admin IRL redeem selected asset is not a receipt');
+      }
+      if (!assetMatchesRequestedDrop(asset, params.dropRuntime)) {
+        throw new HttpsError('failed-precondition', 'Admin IRL redeem receipt does not belong to the requested drop');
+      }
+      if (Number(getDudeIdFromAsset(asset)) !== params.figureId) {
+        throw new HttpsError('failed-precondition', 'Admin IRL redeem card receipt figure id changed');
+      }
+      let proof: any = null;
+      try {
+        proof = await fetchAssetProof(params.receiptAssetId, params.dropRuntime);
+        lastTransientLookupError = null;
+      } catch (err) {
+        recordLookupError(err);
+      }
+      if (adminIrlCardReceiptProofHasIdentity(proof)) {
+        parseCompressedReceiptProof({
+          asset,
+          proof,
+          dropRuntime: params.dropRuntime,
+          expectedOwner: params.adminWallet,
+        });
+        return;
+      }
+    }
+    await sleep(ADMIN_IRL_REDEEM_RECEIPT_INDEX_POLL_MS);
+  }
+  if (lastTransientLookupError) {
+    throw new HttpsError('unavailable', 'Admin IRL card receipt lookup failed while waiting for indexing; retry shortly', {
+      receiptAssetId: params.receiptAssetId,
+      expectedOwner: params.adminWallet,
+      lastOwner,
+      lastError: summarizeError(lastTransientLookupError),
+    });
+  }
+  throw new HttpsError('unavailable', 'Admin IRL card receipt is not indexed under the deployer wallet yet', {
+    receiptAssetId: params.receiptAssetId,
+    expectedOwner: params.adminWallet,
+    lastOwner,
+  });
+}
+
+async function publishCompletedAdminIrlCardRedeem(params: {
+  requestRef: DocumentReference;
+  attemptId: string;
+  dropRuntime: DropRuntime;
+  request: AdminIrlRedeemStartedRequest;
+  transferSignature: string;
+  receiptOwner: string;
+  card: Omit<AdminIrlRedeemCardInput, 'receiptClaimCode'>;
+}): Promise<ReturnType<typeof adminIrlRedeemCompleteResponse>> {
+  const markerRef = db.doc(dropAdminIrlRedeemReceiptMarkerPath(params.dropRuntime.dropId, params.card.receiptAssetId));
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const deliveryId = randomInt(1, 2 ** 31);
+    const claimCode = generateAdminIrlReceiptClaimCodes(1)[0];
+    const cardWithClaimCode: AdminIrlRedeemCardInput = { ...params.card, receiptClaimCode: claimCode };
+    const orderRef = db.doc(dropDeliveryOrderPath(params.dropRuntime.dropId, deliveryId));
+    const claimRef = db.doc(`claimCodes/${claimCode}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const requestSnap = await tx.get(params.requestRef);
+      if (!requestSnap.exists) throw new HttpsError('not-found', 'Admin IRL redeem request not found');
+      const request = requestSnap.data() as any;
+      if (request?.status === 'complete') return { status: 'complete' as const, request };
+      if (request?.status !== 'processing' || request?.processingAttemptId !== params.attemptId) {
+        throw new HttpsError('aborted', 'Admin IRL redeem processing lease changed');
+      }
+
+      const markerSnap = await tx.get(markerRef);
+      if (markerSnap.exists) {
+        const marker = markerSnap.data() as any;
+        if (
+          marker?.version !== ADMIN_IRL_REDEEM_CARD_MARKER_VERSION ||
+          marker?.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
+          marker?.targetKind !== 'card_receipt' ||
+          marker?.dropId !== params.dropRuntime.dropId ||
+          marker?.receiptAssetId !== params.card.receiptAssetId ||
+          Math.floor(Number(marker?.figureId)) !== params.card.figureId
+        ) {
+          throw adminIrlRedeemMarkerConflict('card receipt marker mismatch');
+        }
+        const existingDeliveryId = Math.floor(Number(marker?.deliveryId));
+        let existingClaimCode = '';
+        try {
+          existingClaimCode = requireStripeReceiptClaimCode(marker?.claimCode);
+        } catch {
+          throw adminIrlRedeemMarkerConflict('invalid card receipt marker claim code');
+        }
+        if (
+          !Number.isFinite(existingDeliveryId) ||
+          existingDeliveryId <= 0 ||
+          marker?.owner !== params.request.owner
+        ) {
+          throw adminIrlRedeemMarkerConflict('invalid card receipt marker');
+        }
+        const existingOrderRef = db.doc(dropDeliveryOrderPath(params.dropRuntime.dropId, existingDeliveryId));
+        const existingOrderSnap = await tx.get(existingOrderRef);
+        if (!existingOrderSnap.exists) throw adminIrlRedeemMarkerConflict('card receipt marker order missing');
+        const existingClaimRef = db.doc(`claimCodes/${existingClaimCode}`);
+        const existingClaimSnap = await tx.get(existingClaimRef);
+        if (!existingClaimSnap.exists) throw adminIrlRedeemMarkerConflict('card receipt marker claim missing');
+        const existingOrder = existingOrderSnap.data() as any;
+        const existingOrderItem = Array.isArray(existingOrder?.items) ? existingOrder.items[0] : null;
+        const existingOrderClaim = existingOrder?.stripeReceiptClaim;
+        const existingClaim = existingClaimSnap.data() as any;
+        if (
+          existingOrder?.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
+          existingOrder?.adminIrlRedeem?.targetKind !== 'card_receipt' ||
+          existingOrder?.owner !== params.request.owner ||
+          !Array.isArray(existingOrder?.items) ||
+          existingOrder.items.length !== 1 ||
+          existingOrderItem?.kind !== 'dude' ||
+          Math.floor(Number(existingOrderItem?.refId)) !== params.card.figureId ||
+          existingOrderItem?.assetId !== params.card.receiptAssetId ||
+          existingOrderClaim?.receiptKind !== 'figure' ||
+          existingOrderClaim?.receiptAssetId !== params.card.receiptAssetId ||
+          Math.floor(Number(existingOrderClaim?.figureId)) !== params.card.figureId ||
+          stripeReceiptClaimCodeMaybe(existingOrderClaim) !== existingClaimCode ||
+          existingClaim?.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE ||
+          existingClaim?.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
+          existingClaim?.dropId !== params.dropRuntime.dropId ||
+          Math.floor(Number(existingClaim?.deliveryId)) !== existingDeliveryId ||
+          existingClaim?.receiptKind !== 'figure' ||
+          existingClaim?.receiptAssetId !== params.card.receiptAssetId ||
+          Math.floor(Number(existingClaim?.figureId)) !== params.card.figureId ||
+          normalizeStripeReceiptClaimCode(existingClaim?.code) !== existingClaimCode
+        ) {
+          throw adminIrlRedeemMarkerConflict('card receipt marker order or claim mismatch');
+        }
+        const cards = [{ figureId: params.card.figureId, receiptAssetId: params.card.receiptAssetId, claimCode: existingClaimCode }];
+        const completedRequest = {
+          ...request,
+          status: 'complete',
+          deliveryId: existingDeliveryId,
+          receiptTxs: normalizeReceiptTxs(existingOrder?.receiptTxs),
+          claimCodes: [existingClaimCode],
+          cards,
+          duplicateOfRequestId: marker?.requestId,
+        };
+        tx.set(
+          params.requestRef,
+          {
+            status: 'complete',
+            deliveryId: existingDeliveryId,
+            receiptTxs: completedRequest.receiptTxs,
+            claimCodes: [existingClaimCode],
+            cards,
+            duplicateOfRequestId: marker?.requestId,
+            processingAttemptId: FieldValue.delete(),
+            processingStartedAt: FieldValue.delete(),
+            processingLeaseExpiresAt: FieldValue.delete(),
+            preparedExpiresAt: FieldValue.delete(),
+            completedAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+        return { status: 'complete' as const, request: completedRequest };
+      }
+
+      const [orderSnap, claimSnap] = await Promise.all([tx.get(orderRef), tx.get(claimRef)]);
+      if (orderSnap.exists || claimSnap.exists) return { status: 'collision' as const };
+      tx.create(orderRef, {
+        ...buildAdminIrlRedeemCardDeliveryOrderDocument({
+          dropId: params.dropRuntime.dropId,
+          deliveryId,
+          requestId: params.request.requestId,
+          owner: params.request.owner,
+          receiptOwner: params.receiptOwner,
+          transferSignature: params.transferSignature,
+          card: cardWithClaimCode,
+        }),
+        createdAt: FieldValue.serverTimestamp(),
+        processedAt: FieldValue.serverTimestamp(),
+      });
+      tx.create(claimRef, {
+        ...buildAdminIrlRedeemCardClaimCodeDocument({
+          dropId: params.dropRuntime.dropId,
+          deliveryId,
+          owner: params.request.owner,
+          receiptOwner: params.receiptOwner,
+          requestId: params.request.requestId,
+          card: cardWithClaimCode,
+        }),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      tx.create(markerRef, {
+        ...buildAdminIrlRedeemCardMarkerDocument({
+          dropId: params.dropRuntime.dropId,
+          deliveryId,
+          requestId: params.request.requestId,
+          owner: params.request.owner,
+          transferSignature: params.transferSignature,
+          card: cardWithClaimCode,
+        }),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      const cards = [
+        {
+          figureId: cardWithClaimCode.figureId,
+          receiptAssetId: cardWithClaimCode.receiptAssetId,
+          claimCode,
+        },
+      ];
+      tx.set(
+        params.requestRef,
+        {
+          status: 'complete',
+          deliveryId,
+          receiptTxs: [params.transferSignature],
+          claimCodes: [claimCode],
+          cards,
+          processingAttemptId: FieldValue.delete(),
+          processingStartedAt: FieldValue.delete(),
+          processingLeaseExpiresAt: FieldValue.delete(),
+          preparedExpiresAt: FieldValue.delete(),
+          completedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return { status: 'created' as const, deliveryId, claimCode, cards };
+    });
+
+    if (result.status === 'collision') continue;
+    if (result.status === 'complete') {
+      return adminIrlRedeemCompleteResponse({
+        dropId: params.dropRuntime.dropId,
+        requestId: params.request.requestId,
+        request: result.request,
+      });
+    }
+    return adminIrlRedeemCompleteResponse({
+      dropId: params.dropRuntime.dropId,
+      requestId: params.request.requestId,
+      request: {
+        deliveryId: result.deliveryId,
+        receiptTxs: [params.transferSignature],
+        claimCodes: [result.claimCode],
+        cards: result.cards,
+      },
+    });
+  }
+  throw new HttpsError('unavailable', 'Failed to allocate Admin IRL card receipt delivery id or claim code');
 }
 
 function buildTx(
@@ -5033,6 +5446,13 @@ type FulfillmentOrderBox = {
   dudeIds: number[];
 };
 
+type FulfillmentOrderCardClaim = {
+  figureId: number;
+  assetId?: string;
+  receiptClaimCode?: string;
+  receiptClaimStatus?: string;
+};
+
 type FulfillmentOrder = {
   dropId: string;
   deliveryId: number;
@@ -5048,6 +5468,7 @@ type FulfillmentOrder = {
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
+  cardClaims: FulfillmentOrderCardClaim[];
 };
 
 function toFulfillmentOrder(
@@ -5115,11 +5536,14 @@ function toFulfillmentOrder(
     }))
     .filter((item: any) => Number.isFinite(item.refId) && item.refId > 0);
 
-  const looseDudes = itemsRaw
+  const looseDudeItems = itemsRaw
     .filter((item: any) => item && item.kind === 'dude')
-    .map((item: any) => Math.floor(Number(item.refId)))
-    .filter((refId: number) => Number.isFinite(refId) && refId > 0)
-    .sort((a, b) => a - b);
+    .map((item: any) => ({
+      figureId: Math.floor(Number(item.refId)),
+      assetId: typeof item.assetId === 'string' ? item.assetId.trim() : '',
+    }))
+    .filter((item: { figureId: number }) => Number.isFinite(item.figureId) && item.figureId > 0);
+  const looseDudes = looseDudeItems.map((item: { figureId: number }) => item.figureId).sort((a: number, b: number) => a - b);
 
   const claimsRaw = Array.isArray(order?.irlClaims) ? order.irlClaims : [];
   const claimsByBoxId = new Map<number, { code?: string; dudeIds?: number[]; boxAssetId?: string }>();
@@ -5152,6 +5576,30 @@ function toFulfillmentOrder(
     })
     .sort((a, b) => a.boxId - b.boxId);
 
+  const cardClaims: FulfillmentOrderCardClaim[] = [];
+  const directCardClaim = order?.stripeReceiptClaim;
+  if (
+    isAdminIrlRedeem &&
+    order?.adminIrlRedeem?.targetKind === 'card_receipt' &&
+    directCardClaim?.receiptKind === 'figure'
+  ) {
+    const figureId = Math.floor(Number(directCardClaim?.figureId));
+    const receiptAssetId = typeof directCardClaim?.receiptAssetId === 'string' ? directCardClaim.receiptAssetId.trim() : '';
+    const item = looseDudeItems.find(
+      (candidate: { figureId: number; assetId: string }) =>
+        candidate.figureId === figureId && (!receiptAssetId || !candidate.assetId || candidate.assetId === receiptAssetId),
+    );
+    if (item && receiptAssetId) {
+      const summary = stripeReceiptClaimSummary(directCardClaim);
+      cardClaims.push({
+        figureId,
+        assetId: receiptAssetId,
+        ...(summary.code ? { receiptClaimCode: summary.code } : {}),
+        ...(summary.status ? { receiptClaimStatus: summary.status } : {}),
+      });
+    }
+  }
+
   return {
     dropId: options.dropId,
     deliveryId,
@@ -5167,6 +5615,7 @@ function toFulfillmentOrder(
     address,
     boxes,
     looseDudes,
+    cardClaims,
   };
 }
 
@@ -6544,12 +6993,15 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
     const assets = await mapWithConcurrency(uniqueItemIds, ADMIN_IRL_REDEEM_ASSET_FETCH_CONCURRENCY, (assetId) =>
       fetchAssetRetry(assetId, dropRuntime),
     );
+    const assetKinds = assets.map((asset) => getAssetKind(asset));
+    const isCardReceiptRequest = assetKinds.some((kind) => kind === 'certificate');
+    if (isCardReceiptRequest && (assets.length !== 1 || assetKinds[0] !== 'certificate')) {
+      throw new HttpsError('failed-precondition', 'Admin IRL redeem supports one card receipt at a time and cannot mix item types');
+    }
+    const targetKind: AdminIrlRedeemTargetKind = isCardReceiptRequest ? 'card_receipt' : 'pack';
     const orderItems: AdminIrlRedeemRequestItem[] = assets.map((asset, index) => {
       const assetId = uniqueItemIds[index];
-      const kind = getAssetKind(asset);
-      if (kind !== 'box') {
-        throw new HttpsError('failed-precondition', 'Admin IRL redeem is only available for pack items');
-      }
+      const kind = assetKinds[index];
       if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
         throw new HttpsError('failed-precondition', 'Item does not belong to the requested drop');
       }
@@ -6558,67 +7010,101 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
         throw new HttpsError('failed-precondition', 'Item not owned by wallet');
       }
 
+      if (kind === 'certificate') {
+        const refId = Number(getDudeIdFromAsset(asset));
+        if (!Number.isInteger(refId) || refId <= 0 || refId > dropRuntime.maxDudeId) {
+          throw new HttpsError('failed-precondition', 'Admin IRL redeem receipt must be a card receipt with a valid figure id');
+        }
+        return { assetId, kind: 'card_receipt', refId: Math.floor(refId) };
+      }
+      if (kind !== 'box') {
+        throw new HttpsError('failed-precondition', 'Admin IRL redeem is only available for packs or card receipts');
+      }
       const refId = Number(getBoxIdFromAsset(asset));
       if (!Number.isFinite(refId) || refId <= 0 || refId > 0xffff_ffff) {
         throw new HttpsError('failed-precondition', 'Box id missing from metadata');
       }
-      return {
-        assetId,
-        kind: 'box',
-        refId: Math.floor(refId),
-      };
+      return { assetId, kind: 'box', refId: Math.floor(refId) };
     });
     if (new Set(orderItems.map((item) => item.refId)).size !== orderItems.length) {
       throw new HttpsError('failed-precondition', 'Duplicate box ids are not allowed');
     }
 
-    const pendingOpenPdas = assetPks.map((assetPk) => pendingOpenPdaForBox(dropRuntime, assetPk));
-    const pendingOpenInfos = await withTimeout(
-      conn.getMultipleAccountsInfo(pendingOpenPdas, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
-      RPC_TIMEOUT_MS,
-      'getMultipleAccountsInfo:adminIrlRedeemPendingOpens',
-    );
-    const pendingOpenIndex = pendingOpenInfos.findIndex(Boolean);
-    if (pendingOpenIndex >= 0) {
-      throw new HttpsError('failed-precondition', 'Pending reveal packs cannot be redeemed for Admin IRL events', {
-        assetId: uniqueItemIds[pendingOpenIndex],
-        pending: pendingOpenPdas[pendingOpenIndex]?.toBase58(),
-      });
+    if (targetKind === 'card_receipt') {
+      const existingMarker = await db
+        .doc(dropAdminIrlRedeemReceiptMarkerPath(dropId, uniqueItemIds[0]))
+        .get();
+      if (existingMarker.exists) {
+        throw new HttpsError('failed-precondition', 'This card receipt has already been redeemed for an Admin IRL order');
+      }
     }
 
-    const transferInstructions = assetPks.map((asset) =>
-      mplCoreTransferV1Ix({
-        asset,
-        coreCollection: cfg.coreCollection,
-        payer: ownerPk,
-        authority: ownerPk,
-        newOwner: cfg.admin,
-      }),
-    );
-    const instructions: TransactionInstruction[] = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      ...transferInstructions,
-    ];
-    const sizeTx = buildTx(instructions, ownerPk, DUMMY_BLOCKHASH);
-    const raw = sizeTx.serialize();
-    if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-      let maxFit = 0;
-      for (let n = assetPks.length - 1; n >= 1; n -= 1) {
-        const candidateInstructions: TransactionInstruction[] = [
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ...transferInstructions.slice(0, n),
-        ];
-        if (buildTx(candidateInstructions, ownerPk, DUMMY_BLOCKHASH).serialize().length <= SOLANA_MAX_RAW_TX_BYTES) {
-          maxFit = n;
-          break;
-        }
-      }
-      throw new HttpsError(
-        'failed-precondition',
-        `Admin IRL redeem transfer transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}). Try fewer packs.` +
-          (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 pack.'),
-        { rawBytes: raw.length, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
+    let instructions: TransactionInstruction[];
+    if (targetKind === 'pack') {
+      const pendingOpenPdas = assetPks.map((assetPk) => pendingOpenPdaForBox(dropRuntime, assetPk));
+      const pendingOpenInfos = await withTimeout(
+        conn.getMultipleAccountsInfo(pendingOpenPdas, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }),
+        RPC_TIMEOUT_MS,
+        'getMultipleAccountsInfo:adminIrlRedeemPendingOpens',
       );
+      const pendingOpenIndex = pendingOpenInfos.findIndex(Boolean);
+      if (pendingOpenIndex >= 0) {
+        throw new HttpsError('failed-precondition', 'Pending reveal packs cannot be redeemed for Admin IRL events', {
+          assetId: uniqueItemIds[pendingOpenIndex],
+          pending: pendingOpenPdas[pendingOpenIndex]?.toBase58(),
+        });
+      }
+
+      const transferInstructions = assetPks.map((asset) =>
+        mplCoreTransferV1Ix({
+          asset,
+          coreCollection: cfg.coreCollection,
+          payer: ownerPk,
+          authority: ownerPk,
+          newOwner: cfg.admin,
+        }),
+      );
+      instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ...transferInstructions];
+      const sizeTx = buildTx(instructions, ownerPk, DUMMY_BLOCKHASH);
+      const raw = sizeTx.serialize();
+      if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
+        let maxFit = 0;
+        for (let n = assetPks.length - 1; n >= 1; n -= 1) {
+          const candidateInstructions: TransactionInstruction[] = [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+            ...transferInstructions.slice(0, n),
+          ];
+          if (buildTx(candidateInstructions, ownerPk, DUMMY_BLOCKHASH).serialize().length <= SOLANA_MAX_RAW_TX_BYTES) {
+            maxFit = n;
+            break;
+          }
+        }
+        throw new HttpsError(
+          'failed-precondition',
+          `Admin IRL redeem transfer transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}). Try fewer packs.` +
+            (maxFit ? ` Estimated max that fits: ${maxFit}.` : ' Try 1 pack.'),
+          { rawBytes: raw.length, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, items: assetPks.length, maxFit },
+        );
+      }
+    } else {
+      if (!dropRuntime.receiptsMerkleTreeStr) {
+        throw new HttpsError('failed-precondition', 'Receipt cNFT tree is not configured', { dropId });
+      }
+      const cardAsset = assets[0];
+      const proof = await fetchAssetProof(uniqueItemIds[0], dropRuntime);
+      const proofContext = parseCompressedReceiptProof({
+        asset: cardAsset,
+        proof,
+        dropRuntime,
+        expectedOwner: ownerWallet,
+      });
+      const transferIx = buildCompressedReceiptTransferIx({
+        proofContext,
+        owner: ownerPk,
+        newOwner: cfg.admin,
+        coreCollection: cfg.coreCollection,
+      });
+      instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), transferIx];
     }
 
     const requestRef = db.collection(dropAdminIrlRedeemRequestsCollectionPath(dropId)).doc();
@@ -6627,6 +7113,7 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
         dropId,
         status: 'prepared',
         owner: ownerWallet,
+        targetKind,
         adminWallet: cfg.admin.toBase58(),
         itemIds: uniqueItemIds,
         items: orderItems,
@@ -6645,13 +7132,27 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
         RPC_TIMEOUT_MS,
         'getLatestBlockhash:prepareAdminIrlRedeemTx',
       );
-      const solanaTx = buildTx(instructions, ownerPk, blockhash);
+      const solanaTx = targetKind === 'card_receipt'
+        ? (
+            await buildTxWithOptionalDeliveryLookupTable({
+              conn,
+              dropRuntime,
+              build: (luts) => buildTx(instructions, ownerPk, blockhash, [], luts),
+              encodeTooLargeMessage: 'Admin IRL card receipt transfer is too large to encode.',
+              encodeTooLargeDetails: { dropId, receiptAssetId: uniqueItemIds[0] },
+              packetTooLargeMessage: (rawBytes, maxRawBytes) =>
+                `Admin IRL card receipt transfer transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
+              packetTooLargeDetails: { dropId, receiptAssetId: uniqueItemIds[0] },
+            })
+          ).tx
+        : buildTx(instructions, ownerPk, blockhash);
       return {
         encodedTx: Buffer.from(solanaTx.serialize()).toString('base64'),
         requestId: requestRef.id,
         dropId,
         adminWallet: cfg.admin.toBase58(),
         itemCount: uniqueItemIds.length,
+        targetKind,
       };
     } catch (err) {
       try {
@@ -6723,6 +7224,39 @@ export const finalizeAdminIrlRedeem = onCallLogged(
           'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
           { dropId },
         );
+      }
+
+      if (started.request.targetKind === 'card_receipt') {
+        const cardItem = started.request.items[0];
+        if (!cardItem || cardItem.kind !== 'card_receipt') {
+          throw new HttpsError('failed-precondition', 'Admin IRL card receipt request is invalid');
+        }
+        await verifyDirectCardReceiptTransferSignature({
+          conn,
+          dropRuntime,
+          signature: transferSignature,
+          fromWallet: started.request.owner,
+          toWallet: signer.publicKey.toBase58(),
+          coreCollection: cfg.coreCollection,
+          receiptAssetId: cardItem.assetId,
+          rpcLabel: 'getTransaction:adminIrlCardReceiptTransfer',
+        });
+        await waitForAdminIrlCardReceipt({
+          dropRuntime,
+          receiptAssetId: cardItem.assetId,
+          figureId: cardItem.refId,
+          adminWallet: signer.publicKey.toBase58(),
+        });
+        const completed = await publishCompletedAdminIrlCardRedeem({
+          requestRef,
+          attemptId,
+          dropRuntime,
+          request: started.request,
+          transferSignature,
+          receiptOwner: signer.publicKey.toBase58(),
+          card: { figureId: cardItem.refId, receiptAssetId: cardItem.assetId },
+        });
+        return completed;
       }
 
       await verifyAdminIrlRedeemTransferSignature({
@@ -8214,6 +8748,7 @@ type StripeReceiptClaimStart =
       receiptKind?: StripeReceiptClaimReceiptKind;
       receiptsTransferred?: number;
       figureIds?: number[];
+      receiptAssetIds?: string[];
     }
   | {
       status: 'started';
@@ -8227,10 +8762,199 @@ type StripeReceiptClaimStart =
       hasPreviousClaimFailure: boolean;
       updatePluralOrderClaim: boolean;
       updateSingularOrderClaim: boolean;
+      directFigureReceipt?: { receiptAssetId: string; figureId: number };
+      receiptTxs: string[];
+      receiptTxSubmissions: DirectCardReceiptClaimSubmission[];
     };
 
 function normalizeReceiptTxs(raw: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((tx): tx is string => typeof tx === 'string' && !!tx.trim()) : [];
+}
+
+function directCardReceiptClaimAssetId(raw: any): string {
+  return raw?.receiptKind === 'figure' && typeof raw?.receiptAssetId === 'string'
+    ? raw.receiptAssetId.trim()
+    : '';
+}
+
+function normalizeDirectCardReceiptClaimSubmissions(raw: unknown): DirectCardReceiptClaimSubmission[] {
+  if (!Array.isArray(raw)) return [];
+  const bySignature = new Map<string, DirectCardReceiptClaimSubmission>();
+  raw.forEach((entry) => {
+    const signature = typeof entry?.signature === 'string' ? entry.signature.trim() : '';
+    const lastValidBlockHeight = Math.floor(Number(entry?.lastValidBlockHeight));
+    const submittedAtMs = Number(entry?.submittedAtMs);
+    const status = entry?.status === 'not_landed' ? 'not_landed' : 'submitted';
+    if (
+      !signature ||
+      !Number.isFinite(lastValidBlockHeight) ||
+      lastValidBlockHeight <= 0 ||
+      !Number.isFinite(submittedAtMs) ||
+      submittedAtMs <= 0
+    ) {
+      return;
+    }
+    bySignature.set(signature, { signature, lastValidBlockHeight, submittedAtMs, status });
+  });
+  return Array.from(bySignature.values());
+}
+
+async function inspectDirectCardReceiptClaimSubmission(params: {
+  conn: Connection;
+  signature: string;
+  submission: DirectCardReceiptClaimSubmission;
+}): Promise<Extract<DirectCardReceiptClaimTransferEvidence, 'rejected' | 'expired_unverified' | 'unresolved'>> {
+  const statuses = await withTimeout(
+    params.conn.getSignatureStatuses([params.signature], { searchTransactionHistory: true }),
+    RPC_TIMEOUT_MS,
+    'getSignatureStatuses:claimStripeReceiptDirectCardTransfer',
+  );
+  const status = statuses?.value?.[0] || null;
+  const signatureStatus = status?.err ? 'failed' : status ? 'succeeded' : 'missing';
+  const currentBlockHeight =
+    signatureStatus === 'missing'
+      ? await withTimeout(
+          params.conn.getBlockHeight('confirmed'),
+          RPC_TIMEOUT_MS,
+          'getBlockHeight:claimStripeReceiptDirectCardTransfer',
+        )
+      : 0;
+  const evidence = classifyDirectCardReceiptClaimSubmission({
+    signatureStatus,
+    currentBlockHeight,
+    lastValidBlockHeight: params.submission.lastValidBlockHeight,
+    submittedAtMs: params.submission.submittedAtMs,
+    nowMs: Date.now(),
+  });
+  return evidence === 'not_landed' ? 'rejected' : evidence;
+}
+
+async function resolveAmbiguousDirectCardReceiptSubmission(params: {
+  conn: Connection;
+  signature: string;
+  lastValidBlockHeight: number;
+  submittedAtMs: number;
+}): Promise<'landed' | 'not_landed' | 'unresolved'> {
+  const deadline = Date.now() + DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    try {
+      const statuses = await withTimeout(
+        params.conn.getSignatureStatuses([params.signature], { searchTransactionHistory: true }),
+        RPC_TIMEOUT_MS,
+        'getSignatureStatuses:claimStripeReceiptDirectCardSubmission',
+      );
+      const status = statuses?.value?.[0] || null;
+      if (status?.err) return 'not_landed';
+      if (
+        status?.confirmationStatus === 'confirmed' ||
+        status?.confirmationStatus === 'finalized' ||
+        status?.confirmations === null
+      ) {
+        return 'landed';
+      }
+      if (status) {
+        await sleep(DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_POLL_MS);
+        continue;
+      }
+
+      const currentBlockHeight = await withTimeout(
+        params.conn.getBlockHeight('confirmed'),
+        RPC_TIMEOUT_MS,
+        'getBlockHeight:claimStripeReceiptDirectCardSubmission',
+      );
+      if (
+        directCardReceiptClaimSubmissionProvesNoDelivery({
+          signatureStatus: 'missing',
+          currentBlockHeight,
+          lastValidBlockHeight: params.lastValidBlockHeight,
+          submittedAtMs: params.submittedAtMs,
+          nowMs: Date.now(),
+        })
+      ) {
+        return 'not_landed';
+      }
+    } catch {
+      // Keep polling while this invocation is still inside the fresh history window.
+    }
+    await sleep(DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_POLL_MS);
+  }
+  return 'unresolved';
+}
+
+async function inspectPersistedDirectCardReceiptClaimTransfers(params: {
+  conn: Connection;
+  dropRuntime: DropRuntime;
+  signatures: string[];
+  adminWallet: string;
+  recipientWallet: string;
+  coreCollection: PublicKey;
+  receiptAssetId: string;
+  submissions: DirectCardReceiptClaimSubmission[];
+}): Promise<{
+  evidence: DirectCardReceiptClaimTransferEvidence;
+  signature: string | null;
+  terminalSubmissions: DirectCardReceiptClaimSubmission[];
+}> {
+  const signatures = Array.from(
+    new Set(normalizeReceiptTxs(params.signatures).map((signature) => signature.trim())),
+  ).reverse();
+  if (!signatures.length) return { evidence: 'none', signature: null, terminalSubmissions: [] };
+  const submissionsBySignature = new Map(params.submissions.map((submission) => [submission.signature, submission]));
+
+  let sawUnresolved = false;
+  let sawExpiredUnverified = false;
+  const terminalSubmissions: DirectCardReceiptClaimSubmission[] = [];
+  for (const signature of signatures) {
+    const submission = submissionsBySignature.get(signature);
+    if (submission?.status === 'not_landed') continue;
+    try {
+      await verifyDirectCardReceiptTransferSignature({
+        conn: params.conn,
+        dropRuntime: params.dropRuntime,
+        signature,
+        fromWallet: params.adminWallet,
+        toWallet: params.recipientWallet,
+        coreCollection: params.coreCollection,
+        receiptAssetId: params.receiptAssetId,
+        rpcLabel: 'getTransaction:claimStripeReceiptDirectCardTransfer',
+      });
+      return { evidence: 'verified', signature, terminalSubmissions };
+    } catch (err) {
+      let evidence: Extract<
+        DirectCardReceiptClaimTransferEvidence,
+        'rejected' | 'expired_unverified' | 'unresolved'
+      > = classifyDirectCardReceiptClaimTransferVerificationError(err);
+      if (evidence === 'unresolved' && submission) {
+        try {
+          evidence = await inspectDirectCardReceiptClaimSubmission({ conn: params.conn, signature, submission });
+        } catch (absenceProofErr) {
+          logger.info('claimStripeReceipt:persisted_direct_transfer_absence_unresolved', {
+            dropId: params.dropRuntime.dropId,
+            receiptAssetId: params.receiptAssetId,
+            receiptTx: signature,
+            error: summarizeError(absenceProofErr),
+          });
+        }
+      }
+      if (evidence === 'rejected' && submission) {
+        terminalSubmissions.push({ ...submission, status: 'not_landed' });
+      }
+      if (evidence === 'unresolved') sawUnresolved = true;
+      if (evidence === 'expired_unverified') sawExpiredUnverified = true;
+      logger.info('claimStripeReceipt:persisted_direct_transfer_not_verified', {
+        dropId: params.dropRuntime.dropId,
+        receiptAssetId: params.receiptAssetId,
+        receiptTx: signature,
+        evidence,
+        error: summarizeError(err),
+      });
+    }
+  }
+  return {
+    evidence: sawUnresolved ? 'unresolved' : sawExpiredUnverified ? 'expired_unverified' : 'rejected',
+    signature: null,
+    terminalSubmissions,
+  };
 }
 
 type StripeReceiptClaimReceiptKind = 'box' | 'figure';
@@ -8239,6 +8963,7 @@ type StripeReceiptClaimStoredResult = {
   receiptKind?: StripeReceiptClaimReceiptKind;
   receiptsTransferred?: number;
   figureIds?: number[];
+  receiptAssetIds?: string[];
 };
 
 function stripeReceiptClaimMaybeSubmittedTx(err: unknown): string | null {
@@ -8254,6 +8979,10 @@ function stripeReceiptClaimMaybeSubmittedTx(err: unknown): string | null {
   return signature;
 }
 
+function stripeReceiptClaimErrorKeepsProcessing(err: unknown): boolean {
+  return (err as any)?.details?.keepReceiptClaimProcessing === true;
+}
+
 function normalizePositiveIntegerArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -8267,10 +8996,13 @@ function normalizeStripeReceiptClaimStoredResult(raw: any): StripeReceiptClaimSt
   const receiptsTransferred =
     Number.isFinite(receiptsTransferredRaw) && receiptsTransferredRaw > 0 ? receiptsTransferredRaw : undefined;
   const figureIds = normalizePositiveIntegerArray(raw?.figureIds);
+  const receiptAssetId =
+    receiptKind === 'figure' && typeof raw?.receiptAssetId === 'string' ? raw.receiptAssetId.trim() : '';
   return {
     ...(receiptKind ? { receiptKind } : {}),
     ...(receiptsTransferred ? { receiptsTransferred } : {}),
     ...(figureIds.length ? { figureIds } : {}),
+    ...(receiptAssetId ? { receiptAssetIds: [receiptAssetId] } : {}),
   };
 }
 
@@ -8281,8 +9013,12 @@ function stripeReceiptClaimResponse(params: {
   receiptKind?: StripeReceiptClaimReceiptKind;
   receiptsTransferred?: number;
   figureIds?: number[];
+  receiptAssetIds?: string[];
 }) {
   const figureIds = params.figureIds?.length ? params.figureIds : undefined;
+  const receiptAssetIds = Array.from(
+    new Set((params.receiptAssetIds || []).map((assetId) => String(assetId || '').trim()).filter(Boolean)),
+  );
   const receiptsTransferred =
     params.receiptsTransferred && params.receiptsTransferred > 0
       ? params.receiptsTransferred
@@ -8297,6 +9033,7 @@ function stripeReceiptClaimResponse(params: {
     receiptTxs: params.receiptTxs,
     ...(params.receiptKind ? { receiptKind: params.receiptKind } : {}),
     ...(figureIds ? { figureIds } : {}),
+    ...(receiptAssetIds.length ? { receiptAssetIds } : {}),
   };
 }
 
@@ -8501,10 +9238,42 @@ async function startStripeReceiptClaim(params: {
     const dropId = requireDropId(claim?.dropId);
     const deliveryId = requirePositiveDeliveryId(claim?.deliveryId);
     const boxId = requirePositiveBoxId(claim?.boxId);
+    const directReceiptAssetId = directCardReceiptClaimAssetId(claim);
+    const directFigureId = Math.floor(Number(claim?.figureId));
+    const directFigureReceipt = directReceiptAssetId
+      ? { receiptAssetId: directReceiptAssetId, figureId: directFigureId }
+      : undefined;
+    if (
+      directFigureReceipt &&
+      (!Number.isFinite(directFigureReceipt.figureId) ||
+        directFigureReceipt.figureId <= 0 ||
+        directFigureReceipt.figureId !== boxId)
+    ) {
+      throw new HttpsError('failed-precondition', 'Direct card receipt claim target is invalid');
+    }
     const status = typeof claim?.status === 'string' ? claim.status : 'unclaimed';
     const claimedRecipient = typeof claim?.recipient === 'string' ? claim.recipient : '';
-    const receiptTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    const receiptTxSubmissions = normalizeDirectCardReceiptClaimSubmissions(claim?.receiptTxSubmissions);
+    const storedReceiptTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    const receiptTxs = directFigureReceipt
+      ? activeDirectCardReceiptClaimSignatures({
+          receiptTxs: storedReceiptTxs,
+          submissions: receiptTxSubmissions,
+        })
+      : storedReceiptTxs;
     const storedResult = normalizeStripeReceiptClaimStoredResult(claim);
+    const hasPersistedDirectRecipientLock = Boolean(
+      directFigureReceipt &&
+        directCardReceiptClaimHasRecipientLock({
+          hasRecipient: Boolean(claimedRecipient),
+          receiptTxCount: receiptTxs.length,
+        }),
+    );
+    // Direct sends persist their signed candidate before touching the network.
+    // After the lease expires, no active candidate means a corrected recipient is safe.
+    const hasClaimRecipientLock = directFigureReceipt
+      ? hasPersistedDirectRecipientLock
+      : status === 'processing';
 
     if (status === 'claimed') {
       if (claimedRecipient === params.recipientWallet) {
@@ -8518,7 +9287,12 @@ async function startStripeReceiptClaim(params: {
       throw new HttpsError('aborted', 'This receipt claim code is already being processed');
     }
     // Keep retries bound to the first receiver so maybe-submitted admin transactions can be finalized safely.
-    if (status === 'processing' && claimedRecipient && claimedRecipient !== params.recipientWallet) {
+    // The persisted-transfer check also repairs claims that older recovery code may have reset to `unclaimed`.
+    if (
+      hasClaimRecipientLock &&
+      claimedRecipient &&
+      claimedRecipient !== params.recipientWallet
+    ) {
       throw new HttpsError(
         'failed-precondition',
         'This receipt claim code is locked to the receiver address from the previous attempt. Retry with that same address.',
@@ -8533,6 +9307,16 @@ async function startStripeReceiptClaim(params: {
     const order = orderSnap.data() as any;
     if (!isReceiptClaimDeliveryOrderSource(order?.source)) {
       throw new HttpsError('failed-precondition', 'Claim code is not for a receipt claim order');
+    }
+    if (directFigureReceipt) {
+      const orderClaim = order?.stripeReceiptClaim;
+      if (
+        orderClaim?.receiptKind !== 'figure' ||
+        orderClaim?.receiptAssetId !== directFigureReceipt.receiptAssetId ||
+        Math.floor(Number(orderClaim?.figureId)) !== directFigureReceipt.figureId
+      ) {
+        throw new HttpsError('failed-precondition', 'Direct card receipt order target mismatch');
+      }
     }
     const orderClaimTarget = resolveStripeReceiptClaimOrderTarget({ order, code: params.code, boxId });
 
@@ -8568,8 +9352,12 @@ async function startStripeReceiptClaim(params: {
       attemptId: params.attemptId,
       orderRef,
       orderIrlClaims: Array.isArray(order?.irlClaims) ? order.irlClaims : [],
-      resumingPreviousProcessingClaim: status === 'processing' && claimedRecipient === params.recipientWallet,
+      receiptTxs,
+      receiptTxSubmissions,
+      resumingPreviousProcessingClaim:
+        hasClaimRecipientLock && claimedRecipient === params.recipientWallet,
       hasPreviousClaimFailure: Boolean(claim?.lastClaimError || claim?.lastClaimErrorAt),
+      ...(directFigureReceipt ? { directFigureReceipt } : {}),
       ...orderClaimTarget,
     };
   });
@@ -8625,6 +9413,57 @@ async function clearStripeReceiptClaimProcessing(params: {
     });
 }
 
+async function rememberStripeReceiptClaimSubmittedTx(params: {
+  claimRef: DocumentReference;
+  attemptId: string;
+  receiptTx: string;
+  submission?: Omit<DirectCardReceiptClaimSubmission, 'signature'> | null;
+}): Promise<void> {
+  await db.runTransaction(async (tx) => {
+    const claimSnap = await tx.get(params.claimRef);
+    if (!claimSnap.exists) throw new HttpsError('not-found', 'Receipt claim code not found');
+    const claim = claimSnap.data() as any;
+    if (claim?.status !== 'processing' || claim?.processingAttemptId !== params.attemptId) {
+      throw new HttpsError('aborted', 'Receipt claim processing lease changed');
+    }
+    const isDirectCardReceiptClaim = Boolean(directCardReceiptClaimAssetId(claim));
+    const submission = isDirectCardReceiptClaim && params.submission
+      ? normalizeDirectCardReceiptClaimSubmissions([{ signature: params.receiptTx, ...params.submission }])[0]
+      : undefined;
+    const receiptTxSubmissions = isDirectCardReceiptClaim
+      ? normalizeDirectCardReceiptClaimSubmissions(claim?.receiptTxSubmissions)
+      : [];
+    if (submission) {
+      const existingIndex = receiptTxSubmissions.findIndex((entry) => entry.signature === submission.signature);
+      if (existingIndex >= 0) receiptTxSubmissions[existingIndex] = submission;
+      else receiptTxSubmissions.push(submission);
+    }
+    const mergedReceiptTxs = Array.from(new Set([...normalizeReceiptTxs(claim?.receiptTxs), params.receiptTx]));
+    const receiptTxs = isDirectCardReceiptClaim && receiptTxSubmissions.length
+      ? activeDirectCardReceiptClaimSignatures({
+          receiptTxs: mergedReceiptTxs,
+          submissions: receiptTxSubmissions,
+        })
+      : mergedReceiptTxs;
+    tx.set(
+      params.claimRef,
+      {
+        receiptTxs,
+        ...(submission ? { receiptTxSubmissions } : {}),
+        ...(submission
+          ? {
+              processingLeaseExpiresAt: Timestamp.fromMillis(
+                Date.now() + DIRECT_CARD_RECEIPT_SUBMISSION_PROCESSING_LEASE_MS,
+              ),
+            }
+          : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+}
+
 async function finalizeStripeReceiptClaim(params: {
   claimRef: DocumentReference;
   orderRef: DocumentReference;
@@ -8646,7 +9485,17 @@ async function finalizeStripeReceiptClaim(params: {
     const claim = claimSnap.exists ? (claimSnap.data() as any) : null;
     if (!claim) throw new HttpsError('not-found', 'Receipt claim code not found');
 
-    const existingTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    const storedReceiptTxs = normalizeReceiptTxs(claim?.receiptTxs);
+    const isDirectCardReceiptClaim = Boolean(directCardReceiptClaimAssetId(claim));
+    const receiptTxSubmissions = isDirectCardReceiptClaim
+      ? normalizeDirectCardReceiptClaimSubmissions(claim?.receiptTxSubmissions)
+      : [];
+    const existingTxs = isDirectCardReceiptClaim && receiptTxSubmissions.length
+      ? activeDirectCardReceiptClaimSignatures({
+          receiptTxs: storedReceiptTxs,
+          submissions: receiptTxSubmissions,
+        })
+      : storedReceiptTxs;
     if (claim?.status === 'claimed') {
       if (claim?.recipient !== params.recipientWallet) {
         throw new HttpsError('failed-precondition', 'This receipt claim code has already been used');
@@ -8769,6 +9618,152 @@ async function findStripeReceiptAssetByIdOwnedBy(
     });
   }
   return asset;
+}
+
+async function findDirectFigureReceiptAssetByIdOwnedBy(
+  ownerWallet: string,
+  dropRuntime: DropRuntime,
+  figureId: number,
+  assetId: string,
+): Promise<any | null> {
+  let asset: any;
+  try {
+    asset = await fetchAsset(assetId, dropRuntime);
+  } catch (err) {
+    if ((err as any)?.code === 'not-found') return null;
+    throw err;
+  }
+  if (!asset || looksBurntOrClosedInHelius(asset)) return null;
+  if (asset?.ownership?.owner !== ownerWallet) return null;
+  if (getAssetKind(asset) !== 'certificate') {
+    throw new HttpsError('failed-precondition', 'Direct card receipt claim target is not a receipt');
+  }
+  if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
+    throw new HttpsError('failed-precondition', 'Direct card receipt claim target belongs to a different drop');
+  }
+  if (Number(getDudeIdFromAsset(asset)) !== figureId) {
+    throw new HttpsError('failed-precondition', 'Direct card receipt claim figure id mismatch');
+  }
+  const proof = await fetchAssetProof(assetId, dropRuntime);
+  parseCompressedReceiptProof({ asset, proof, dropRuntime, expectedOwner: ownerWallet });
+  return asset;
+}
+
+async function sendDirectFigureReceiptClaimTx(params: {
+  conn: Connection;
+  dropRuntime: DropRuntime;
+  signer: Keypair;
+  recipientPk: PublicKey;
+  coreCollection: PublicKey;
+  adminReceipt: any;
+  persistSubmission: (submission: DirectCardReceiptClaimSubmission) => Promise<void>;
+}): Promise<DirectCardReceiptClaimSubmission> {
+  const receiptId = String(params.adminReceipt?.id || '');
+  if (!receiptId) throw new HttpsError('failed-precondition', 'Direct card receipt is missing an asset id');
+  const proof = await fetchAssetProof(receiptId, params.dropRuntime);
+  const proofContext = parseCompressedReceiptProof({
+    asset: params.adminReceipt,
+    proof,
+    dropRuntime: params.dropRuntime,
+    expectedOwner: params.signer.publicKey.toBase58(),
+  });
+  const transferIx = buildCompressedReceiptTransferIx({
+    proofContext,
+    owner: params.signer.publicKey,
+    newOwner: params.recipientPk,
+    coreCollection: params.coreCollection,
+  });
+  const { blockhash, lastValidBlockHeight } = await withTimeout(
+    params.conn.getLatestBlockhash('confirmed'),
+    RPC_TIMEOUT_MS,
+    'getLatestBlockhash:claimStripeReceipt:directFigure',
+  );
+  const { tx } = await buildTxWithOptionalDeliveryLookupTable({
+    conn: params.conn,
+    dropRuntime: params.dropRuntime,
+    build: (luts) =>
+      buildTx(
+        [ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), transferIx],
+        params.signer.publicKey,
+        blockhash,
+        [params.signer],
+        luts,
+      ),
+    encodeTooLargeMessage: 'Direct card receipt claim transaction is too large to encode.',
+    encodeTooLargeDetails: { dropId: params.dropRuntime.dropId, receiptAssetId: receiptId },
+    packetTooLargeMessage: (rawBytes, maxRawBytes) =>
+      `Direct card receipt claim transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
+    packetTooLargeDetails: { dropId: params.dropRuntime.dropId, receiptAssetId: receiptId },
+  });
+  const submittedAtMs = Date.now();
+  const submission: DirectCardReceiptClaimSubmission = {
+    signature: bs58.encode(tx.signatures[0]),
+    lastValidBlockHeight,
+    submittedAtMs,
+    status: 'submitted',
+  };
+  // Persist the exact signed candidate and extend the lease before any network
+  // submission so a timeout or concurrent recovery can never lose the evidence.
+  await params.persistSubmission(submission);
+  try {
+    const signature = await sendAndConfirmSignedTx(params.conn, tx, 'claimStripeReceipt:directFigure', {
+      sendTimeoutMs: TX_SEND_TIMEOUT_MS,
+      confirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+    });
+    return { ...submission, signature };
+  } catch (err) {
+    const ambiguousSignature = stripeReceiptClaimMaybeSubmittedTx(err);
+    if (!ambiguousSignature) {
+      try {
+        await params.persistSubmission({ ...submission, status: 'not_landed' });
+      } catch (persistErr) {
+        logger.warn('claimStripeReceipt:direct_submission_failure_persist_failed', {
+          dropId: params.dropRuntime.dropId,
+          receiptTx: submission.signature,
+          error: summarizeError(persistErr),
+        });
+        const details = (err as any)?.details || {};
+        (err as any).details = { ...details, lastValidBlockHeight, submittedAtMs };
+        throw err;
+      }
+      const details = (err as any)?.details || {};
+      (err as any).details = { ...details, directCardReceiptSubmissionStatus: 'not_landed' };
+      throw err;
+    }
+    const resolution = await resolveAmbiguousDirectCardReceiptSubmission({
+      conn: params.conn,
+      signature: ambiguousSignature,
+      lastValidBlockHeight,
+      submittedAtMs,
+    });
+    if (resolution === 'landed') {
+      return { ...submission, signature: ambiguousSignature };
+    }
+    if (resolution === 'not_landed') {
+      const notLandedSubmission = { ...submission, signature: ambiguousSignature, status: 'not_landed' as const };
+      try {
+        await params.persistSubmission(notLandedSubmission);
+      } catch (persistErr) {
+        logger.warn('claimStripeReceipt:direct_submission_verdict_persist_failed', {
+          dropId: params.dropRuntime.dropId,
+          receiptTx: ambiguousSignature,
+          error: summarizeError(persistErr),
+        });
+        const details = (err as any)?.details || {};
+        (err as any).details = { ...details, lastValidBlockHeight, submittedAtMs };
+        throw err;
+      }
+      throw new HttpsError('failed-precondition', 'Direct card receipt claim transaction expired before landing; retry', {
+        signature: ambiguousSignature,
+        directCardReceiptSubmissionStatus: 'not_landed',
+      });
+    }
+    const details = (err as any)?.details;
+    if (details && typeof details.signature === 'string') {
+      (err as any).details = { ...details, lastValidBlockHeight, submittedAtMs };
+    }
+    throw err;
+  }
 }
 
 function requireStripeOpenableClaimAssignment(order: any, dropRuntime: DropRuntime, boxId: number): StripeAssignedIrlClaim {
@@ -9071,6 +10066,36 @@ function parseCompressedReceiptProof(params: {
   };
 }
 
+function buildCompressedReceiptTransferIx(args: {
+  proofContext: ReturnType<typeof parseCompressedReceiptProof>;
+  owner: PublicKey;
+  newOwner: PublicKey;
+  coreCollection: PublicKey;
+}): TransactionInstruction {
+  const { proofContext } = args;
+  return bubblegumTransferV2Ix({
+    bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
+    mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
+    mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    treeConfig: deriveTreeConfigPda(proofContext.merkleTree),
+    payer: args.owner,
+    authority: args.owner,
+    leafOwner: proofContext.leafOwner,
+    leafDelegate: proofContext.leafDelegate,
+    newLeafOwner: args.newOwner,
+    merkleTree: proofContext.merkleTree,
+    coreCollection: args.coreCollection,
+    root: proofContext.root,
+    dataHash: proofContext.dataHash,
+    creatorHash: proofContext.creatorHash,
+    assetDataHash: proofContext.assetDataHash,
+    flags: proofContext.flags,
+    nonce: proofContext.nonce,
+    index: proofContext.index,
+    proof: proofContext.proofAccounts,
+  });
+}
+
 async function sendOpenableStripeReceiptClaimTx(params: {
   conn: Connection;
   dropRuntime: DropRuntime;
@@ -9163,6 +10188,8 @@ export const claimStripeReceipt = onCallLogged(
 
     let startedClaim: Extract<StripeReceiptClaimStart, { status: 'started' }> | null = null;
     let sentReceiptTx: string | null = null;
+    let sentReceiptTxSubmission: Omit<DirectCardReceiptClaimSubmission, 'signature'> | null = null;
+    let keepDirectRecipientLockOnError = false;
     try {
       const started = await startStripeReceiptClaim({
         claimRef,
@@ -9180,6 +10207,7 @@ export const claimStripeReceipt = onCallLogged(
             receiptKind: started.receiptKind,
             receiptsTransferred: started.receiptsTransferred,
             figureIds: started.figureIds,
+            receiptAssetIds: started.receiptAssetIds,
           });
         }
         let dropRuntime: DropRuntime | null = null;
@@ -9229,9 +10257,16 @@ export const claimStripeReceipt = onCallLogged(
         });
       }
       startedClaim = started;
+      keepDirectRecipientLockOnError = Boolean(
+        started.directFigureReceipt &&
+          shouldKeepDirectCardReceiptClaimProcessing({
+            resumingPreviousProcessingClaim: started.resumingPreviousProcessingClaim,
+            recipientOwnershipConfirmed: false,
+          }),
+      );
 
       const dropRuntime = getDropRuntime(started.dropId);
-      const openableAssignment = isOpenableDrop(dropRuntime)
+      const openableAssignment = !started.directFigureReceipt && isOpenableDrop(dropRuntime)
         ? requireStripeOpenableClaimAssignment({ irlClaims: started.orderIrlClaims }, dropRuntime, started.boxId)
         : null;
       const cfg = await ensureOnchainCoreConfig(dropRuntime, true);
@@ -9261,6 +10296,116 @@ export const claimStripeReceipt = onCallLogged(
       }
 
       const adminWallet = signer.publicKey.toBase58();
+      if (started.directFigureReceipt) {
+        const target = started.directFigureReceipt;
+        const finalizeDirectFigureClaim = async (receiptTx: string | null) => {
+          const receiptTxs = await finalizeStripeReceiptClaim({
+            claimRef,
+            orderRef: started.orderRef,
+            code,
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            boxId: started.boxId,
+            recipientWallet,
+            attemptId,
+            receiptTx,
+            receiptKind: 'figure',
+            receiptsTransferred: 1,
+            figureIds: [target.figureId],
+            updatePluralOrderClaim: started.updatePluralOrderClaim,
+            updateSingularOrderClaim: started.updateSingularOrderClaim,
+          });
+          return stripeReceiptClaimResponse({
+            dropId: started.dropId,
+            deliveryId: started.deliveryId,
+            receiptTxs,
+            receiptKind: 'figure',
+            receiptsTransferred: 1,
+            figureIds: [target.figureId],
+            receiptAssetIds: [target.receiptAssetId],
+          });
+        };
+        const persistedTransfer = await inspectPersistedDirectCardReceiptClaimTransfers({
+          conn,
+          dropRuntime,
+          signatures: started.receiptTxs,
+          submissions: started.receiptTxSubmissions,
+          adminWallet,
+          recipientWallet,
+          coreCollection: cfg.coreCollection,
+          receiptAssetId: target.receiptAssetId,
+        });
+        for (const terminalSubmission of persistedTransfer.terminalSubmissions) {
+          const { signature, ...submission } = terminalSubmission;
+          await rememberStripeReceiptClaimSubmittedTx({
+            claimRef,
+            attemptId,
+            receiptTx: signature,
+            submission,
+          });
+        }
+        const recipientReceipt = persistedTransfer.evidence === 'verified'
+          ? null
+          : await findDirectFigureReceiptAssetByIdOwnedBy(
+              recipientWallet,
+              dropRuntime,
+              target.figureId,
+              target.receiptAssetId,
+            );
+        const adminReceipt =
+          persistedTransfer.evidence === 'verified' || persistedTransfer.evidence === 'unresolved' || recipientReceipt
+          ? null
+          : await findDirectFigureReceiptAssetByIdOwnedBy(
+              adminWallet,
+              dropRuntime,
+              target.figureId,
+              target.receiptAssetId,
+            );
+        const recoveryAction = resolveDirectCardReceiptClaimRecoveryAction({
+          transferEvidence: persistedTransfer.evidence,
+          recipientOwnsReceipt: Boolean(recipientReceipt),
+          adminOwnsReceipt: Boolean(adminReceipt),
+        });
+        if (recoveryAction === 'finalize') {
+          keepDirectRecipientLockOnError = shouldKeepDirectCardReceiptClaimProcessing({
+            resumingPreviousProcessingClaim: started.resumingPreviousProcessingClaim,
+            recipientOwnershipConfirmed: true,
+          });
+          return finalizeDirectFigureClaim(persistedTransfer.signature);
+        }
+        if (recoveryAction === 'wait' || !adminReceipt) {
+          if (keepDirectRecipientLockOnError) {
+            throw new HttpsError(
+              'unavailable',
+              'Card receipt ownership is still resolving for the original receiver; retry shortly',
+              { keepReceiptClaimProcessing: true },
+            );
+          }
+          throw new HttpsError('failed-precondition', 'Matching admin-owned card receipt not found');
+        }
+        const receiptSubmission = await sendDirectFigureReceiptClaimTx({
+          conn,
+          dropRuntime,
+          signer,
+          recipientPk,
+          coreCollection: cfg.coreCollection,
+          adminReceipt,
+          persistSubmission: async (candidate) => {
+            const { signature, ...submission } = candidate;
+            await rememberStripeReceiptClaimSubmittedTx({
+              claimRef,
+              attemptId,
+              receiptTx: signature,
+              submission,
+            });
+            sentReceiptTx = signature;
+            sentReceiptTxSubmission = submission;
+          },
+        });
+        const receiptTx = receiptSubmission.signature;
+        return finalizeDirectFigureClaim(receiptTx);
+      }
+
       const adminReceipt = openableAssignment
         ? await findStripeReceiptAssetByIdOwnedBy(adminWallet, dropRuntime, started.boxId, openableAssignment.boxAssetId)
         : await findStripeReceiptAssetOwnedBy(adminWallet, dropRuntime, started.boxId);
@@ -9395,26 +10540,11 @@ export const claimStripeReceipt = onCallLogged(
         expectedOwner: adminWallet,
       });
 
-      const transferIx = bubblegumTransferV2Ix({
-        bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
-        mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
-        mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-        treeConfig: deriveTreeConfigPda(proofContext.merkleTree),
-        payer: signer.publicKey,
-        authority: signer.publicKey,
-        leafOwner: proofContext.leafOwner,
-        leafDelegate: proofContext.leafDelegate,
-        newLeafOwner: recipientPk,
-        merkleTree: proofContext.merkleTree,
+      const transferIx = buildCompressedReceiptTransferIx({
+        proofContext,
+        owner: signer.publicKey,
+        newOwner: recipientPk,
         coreCollection: cfg.coreCollection,
-        root: proofContext.root,
-        dataHash: proofContext.dataHash,
-        creatorHash: proofContext.creatorHash,
-        assetDataHash: proofContext.assetDataHash,
-        flags: proofContext.flags,
-        nonce: proofContext.nonce,
-        index: proofContext.index,
-        proof: proofContext.proofAccounts,
       });
       const { blockhash } = await withTimeout(
         conn.getLatestBlockhash('confirmed'),
@@ -9429,13 +10559,48 @@ export const claimStripeReceipt = onCallLogged(
       sentReceiptTx = receiptTx;
       return finalizeBoxClaim(receiptTx);
     } catch (err) {
-      const maybeSentReceiptTx = sentReceiptTx || stripeReceiptClaimMaybeSubmittedTx(err);
+      const directSubmissionDefinitelyNotLanded =
+        (err as any)?.details?.directCardReceiptSubmissionStatus === 'not_landed';
+      const maybeSentReceiptTx = directSubmissionDefinitelyNotLanded
+        ? null
+        : sentReceiptTx || stripeReceiptClaimMaybeSubmittedTx(err);
       if (startedClaim && maybeSentReceiptTx) {
+        const errorSubmission = normalizeDirectCardReceiptClaimSubmissions([
+          {
+            signature: maybeSentReceiptTx,
+            lastValidBlockHeight: (err as any)?.details?.lastValidBlockHeight,
+            submittedAtMs: (err as any)?.details?.submittedAtMs,
+          },
+        ])[0];
+        await rememberStripeReceiptClaimSubmittedTx({
+          claimRef,
+          attemptId,
+          receiptTx: maybeSentReceiptTx,
+          submission: sentReceiptTxSubmission || errorSubmission || null,
+        }).catch((persistErr) => {
+          logger.warn('claimStripeReceipt:submitted_tx_persist_failed', {
+            dropId: startedClaim?.dropId,
+            deliveryId: startedClaim?.deliveryId,
+            receiptTx: maybeSentReceiptTx,
+            error: summarizeError(persistErr),
+          });
+        });
         logger.warn('claimStripeReceipt:post_send_error_left_processing_for_retry', {
           dropId: startedClaim.dropId,
           deliveryId: startedClaim.deliveryId,
           boxId: startedClaim.boxId,
           receiptTx: maybeSentReceiptTx,
+          error: summarizeError(err),
+        });
+      } else if (
+        startedClaim &&
+        !directSubmissionDefinitelyNotLanded &&
+        (stripeReceiptClaimErrorKeepsProcessing(err) || keepDirectRecipientLockOnError)
+      ) {
+        logger.warn('claimStripeReceipt:processing_left_locked_for_indexing', {
+          dropId: startedClaim.dropId,
+          deliveryId: startedClaim.deliveryId,
+          boxId: startedClaim.boxId,
           error: summarizeError(err),
         });
       } else if (startedClaim) {
@@ -9454,7 +10619,7 @@ export const claimStripeReceipt = onCallLogged(
       throw err;
     }
   },
-  { secrets: [COSIGNER_SECRET] },
+  { secrets: [COSIGNER_SECRET], timeoutSeconds: 180 },
 );
 
 export const prepareIrlClaimTx = onCallLogged(

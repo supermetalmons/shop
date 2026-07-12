@@ -13,6 +13,7 @@ export const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
 };
 
 export const ADMIN_IRL_REDEEM_MARKER_VERSION = 1;
+export const ADMIN_IRL_REDEEM_CARD_MARKER_VERSION = 2;
 
 export type AdminIrlRedeemBoxBaseInput = {
   boxId: number;
@@ -63,6 +64,22 @@ export type AdminIrlRedeemMarkerReuseResolution =
       claimCodes: string[];
       boxes: AdminIrlRedeemMarkerReuseBox[];
     };
+
+export type AdminIrlRedeemCardInput = {
+  figureId: number;
+  receiptAssetId: string;
+  receiptClaimCode: string;
+};
+
+export type AdminIrlRedeemCardDeliveryOrderInput = {
+  dropId: string;
+  deliveryId: number;
+  requestId: string;
+  owner: string;
+  receiptOwner: string;
+  transferSignature: string;
+  card: AdminIrlRedeemCardInput;
+};
 
 export function getAdminIrlRedeemUnsupportedReason(args: {
   dropFamily: DropFamily;
@@ -127,6 +144,18 @@ function normalizeBox(input: AdminIrlRedeemBoxInput): AdminIrlRedeemBoxInput {
     receiptAssetId: normalizeString(input.receiptAssetId, 'pack receipt asset id'),
     receiptClaimCode: requireStripeReceiptClaimCode(input.receiptClaimCode),
     dudeIds: normalizeDudeIds(input.dudeIds),
+  };
+}
+
+function normalizeCard(input: AdminIrlRedeemCardInput): AdminIrlRedeemCardInput {
+  const figureId = Number(input.figureId);
+  if (!Number.isInteger(figureId) || figureId <= 0 || figureId > 0xffff_ffff) {
+    throw new Error('Invalid admin IRL redeem figure id');
+  }
+  return {
+    figureId,
+    receiptAssetId: normalizeString(input.receiptAssetId, 'card receipt asset id'),
+    receiptClaimCode: requireStripeReceiptClaimCode(input.receiptClaimCode),
   };
 }
 
@@ -225,6 +254,96 @@ export function buildAdminIrlRedeemClaimCodeDocument(args: {
     originalBoxAssetId: box.originalAssetId,
     dudeIds: box.dudeIds,
     status: 'unclaimed',
+  };
+}
+
+export function buildAdminIrlRedeemCardDeliveryOrderDocument(
+  input: AdminIrlRedeemCardDeliveryOrderInput,
+): Record<string, unknown> {
+  const card = normalizeCard(input.card);
+  const claim = {
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    code: card.receiptClaimCode,
+    // The long-code claim engine historically keys targets by boxId. Keep this
+    // compatibility alias internal while exposing the semantic figure fields.
+    boxId: card.figureId,
+    status: 'unclaimed',
+    receiptKind: 'figure',
+    figureId: card.figureId,
+    receiptAssetId: card.receiptAssetId,
+  };
+
+  return {
+    dropId: normalizeString(input.dropId, 'dropId'),
+    source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+    status: 'ready_to_ship',
+    owner: normalizeString(input.owner, 'owner'),
+    receiptOwner: normalizeString(input.receiptOwner, 'receipt owner'),
+    addressSnapshot: ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
+    itemIds: [card.receiptAssetId],
+    originalItemIds: [card.receiptAssetId],
+    items: [{ kind: 'dude', refId: card.figureId, assetId: card.receiptAssetId }],
+    deliveryId: normalizePositiveDeliveryId(input.deliveryId),
+    quantity: 1,
+    receiptTxs: [normalizeString(input.transferSignature, 'transfer signature')],
+    stripeReceiptClaim: claim,
+    adminIrlRedeem: {
+      targetKind: 'card_receipt',
+      requestId: normalizeString(input.requestId, 'requestId'),
+      transferSignature: normalizeString(input.transferSignature, 'transfer signature'),
+      originalItemIds: [card.receiptAssetId],
+    },
+  };
+}
+
+export function buildAdminIrlRedeemCardClaimCodeDocument(args: {
+  dropId: string;
+  deliveryId: number;
+  owner: string;
+  receiptOwner: string;
+  requestId: string;
+  card: AdminIrlRedeemCardInput;
+}): Record<string, unknown> {
+  const card = normalizeCard(args.card);
+  return {
+    version: 1,
+    namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+    source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+    code: card.receiptClaimCode,
+    dropId: normalizeString(args.dropId, 'dropId'),
+    deliveryId: normalizePositiveDeliveryId(args.deliveryId),
+    owner: normalizeString(args.owner, 'owner'),
+    receiptOwner: normalizeString(args.receiptOwner, 'receipt owner'),
+    requestId: normalizeString(args.requestId, 'requestId'),
+    boxId: card.figureId,
+    receiptKind: 'figure',
+    figureId: card.figureId,
+    receiptAssetId: card.receiptAssetId,
+    status: 'unclaimed',
+  };
+}
+
+export function buildAdminIrlRedeemCardMarkerDocument(args: {
+  dropId: string;
+  deliveryId: number;
+  requestId: string;
+  owner: string;
+  transferSignature: string;
+  card: AdminIrlRedeemCardInput;
+}): Record<string, unknown> {
+  const card = normalizeCard(args.card);
+  return {
+    version: ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
+    source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+    targetKind: 'card_receipt',
+    dropId: normalizeString(args.dropId, 'dropId'),
+    requestId: normalizeString(args.requestId, 'requestId'),
+    deliveryId: normalizePositiveDeliveryId(args.deliveryId),
+    owner: normalizeString(args.owner, 'owner'),
+    receiptAssetId: card.receiptAssetId,
+    figureId: card.figureId,
+    claimCode: card.receiptClaimCode,
+    transferSignature: normalizeString(args.transferSignature, 'transfer signature'),
   };
 }
 

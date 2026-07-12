@@ -38,9 +38,12 @@ import {
   issueReceipts,
 } from './lib/api';
 import {
+  canAdminIrlRedeemCardReceipt,
   canAdminIrlRedeemSelection,
   forgetPendingAdminIrlRedeem,
+  removeHiddenAssetIds,
   rememberPendingAdminIrlRedeem,
+  retainTransientHiddenAssetIdsPresentInInventory,
 } from './lib/adminIrlRedeem';
 import { auth } from './lib/firebase';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
@@ -1228,6 +1231,7 @@ type RevealOverlayState = {
   viewerMode?: 'poncho-card' | 'receipt-image';
   imageViewerSize?: ImageViewerSize;
   receiptImages?: ReceiptViewerImage[];
+  adminIrlRedeemReceipt?: InventoryItem;
   viewerFigureId?: number;
   hasRevealAttempted?: boolean;
   autoOpening?: boolean;
@@ -1243,6 +1247,10 @@ type ReceiptImageViewerOverlayProps = {
   alt: string;
   viewerSize?: ImageViewerSize;
   onDismiss?: () => void;
+  adminIrlRedeem?: {
+    loading: boolean;
+    onClick: () => void;
+  };
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
 
@@ -1255,6 +1263,7 @@ function ReceiptImageViewerOverlay({
   alt,
   viewerSize = 'receipt',
   onDismiss,
+  adminIrlRedeem,
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
   const receiptImages = images?.length ? images : [{ key: 'receipt-image', name: alt, image: imageSrc }];
@@ -1297,6 +1306,23 @@ function ReceiptImageViewerOverlay({
           ))}
         </div>
       </div>
+      {adminIrlRedeem ? (
+        <div className="receipt-viewer-overlay__admin-irl" onClick={(evt) => evt.stopPropagation()}>
+          <button
+            type="button"
+            className="ghost receipt-viewer-overlay__admin-irl-button"
+            disabled={adminIrlRedeem.loading}
+            aria-busy={adminIrlRedeem.loading}
+            onClick={(evt) => {
+              evt.stopPropagation();
+              adminIrlRedeem.onClick();
+            }}
+          >
+            <FaBoxOpen aria-hidden="true" focusable="false" size={16} />
+            <span>{adminIrlRedeem.loading ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1979,6 +2005,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   );
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
+  const [transientHiddenAssets, setTransientHiddenAssets] = useState<Set<string>>(new Set());
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
     loadPendingReveals(connectedWallet),
   );
@@ -3194,7 +3221,19 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(connectedWallet));
+    setTransientHiddenAssets(new Set());
   }, [connectedWallet]);
+
+  useEffect(() => {
+    if (!connectedWallet || isViewerMode || !inventoryFetched || !inventoryData || !transientHiddenAssets.size) return;
+    setTransientHiddenAssets((prev) => {
+      const next = retainTransientHiddenAssetIdsPresentInInventory(
+        prev,
+        inventoryData.map((item) => item.id),
+      );
+      return next.size === prev.size ? prev : next;
+    });
+  }, [connectedWallet, inventoryData, inventoryFetched, isViewerMode, transientHiddenAssets.size]);
 
   useEffect(() => {
     const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
@@ -3587,6 +3626,35 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     };
   }, [connectedWallet, isViewerMode]);
 
+  const markAssetsTransientlyHidden = useMemo(() => {
+    if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
+    return (ids: string[]) => {
+      setTransientHiddenAssets((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => {
+          if (typeof id === 'string' && id) next.add(id);
+        });
+        return next;
+      });
+    };
+  }, [connectedWallet, isViewerMode]);
+
+  const unhideAssets = useMemo(() => {
+    if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
+    return (ids: string[]) => {
+      setHiddenAssets((prev) => {
+        const next = removeHiddenAssetIds(prev, ids);
+        if (next.size === prev.size) return prev;
+        persistHiddenAssets(connectedWallet, next);
+        return next;
+      });
+      setTransientHiddenAssets((prev) => {
+        const next = removeHiddenAssetIds(prev, ids);
+        return next.size === prev.size ? prev : next;
+      });
+    };
+  }, [connectedWallet, isViewerMode]);
+
   const localRevealedDudes = useMemo(() => {
     if (isViewerMode) return EMPTY_INVENTORY;
     if (!localRevealedDudeKeys.length) return EMPTY_INVENTORY;
@@ -3624,7 +3692,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const visibleInventory = useMemo(() => {
     const baseRaw =
-      isViewerMode || !hiddenAssets.size ? inventoryView : inventoryView.filter((item) => !hiddenAssets.has(item.id));
+      isViewerMode || (!hiddenAssets.size && !transientHiddenAssets.size)
+        ? inventoryView
+        : inventoryView.filter((item) => !hiddenAssets.has(item.id) && !transientHiddenAssets.has(item.id));
     const base = withoutLocallyMintedUnresolvedCardNft2Boxes(baseRaw, pendingCardNft2LocalMintedBoxes);
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
@@ -3648,6 +3718,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, [
     inventoryView,
     hiddenAssets,
+    transientHiddenAssets,
     pendingCardNft2LocalMintedBoxes,
     localRevealedDudes,
     figureMetadataByKey,
@@ -3886,6 +3957,22 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }),
     [adminIrlRedeemSelection, connectedWallet, isSignedInWallet],
   );
+  const adminIrlRedeemOverlayReceipt = useMemo(() => {
+    if (revealOverlay?.viewerMode !== 'receipt-image' || revealOverlay.imageViewerSize !== 'receipt') return null;
+    const receipt = revealOverlay.adminIrlRedeemReceipt;
+    const receiptImages = revealOverlay.receiptImages || [];
+    if (!receipt || receiptImages.length !== 1 || receiptImages[0]?.key !== receipt.id) return null;
+    return canAdminIrlRedeemCardReceipt({
+      wallet: connectedWallet,
+      isSignedInWallet,
+      selectionOwner: owner,
+      receiptCount: receiptImages.length,
+      item: receipt,
+      dropFamily: getDropConfig(receipt.dropId)?.dropFamily,
+    })
+      ? receipt
+      : null;
+  }, [connectedWallet, getDropConfig, isSignedInWallet, owner, revealOverlay]);
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
@@ -4790,6 +4877,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       overlayId?: string;
       overlayName?: string;
       receiptImages?: ReceiptViewerImage[];
+      adminIrlRedeemReceipt?: InventoryItem;
       allowMissingImage?: boolean;
     },
   ) => {
@@ -4835,6 +4923,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       viewerMode: 'receipt-image',
       imageViewerSize: options?.size || 'receipt',
       receiptImages: options?.receiptImages,
+      adminIrlRedeemReceipt: options?.adminIrlRedeemReceipt,
       viewerFigureId: undefined,
       hasRevealAttempted: true,
       autoOpening: false,
@@ -4855,7 +4944,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const openReceiptImageViewerGroup = useCallback((
     items: readonly ReceiptViewerSource[],
     originRect?: DOMRect | null,
-    options?: { inventorySnapshot?: InventoryItem[]; allowPlaceholders?: boolean },
+    options?: {
+      inventorySnapshot?: InventoryItem[];
+      allowPlaceholders?: boolean;
+      adminIrlRedeemReceipt?: InventoryItem;
+    },
   ) => {
     const receiptImages = items.filter((item) => item.id && item.dropId);
     const firstReceipt = receiptImages[0];
@@ -4875,6 +4968,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         : `claimed-receipts-${firstReceipt.dropId}-${receiptImages.map((item) => item.id).join('-')}`,
       overlayName: receiptImages.length === 1 ? firstReceipt.name : 'Claimed receipts',
       receiptImages: receiptImages.map((item) => ({ key: item.id, name: item.name, image: item.image })),
+      adminIrlRedeemReceipt:
+        receiptImages.length === 1 && options?.adminIrlRedeemReceipt?.id === firstReceipt.id
+          ? options.adminIrlRedeemReceipt
+          : undefined,
       allowMissingImage: options?.allowPlaceholders,
     });
   }, [openImageViewer]);
@@ -4887,6 +4984,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     if (item.kind !== 'certificate') return false;
     return openReceiptImageViewerGroup([item], originRect, {
       inventorySnapshot: options?.inventorySnapshot,
+      adminIrlRedeemReceipt: item,
     });
   }, [openReceiptImageViewerGroup]);
 
@@ -5070,29 +5168,57 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     }
   };
 
-  const handleAdminIrlRedeem = async () => {
+  const handleAdminIrlRedeem = async (receiptTarget?: InventoryItem) => {
     if (blockViewerModeAction()) return;
     if (adminIrlRedeeming) return;
     if (!publicKey) {
       setVisible(true);
-      showToast('Connect a wallet to redeem packs');
+      showToast(
+        receiptTarget?.kind === 'certificate'
+          ? 'Connect a wallet to redeem this card receipt'
+          : 'Connect a wallet to redeem packs',
+      );
       return;
     }
     const signedIn = isSignedInWallet ? true : await ensureSignedIn();
     if (!signedIn) return;
     const wallet = publicKey.toBase58();
-    const eligible = canAdminIrlRedeemSelection({
-      wallet,
-      isSignedInWallet: true,
-      ...adminIrlRedeemSelection,
-    });
+    const currentOverlay = revealOverlayRef.current;
+    const isReceiptTarget = receiptTarget?.kind === 'certificate';
+    const currentOverlayReceiptCount = currentOverlay?.receiptImages?.length || 0;
+    const receiptTargetMatchesOverlay = Boolean(
+      isReceiptTarget &&
+        currentOverlay?.viewerMode === 'receipt-image' &&
+        currentOverlay.imageViewerSize === 'receipt' &&
+        currentOverlay.adminIrlRedeemReceipt?.id === receiptTarget.id &&
+        currentOverlayReceiptCount === 1 &&
+        currentOverlay.receiptImages?.[0]?.key === receiptTarget.id,
+    );
+    const eligible = isReceiptTarget
+      ? canAdminIrlRedeemCardReceipt({
+          wallet,
+          isSignedInWallet: true,
+          selectionOwner: owner,
+          receiptCount: receiptTargetMatchesOverlay ? currentOverlayReceiptCount : 0,
+          item: receiptTarget,
+          dropFamily: getDropConfig(receiptTarget.dropId)?.dropFamily,
+        })
+      : canAdminIrlRedeemSelection({
+          wallet,
+          isSignedInWallet: true,
+          ...adminIrlRedeemSelection,
+        });
     if (!eligible) {
-      showToast('Select only card_nft_2 packs for Admin IRL Redeem');
+      showToast(
+        isReceiptTarget
+          ? 'Open one card_nft_2 card receipt to run Admin IRL Redeem'
+          : 'Select only card_nft_2 packs for Admin IRL Redeem',
+      );
       return;
     }
 
-    const adminIrlDropId = selectedDropId;
-    const redeemIds = deliverableItems.map((item) => item.id);
+    const adminIrlDropId = isReceiptTarget ? receiptTarget.dropId : selectedDropId;
+    const redeemIds = isReceiptTarget ? [receiptTarget.id] : deliverableItems.map((item) => item.id);
     let pendingFinalizeRequestId = '';
     let pendingFinalizeTransferSignature = '';
     try {
@@ -5136,8 +5262,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         sig = await submitTransfer(resp.encodedTx, resp.requestId);
       }
 
-      markAssetsHidden(redeemIds);
-      setSelected(new Set());
+      if (isReceiptTarget) markAssetsTransientlyHidden(redeemIds);
+      else markAssetsHidden(redeemIds);
+      if (isReceiptTarget) closeRevealOverlay();
+      else setSelected(new Set());
       showToast(`Admin IRL transfer confirmed · finalizing…`);
       const finalized = await finalizeAdminIrlRedeemWithRetry({
         dropId: adminIrlDrop.dropId,
@@ -5146,11 +5274,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       });
       forgetPendingAdminIrlRedeem(wallet, resp.requestId);
 
-      const codeCount = Math.max(0, finalized.claimCodes?.length || finalized.boxes?.length || redeemIds.length);
+      const codeCount = Math.max(
+        0,
+        finalized.claimCodes?.length || finalized.cards?.length || finalized.boxes?.length || redeemIds.length,
+      );
       const codeLabel = codeCount === 1 ? 'code' : 'codes';
       const orderSuffix = finalized.deliveryId ? ` · order ${finalized.deliveryId}` : '';
       showToast(`Admin IRL redeem ready${orderSuffix} · ${codeCount} ${codeLabel}`);
-      setDeliveryOpen(false);
+      if (!isReceiptTarget) setDeliveryOpen(false);
       await Promise.all([refetchInventory(), refreshProfile().catch(() => null)]);
     } catch (err) {
       console.error(err);
@@ -5167,8 +5298,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             transferSignature: pendingFinalizeTransferSignature,
             error: err,
           });
-          setSelected(new Set());
-          setDeliveryOpen(false);
+          if (isReceiptTarget) closeRevealOverlay();
+          else {
+            setSelected(new Set());
+            setDeliveryOpen(false);
+          }
           void refetchInventory().catch((refreshErr) => {
             console.warn('[mons] failed to refresh inventory after pending Admin IRL redeem transfer', refreshErr);
           });
@@ -5217,13 +5351,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }
 
       const result = await claimStripeReceipt({ code, recipient: recipientWallet });
+      const returnedReceiptAssetIds = result.receiptAssetIds || [];
+      if (owner === recipientWallet) unhideAssets(returnedReceiptAssetIds);
       closeClaimModal();
       const count = Math.max(0, Math.floor(Number(result.receiptsTransferred || 0)));
       const displayCount = count || 1;
       const receiptBaseLabel = result.receiptKind === 'figure' ? 'card receipt' : 'receipt';
       const receiptLabel = displayCount === 1 ? receiptBaseLabel : `${receiptBaseLabel}s`;
       showToast(`Claim submitted · ${displayCount} ${receiptLabel} sent to ${shortAddress(recipientWallet)}`);
-      if (owner === recipientWallet) {
+      if (owner && (owner === recipientWallet || returnedReceiptAssetIds.length)) {
         void refetchInventory().catch((err) => {
           console.warn('[mons] failed to refresh inventory after receipt claim', err);
         });
@@ -5921,6 +6057,16 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
         viewerSize={revealOverlay.imageViewerSize}
+        adminIrlRedeem={
+          adminIrlRedeemOverlayReceipt
+            ? {
+                loading: adminIrlRedeeming,
+                onClick: () => {
+                  void handleAdminIrlRedeem(adminIrlRedeemOverlayReceipt);
+                },
+              }
+            : undefined
+        }
         onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
       />
@@ -6255,7 +6401,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               <button
                 type="button"
                 className="ghost delivery-modal__admin-irl-button"
-                onClick={handleAdminIrlRedeem}
+                onClick={() => {
+                  void handleAdminIrlRedeem();
+                }}
                 disabled={adminIrlRedeeming}
               >
                 <FaBoxOpen aria-hidden="true" focusable="false" size={16} />

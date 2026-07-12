@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
   type RefObject,
   type TransitionEvent,
 } from 'react';
@@ -32,7 +33,13 @@ import {
 } from './lib/figureMetadata';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
-import { fulfillmentBoxSecretCode, isUsedReceiptClaimStatus } from './lib/fulfillmentCodes';
+import {
+  fulfillmentBoxSecretCode,
+  fulfillmentCardClaimSecretCode,
+  fulfillmentLooseFigureIdsExcludingCardClaims,
+  fulfillmentOrderLooseFigureIds,
+  isUsedReceiptClaimStatus,
+} from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
@@ -41,6 +48,7 @@ import { ShopHeader } from './components/ShopHeader';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
   buildFulfillmentAddressExport,
+  buildFulfillmentCardClaimSecretCodeExportEntry,
   buildFulfillmentExportFilename,
   buildFulfillmentOrdersExport,
   buildFulfillmentSecretCodeExportEntry,
@@ -126,6 +134,9 @@ const FULFILLMENT_INTERACTIVE_CARD_CLICK_ENABLED = false;
 type QRCodeModule = typeof import('qrcode');
 type SecretCodesZipProgressHandler = (percent: number) => void;
 type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
+type FulfillmentSecretCodeDownloadTarget =
+  | { kind: 'box'; index: number }
+  | { kind: 'card-claim'; index: number };
 type FulfillmentInteractiveCardViewerHandler = (args: {
   dropId: string;
   figureId: number;
@@ -205,7 +216,7 @@ function manualReviewIssueText(checkout: FulfillmentManualReviewCheckout): strin
 }
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
-  return [...order.looseDudes, ...order.boxes.flatMap((box) => box.dudeIds)];
+  return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
 }
 
 function collectFulfillmentFigureMetadataTargets(args: {
@@ -816,6 +827,7 @@ function renderFigureTiles(args: {
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
   onViewInteractiveCard?: FulfillmentInteractiveCardViewerHandler;
   labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
+  renderFooter?: (args: { figureId: number; index: number }) => ReactNode;
 }) {
   const {
     dropId,
@@ -830,6 +842,7 @@ function renderFigureTiles(args: {
     onMetadataResolved,
     onViewInteractiveCard,
     labelOverride,
+    renderFooter,
   } = args;
   return (
     <div className="figure-grid">
@@ -860,6 +873,7 @@ function renderFigureTiles(args: {
               onMetadataResolved={onMetadataResolved}
             />
             <span className="muted small">{preview.label}</span>
+            {renderFooter?.({ figureId, index })}
           </>
         );
         if (canViewInteractiveCard) {
@@ -913,7 +927,10 @@ function SecretCodeDownloadButton(props: {
       aria-label={`Download PNG for secret code ${props.secretCode}`}
       title="Download PNG"
       disabled={props.disabled}
-      onClick={props.onClick}
+      onClick={(evt) => {
+        evt.stopPropagation();
+        props.onClick?.();
+      }}
     >
       <FiDownload aria-hidden="true" />
     </button>
@@ -1773,14 +1790,24 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [figureMetadataByKey, fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
 
   const downloadSecretCodePng = useCallback(
-    async (order: FulfillmentOrder, boxIndex: number) => {
+    async (order: FulfillmentOrder, target: FulfillmentSecretCodeDownloadTarget) => {
       if (secretCodesExporting || secretCodePngExportingKey) return;
 
-      const box = order.boxes[boxIndex];
-      const secretCode = box ? fulfillmentBoxSecretCode(box) : '';
-      if (!secretCode) return;
+      let figureIds: number[];
+      if (target.kind === 'box') {
+        const box = order.boxes[target.index];
+        if (!box || !fulfillmentBoxSecretCode(box)) return;
+        figureIds = box.dudeIds;
+      } else {
+        const claim = order.cardClaims?.[target.index];
+        const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
+        if (!claim || !secretCode || isUsedReceiptClaimStatus(claim.receiptClaimStatus)) return;
+        figureIds = [claim.figureId];
+      }
 
-      const exportKey = `${fulfillmentOrderKey(order)}:${boxIndex}`;
+      const exportKey = `${fulfillmentOrderKey(order)}:${
+        target.kind === 'box' ? target.index : `card:${target.index}`
+      }`;
       setSecretCodePngExportingKey(exportKey);
       setOrdersError(null);
       try {
@@ -1788,26 +1815,36 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         const exportFigureMetadataByKey = await loadFulfillmentExportFigureMetadata(
           orderDrop
             ? collectFulfillmentFigureMetadataTargets({
-                entries: [{ drop: orderDrop, figureIds: box.dudeIds }],
+                entries: [{ drop: orderDrop, figureIds }],
                 figureMetadataByKey,
               })
             : [],
         );
-        const entry = buildFulfillmentSecretCodeExportEntry({
-          order,
-          boxIndex,
-          options: {
-            dropById,
-            figureMetadataByKey: exportFigureMetadataByKey,
-          },
-        });
+        const options = { dropById, figureMetadataByKey: exportFigureMetadataByKey };
+        const entry =
+          target.kind === 'box'
+            ? buildFulfillmentSecretCodeExportEntry({ order, boxIndex: target.index, options })
+            : buildFulfillmentCardClaimSecretCodeExportEntry({
+                order,
+                cardClaimIndex: target.index,
+                options,
+              });
         if (!entry) throw new Error('Secret code unavailable');
 
         const pngBlob = await buildSecretCodePngBlob(entry);
         downloadBlobFile(entry.filename, pngBlob);
       } catch (err) {
-        console.error('[mons] failed to export fulfillment secret code PNG', err);
-        setOrdersError(err instanceof Error ? err.message : 'Failed to export fulfillment secret code PNG');
+        const fallbackMessage =
+          target.kind === 'card-claim'
+            ? 'Failed to export fulfillment card secret code PNG'
+            : 'Failed to export fulfillment secret code PNG';
+        console.error(
+          target.kind === 'card-claim'
+            ? '[mons] failed to export fulfillment card secret code PNG'
+            : '[mons] failed to export fulfillment secret code PNG',
+          err,
+        );
+        setOrdersError(err instanceof Error ? err.message : fallbackMessage);
       } finally {
         setSecretCodePngExportingKey((current) => (current === exportKey ? null : current));
       }
@@ -1938,6 +1975,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
     const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
     const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
+    const cardClaims = order.cardClaims || [];
+    const looseDudes = fulfillmentLooseFigureIdsExcludingCardClaims(order);
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
     return (
@@ -2016,7 +2055,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 labelSource: orderDrop,
                 getPreviewSrc: (boxId) => normalizeBoxDisplayImage({ dropId: orderDrop.dropId, boxId }),
                 secretCodeDownloadDisabled,
-                onDownloadSecretCode: (boxIndex) => void downloadSecretCodePng(order, boxIndex),
+                onDownloadSecretCode: (boxIndex) =>
+                  void downloadSecretCodePng(order, { kind: 'box', index: boxIndex }),
               })
             ) : (
               <div className="box-contents-list">
@@ -2048,7 +2088,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                                 secretCode={secretCode}
                                 disabled={secretCodeDownloadDisabled}
                                 onClick={
-                                  hideSecretCodeDownload ? undefined : () => void downloadSecretCodePng(order, boxIndex)
+                                  hideSecretCodeDownload
+                                    ? undefined
+                                    : () => void downloadSecretCodePng(order, { kind: 'box', index: boxIndex })
                                 }
                               />
                             </span>
@@ -2084,11 +2126,52 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             )
           ) : null}
 
-          {order.looseDudes.length
+          {cardClaims.length
             ? renderFigureTiles({
                 dropId: orderDrop.dropId,
                 drop: orderDrop,
-                figureIds: order.looseDudes,
+                figureIds: cardClaims.map((claim) => claim.figureId),
+                keyPrefix: `${orderKey}:card-claim`,
+                figureNamePrefix: orderDrop.figureNamePrefix,
+                previewMode: orderDropContent.figures.fulfillmentPreviewMode,
+                figureMediaBase: orderFigureMediaBase,
+                figureMedia: orderDrop.figureMedia,
+                figureMetadataByKey,
+                onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
+                onViewInteractiveCard: openInteractiveCardViewer,
+                renderFooter: ({ index }) => {
+                  const claim = cardClaims[index];
+                  const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
+                  if (!claim || !secretCode) {
+                    return <span className="muted small">Secret code unavailable</span>;
+                  }
+                  const hideSecretCodeDownload = isUsedReceiptClaimStatus(claim.receiptClaimStatus);
+                  return (
+                    <span className="muted small fulfillment-secret-code-line">
+                      <span>
+                        {dropAssetLabel(orderDrop, 'figure', 1, { capitalize: true })} Secret{' '}
+                        <span className={fulfillmentSecretCodeClassName(claim.receiptClaimStatus)}>{secretCode}</span>
+                      </span>
+                      <SecretCodeDownloadButton
+                        secretCode={secretCode}
+                        disabled={secretCodeDownloadDisabled}
+                        onClick={
+                          hideSecretCodeDownload
+                            ? undefined
+                            : () => void downloadSecretCodePng(order, { kind: 'card-claim', index })
+                        }
+                      />
+                    </span>
+                  );
+                },
+              })
+            : null}
+
+          {looseDudes.length
+            ? renderFigureTiles({
+                dropId: orderDrop.dropId,
+                drop: orderDrop,
+                figureIds: looseDudes,
                 keyPrefix: `${orderKey}:dude`,
                 figureNamePrefix: orderDrop.figureNamePrefix,
                 previewMode: orderDropContent.figures.fulfillmentPreviewMode,

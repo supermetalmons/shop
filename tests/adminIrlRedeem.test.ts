@@ -14,7 +14,12 @@ import {
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   isReceiptClaimDeliveryOrderSource,
 } from '../functions/src/stripeCheckout/contract.ts';
-import { canAdminIrlRedeemSelection } from '../src/lib/adminIrlRedeem.ts';
+import {
+  canAdminIrlRedeemCardReceipt,
+  canAdminIrlRedeemSelection,
+  removeHiddenAssetIds,
+  retainTransientHiddenAssetIdsPresentInInventory,
+} from '../src/lib/adminIrlRedeem.ts';
 
 const ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const IRL_REDEEM_WALLETS = [
@@ -22,6 +27,21 @@ const IRL_REDEEM_WALLETS = [
   'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
 ];
 const SHIPPER_WITHOUT_IRL_REDEEM_ACCESS = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+
+test('direct-card transient hiding clears absent receipts without changing persistent hidden assets', () => {
+  const transient = new Set(['receipt-present', 'receipt-gone']);
+  assert.deepEqual(
+    Array.from(retainTransientHiddenAssetIdsPresentInInventory(transient, ['receipt-present', 'unrelated'])),
+    ['receipt-present'],
+  );
+  assert.deepEqual(Array.from(transient), ['receipt-present', 'receipt-gone']);
+});
+
+test('claim completion unhides only the exact returned receipt asset ids', () => {
+  const hidden = new Set(['receipt-a', 'receipt-b', 'pack-c']);
+  assert.deepEqual(Array.from(removeHiddenAssetIds(hidden, ['receipt-b', '', 'missing'])), ['receipt-a', 'pack-c']);
+  assert.deepEqual(Array.from(hidden), ['receipt-a', 'receipt-b', 'pack-c']);
+});
 
 test('Admin IRL Redeem eligibility is true for authorized wallets selecting their own card_nft_2 packs', () => {
   const selectedItems = [
@@ -81,6 +101,77 @@ test('Admin IRL Redeem eligibility is true for authorized wallets selecting thei
       selectedItems: [...selectedItems, { dropId: 'card_nft_2', kind: 'certificate' as const }],
       selectedCount: 3,
     } as any),
+    false,
+  );
+});
+
+test('Admin IRL Redeem card eligibility accepts one owned card_nft_2 card receipt for the existing admins', () => {
+  const item = { dropId: 'card_nft_2', kind: 'certificate' as const, dudeId: 42 };
+  const base = {
+    wallet: ADMIN_WALLET,
+    isSignedInWallet: true,
+    selectionOwner: ADMIN_WALLET,
+    receiptCount: 1,
+    item,
+    dropFamily: 'card_nft_2' as const,
+  };
+
+  assert.equal(canAdminIrlRedeemCardReceipt(base), true);
+  IRL_REDEEM_WALLETS.forEach((wallet) => {
+    assert.equal(canAdminIrlRedeemCardReceipt({ ...base, wallet, selectionOwner: wallet }), true);
+  });
+});
+
+test('Admin IRL Redeem card eligibility rejects unauthorized, grouped, non-card, and non-owned receipts', () => {
+  const base = {
+    wallet: ADMIN_WALLET,
+    isSignedInWallet: true,
+    selectionOwner: ADMIN_WALLET,
+    receiptCount: 1,
+    item: { dropId: 'card_nft_2', kind: 'certificate' as const, dudeId: 42 },
+    dropFamily: 'card_nft_2' as const,
+  };
+
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, isSignedInWallet: false }), false);
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, selectionOwner: IRL_REDEEM_WALLETS[0] }), false);
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, selectionOwner: null }), false);
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, receiptCount: 0 }), false);
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, receiptCount: 2 }), false);
+  assert.equal(canAdminIrlRedeemCardReceipt({ ...base, dropFamily: 'little_swag_boxes' as any }), false);
+  assert.equal(
+    canAdminIrlRedeemCardReceipt({
+      ...base,
+      wallet: SHIPPER_WITHOUT_IRL_REDEEM_ACCESS,
+      selectionOwner: SHIPPER_WITHOUT_IRL_REDEEM_ACCESS,
+    }),
+    false,
+  );
+  assert.equal(
+    canAdminIrlRedeemCardReceipt({
+      ...base,
+      item: { dropId: 'card_nft_2', kind: 'box' as const, dudeId: 42 },
+    }),
+    false,
+  );
+  assert.equal(
+    canAdminIrlRedeemCardReceipt({
+      ...base,
+      item: { dropId: 'card_nft_2', kind: 'certificate' as const, dudeId: undefined },
+    }),
+    false,
+  );
+  assert.equal(
+    canAdminIrlRedeemCardReceipt({
+      ...base,
+      item: { dropId: 'card_nft_2', kind: 'certificate' as const, dudeId: 0 },
+    }),
+    false,
+  );
+  assert.equal(
+    canAdminIrlRedeemCardReceipt({
+      ...base,
+      item: { dropId: 'card_nft_2', kind: 'certificate' as const, dudeId: 42.5 },
+    }),
     false,
   );
 });

@@ -4,10 +4,12 @@ import { LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL } from '../src/config/dropMedia
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   buildFulfillmentAddressExport,
+  buildFulfillmentCardClaimSecretCodeExportEntry,
   buildFulfillmentExportFilename,
   buildFulfillmentOrdersExport,
   buildFulfillmentSecretCodeExportEntry,
   buildFulfillmentSecretCodeExportEntries,
+  countFulfillmentSecretCodeExportEntries,
 } from '../src/lib/fulfillmentExports.ts';
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
 import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
@@ -178,6 +180,28 @@ test('buildFulfillmentOrdersExport omits empty boxes and loose figure fields', (
   ]);
 });
 
+test('buildFulfillmentOrdersExport includes card-claim figures exactly once', () => {
+  const payload = buildFulfillmentOrdersExport(
+    [
+      cardOrder({
+        boxes: [],
+        looseDudes: [42, 99],
+        cardClaims: [{ figureId: 42, receiptClaimCode: 'CARD-SECRET-42' }],
+      }),
+      cardOrder({
+        deliveryId: 8,
+        boxes: [],
+        looseDudes: [],
+        cardClaims: [{ figureId: 101, receiptClaimCode: 'CARD-SECRET-101' }],
+      }),
+    ],
+    { dropById },
+  );
+
+  assert.deepEqual(payload[0].looseFigures, [42, 99]);
+  assert.deepEqual(payload[1].looseFigures, [101]);
+});
+
 test('buildFulfillmentOrdersExport exports numeric fulfillment labels for figures', () => {
   const payload = buildFulfillmentOrdersExport(
     [
@@ -290,6 +314,66 @@ test('buildFulfillmentSecretCodeExportEntry maps one box secret code to a png jo
     claimUrl: 'https://mons.shop/claim/?code=SECOND-SECRET',
     filename: '7-2.png',
   });
+});
+
+test('card claim secret-code exports support individual and ZIP jobs and suppress used codes', () => {
+  const order = cardOrder({
+    boxes: [{ boxId: 11, receiptClaimCode: 'PACK-SECRET', dudeIds: [] }],
+    cardClaims: [
+      { figureId: 101, assetId: 'receipt-101', receiptClaimCode: 'CARD-SECRET-101', receiptClaimStatus: 'unclaimed' },
+      { figureId: 102, receiptClaimCode: 'CARD-SECRET-102', receiptClaimStatus: 'processing' },
+      { figureId: 103, receiptClaimCode: 'CARD-SECRET-103', receiptClaimStatus: 'claimed' },
+      { figureId: 104, receiptClaimCode: '   ', receiptClaimStatus: 'unclaimed' },
+    ],
+  });
+
+  assert.deepEqual(buildFulfillmentCardClaimSecretCodeExportEntry({ order, cardClaimIndex: 0 }), {
+    orderId: 'card_nft_2:7',
+    figureId: 101,
+    cardClaimIndex: 0,
+    secretCode: 'CARD-SECRET-101',
+    claimUrl: 'https://mons.shop/claim/?code=CARD-SECRET-101',
+    filename: '7-2.png',
+  });
+  assert.equal(buildFulfillmentCardClaimSecretCodeExportEntry({ order, cardClaimIndex: 1 }), null);
+  assert.equal(buildFulfillmentCardClaimSecretCodeExportEntry({ order, cardClaimIndex: 2 }), null);
+
+  const entries = buildFulfillmentSecretCodeExportEntries([order]);
+  assert.deepEqual(
+    entries.map((entry) => ({
+      boxId: entry.boxId,
+      figureId: entry.figureId,
+      secretCode: entry.secretCode,
+      filename: entry.filename,
+    })),
+    [
+      { boxId: 11, figureId: undefined, secretCode: 'PACK-SECRET', filename: '7-1.png' },
+      { boxId: undefined, figureId: 101, secretCode: 'CARD-SECRET-101', filename: '7-2.png' },
+    ],
+  );
+  assert.equal(countFulfillmentSecretCodeExportEntries([order]), 2);
+});
+
+test('card claim secret-code export uses the claimed card preview image', () => {
+  const order = cardOrder({
+    boxes: [],
+    looseDudes: [101],
+    cardClaims: [{ figureId: 101, receiptClaimCode: 'CARD-SECRET-101' }],
+  });
+  const figureMetadataByKey = {
+    [figureMetadataCacheKey(cardDrop.dropId, 101)]: {
+      dropId: cardDrop.dropId,
+      id: 101,
+      image: 'https://assets.example.com/card-101.webp',
+    },
+  };
+
+  const entry = buildFulfillmentCardClaimSecretCodeExportEntry({
+    order,
+    cardClaimIndex: 0,
+    options: { dropById, figureMetadataByKey },
+  });
+  assert.deepEqual(entry?.previewImages, [{ src: 'https://assets.example.com/card-101.webp' }]);
 });
 
 test('buildFulfillmentSecretCodeExportEntries adds direct-delivery box preview images', () => {

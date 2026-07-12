@@ -2,7 +2,10 @@ import { FieldValue, type DocumentReference, type Firestore } from 'firebase-adm
 import type { SolanaCluster } from './config/deployment.js';
 import { dropBoxAssignmentPath, dropPackStatusPath, dropRootPath } from './dropPaths.js';
 import { IRL_CLAIM_CODE_NAMESPACE } from './claimCodes.js';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from './stripeCheckout/contract.js';
+import {
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+} from './stripeCheckout/contract.js';
 
 export const PACK_STATUS_SCHEMA_VERSION = 1;
 export const PACK_STATUS_DEFAULT_DROP_ID = 'card_nft_2';
@@ -59,6 +62,7 @@ export type PackStatusDeliveryOrderRecord = {
   status?: unknown;
   source?: unknown;
   items?: unknown;
+  adminIrlRedeem?: unknown;
   metadataId?: unknown;
   metadataIds?: unknown;
   quantity?: unknown;
@@ -164,6 +168,13 @@ function isStripeOffchainOrder(order: any): boolean {
   return order?.source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE;
 }
 
+function isAdminIrlDirectCardReceiptOrder(order: any): boolean {
+  return (
+    order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE &&
+    order?.adminIrlRedeem?.targetKind === 'card_receipt'
+  );
+}
+
 export function buildPackStatusBreakdown(counters: PackStatusCounters): PackStatusBreakdown {
   const totalInitialSupply = safeNonNegativeInteger(counters.totalInitialSupply);
   const cardsPerPack = safeNonNegativeInteger(counters.cardsPerPack) || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
@@ -219,6 +230,9 @@ export function buildPackStatusCountersFromRebuildInputs(params: PackStatusRebui
   let redeemedUnsealedCards = 0;
   for (const order of params.deliveryOrders) {
     if (order?.status !== 'ready_to_ship') continue;
+    // This order moves an existing receipt NFT; its underlying card was counted
+    // when that receipt was originally issued.
+    if (isAdminIrlDirectCardReceiptOrder(order)) continue;
     if (isStripeOffchainOrder(order)) {
       redeemedIrlStripe += stripeIrlPackQuantityFromOrder(order);
     } else {

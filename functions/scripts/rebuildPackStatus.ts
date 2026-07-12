@@ -122,7 +122,7 @@ async function aggregateCount(query: any): Promise<number> {
 async function fetchDeliveryOrders(db: Firestore, dropId: string): Promise<PackStatusDeliveryOrderRecord[]> {
   let query: any = db.collection(dropDeliveryOrdersCollectionPath(dropId));
   if (typeof query.select === 'function') {
-    query = query.select('status', 'source', 'items', 'metadataId', 'metadataIds', 'quantity');
+    query = query.select('status', 'source', 'items', 'adminIrlRedeem', 'metadataId', 'metadataIds', 'quantity');
   }
   const snap = await query.get();
   return (snap.docs || []).map((doc: any) => doc.data());

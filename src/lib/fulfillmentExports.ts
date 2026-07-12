@@ -1,8 +1,18 @@
 import { isDropFamily, type FrontendDeploymentConfig } from '../config/deployment';
 import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraContent';
-import type { FulfillmentOrder, FulfillmentOrderAddress, FulfillmentOrderBox } from '../types';
+import type {
+  FulfillmentOrder,
+  FulfillmentOrderAddress,
+  FulfillmentOrderBox,
+  FulfillmentOrderCardClaim,
+} from '../types';
 import type { FigureMetadataRecord } from './figureMetadata';
-import { fulfillmentBoxSecretCode, isUsedReceiptClaimStatus } from './fulfillmentCodes';
+import {
+  fulfillmentBoxSecretCode,
+  fulfillmentCardClaimSecretCode,
+  fulfillmentOrderLooseFigureIds,
+  isUsedReceiptClaimStatus,
+} from './fulfillmentCodes';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from './shipping';
 import { findCountryByCode } from './countries';
@@ -38,8 +48,10 @@ export type FulfillmentSecretCodePreviewImage = {
 
 export type FulfillmentSecretCodeExportEntry = {
   orderId: string;
-  boxId: number;
-  boxIndex: number;
+  boxId?: number;
+  boxIndex?: number;
+  figureId?: number;
+  cardClaimIndex?: number;
   secretCode: string;
   claimUrl: string;
   filename: string;
@@ -214,7 +226,7 @@ export function buildFulfillmentOrdersExport(
       dropId: order.dropId,
       drop,
       previewMode,
-      figureIds: order.looseDudes,
+      figureIds: fulfillmentOrderLooseFigureIds(order),
       figureMetadataByKey: options.figureMetadataByKey,
     });
     return {
@@ -249,20 +261,40 @@ export function buildFulfillmentAddressExport(orders: FulfillmentOrder[]): Recor
 
 export function countFulfillmentSecretCodeExportEntries(orders: FulfillmentOrder[]): number {
   return orders.reduce(
-    (total, order) => total + order.boxes.reduce((boxTotal, box) => boxTotal + (exportableSecretCode(box) ? 1 : 0), 0),
+    (total, order) =>
+      total +
+      order.boxes.reduce((boxTotal, box) => boxTotal + (exportableBoxSecretCode(box) ? 1 : 0), 0) +
+      (order.cardClaims || []).reduce(
+        (claimTotal, claim) => claimTotal + (exportableCardClaimSecretCode(claim) ? 1 : 0),
+        0,
+      ),
     0,
   );
 }
 
-function exportableSecretCode(box: FulfillmentOrderBox): string {
+function exportableBoxSecretCode(box: FulfillmentOrderBox): string {
   if (isUsedReceiptClaimStatus(box.receiptClaimStatus)) return '';
   return fulfillmentBoxSecretCode(box);
+}
+
+function exportableCardClaimSecretCode(claim: FulfillmentOrderCardClaim): string {
+  if (isUsedReceiptClaimStatus(claim.receiptClaimStatus)) return '';
+  return fulfillmentCardClaimSecretCode(claim);
 }
 
 function countFulfillmentSecretCodesThroughBox(order: FulfillmentOrder, boxIndex: number): number {
   let total = 0;
   for (let index = 0; index <= boxIndex && index < order.boxes.length; index += 1) {
-    if (exportableSecretCode(order.boxes[index])) total += 1;
+    if (exportableBoxSecretCode(order.boxes[index])) total += 1;
+  }
+  return total;
+}
+
+function countFulfillmentSecretCodesThroughCardClaim(order: FulfillmentOrder, cardClaimIndex: number): number {
+  let total = countFulfillmentSecretCodesThroughBox(order, order.boxes.length - 1);
+  const cardClaims = order.cardClaims || [];
+  for (let index = 0; index <= cardClaimIndex && index < cardClaims.length; index += 1) {
+    if (exportableCardClaimSecretCode(cardClaims[index])) total += 1;
   }
   return total;
 }
@@ -283,6 +315,31 @@ function uniqueFilename(filename: string, usedFilenames: Set<string>): string {
   const nextFilename = `${basename}-${index}${extension}`;
   usedFilenames.add(nextFilename);
   return nextFilename;
+}
+
+type FulfillmentSecretCodeExportTarget =
+  | { boxId: number; boxIndex: number }
+  | { figureId: number; cardClaimIndex: number };
+
+function buildFulfillmentSecretCodeExportResult(args: {
+  order: FulfillmentOrder;
+  target: FulfillmentSecretCodeExportTarget;
+  secretCode: string;
+  secretCodeOrdinal: number;
+  previewImages: FulfillmentSecretCodePreviewImage[];
+  usedFilenames?: Set<string>;
+}): FulfillmentSecretCodeExportEntry {
+  const orderSegment = sanitizeFilenameSegment(String(args.order.deliveryId), 'order');
+  const filenameBase = `${orderSegment}-${args.secretCodeOrdinal}.png`;
+  const filename = args.usedFilenames ? uniqueFilename(filenameBase, args.usedFilenames) : filenameBase;
+  return {
+    orderId: fulfillmentExportOrderId(args.order),
+    ...args.target,
+    secretCode: args.secretCode,
+    claimUrl: fulfillmentSecretCodeClaimUrl(args.secretCode),
+    filename,
+    ...(args.previewImages.length ? { previewImages: args.previewImages } : {}),
+  };
 }
 
 function buildSecretCodePreviewImages(args: {
@@ -333,6 +390,34 @@ function buildSecretCodePreviewImages(args: {
   });
 }
 
+function buildCardClaimSecretCodePreviewImages(args: {
+  dropId: string;
+  drop: FrontendDeploymentConfig | null;
+  previewMode: DropFigureFulfillmentPreviewMode;
+  claim: FulfillmentOrderCardClaim;
+  figureMetadataByKey?: Record<string, FigureMetadataRecord>;
+}): FulfillmentSecretCodePreviewImage[] {
+  const figureId = normalizePositiveInteger(args.claim.figureId);
+  if (!figureId) {
+    throw new Error(`Missing figure id for card secret code preview: ${args.dropId}`);
+  }
+
+  const preview = resolveFulfillmentFigurePreview({
+    dropId: args.dropId,
+    drop: args.drop,
+    figureId,
+    index: 0,
+    previewMode: args.previewMode,
+    figureMediaBase: resolveDropContent(args.drop || args.dropId).figures.fulfillmentMediaBaseUrl,
+    figureMetadataByKey: args.figureMetadataByKey,
+  });
+  if (!preview.imageSrc) {
+    throw new Error(`Missing figure preview image for card secret code preview: ${args.dropId} figure ${figureId}`);
+  }
+
+  return [{ src: preview.imageSrc }];
+}
+
 function buildFulfillmentSecretCodeExportEntryFromBox(args: {
   order: FulfillmentOrder;
   box: FulfillmentOrderBox;
@@ -344,9 +429,6 @@ function buildFulfillmentSecretCodeExportEntryFromBox(args: {
 }): FulfillmentSecretCodeExportEntry {
   const drop = args.options?.dropById.get(args.order.dropId) || null;
   const previewMode = resolveDropContent(drop || args.order.dropId).figures.fulfillmentPreviewMode;
-  const orderSegment = sanitizeFilenameSegment(String(args.order.deliveryId), 'order');
-  const filenameBase = `${orderSegment}-${args.secretCodeOrdinal}.png`;
-  const filename = args.usedFilenames ? uniqueFilename(filenameBase, args.usedFilenames) : filenameBase;
   const previewImages = args.options
     ? buildSecretCodePreviewImages({
         dropId: args.order.dropId,
@@ -357,15 +439,14 @@ function buildFulfillmentSecretCodeExportEntryFromBox(args: {
       })
     : [];
 
-  return {
-    orderId: fulfillmentExportOrderId(args.order),
-    boxId: args.box.boxId,
-    boxIndex: args.boxIndex,
+  return buildFulfillmentSecretCodeExportResult({
+    order: args.order,
+    target: { boxId: args.box.boxId, boxIndex: args.boxIndex },
     secretCode: args.secretCode,
-    claimUrl: fulfillmentSecretCodeClaimUrl(args.secretCode),
-    filename,
-    ...(previewImages.length ? { previewImages } : {}),
-  };
+    secretCodeOrdinal: args.secretCodeOrdinal,
+    previewImages,
+    usedFilenames: args.usedFilenames,
+  });
 }
 
 export function buildFulfillmentSecretCodeExportEntry(args: {
@@ -377,7 +458,7 @@ export function buildFulfillmentSecretCodeExportEntry(args: {
   const box = args.order.boxes[args.boxIndex];
   if (!box) return null;
 
-  const secretCode = exportableSecretCode(box);
+  const secretCode = exportableBoxSecretCode(box);
   if (!secretCode) return null;
 
   return buildFulfillmentSecretCodeExportEntryFromBox({
@@ -391,6 +472,60 @@ export function buildFulfillmentSecretCodeExportEntry(args: {
   });
 }
 
+function buildFulfillmentSecretCodeExportEntryFromCardClaim(args: {
+  order: FulfillmentOrder;
+  claim: FulfillmentOrderCardClaim;
+  cardClaimIndex: number;
+  secretCode: string;
+  secretCodeOrdinal: number;
+  options?: FulfillmentSecretCodeExportOptions;
+  usedFilenames?: Set<string>;
+}): FulfillmentSecretCodeExportEntry {
+  const drop = args.options?.dropById.get(args.order.dropId) || null;
+  const previewMode = resolveDropContent(drop || args.order.dropId).figures.fulfillmentPreviewMode;
+  const previewImages = args.options
+    ? buildCardClaimSecretCodePreviewImages({
+        dropId: args.order.dropId,
+        drop,
+        previewMode,
+        claim: args.claim,
+        figureMetadataByKey: args.options.figureMetadataByKey,
+      })
+    : [];
+
+  return buildFulfillmentSecretCodeExportResult({
+    order: args.order,
+    target: { figureId: args.claim.figureId, cardClaimIndex: args.cardClaimIndex },
+    secretCode: args.secretCode,
+    secretCodeOrdinal: args.secretCodeOrdinal,
+    previewImages,
+    usedFilenames: args.usedFilenames,
+  });
+}
+
+export function buildFulfillmentCardClaimSecretCodeExportEntry(args: {
+  order: FulfillmentOrder;
+  cardClaimIndex: number;
+  options?: FulfillmentSecretCodeExportOptions;
+  usedFilenames?: Set<string>;
+}): FulfillmentSecretCodeExportEntry | null {
+  const claim = args.order.cardClaims?.[args.cardClaimIndex];
+  if (!claim) return null;
+
+  const secretCode = exportableCardClaimSecretCode(claim);
+  if (!secretCode) return null;
+
+  return buildFulfillmentSecretCodeExportEntryFromCardClaim({
+    order: args.order,
+    claim,
+    cardClaimIndex: args.cardClaimIndex,
+    secretCode,
+    secretCodeOrdinal: countFulfillmentSecretCodesThroughCardClaim(args.order, args.cardClaimIndex),
+    options: args.options,
+    usedFilenames: args.usedFilenames,
+  });
+}
+
 export function buildFulfillmentSecretCodeExportEntries(
   orders: FulfillmentOrder[],
   options?: FulfillmentSecretCodeExportOptions,
@@ -398,8 +533,8 @@ export function buildFulfillmentSecretCodeExportEntries(
   const usedFilenames = new Set<string>();
   return orders.flatMap((order) => {
     let secretCodeOrdinal = 0;
-    return order.boxes.flatMap((box, boxIndex) => {
-      const secretCode = exportableSecretCode(box);
+    const boxEntries = order.boxes.flatMap((box, boxIndex) => {
+      const secretCode = exportableBoxSecretCode(box);
       if (!secretCode) return [];
 
       secretCodeOrdinal += 1;
@@ -415,6 +550,24 @@ export function buildFulfillmentSecretCodeExportEntries(
         }),
       ];
     });
+    const cardEntries = (order.cardClaims || []).flatMap((claim, cardClaimIndex) => {
+      const secretCode = exportableCardClaimSecretCode(claim);
+      if (!secretCode) return [];
+
+      secretCodeOrdinal += 1;
+      return [
+        buildFulfillmentSecretCodeExportEntryFromCardClaim({
+          order,
+          claim,
+          cardClaimIndex,
+          secretCode,
+          secretCodeOrdinal,
+          options,
+          usedFilenames,
+        }),
+      ];
+    });
+    return [...boxEntries, ...cardEntries];
   });
 }
 

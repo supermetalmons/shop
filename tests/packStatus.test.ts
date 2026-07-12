@@ -161,6 +161,12 @@ test('historical pack status counting separates online reveals, normal/Admin IRL
       },
       {
         status: 'ready_to_ship',
+        source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+        items: [{ kind: 'dude', assetId: 'admin-irl-card-receipt' }],
+        adminIrlRedeem: { targetKind: 'card_receipt' },
+      },
+      {
+        status: 'ready_to_ship',
         source: 'stripe_offchain',
         metadataIds: [101, 102, 103],
       },
@@ -286,6 +292,47 @@ test('normal IRL pack status increments counters and records card-equivalent eve
     redeemedIrlNormal: 2,
     redeemedUnsealedCards: 4,
   });
+});
+
+test('normal card-only IRL status counts one redeemed unsealed card idempotently', async () => {
+  const updates: Array<{ ref: any; data: any }> = [];
+  const creates: Array<{ ref: any; data: any }> = [];
+  let eventExists = false;
+  const db = {
+    doc: (path: string) => ({ path }),
+    runTransaction: async (fn: any) =>
+      fn({
+        get: async () => ({ exists: eventExists }),
+        update: (ref: any, data: any) => updates.push({ ref, data }),
+        create: (ref: any, data: any) => {
+          eventExists = true;
+          creates.push({ ref, data });
+        },
+      }),
+  } as any;
+
+  const first = await countNormalIrlPackStatus({
+    db,
+    dropRuntime: CARD_NFT_2_RUNTIME,
+    deliveryId: 137,
+    packQuantity: 0,
+    unsealedCardQuantity: 1,
+  });
+  const duplicate = await countNormalIrlPackStatus({
+    db,
+    dropRuntime: CARD_NFT_2_RUNTIME,
+    deliveryId: 137,
+    packQuantity: 0,
+    unsealedCardQuantity: 1,
+  });
+
+  assert.deepEqual(first, { counted: true, quantity: 1 });
+  assert.deepEqual(duplicate, { counted: false, quantity: 0 });
+  assert.equal(updates.length, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedIrlNormal'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedUnsealedCards'), true);
+  assert.equal(creates.length, 1);
+  assert.deepEqual(creates[0].data.increments, { redeemedUnsealedCards: 1 });
 });
 
 test('normal IRL poncho pack status records one-card pack event quantity', async () => {

@@ -3,6 +3,7 @@ import type { InventoryItem } from '../types';
 import { hasAdminIrlRedeemAccess } from './fulfillmentAccess';
 
 type EligibilityItem = Pick<InventoryItem, 'dropId' | 'kind'>;
+type CardReceiptEligibilityItem = Pick<InventoryItem, 'dropId' | 'kind' | 'dudeId'>;
 
 export type PendingAdminIrlRedeemFinalize = {
   wallet: string;
@@ -18,6 +19,20 @@ const ADMIN_IRL_REDEEM_PENDING_FINALIZE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_PENDING_ADMIN_IRL_REDEEMS = 20;
 const ADMIN_IRL_REDEEM_REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 const ADMIN_IRL_REDEEM_TRANSFER_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{64,128}$/;
+
+export function removeHiddenAssetIds(hiddenAssetIds: ReadonlySet<string>, assetIds: Iterable<string>): Set<string> {
+  const removed = new Set(Array.from(assetIds, (id) => String(id || '').trim()).filter(Boolean));
+  if (!removed.size) return new Set(hiddenAssetIds);
+  return new Set(Array.from(hiddenAssetIds).filter((id) => !removed.has(id)));
+}
+
+export function retainTransientHiddenAssetIdsPresentInInventory(
+  hiddenAssetIds: ReadonlySet<string>,
+  inventoryAssetIds: Iterable<string>,
+): Set<string> {
+  const present = new Set(Array.from(inventoryAssetIds, (id) => String(id || '').trim()).filter(Boolean));
+  return new Set(Array.from(hiddenAssetIds).filter((id) => present.has(id)));
+}
 
 function pendingAdminIrlRedeemFinalizeKey(wallet?: string) {
   return wallet ? `monsPendingAdminIrlRedeems:${wallet}` : 'monsPendingAdminIrlRedeems:disconnected';
@@ -134,4 +149,24 @@ export function canAdminIrlRedeemSelection(args: {
   if (args.selectedDropIds.length !== 1) return false;
   if (args.selectedDropFamily !== 'card_nft_2') return false;
   return args.deliverableItems.every((item) => item.kind === 'box');
+}
+
+export function canAdminIrlRedeemCardReceipt(args: {
+  wallet?: string | null;
+  isSignedInWallet: boolean;
+  selectionOwner?: string | null;
+  receiptCount: number;
+  item?: CardReceiptEligibilityItem | null;
+  dropFamily?: DropFamily;
+  hasAdminAccess?: (wallet: string | null | undefined) => boolean;
+}): boolean {
+  const hasAdminAccess = args.hasAdminAccess || hasAdminIrlRedeemAccess;
+  if (!args.wallet || !args.isSignedInWallet || !hasAdminAccess(args.wallet)) return false;
+  if (!args.selectionOwner || args.selectionOwner !== args.wallet) return false;
+  if (args.receiptCount !== 1) return false;
+  if (args.dropFamily !== 'card_nft_2') return false;
+  const item = args.item;
+  if (!item || item.kind !== 'certificate') return false;
+  const figureId = Number(item.dudeId);
+  return Number.isInteger(figureId) && figureId > 0;
 }

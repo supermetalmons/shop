@@ -176,6 +176,13 @@ export interface FulfillmentOrderBox {
   dudeIds: number[];
 }
 
+export interface FulfillmentOrderCardClaim {
+  figureId: number;
+  assetId?: string;
+  receiptClaimCode?: string;
+  receiptClaimStatus?: string;
+}
+
 export interface FulfillmentOrder {
   dropId: string;
   deliveryId: number;
@@ -191,6 +198,7 @@ export interface FulfillmentOrder {
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
+  cardClaims?: FulfillmentOrderCardClaim[];
 }
 
 export interface FulfillmentManualReviewCheckout {
@@ -234,6 +242,7 @@ export interface AdminIrlRedeemPreparedTxResponse extends PreparedTxResponse {
   dropId: string;
   adminWallet: string;
   itemCount: number;
+  targetKind?: 'pack' | 'card_receipt';
 }
 
 export interface AdminIrlRedeemFinalizeResult {
@@ -249,6 +258,11 @@ export interface AdminIrlRedeemFinalizeResult {
     claimCode?: string;
     dudeIds?: number[];
   }>;
+  cards?: Array<{
+    figureId: number;
+    receiptAssetId: string;
+    claimCode?: string;
+  }>;
 }
 
 export interface StripeReceiptClaimResult {
@@ -259,6 +273,7 @@ export interface StripeReceiptClaimResult {
   receiptTxs?: string[];
   receiptKind?: 'box' | 'figure';
   figureIds?: number[];
+  receiptAssetIds?: string[];
 }
 
 export interface DeliverySelection {
