@@ -2983,6 +2983,37 @@ button.no-focus-style:focus-visible {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.receipt-viewer-overlay__explorer-link {
+  position: absolute;
+  top: calc(100% + clamp(10px, 1.8svh, 18px));
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  touch-action: manipulation;
+}
+
+.receipt-viewer-overlay__explorer-link:hover,
+.receipt-viewer-overlay__explorer-link:focus-visible {
+  text-decoration: underline;
+}
+
+.receipt-viewer-overlay__explorer-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .receipt-viewer-overlay__admin-irl {
   position: absolute;
   left: 50%;

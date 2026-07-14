@@ -127,6 +127,7 @@ import {
   sendPreparedTransaction,
   shortAddress,
 } from './lib/solana';
+import { solanaExplorerAddressUrl } from './lib/solanaExplorer';
 import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
 import {
   normalizeOptionalFulfillmentTrackingCode,
@@ -1246,6 +1247,7 @@ type ReceiptImageViewerOverlayProps = {
   imageSrc?: string;
   alt: string;
   viewerSize?: ImageViewerSize;
+  explorerHref?: string;
   onDismiss?: () => void;
   adminIrlRedeem?: {
     loading: boolean;
@@ -1262,6 +1264,7 @@ function ReceiptImageViewerOverlay({
   imageSrc,
   alt,
   viewerSize = 'receipt',
+  explorerHref,
   onDismiss,
   adminIrlRedeem,
   onTransitionEnd,
@@ -1305,6 +1308,17 @@ function ReceiptImageViewerOverlay({
             </div>
           ))}
         </div>
+        {explorerHref ? (
+          <a
+            className="receipt-viewer-overlay__explorer-link"
+            href={explorerHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(evt) => evt.stopPropagation()}
+          >
+            View on block explorer
+          </a>
+        ) : null}
       </div>
       {adminIrlRedeem ? (
         <div className="receipt-viewer-overlay__admin-irl" onClick={(evt) => evt.stopPropagation()}>
@@ -3973,6 +3987,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       ? receipt
       : null;
   }, [connectedWallet, getDropConfig, isSignedInWallet, owner, revealOverlay]);
+  const receiptExplorerHref = useMemo(() => {
+    if (revealOverlay?.viewerMode !== 'receipt-image' || revealOverlay.imageViewerSize !== 'receipt') return undefined;
+    const receiptImages = revealOverlay.receiptImages || [];
+    if (receiptImages.length !== 1) return undefined;
+    const receiptId = receiptImages[0]?.key;
+    const cluster = getDropConfig(revealOverlay.dropId)?.solanaCluster;
+    return receiptId && cluster ? solanaExplorerAddressUrl(receiptId, cluster) ?? undefined : undefined;
+  }, [getDropConfig, revealOverlay]);
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
@@ -6057,6 +6079,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
         viewerSize={revealOverlay.imageViewerSize}
+        explorerHref={receiptExplorerHref}
         adminIrlRedeem={
           adminIrlRedeemOverlayReceipt
             ? {
