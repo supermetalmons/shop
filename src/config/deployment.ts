@@ -13,7 +13,7 @@
 import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'little_swag_hoodies' | 'card_nft_2';
+export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
 export type MetadataPathFormat = 'legacy' | 'compact';
 
 export type MediaMapStrategy = 'direct' | 'cyclic';
@@ -232,6 +232,8 @@ export function normalizeDropId(dropId: string): string {
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   card_nft_2: 'card_nft_2',
+  drifella_binder: 'drifella_binder',
+  drifella_shirt: 'drifella_shirt',
   little_swag_boxes: 'little_swag_boxes',
   little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
@@ -248,6 +250,8 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'drifella_binder' ||
+    normalized === 'drifella_shirt' ||
     normalized === 'card_nft_2' ||
     normalized === 'default'
   ) {

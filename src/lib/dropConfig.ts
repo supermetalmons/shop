@@ -52,6 +52,26 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     previewDropId: 'little_swag_hoodies_devnet',
     boxNamePrefix: 'hoodie',
   },
+  {
+    path: '/drifella_binder',
+    dropFamily: 'drifella_binder',
+    solanaCluster: 'mainnet-beta',
+    label: 'Honor Thy Father Binder',
+    title: 'Honor Thy Father Binder',
+    previewImageUrl: 'https://cdn.lil.org/wip/binder.webp',
+    previewAspectRatio: 1034 / 1400,
+    boxNamePrefix: 'binder',
+  },
+  {
+    path: '/drifella_shirt',
+    dropFamily: 'drifella_shirt',
+    solanaCluster: 'mainnet-beta',
+    label: 'Drifella Shirt',
+    title: 'Drifella Shirt',
+    previewImageUrl: 'https://cdn.lil.org/wip/shirt.webp',
+    previewAspectRatio: 1781 / 1400,
+    boxNamePrefix: 'shirt',
+  },
 ];
 
 export function listFrontendDrops(): FrontendDropConfig[] {
