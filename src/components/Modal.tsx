@@ -24,6 +24,7 @@ interface ModalProps {
   title: string;
   onClose: () => void;
   className?: string;
+  overlayClassName?: string;
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
   focusDialogOnOpen?: boolean;
@@ -35,6 +36,7 @@ export function Modal({
   title,
   onClose,
   className,
+  overlayClassName,
   showCloseButton = true,
   closeOnEscape = true,
   focusDialogOnOpen = false,
@@ -72,7 +74,7 @@ export function Modal({
 
   return (
     <div
-      className="modal-overlay"
+      className={`modal-overlay${overlayClassName ? ` ${overlayClassName}` : ''}`}
       role="presentation"
       onClick={(evt) => {
         if (evt.target === evt.currentTarget) onClose();

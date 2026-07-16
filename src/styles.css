@@ -4648,6 +4648,48 @@ button.fulfillment-secret-code-download svg {
   pointer-events: none;
 }
 
+.notify-success-hud {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 1100;
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(24px) saturate(1.02);
+  -webkit-backdrop-filter: blur(24px) saturate(1.02);
+  opacity: 1;
+  transform: translate(-50%, -50%);
+  transition: opacity 260ms ease;
+  pointer-events: none;
+}
+
+.notify-success-hud svg {
+  width: 28px;
+  height: 28px;
+}
+
+.notify-success-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.notify-success-hud--hidden {
+  opacity: 0;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -4687,7 +4729,7 @@ button.fulfillment-secret-code-download svg {
   gap: 16px;
 }
 
-.modal-overlay:has(.notify-modal) {
+.modal-overlay.notify-modal-overlay {
   background: transparent;
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -4738,6 +4780,10 @@ button.fulfillment-secret-code-download svg {
   box-shadow: none;
 }
 
+.notify-form input:disabled {
+  cursor: text;
+}
+
 .notify-form__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4761,16 +4807,31 @@ button.fulfillment-secret-code-download svg {
   font-weight: 650;
 }
 
-.notify-form__actions button:hover:not(:disabled),
-.notify-form__actions button:focus-visible {
+.notify-form__actions button:hover:not(:disabled):not([aria-disabled='true']),
+.notify-form__actions button:focus-visible:not([aria-disabled='true']) {
   outline: none;
   background: color-mix(in srgb, var(--surface) 82%, var(--fg) 18%);
   box-shadow: none;
 }
 
-.notify-form__actions button + button:hover:not(:disabled),
-.notify-form__actions button + button:focus-visible {
+.notify-form__actions button + button:hover:not(:disabled):not([aria-disabled='true']),
+.notify-form__actions button + button:focus-visible:not([aria-disabled='true']) {
   background: var(--accent-hover);
+}
+
+.notify-form__actions button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: pointer;
+  outline: none;
+  box-shadow: none;
+}
+
+.notify-form__actions button:disabled {
+  cursor: pointer;
+}
+
+.notify-form__actions button + button[aria-disabled='true'] {
+  background: var(--accent);
 }
 
 .notify-form .error {
@@ -4795,7 +4856,11 @@ button.fulfillment-secret-code-download svg {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .notify-modal {
+  .notify-success-hud {
+    transition: opacity 1ms linear;
+  }
+
+  .modal.notify-modal {
     animation: none;
   }
 }

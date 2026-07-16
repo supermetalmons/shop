@@ -4,7 +4,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { onAuthStateChanged } from 'firebase/auth';
-import { FaBoxOpen, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
+import { FaBoxOpen, FaCheck, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel, type MintPanelBoxMedia } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
@@ -198,6 +198,8 @@ const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
+const NOTIFY_SUCCESS_HUD_VISIBLE_MS = 1_100;
+const NOTIFY_SUCCESS_HUD_FADE_MS = 260;
 const SELECTION_PANEL_ACTION = {
   cancel: 'cancel',
   view: 'view',
@@ -1965,6 +1967,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [notifySuccessHudPhase, setNotifySuccessHudPhase] = useState<'visible' | 'fading' | null>(null);
+  const notifySuccessHudFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifySuccessHudClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [notifySuccessAnnouncement, setNotifySuccessAnnouncement] = useState('');
+  const notifySuccessAnnouncementTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
@@ -2170,8 +2177,27 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const handleNotifySuccess = useCallback(() => {
     setNotifyOpen(false);
-    showToast('You’re on the list.');
-  }, [showToast]);
+    if (notifySuccessHudFadeTimeoutRef.current) {
+      clearTimeout(notifySuccessHudFadeTimeoutRef.current);
+    }
+    if (notifySuccessHudClearTimeoutRef.current) {
+      clearTimeout(notifySuccessHudClearTimeoutRef.current);
+    }
+    if (notifySuccessAnnouncementTimeoutRef.current) {
+      clearTimeout(notifySuccessAnnouncementTimeoutRef.current);
+    }
+    setNotifySuccessHudPhase('visible');
+    setNotifySuccessAnnouncement('');
+    notifySuccessAnnouncementTimeoutRef.current = setTimeout(() => {
+      setNotifySuccessAnnouncement('You’re on the list.');
+    }, 0);
+    notifySuccessHudFadeTimeoutRef.current = setTimeout(() => {
+      setNotifySuccessHudPhase('fading');
+      notifySuccessHudClearTimeoutRef.current = setTimeout(() => {
+        setNotifySuccessHudPhase(null);
+      }, NOTIFY_SUCCESS_HUD_FADE_MS);
+    }, NOTIFY_SUCCESS_HUD_VISIBLE_MS);
+  }, []);
 
   useEffect(() => {
     if (!auth) return;
@@ -3626,6 +3652,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }
       if (toastClearTimeoutRef.current) {
         clearTimeout(toastClearTimeoutRef.current);
+      }
+      if (notifySuccessHudFadeTimeoutRef.current) {
+        clearTimeout(notifySuccessHudFadeTimeoutRef.current);
+      }
+      if (notifySuccessHudClearTimeoutRef.current) {
+        clearTimeout(notifySuccessHudClearTimeoutRef.current);
+      }
+      if (notifySuccessAnnouncementTimeoutRef.current) {
+        clearTimeout(notifySuccessAnnouncementTimeoutRef.current);
       }
       cancelRevealOverlayAnimationFrame();
       if (revealOverlayResizeRafRef.current) {
@@ -6312,6 +6347,17 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           {toast}
         </div>
       ) : null}
+      <div className="notify-success-announcer" role="status" aria-live="polite" aria-atomic="true">
+        {notifySuccessAnnouncement}
+      </div>
+      {notifySuccessHudPhase ? (
+        <div
+          className={`notify-success-hud${notifySuccessHudPhase === 'fading' ? ' notify-success-hud--hidden' : ''}`}
+          aria-hidden="true"
+        >
+          <FaCheck aria-hidden="true" focusable="false" />
+        </div>
+      ) : null}
       {revealOverlayNode}
       <div className={primaryFrameClassName}>
         <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
@@ -6415,6 +6461,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         title="Notify me"
         onClose={() => setNotifyOpen(false)}
         className="notify-modal"
+        overlayClassName="notify-modal-overlay"
         showCloseButton={false}
       >
         <NotifyForm onSuccess={handleNotifySuccess} onCancel={() => setNotifyOpen(false)} />

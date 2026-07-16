@@ -34,6 +34,7 @@ function keepFocusInNotifyForm(event: KeyboardEvent<HTMLFormElement>) {
 export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
   const mountedRef = useRef(false);
   const pendingRef = useRef(false);
+  const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const errorId = useId();
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,10 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (pending) submitButtonRef.current?.focus({ preventScroll: true });
+  }, [pending]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -113,7 +118,7 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
         <button type="button" onClick={onCancel} disabled={pending}>
           Cancel
         </button>
-        <button type="submit" disabled={pending} aria-busy={pending}>
+        <button ref={submitButtonRef} type="submit" aria-disabled={pending} aria-busy={pending}>
           OK
         </button>
       </div>
