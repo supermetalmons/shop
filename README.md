@@ -57,9 +57,10 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
 - `RESEND_API_KEY` (Firebase Functions secret used only for outbound notifications; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Set: `firebase functions:secrets:set RESEND_API_KEY`
-- `RESEND_INBOUND_API_KEY` (Firebase Functions secret used only by `resendInboundWebhook`; requires Resend Full Access so it can read inbound messages and attachments)
+- `RESEND_INBOUND_API_KEY` (Firebase Functions secret used by `resendInboundWebhook` and `subscribeToNotifications`; requires Resend Full Access so it can read inbound messages and attachments and manage Contacts)
   - Set: `firebase functions:secrets:set RESEND_INBOUND_API_KEY`
-  - There is deliberately no fallback between the inbound and outbound keys.
+  - A notification signup directly adds the normalized address to global Resend Contacts without sending a confirmation email. Existing contacts return success without changing their current unsubscribe state.
+  - There is deliberately no fallback between the outbound key and the shared inbound/Contacts key.
 - `RESEND_WEBHOOK_SECRET` (Firebase Functions secret used to verify Resend inbound webhook signatures)
   - In Resend, add an `email.received` webhook for `https://us-central1-mons-shop.cloudfunctions.net/resendInboundWebhook` and copy its signing secret.
   - Set: `firebase functions:secrets:set RESEND_WEBHOOK_SECRET`

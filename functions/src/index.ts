@@ -154,6 +154,10 @@ import { processResendInboundForward } from './resendInboundService.js';
 import { FirestoreResendInboundStore } from './resendInboundStore.js';
 import { isRetryableResendError, summarizeResendError, type ResendErrorSummary } from './resendErrors.js';
 import {
+  createResendSubscribersProvider,
+  subscribeResendContact,
+} from './resendSubscribers.js';
+import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from './orderEmailItems.js';
@@ -4545,34 +4549,25 @@ function isRetryableNotificationEmailError(err: unknown): err is RetryableNotifi
   return err instanceof RetryableNotificationEmailError && typeof err.reason === 'string';
 }
 
-let cachedResend: ResendClient | null = null;
-let cachedInboundResend: ResendClient | null = null;
-
-function resendApiKey(): string {
-  return envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY);
+function createResendClient(apiKey: () => string): () => Promise<ResendClient | null> {
+  let cachedClient: ResendClient | null = null;
+  return async () => {
+    if (cachedClient) return cachedClient;
+    const key = apiKey();
+    if (!key) return null;
+    const { Resend } = await import('resend');
+    cachedClient = new Resend(key);
+    return cachedClient;
+  };
 }
 
-async function resendClient(): Promise<ResendClient | null> {
-  if (cachedResend) return cachedResend;
-  const apiKey = resendApiKey();
-  if (!apiKey) return null;
-  const { Resend } = await import('resend');
-  cachedResend = new Resend(apiKey);
-  return cachedResend;
-}
-
-function resendInboundApiKey(): string {
-  return envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY);
-}
-
-async function resendInboundClient(): Promise<ResendClient | null> {
-  if (cachedInboundResend) return cachedInboundResend;
-  const apiKey = resendInboundApiKey();
-  if (!apiKey) return null;
-  const { Resend } = await import('resend');
-  cachedInboundResend = new Resend(apiKey);
-  return cachedInboundResend;
-}
+const resendClient = createResendClient(() => envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY));
+const resendInboundClient = createResendClient(() =>
+  envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY),
+);
+const resendContactsClient = createResendClient(() =>
+  envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY),
+);
 
 function resendWebhookSecret(): string {
   return envOrSecretValue('RESEND_WEBHOOK_SECRET', RESEND_WEBHOOK_SECRET);
@@ -6286,6 +6281,32 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   await addressRef.delete();
   return { id: addressId, removed: true };
 });
+
+export const subscribeToNotifications = onCallAuthed(
+  'subscribeToNotifications',
+  async (request) => {
+    const { email: rawEmail } = parseRequest(
+      z.object({ email: z.unknown() }),
+      request.data,
+    );
+    const email = normalizeNotificationEmailRecipient(rawEmail);
+    if (!email) {
+      throw new HttpsError('invalid-argument', 'Enter a valid email address.');
+    }
+
+    try {
+      const resend = await resendContactsClient();
+      if (!resend) throw new Error('Resend Contacts is not configured.');
+      return await subscribeResendContact({
+        email,
+        provider: createResendSubscribersProvider(resend),
+      });
+    } catch {
+      throw new HttpsError('internal', 'Unable to subscribe.');
+    }
+  },
+  { secrets: [RESEND_INBOUND_API_KEY] },
+);
 
 export const resendInboundWebhook = onRequest(
   {

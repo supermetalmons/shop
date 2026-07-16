@@ -202,6 +202,14 @@ export type ListCardNft2UnrevealedCardsResponse = {
   hasMore: boolean;
 };
 
+export type SubscribeToNotificationsRequest = {
+  email: string;
+};
+
+export type SubscribeToNotificationsResponse = {
+  subscribed: true;
+};
+
 const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
   .sort((a, b) => a.localeCompare(b))
   .map((dropId) => {
@@ -911,6 +919,15 @@ export async function listCardNft2UnrevealedCards(
 ): Promise<ListCardNft2UnrevealedCardsResponse> {
   return callFunction<ListCardNft2UnrevealedCardsRequest, ListCardNft2UnrevealedCardsResponse>(
     'listCardNft2UnrevealedCards',
+    args,
+  );
+}
+
+export function subscribeToNotifications(
+  args: SubscribeToNotificationsRequest,
+): Promise<SubscribeToNotificationsResponse> {
+  return callFunction<SubscribeToNotificationsRequest, SubscribeToNotificationsResponse>(
+    'subscribeToNotifications',
     args,
   );
 }

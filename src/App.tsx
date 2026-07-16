@@ -10,6 +10,7 @@ import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
+import { NotifyForm } from './components/NotifyForm';
 import { ClaimForm } from './components/ClaimForm';
 import { ShopHeader } from './components/ShopHeader';
 import { useMintProgress } from './hooks/useMintProgress';
@@ -2011,6 +2012,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [adminIrlRedeeming, setAdminIrlRedeeming] = useState(false);
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
+  const [notifyOpen, setNotifyOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
   const [claimInitialCode, setClaimInitialCode] = useState('');
   const [claimOpenedFromDeepLink, setClaimOpenedFromDeepLink] = useState(false);
@@ -2165,6 +2167,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   }, []);
+
+  const handleNotifySuccess = useCallback(() => {
+    setNotifyOpen(false);
+    showToast('You’re on the list.');
+  }, [showToast]);
 
   useEffect(() => {
     if (!auth) return;
@@ -2489,6 +2496,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   useEffect(() => {
     if (!claimOpen) setPendingClaimSignIn(false);
   }, [claimOpen]);
+
+  useEffect(() => {
+    setNotifyOpen(false);
+  }, [normalizedCurrentPath]);
 
   useEffect(() => {
     if (claimDeepLinkCode === null) return;
@@ -6318,6 +6329,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             maxPerTx={1}
             terminalAction={{
               statusText: 'Soon',
+              buttonText: 'Notify Me',
+              onClick: () => {
+                // The reveal/viewer layer sits above ordinary modals. Its
+                // underlying page can still receive a synthesized keyboard
+                // activation, so never open an inaccessible modal behind it.
+                if (revealOverlayOpen) return;
+                setNotifyOpen(true);
+              },
             }}
           />
         ) : !routeDrop ? (
@@ -6390,6 +6409,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
+
+      <Modal
+        open={notifyOpen}
+        title="Notify Me"
+        onClose={() => setNotifyOpen(false)}
+        focusDialogOnOpen
+      >
+        <NotifyForm onSuccess={handleNotifySuccess} />
+      </Modal>
 
       <Modal
         open={deliveryOpen}

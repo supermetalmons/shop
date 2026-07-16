@@ -1,4 +1,4 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useLayoutEffect, useRef } from 'react';
 
 let activeModalScrollLocks = 0;
 let previousBodyOverflow: string | undefined;
@@ -25,10 +25,28 @@ interface ModalProps {
   onClose: () => void;
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
+  focusDialogOnOpen?: boolean;
   children: ReactNode;
 }
 
-export function Modal({ open, title, onClose, showCloseButton = true, closeOnEscape = true, children }: ModalProps) {
+export function Modal({
+  open,
+  title,
+  onClose,
+  showCloseButton = true,
+  closeOnEscape = true,
+  focusDialogOnOpen = false,
+  children,
+}: ModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !focusDialogOnOpen) return;
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.contains(document.activeElement)) return;
+    dialog.focus({ preventScroll: true });
+  }, [focusDialogOnOpen, open]);
+
   useEffect(() => {
     if (!open) return;
 
@@ -58,7 +76,14 @@ export function Modal({ open, title, onClose, showCloseButton = true, closeOnEsc
         if (evt.target === evt.currentTarget) onClose();
       }}
     >
-      <div className="modal card" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        ref={dialogRef}
+        className="modal card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={focusDialogOnOpen ? -1 : undefined}
+      >
         <div className="modal__head">
           <div className="card__title">{title}</div>
           {showCloseButton ? (
