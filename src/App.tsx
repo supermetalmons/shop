@@ -6412,11 +6412,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
       <Modal
         open={notifyOpen}
-        title="Notify Me"
+        title="Notify me"
         onClose={() => setNotifyOpen(false)}
-        focusDialogOnOpen
+        className="notify-modal"
+        showCloseButton={false}
       >
-        <NotifyForm onSuccess={handleNotifySuccess} />
+        <NotifyForm onSuccess={handleNotifySuccess} onCancel={() => setNotifyOpen(false)} />
       </Modal>
 
       <Modal

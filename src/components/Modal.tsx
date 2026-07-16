@@ -23,6 +23,7 @@ interface ModalProps {
   open: boolean;
   title: string;
   onClose: () => void;
+  className?: string;
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
   focusDialogOnOpen?: boolean;
@@ -33,6 +34,7 @@ export function Modal({
   open,
   title,
   onClose,
+  className,
   showCloseButton = true,
   closeOnEscape = true,
   focusDialogOnOpen = false,
@@ -78,7 +80,7 @@ export function Modal({
     >
       <div
         ref={dialogRef}
-        className="modal card"
+        className={`modal card${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

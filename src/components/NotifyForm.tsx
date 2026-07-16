@@ -1,28 +1,40 @@
-import { FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
 import { subscribeToNotifications } from '../lib/api';
 
 interface NotifyFormProps {
   onSuccess: () => void;
+  onCancel: () => void;
 }
 
 const NOTIFICATION_EMAIL_SCHEMA = z.string().email().max(254);
-
-function shouldAutoFocusEmailInput(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return window.matchMedia('(pointer: fine)').matches;
-}
 
 function isValidEmail(email: string): boolean {
   return NOTIFICATION_EMAIL_SCHEMA.safeParse(email).success;
 }
 
-export function NotifyForm({ onSuccess }: NotifyFormProps) {
-  const emailInputRef = useRef<HTMLInputElement | null>(null);
+function keepFocusInNotifyForm(event: KeyboardEvent<HTMLFormElement>) {
+  if (event.key !== 'Tab') return;
+  const controls = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)'),
+  );
+  const firstControl = controls[0];
+  const lastControl = controls.at(-1);
+  if (!firstControl || !lastControl) return;
+
+  if (event.shiftKey && document.activeElement === firstControl) {
+    event.preventDefault();
+    lastControl.focus({ preventScroll: true });
+  } else if (!event.shiftKey && document.activeElement === lastControl) {
+    event.preventDefault();
+    firstControl.focus({ preventScroll: true });
+  }
+}
+
+export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
   const mountedRef = useRef(false);
   const pendingRef = useRef(false);
   const errorId = useId();
-  const [shouldAutoFocus] = useState(shouldAutoFocusEmailInput);
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -33,11 +45,6 @@ export function NotifyForm({ onSuccess }: NotifyFormProps) {
       mountedRef.current = false;
     };
   }, []);
-
-  useLayoutEffect(() => {
-    if (!shouldAutoFocus) return;
-    emailInputRef.current?.focus({ preventScroll: true });
-  }, [shouldAutoFocus]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -72,35 +79,44 @@ export function NotifyForm({ onSuccess }: NotifyFormProps) {
   };
 
   return (
-    <form className="modal-form notify-form" onSubmit={submit} noValidate aria-busy={pending}>
-      <label>
-        <span className="muted">Email</span>
-        <input
-          ref={emailInputRef}
-          type="email"
-          inputMode="email"
-          autoComplete="email"
-          maxLength={254}
-          value={email}
-          onChange={(event) => {
-            setEmail(event.target.value);
-            if (error) setError(null);
-          }}
-          placeholder="you@example.com"
-          required
-          disabled={pending}
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? errorId : undefined}
-        />
-      </label>
+    <form
+      className="modal-form notify-form"
+      onSubmit={submit}
+      onKeyDown={keepFocusInNotifyForm}
+      noValidate
+      aria-busy={pending}
+    >
+      <input
+        autoFocus
+        type="email"
+        inputMode="email"
+        autoComplete="email"
+        maxLength={254}
+        value={email}
+        onChange={(event) => {
+          setEmail(event.target.value);
+          if (error) setError(null);
+        }}
+        placeholder="Email"
+        aria-label="Email"
+        required
+        disabled={pending}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+      />
       {error ? (
         <div id={errorId} className="error" role="alert">
           {error}
         </div>
       ) : null}
-      <button type="submit" disabled={pending} aria-busy={pending}>
-        {pending ? 'Adding…' : 'Notify Me'}
-      </button>
+      <div className="notify-form__actions">
+        <button type="button" onClick={onCancel} disabled={pending}>
+          Cancel
+        </button>
+        <button type="submit" disabled={pending} aria-busy={pending}>
+          OK
+        </button>
+      </div>
     </form>
   );
 }
