@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CARD_NFT_2_BOX_MEDIA } from '../../src/config/dropMediaDefaults.ts';
 
@@ -8,7 +8,82 @@ export type MetadataPathFormat = 'legacy' | 'compact';
 
 export const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
 
-export type MediaMapConfigSerialized = {
+export function acquireDeploymentRegistryMutationLock(args: {
+  root: string;
+  operation: string;
+}): () => boolean {
+  const lockPath = join(args.root, '.cache', 'deployment-registry-mutation.lock');
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const payload = `${JSON.stringify({
+    operation: args.operation,
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    token,
+  }, null, 2)}\n`;
+  mkdirSync(dirname(lockPath), { recursive: true });
+  try {
+    writeFileSync(lockPath, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+    let owner = 'owner details unavailable';
+    try {
+      const existing = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+        operation?: unknown;
+        pid?: unknown;
+        startedAt?: unknown;
+      };
+      owner =
+        `operation=${String(existing.operation ?? 'unknown')}, ` +
+        `pid=${String(existing.pid ?? 'unknown')}, ` +
+        `startedAt=${String(existing.startedAt ?? 'unknown')}`;
+    } catch {
+      // Keep the conservative owner description above.
+    }
+    throw new Error(
+      `Another deployment-registry operation may still be running (${owner}).\n` +
+        `Lock: ${lockPath}\n` +
+        `Concurrent deploy/wipe operations are blocked so proof and registry files cannot race.\n` +
+        `If no matching process is running, remove this stale lock file and rerun.`,
+    );
+  }
+
+  let released = false;
+  return () => {
+    if (released) return true;
+    try {
+      if (!existsSync(lockPath)) {
+        released = true;
+        return true;
+      }
+      const current = JSON.parse(readFileSync(lockPath, 'utf8')) as { token?: unknown };
+      if (current.token !== token) {
+        released = true;
+        try {
+          console.warn(`⚠️  Preserved deployment-registry lock because its owner changed: ${lockPath}`);
+        } catch {
+          // Cleanup warnings must not disrupt the caller.
+        }
+        return true;
+      }
+      unlinkSync(lockPath);
+      released = true;
+      return true;
+    } catch (err) {
+      try {
+        console.warn(
+          `⚠️  Failed to remove deployment-registry lock ${lockPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      } catch {
+        // Cleanup warnings must not disrupt the caller.
+      }
+      return false;
+    }
+  };
+}
+
+type MediaMapConfigSerialized = {
   strategy?: 'direct' | 'cyclic';
   count?: number;
   overrides?: Record<number, number>;
@@ -17,7 +92,7 @@ export type MediaMapConfigSerialized = {
 export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
 export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
 
-export type MintSelectionOptionSerialized = {
+type MintSelectionOptionSerialized = {
   key: string;
   label: string;
   startId: number;
@@ -82,10 +157,10 @@ export type DropPaths = {
   receiptsFiguresJsonBase: string;
 };
 
-export const FRONTEND_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY';
-export const FRONTEND_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FRONTEND DROP REGISTRY';
-export const FUNCTIONS_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY';
-export const FUNCTIONS_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FUNCTIONS DROP REGISTRY';
+const FRONTEND_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY';
+const FRONTEND_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FRONTEND DROP REGISTRY';
+const FUNCTIONS_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY';
+const FUNCTIONS_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FUNCTIONS DROP REGISTRY';
 
 function tsStringLiteral(value: string): string {
   return JSON.stringify(value);
@@ -107,7 +182,7 @@ function asOptionalStripeUnitAmountCents(value: unknown): number | undefined {
 }
 
 const IPFS_PROTOCOL = 'ipfs://';
-export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
+const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 const HTTP_PROTOCOL = 'http://';
@@ -194,7 +269,7 @@ function hasSupportedMetadataBaseScheme(value: string): boolean {
   );
 }
 
-export function isSupportedMetadataBaseInput(base: string): boolean {
+function isSupportedMetadataBaseInput(base: string): boolean {
   const trimmed = trimTrailingSlashes(String(base || '').trim());
   if (!trimmed) return false;
   return hasSupportedMetadataBaseScheme(trimmed) || isRawIpfsCid(trimmed);
@@ -358,9 +433,9 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
   return defaultDropFamilyForDropId(dropId || '');
 }
 
-export type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
 
-export type SecondaryMarketplaceLink = {
+type SecondaryMarketplaceLink = {
   key: SecondaryMarketplaceKey;
   label: string;
   href: string;
@@ -386,7 +461,7 @@ function defaultSecondaryMarketHref(dropId: string): string | undefined {
   return secondaryMarketplaceLinksForDropId(dropId).find((link) => link.key === 'tensor')?.href;
 }
 
-export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
+function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
   const normalizedDropId = normalizeDropId(dropId);
   if (!normalizedDropId) return [];
   return [
@@ -511,11 +586,11 @@ export function defaultFrontendBoxMediaForDropFamily(dropFamily: DropFamily): Bo
   return normalizeBoxMediaConfigForRegistry(CARD_NFT_2_BOX_MEDIA);
 }
 
-export function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
+function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
   return dropFamily === 'card_nft_2';
 }
 
-export function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
+function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
   if (dropFamily !== 'card_nft_2') return undefined;
   return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
 }
@@ -885,7 +960,7 @@ ${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMi
   }),`;
 }
 
-export function renderFrontendDeploymentRegistrySection(args: {
+function renderFrontendDeploymentRegistrySection(args: {
   drops: Record<string, FrontendDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
@@ -918,9 +993,9 @@ import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-export type MetadataPathFormat = 'legacy' | 'compact';
+type MetadataPathFormat = 'legacy' | 'compact';
 
-export type MediaMapStrategy = 'direct' | 'cyclic';
+type MediaMapStrategy = 'direct' | 'cyclic';
 
 export type MediaMapConfig = {
   strategy?: MediaMapStrategy;
@@ -929,9 +1004,9 @@ export type MediaMapConfig = {
 };
 
 export type FigureMediaConfig = MediaMapConfig;
-export type BoxMediaConfig = MediaMapConfig;
+type BoxMediaConfig = MediaMapConfig;
 
-export type MintSelectionOption = {
+type MintSelectionOption = {
   key: string;
   label: string;
   startId: number;
@@ -987,7 +1062,7 @@ export type FrontendDeploymentConfig = FrontendDropConfig;
 
 export type FrontendDropsMap = Record<string, FrontendDropConfig>;
 
-export type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
 
 export type SecondaryMarketplaceLink = {
   key: SecondaryMarketplaceKey;
@@ -995,7 +1070,7 @@ export type SecondaryMarketplaceLink = {
   href: string;
 };
 
-export type DropPaths = {
+type DropPaths = {
   /** Normalized drop base (no trailing slash). */
   base: string;
   collectionJson: string;
@@ -1316,7 +1391,7 @@ function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): b
   return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
 }
 
-export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
+function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
     return {
@@ -1387,7 +1462,7 @@ export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined 
   return FRONTEND_DROPS[normalizedDropId];
 }
 
-export function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
+function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
   const drop =
     typeof dropOrId === 'string'
       ? getFrontendDrop(dropOrId)
@@ -1402,14 +1477,6 @@ export function isDropFamily(dropOrId: FrontendDropConfig | string | undefined, 
   return dropFamilyForDrop(dropOrId) === dropFamily;
 }
 
-export function requireFrontendDrop(dropId: string): FrontendDropConfig {
-  const found = getFrontendDrop(dropId);
-  if (!found) {
-    throw new Error(\`Unknown frontend dropId: \${dropId}\`);
-  }
-  return found;
-}
-
 export function listFrontendDrops(): FrontendDropConfig[] {
   return Object.keys(FRONTEND_DROPS)
     .sort((a, b) => a.localeCompare(b))
@@ -1418,7 +1485,7 @@ export function listFrontendDrops(): FrontendDropConfig[] {
 `;
 }
 
-export function renderFunctionsDeploymentRegistrySection(args: {
+function renderFunctionsDeploymentRegistrySection(args: {
   drops: Record<string, FunctionsDropConfigSerialized>;
 }): string {
   const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
@@ -1448,9 +1515,9 @@ export function renderFunctionsDeploymentRegistryFile(args: {
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-export type MetadataPathFormat = 'legacy' | 'compact';
+type MetadataPathFormat = 'legacy' | 'compact';
 
-export type MintSelectionOption = {
+type MintSelectionOption = {
   key: string;
   label: string;
   startId: number;
@@ -1497,22 +1564,8 @@ export type FunctionsDropConfig = {
   deliveryLookupTable: string;
 };
 
-// Backward-compatible type alias.
-export type FunctionsDeploymentConfig = FunctionsDropConfig;
-
 export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
 
-export type DropPaths = {
-  /** Normalized drop base (no trailing slash). */
-  base: string;
-  collectionJson: string;
-  boxesJsonBase: string;
-  figuresJsonBase: string;
-  receiptsBoxesJsonBase: string;
-  receiptsFiguresJsonBase: string;
-};
-
-export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const IPFS_PROTOCOL = 'ipfs://';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -1630,13 +1683,6 @@ export function canonicalizeDropAssetUrl(url: string): string {
   return trimmed;
 }
 
-export function resolveDropAssetUrl(url: string): string {
-  const canonical = canonicalizeDropAssetUrl(url);
-  if (!canonical.toLowerCase().startsWith(IPFS_PROTOCOL)) return canonical;
-  const path = canonical.slice(IPFS_PROTOCOL.length).replace(/^\\/+/, '');
-  return \`\${DROP_METADATA_IPFS_GATEWAY}\${path}\`;
-}
-
 export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
@@ -1713,28 +1759,6 @@ function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): Min
   };
 }
 
-export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
-  const base = normalizeDropBase(dropBase);
-  if (metadataPathFormat === 'legacy') {
-    return {
-      base,
-      collectionJson: \`\${base}/collection.json\`,
-      boxesJsonBase: \`\${base}/json/boxes/\`,
-      figuresJsonBase: \`\${base}/json/figures/\`,
-      receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
-      receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
-    };
-  }
-  return {
-    base,
-    collectionJson: \`\${base}/collection.json\`,
-    boxesJsonBase: \`\${base}/b\`,
-    figuresJsonBase: \`\${base}/f\`,
-    receiptsBoxesJsonBase: \`\${base}/rb\`,
-    receiptsFiguresJsonBase: \`\${base}/rf\`,
-  };
-}
-
 function createFunctionsDrop(
   config: Omit<FunctionsDropConfig, 'dropId' | 'metadataPathFormat'> & {
     dropId: string;
@@ -1792,15 +1816,10 @@ export function requireFunctionsDrop(dropId: string): FunctionsDropConfig {
   return found;
 }
 
-export function listFunctionsDrops(): FunctionsDropConfig[] {
-  return Object.keys(FUNCTIONS_DROPS)
-    .sort((a, b) => a.localeCompare(b))
-    .map((dropId) => FUNCTIONS_DROPS[dropId]);
-}
 `;
 }
 
-export function replaceMarkedSection(args: {
+function replaceMarkedSection(args: {
   filePath: string;
   existingContent: string;
   startMarker: string;
@@ -1822,7 +1841,7 @@ export function replaceMarkedSection(args: {
   return `${args.existingContent.slice(0, prefixEnd)}${nextSection}${args.existingContent.slice(suffixStart)}`;
 }
 
-export function writeTextFileIfChanged(filePath: string, content: string): void {
+function writeTextFileIfChanged(filePath: string, content: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const next = content.endsWith('\n') ? content : `${content}\n`;
   const prev = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';

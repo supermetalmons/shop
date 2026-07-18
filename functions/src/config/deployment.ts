@@ -11,7 +11,7 @@
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-export type MetadataPathFormat = 'legacy' | 'compact';
+type MetadataPathFormat = 'legacy' | 'compact';
 
 export type FunctionsDropConfig = {
   solanaCluster: SolanaCluster;
@@ -48,12 +48,9 @@ export type FunctionsDropConfig = {
   deliveryLookupTable: string;
 };
 
-// Backward-compatible type alias.
-export type FunctionsDeploymentConfig = FunctionsDropConfig;
-
 export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
 
-export type MintSelectionOption = {
+type MintSelectionOption = {
   key: string;
   label: string;
   startId: number;
@@ -65,17 +62,6 @@ export type MintSelectionConfig = {
   options: MintSelectionOption[];
 };
 
-export type DropPaths = {
-  /** Normalized drop base (no trailing slash). */
-  base: string;
-  collectionJson: string;
-  boxesJsonBase: string;
-  figuresJsonBase: string;
-  receiptsBoxesJsonBase: string;
-  receiptsFiguresJsonBase: string;
-};
-
-export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
 const IPFS_PROTOCOL = 'ipfs://';
 const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -193,13 +179,6 @@ export function canonicalizeDropAssetUrl(url: string): string {
   return trimmed;
 }
 
-export function resolveDropAssetUrl(url: string): string {
-  const canonical = canonicalizeDropAssetUrl(url);
-  if (!canonical.toLowerCase().startsWith(IPFS_PROTOCOL)) return canonical;
-  const path = canonical.slice(IPFS_PROTOCOL.length).replace(/^\/+/, '');
-  return `${DROP_METADATA_IPFS_GATEWAY}${path}`;
-}
-
 export function normalizeDropId(dropId: string): string {
   return String(dropId || '').trim().toLowerCase();
 }
@@ -273,28 +252,6 @@ function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): Min
   return {
     kind: 'size',
     options,
-  };
-}
-
-export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
-  const base = normalizeDropBase(dropBase);
-  if (metadataPathFormat === 'legacy') {
-    return {
-      base,
-      collectionJson: `${base}/collection.json`,
-      boxesJsonBase: `${base}/json/boxes/`,
-      figuresJsonBase: `${base}/json/figures/`,
-      receiptsBoxesJsonBase: `${base}/json/receipts/boxes/`,
-      receiptsFiguresJsonBase: `${base}/json/receipts/figures/`,
-    };
-  }
-  return {
-    base,
-    collectionJson: `${base}/collection.json`,
-    boxesJsonBase: `${base}/b`,
-    figuresJsonBase: `${base}/f`,
-    receiptsBoxesJsonBase: `${base}/rb`,
-    receiptsFiguresJsonBase: `${base}/rf`,
   };
 }
 
@@ -671,10 +628,4 @@ export function requireFunctionsDrop(dropId: string): FunctionsDropConfig {
     throw new Error(`Unknown functions dropId: ${dropId}`);
   }
   return found;
-}
-
-export function listFunctionsDrops(): FunctionsDropConfig[] {
-  return Object.keys(FUNCTIONS_DROPS)
-    .sort((a, b) => a.localeCompare(b))
-    .map((dropId) => FUNCTIONS_DROPS[dropId]);
 }

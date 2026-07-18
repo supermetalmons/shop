@@ -28,7 +28,6 @@ export function useDropPageScrollFade({ active, pageRef }: DropPageScrollFadeOpt
     const page = pageRef.current;
     if (!active || !page || typeof window === 'undefined') {
       page?.style.removeProperty('--drop-scroll-progress');
-      page?.style.removeProperty('--drop-backdrop-opacity');
       return;
     }
 
@@ -38,7 +37,6 @@ export function useDropPageScrollFade({ active, pageRef }: DropPageScrollFadeOpt
       frameId = 0;
       const progress = smoothStep((window.scrollY || 0) / SCROLL_FADE_RANGE);
       page.style.setProperty('--drop-scroll-progress', formatCssNumber(progress));
-      page.style.setProperty('--drop-backdrop-opacity', formatCssNumber(1 - progress));
     };
 
     const requestApplyProgress = () => {
@@ -59,7 +57,6 @@ export function useDropPageScrollFade({ active, pageRef }: DropPageScrollFadeOpt
       window.visualViewport?.removeEventListener('scroll', requestApplyProgress);
       window.visualViewport?.removeEventListener('resize', requestApplyProgress);
       page.style.removeProperty('--drop-scroll-progress');
-      page.style.removeProperty('--drop-backdrop-opacity');
     };
   }, [active, pageRef]);
 }

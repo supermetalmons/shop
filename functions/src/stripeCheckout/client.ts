@@ -13,11 +13,11 @@ async function stripeCtor(): Promise<typeof import('stripe').default> {
   return cachedStripeCtor;
 }
 
-export function isStripeTestApiKey(key: string): boolean {
+function isStripeTestApiKey(key: string): boolean {
   return /^(sk|rk)_test_/.test(String(key || '').trim());
 }
 
-export function isStripeLiveApiKey(key: string): boolean {
+function isStripeLiveApiKey(key: string): boolean {
   return /^(sk|rk)_live_/.test(String(key || '').trim());
 }
 

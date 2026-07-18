@@ -2,7 +2,7 @@ import { HttpsError } from 'firebase-functions/v2/https';
 import type { PendingOpenBoxLayout } from './pendingOpenBox.js';
 
 // Anchor discriminator = sha256("global:finalize_open_box")[0..8]
-export const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
+const IX_FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 
 type FinalizeOpenBoxArgsOptions = {
   itemsPerBox: number;

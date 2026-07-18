@@ -2,7 +2,7 @@ import type { FulfillmentStatus } from './lib/fulfillmentStatus';
 
 export type { FulfillmentStatus } from './lib/fulfillmentStatus';
 
-export type AssetKind = 'box' | 'dude' | 'certificate';
+type AssetKind = 'box' | 'dude' | 'certificate';
 
 export type PreviewVideoSource = {
   src: string;
@@ -84,7 +84,7 @@ export interface ProfileAddress {
   email?: string;
 }
 
-export interface DeliveryOrderItemSummary {
+interface DeliveryOrderItemSummary {
   kind: 'box' | 'dude';
   refId: number;
 }
@@ -103,7 +103,7 @@ export interface DeliveryOrderSummary {
   fulfillmentUpdatedAt?: number;
 }
 
-export interface DeliveryRecoveryState {
+interface DeliveryRecoveryState {
   nextCheckAt?: number;
 }
 
@@ -122,7 +122,7 @@ export interface IssueReceiptsResult {
   closeDeliveryTx?: string | null;
 }
 
-export type DeliveryRecoveryOutcome =
+type DeliveryRecoveryOutcome =
   | 'recovered'
   | 'failed'
   | 'lease_active'
@@ -138,7 +138,7 @@ export interface RecoverDeliveryOrdersArgs {
   force?: boolean;
 }
 
-export interface RecoverDeliveryOrdersItemResult {
+interface RecoverDeliveryOrdersItemResult {
   dropId: string;
   deliveryId: number;
   statusBefore: string;

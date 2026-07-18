@@ -134,7 +134,7 @@ export function joinDropAssetUrl(baseUrl: string | undefined, path: string): str
   return resolveDisplayMediaUrl(joined);
 }
 
-export function resolveFigureMediaImageUrl(
+function resolveFigureMediaImageUrl(
   baseUrl: string | undefined,
   figureId: number | undefined,
   figureMedia: FrontendDropConfig['figureMedia'] | undefined,

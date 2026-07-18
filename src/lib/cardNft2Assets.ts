@@ -38,7 +38,7 @@ export function isCardNft2CommonCardId(cardId: unknown): boolean {
   return normalizedCardId ? CARD_NFT_2_COMMON_CARD_IDS.has(normalizedCardId) : false;
 }
 
-export function formatCardNft2AssetId(cardId: unknown): string | undefined {
+function formatCardNft2AssetId(cardId: unknown): string | undefined {
   const normalizedCardId = normalizeCardNft2CardId(cardId);
   if (!normalizedCardId) return undefined;
   return String(normalizedCardId).padStart(4, '0');

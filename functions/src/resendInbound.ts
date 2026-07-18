@@ -11,13 +11,13 @@ import { isRetryableResendError, summarizeResendError, type ResendErrorSummary }
 
 export const RESEND_INBOUND_FORWARD_FROM = 'Mons Shop Forwarder <forwarder@support.mons.shop>';
 export const RESEND_INBOUND_FORWARD_FROM_ADDRESS = 'forwarder@support.mons.shop';
-export const RESEND_INBOUND_PAYLOAD_VERSION = 'v1';
+const RESEND_INBOUND_PAYLOAD_VERSION = 'v1';
 // Three waves at the provider's 15-second per-download timeout leave enough of
 // the 120-second webhook budget for fetching, persistence, and the final send.
 export const RESEND_INBOUND_MAX_ATTACHMENTS = 9;
 export const RESEND_INBOUND_MAX_PAYLOAD_BYTES = 35_000_000;
-export const RESEND_INBOUND_BODY_EXCERPT_BYTES = 256 * 1024;
-export const RESEND_INBOUND_ATTACHMENT_CONCURRENCY = 3;
+const RESEND_INBOUND_BODY_EXCERPT_BYTES = 256 * 1024;
+const RESEND_INBOUND_ATTACHMENT_CONCURRENCY = 3;
 
 const EMPTY_BODY_TEXT = 'This forwarded email contained no text body.';
 
@@ -26,7 +26,7 @@ export type ResendInboundForwardRoute = {
   forwardTo: readonly string[];
 };
 
-export const RESEND_INBOUND_FORWARD_ROUTES: readonly ResendInboundForwardRoute[] = [
+const RESEND_INBOUND_FORWARD_ROUTES: readonly ResendInboundForwardRoute[] = [
   {
     recipient: 'notifications@support.mons.shop',
     forwardTo: ['ivan@ivan.lol'],
@@ -340,11 +340,11 @@ function buildPayload(params: {
   };
 }
 
-export function resendInboundPayloadDigest(payload: CreateEmailOptions): string {
+function resendInboundPayloadDigest(payload: CreateEmailOptions): string {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
-export function resendInboundPayloadBytes(payload: CreateEmailOptions): number {
+function resendInboundPayloadBytes(payload: CreateEmailOptions): number {
   return Buffer.byteLength(JSON.stringify(payload), 'utf8');
 }
 

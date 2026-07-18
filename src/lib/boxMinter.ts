@@ -83,8 +83,8 @@ const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 const ACCOUNT_DISCOUNT_MINT_RECORD = Uint8Array.from([0x63, 0xca, 0x74, 0x83, 0xde, 0x9f, 0x0f, 0x70]);
 
-export const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
-export const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -184,7 +184,7 @@ async function buildComputeBudgetTransaction(
   return new VersionedTransaction(message);
 }
 
-export function boxMinterProgramId(dropConfig: DropProgramScopeConfig): PublicKey {
+function boxMinterProgramId(dropConfig: DropProgramScopeConfig): PublicKey {
   return new PublicKey(dropConfig.boxMinterProgramId);
 }
 
@@ -262,11 +262,11 @@ export function discountMintRecordPda(
   return PublicKey.findProgramAddressSync(seeds, programId);
 }
 
-export function pendingOpenPda(boxAsset: PublicKey, programId: PublicKey): [PublicKey, number] {
+function pendingOpenPda(boxAsset: PublicKey, programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_OPEN_SEED), boxAsset.toBuffer()], programId);
 }
 
-export function pendingDudeAssetPda(
+function pendingDudeAssetPda(
   pending: PublicKey,
   index: number,
   itemsPerBox: number,
@@ -502,7 +502,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
   };
 }
 
-export function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
+function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
   if (data.length < 8 + 32 + 1) {
     throw new Error('Invalid discount record account');
   }
@@ -692,15 +692,6 @@ function encodeMintDiscountedVariantBoxData(variantIndex: number, mintId: bigint
   ]);
 }
 
-export function buildMintBoxesIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  quantity: number,
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  return buildMintBoxesInstructionPlan(cfg, payer, quantity, dropConfig).instruction;
-}
-
 function buildMintBoxesInstructionPlan(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
@@ -731,16 +722,6 @@ function buildMintBoxesInstructionPlan(
     }),
     boxAccounts,
   };
-}
-
-export function buildMintDiscountedBoxIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  quantity: number,
-  proof: Uint8Array[],
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  return buildMintDiscountedBoxInstructionPlan(cfg, payer, quantity, proof, dropConfig).instruction;
 }
 
 function buildMintDiscountedBoxInstructionPlan(
@@ -778,15 +759,6 @@ function buildMintDiscountedBoxInstructionPlan(
   };
 }
 
-export function buildMintVariantBoxIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  variantKey: string,
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  return buildMintVariantInstructionPlan(cfg, payer, variantKey, dropConfig).instruction;
-}
-
 function buildMintVariantInstructionPlan(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
@@ -812,16 +784,6 @@ function buildMintVariantInstructionPlan(
     }),
     boxAccounts,
   };
-}
-
-export function buildMintDiscountedVariantBoxIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  variantKey: string,
-  proof: Uint8Array[],
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  return buildMintDiscountedVariantInstructionPlan(cfg, payer, variantKey, proof, dropConfig).instruction;
 }
 
 function buildMintDiscountedVariantInstructionPlan(
@@ -918,15 +880,6 @@ export async function buildMintDiscountedVariantBoxTxWithAccounts(
   );
 }
 
-export function buildStartOpenBoxIx(
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  boxAsset: PublicKey,
-  dropConfig: DropProgramConfig,
-): TransactionInstruction {
-  return buildStartOpenBoxInstructionPlan(cfg, payer, boxAsset, dropConfig).instruction;
-}
-
 function buildStartOpenBoxInstructionPlan(
   cfg: BoxMinterConfigAccount,
   payer: PublicKey,
@@ -973,61 +926,4 @@ export async function buildStartOpenBoxTxWithPending(
     tx: await buildComputeBudgetTransaction(connection, payer, instruction),
     pendingPda,
   };
-}
-
-export async function buildMintBoxesTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  quantity: number,
-  dropConfig: DropProgramConfig,
-): Promise<VersionedTransaction> {
-  const { tx } = await buildMintBoxesTxWithAccounts(connection, cfg, payer, quantity, dropConfig);
-  return tx;
-}
-
-export async function buildMintDiscountedBoxTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  quantity: number,
-  proof: Uint8Array[],
-  dropConfig: DropProgramConfig,
-): Promise<VersionedTransaction> {
-  const { tx } = await buildMintDiscountedBoxTxWithAccounts(connection, cfg, payer, quantity, proof, dropConfig);
-  return tx;
-}
-
-export async function buildMintVariantBoxTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  variantKey: string,
-  dropConfig: DropProgramConfig,
-): Promise<VersionedTransaction> {
-  const { tx } = await buildMintVariantBoxTxWithAccounts(connection, cfg, payer, variantKey, dropConfig);
-  return tx;
-}
-
-export async function buildMintDiscountedVariantBoxTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  variantKey: string,
-  proof: Uint8Array[],
-  dropConfig: DropProgramConfig,
-): Promise<VersionedTransaction> {
-  const { tx } = await buildMintDiscountedVariantBoxTxWithAccounts(connection, cfg, payer, variantKey, proof, dropConfig);
-  return tx;
-}
-
-export async function buildStartOpenBoxTx(
-  connection: Connection,
-  cfg: BoxMinterConfigAccount,
-  payer: PublicKey,
-  boxAsset: PublicKey,
-  dropConfig: DropProgramConfig,
-): Promise<VersionedTransaction> {
-  const { tx } = await buildStartOpenBoxTxWithPending(connection, cfg, payer, boxAsset, dropConfig);
-  return tx;
 }

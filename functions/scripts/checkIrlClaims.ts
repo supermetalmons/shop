@@ -89,7 +89,7 @@ function fail(message: string): never {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { json: false };
+  const args: Omit<Args, 'dropId'> & { dropId?: string } = { json: false };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -138,7 +138,7 @@ function parseArgs(argv: string[]): Args {
     fail(`Missing required --drop-id.\n\n${usage()}`);
   }
 
-  return args;
+  return { ...args, dropId: args.dropId };
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -219,31 +219,6 @@ async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
     throw new Error(message);
   }
   return (json as any).result as T;
-}
-
-async function heliusJson(url: string): Promise<any> {
-  const res = await fetch(url);
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || (json as any)?.error) {
-    const message = (json as any)?.error?.message || res.statusText || 'Helius request failed';
-    throw new Error(message);
-  }
-  return json;
-}
-
-async function fetchAsset(assetId: string): Promise<DasAsset | null> {
-  try {
-    const asset = await heliusRpc<any>('getAsset', { id: assetId });
-    return asset || null;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!/method not found|invalid params/i.test(message)) throw err;
-
-    const clusterParam = cluster === 'mainnet-beta' ? '' : `&cluster=${cluster}`;
-    const url = `https://api.helius.xyz/v0/assets?ids[]=${assetId}&api-key=${heliusApiKey()}${clusterParam}`;
-    const json = await heliusJson(url);
-    return Array.isArray(json) ? json[0] || null : (json as any)?.[0] || null;
-  }
 }
 
 function normalizeWallet(wallet: string): string {
@@ -372,28 +347,6 @@ function isMonsAsset(asset: DasAsset): boolean {
   if (!kind) return false;
   if (!collectionMint) return false;
   return assetMatchesCollection(asset, collectionMint);
-}
-
-async function fetchAssetsOwned(owner: string): Promise<DasAsset[]> {
-  const baseParams = {
-    ownerAddress: owner,
-    page: 1,
-    limit: 1000,
-    displayOptions: {
-      showCollectionMetadata: true,
-      showUnverifiedCollections: true,
-    },
-  };
-
-  if (collectionMint) {
-    const grouped = await heliusRpc<any>('searchAssets', { ...baseParams, grouping: ['collection', collectionMint] });
-    const groupedItems = Array.isArray(grouped?.items) ? grouped.items : [];
-    if (groupedItems.length) return groupedItems.filter(isMonsAsset);
-  }
-
-  const ungrouped = await heliusRpc<any>('searchAssets', baseParams);
-  const items = Array.isArray(ungrouped?.items) ? ungrouped.items : [];
-  return items.filter(isMonsAsset);
 }
 
 let cachedCollectionAssetsPromise: Promise<DasAsset[]> | null = null;

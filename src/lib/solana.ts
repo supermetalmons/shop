@@ -1,5 +1,5 @@
 import bs58 from 'bs58';
-import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction, type SignatureStatus } from '@solana/web3.js';
+import { Connection, PublicKey, VersionedTransaction, type SignatureStatus } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 
 function unwrapTxErrorMessage(err: unknown): string {
@@ -278,10 +278,6 @@ function describeRequiredSigners(tx: VersionedTransaction): { required: string[]
     if (isZeroSignature(tx.signatures[i])) missingNonPayer.push(required[i]);
   }
   return { required, missingNonPayer };
-}
-
-export function lamportsToSol(lamports = 0): string {
-  return (lamports / LAMPORTS_PER_SOL).toFixed(3);
 }
 
 export function normalizeCountryCode(country?: string) {

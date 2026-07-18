@@ -24,6 +24,7 @@ dist/
 .vite/
 .cache/
 renderer-samples/
+scripts/collection-files/
 *.tsbuildinfo
 
 npm-debug.log*

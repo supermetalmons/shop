@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/main.tsx",
+        "src/renderer/main.tsx",
+        "scripts/*.{ts,cjs}",
+        "scripts/newDrops/*.ts",
+        "tests/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "scripts/**/*.{ts,cjs}",
+        "tests/**/*.ts"
+      ],
+      "ignoreDependencies": ["buffer"],
+      "ignoreBinaries": ["firebase", "solana"]
+    },
+    "functions": {
+      "entry": ["src/index.ts", "scripts/*.ts", "../tests/*.test.ts"],
+      "project": ["src/**/*.ts", "scripts/**/*.ts", "../tests/**/*.ts"],
+      "ignoreBinaries": ["firebase"]
+    }
+  }
+}

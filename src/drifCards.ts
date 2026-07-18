@@ -1,4 +1,4 @@
-export type GlowType =
+type GlowType =
   | 'water'
   | 'fire'
   | 'grass'
@@ -18,9 +18,9 @@ export const DRIF_EFFECT_KEYS = Object.freeze({
   lightingOnly: 'lighting-only',
 } as const);
 
-export type DrifEffectKey = (typeof DRIF_EFFECT_KEYS)[keyof typeof DRIF_EFFECT_KEYS];
+type DrifEffectKey = (typeof DRIF_EFFECT_KEYS)[keyof typeof DRIF_EFFECT_KEYS];
 
-export type EffectConfig = {
+type EffectConfig = {
   id: string;
   effectKey: DrifEffectKey;
   source: string;
@@ -33,7 +33,7 @@ export type EffectConfig = {
   typeClass?: GlowType;
 };
 
-export type DrifCardEffectAssets = {
+type DrifCardEffectAssets = {
   foilSrc: string;
   textureSrc: string;
 };
@@ -101,14 +101,14 @@ const EFFECTS: Record<string, EffectConfig> = {
 
 export const DRIF_EFFECTS = EFFECTS;
 
-export const DRIF_CARD_COUNT = 207;
-export const DRIF_SHOWCASE_CARD_COUNT = 200;
+const DRIF_CARD_COUNT = 207;
+const DRIF_SHOWCASE_CARD_COUNT = 200;
 
 const PONCHO_DRIFELLA_CDN_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella';
 const PONCHO_DRIFELLA_FRONT_CDN_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/fronts`;
 const DEFAULT_DRIF_GLOW_TYPE: GlowType = 'metal';
 
-export const DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS = Object.freeze({
+const DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS = Object.freeze({
   'https://cdn.lil.org/nft/poncho_drifella/fronts/1.webp': 'swshp-SWSH179',
   'https://cdn.lil.org/nft/poncho_drifella/fronts/8.webp': 'swshp-SWSH179',
   'https://cdn.lil.org/nft/poncho_drifella/fronts/37.webp': 'swsh6-196',
@@ -374,7 +374,7 @@ export function getDrifCardAssetSources(card: DrifCardConfig | undefined): strin
   );
 }
 
-export const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {
+const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {
   const assetId = getDrifAssetId(index);
   const effectId = DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS[getDrifEffectPreferenceKey(assetId)];
 

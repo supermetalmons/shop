@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["ES2021"],
+    "lib": ["ES2021", "DOM"],
     "module": "NodeNext",
     "target": "ES2021",
     "moduleResolution": "NodeNext",
@@ -12,7 +12,9 @@
     "resolveJsonModule": true,
     "sourceMap": true,
     "types": ["node"],
-    "strict": false
+    "strict": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src"],
   "exclude": ["node_modules"]

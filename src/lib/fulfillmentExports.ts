@@ -22,7 +22,7 @@ import {
   resolveFulfillmentFigurePreview,
 } from './fulfillmentLabels';
 
-export type FulfillmentExportBox = {
+type FulfillmentExportBox = {
   secretCode?: string;
   style?: string;
   variant?: string;
@@ -42,7 +42,7 @@ export type FulfillmentAddressExportEntry = {
   phone?: string;
 };
 
-export type FulfillmentSecretCodePreviewImage = {
+type FulfillmentSecretCodePreviewImage = {
   src: string;
 };
 
@@ -58,7 +58,7 @@ export type FulfillmentSecretCodeExportEntry = {
   previewImages?: FulfillmentSecretCodePreviewImage[];
 };
 
-export type FulfillmentExportOptions = {
+type FulfillmentExportOptions = {
   dropById: ReadonlyMap<string, FrontendDeploymentConfig>;
   figureMetadataByKey?: Record<string, FigureMetadataRecord>;
 };
@@ -79,15 +79,15 @@ function normalizePositiveInteger(value: unknown): number | null {
   return normalized;
 }
 
-export function fulfillmentExportOrderId(order: Pick<FulfillmentOrder, 'dropId' | 'deliveryId'>): string {
+function fulfillmentExportOrderId(order: Pick<FulfillmentOrder, 'dropId' | 'deliveryId'>): string {
   return `${order.dropId}:${order.deliveryId}`;
 }
 
-export function fulfillmentSecretCodeClaimUrl(secretCode: string): string {
+function fulfillmentSecretCodeClaimUrl(secretCode: string): string {
   return `https://mons.shop/claim/?code=${encodeURIComponent(secretCode)}`;
 }
 
-export function formatFulfillmentCountry(country?: string, countryCode?: string): string {
+function formatFulfillmentCountry(country?: string, countryCode?: string): string {
   const countryCodeName = findCountryByCode(countryCode)?.name;
   if (countryCodeName) return countryCodeName;
 

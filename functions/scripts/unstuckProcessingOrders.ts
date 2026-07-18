@@ -4,8 +4,8 @@ import {
   findConfirmedDeliverySignatureForDeliveryOrder,
   hasConfirmedDeliveryRecordForDeliveryOrder,
   retryIssueReceiptsForDeliveryOrder,
-} from '../lib/index.js';
-import { FUNCTIONS_DROPS } from '../lib/config/deployment.js';
+} from '../src/index.ts';
+import { FUNCTIONS_DROPS } from '../src/config/deployment.ts';
 
 type Args = {
   dropId?: string;

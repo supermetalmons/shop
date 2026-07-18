@@ -69,10 +69,6 @@ export function dropOpenActionProgress(source: DropLabelSource): string {
   return usesUnboxAction(source) ? 'Unboxing…' : 'Opening…';
 }
 
-export function dropOpenVerb(source: DropLabelSource): string {
-  return usesUnboxAction(source) ? 'unbox' : 'open';
-}
-
 export function dropOpenGerund(source: DropLabelSource): string {
   return usesUnboxAction(source) ? 'unboxing' : 'opening';
 }

@@ -43,7 +43,7 @@ function firstCapturedGroup(uri: string, patterns: readonly RegExp[]): string | 
   return undefined;
 }
 
-export function canonicalMetadataUri(uri: string): string {
+function canonicalMetadataUri(uri: string): string {
   return canonicalizeDropAssetUrl(uri);
 }
 

@@ -25,7 +25,7 @@ export function normalizeDeliveryUnitsPerBox(itemsPerBox?: number): number {
   return parsed;
 }
 
-export function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>, itemsPerBox?: number): number {
+function countDeliveryFigures(items: Array<Pick<InventoryItem, 'kind'>>, itemsPerBox?: number): number {
   const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
   return items.reduce((total, item) => total + (item.kind === 'box' ? deliveryUnitsPerBox : 1), 0);
 }

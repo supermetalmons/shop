@@ -610,7 +610,6 @@ export function InventoryGrid({
                     Contains {dropAssetCount(getFrontendDrop(item.dropId), 'figure', item.assignedDudes.length)}
                   </p>
                 ) : null}
-                <div className="inventory__actions" />
               </div>
             ) : null}
           </article>

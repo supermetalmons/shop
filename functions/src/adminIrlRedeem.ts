@@ -47,7 +47,7 @@ export type AdminIrlRedeemMarkerInput = {
   box: AdminIrlRedeemBoxInput;
 };
 
-export type AdminIrlRedeemMarkerReuseBox = {
+type AdminIrlRedeemMarkerReuseBox = {
   boxId: number;
   originalAssetId: string;
   receiptAssetId: string;

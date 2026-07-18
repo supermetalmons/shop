@@ -11,7 +11,6 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase-admin/firestore';
 import { PublicKey } from '@solana/web3.js';
-import fetch from 'cross-fetch';
 import {
   DudeAssignmentValidationError,
   pickDudeIdsForAssignment,

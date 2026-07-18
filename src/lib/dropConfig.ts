@@ -11,7 +11,7 @@ import {
 import { getHeliusApiKey } from './helius';
 import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
 
-export function normalizePathname(pathname: string): string {
+function normalizePathname(pathname: string): string {
   const normalized = String(pathname || '').replace(/\/+$/, '');
   return normalized || '/';
 }
@@ -80,10 +80,6 @@ export function listFrontendDrops(): FrontendDropConfig[] {
     .map((dropId) => FRONTEND_DROPS[dropId]);
 }
 
-export function listFrontendDropIds(): string[] {
-  return listFrontendDrops().map((drop) => drop.dropId);
-}
-
 export function listUpcomingDropRoutes(): UpcomingDropRouteConfig[] {
   return [...UPCOMING_DROP_ROUTES];
 }
@@ -127,7 +123,7 @@ export function resolveFrontendDropByPath(
   return resolveUpcomingRouteDrop(upcomingRoute, options?.drops);
 }
 
-export function heliusRpcUrlForCluster(cluster: SolanaCluster): string | null {
+function heliusRpcUrlForCluster(cluster: SolanaCluster): string | null {
   const apiKey = getHeliusApiKey();
   if (!apiKey) return null;
   const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;

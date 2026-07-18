@@ -1,6 +1,6 @@
-export type StripeCheckoutMarkerStatus = 'started' | 'completed';
+type StripeCheckoutMarkerStatus = 'started' | 'completed';
 
-export type StripeCheckoutMarker = {
+type StripeCheckoutMarker = {
   sessionId: string;
   dropId: string;
   firebaseUid: string;
@@ -11,7 +11,7 @@ export type StripeCheckoutMarker = {
 
 export type StripeCheckoutMarkerStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-export const STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v1';
+const STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v1';
 
 const MAX_STRIPE_CHECKOUT_MARKERS = 50;
 
@@ -100,7 +100,7 @@ export function parseStripeCheckoutMarkers(raw: string | null | undefined): {
   }
 }
 
-export function persistStripeCheckoutMarkers(
+function persistStripeCheckoutMarkers(
   markers: readonly StripeCheckoutMarker[],
   storage: StripeCheckoutMarkerStorage | null = defaultStorage(),
 ): StripeCheckoutMarker[] {

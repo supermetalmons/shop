@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import {
+  acquireDeploymentRegistryMutationLock,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
   dropPathsFromBase as dropPathsFromRegistryBase,
@@ -39,6 +42,87 @@ import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
 
 const VALID_IPFS_CID = 'bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku';
 const DROP_MEDIA_DEFAULTS_SOURCE_URL = new URL('../src/config/dropMediaDefaults.ts', import.meta.url);
+const FRONTEND_DEPLOYMENT_SOURCE_URL = new URL('../src/config/deployment.ts', import.meta.url);
+const FUNCTIONS_DEPLOYMENT_SOURCE_URL = new URL('../functions/src/config/deployment.ts', import.meta.url);
+
+test('deployment registry mutation lock excludes overlapping deploy and wipe operations', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deployment-registry-lock-test-'));
+  const releaseDeploy = acquireDeploymentRegistryMutationLock({
+    root,
+    operation: 'deploy test_drop',
+  });
+  t.after(async () => {
+    releaseDeploy();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  assert.throws(
+    () =>
+      acquireDeploymentRegistryMutationLock({
+        root,
+        operation: 'wipe test_drop',
+      }),
+    /Another deployment-registry operation may still be running/,
+  );
+
+  assert.equal(releaseDeploy(), true);
+  assert.equal(releaseDeploy(), true);
+  const releaseWipe = acquireDeploymentRegistryMutationLock({
+    root,
+    operation: 'wipe test_drop',
+  });
+  assert.equal(existsSync(path.join(root, '.cache', 'deployment-registry-mutation.lock')), true);
+  assert.equal(releaseWipe(), true);
+  assert.equal(releaseWipe(), true);
+  assert.equal(existsSync(path.join(root, '.cache', 'deployment-registry-mutation.lock')), false);
+});
+
+test('deployment registry mutation lock release retries after a transient unreadable lock', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deployment-registry-lock-retry-test-'));
+  const lockPath = path.join(root, '.cache', 'deployment-registry-mutation.lock');
+  const release = acquireDeploymentRegistryMutationLock({
+    root,
+    operation: 'deploy retry_test_drop',
+  });
+  t.after(async () => {
+    release();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const ownedPayload = await readFile(lockPath, 'utf8');
+  await writeFile(lockPath, '{not valid json\n', 'utf8');
+  assert.equal(release(), false);
+  assert.equal(existsSync(lockPath), true);
+
+  await writeFile(lockPath, ownedPayload, 'utf8');
+  assert.equal(release(), true);
+  assert.equal(existsSync(lockPath), false);
+});
+
+test("deployment registry mutation lock release preserves a replacement owner's lock", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'deployment-registry-lock-owner-test-'));
+  const lockPath = path.join(root, '.cache', 'deployment-registry-mutation.lock');
+  const release = acquireDeploymentRegistryMutationLock({
+    root,
+    operation: 'deploy original_drop',
+  });
+  t.after(async () => {
+    release();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const replacementPayload = {
+    ...JSON.parse(await readFile(lockPath, 'utf8')),
+    operation: 'wipe replacement_drop',
+    token: 'replacement-owner-token',
+  };
+  await writeFile(lockPath, `${JSON.stringify(replacementPayload, null, 2)}\n`, 'utf8');
+
+  assert.equal(release(), true);
+  assert.equal(release(), true);
+  assert.equal(existsSync(lockPath), true);
+  assert.equal(JSON.parse(await readFile(lockPath, 'utf8')).token, 'replacement-owner-token');
+});
 
 async function withTempModule(source: string, run: (filePath: string) => Promise<void>, extension = '.mjs') {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'deployment-registry-test-'));
@@ -62,6 +146,84 @@ function generatedEntrySource(source: string, dropId: string): string {
   assert.notEqual(entryEnd, -1, `Generated entry for ${dropId} has no end marker`);
   return source.slice(entryStart, entryEnd);
 }
+
+function addBindingNames(names: string[], bindingName: ts.BindingName): void {
+  if (ts.isIdentifier(bindingName)) {
+    names.push(bindingName.text);
+    return;
+  }
+  for (const element of bindingName.elements) {
+    if (!ts.isOmittedExpression(element)) addBindingNames(names, element.name);
+  }
+}
+
+function topLevelExportSurface(source: string, fileName: string): string[] {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const surface: string[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportAssignment(statement)) {
+      surface.push('value:default');
+      continue;
+    }
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+        for (const element of statement.exportClause.elements) {
+          const kind = statement.isTypeOnly || element.isTypeOnly ? 'type' : 're-export';
+          surface.push(`${kind}:${element.name.text}`);
+        }
+      } else if (statement.exportClause && ts.isNamespaceExport(statement.exportClause)) {
+        surface.push(`namespace:${statement.exportClause.name.text}`);
+      } else {
+        surface.push(`re-export:*:${statement.moduleSpecifier?.getText(sourceFile) ?? ''}`);
+      }
+      continue;
+    }
+
+    const isExported =
+      ts.canHaveModifiers(statement) &&
+      Boolean(ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword));
+    if (!isExported) continue;
+
+    if (ts.isVariableStatement(statement)) {
+      const names: string[] = [];
+      for (const declaration of statement.declarationList.declarations) {
+        addBindingNames(names, declaration.name);
+      }
+      surface.push(...names.map((name) => `value:${name}`));
+    } else if (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement)) {
+      surface.push(`type:${statement.name.text}`);
+    } else if (
+      ts.isClassDeclaration(statement) ||
+      ts.isEnumDeclaration(statement) ||
+      ts.isModuleDeclaration(statement)
+    ) {
+      surface.push(`${ts.isModuleDeclaration(statement) ? 'namespace' : 'type+value'}:${statement.name?.getText(sourceFile) ?? 'default'}`);
+    } else if (ts.isFunctionDeclaration(statement)) {
+      surface.push(`value:${statement.name?.text ?? 'default'}`);
+    }
+  }
+
+  return surface.sort();
+}
+
+test('full deployment registry renderers preserve the checked-in export surfaces', async () => {
+  const [frontendSource, functionsSource] = await Promise.all([
+    readFile(FRONTEND_DEPLOYMENT_SOURCE_URL, 'utf8'),
+    readFile(FUNCTIONS_DEPLOYMENT_SOURCE_URL, 'utf8'),
+  ]);
+
+  assert.deepEqual(
+    topLevelExportSurface(renderFrontendDeploymentRegistryFile({ drops: {} }), 'rendered-frontend-deployment.ts'),
+    topLevelExportSurface(frontendSource, 'src/config/deployment.ts'),
+    'frontend full-file renderer export surface drifted from src/config/deployment.ts',
+  );
+  assert.deepEqual(
+    topLevelExportSurface(renderFunctionsDeploymentRegistryFile({ drops: {} }), 'rendered-functions-deployment.ts'),
+    topLevelExportSurface(functionsSource, 'functions/src/config/deployment.ts'),
+    'Functions full-file renderer export surface drifted from functions/src/config/deployment.ts',
+  );
+});
 
 test('live little_swag_hoodies registry enables Stripe Checkout at $219', () => {
   const frontendDrop = FRONTEND_DROPS.little_swag_hoodies;

@@ -124,7 +124,7 @@ test('pack status breakdown treats missing raw counter fields safely without sea
   assert.equal(missing.unsealedCards, 0);
   assert.equal(missing.redeemedCards, 0);
   assert.equal(missing.totalCards, 30);
-  assert.equal(missing.items.some((item) => item.key === 'sealed'), false);
+  assert.equal(missing.items.some((item) => String(item.key) === 'sealed'), false);
 
   const excessive = buildPackStatusBreakdown({
     dropId: 'card_nft_2',

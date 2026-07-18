@@ -297,11 +297,3 @@ export async function buildShipperVisibleOrderEmailItems(
 ): Promise<ShipperVisibleOrderEmailItem[]> {
   return buildAudienceVisibleOrderEmailItems(order, selectedOrder, 'shipper') as ShipperVisibleOrderEmailItem[];
 }
-
-export const buildBuyerOrderEmailItems = buildBuyerVisibleOrderEmailItems;
-
-/**
- * @deprecated Use buildBuyerVisibleOrderEmailItems so the sealed-pack privacy
- * boundary stays explicit at call sites.
- */
-export const buildOrderEmailItems = buildBuyerVisibleOrderEmailItems;

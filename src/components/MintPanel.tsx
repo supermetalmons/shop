@@ -36,7 +36,7 @@ type MintPanelTerminalAction = {
   buttons?: MintPanelTerminalButton[];
 };
 
-export type MintPanelVideoSource = PreviewVideoSource;
+type MintPanelVideoSource = PreviewVideoSource;
 
 export type MintPanelBoxMedia = {
   imageSrc?: string;

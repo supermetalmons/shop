@@ -5,10 +5,10 @@ export type PonchoDrifellaFrameRect = {
   height: number;
 };
 
-export type PonchoDrifellaPackFrameRect = PonchoDrifellaFrameRect;
+type PonchoDrifellaPackFrameRect = PonchoDrifellaFrameRect;
 export type PonchoDrifellaViewportFrameRect = PonchoDrifellaFrameRect;
 
-export type RevealOverlayCssVarName =
+type RevealOverlayCssVarName =
   | '--reveal-target-left'
   | '--reveal-target-top'
   | '--reveal-target-width'
@@ -49,7 +49,7 @@ export type RevealOverlayViewport = {
 type PonchoDrifellaLayoutViewport = Readonly<RevealOverlayViewport>;
 type RevealOverlayStyleMode = 'default' | 'poncho-card';
 
-export type PonchoDrifellaCardLayout = {
+type PonchoDrifellaCardLayout = {
   packCardRect: PonchoDrifellaPackFrameRect;
   viewportRowSlots: readonly [
     PonchoDrifellaViewportFrameRect,
@@ -79,7 +79,7 @@ const PONCHO_DRIFELLA_ROW_MAX_WIDTH_RATIOS = Object.freeze({
 
 // Seeded from the previous desktop-only layout at a 738px square reveal target,
 // then reduced by 10% while keeping the card centered for pack-relative tuning.
-export const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
+const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
   left: 460,
   top: 372,
   width: 520,
@@ -106,7 +106,7 @@ export function calcPonchoDrifellaRevealTargetRect(
   };
 }
 
-export function calcPonchoDrifellaCardRect(
+function calcPonchoDrifellaCardRect(
   targetRect: Readonly<{ width: number; height: number }>,
 ): PonchoDrifellaPackFrameRect {
   const safeTargetWidth = Math.max(1, targetRect.width);
@@ -291,7 +291,7 @@ function calcPonchoDrifellaRowStartDeltas(
   ] as const;
 }
 
-export function calcPonchoDrifellaCardLayout(
+function calcPonchoDrifellaCardLayout(
   targetRect: Readonly<PonchoDrifellaCardRowLayoutRect>,
   viewport: PonchoDrifellaLayoutViewport,
   cardCount = PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
@@ -309,7 +309,7 @@ export function calcPonchoDrifellaCardLayout(
   };
 }
 
-export function ponchoDrifellaCardLayoutCssVars({
+function ponchoDrifellaCardLayoutCssVars({
   packCardRect,
   rowStartDeltas,
   rowStartScale,
@@ -335,7 +335,7 @@ export function ponchoDrifellaCardLayoutCssVars({
   };
 }
 
-export function ponchoDrifellaSingleCardLayoutCssVars(
+function ponchoDrifellaSingleCardLayoutCssVars(
   cardRect: Readonly<PonchoDrifellaFrameRect>,
 ): RevealOverlayStyleVars {
   const rowSlot = {

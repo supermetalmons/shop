@@ -7,10 +7,10 @@ import {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from './stripeCheckout/contract.js';
 
-export const PACK_STATUS_SCHEMA_VERSION = 1;
+const PACK_STATUS_SCHEMA_VERSION = 1;
 export const PACK_STATUS_DEFAULT_DROP_ID = 'card_nft_2';
 export const PACK_STATUS_SUPPORTED_DROP_IDS = ['card_nft_2', 'poncho_drifella', 'little_swag_boxes'] as const;
-export const PACK_STATUS_DEFAULT_CARDS_PER_PACK = 3;
+const PACK_STATUS_DEFAULT_CARDS_PER_PACK = 3;
 
 export type PackStatusDropRuntime = {
   dropId: string;
@@ -19,7 +19,7 @@ export type PackStatusDropRuntime = {
   maxSupply?: number;
 };
 
-export type PackStatusBreakdownItem = {
+type PackStatusBreakdownItem = {
   key: 'redeemed' | 'unsealed' | 'total';
   label: string;
   amount: number;
@@ -108,7 +108,7 @@ function packStatusUnsealedLabel(dropId: string): string {
   return dropId === 'little_swag_boxes' ? 'Unboxed' : 'Unpacked';
 }
 
-export function packStatusCardsPerPack(dropRuntime: Pick<PackStatusDropRuntime, 'itemsPerBox'> | undefined): number {
+function packStatusCardsPerPack(dropRuntime: Pick<PackStatusDropRuntime, 'itemsPerBox'> | undefined): number {
   return safeNonNegativeInteger(dropRuntime?.itemsPerBox) || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
 }
 
@@ -155,7 +155,7 @@ export function deliveryOrderBoxAssetIds(items: unknown): string[] {
     .filter(Boolean);
 }
 
-export function stripeIrlPackQuantityFromOrder(order: any): number {
+function stripeIrlPackQuantityFromOrder(order: any): number {
   const metadataIds = Array.isArray(order?.metadataIds)
     ? order.metadataIds.map((id: unknown) => safeInteger(id)).filter((id: number) => id > 0)
     : [];

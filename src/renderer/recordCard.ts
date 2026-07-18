@@ -490,7 +490,7 @@ function extractStaticStyle(style: string) {
   return parts.join(' ');
 }
 
-export async function fetchAsDataUrl(absUrl: string) {
+async function fetchAsDataUrl(absUrl: string) {
   const response = await fetch(absUrl);
   if (!response.ok) throw new Error(`Failed to load ${absUrl}: ${response.status}`);
   const blob = await response.blob();

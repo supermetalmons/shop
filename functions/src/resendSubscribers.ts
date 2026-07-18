@@ -2,7 +2,7 @@ import type { Resend } from 'resend';
 import { normalizeNotificationEmailRecipient } from './notifications.js';
 import { summarizeResendError } from './resendErrors.js';
 
-export type ResendSubscriberContactInput = {
+type ResendSubscriberContactInput = {
   email: string;
   unsubscribed: false;
 };
@@ -15,7 +15,7 @@ export interface ResendSubscribersProvider {
   createContact(input: ResendSubscriberContactInput): Promise<ResendSubscriberContactResponse>;
 }
 
-export class ResendSubscriberValidationError extends Error {
+class ResendSubscriberValidationError extends Error {
   readonly code = 'invalid_email';
 
   constructor() {
@@ -24,7 +24,7 @@ export class ResendSubscriberValidationError extends Error {
   }
 }
 
-export class ResendSubscriberProviderError extends Error {
+class ResendSubscriberProviderError extends Error {
   constructor() {
     super('Unable to subscribe.');
     this.name = 'ResendSubscriberProviderError';

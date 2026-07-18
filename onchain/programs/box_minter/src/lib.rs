@@ -22,7 +22,6 @@ const MAX_SAFE_DELIVERY_ITEMS_PER_TX: u8 = 32;
 const MIN_DISCOUNT_MINTS_PER_WALLET: u8 = 1;
 const MAX_DISCOUNT_MINTS_PER_WALLET: u8 = 3;
 
-const MIN_ITEMS_PER_BOX: u8 = 0;
 const MIN_OPENABLE_ITEMS_PER_BOX: u8 = 1;
 // Keep this conservative: start_open_box + finalize_open_box do multiple MPL-Core CPIs per figure.
 const MAX_ITEMS_PER_BOX: u8 = 5;
@@ -1038,7 +1037,7 @@ pub mod box_minter {
             BoxMinterError::InvalidMaxPerTx
         );
         require!(
-            args.items_per_box >= MIN_ITEMS_PER_BOX && args.items_per_box <= MAX_ITEMS_PER_BOX,
+            args.items_per_box <= MAX_ITEMS_PER_BOX,
             BoxMinterError::InvalidItemsPerBox
         );
         let max_figure_id = (args.max_supply as u64)

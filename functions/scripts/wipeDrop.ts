@@ -1,11 +1,17 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import {
+  planDiscountMerkleDatasetRemoval,
+  type DiscountMerkleDatasetReference,
+} from '../../scripts/shared/discountMerkleDataset.ts';
+import {
+  acquireDeploymentRegistryMutationLock,
   normalizeDropId,
   readFrontendDropRegistry,
   readFunctionsDropRegistry,
@@ -28,6 +34,7 @@ type RepoPlan = {
   functionsDropsNext: Record<string, FunctionsDropConfigSerialized>;
   frontendConfigWillChange: boolean;
   functionsConfigWillChange: boolean;
+  targetRegistryState: 'paired' | 'frontend-only' | 'functions-only' | 'absent';
   canonicalDeleteRelPaths: string[];
   canonicalDeleteAbsPaths: string[];
   extraReferences: string[];
@@ -274,11 +281,92 @@ function fileContainsDropIdToken(filePath: string, dropIdTokenRegex: RegExp): bo
 
 function isCanonicalDropFile(relPath: string, dropId: string): boolean {
   if (!relPath.startsWith('src/drops/')) return false;
+  if (relPath.startsWith('src/drops/discountMerkles/')) return false;
   return path.parse(relPath).name === dropId;
 }
 
 function isPreservedDropConfigFile(relPath: string): boolean {
   return relPath.startsWith('scripts/newDrops/');
+}
+
+function discountMerkleReference(
+  drop: { dropId: string; dropFamily: string; discountMerkleRoot: string } | undefined,
+  source: string,
+): DiscountMerkleDatasetReference | undefined {
+  if (!drop) return undefined;
+  return {
+    dropFamily: drop.dropFamily,
+    rootHex: drop.discountMerkleRoot,
+    source: `${source}:${drop.dropId}`,
+  };
+}
+
+function discountMerkleReferences(
+  drops: Record<string, { dropId: string; dropFamily: string; discountMerkleRoot: string }>,
+  source: string,
+): DiscountMerkleDatasetReference[] {
+  return Object.values(drops).map((drop) => ({
+    dropFamily: drop.dropFamily,
+    rootHex: drop.discountMerkleRoot,
+    source: `${source}:${drop.dropId}`,
+  }));
+}
+
+export function assertWipeRegistryConsistency(args: {
+  dropId: string;
+  frontendDrops: Record<string, Pick<FrontendDropConfigSerialized, 'dropId' | 'dropFamily' | 'discountMerkleRoot'>>;
+  functionsDrops: Record<string, Pick<FunctionsDropConfigSerialized, 'dropId' | 'dropFamily' | 'discountMerkleRoot'>>;
+}): void {
+  const dropIds = sortStrings([
+    ...Object.keys(args.frontendDrops),
+    ...Object.keys(args.functionsDrops),
+  ]);
+  for (const dropId of dropIds) {
+    const frontend = args.frontendDrops[dropId];
+    const functions = args.functionsDrops[dropId];
+    if (!frontend || !functions) {
+      if (dropId === args.dropId) continue;
+      fail(
+        `Refusing to wipe ${args.dropId}: unrelated drop ${dropId} is missing from the ${
+          frontend ? 'Functions' : 'frontend'
+        } deployment registry.`,
+      );
+    }
+    if (
+      frontend.dropFamily !== functions.dropFamily ||
+      frontend.discountMerkleRoot !== functions.discountMerkleRoot
+    ) {
+      const targetLabel = dropId === args.dropId ? 'target' : 'unrelated';
+      fail(
+        `Refusing to wipe ${args.dropId}: ${targetLabel} drop ${dropId} has mismatched discount Merkle references.\n` +
+          `- frontend : ${frontend.dropFamily}/${frontend.discountMerkleRoot}\n` +
+          `- Functions: ${functions.dropFamily}/${functions.discountMerkleRoot}`,
+      );
+    }
+  }
+}
+
+function assertDiscountMerkleDatasetRoot(filePath: string, expectedRoot: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    fail(
+      `Refusing to delete malformed discount Merkle dataset ${filePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  const embeddedRoot =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? String((parsed as { root?: unknown }).root ?? '')
+      : '';
+  if (embeddedRoot !== expectedRoot) {
+    fail(
+      `Refusing to delete discount Merkle dataset ${filePath}: embedded root ${embeddedRoot || '(missing)'} ` +
+        `does not match registry root ${expectedRoot}.`,
+    );
+  }
 }
 
 function adminDb() {
@@ -739,11 +827,34 @@ async function buildRepoPlan(args: {
     readFrontendDropRegistry(frontendConfigPath),
     readFunctionsDropRegistry(functionsConfigPath),
   ]);
+  assertWipeRegistryConsistency({
+    dropId: args.dropId,
+    frontendDrops: frontendRegistry.drops,
+    functionsDrops: functionsRegistry.drops,
+  });
 
   const frontendDropsNext = { ...frontendRegistry.drops };
   delete frontendDropsNext[args.dropId];
   const functionsDropsNext = { ...functionsRegistry.drops };
   delete functionsDropsNext[args.dropId];
+  const discountMerkleRemovalPlan = planDiscountMerkleDatasetRemoval({
+    removedFrontend: discountMerkleReference(
+      frontendRegistry.drops[args.dropId],
+      path.relative(args.root, frontendConfigPath),
+    ),
+    removedFunctions: discountMerkleReference(
+      functionsRegistry.drops[args.dropId],
+      path.relative(args.root, functionsConfigPath),
+    ),
+    remainingFrontend: discountMerkleReferences(
+      frontendDropsNext,
+      path.relative(args.root, frontendConfigPath),
+    ),
+    remainingFunctions: discountMerkleReferences(
+      functionsDropsNext,
+      path.relative(args.root, functionsConfigPath),
+    ),
+  });
 
   const nextFrontendDropIds = Object.keys(frontendDropsNext).sort((a, b) => a.localeCompare(b));
   const nextFunctionsDropIds = Object.keys(functionsDropsNext).sort((a, b) => a.localeCompare(b));
@@ -761,19 +872,49 @@ async function buildRepoPlan(args: {
   }
 
   const trackedFiles = listTrackedFiles(args.root);
+  const discountMerkleDeleteRelPaths: string[] = [];
+  const allowedDiscountMerkleRelPaths: string[] = [];
+  if (discountMerkleRemovalPlan) {
+    const canonicalRelPath = discountMerkleRemovalPlan.relativePath;
+    const canonicalAbsPath = path.join(args.root, canonicalRelPath);
+    allowedDiscountMerkleRelPaths.push(canonicalRelPath);
+    if (discountMerkleRemovalPlan.deleteCanonicalFile && existsSync(canonicalAbsPath)) {
+      assertDiscountMerkleDatasetRoot(canonicalAbsPath, discountMerkleRemovalPlan.rootHex);
+      discountMerkleDeleteRelPaths.push(canonicalRelPath);
+    }
+
+    const legacyDropRelPath = `src/drops/discountMerkles/${args.dropId}.json`;
+    if (legacyDropRelPath !== canonicalRelPath) {
+      allowedDiscountMerkleRelPaths.push(legacyDropRelPath);
+      const legacyDropAbsPath = path.join(args.root, legacyDropRelPath);
+      if (trackedFiles.includes(legacyDropRelPath) && existsSync(legacyDropAbsPath)) {
+        assertDiscountMerkleDatasetRoot(legacyDropAbsPath, discountMerkleRemovalPlan.rootHex);
+        discountMerkleDeleteRelPaths.push(legacyDropRelPath);
+      }
+    }
+  }
   const canonicalDeleteRelPaths = sortStrings(
-    trackedFiles.filter((relPath) => isCanonicalDropFile(relPath, args.dropId) || relPath === `scripts/discounts/${args.dropId}.csv`),
+    [
+      ...trackedFiles.filter(
+        (relPath) =>
+          isCanonicalDropFile(relPath, args.dropId) ||
+          relPath === `scripts/discounts/${args.dropId}.csv`,
+      ),
+      ...discountMerkleDeleteRelPaths,
+    ],
   );
   const allowedReferencePaths = new Set<string>([
     path.relative(args.root, frontendConfigPath),
     path.relative(args.root, functionsConfigPath),
     ...canonicalDeleteRelPaths,
+    ...allowedDiscountMerkleRelPaths,
   ]);
   const dropIdTokenRegex = buildDropIdTokenRegex(args.dropId);
   const extraReferences = sortStrings(
     trackedFiles.filter((relPath) => {
       if (allowedReferencePaths.has(relPath)) return false;
       if (isPreservedDropConfigFile(relPath)) return false;
+      if (!existsSync(path.join(args.root, relPath))) return false;
       if (hasDropIdToken(relPath, dropIdTokenRegex)) return true;
       return fileContainsDropIdToken(path.join(args.root, relPath), dropIdTokenRegex);
     }),
@@ -786,6 +927,7 @@ async function buildRepoPlan(args: {
     functionsDropsNext,
     frontendConfigWillChange: Boolean(frontendRegistry.drops[args.dropId]),
     functionsConfigWillChange: Boolean(functionsRegistry.drops[args.dropId]),
+    targetRegistryState: discountMerkleRemovalPlan?.targetRegistryState || 'absent',
     canonicalDeleteRelPaths,
     canonicalDeleteAbsPaths: canonicalDeleteRelPaths.map((relPath) => path.join(args.root, relPath)),
     extraReferences,
@@ -896,6 +1038,12 @@ function printPlan(args: {
   } else {
     console.log('- functions/src/config/deployment.ts: no changes');
   }
+  if (
+    repoPlan.targetRegistryState === 'frontend-only' ||
+    repoPlan.targetRegistryState === 'functions-only'
+  ) {
+    console.log(`- recover one-sided target registry state: ${repoPlan.targetRegistryState}`);
+  }
   if (repoPlan.canonicalDeleteRelPaths.length) {
     repoPlan.canonicalDeleteRelPaths.forEach((relPath) => {
       console.log(`- delete ${relPath}`);
@@ -929,22 +1077,123 @@ async function promptForConfirmation(): Promise<boolean> {
   }
 }
 
-function applyRepoWipe(plan: RepoPlan): void {
-  if (plan.frontendConfigWillChange) {
-    writeFrontendDeploymentRegistryFile({
-      filePath: plan.frontendConfigPath,
-      drops: plan.frontendDropsNext,
-    });
+type LocalFileSnapshot =
+  | { exists: false }
+  | {
+      exists: true;
+      content: Buffer;
+      mode: number;
+    };
+
+function snapshotLocalFile(filePath: string): LocalFileSnapshot {
+  if (!existsSync(filePath)) return { exists: false };
+  return {
+    exists: true,
+    content: readFileSync(filePath),
+    mode: statSync(filePath).mode & 0o777,
+  };
+}
+
+function restoreLocalFile(filePath: string, snapshot: LocalFileSnapshot): void {
+  if (!snapshot.exists) {
+    rmSync(filePath, { force: true });
+    return;
   }
-  if (plan.functionsConfigWillChange) {
-    writeFunctionsDeploymentRegistryFile({
-      filePath: plan.functionsConfigPath,
-      drops: plan.functionsDropsNext,
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, snapshot.content, { mode: snapshot.mode });
+}
+
+type RepoWipeIo = {
+  writeFrontendRegistry: typeof writeFrontendDeploymentRegistryFile;
+  writeFunctionsRegistry: typeof writeFunctionsDeploymentRegistryFile;
+  removeFile: (filePath: string) => void;
+};
+
+const DEFAULT_REPO_WIPE_IO: RepoWipeIo = {
+  writeFrontendRegistry: writeFrontendDeploymentRegistryFile,
+  writeFunctionsRegistry: writeFunctionsDeploymentRegistryFile,
+  removeFile: (filePath) => rmSync(filePath, { force: true }),
+};
+
+export function applyRepoWipe(plan: RepoPlan, ioOverrides: Partial<RepoWipeIo> = {}): void {
+  const io = { ...DEFAULT_REPO_WIPE_IO, ...ioOverrides };
+  const frontendBefore = snapshotLocalFile(plan.frontendConfigPath);
+  const functionsBefore = snapshotLocalFile(plan.functionsConfigPath);
+  const canonicalBefore = new Map(
+    plan.canonicalDeleteAbsPaths.map((filePath) => [filePath, snapshotLocalFile(filePath)] as const),
+  );
+  let frontendAttempted = false;
+  let functionsAttempted = false;
+  const canonicalAttemptedPaths: string[] = [];
+
+  try {
+    if (plan.frontendConfigWillChange) {
+      frontendAttempted = true;
+      io.writeFrontendRegistry({
+        filePath: plan.frontendConfigPath,
+        drops: plan.frontendDropsNext,
+      });
+    }
+    if (plan.functionsConfigWillChange) {
+      functionsAttempted = true;
+      io.writeFunctionsRegistry({
+        filePath: plan.functionsConfigPath,
+        drops: plan.functionsDropsNext,
+      });
+    }
+    plan.canonicalDeleteAbsPaths.forEach((filePath) => {
+      if (!existsSync(filePath)) return;
+      canonicalAttemptedPaths.push(filePath);
+      io.removeFile(filePath);
     });
+  } catch (mutationError) {
+    const rollbackErrors: string[] = [];
+    const rollBack = (label: string, action: () => void) => {
+      try {
+        action();
+      } catch (rollbackError) {
+        rollbackErrors.push(
+          `${label}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        );
+      }
+    };
+    canonicalAttemptedPaths
+      .slice()
+      .reverse()
+      .forEach((filePath) => {
+        const snapshot = canonicalBefore.get(filePath);
+        if (snapshot) {
+          rollBack(filePath, () => restoreLocalFile(filePath, snapshot));
+        }
+      });
+    if (functionsAttempted) {
+      rollBack(plan.functionsConfigPath, () =>
+        restoreLocalFile(plan.functionsConfigPath, functionsBefore),
+      );
+    }
+    if (frontendAttempted) {
+      rollBack(plan.frontendConfigPath, () =>
+        restoreLocalFile(plan.frontendConfigPath, frontendBefore),
+      );
+    }
+    if (rollbackErrors.length) {
+      throw new Error(
+        `Repository wipe failed and rollback was incomplete.\n${rollbackErrors
+          .map((entry) => `- ${entry}`)
+          .join('\n')}`,
+        { cause: mutationError },
+      );
+    }
+    throw mutationError;
   }
-  plan.canonicalDeleteAbsPaths.forEach((absPath) => {
-    if (existsSync(absPath)) rmSync(absPath, { force: true });
-  });
+}
+
+export async function applyWipePhases(args: {
+  applyRepo: () => void;
+  applyFirestore: () => Promise<void>;
+}): Promise<void> {
+  await args.applyFirestore();
+  args.applyRepo();
 }
 
 async function applyFirestoreWipe(dropId: string, plan: FirestorePlan): Promise<void> {
@@ -1015,23 +1264,80 @@ async function main() {
     }
   }
 
-  await applyFirestoreWipe(args.dropId, firestorePlan);
-  applyRepoWipe(repoPlan);
+  let releaseRegistryLock: (() => boolean) | undefined;
+  const releaseOnExit = () => releaseRegistryLock?.();
+  const handleSigint = () => {
+    releaseRegistryLock?.();
+    process.exit(130);
+  };
+  const handleSigterm = () => {
+    releaseRegistryLock?.();
+    process.exit(143);
+  };
+  process.once('exit', releaseOnExit);
+  process.once('SIGINT', handleSigint);
+  process.once('SIGTERM', handleSigterm);
 
-  console.log('');
-  console.log(
-    `wipe complete: removed ${args.dropId} from local config, deleted ${repoPlan.canonicalDeleteRelPaths.length} canonical file(s), ` +
-      `deleted ${firestorePlan.claimCodesToDelete.length} claimCodes doc(s), and recursively deleted ${firestorePlan.recursiveDeletePath}`,
-  );
+  try {
+    releaseRegistryLock = acquireDeploymentRegistryMutationLock({
+      root,
+      operation: `wipe ${args.dropId}`,
+    });
+    const lockedRepoPlan = await buildRepoPlan({ root, dropId: args.dropId });
+    if (lockedRepoPlan.extraReferences.length) {
+      fail(
+        `Found additional tracked references to ${args.dropId} outside the canonical wipe paths:\n` +
+          lockedRepoPlan.extraReferences.map((relPath) => `- ${relPath}`).join('\n') +
+          `\nRemove or rename those references first, then retry.`,
+      );
+    }
+    const lockedKnownDropIds = sortStrings([
+      ...Object.keys(lockedRepoPlan.frontendDropsNext),
+      ...Object.keys(lockedRepoPlan.functionsDropsNext),
+      args.dropId,
+    ]);
+    const lockedFirestorePlan = await buildFirestorePlan(args.dropId, lockedKnownDropIds);
+    if (
+      !isDeepStrictEqual(lockedRepoPlan, repoPlan) ||
+      !isDeepStrictEqual(lockedFirestorePlan, firestorePlan)
+    ) {
+      fail('Repository or Firestore state changed after the wipe plan was shown. Rerun to review a fresh plan.');
+    }
+
+    await applyWipePhases({
+      applyRepo: () => applyRepoWipe(lockedRepoPlan),
+      applyFirestore: () => applyFirestoreWipe(args.dropId, lockedFirestorePlan),
+    });
+
+    console.log('');
+    console.log(
+      `wipe complete: removed ${args.dropId} from local config, deleted ${lockedRepoPlan.canonicalDeleteRelPaths.length} canonical file(s), ` +
+      `deleted ${lockedFirestorePlan.claimCodesToDelete.length} claimCodes doc(s), and recursively deleted ${lockedFirestorePlan.recursiveDeletePath}`,
+    );
+  } finally {
+    const released = releaseRegistryLock ? releaseRegistryLock() : true;
+    if (!releaseRegistryLock || released) {
+      process.removeListener('exit', releaseOnExit);
+      process.removeListener('SIGINT', handleSigint);
+      process.removeListener('SIGTERM', handleSigterm);
+    }
+  }
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  if (looksLikeCredentialError(message)) {
-    console.error(
-      'Firestore access is unavailable. Set GOOGLE_APPLICATION_CREDENTIALS/local ADC or authenticate with `firebase login`, then retry.',
-    );
-  }
-  console.error(message);
-  process.exit(1);
-});
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
+}
+
+if (isDirectRun()) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (looksLikeCredentialError(message)) {
+      console.error(
+        'Firestore access is unavailable. Set GOOGLE_APPLICATION_CREDENTIALS/local ADC or authenticate with `firebase login`, then retry.',
+      );
+    }
+    console.error(message);
+    process.exit(1);
+  });
+}

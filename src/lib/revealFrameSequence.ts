@@ -31,17 +31,7 @@ export function resolveRevealFrameSrc(
   return joinBaseAndPath(frameSequence.baseUrl, `${safeFrameIndex}.${frameSequence.ext}`);
 }
 
-export function listRevealFrameSrcs(frameSequence: DropRevealFrameSourceSequence | undefined): string[] {
-  if (!frameSequence) return [];
-  const sources: string[] = [];
-  for (let frameIndex = 1; frameIndex <= frameSequence.frameCount; frameIndex += 1) {
-    const src = resolveRevealFrameSrc(frameSequence, frameIndex);
-    if (src) sources.push(src);
-  }
-  return sources;
-}
-
-export function preloadRevealFrameSrc(
+function preloadRevealFrameSrc(
   frameSrc: string | undefined,
   loadedFrames: Set<string>,
   pendingFrames: Map<string, HTMLImageElement>,

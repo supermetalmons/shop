@@ -1,19 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getDrifCardAssetSources, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards.ts';
+import { getDrifCardAssetSources, type DrifCardConfig } from '../drifCards.ts';
 import {
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
   type InteractiveCardPackRevealSequence,
 } from './interactiveCardPackReveal.ts';
-import {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
-  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-} from './interactiveCardPackRevealSounds.ts';
-export {
-  PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
-  PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
-} from './interactiveCardPackRevealSounds.ts';
-export const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
-export const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 50;
+const PONCHO_DRIFELLA_PUNCH_FRAME_DURATION_MS = 100;
+const PONCHO_DRIFELLA_SEQUENCE_AUTOPLAY_DELAY_MS = 50;
 export const PONCHO_DRIFELLA_PACK_DISCARD_DELAY_MS = 420;
 export const PONCHO_DRIFELLA_PACK_DISCARD_DURATION_MS = 380;
 const PONCHO_DRIFELLA_CARD_INTERACTION_UNLOCK_DELAY_MS =
@@ -24,8 +16,8 @@ const PONCHO_DRIFELLA_CARD_IMAGE_SETTLE_DELAY_MS = 96;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_BASE_MS = 12_000;
 const PONCHO_DRIFELLA_IMAGE_LOAD_TIMEOUT_MAX_MS = 60_000;
 
-export type PonchoDrifellaImagePreloadMode = 'warm' | 'resident';
-export type PonchoDrifellaImagePreloadPriority = 'high' | 'low';
+type PonchoDrifellaImagePreloadMode = 'warm' | 'resident';
+type PonchoDrifellaImagePreloadPriority = 'high' | 'low';
 
 export type PonchoDrifellaImageCache = {
   fetched: Set<string>;
@@ -159,14 +151,6 @@ export function usePonchoDrifellaImageCacheGeneration(imageCache?: PonchoDrifell
 
   return generation;
 }
-
-export const PONCHO_DRIFELLA_INITIAL_FRAME_URL = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.initialFrameUrl;
-export const PONCHO_DRIFELLA_PUNCH_FRAME_URLS_BY_VARIANT = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.punchFrameUrlsByVariant;
-export const PONCHO_DRIFELLA_SEGMENT_1_1_FRAME_URLS = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segment11FrameUrls;
-export const PONCHO_DRIFELLA_SEGMENT_1_2_FRAME_URLS = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segment12FrameUrls;
-export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_FRAME_URLS = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segmentAutoplayFrameUrls;
-export const PONCHO_DRIFELLA_SEGMENT_AUTOPLAY_OVERTOP_FRAME_URLS =
-  PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.segmentAutoplayOvertopFrameUrls;
 
 export const PONCHO_DRIFELLA_REVEAL_FRAME_SEQUENCE = Object.freeze({
   ...PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.revealFrameSequence,
@@ -309,7 +293,7 @@ export function clearPonchoDrifellaImageCache(imageCache: PonchoDrifellaImageCac
   notifyPonchoDrifellaImageCacheInvalidated(imageCache);
 }
 
-export function releasePonchoDrifellaResidentImages(
+function releasePonchoDrifellaResidentImages(
   imageSources: readonly string[],
   imageCache: PonchoDrifellaImageCache,
 ) {
@@ -320,7 +304,7 @@ export function releasePonchoDrifellaResidentImages(
   });
 }
 
-export async function preloadPonchoDrifellaImage(
+async function preloadPonchoDrifellaImage(
   imageSrc: string | undefined,
   imageCache: PonchoDrifellaImageCache,
   { mode = 'warm', priority = 'low' }: PonchoDrifellaImagePreloadOptions = {},
@@ -609,18 +593,6 @@ async function waitForPonchoDrifellaResidentImageSourcesProgressively(
   return true;
 }
 
-export function getRandomPonchoDrifellaBoxClickSoundUrl() {
-  return (
-    PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS[
-      Math.floor(Math.random() * PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS.length)
-    ] || PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS[0]
-  );
-}
-
-export function getPonchoDrifellaCardByFigureId(figureId: number): DrifCardConfig | undefined {
-  return getDrifCardByFigureId(figureId);
-}
-
 export function arePonchoDrifellaCardAssetsReady(
   card: DrifCardConfig | undefined,
   imageCache?: PonchoDrifellaImageCache,
@@ -647,7 +619,7 @@ export function releasePonchoDrifellaCardAssets(
   releasePonchoDrifellaResidentImages(assetSources, imageCache);
 }
 
-export function waitForPonchoDrifellaCardAssetsUntilReady(
+function waitForPonchoDrifellaCardAssetsUntilReady(
   card: DrifCardConfig | undefined,
   imageCache: PonchoDrifellaImageCache,
   signal?: AbortSignal,
@@ -716,7 +688,7 @@ export function usePonchoDrifellaCardAssetsReady({
   return ready;
 }
 
-export function preloadPonchoDrifellaPunchAssets(
+function preloadPonchoDrifellaPunchAssets(
   imageCache: PonchoDrifellaImageCache,
   options: PonchoDrifellaImagePreloadOptions = {},
   packSequence = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
@@ -727,7 +699,7 @@ export function preloadPonchoDrifellaPunchAssets(
   preloadPonchoDrifellaImageSources(packSequence.punchFrameUrls, imageCache, options);
 }
 
-export function preloadPonchoDrifellaSequenceAssets(
+function preloadPonchoDrifellaSequenceAssets(
   imageCache: PonchoDrifellaImageCache,
   options: PonchoDrifellaImagePreloadOptions = {},
   packSequence = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
@@ -745,7 +717,7 @@ export function preloadPonchoDrifellaPackAssets(
   preloadPonchoDrifellaSequenceAssets(imageCache, options, packSequence);
 }
 
-export type PonchoDrifellaRevealVisualTarget = {
+type PonchoDrifellaRevealVisualTarget = {
   boxFrameSrc: string;
   foregroundFrameSrc?: string;
   stageVisible: boolean;
@@ -765,14 +737,14 @@ export type PonchoDrifellaRevealPlayerViewState = {
   cardVisible: boolean;
 };
 
-export type PonchoDrifellaRevealHostVisual = {
+type PonchoDrifellaRevealHostVisual = {
   boxImage: HTMLImageElement;
   foregroundImage?: HTMLImageElement;
   stageVisible: boolean;
   cardVisible: boolean;
 };
 
-export type PonchoDrifellaRevealPlayerHost = {
+type PonchoDrifellaRevealPlayerHost = {
   clearVisuals: () => void;
   commitVisual: (visual: PonchoDrifellaRevealHostVisual) => boolean;
   onStateChange: (state: PonchoDrifellaRevealPlayerViewState) => void;
@@ -819,12 +791,12 @@ export type PonchoDrifellaRevealPlayer = {
   dispose: () => void;
 };
 
-export type PonchoDrifellaTimedAdvanceResult = {
+type PonchoDrifellaTimedAdvanceResult = {
   stage: PonchoDrifellaRevealStage;
   stageFrameIndex: number;
 };
 
-export type PonchoDrifellaAdvanceDecision =
+type PonchoDrifellaAdvanceDecision =
   | 'noop'
   | 'request-only'
   | 'start-punch'
@@ -833,7 +805,7 @@ export type PonchoDrifellaAdvanceDecision =
   | 'start-autoplay'
   | 'queue-autoplay';
 
-export function getPonchoDrifellaRevealVisualTarget(
+function getPonchoDrifellaRevealVisualTarget(
   stage: PonchoDrifellaRevealStage,
   stageFrameIndex: number,
   activePunchFrameUrls: readonly string[],
@@ -851,7 +823,7 @@ export function getPonchoDrifellaRevealVisualTarget(
   };
 }
 
-export function canCommitPonchoDrifellaVisualTarget(
+function canCommitPonchoDrifellaVisualTarget(
   target: PonchoDrifellaRevealVisualTarget,
   readySources: ReadonlySet<string>,
 ) {
@@ -861,7 +833,7 @@ export function canCommitPonchoDrifellaVisualTarget(
   return true;
 }
 
-export function canEnterPonchoDrifellaAutoplay({
+function canEnterPonchoDrifellaAutoplay({
   cardReady,
   cardAssetsReady,
   cardImageReady,
@@ -878,7 +850,7 @@ export function canEnterPonchoDrifellaAutoplay({
   return cardReady && cardAssetsReady && cardImageGateReady && autoplayFramesReady;
 }
 
-export function getPonchoDrifellaTimedAdvanceResult({
+function getPonchoDrifellaTimedAdvanceResult({
   stage,
   stageFrameIndex,
   activePunchFrameCount,
@@ -916,7 +888,7 @@ export function getPonchoDrifellaTimedAdvanceResult({
   return null;
 }
 
-export function getPonchoDrifellaAdvanceDecision({
+function getPonchoDrifellaAdvanceDecision({
   phase,
   stage,
   advanceLocked,
@@ -950,7 +922,7 @@ export function getPonchoDrifellaAdvanceDecision({
   return 'noop';
 }
 
-export function buildPonchoDrifellaRevealPlayerViewState({
+function buildPonchoDrifellaRevealPlayerViewState({
   phase,
   boxLabel,
   hasRevealAttempted,

@@ -16,7 +16,6 @@ import {
   AddressLookupTableAccount,
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import fetch from 'cross-fetch';
 import nacl from 'tweetnacl';
 import type Stripe from 'stripe';
 import type { Resend as ResendClient } from 'resend';
@@ -82,7 +81,6 @@ import {
   stripeReceiptClaimBoxMapKey,
   stripeReceiptClaimSummary,
   stripeCheckoutOwnerId,
-  type StripeReceiptClaimSummary,
 } from './stripeCheckout/contract.js';
 import {
   ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
@@ -1085,30 +1083,6 @@ function isGrpcAlreadyExists(err: unknown): boolean {
   return code === 6 || code === '6' || code === 'ALREADY_EXISTS';
 }
 
-function isGrpcAborted(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.code;
-  return code === 10 || code === '10' || code === 'ABORTED';
-}
-
-function isGrpcDeadlineExceeded(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.code;
-  return code === 4 || code === '4' || code === 'DEADLINE_EXCEEDED';
-}
-
-function isGrpcUnavailable(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.code;
-  return code === 14 || code === '14' || code === 'UNAVAILABLE';
-}
-
-function isGrpcResourceExhausted(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.code;
-  return code === 8 || code === '8' || code === 'RESOURCE_EXHAUSTED';
-}
-
 function summarizeValue(value: unknown) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return `array(${value.length})`;
@@ -1640,7 +1614,7 @@ async function heliusRpc<T>(dropRuntime: DropRuntime, method: string, params: an
     RPC_TIMEOUT_MS,
     `heliusRpc:${method}`,
   );
-  const json = await res.json().catch(() => ({}));
+  const json: any = await res.json().catch(() => ({}));
   if (!res.ok || json?.error) {
     const message = json?.error?.message || res.statusText || 'Unknown Helius RPC error';
     const upstreamCode = json?.error?.code;
@@ -8121,7 +8095,6 @@ export async function retryIssueReceiptsForDeliveryOrder(
     context: 'getAccountInfo:boxMinterConfig',
   });
   const cfgAdmin = cfg.admin;
-  const cfgTreasury = cfg.treasury;
   const cfgCoreCollection = cfg.coreCollection;
   const signer = cosigner();
   if (!signer.publicKey.equals(cfgAdmin)) {

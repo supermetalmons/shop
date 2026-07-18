@@ -278,9 +278,9 @@ test('resolveMintSelectionVariantIndex maps configured size keys', () => {
   const selection = {
     kind: 'size' as const,
     options: [
-      { key: 'L', startId: 1, endId: 15 },
-      { key: 'XL', startId: 16, endId: 30 },
-      { key: '2XL', startId: 31, endId: 34 },
+      { key: 'L', label: 'L', startId: 1, endId: 15 },
+      { key: 'XL', label: 'XL', startId: 16, endId: 30 },
+      { key: '2XL', label: '2XL', startId: 31, endId: 34 },
     ],
   };
 
@@ -648,7 +648,6 @@ test('validateStripeCheckoutContract accepts a one-item USD live checkout', () =
       automatic_tax: { enabled: true, status: 'complete' },
       amount_subtotal: 24900,
       amount_total: 27042,
-      total_details: { amount_tax: 2142 },
       currency: STRIPE_OFFCHAIN_CURRENCY,
       metadata: {
         fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
@@ -697,7 +696,6 @@ test('validateStripeCheckoutContract accepts multi-item checkout quantity when e
       automatic_tax: { enabled: true, status: 'complete' },
       amount_subtotal: 74700,
       amount_total: 81126,
-      total_details: { amount_tax: 6426 },
       currency: STRIPE_OFFCHAIN_CURRENCY,
       metadata: {
         fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
@@ -1312,6 +1310,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
     orderHashHex,
     stripeSession: { id: 'cs_test_pack_retry' },
     receiptTx: 'txpackretry',
+    addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
     stripeReceiptClaims: [
       { code: 'PACKCC-0123456789', boxId: 1, status: 'unclaimed' },
       { code: 'PACKDD-0123456789', boxId: 2, status: 'unclaimed' },

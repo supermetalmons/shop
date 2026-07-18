@@ -1012,10 +1012,6 @@ export async function saveEncryptedAddress(
   >('saveAddress', { encrypted, country, countryCode, hint, email });
 }
 
-export async function removeAddress(addressId: string): Promise<{ id: string; removed?: boolean }> {
-  return callFunction<{ addressId: string }, { id: string; removed?: boolean }>('removeAddress', { addressId });
-}
-
 type StripeCheckoutSessionRequest = {
   dropId: string;
   variantKey?: string;
@@ -1057,13 +1053,6 @@ function stripeCheckoutSessionPayload(args: StripeCheckoutSessionRequest): Strip
 export async function createStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
   return callFunction<StripeCheckoutSessionRequest, StripeCheckoutSessionResponse>(
     'createStripeCheckoutSession',
-    stripeCheckoutSessionPayload(args),
-  );
-}
-
-export async function createTestStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
-  return callFunction<StripeCheckoutSessionRequest, StripeCheckoutSessionResponse>(
-    'createTestStripeCheckoutSession',
     stripeCheckoutSessionPayload(args),
   );
 }
@@ -1236,17 +1225,6 @@ export async function updateFulfillmentStatus(
     { deliveryId: number; status: FulfillmentStatus | '' | null; dropId: string; trackingCode?: string },
     { deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }
   >('updateFulfillmentStatus', { deliveryId, status, dropId, ...(trackingCode != null ? { trackingCode } : {}) });
-}
-
-export async function updateFulfillmentInternalStatus(
-  deliveryId: number,
-  status: string,
-  dropId: string,
-): Promise<{ deliveryId: number; fulfillmentInternalStatus: string }> {
-  return callFunction<
-    { deliveryId: number; status: string; dropId: string },
-    { deliveryId: number; fulfillmentInternalStatus: string }
-  >('updateFulfillmentInternalStatus', { deliveryId, status, dropId });
 }
 
 export async function requestDeliveryTx(

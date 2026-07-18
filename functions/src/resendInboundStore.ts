@@ -5,7 +5,7 @@ export const RESEND_INBOUND_FORWARD_LEASE_MS = 5 * 60 * 1000;
 export const RESEND_INBOUND_AMBIGUOUS_REVIEW_MS = 23 * 60 * 60 * 1000;
 export const RESEND_INBOUND_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
-export type ResendInboundForwardStatus =
+type ResendInboundForwardStatus =
   | 'forwarding'
   | 'forwarded'
   | 'forwarded_degraded'
@@ -13,7 +13,7 @@ export type ResendInboundForwardStatus =
   | 'failed_permanent'
   | 'needs_review';
 
-export type FrozenResendInboundPlan = ResendInboundForwardPlan;
+type FrozenResendInboundPlan = ResendInboundForwardPlan;
 
 export type ResendInboundReservation =
   | {

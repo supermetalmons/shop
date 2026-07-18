@@ -206,19 +206,6 @@ const SELECTION_PANEL_ACTION = {
   open: 'open',
   ship: 'ship',
 } as const;
-const DROP_CARD_BACKDROP_ENABLED = false;
-const DROP_CARD_BACKDROP_COUNT = 30;
-const DROP_CARD_BACKDROP_COLUMNS = 6;
-const DROP_CARD_BACKDROP_ROWS = 5;
-const DROP_CARD_BACKDROP_EDGE_GAP_PX = 10;
-const DROP_CARD_BACKDROP_AVOID_GAP_PX = 12;
-const DROP_CARD_BACKDROP_MIN_CARD_SIZE_PX = 44;
-const DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX = 132;
-const DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO = 1.66;
-const DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER = 1.04;
-const DROP_CARD_BACKDROP_REPOSITION_STEPS = 28;
-const DROP_CARD_BACKDROP_REPOSITION_CANDIDATES = 12;
-
 type SelectionPanelAction = (typeof SELECTION_PANEL_ACTION)[keyof typeof SELECTION_PANEL_ACTION];
 type SelectionPanelActionHandlers = Record<SelectionPanelAction, () => void>;
 
@@ -231,18 +218,6 @@ function isSelectionPanelAction(action: string | undefined): action is Selection
   );
 }
 
-type DropCardBackdropConfig = {
-  baseUrl: string;
-  maxId: number;
-  allowRepeats?: boolean;
-  srcForId?: (baseUrl: string, id: number) => string;
-  sizeBase?: number;
-  sizeRange?: number;
-  opacityBase?: number;
-  opacityRange?: number;
-  rotateRange?: number;
-  heightRatio?: number;
-};
 type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
 type ReceiptViewerImage = {
   key: string;
@@ -250,38 +225,6 @@ type ReceiptViewerImage = {
   image?: string;
 };
 type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-count'?: string };
-type DropCardBackdropItem = {
-  id: number;
-  src: string;
-  x: number;
-  y: number;
-  size: number;
-  opacity: number;
-  rotate: number;
-  blur: number;
-  heightRatio: number;
-};
-type DropCardBackdropBounds = {
-  viewportWidth: number;
-  viewportHeight: number;
-  avoidRects: DropCardBackdropRect[];
-};
-type DropCardBackdropRect = {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-};
-type DropCardBackdropPlacement = {
-  x: number;
-  y: number;
-  rect: DropCardBackdropRect;
-};
-type DropCardBackdropRenderItem = {
-  item: DropCardBackdropItem;
-  index: number;
-  placement: DropCardBackdropPlacement;
-};
 type StripePaymentMode = 'test' | 'live';
 type StripeCheckoutReturn =
   | {
@@ -293,419 +236,6 @@ type StripeCheckoutReturn =
       sessionId?: undefined;
     };
 type CardNft2PackVideoSources = readonly PreviewVideoSource[];
-
-function shuffleWithRandom<T>(items: T[], random: () => number): T[] {
-  const next = items.slice();
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-  }
-  return next;
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
-}
-
-function dropCardBackdropRowY(row: number, random: () => number): number {
-  const lastRow = DROP_CARD_BACKDROP_ROWS - 1;
-  if (lastRow <= 0) return 50;
-  if (row <= 0) return random() * 4;
-  if (row >= lastRow) return 100 - random() * 4;
-  return clampNumber((row / lastRow) * 100 + (random() - 0.5) * 8, 0, 100);
-}
-
-function seededBackdropRandom(seed: number): number {
-  const value = Math.sin(seed * 12.9898) * 43758.5453;
-  return value - Math.floor(value);
-}
-
-function createDropCardBackdropItems(config: DropCardBackdropConfig): DropCardBackdropItem[] {
-  const random = Math.random;
-  const sizeBase = config.sizeBase ?? 7.5;
-  const sizeRange = config.sizeRange ?? 4.5;
-  const opacityBase = config.opacityBase ?? 0.07;
-  const opacityRange = config.opacityRange ?? 0.1;
-  const rotateRange = config.rotateRange ?? 26;
-  const heightRatio = config.heightRatio ?? DROP_CARD_BACKDROP_DEFAULT_HEIGHT_RATIO;
-  const ids = config.allowRepeats
-    ? Array.from({ length: DROP_CARD_BACKDROP_COUNT }, () => Math.floor(random() * config.maxId) + 1)
-    : shuffleWithRandom(
-        Array.from({ length: config.maxId }, (_, index) => index + 1),
-        random,
-      ).slice(0, DROP_CARD_BACKDROP_COUNT);
-  const cells = shuffleWithRandom(
-    Array.from({ length: DROP_CARD_BACKDROP_COUNT }, (_, index) => ({
-      col: index % DROP_CARD_BACKDROP_COLUMNS,
-      row: Math.floor(index / DROP_CARD_BACKDROP_COLUMNS),
-    })),
-    random,
-  );
-
-  return ids.map((id, index) => {
-    const cell = cells[index];
-    const xJitter = (random() - 0.5) * 6;
-    const depth = random();
-
-    return {
-      id,
-      src: config.srcForId ? config.srcForId(config.baseUrl, id) : `${config.baseUrl}/${id}.webp`,
-      x: ((cell.col + 0.5) / DROP_CARD_BACKDROP_COLUMNS) * 100 + xJitter,
-      y: dropCardBackdropRowY(cell.row, random),
-      size: sizeBase + depth * sizeRange,
-      opacity: opacityBase + depth * opacityRange,
-      rotate: (random() - 0.5) * rotateRange,
-      blur: depth < 0.35 ? 0.3 : 0,
-      heightRatio,
-    };
-  });
-}
-
-const PONCHO_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://cdn.lil.org/nft/poncho_drifella/thumbs',
-  maxId: 207,
-  heightRatio: 500 / 357,
-};
-const HOODIE_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://cdn.lil.org/nft/little_swag_hoodie/thumbs',
-  maxId: 7,
-  allowRepeats: true,
-  sizeBase: 5.2,
-  sizeRange: 3.2,
-  rotateRange: 0,
-  heightRatio: 555 / 371,
-};
-const LSB_DROP_CARD_BACKDROP_CONFIG: DropCardBackdropConfig = {
-  baseUrl: 'https://cdn.lil.org/nft/little_swag_boxes/thumbs',
-  maxId: 333,
-  sizeBase: 5.2,
-  sizeRange: 3.2,
-  rotateRange: 0,
-  heightRatio: 500 / 304,
-};
-
-function dropCardBackdropViewportMin(bounds: DropCardBackdropBounds): number {
-  const layoutWidth = typeof window === 'undefined' ? bounds.viewportWidth : window.innerWidth || bounds.viewportWidth;
-  const layoutHeight = typeof window === 'undefined' ? bounds.viewportHeight : window.innerHeight || bounds.viewportHeight;
-  return Math.min(layoutWidth, layoutHeight);
-}
-
-function dropCardBackdropWidthPx(item: DropCardBackdropItem, bounds: DropCardBackdropBounds): number {
-  return clampNumber(
-    (dropCardBackdropViewportMin(bounds) * item.size) / 100,
-    DROP_CARD_BACKDROP_MIN_CARD_SIZE_PX,
-    DROP_CARD_BACKDROP_MAX_CARD_SIZE_PX,
-  );
-}
-
-function dropCardBackdropSafeBox(item: DropCardBackdropItem, bounds: DropCardBackdropBounds) {
-  const width = dropCardBackdropWidthPx(item, bounds);
-  const height = width * item.heightRatio;
-  const rotation = Math.abs(item.rotate) * (Math.PI / 180);
-  const rotatedWidth = width * Math.cos(rotation) + height * Math.sin(rotation);
-  const rotatedHeight = width * Math.sin(rotation) + height * Math.cos(rotation);
-
-  return {
-    halfWidth: (rotatedWidth * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER) / 2 + DROP_CARD_BACKDROP_AVOID_GAP_PX,
-    halfHeight: (rotatedHeight * DROP_CARD_BACKDROP_SAFE_SIZE_MULTIPLIER) / 2 + DROP_CARD_BACKDROP_AVOID_GAP_PX,
-  };
-}
-
-function dropCardBackdropRectFromCenter(
-  x: number,
-  y: number,
-  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
-): DropCardBackdropRect {
-  return {
-    left: x - safeBox.halfWidth,
-    top: y - safeBox.halfHeight,
-    right: x + safeBox.halfWidth,
-    bottom: y + safeBox.halfHeight,
-  };
-}
-
-function rectsOverlap(a: DropCardBackdropRect, b: DropCardBackdropRect): boolean {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-function rectInsideBackdropViewport(rect: DropCardBackdropRect, bounds: DropCardBackdropBounds): boolean {
-  return (
-    rect.left >= DROP_CARD_BACKDROP_EDGE_GAP_PX &&
-    rect.top >= DROP_CARD_BACKDROP_EDGE_GAP_PX &&
-    rect.right <= bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX &&
-    rect.bottom <= bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX
-  );
-}
-
-function backdropRectAllowed(
-  rect: DropCardBackdropRect,
-  bounds: DropCardBackdropBounds,
-  occupiedRects: DropCardBackdropRect[],
-): boolean {
-  if (!rectInsideBackdropViewport(rect, bounds)) return false;
-  if (bounds.avoidRects.some((avoidRect) => rectsOverlap(rect, avoidRect))) return false;
-  return !occupiedRects.some((occupiedRect) => rectsOverlap(rect, occupiedRect));
-}
-
-function elementAvoidRect(selector: string, padding: number): DropCardBackdropRect | null {
-  const el = document.querySelector<HTMLElement>(selector);
-  if (!el) return null;
-  const style = window.getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return null;
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return null;
-
-  return {
-    left: rect.left - padding,
-    top: rect.top - padding,
-    right: rect.right + padding,
-    bottom: rect.bottom + padding,
-  };
-}
-
-function elementAvoidRects(selector: string, padding: number): DropCardBackdropRect[] {
-  return Array.from(document.querySelectorAll<HTMLElement>(selector)).flatMap((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return [];
-    const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return [];
-
-    return [{
-      left: rect.left - padding,
-      top: rect.top - padding,
-      right: rect.right + padding,
-      bottom: rect.bottom + padding,
-    }];
-  });
-}
-
-function measureDropCardBackdropBounds(): DropCardBackdropBounds {
-  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
-  const avoidPadding = DROP_CARD_BACKDROP_AVOID_GAP_PX;
-  const avoidRects = [
-    elementAvoidRect('header.top--fixed .brand h1', avoidPadding),
-    elementAvoidRect('header.top--fixed .top__right', avoidPadding),
-    ...elementAvoidRects(
-      [
-        '.mint-panel__footer .mint-panel__info',
-        '.mint-panel__footer .mint-panel__slider:not(.mint-panel__slider--hidden)',
-        '.mint-panel__footer .mint-panel__cta',
-      ].join(','),
-      avoidPadding,
-    ),
-  ].filter((rect): rect is DropCardBackdropRect => Boolean(rect));
-
-  return { viewportWidth, viewportHeight, avoidRects };
-}
-
-function boundsEqual(a: DropCardBackdropBounds | null, b: DropCardBackdropBounds): boolean {
-  if (!a || Math.abs(a.viewportWidth - b.viewportWidth) >= 0.5 || Math.abs(a.viewportHeight - b.viewportHeight) >= 0.5) {
-    return false;
-  }
-  if (a.avoidRects.length !== b.avoidRects.length) return false;
-
-  return a.avoidRects.every((rect, index) => {
-    const next = b.avoidRects[index];
-    return (
-      Math.abs(rect.left - next.left) < 0.5 &&
-      Math.abs(rect.top - next.top) < 0.5 &&
-      Math.abs(rect.right - next.right) < 0.5 &&
-      Math.abs(rect.bottom - next.bottom) < 0.5
-    );
-  });
-}
-
-function clampBackdropCenter(
-  x: number,
-  y: number,
-  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
-  bounds: DropCardBackdropBounds,
-): { x: number; y: number } | null {
-  const minX = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfWidth;
-  const minY = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfHeight;
-  const maxX = bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfWidth;
-  const maxY = bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfHeight;
-
-  if (maxX < minX || maxY < minY) return null;
-
-  return {
-    x: clampNumber(x, minX, maxX),
-    y: clampNumber(y, minY, maxY),
-  };
-}
-
-function backdropPlacementFromCenter(
-  x: number,
-  y: number,
-  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
-  bounds: DropCardBackdropBounds,
-  occupiedRects: DropCardBackdropRect[],
-): DropCardBackdropPlacement | null {
-  const center = clampBackdropCenter(x, y, safeBox, bounds);
-  if (!center) return null;
-
-  const rect = dropCardBackdropRectFromCenter(center.x, center.y, safeBox);
-  if (!backdropRectAllowed(rect, bounds, occupiedRects)) return null;
-
-  return { x: center.x, y: center.y, rect };
-}
-
-function scanBackdropGridPlacement(
-  x: number,
-  y: number,
-  safeBox: ReturnType<typeof dropCardBackdropSafeBox>,
-  bounds: DropCardBackdropBounds,
-  occupiedRects: DropCardBackdropRect[],
-): DropCardBackdropPlacement | null {
-  const minX = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfWidth;
-  const minY = DROP_CARD_BACKDROP_EDGE_GAP_PX + safeBox.halfHeight;
-  const maxX = bounds.viewportWidth - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfWidth;
-  const maxY = bounds.viewportHeight - DROP_CARD_BACKDROP_EDGE_GAP_PX - safeBox.halfHeight;
-  if (maxX < minX || maxY < minY) return null;
-
-  const stepX = Math.max(24, safeBox.halfWidth * 1.1);
-  const stepY = Math.max(24, safeBox.halfHeight * 1.1);
-  const cols = Math.max(1, Math.floor((maxX - minX) / stepX) + 1);
-  const rows = Math.max(1, Math.floor((maxY - minY) / stepY) + 1);
-  let best: DropCardBackdropPlacement | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
-
-  for (let row = 0; row < rows; row += 1) {
-    const candidateY = rows === 1 ? (minY + maxY) / 2 : minY + ((maxY - minY) * row) / (rows - 1);
-    for (let col = 0; col < cols; col += 1) {
-      const candidateX = cols === 1 ? (minX + maxX) / 2 : minX + ((maxX - minX) * col) / (cols - 1);
-      const rect = dropCardBackdropRectFromCenter(candidateX, candidateY, safeBox);
-      if (!backdropRectAllowed(rect, bounds, occupiedRects)) continue;
-
-      const distanceScore = Math.abs(candidateX - x) + Math.abs(candidateY - y);
-      if (distanceScore < bestScore) {
-        best = { x: candidateX, y: candidateY, rect };
-        bestScore = distanceScore;
-      }
-    }
-  }
-
-  return best;
-}
-
-function repositionBackdropPlacement(
-  item: DropCardBackdropItem,
-  index: number,
-  x: number,
-  y: number,
-  bounds: DropCardBackdropBounds,
-  occupiedRects: DropCardBackdropRect[],
-): DropCardBackdropPlacement | null {
-  const safeBox = dropCardBackdropSafeBox(item, bounds);
-  const initial = backdropPlacementFromCenter(x, y, safeBox, bounds, occupiedRects);
-  if (initial) return initial;
-
-  const baseAngle = seededBackdropRandom(item.id + index * 97) * Math.PI * 2;
-  const radiusStep = Math.max(24, Math.min(safeBox.halfWidth, safeBox.halfHeight) * 0.8);
-
-  for (let step = 1; step <= DROP_CARD_BACKDROP_REPOSITION_STEPS; step += 1) {
-    const radius = step * radiusStep;
-    for (let candidate = 0; candidate < DROP_CARD_BACKDROP_REPOSITION_CANDIDATES; candidate += 1) {
-      const angle = baseAngle + (candidate / DROP_CARD_BACKDROP_REPOSITION_CANDIDATES) * Math.PI * 2;
-      const placed = backdropPlacementFromCenter(
-        x + Math.cos(angle) * radius,
-        y + Math.sin(angle) * radius,
-        safeBox,
-        bounds,
-        occupiedRects,
-      );
-      if (placed) return placed;
-    }
-  }
-
-  return scanBackdropGridPlacement(x, y, safeBox, bounds, occupiedRects);
-}
-
-function createDropCardBackdropPlacements(
-  items: DropCardBackdropItem[],
-  bounds: DropCardBackdropBounds,
-): DropCardBackdropRenderItem[] {
-  const occupiedRects: DropCardBackdropRect[] = [];
-  const orderedItems = items
-    .map((item, index) => ({ item, index }))
-    .sort((a, b) => b.item.size - a.item.size || a.index - b.index);
-  const placedItems: DropCardBackdropRenderItem[] = [];
-
-  orderedItems.forEach(({ item, index }) => {
-    const x = (item.x / 100) * bounds.viewportWidth;
-    const y = (item.y / 100) * bounds.viewportHeight;
-    const placement = repositionBackdropPlacement(item, index, x, y, bounds, occupiedRects);
-    if (!placement) return;
-
-    occupiedRects.push(placement.rect);
-    placedItems.push({ item, index, placement });
-  });
-
-  return placedItems.sort((a, b) => a.index - b.index);
-}
-
-function DropCardsBackdrop({ items }: { items: DropCardBackdropItem[] }) {
-  const [bounds, setBounds] = useState<DropCardBackdropBounds | null>(null);
-  const placedItems = useMemo(
-    () => (bounds ? createDropCardBackdropPlacements(items, bounds) : []),
-    [bounds, items],
-  );
-
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      const next = measureDropCardBackdropBounds();
-      setBounds((prev) => (boundsEqual(prev, next) ? prev : next));
-    };
-    const schedule = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(update);
-    };
-
-    update();
-    frame = window.requestAnimationFrame(update);
-    window.addEventListener('resize', schedule);
-    window.visualViewport?.addEventListener('resize', schedule);
-
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      window.removeEventListener('resize', schedule);
-      window.visualViewport?.removeEventListener('resize', schedule);
-    };
-  }, [items]);
-
-  return (
-    <div className="drop-cards-backdrop" aria-hidden="true">
-      {placedItems.map(({ item, index, placement }) => {
-        return (
-          <img
-            key={`${item.id}-${index}`}
-            className="drop-cards-backdrop__card"
-            src={item.src}
-            alt=""
-            draggable={false}
-            decoding="async"
-            style={
-              {
-                '--drop-card-x': `${placement.x}px`,
-                '--drop-card-y': `${placement.y}px`,
-                '--drop-card-size': `${item.size}vmin`,
-                '--drop-card-opacity': item.opacity,
-                '--drop-card-rotate': `${item.rotate}deg`,
-                '--drop-card-blur': `${item.blur}px`,
-              } as CSSProperties
-            }
-          />
-        );
-      })}
-    </div>
-  );
-}
 
 const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
@@ -1457,11 +987,6 @@ function resolveRevealOverlayPhaseAfterReveal({
   return frame >= mediaStart && hasResults ? 'revealed' : 'ready';
 }
 
-function formatRevealIds(ids?: number[]) {
-  if (!ids || !ids.length) return 'Figures: none';
-  return '';
-}
-
 function cardNft2PackVideoSourcesForBrowser(): CardNft2PackVideoSources {
   if (typeof document === 'undefined') return CARD_NFT_2_PACK_VIDEO_SOURCES;
   const video = document.createElement('video');
@@ -2023,9 +1548,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [claimOpen, setClaimOpen] = useState(false);
   const [claimInitialCode, setClaimInitialCode] = useState('');
   const [claimOpenedFromDeepLink, setClaimOpenedFromDeepLink] = useState(false);
-  const [discountUsedCount, setDiscountUsedCount] = useState<number>(() =>
-    loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet),
-  );
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
   const [transientHiddenAssets, setTransientHiddenAssets] = useState<Set<string>>(new Set());
@@ -3288,7 +2810,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   useEffect(() => {
     const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
-    setDiscountUsedCount(usedCount);
     setDiscountRemainingCount(Math.max(0, activeDiscountAllowance - usedCount));
     setDiscountEligible(false);
     setDiscountChecking(false);
@@ -4275,14 +3796,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         if (!listed) {
           setDiscountEligible(false);
           setDiscountRemainingCount(0);
-          setDiscountUsedCount(0);
           persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, 0);
           return;
         }
         const usedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, routeDrop);
         if (cancelled) return;
         const remainingCount = Math.max(0, activeDiscountAllowance - usedCount);
-        setDiscountUsedCount(usedCount);
         setDiscountRemainingCount(remainingCount);
         setDiscountEligible(remainingCount > 0);
         persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, usedCount);
@@ -4433,7 +3952,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       const onchainUsedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, mintDrop);
       const onchainRemainingCount = Math.max(0, onchainDiscountAllowance - onchainUsedCount);
       if (quantity > onchainRemainingCount) {
-        setDiscountUsedCount(onchainUsedCount);
         setDiscountRemainingCount(onchainRemainingCount);
         setDiscountEligible(onchainRemainingCount > 0);
         if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, onchainUsedCount);
@@ -4468,7 +3986,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       const nextRemainingCount = hasConfirmationError
         ? onchainRemainingCount
         : Math.max(0, onchainDiscountAllowance - nextUsedCount);
-      setDiscountUsedCount(nextUsedCount);
       setDiscountRemainingCount(nextRemainingCount);
       setDiscountEligible(nextRemainingCount > 0);
       if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, nextUsedCount);
@@ -5605,8 +5122,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     : walletIdleReady
       ? 'visible'
       : 'hidden';
-  const shipmentsContentVisible =
-    shipmentsReady && (deliveryOrders.length > 0 || shipmentsEmptyStateVisibility === 'visible');
   const shipmentsLookupPendingForReceipts =
     (!viewedProfile && profileLoadingForView) ||
     (anonymousStripeHistoryVisible &&
@@ -6193,18 +5708,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     active: Boolean(routeDrop || upcomingDropRoute),
     pageRef,
   });
-  const dropCardBackdropItems = useMemo(() => {
-    if (!DROP_CARD_BACKDROP_ENABLED || !routeDrop) return null;
-    if (isDropFamily(routeDrop, 'poncho_drifella')) {
-      return createDropCardBackdropItems(PONCHO_DROP_CARD_BACKDROP_CONFIG);
-    }
-    if (isDropFamily(routeDrop, 'little_swag_hoodies')) {
-      return createDropCardBackdropItems(HOODIE_DROP_CARD_BACKDROP_CONFIG);
-    }
-    return createDropCardBackdropItems(
-      LSB_DROP_CARD_BACKDROP_CONFIG,
-    );
-  }, [routeDrop]);
   const renderHeaderRight = ({ interactive }: { interactive: boolean }) => {
     const walletAction = showHeaderWalletButton ? (
       <button
@@ -6341,7 +5844,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   return (
     <div className="page" ref={pageRef}>
-      {dropCardBackdropItems ? <DropCardsBackdrop items={dropCardBackdropItems} /> : null}
       {toast ? (
         <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
           {toast}

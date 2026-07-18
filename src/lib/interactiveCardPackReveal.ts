@@ -74,7 +74,7 @@ export function normalizeInteractiveCardPackMediaId(value: unknown): number | un
   return normalizePositiveInteger(value);
 }
 
-export function buildInteractiveCardPackRevealSequence(packBaseUrlRaw: string): InteractiveCardPackRevealSequence {
+function buildInteractiveCardPackRevealSequence(packBaseUrlRaw: string): InteractiveCardPackRevealSequence {
   const packBaseUrl = normalizePackBaseUrl(packBaseUrlRaw);
   const initialFrameUrl = `${packBaseUrl}/initial.webp`;
   const punchSequenceBaseUrl = `${packBaseUrl}/recoverable_punches`;
@@ -276,6 +276,6 @@ export function getInteractiveCardPackCardsByFigureIds(
   return cards;
 }
 
-export function usesInteractiveCardPackStackReveal(dropOrId?: FrontendDropConfig | string) {
+function usesInteractiveCardPackStackReveal(dropOrId?: FrontendDropConfig | string) {
   return isDropFamily(dropOrId, 'card_nft_2');
 }

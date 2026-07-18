@@ -1,4 +1,4 @@
-export const STRIPE_RECEIPT_CLAIM_CODE_PATTERN = /^[A-Z]{6}-\d{10}$/;
+const STRIPE_RECEIPT_CLAIM_CODE_PATTERN = /^[A-Z]{6}-\d{10}$/;
 
 function normalizedString(value: unknown): string {
   return String(value || '').trim();
@@ -6,10 +6,6 @@ function normalizedString(value: unknown): string {
 
 export function normalizeStripeReceiptClaimCode(code: unknown): string {
   return normalizedString(code).toUpperCase();
-}
-
-export function isStripeReceiptClaimCode(code: unknown): boolean {
-  return STRIPE_RECEIPT_CLAIM_CODE_PATTERN.test(normalizeStripeReceiptClaimCode(code));
 }
 
 export function requireStripeReceiptClaimCode(code: unknown): string {

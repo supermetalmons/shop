@@ -62,7 +62,7 @@ export type StripeCheckoutSessionResponse = {
   livemode: boolean;
 };
 
-export type StripeCheckoutSessionSnapshot = {
+type StripeCheckoutSessionSnapshot = {
   id: string;
   livemode: boolean;
   mode?: unknown;
@@ -75,12 +75,12 @@ export type StripeCheckoutSessionSnapshot = {
   metadata?: Record<string, string>;
 };
 
-export type StripeCheckoutDocumentRecord = {
+type StripeCheckoutDocumentRecord = {
   ref: DocumentReference;
   checkout: any;
 } & StripeCheckoutDocumentData;
 
-export type StripeCheckoutManualReviewAddress = {
+type StripeCheckoutManualReviewAddress = {
   email?: string;
   country?: string;
   countryCode?: string;
@@ -102,7 +102,7 @@ export type StripeCheckoutManualReviewSummary = {
   address: StripeCheckoutManualReviewAddress;
 };
 
-export type StripeCheckoutFulfillmentEnqueueReason =
+type StripeCheckoutFulfillmentEnqueueReason =
   | 'not_app_fulfillment'
   | 'already_fulfilled'
   | 'already_pending';
@@ -147,13 +147,13 @@ export type StripeCheckoutFulfillmentStart =
       reason: StripeCheckoutFulfillmentStartSkippedReason;
     };
 
-export type StripeCheckoutFulfillmentStartSkippedReason =
+type StripeCheckoutFulfillmentStartSkippedReason =
   | 'already_fulfilled'
   | 'processing'
   | 'not_pending'
   | 'failed';
 
-export type StripeCheckoutFulfillmentSkippedReason =
+type StripeCheckoutFulfillmentSkippedReason =
   | StripeCheckoutFulfillmentStartSkippedReason
   | 'stale_processing_attempt';
 
@@ -205,7 +205,7 @@ export type StripeCheckoutOnchainConfig = {
   coreCollection: PublicKey;
 };
 
-export type StripeCheckoutPrograms = {
+type StripeCheckoutPrograms = {
   bubblegumProgramId: PublicKey;
   mplNoopProgramId: PublicKey;
   mplAccountCompressionProgramId: PublicKey;

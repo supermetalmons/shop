@@ -6,7 +6,7 @@ import {
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
-export type NewDropDeployConfig = {
+type NewDropDeployConfig = {
   solanaCluster: SolanaCluster;
   solanaRpcUrl?: string;
   coreCollectionPubkey?: string;
@@ -50,7 +50,7 @@ export type NewDropOnchainConfig = {
   symbol: string;
 };
 
-export type NewDropSharedConfig = {
+type NewDropSharedConfig = {
   isMainnet: boolean;
   dropSymbol: string;
   sellerFeeBasisPoints: number;

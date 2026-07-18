@@ -5,9 +5,7 @@ import {
 import type { PreviewVideoSource } from '../types';
 
 export {
-  CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_BASE_URL,
-  CARD_NFT_2_PACK_INITIAL_COUNT,
 } from '../config/dropMediaDefaults.ts';
 
 export type CardNft2PackImage = {
@@ -27,7 +25,7 @@ export const CARD_NFT_2_PACK_IMAGES: readonly CardNft2PackImage[] = [
   { src: `${CARD_NFT_2_PACK_BASE_URL}/4/tight.webp`, width: 866, height: 1400 },
 ];
 
-export const CARD_NFT_2_PACK_INITIAL_IMAGES: readonly CardNft2PackImage[] = Array.from(
+const CARD_NFT_2_PACK_INITIAL_IMAGES: readonly CardNft2PackImage[] = Array.from(
   { length: CARD_NFT_2_PACK_INITIAL_COUNT },
   (_, index) => ({
     src: `${CARD_NFT_2_PACK_BASE_URL}/${index + 1}/initial.webp`,
@@ -72,7 +70,7 @@ export const CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC = CARD_NFT_2_PACK_IMAGES.re
   return dimensionsBySrc;
 }, {});
 
-export const CARD_NFT_2_PACK_PREVIEW_IMAGE = CARD_NFT_2_PACK_IMAGES[0];
+const CARD_NFT_2_PACK_PREVIEW_IMAGE = CARD_NFT_2_PACK_IMAGES[0];
 export const CARD_NFT_2_PACK_PREVIEW_IMAGE_URL = CARD_NFT_2_PACK_PREVIEW_IMAGE.src;
 export const CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO =
   CARD_NFT_2_PACK_PREVIEW_IMAGE.width / CARD_NFT_2_PACK_PREVIEW_IMAGE.height;

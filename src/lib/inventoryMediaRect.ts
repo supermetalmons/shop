@@ -1,4 +1,4 @@
-export function findVisibleInventoryMediaElement(root: ParentNode): HTMLElement | null {
+function findVisibleInventoryMediaElement(root: ParentNode): HTMLElement | null {
   return (
     root.querySelector<HTMLElement>('.inventory__media > :not([hidden])') ||
     root.querySelector<HTMLElement>('.inventory__media') ||

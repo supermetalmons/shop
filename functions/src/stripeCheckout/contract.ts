@@ -10,12 +10,12 @@ export {
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
 } from '../shared/stripeReceiptClaims.js';
-export { stripeAssignedIrlClaimForBox, type StripeAssignedIrlClaim } from '../cardAssignment.js';
+export { stripeAssignedIrlClaimForBox } from '../cardAssignment.js';
 
-export const ADMIN_ORDER_SEED = 'admin_order';
+const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
-export const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
+const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
 export const STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE = 'stripe_offchain';
 export const ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE = 'admin_irl_redeem';
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
@@ -25,7 +25,7 @@ export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
-export const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
+const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
 
 export const STRIPE_CHECKOUT_STATUS = {
   CREATED: 'created',
@@ -54,7 +54,7 @@ export type StripeFulfillmentAddress = {
   email?: string;
 };
 
-export type StripeCheckoutLineItemLike = {
+type StripeCheckoutLineItemLike = {
   quantity?: unknown;
   currency?: unknown;
   amount_subtotal?: unknown;

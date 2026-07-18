@@ -5,11 +5,11 @@ import type { NewDropConfig } from './newDropConfig.ts';
 
 const NEW_DROP_CONFIGS_DIR_RELATIVE_PATH = path.join('scripts', 'newDrops');
 
-export function normalizeNewDropId(value: string | undefined): string {
+function normalizeNewDropId(value: string | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
-export function formatKnownNewDropIds(knownDropIds: string[]): string {
+function formatKnownNewDropIds(knownDropIds: string[]): string {
   return knownDropIds.length ? knownDropIds.join(', ') : '(none)';
 }
 
@@ -17,15 +17,15 @@ export function newDropConfigUsage(scriptName = 'deploy-all-onchain'): string {
   return `Run:\n  npm run ${scriptName} -- <dropId>\n`;
 }
 
-export function getNewDropConfigsDir(root: string): string {
+function getNewDropConfigsDir(root: string): string {
   return path.join(root, NEW_DROP_CONFIGS_DIR_RELATIVE_PATH);
 }
 
-export function getNewDropConfigPath(root: string, dropId: string): string {
+function getNewDropConfigPath(root: string, dropId: string): string {
   return path.join(getNewDropConfigsDir(root), `${normalizeNewDropId(dropId)}.ts`);
 }
 
-export function listNewDropConfigIds(root: string): string[] {
+function listNewDropConfigIds(root: string): string[] {
   const configsDir = getNewDropConfigsDir(root);
   if (!existsSync(configsDir)) return [];
   return readdirSync(configsDir, { withFileTypes: true })

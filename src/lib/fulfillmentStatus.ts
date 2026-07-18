@@ -4,7 +4,7 @@ export type FulfillmentStatus = (typeof FULFILLMENT_STATUS_OPTIONS)[number];
 
 const FULFILLMENT_STATUS_SET = new Set<string>(FULFILLMENT_STATUS_OPTIONS);
 
-export function isFulfillmentStatus(value: unknown): value is FulfillmentStatus {
+function isFulfillmentStatus(value: unknown): value is FulfillmentStatus {
   return typeof value === 'string' && FULFILLMENT_STATUS_SET.has(value);
 }
 

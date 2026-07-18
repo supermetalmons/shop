@@ -75,7 +75,7 @@ type PonchoRevealRuntimeProps = PonchoRevealSharedProps & {
   boxButtonRef?: RefObject<HTMLButtonElement | null>;
 };
 
-export type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
+type PonchoInventoryRevealOverlayProps = PonchoRevealSharedProps & {
   mode: 'inventory-unbox';
   cards?: readonly DrifCardConfig[];
   cardReady?: boolean;
@@ -1454,7 +1454,7 @@ export function PonchoRevealOverlay({
   );
 }
 
-export default function PonchoInventoryRevealOverlay({
+function PonchoInventoryRevealOverlay({
   mode: _mode,
   cards = EMPTY_CARD_STACK,
   cardReady,

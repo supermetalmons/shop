@@ -1,7 +1,7 @@
 import { getFrontendDrop, normalizeDropId, resolveDropAssetUrl } from '../config/deployment';
 import { normalizeFigureDisplayImage } from './dropContent';
 
-export type FigureMetadataAttributes = { trait_type: string; value: string };
+type FigureMetadataAttributes = { trait_type: string; value: string };
 
 export type FigureMetadataRecord = {
   id: number;

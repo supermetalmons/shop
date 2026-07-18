@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  STRIPE_CHECKOUT_MARKERS_STORAGE_KEY,
   completeStripeCheckoutMarker,
   completedStripeCheckoutMarkerKeyForFirebaseUid,
   completedStripeCheckoutMarkerSummaryForFirebaseUid,
@@ -11,6 +10,8 @@ import {
   rememberStripeCheckoutStarted,
   type StripeCheckoutMarkerStorage,
 } from '../src/lib/stripeCheckoutMarkers.ts';
+
+const STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v1';
 
 class MemoryStorage implements StripeCheckoutMarkerStorage {
   private readonly values = new Map<string, string>();

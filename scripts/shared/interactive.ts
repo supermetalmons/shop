@@ -78,7 +78,7 @@ export async function promptYConfirmation(prompt: string): Promise<boolean> {
   }
 }
 
-export function keypairFromBytes(bytes: Uint8Array): Keypair {
+function keypairFromBytes(bytes: Uint8Array): Keypair {
   if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
   if (bytes.length === 32) return Keypair.fromSeed(bytes);
   throw new Error(`Invalid private key length: ${bytes.length} bytes (expected 32 or 64).`);

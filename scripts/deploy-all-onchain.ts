@@ -4,10 +4,17 @@ import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+import { isDeepStrictEqual } from 'node:util';
 import { loadNewDropConfigById, newDropConfigUsage } from './shared/newDropLoader.ts';
 import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig.ts';
-import { keypairFromBytes, parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
+import { parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
 import {
+  requireDiscountMerkleDatasetIdentity,
+  validateDiscountMerkleFamilyRootInvariant,
+  type DiscountMerkleDatasetReference,
+} from './shared/discountMerkleDataset.ts';
+import {
+  acquireDeploymentRegistryMutationLock,
   defaultFrontendBoxMediaForDropFamily,
   defaultFrontendFigureMediaForDropFamily,
   normalizeDropBase,
@@ -183,26 +190,103 @@ function writeTempKeypairFile(kp: Keypair, prefix = 'mons-shop-deployer'): strin
   return filePath;
 }
 
-function registerTempKeypairCleanup(filePath: string) {
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
+type DeploymentCleanupEvent = 'exit' | 'SIGINT' | 'SIGTERM';
+
+type DeploymentCleanupRuntime = {
+  once: (event: DeploymentCleanupEvent, listener: () => void) => void;
+  off: (event: DeploymentCleanupEvent, listener: () => void) => void;
+  exit: (code: number) => void;
+};
+
+export function registerDeploymentCleanup(args: {
+  releaseDeploymentRegistryLock: () => boolean;
+  runtime?: DeploymentCleanupRuntime;
+}): {
+  setTempKeypairPath: (filePath: string) => void;
+  cleanup: () => boolean;
+} {
+  const runtime =
+    args.runtime ||
+    ({
+      once: (event, listener) => process.once(event, listener),
+      off: (event, listener) => process.off(event, listener),
+      exit: (code) => process.exit(code),
+    } satisfies DeploymentCleanupRuntime);
+  let tempKeypairPath: string | undefined;
+  let complete = false;
+  let terminating = false;
+
+  const removeTempKeypair = (): boolean => {
+    if (!tempKeypairPath) return true;
     try {
-      unlinkSync(filePath);
-    } catch {
-      // ignore
+      unlinkSync(tempKeypairPath);
+      tempKeypairPath = undefined;
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        tempKeypairPath = undefined;
+        return true;
+      }
+      try {
+        console.warn(
+          `⚠️  Failed to remove temporary deployer keypair ${tempKeypairPath}: ${errorMessage(err)}`,
+        );
+      } catch {
+        // Cleanup warnings must not disrupt the caller.
+      }
+      return false;
     }
   };
-  process.on('exit', cleanup);
-  process.on('SIGINT', () => {
+
+  const onExit = () => {
     cleanup();
-    process.exit(130);
-  });
-  process.on('SIGTERM', () => {
+  };
+  const terminate = (exitCode: number) => {
+    if (terminating) return;
+    terminating = true;
     cleanup();
-    process.exit(143);
-  });
+    runtime.exit(exitCode);
+  };
+  const onSigint = () => terminate(130);
+  const onSigterm = () => terminate(143);
+  const detach = () => {
+    runtime.off('exit', onExit);
+    runtime.off('SIGINT', onSigint);
+    runtime.off('SIGTERM', onSigterm);
+  };
+  const cleanup = (): boolean => {
+    if (complete) return true;
+    const tempKeypairRemoved = removeTempKeypair();
+    let lockReleased = false;
+    try {
+      lockReleased = args.releaseDeploymentRegistryLock();
+    } catch (err) {
+      try {
+        console.warn(`⚠️  Failed to release deployment-registry lock: ${errorMessage(err)}`);
+      } catch {
+        // Cleanup warnings must not disrupt the caller.
+      }
+    }
+    if (tempKeypairRemoved && lockReleased) {
+      complete = true;
+      detach();
+    }
+    return complete;
+  };
+
+  runtime.once('exit', onExit);
+  runtime.once('SIGINT', onSigint);
+  runtime.once('SIGTERM', onSigterm);
+
+  return {
+    setTempKeypairPath: (filePath) => {
+      if (complete) {
+        throw new Error('Cannot register a temporary deployer keypair after deployment cleanup completed');
+      }
+      tempKeypairPath = filePath;
+    },
+    cleanup,
+  };
 }
 
 function normalizeDropId(value: string | undefined): string {
@@ -786,12 +870,236 @@ function buildDiscountMerkleData(addresses: string[]) {
   return { root, proofs };
 }
 
-function writeDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, string[]>; filePath: string }) {
-  const payload = {
+function renderDiscountMerkleJson(args: { root: Buffer; proofs: Record<string, string[]> }): string {
+  return `${JSON.stringify(discountMerkleJsonValue(args), null, 2)}\n`;
+}
+
+function discountMerkleJsonValue(args: { root: Buffer; proofs: Record<string, string[]> }) {
+  return {
     root: args.root.toString('hex'),
     proofs: args.proofs,
   };
-  writeTextFileIfChanged(args.filePath, JSON.stringify(payload, null, 2));
+}
+
+function assertExistingDiscountMerkleJsonMatches(args: {
+  root: Buffer;
+  proofs: Record<string, string[]>;
+  filePath: string;
+}): void {
+  const existingSource = readFileSync(args.filePath, 'utf8');
+  let existingValue: unknown;
+  try {
+    existingValue = JSON.parse(existingSource);
+  } catch (err) {
+    throw new Error(
+      `Existing discount Merkle dataset is not valid JSON: ${args.filePath} (${errorMessage(err)})`,
+    );
+  }
+  if (!isDeepStrictEqual(existingValue, discountMerkleJsonValue(args))) {
+    throw new Error(
+      `Existing discount Merkle dataset conflicts with the generated dataset for root ${args.root.toString('hex')}: ${args.filePath}`,
+    );
+  }
+}
+
+function discountMerkleRegistryReferences(
+  root: string,
+  registryPath: string,
+  drops: Record<string, { dropId: string; dropFamily: string; discountMerkleRoot: string }>,
+): DiscountMerkleDatasetReference[] {
+  const registryLabel = path.relative(root, registryPath);
+  return Object.values(drops).map((drop) => ({
+    dropFamily: drop.dropFamily,
+    rootHex: drop.discountMerkleRoot,
+    source: `${registryLabel}:${drop.dropId}`,
+  }));
+}
+
+export async function validateDiscountMerkleDatasetForDeploy(args: {
+  root: string;
+  dropId: string;
+  dropFamily: DropFamily;
+  merkleRoot: Buffer;
+  proofs: Record<string, string[]>;
+}): Promise<{
+  dropFamily: string;
+  rootHex: string;
+  fileName: string;
+  relativePath: string;
+  filePath: string;
+}> {
+  const desired = requireDiscountMerkleDatasetIdentity({
+    dropFamily: args.dropFamily,
+    rootHex: args.merkleRoot.toString('hex'),
+    source: `${getActiveNewDropConfigPath()}:${args.dropId}`,
+  });
+  const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
+  const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
+  const [frontendRegistry, functionsRegistry] = await Promise.all([
+    readFrontendDropRegistry(frontendPath),
+    readFunctionsDropRegistry(functionsPath),
+  ]);
+  validateDiscountMerkleFamilyRootInvariant([
+    ...discountMerkleRegistryReferences(args.root, frontendPath, frontendRegistry.drops),
+    ...discountMerkleRegistryReferences(args.root, functionsPath, functionsRegistry.drops),
+    {
+      dropFamily: desired.dropFamily,
+      rootHex: desired.rootHex,
+      source: `${getActiveNewDropConfigPath()}:${args.dropId}`,
+    },
+  ]);
+
+  const filePath = path.join(args.root, desired.relativePath);
+  if (existsSync(filePath)) {
+    assertExistingDiscountMerkleJsonMatches({
+      root: args.merkleRoot,
+      proofs: args.proofs,
+      filePath,
+    });
+  }
+  return { ...desired, filePath };
+}
+
+function writeDiscountMerkleJson(args: {
+  root: Buffer;
+  proofs: Record<string, string[]>;
+  filePath: string;
+}): void {
+  const payload = renderDiscountMerkleJson(args);
+  mkdirSync(path.dirname(args.filePath), { recursive: true });
+  if (existsSync(args.filePath)) {
+    assertExistingDiscountMerkleJsonMatches(args);
+    return;
+  }
+  try {
+    writeFileSync(args.filePath, payload, { encoding: 'utf8', flag: 'wx' });
+    return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+  }
+  assertExistingDiscountMerkleJsonMatches(args);
+}
+
+export async function finalizeDiscountMerkleAndDeploymentRegistry<T>(args: {
+  root: Buffer;
+  proofs: Record<string, string[]>;
+  filePath: string;
+  frontendConfigPath: string;
+  functionsConfigPath: string;
+  commitRegistryChanges: () => Promise<T>;
+}): Promise<T> {
+  // The initialize transaction may already have committed this root. Registry
+  // rollback must never remove the only data capable of producing its proofs.
+  writeDiscountMerkleJson(args);
+  return args.commitRegistryChanges();
+}
+
+type TextFileSnapshot =
+  | { exists: false }
+  | {
+      exists: true;
+      content: string;
+    };
+
+function snapshotTextFile(filePath: string): TextFileSnapshot {
+  return existsSync(filePath)
+    ? { exists: true, content: readFileSync(filePath, 'utf8') }
+    : { exists: false };
+}
+
+function textFileSnapshotsMatch(left: TextFileSnapshot, right: TextFileSnapshot): boolean {
+  return left.exists === right.exists && (!left.exists || (right.exists && left.content === right.content));
+}
+
+function restoreTextFileSnapshot(filePath: string, snapshot: TextFileSnapshot): void {
+  if (snapshot.exists) {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, snapshot.content, 'utf8');
+    return;
+  }
+  if (existsSync(filePath)) unlinkSync(filePath);
+}
+
+function warnRegistryRollbackSkipped(filePath: string, reason: string): void {
+  try {
+    console.warn(`⚠️  Could not roll back deployment registry: ${filePath} (${reason})`);
+  } catch {
+    // Logging must never replace the original registry commit error.
+  }
+}
+
+export async function commitDeploymentRegistryPair<TFrontend, TFunctions>(args: {
+  frontendConfigPath: string;
+  functionsConfigPath: string;
+  expectedFrontendSnapshot?: TextFileSnapshot;
+  expectedFunctionsSnapshot?: TextFileSnapshot;
+  commitFrontend: () => Promise<TFrontend> | TFrontend;
+  commitFunctions: () => Promise<TFunctions> | TFunctions;
+}): Promise<{ frontend: TFrontend; functions: TFunctions }> {
+  if (path.resolve(args.frontendConfigPath) === path.resolve(args.functionsConfigPath)) {
+    throw new Error('Frontend and Functions deployment registries must be different files');
+  }
+
+  // Snapshot both inputs before the first mutation. This also fails early if an
+  // existing registry cannot be read.
+  const frontendBefore = snapshotTextFile(args.frontendConfigPath);
+  const functionsBefore = snapshotTextFile(args.functionsConfigPath);
+  if (
+    args.expectedFrontendSnapshot &&
+    !textFileSnapshotsMatch(frontendBefore, args.expectedFrontendSnapshot)
+  ) {
+    throw new Error(`Frontend deployment registry changed after it was prepared: ${args.frontendConfigPath}`);
+  }
+  if (
+    args.expectedFunctionsSnapshot &&
+    !textFileSnapshotsMatch(functionsBefore, args.expectedFunctionsSnapshot)
+  ) {
+    throw new Error(`Functions deployment registry changed after it was prepared: ${args.functionsConfigPath}`);
+  }
+
+  let frontend: TFrontend;
+  try {
+    frontend = await args.commitFrontend();
+  } catch (commitError) {
+    try {
+      const frontendCurrent = snapshotTextFile(args.frontendConfigPath);
+      if (!textFileSnapshotsMatch(frontendCurrent, frontendBefore)) {
+        restoreTextFileSnapshot(args.frontendConfigPath, frontendBefore);
+      }
+    } catch (rollbackError) {
+      warnRegistryRollbackSkipped(args.frontendConfigPath, errorMessage(rollbackError));
+    }
+    throw commitError;
+  }
+
+  const frontendWritten = snapshotTextFile(args.frontendConfigPath);
+  try {
+    const functions = await args.commitFunctions();
+    return { frontend, functions };
+  } catch (commitError) {
+    try {
+      const functionsCurrent = snapshotTextFile(args.functionsConfigPath);
+      if (!textFileSnapshotsMatch(functionsCurrent, functionsBefore)) {
+        restoreTextFileSnapshot(args.functionsConfigPath, functionsBefore);
+      }
+    } catch (rollbackError) {
+      warnRegistryRollbackSkipped(args.functionsConfigPath, errorMessage(rollbackError));
+    }
+    try {
+      const frontendCurrent = snapshotTextFile(args.frontendConfigPath);
+      if (textFileSnapshotsMatch(frontendCurrent, frontendWritten)) {
+        restoreTextFileSnapshot(args.frontendConfigPath, frontendBefore);
+      } else {
+        warnRegistryRollbackSkipped(
+          args.frontendConfigPath,
+          'file contents changed after this run wrote it',
+        );
+      }
+    } catch (rollbackError) {
+      warnRegistryRollbackSkipped(args.frontendConfigPath, errorMessage(rollbackError));
+    }
+    throw commitError;
+  }
 }
 
 async function assertDropIdNotConfiguredInDeploymentFiles(args: {
@@ -840,7 +1148,7 @@ function throwFreshDeployOnlyForExistingConfig(args: {
   );
 }
 
-async function writeFrontendDeploymentConfig(args: {
+async function prepareFrontendDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
@@ -865,13 +1173,22 @@ async function writeFrontendDeploymentConfig(args: {
   boxMinterProgramId: string;
   boxMinterConfigPda?: string;
   collectionMint: string;
-}) {
+}): Promise<{
+  filePath: string;
+  drops: Record<string, FrontendDropConfigSerialized>;
+  sourceSnapshot: TextFileSnapshot;
+}> {
   const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
   const normalizedDropId = normalizeDropId(args.dropId);
   if (!normalizedDropId) {
     throw new Error('Missing dropId while writing src/config/deployment.ts');
   }
+  const sourceBefore = snapshotTextFile(filePath);
   const existing = await readFrontendDropRegistry(filePath);
+  const sourceSnapshot = snapshotTextFile(filePath);
+  if (!textFileSnapshotsMatch(sourceBefore, sourceSnapshot)) {
+    throw new Error(`Frontend deployment registry changed while it was being prepared: ${filePath}`);
+  }
   if (existing.drops[normalizedDropId]) {
     throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
   }
@@ -915,11 +1232,10 @@ async function writeFrontendDeploymentConfig(args: {
     ...(trimToUndefined(args.boxMinterConfigPda) ? { boxMinterConfigPda: trimToUndefined(args.boxMinterConfigPda) } : {}),
     collectionMint: args.collectionMint,
   };
-  writeFrontendDeploymentRegistryFile({ filePath, drops: nextDrops });
-  return filePath;
+  return { filePath, drops: nextDrops, sourceSnapshot };
 }
 
-async function writeFunctionsDeploymentConfig(args: {
+async function prepareFunctionsDeploymentConfig(args: {
   root: string;
   solanaCluster: string;
   dropId: string;
@@ -947,13 +1263,22 @@ async function writeFunctionsDeploymentConfig(args: {
   collectionMint: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
-}) {
+}): Promise<{
+  filePath: string;
+  drops: Record<string, FunctionsDropConfigSerialized>;
+  sourceSnapshot: TextFileSnapshot;
+}> {
   const filePath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
   const normalizedDropId = normalizeDropId(args.dropId);
   if (!normalizedDropId) {
     throw new Error('Missing dropId while writing functions/src/config/deployment.ts');
   }
+  const sourceBefore = snapshotTextFile(filePath);
   const existing = await readFunctionsDropRegistry(filePath);
+  const sourceSnapshot = snapshotTextFile(filePath);
+  if (!textFileSnapshotsMatch(sourceBefore, sourceSnapshot)) {
+    throw new Error(`Functions deployment registry changed while it was being prepared: ${filePath}`);
+  }
   if (existing.drops[normalizedDropId]) {
     throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
   }
@@ -1001,8 +1326,7 @@ async function writeFunctionsDeploymentConfig(args: {
     receiptsMerkleTree: args.receiptsMerkleTree,
     deliveryLookupTable: args.deliveryLookupTable,
   };
-  writeFunctionsDeploymentRegistryFile({ filePath, drops: nextDrops });
-  return filePath;
+  return { filePath, drops: nextDrops, sourceSnapshot };
 }
 
 function u64LE(value: bigint): Buffer {
@@ -1771,8 +2095,6 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
 
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
 const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
-// Anchor instruction discriminator: sha256("global:set_treasury")[0..8]
-const IX_SET_TREASURY = createHash('sha256').update('global:set_treasury').digest().subarray(0, 8);
 
 function buildInitializeIx(args: {
   programId: PublicKey;
@@ -1824,25 +2146,6 @@ function buildInitializeIx(args: {
       { pubkey: args.treasury, isSigner: false, isWritable: false },
       { pubkey: args.coreCollection, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data,
-  });
-}
-
-function buildSetTreasuryIx(args: {
-  programId: PublicKey;
-  admin: PublicKey;
-  treasury: PublicKey;
-  configPda?: PublicKey;
-  dropSeed?: Buffer;
-}): TransactionInstruction {
-  const configPda = args.configPda || boxMinterConfigPda(args.programId, args.dropSeed);
-  const data = Buffer.concat([IX_SET_TREASURY, args.treasury.toBuffer()]);
-  return new TransactionInstruction({
-    programId: args.programId,
-    keys: [
-      { pubkey: configPda, isSigner: false, isWritable: true },
-      { pubkey: args.admin, isSigner: true, isWritable: false },
     ],
     data,
   });
@@ -2014,13 +2317,18 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
+type ReusableProgramResolution = {
+  programId: string;
+  source: string;
+};
+
 async function resolveReusableProgramId(args: {
   root: string;
   solanaCluster: SolanaCluster;
   dropId: string;
   desiredMetadataPathFormat: MetadataPathFormat;
   referenceDropId?: string;
-}): Promise<{ programId: string; source: string }> {
+}): Promise<ReusableProgramResolution> {
   const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
   const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
   const [frontendRegistry, functionsRegistry] = await Promise.all([
@@ -2079,6 +2387,35 @@ async function resolveReusableProgramId(args: {
     `NEW_DROP.deploy.reuseProgramId=true is ambiguous on ${args.solanaCluster}; found multiple reusable program ids: ${programIds.join(', ')}.\n` +
       `Set NEW_DROP.deploy.reuseProgramIdFromDropId in ${getActiveNewDropConfigPath()}.`,
   );
+}
+
+export async function revalidateReusableProgramResolution(args: {
+  root: string;
+  solanaCluster: SolanaCluster;
+  dropId: string;
+  desiredMetadataPathFormat: MetadataPathFormat;
+  referenceDropId?: string;
+  expected: ReusableProgramResolution;
+}): Promise<ReusableProgramResolution> {
+  const current = await resolveReusableProgramId(args);
+  const expectedProgramId = new PublicKey(args.expected.programId);
+  const currentProgramId = new PublicKey(current.programId);
+  if (!currentProgramId.equals(expectedProgramId)) {
+    throw new Error(
+      `Reusable program selection changed while waiting for deployer credentials.\n` +
+        `- before prompt: ${expectedProgramId.toBase58()} (${args.expected.source})\n` +
+        `- under lock   : ${currentProgramId.toBase58()} (${current.source})\n` +
+        `No deployment mutation was started. Rerun to review and validate the current program lineage.`,
+    );
+  }
+  await assertProgramReuseMatchesMetadataPathFormat({
+    root: args.root,
+    solanaCluster: args.solanaCluster,
+    dropId: args.dropId,
+    programId: current.programId,
+    desiredMetadataPathFormat: args.desiredMetadataPathFormat,
+  });
+  return current;
 }
 
 async function assertReusedProgramDeployed(args: {
@@ -2436,9 +2773,10 @@ async function main() {
 
   const reuseProgramId = deployCfg.reuseProgramId;
   let expectedProgramId: string | undefined;
+  let reusableProgram: ReusableProgramResolution | null = null;
   let freshProgramKeypair: Keypair | null = null;
   if (reuseProgramId) {
-    const reusableProgram = await resolveReusableProgramId({
+    reusableProgram = await resolveReusableProgramId({
       root,
       solanaCluster: cluster,
       dropId,
@@ -2500,14 +2838,54 @@ async function main() {
     dropCfg,
     dropMetadataBase,
   });
+  let discountMerkleDataset = await validateDiscountMerkleDatasetForDeploy({
+    root,
+    dropId,
+    dropFamily,
+    merkleRoot: initDropInputs.discountMerkle.root,
+    proofs: initDropInputs.discountMerkle.proofs,
+  });
 
   console.log('Enter the deployer wallet private key (input is hidden).');
   console.log('Accepted formats: base58 secret key, or JSON array (like ~/.config/solana/id.json contents).');
   const payer = parsePrivateKeyInput(await promptMaskedInput('deployer private key: '));
   console.log('deployer pubkey:', payer.publicKey.toBase58());
 
+  const releaseDeploymentRegistryLock = acquireDeploymentRegistryMutationLock({
+    root,
+    operation: `deploy ${dropId}`,
+  });
+  const deploymentCleanup = registerDeploymentCleanup({
+    releaseDeploymentRegistryLock,
+  });
+  try {
+  // The first check happened before the private-key prompt. Recheck under the
+  // repository lock so another completed deployment cannot slip through.
+  await assertDropIdNotConfiguredInDeploymentFiles({
+    dropId,
+    frontendConfigPath: frontendDeploymentCfgPath,
+    functionsConfigPath: functionsDeploymentCfgPath,
+  });
+  if (reusableProgram) {
+    await revalidateReusableProgramResolution({
+      root,
+      solanaCluster: cluster,
+      dropId,
+      desiredMetadataPathFormat: metadataPathFormat,
+      referenceDropId: deployCfg.reuseProgramIdFromDropId,
+      expected: reusableProgram,
+    });
+  }
+  discountMerkleDataset = await validateDiscountMerkleDatasetForDeploy({
+    root,
+    dropId,
+    dropFamily,
+    merkleRoot: initDropInputs.discountMerkle.root,
+    proofs: initDropInputs.discountMerkle.proofs,
+  });
+
   const tempKeypairPath = writeTempKeypairFile(payer);
-  registerTempKeypairCleanup(tempKeypairPath);
+  deploymentCleanup.setTempKeypairPath(tempKeypairPath);
   const toolEnv = {
     ...(solanaBinDir ? { PATH: `${solanaBinDir}:${process.env.PATH || ''}` } : {}),
     // Keep anchor + solana cli aligned with the deployer wallet.
@@ -2619,12 +2997,6 @@ async function main() {
   }
   const requiredDropMetadataBase = initDropInputs.requiredDropMetadataBase;
   const discountMerkle = initDropInputs.discountMerkle;
-  const discountMerkleJsonPath = path.join(root, 'src', 'drops', 'discountMerkles', `${dropId}.json`);
-  writeDiscountMerkleJson({
-    root: discountMerkle.root,
-    proofs: discountMerkle.proofs,
-    filePath: discountMerkleJsonPath,
-  });
 
   const boxMinterConfig = {
     // Payment + mint caps
@@ -2805,7 +3177,33 @@ async function main() {
   const setupTx = new Transaction().add(initIx);
   setupTx.feePayer = payer.publicKey;
   setupTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(initialize box minter)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
-  const setupSig = await sendAndConfirmTx({ connection, tx: setupTx, signers: [payer], label: 'initialize box minter', commitment: 'confirmed' });
+  // This root is committed by initialize and cannot reconstruct its proofs. Persist
+  // the canonical family dataset before the transaction has any chance to land.
+  writeDiscountMerkleJson({
+    root: discountMerkleRoot,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleDataset.filePath,
+  });
+  let setupSig: string;
+  try {
+    setupSig = await sendAndConfirmTx({
+      connection,
+      tx: setupTx,
+      signers: [payer],
+      label: 'initialize box minter',
+      commitment: 'confirmed',
+    });
+  } catch (err) {
+    try {
+      console.warn(
+        `⚠️  Preserved discount proof because initialize may have landed: ${discountMerkleDataset.filePath}\n` +
+          `Verify config PDA ${configPda.toBase58()} before retrying or deleting this file.`,
+      );
+    } catch {
+      // Logging must never replace the transaction error.
+    }
+    throw err;
+  }
   console.log('✅ Box minter configured:', setupSig);
   console.log('  Config PDA:', configPda.toBase58());
   console.log('  Payment treasury:', treasury.toBase58());
@@ -2853,60 +3251,89 @@ async function main() {
   // For fresh deployments, never reuse a previous drop's LUT: use the newly created LUT or leave empty.
   const deliveryLutStr = deliveryLut?.toBase58() || '';
 
-  const frontendCfgPath = await writeFrontendDeploymentConfig({
-    root,
-    solanaCluster: cluster,
-    dropId,
-    dropFamily,
-    collectionName: collectionMetadata.name,
-    metadataBase: requiredDropMetadataBase,
-    metadataPathFormat,
-    mintSelection: boxMinterConfig.mintSelection,
-    treasury: treasury.toBase58(),
-    priceSol: Number(boxMinterConfig.priceSol),
-    discountPriceSol: Number(boxMinterConfig.discountPriceSol),
-    stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
-    stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
-    discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
-    discountMerkleRoot: discountMerkleRoot.toString('hex'),
-    maxSupply: Number(boxMinterConfig.maxSupply),
-    itemsPerBox: Number(boxMinterConfig.itemsPerBox),
-    maxPerTx: Number(boxMinterConfig.maxPerTx),
-    namePrefix: boxMinterConfig.namePrefix,
-    figureNamePrefix: boxMinterConfig.figureNamePrefix,
-    symbol: boxMinterConfig.symbol,
-    boxMinterProgramId: programPk.toBase58(),
-    boxMinterConfigPda: configPda.toBase58(),
-    collectionMint: resolvedCoreCollection.toBase58(),
-  });
-  const functionsCfgWrittenPath = await writeFunctionsDeploymentConfig({
-    root,
-    solanaCluster: cluster,
-    dropId,
-    dropFamily,
-    collectionName: collectionMetadata.name,
-    metadataBase: requiredDropMetadataBase,
-    metadataPathFormat,
-    mintSelection: boxMinterConfig.mintSelection,
-    treasury: treasury.toBase58(),
-    priceSol: Number(boxMinterConfig.priceSol),
-    discountPriceSol: Number(boxMinterConfig.discountPriceSol),
-    stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
-    stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
-    stripeProductTaxCode: boxMinterConfig.stripeProductTaxCode,
-    discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
-    discountMerkleRoot: discountMerkleRoot.toString('hex'),
-    maxSupply: Number(boxMinterConfig.maxSupply),
-    itemsPerBox: Number(boxMinterConfig.itemsPerBox),
-    maxPerTx: Number(boxMinterConfig.maxPerTx),
-    namePrefix: boxMinterConfig.namePrefix,
-    figureNamePrefix: boxMinterConfig.figureNamePrefix,
-    symbol: boxMinterConfig.symbol,
-    boxMinterProgramId: programPk.toBase58(),
-    boxMinterConfigPda: configPda.toBase58(),
-    collectionMint: resolvedCoreCollection.toBase58(),
-    receiptsMerkleTree: receiptsTreeStr,
-    deliveryLookupTable: deliveryLutStr,
+  const [preparedFrontendCfg, preparedFunctionsCfg] = await Promise.all([
+    prepareFrontendDeploymentConfig({
+      root,
+      solanaCluster: cluster,
+      dropId,
+      dropFamily,
+      collectionName: collectionMetadata.name,
+      metadataBase: requiredDropMetadataBase,
+      metadataPathFormat,
+      mintSelection: boxMinterConfig.mintSelection,
+      treasury: treasury.toBase58(),
+      priceSol: Number(boxMinterConfig.priceSol),
+      discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+      stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
+      stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
+      discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
+      discountMerkleRoot: discountMerkleRoot.toString('hex'),
+      maxSupply: Number(boxMinterConfig.maxSupply),
+      itemsPerBox: Number(boxMinterConfig.itemsPerBox),
+      maxPerTx: Number(boxMinterConfig.maxPerTx),
+      namePrefix: boxMinterConfig.namePrefix,
+      figureNamePrefix: boxMinterConfig.figureNamePrefix,
+      symbol: boxMinterConfig.symbol,
+      boxMinterProgramId: programPk.toBase58(),
+      boxMinterConfigPda: configPda.toBase58(),
+      collectionMint: resolvedCoreCollection.toBase58(),
+    }),
+    prepareFunctionsDeploymentConfig({
+      root,
+      solanaCluster: cluster,
+      dropId,
+      dropFamily,
+      collectionName: collectionMetadata.name,
+      metadataBase: requiredDropMetadataBase,
+      metadataPathFormat,
+      mintSelection: boxMinterConfig.mintSelection,
+      treasury: treasury.toBase58(),
+      priceSol: Number(boxMinterConfig.priceSol),
+      discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+      stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
+      stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
+      stripeProductTaxCode: boxMinterConfig.stripeProductTaxCode,
+      discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
+      discountMerkleRoot: discountMerkleRoot.toString('hex'),
+      maxSupply: Number(boxMinterConfig.maxSupply),
+      itemsPerBox: Number(boxMinterConfig.itemsPerBox),
+      maxPerTx: Number(boxMinterConfig.maxPerTx),
+      namePrefix: boxMinterConfig.namePrefix,
+      figureNamePrefix: boxMinterConfig.figureNamePrefix,
+      symbol: boxMinterConfig.symbol,
+      boxMinterProgramId: programPk.toBase58(),
+      boxMinterConfigPda: configPda.toBase58(),
+      collectionMint: resolvedCoreCollection.toBase58(),
+      receiptsMerkleTree: receiptsTreeStr,
+      deliveryLookupTable: deliveryLutStr,
+    }),
+  ]);
+  const { frontendCfgPath, functionsCfgWrittenPath } = await finalizeDiscountMerkleAndDeploymentRegistry({
+    root: discountMerkleRoot,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleDataset.filePath,
+    frontendConfigPath: frontendDeploymentCfgPath,
+    functionsConfigPath: functionsDeploymentCfgPath,
+    commitRegistryChanges: async () => {
+      const committed = await commitDeploymentRegistryPair({
+        frontendConfigPath: preparedFrontendCfg.filePath,
+        functionsConfigPath: preparedFunctionsCfg.filePath,
+        expectedFrontendSnapshot: preparedFrontendCfg.sourceSnapshot,
+        expectedFunctionsSnapshot: preparedFunctionsCfg.sourceSnapshot,
+        commitFrontend: () => {
+          writeFrontendDeploymentRegistryFile(preparedFrontendCfg);
+          return preparedFrontendCfg.filePath;
+        },
+        commitFunctions: () => {
+          writeFunctionsDeploymentRegistryFile(preparedFunctionsCfg);
+          return preparedFunctionsCfg.filePath;
+        },
+      });
+      return {
+        frontendCfgPath: committed.frontend,
+        functionsCfgWrittenPath: committed.functions,
+      };
+    },
   });
 
   console.log('');
@@ -2914,7 +3341,9 @@ async function main() {
   console.log(`- ${path.relative(root, frontendCfgPath)}`);
   console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
   console.log('');
-
+  } finally {
+    deploymentCleanup.cleanup();
+  }
 }
 
 function isDirectRun(): boolean {

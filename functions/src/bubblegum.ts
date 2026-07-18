@@ -28,7 +28,7 @@ function assertBytes32(value: Buffer | Uint8Array, label: string): Buffer {
   return buf;
 }
 
-export function encodeBubblegumTransferV2Args(args: {
+function encodeBubblegumTransferV2Args(args: {
   root: Buffer | Uint8Array;
   dataHash: Buffer | Uint8Array;
   creatorHash: Buffer | Uint8Array;

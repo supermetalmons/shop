@@ -1,5 +1,5 @@
 export const MIN_TIME_BETWEEN_TOUCHSTARTS = 555;
-export const MOBILE_TAP_MOVE_CANCEL_PX = 12;
+const MOBILE_TAP_MOVE_CANCEL_PX = 12;
 
 type TouchstartGuardInput = {
   currentTime: number;
@@ -93,7 +93,7 @@ export function getTouchstartGuardResult({
 let installed = false;
 let lastTouchStartTime: number | null = null;
 
-export function preventTouchstartIfNeeded(event: TouchstartPreventableEvent): boolean {
+function preventTouchstartIfNeeded(event: TouchstartPreventableEvent): boolean {
   if (!isMobileBrowser()) return false;
   if (isEditableMobileInteractionTarget(event.target ?? null)) return false;
 

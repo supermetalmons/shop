@@ -1,5 +1,5 @@
 export const NOTIFICATION_EMAIL_FROM = 'notifications@support.mons.shop';
-export const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
+const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
 const BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE = 'If you have any questions, reply to this email.';
 
 export type ShipperReadyOrderSummary = {
@@ -58,12 +58,6 @@ export type BuyerVisibleOrderEmailItem = NotificationEmailItem & {
 export type ShipperVisibleOrderEmailItem = NotificationEmailItem & {
   readonly [shipperVisibleOrderEmailItemBrand]: true;
 };
-
-/**
- * @deprecated Use BuyerVisibleOrderEmailItem so the sealed-pack privacy
- * boundary stays explicit at call sites.
- */
-export type BuyerOrderEmailItem = BuyerVisibleOrderEmailItem;
 
 export type BuyerOrderEmailMessageBase = {
   idempotencyKey: string;
@@ -135,7 +129,7 @@ function shipperReadyItemsText(message: ShipperReadyToShipEmailMessage): string[
   return ['- Items pending'];
 }
 
-export function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
+function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessage): string {
   return [
     `New order - ${message.deliveryId}`,
     '',
@@ -145,7 +139,7 @@ export function buildShipperReadyEmailText(message: ShipperReadyToShipEmailMessa
   ].join('\n');
 }
 
-export function escapeHtml(value: unknown): string {
+function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -154,7 +148,7 @@ export function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-export function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
+function buildShipperReadyEmailHtml(message: ShipperReadyToShipEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'New order',
     orderNumber: message.deliveryId,
@@ -217,7 +211,7 @@ function stripeCheckoutManualReviewEmailDetails(
   ];
 }
 
-export function buildStripeCheckoutManualReviewEmailText(message: StripeCheckoutManualReviewEmailMessage): string {
+function buildStripeCheckoutManualReviewEmailText(message: StripeCheckoutManualReviewEmailMessage): string {
   const details = stripeCheckoutManualReviewEmailDetails(message).map(({ label, value }) => `${label}: ${value}`);
   return [
     'Stripe checkout fulfillment needs manual review.',
@@ -229,7 +223,7 @@ export function buildStripeCheckoutManualReviewEmailText(message: StripeCheckout
   ].join('\n');
 }
 
-export function buildStripeCheckoutManualReviewEmailHtml(message: StripeCheckoutManualReviewEmailMessage): string {
+function buildStripeCheckoutManualReviewEmailHtml(message: StripeCheckoutManualReviewEmailMessage): string {
   const details = stripeCheckoutManualReviewEmailDetails(message)
     .map(({ label, value }) => `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`)
     .join('');
@@ -279,7 +273,7 @@ function buyerOrderEmailText(args: {
   return lines.join('\n');
 }
 
-export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmailMessage): string {
+function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmailMessage): string {
   return buyerOrderEmailText({
     title: 'Order received',
     intro: 'We received your order.',
@@ -288,7 +282,7 @@ export function buildBuyerOrderReceivedEmailText(message: BuyerOrderReceivedEmai
   });
 }
 
-export function buildBuyerOrderUpdateEmailText(message: BuyerOrderUpdateEmailMessage): string {
+function buildBuyerOrderUpdateEmailText(message: BuyerOrderUpdateEmailMessage): string {
   return buyerOrderEmailText({
     title: 'Order update',
     intro: "Thanks for your patience. We'll let you know when your order ships.",
@@ -297,7 +291,7 @@ export function buildBuyerOrderUpdateEmailText(message: BuyerOrderUpdateEmailMes
   });
 }
 
-export function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailMessage): string {
+function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailMessage): string {
   return buyerOrderEmailText({
     title: 'Order shipped',
     intro: 'Your order shipped.',
@@ -405,7 +399,7 @@ function notificationEmailHtmlShell(args: {
   ].join('');
 }
 
-export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmailMessage): string {
+function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'Order received',
     intro: "Thanks for your order. We'll let you know when it ships.",
@@ -415,7 +409,7 @@ export function buildBuyerOrderReceivedEmailHtml(message: BuyerOrderReceivedEmai
   });
 }
 
-export function buildBuyerOrderUpdateEmailHtml(message: BuyerOrderUpdateEmailMessage): string {
+function buildBuyerOrderUpdateEmailHtml(message: BuyerOrderUpdateEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'Order update',
     intro: "Thanks for your patience. We'll let you know when your order ships.",
@@ -425,7 +419,7 @@ export function buildBuyerOrderUpdateEmailHtml(message: BuyerOrderUpdateEmailMes
   });
 }
 
-export function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailMessage): string {
+function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailMessage): string {
   return notificationEmailHtmlShell({
     title: 'Order shipped',
     intro: 'Your package is on the way.',

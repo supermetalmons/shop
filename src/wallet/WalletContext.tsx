@@ -7,7 +7,7 @@ import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import {
   PhantomWalletAdapter,
-} from '@solana/wallet-adapter-wallets';
+} from '@solana/wallet-adapter-phantom';
 import { GlowWalletAdapter } from '@solana/wallet-adapter-glow';
 import { LedgerWalletAdapter } from '@solana/wallet-adapter-ledger';
 import '@solana/wallet-adapter-react-ui/styles.css';

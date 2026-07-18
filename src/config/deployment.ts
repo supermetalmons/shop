@@ -14,9 +14,9 @@ import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-export type MetadataPathFormat = 'legacy' | 'compact';
+type MetadataPathFormat = 'legacy' | 'compact';
 
-export type MediaMapStrategy = 'direct' | 'cyclic';
+type MediaMapStrategy = 'direct' | 'cyclic';
 
 export type MediaMapConfig = {
   strategy?: MediaMapStrategy;
@@ -25,9 +25,9 @@ export type MediaMapConfig = {
 };
 
 export type FigureMediaConfig = MediaMapConfig;
-export type BoxMediaConfig = MediaMapConfig;
+type BoxMediaConfig = MediaMapConfig;
 
-export type MintSelectionOption = {
+type MintSelectionOption = {
   key: string;
   label: string;
   startId: number;
@@ -83,7 +83,7 @@ export type FrontendDeploymentConfig = FrontendDropConfig;
 
 export type FrontendDropsMap = Record<string, FrontendDropConfig>;
 
-export type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
 
 export type SecondaryMarketplaceLink = {
   key: SecondaryMarketplaceKey;
@@ -91,7 +91,7 @@ export type SecondaryMarketplaceLink = {
   href: string;
 };
 
-export type DropPaths = {
+type DropPaths = {
   /** Normalized drop base (no trailing slash). */
   base: string;
   collectionJson: string;
@@ -412,7 +412,7 @@ function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): b
   return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
 }
 
-export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
+function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
   const base = normalizeDropBase(dropBase);
   if (metadataPathFormat === 'legacy') {
     return {
@@ -837,7 +837,7 @@ export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined 
   return FRONTEND_DROPS[normalizedDropId];
 }
 
-export function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
+function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
   const drop =
     typeof dropOrId === 'string'
       ? getFrontendDrop(dropOrId)
@@ -850,14 +850,6 @@ export function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropF
 
 export function isDropFamily(dropOrId: FrontendDropConfig | string | undefined, dropFamily: DropFamily): boolean {
   return dropFamilyForDrop(dropOrId) === dropFamily;
-}
-
-export function requireFrontendDrop(dropId: string): FrontendDropConfig {
-  const found = getFrontendDrop(dropId);
-  if (!found) {
-    throw new Error(`Unknown frontend dropId: ${dropId}`);
-  }
-  return found;
 }
 
 export function listFrontendDrops(): FrontendDropConfig[] {
