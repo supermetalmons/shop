@@ -1,7 +1,11 @@
 import type { FulfillmentOrder } from '../types';
+import {
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE as ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
+  isAdminIrlRedeemDeliveryOrderSource,
+} from '../../functions/src/shared/fulfillmentSources';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus';
 
-export const ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE = 'admin_irl_redeem';
+export { ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE };
 
 export const FULFILLMENT_ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
@@ -17,7 +21,7 @@ export const DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER: FulfillmentOrderVisibi
 type FulfillmentOrderVisibilityInput = Pick<FulfillmentOrder, 'source' | 'fulfillmentStatus'>;
 
 export function isRedeemedForIrlFulfillmentOrder(order: Pick<FulfillmentOrder, 'source'>): boolean {
-  return order.source === ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE;
+  return isAdminIrlRedeemDeliveryOrderSource(order.source);
 }
 
 export function filterFulfillmentOrdersByVisibility<T extends FulfillmentOrderVisibilityInput>(

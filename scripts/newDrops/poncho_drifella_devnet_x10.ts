@@ -1,4 +1,5 @@
 import { defineNewDropConfig } from '../shared/newDropConfig.ts';
+import { PONCHO_DRIFELLA_CDN_BASE_URL } from '../../functions/src/shared/dropMediaDefaults.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {
@@ -19,7 +20,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Poncho Drifella',
       description: 'poncho drifella cards · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://cdn.lil.org/nft/poncho_drifella/pack.webp',
+      image: `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack.webp`,
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/poncho_drifella.csv',
     receiptsTree: {

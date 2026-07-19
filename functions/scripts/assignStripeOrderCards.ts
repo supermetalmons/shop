@@ -25,10 +25,16 @@ import {
 import { FUNCTIONS_DROPS, requireFunctionsDrop, type FunctionsDropConfig, type SolanaCluster } from '../src/config/deployment.ts';
 import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from '../src/claimCodes.ts';
 import {
-  boxIdFromMetadataUri,
-  metadataKindFromUri,
-  selectMetadataUri,
-} from '../src/dropMetadataUri.ts';
+  dasAssetBoxId,
+  dasAssetKind,
+  dasAssetLooksBurntOrClosed,
+  type DasAsset,
+} from '../src/shared/dasAsset.ts';
+import {
+  heliusSearchAssetsHasNextPage as sharedHeliusSearchAssetsHasNextPage,
+  heliusSearchAssetsItems,
+} from '../src/shared/heliusDas.ts';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../src/shared/fulfillmentSources.ts';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS, uniqueAssetGroupingCollectionMint } from '../src/dasAssetCollections.ts';
 import {
   dropBoxAssignmentPath,
@@ -48,6 +54,11 @@ const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
 const ORDER_DOC_PAGE_SIZE = 100;
 const RPC_TIMEOUT_MS = 20_000;
+const ASSIGN_SCRIPT_DAS_NAME_OPTIONS = { metadataNameMode: 'coerce' } as const;
+const ASSIGN_SCRIPT_DAS_BURN_OPTIONS = {
+  missingAssetResult: true,
+  nonBooleanFlagIsBurnt: true,
+} as const;
 
 type Args = {
   execute: boolean;
@@ -67,8 +78,6 @@ type ReceiptOwnerResolution = {
   source: 'claimed_recipient' | 'receipt_owner';
   claimStatus: 'claimed' | 'unclaimed';
 };
-
-type DasAsset = Record<string, any>;
 
 type ScriptDropRuntime = CardAssignmentDropRuntime & {
   cluster: SolanaCluster;
@@ -255,7 +264,7 @@ function pubkeyString(label: string, value: string | undefined): string {
   try {
     return new PublicKey(trimmed).toBase58();
   } catch (err) {
-    fail(`${label} is invalid in functions/src/config/deployment.ts: ${err instanceof Error ? err.message : String(err)}`);
+    fail(`${label} is invalid in functions/src/shared/deploymentRegistry.ts: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -522,18 +531,16 @@ function heliusSearchAssetsParams(owner: string, page: number, grouping?: readon
   return params;
 }
 
-function heliusSearchAssetsItems(result: any): DasAsset[] {
-  return Array.isArray(result?.items) ? result.items : [];
-}
-
 function heliusSearchAssetsHasNextPage(result: any, page: number, items: DasAsset[]): boolean {
-  if (!items.length) return false;
-  const responseLimit = Number(result?.limit);
-  const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : HELIUS_ASSETS_PAGE_LIMIT;
   // Helius can return a capped/stale `total` equal to the page limit while later pages still exist.
   // Keep paging while full pages are returned; the hard page cap prevents unbounded scans.
-  void page;
-  return items.length >= limit;
+  return sharedHeliusSearchAssetsHasNextPage(
+    result,
+    page,
+    items,
+    HELIUS_ASSETS_PAGE_LIMIT,
+    { totalPolicy: 'ignore' },
+  );
 }
 
 const ownerGroupedAssetsCache = new Map<string, Promise<DasAsset[]>>();
@@ -588,40 +595,12 @@ async function fetchOwnedAssetsPages(
   fail(`Helius searchAssets page cap reached while scanning ${owner}`);
 }
 
-function assetMetadataUri(asset: DasAsset): string {
-  return selectMetadataUri(
-    asset?.content?.json_uri,
-    asset?.content?.jsonUri,
-    asset?.content?.metadata?.json_uri,
-    asset?.content?.metadata?.jsonUri,
-    asset?.content?.metadata?.uri,
-  );
-}
-
 function getAssetKind(asset: DasAsset): 'box' | 'dude' | 'certificate' | null {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((attr: any) => attr?.trait_type === 'type');
-  const value = kindAttr?.value;
-  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
-  const kindFromUri = metadataKindFromUri(assetMetadataUri(asset));
-  if (kindFromUri) return kindFromUri;
-  const name = String(asset?.content?.metadata?.name || asset?.content?.metadata?.title || '').toLowerCase();
-  if (name.includes('blind box')) return 'box';
-  if (name.includes('receipt') || name.includes('authenticity')) return 'certificate';
-  if (name.includes('figure')) return 'dude';
-  if (/^(b|box)#?\d+$/.test(name.replace(/\s+/g, ''))) return 'box';
-  return null;
+  return dasAssetKind(asset, ASSIGN_SCRIPT_DAS_NAME_OPTIONS);
 }
 
 function getBoxIdFromAsset(asset: DasAsset): string | undefined {
-  const boxAttr = asset?.content?.metadata?.attributes?.find((attr: any) => attr?.trait_type === 'box_id');
-  if (typeof boxAttr?.value === 'string' && boxAttr.value) return boxAttr.value;
-  const uriBoxId = boxIdFromMetadataUri(assetMetadataUri(asset));
-  if (uriBoxId) return uriBoxId;
-  const normalized = String(asset?.content?.metadata?.name || asset?.content?.metadata?.title || '')
-    .toLowerCase()
-    .replace(/\s+/g, '');
-  const match = normalized.match(/^(b|box)#?(\d+)$/);
-  return match?.[2];
+  return dasAssetBoxId(asset, ASSIGN_SCRIPT_DAS_NAME_OPTIONS);
 }
 
 function assetMatchesRequestedDrop(asset: DasAsset, runtime: ScriptDropRuntime): boolean {
@@ -631,24 +610,7 @@ function assetMatchesRequestedDrop(asset: DasAsset, runtime: ScriptDropRuntime):
 }
 
 function looksBurntOrClosedInHelius(asset: DasAsset | null | undefined): boolean {
-  if (!asset || typeof asset !== 'object') return true;
-  const burntFlag =
-    asset?.burnt ??
-    asset?.burned ??
-    asset?.is_burnt ??
-    asset?.isBurnt ??
-    asset?.compression?.burnt ??
-    asset?.compression?.burned ??
-    asset?.compression?.is_burnt ??
-    asset?.compression?.isBurnt ??
-    asset?.ownership?.burnt ??
-    asset?.ownership?.burned;
-  if (typeof burntFlag === 'boolean') return burntFlag;
-  if (burntFlag != null && burntFlag !== false) return true;
-  const ownershipState = String(
-    asset?.ownership?.ownership_state || asset?.ownership?.ownershipState || asset?.ownership?.state || '',
-  ).toLowerCase();
-  return Boolean(ownershipState && /burn/.test(ownershipState));
+  return dasAssetLooksBurntOrClosed(asset, ASSIGN_SCRIPT_DAS_BURN_OPTIONS);
 }
 
 function uniqueDasAssetsById(assets: DasAsset[]): DasAsset[] {
@@ -851,7 +813,7 @@ async function* loadOrderDocs(db: Firestore, runtime: ScriptDropRuntime, args: A
   const baseQuery = db
     .collection(dropDeliveryOrdersCollectionPath(runtime.dropId))
     .where('status', '==', 'ready_to_ship')
-    .where('source', '==', 'stripe_offchain');
+    .where('source', '==', STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE);
   let cursor: QueryDocumentSnapshot | undefined;
   while (true) {
     const query = cursor ? baseQuery.startAfter(cursor).limit(ORDER_DOC_PAGE_SIZE) : baseQuery.limit(ORDER_DOC_PAGE_SIZE);
@@ -881,7 +843,7 @@ async function buildDryRunManifest(db: Firestore, runtime: ScriptDropRuntime, ar
 
   for await (const doc of loadOrderDocs(db, runtime, args)) {
     const order = doc.data() as any;
-    if (order?.source !== 'stripe_offchain' || order?.status !== 'ready_to_ship') continue;
+    if (order?.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || order?.status !== 'ready_to_ship') continue;
     const deliveryId = getOrderDeliveryId(doc, order);
     const existingClaims = existingIrlClaimsByBoxId(order, runtime, doc.ref.path);
     const boxes: ManifestBox[] = [];
@@ -1249,7 +1211,7 @@ async function buildExecutePlan(db: Firestore, runtime: ScriptDropRuntime, manif
     const orderSnap = await db.doc(order.docPath).get();
     if (!orderSnap.exists) fail(`Delivery order not found: ${order.docPath}`);
     const orderData = orderSnap.data() as any;
-    if (orderData?.source !== 'stripe_offchain' || orderData?.status !== 'ready_to_ship') {
+    if (orderData?.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || orderData?.status !== 'ready_to_ship') {
       fail(`${order.docPath} is no longer a ready_to_ship Stripe offchain order`);
     }
     if (getOrderDeliveryId(orderSnap, orderData) !== order.deliveryId) {
@@ -1281,7 +1243,7 @@ async function upsertOrderIrlClaims(params: {
     const snap = await tx.get(orderRef);
     if (!snap.exists) fail(`Delivery order disappeared: ${params.orderPath}`);
     const order = snap.data() as any;
-    if (order?.source !== 'stripe_offchain' || order?.status !== 'ready_to_ship') {
+    if (order?.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || order?.status !== 'ready_to_ship') {
       fail(`${params.orderPath} is no longer a ready_to_ship Stripe offchain order`);
     }
     const existingClaims = existingIrlClaimsByBoxId(order, params.runtime, params.orderPath);

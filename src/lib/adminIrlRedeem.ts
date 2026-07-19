@@ -1,5 +1,9 @@
 import type { DropFamily } from '../config/deployment';
 import type { InventoryItem } from '../types';
+import {
+  getAdminIrlRedeemTargetEligibility,
+  isAdminIrlRedeemDropFamily,
+} from '../../functions/src/shared/adminIrlEligibility';
 import { hasAdminIrlRedeemAccess } from './fulfillmentAccess';
 
 type EligibilityItem = Pick<InventoryItem, 'dropId' | 'kind'>;
@@ -144,10 +148,18 @@ export function canAdminIrlRedeemSelection(args: {
   const hasAdminAccess = args.hasAdminAccess || hasAdminIrlRedeemAccess;
   if (!args.wallet || !args.isSignedInWallet || !hasAdminAccess(args.wallet)) return false;
   if (!args.selectionOwner || args.selectionOwner !== args.wallet) return false;
-  if (args.selectedCount <= 0 || args.deliverableItems.length !== args.selectedCount) return false;
+  if (args.deliverableItems.length !== args.selectedCount) return false;
   if (args.selectedItems.length !== args.selectedCount) return false;
   if (args.selectedDropIds.length !== 1) return false;
-  if (args.selectedDropFamily !== 'card_nft_2') return false;
+  if (!isAdminIrlRedeemDropFamily(args.selectedDropFamily)) return false;
+  if (
+    !getAdminIrlRedeemTargetEligibility({
+      targetKind: 'pack',
+      itemCount: args.selectedCount,
+    }).eligible
+  ) {
+    return false;
+  }
   return args.deliverableItems.every((item) => item.kind === 'box');
 }
 
@@ -163,8 +175,15 @@ export function canAdminIrlRedeemCardReceipt(args: {
   const hasAdminAccess = args.hasAdminAccess || hasAdminIrlRedeemAccess;
   if (!args.wallet || !args.isSignedInWallet || !hasAdminAccess(args.wallet)) return false;
   if (!args.selectionOwner || args.selectionOwner !== args.wallet) return false;
-  if (args.receiptCount !== 1) return false;
-  if (args.dropFamily !== 'card_nft_2') return false;
+  if (
+    !getAdminIrlRedeemTargetEligibility({
+      targetKind: 'card_receipt',
+      itemCount: args.receiptCount,
+    }).eligible
+  ) {
+    return false;
+  }
+  if (!isAdminIrlRedeemDropFamily(args.dropFamily)) return false;
   const item = args.item;
   if (!item || item.kind !== 'certificate') return false;
   const figureId = Number(item.dudeId);

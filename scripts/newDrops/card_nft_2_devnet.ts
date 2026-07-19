@@ -1,4 +1,5 @@
 import { defineNewDropConfig } from '../shared/newDropConfig.ts';
+import { CARD_NFT_2_CDN_BASE_URL } from '../../functions/src/shared/dropMediaDefaults.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {
@@ -19,7 +20,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Card NFT 2',
       description: 'card nft 2 · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: 'https://cdn.lil.org/nft/card_nft_2/pack/cover.gif',
+      image: `${CARD_NFT_2_CDN_BASE_URL}/pack/cover.gif`,
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/card_nft_2.csv',
     receiptsTree: {

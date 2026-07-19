@@ -5,8 +5,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
 import { clusterApiUrl, Keypair, PublicKey } from '@solana/web3.js';
-import { FRONTEND_DROPS, normalizeDropId, type FrontendDropConfig, type SolanaCluster } from '../src/config/deployment.ts';
+import {
+  DEPLOYMENT_DROPS,
+  getDeploymentDrop,
+  type DeploymentRegistryDrop,
+} from '../functions/src/shared/deploymentRegistry.ts';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
+
+type SolanaCluster = DeploymentRegistryDrop['solanaCluster'];
 
 type CliOptions = {
   dropId?: string;
@@ -141,17 +147,16 @@ function requireCluster(value: string | undefined, optionName: string): SolanaCl
   return trimmed;
 }
 
-function resolveDropTarget(dropId: string, cluster?: SolanaCluster): FrontendDropConfig {
-  const normalizedDropId = normalizeDropId(dropId);
-  const drop = FRONTEND_DROPS[normalizedDropId];
+function resolveDropTarget(dropId: string, cluster?: SolanaCluster): DeploymentRegistryDrop {
+  const drop = getDeploymentDrop(dropId);
   if (!drop) {
-    const known = Object.keys(FRONTEND_DROPS).sort().join(', ');
+    const known = Object.keys(DEPLOYMENT_DROPS).sort().join(', ');
     throw new Error(`Unknown dropId: ${dropId}\nKnown drops: ${known}`);
   }
   if (cluster && drop.solanaCluster !== cluster) {
     throw new Error(
       `Drop ${drop.dropId} is configured for ${drop.solanaCluster}, not ${cluster}.\n` +
-        `Use the environment-specific drop id from src/config/deployment.ts.`,
+        `Use the environment-specific drop id from functions/src/shared/deploymentRegistry.ts.`,
     );
   }
   new PublicKey(drop.boxMinterProgramId);

@@ -111,8 +111,6 @@
   --pointer-from-center: 0;
   --pointer-from-top: var(--pointer-from-center);
   --pointer-from-left: var(--pointer-from-center);
-  --grain: url('https://cdn.lil.org/nft/poncho_drifella/misc/grain.webp');
-  --glitter: url('https://cdn.lil.org/nft/poncho_drifella/misc/glitter.png');
   --glittersize: 25%;
   --space: 5%;
   --angle: 133deg;

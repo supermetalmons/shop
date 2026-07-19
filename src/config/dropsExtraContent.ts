@@ -7,11 +7,13 @@ import {
   LITTLE_SWAG_BOXES_CDN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
   LITTLE_SWAG_BOXES_RECEIPT_BASE_URL,
-  LITTLE_SWAG_HOODIE_CDN_BASE_URL,
+  LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
   LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
   LITTLE_SWAG_HOODIE_RECEIPT_MEDIA,
-  PONCHO_DRIFELLA_CDN_BASE_URL,
+  PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
+  PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL,
   PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
+  PONCHO_DRIFELLA_PACK_TIGHT_IMAGE_URL,
   PONCHO_DRIFELLA_RECEIPT_BASE_URL,
 } from './dropMediaDefaults.ts';
 import { isDropFamily, normalizeDropId, type MediaMapConfig } from './deployment.ts';
@@ -92,19 +94,15 @@ export type DropExtraContentOverride = {
   };
 };
 
-const PONCHO_DRIFELLA_CLEAN_ITEMS_BASE = `${PONCHO_DRIFELLA_CDN_BASE_URL}/items/clean`;
-const PONCHO_DRIFELLA_PACK_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/pack`;
-const PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL = `${PONCHO_DRIFELLA_PACK_BASE_URL}/tight.webp`;
 const PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO = 637 / 1092;
-const HOODIE_CLEAN_IMAGE_URL = `${LITTLE_SWAG_HOODIE_CDN_BASE_URL}/images/hoodie_clean.webp`;
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 877;
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
-    previewImageUrl: `${PONCHO_DRIFELLA_PACK_BASE_URL}/initial.webp`,
+    previewImageUrl: PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL,
     aspectRatio: 1,
   },
   mintPanel: {
-    previewImageUrl: PONCHO_DRIFELLA_PACK_PREVIEW_IMAGE_URL,
+    previewImageUrl: PONCHO_DRIFELLA_PACK_TIGHT_IMAGE_URL,
     aspectRatio: PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO,
   },
   reveal: {
@@ -116,9 +114,9 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     },
   },
   figures: {
-    inventoryImageBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
+    inventoryImageBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
     fulfillmentPreviewMode: 'media_map_folder',
-    fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE,
+    fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
   },
   certificates: {
     inventoryImageBaseUrl: PONCHO_DRIFELLA_RECEIPT_BASE_URL,
@@ -127,15 +125,15 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
 };
 const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
-    previewImageUrl: HOODIE_CLEAN_IMAGE_URL,
+    previewImageUrl: LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
     aspectRatio: HOODIE_CLEAN_IMAGE_ASPECT_RATIO,
   },
   mintPanel: {
-    previewImageUrl: HOODIE_CLEAN_IMAGE_URL,
+    previewImageUrl: LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
     aspectRatio: HOODIE_CLEAN_IMAGE_ASPECT_RATIO,
   },
   figures: {
-    inventoryImageUrl: HOODIE_CLEAN_IMAGE_URL,
+    inventoryImageUrl: LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
   },
   certificates: {
     boxInventoryImageBaseUrl: LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,

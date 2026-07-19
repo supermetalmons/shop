@@ -1,48 +1,22 @@
-import { existsSync } from 'fs';
-import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { lstatSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'crypto';
 import { clusterApiUrl, Connection, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
-import { normalizeDropBase } from './shared/deploymentRegistry.ts';
+import {
+  normalizeDropBase,
+  normalizeAndValidateDropId,
+  readDeploymentDropRegistry,
+} from './shared/deploymentRegistry.ts';
+import { decodeBoxMinterConfigData } from '../functions/src/shared/boxMinterConfigCodec.ts';
+import { normalizeBoxMinterMetadataBaseForComparison } from '../functions/src/shared/deploymentCore.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 // Anchor instruction discriminator: sha256("global:start_mint")[0..8]
 const IX_START_MINT = createHash('sha256').update('global:start_mint').digest().subarray(0, 8);
-const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
-
-const deploymentConfigObjectCache = new Map<string, Record<string, unknown> | null>();
-
-async function readDeploymentConfigObject(filePath: string): Promise<Record<string, unknown> | undefined> {
-  if (!existsSync(filePath)) return undefined;
-
-  if (deploymentConfigObjectCache.has(filePath)) {
-    return deploymentConfigObjectCache.get(filePath) || undefined;
-  }
-
-  try {
-    const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
-    const candidates = ['DEPLOYMENT', 'default'];
-    for (const key of candidates) {
-      const candidate = mod[key];
-      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-        const value = candidate as Record<string, unknown>;
-        deploymentConfigObjectCache.set(filePath, value);
-        return value;
-      }
-    }
-  } catch {
-    // Allow the caller to handle parse failure.
-  }
-
-  deploymentConfigObjectCache.set(filePath, null);
-  return undefined;
-}
-
-function normalizeDropId(value: string | undefined): string {
-  return String(value || '').trim().toLowerCase();
-}
 
 function formatKnownDrops(knownDropIds: string[]): string {
   return knownDropIds.length ? knownDropIds.join(', ') : '(none)';
@@ -56,59 +30,119 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function resolveFrontendDropConfig(args: {
-  filePath: string;
+function pathEntryExists(filePath: string): boolean {
+  try {
+    lstatSync(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function importDeploymentModule(
+  filePath: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return (await import(pathToFileURL(filePath).href)) as Record<
+      string,
+      unknown
+    >;
+  } catch (err) {
+    throw new Error(
+      `Could not load deployment config from ${filePath}: ${String(err)}`,
+    );
+  }
+}
+
+export async function resolveDeploymentConfig(args: {
+  root: string;
   requestedDropId: string;
 }): Promise<{
   dropConfig: Record<string, unknown>;
   knownDropIds: string[];
+  registryLabel: string;
 }> {
-  if (!existsSync(args.filePath)) {
-    throw new Error(`Missing frontend deployment config: ${args.filePath}`);
-  }
-
-  let mod: Record<string, unknown>;
-  try {
-    mod = (await import(pathToFileURL(args.filePath).href)) as Record<string, unknown>;
-  } catch (err) {
-    throw new Error(`Could not load frontend deployment config from ${args.filePath}: ${String(err)}`);
-  }
-
-  const dropsCandidate = mod.FRONTEND_DROPS;
-  if (isObjectRecord(dropsCandidate)) {
-    const dropsMap = dropsCandidate as Record<string, unknown>;
-    const knownDropIds = Object.keys(dropsMap).sort((a, b) => a.localeCompare(b));
-    const entry = dropsMap[args.requestedDropId];
-    if (!isObjectRecord(entry)) {
+  const requestedDropId = normalizeAndValidateDropId(
+    args.requestedDropId,
+    'requested dropId',
+  );
+  const canonicalPath = path.join(
+    args.root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  const legacyPath = path.join(args.root, 'src', 'config', 'deployed.ts');
+  if (pathEntryExists(canonicalPath)) {
+    const registry = await readDeploymentDropRegistry(canonicalPath);
+    const knownDropIds = Object.keys(registry.drops).sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const dropConfig = Object.prototype.hasOwnProperty.call(
+      registry.drops,
+      requestedDropId,
+    )
+      ? registry.drops[requestedDropId]
+      : undefined;
+    if (!isObjectRecord(dropConfig)) {
       throw new Error(
-        `Drop ${args.requestedDropId} is not present in ${args.filePath}.\n` +
+        `Drop ${requestedDropId} is not present in ${canonicalPath}.\n` +
           `Known deployed drops: ${formatKnownDrops(knownDropIds)}\n` +
-          `Run npm run deploy-all-onchain -- ${args.requestedDropId} for this drop before start-mint.`,
+          `Run npm run deploy-all-onchain -- ${requestedDropId} for this drop before start-mint.`,
       );
     }
-    return { dropConfig: entry, knownDropIds };
+    return {
+      dropConfig,
+      knownDropIds,
+      registryLabel: canonicalPath,
+    };
   }
 
-  const legacyConfig = await readDeploymentConfigObject(args.filePath);
-  if (!legacyConfig) {
+  if (!pathEntryExists(legacyPath)) {
     throw new Error(
-      `Could not parse frontend deployment config from ${args.filePath}.\n` +
+      `Could not find deployment config.\n` +
+        `Checked:\n` +
+        `  - ${canonicalPath}\n` +
+        `  - ${legacyPath}\n` +
+        `Make sure you've run:\n` +
+        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
+    );
+  }
+
+  const mod = await importDeploymentModule(legacyPath);
+  const legacyConfig = mod.DEPLOYMENT || mod.default;
+  if (!isObjectRecord(legacyConfig)) {
+    throw new Error(
+      `Could not parse deployment config from ${legacyPath}.\n` +
         `Run npm run deploy-all-onchain -- <dropId> and retry.`,
     );
   }
-  const legacyDropId = normalizeDropId(typeof legacyConfig.dropId === 'string' ? legacyConfig.dropId : undefined);
-  if (legacyDropId && legacyDropId !== args.requestedDropId) {
+  const configuredDropId =
+    Object.prototype.hasOwnProperty.call(legacyConfig, 'dropId') &&
+    typeof legacyConfig.dropId === 'string'
+      ? legacyConfig.dropId
+      : '';
+  const legacyDropId = configuredDropId
+    ? normalizeAndValidateDropId(configuredDropId, 'deployed dropId')
+    : '';
+  if (legacyDropId && legacyDropId !== requestedDropId) {
     throw new Error(
-      `Drop ${args.requestedDropId} does not match the deployed config in ${args.filePath}.\n` +
+      `Drop ${requestedDropId} does not match the deployed config in ${legacyPath}.\n` +
         `Configured deployed drop: ${legacyDropId}\n` +
-        `Pass the deployed dropId explicitly, or rerun npm run deploy-all-onchain -- ${args.requestedDropId} first.`,
+        `Pass the deployed dropId explicitly, or rerun npm run deploy-all-onchain -- ${requestedDropId} first.`,
     );
   }
-  return { dropConfig: legacyConfig, knownDropIds: legacyDropId ? [legacyDropId] : [] };
+  return {
+    dropConfig: legacyConfig,
+    knownDropIds: legacyDropId ? [legacyDropId] : [],
+    registryLabel: legacyPath,
+  };
 }
 
 function boxMinterConfigPda(programId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0];
+  return PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], programId)[0];
 }
 
 function configuredBoxMinterConfigPda(programId: PublicKey, configured: unknown): PublicKey {
@@ -116,33 +150,12 @@ function configuredBoxMinterConfigPda(programId: PublicKey, configured: unknown)
   return value ? new PublicKey(value) : boxMinterConfigPda(programId);
 }
 
-function readBorshString(data: Buffer, offset: number): { value: string; next: number } {
-  if (offset + 4 > data.length) {
-    throw new Error('Unsupported box minter config schema while decoding metadata base.');
-  }
-  const len = data.readUInt32LE(offset);
-  const start = offset + 4;
-  const end = start + len;
-  if (end > data.length) {
-    throw new Error('Unsupported box minter config schema while decoding metadata base.');
-  }
-  return { value: data.subarray(start, end).toString('utf8'), next: end };
-}
-
-function decodeConfigMetadataBase(data: Buffer): string {
-  if (data.length < 8 + 32 * 3 + 8 + 8 + 32 + 4 + 1 + 1 + 4) {
-    throw new Error('Unsupported box minter config schema while decoding metadata base.');
-  }
-  for (let i = 0; i < ACCOUNT_BOX_MINTER_CONFIG.length; i += 1) {
-    if (data[i] !== ACCOUNT_BOX_MINTER_CONFIG[i]) {
-      throw new Error('Invalid box minter config discriminator.');
-    }
-  }
-
-  let o = 8 + 32 * 3 + 8 + 8 + 32 + 4 + 1 + 1 + 4;
-  o = readBorshString(data, o).next;
-  o = readBorshString(data, o).next;
-  return readBorshString(data, o).value;
+export function decodeStartMintMetadataBase(data: Uint8Array): string {
+  const config = decodeBoxMinterConfigData(data, {
+    validateItemsPerBox: false,
+    decodeExtensions: false,
+  });
+  return normalizeBoxMinterMetadataBaseForComparison(config.uriBase);
 }
 
 async function main() {
@@ -153,38 +166,26 @@ async function main() {
         `${startMintUsage()}`,
     );
   }
-  const requestedDropId = normalizeDropId(extraArgs[0]);
-  if (!requestedDropId) {
+  if (!String(extraArgs[0] || '').trim()) {
     throw new Error(
       `Missing dropId.\n` +
         `${startMintUsage()}`,
     );
   }
+  const requestedDropId = normalizeAndValidateDropId(
+    extraArgs[0],
+    'requested dropId',
+  );
 
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const root = path.resolve(__dirname, '..');
-
-  const frontendDeploymentCfgPath = path.join(root, 'src', 'config', 'deployment.ts');
-  const legacyFrontendDeployedCfgPath = path.join(root, 'src', 'config', 'deployed.ts');
-
-  // Prefer the canonical config path. Keep a legacy fallback only for older checkouts.
-  const frontendCfgPath = existsSync(frontendDeploymentCfgPath) ? frontendDeploymentCfgPath : legacyFrontendDeployedCfgPath;
-  if (!existsSync(frontendCfgPath)) {
-    throw new Error(
-      `Could not find frontend deployment config.\n` +
-        `Checked:\n` +
-        `  - ${frontendDeploymentCfgPath}\n` +
-        `  - ${legacyFrontendDeployedCfgPath}\n` +
-        `Make sure you've run:\n` +
-        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
-    );
-  }
-
-  const { dropConfig, knownDropIds } = await resolveFrontendDropConfig({
-    filePath: frontendCfgPath,
-    requestedDropId,
-  });
+  const root = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+  );
+  const { dropConfig, knownDropIds, registryLabel } =
+    await resolveDeploymentConfig({
+      root,
+      requestedDropId,
+    });
 
   const clusterStr = (typeof dropConfig.solanaCluster === 'string' ? dropConfig.solanaCluster : undefined) as
     | SolanaCluster
@@ -200,14 +201,14 @@ async function main() {
 
   if (!clusterStr || !['devnet', 'testnet', 'mainnet-beta'].includes(clusterStr)) {
     throw new Error(
-      `Could not read solanaCluster from ${frontendCfgPath}.\n` +
+      `Could not read solanaCluster from ${registryLabel}.\n` +
         `Make sure you've run:\n` +
         `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
     );
   }
   if (!programIdStr) {
     throw new Error(
-      `Could not read boxMinterProgramId from ${frontendCfgPath}.\n` +
+      `Could not read boxMinterProgramId from ${registryLabel}.\n` +
         `Make sure you've run:\n` +
         `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
     );
@@ -233,7 +234,7 @@ async function main() {
     throw new Error(`Missing config PDA on this cluster: ${configPda.toBase58()}`);
   }
   if (metadataBase) {
-    const onchainMetadataBase = normalizeDropBase(decodeConfigMetadataBase(Buffer.from(info.data)));
+    const onchainMetadataBase = decodeStartMintMetadataBase(info.data);
     if (onchainMetadataBase !== metadataBase) {
       throw new Error(
         `Config PDA ${configPda.toBase58()} does not match drop ${activeDropId}.\n` +
@@ -274,7 +275,14 @@ async function main() {
   console.log('\n✅ start_mint confirmed:', sig);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry) && path.resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectRun()) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

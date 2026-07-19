@@ -19,6 +19,6 @@
     "baseUrl": "./src",
     "tsBuildInfoFile": "./.cache/tsconfig.tsbuildinfo"
   },
-  "include": ["src"],
+  "include": ["src", "functions/src/shared"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../functions/src/assignDudesPicker.ts';
+import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../functions/src/shared/cardNft2CommonIds.ts';
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
   CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
@@ -25,6 +26,8 @@ const EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS = [
   635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014, 1092, 1100, 1104,
   1117, 1183, 3300,
 ];
+const EXPECTED_CARD_NFT_2_COMMON_CARD_IDS_SHA256 =
+  'fb8354b3f0cf919a620bc7b8e086b825f80a1d213b63aa07ce433d10218c99df';
 
 function sequenceRandomInt(values: number[]): (maxExclusive: number) => number {
   let index = 0;
@@ -67,11 +70,6 @@ function generatedPixelMosaicIds(): number[] {
   return Array.from({ length: 111 }, (_, index) => 11001 + index);
 }
 
-function readCanonicalIdList(path: string): number[] {
-  const raw = JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')) as unknown[];
-  return raw.map((value) => Number(value));
-}
-
 test('function-local card_nft_2 reveal ids match canonical sources and are valid', () => {
   const expectedAsGoodAsSuperRareIds = [
     ...new Set([
@@ -81,9 +79,14 @@ test('function-local card_nft_2 reveal ids match canonical sources and are valid
     ]),
   ];
 
-  assert.deepEqual(
-    [...CARD_NFT_2_COMMON_CARD_IDS],
-    readCanonicalIdList('../src/lib/cardNft2CommonIds.json'),
+  assert.equal(CARD_NFT_2_COMMON_CARD_IDS, CARD_NFT_2_COMMON_CARD_ID_VALUES);
+  assert.equal(Object.isFrozen(CARD_NFT_2_COMMON_CARD_IDS), true);
+  assert.equal(CARD_NFT_2_COMMON_CARD_IDS.length, 4_983);
+  assert.equal(
+    createHash('sha256')
+      .update(CARD_NFT_2_COMMON_CARD_IDS.join(','))
+      .digest('hex'),
+    EXPECTED_CARD_NFT_2_COMMON_CARD_IDS_SHA256,
   );
   assert.deepEqual([...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS], generatedPixelMosaicIds());
   assert.deepEqual([...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS], EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);

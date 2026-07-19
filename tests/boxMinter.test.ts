@@ -122,6 +122,11 @@ test('decodeBoxMinterConfigAccount handles pre-items fixed-3 legacy schema', () 
   assert.equal(legacy.uriBase, 'https://assets.example.com/drops/lsb/json/boxes/');
   assert.equal(legacy.dropSeed, undefined);
   assert.equal(legacy.mintVariantKind, 0);
+  assert.doesNotThrow(() =>
+    assertBoxMinterConfigMatchesDropConfig(legacy, {
+      metadataBase: 'https://assets.example.com/drops/lsb',
+    } as any),
+  );
 });
 
 test('boxMinterConfigPda uses drop seed when provided', () => {

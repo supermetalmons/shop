@@ -2,20 +2,18 @@ import {
   CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET,
   CARD_NFT_2_MAX_CARD_ID,
 } from './cardNft2RevealIds.js';
+import type {
+  ListCardNft2UnrevealedCardsRequest,
+  ListCardNft2UnrevealedCardsResponse,
+} from './shared/contracts.js';
+
+export type {
+  ListCardNft2UnrevealedCardsRequest,
+  ListCardNft2UnrevealedCardsResponse,
+} from './shared/contracts.js';
 
 export const CARD_NFT_2_UNREVEALED_DEFAULT_LIMIT = 240;
 export const CARD_NFT_2_UNREVEALED_MAX_LIMIT = 500;
-
-export type ListCardNft2UnrevealedCardsRequest = {
-  limit?: number;
-  cursor?: number;
-};
-
-export type ListCardNft2UnrevealedCardsResponse = {
-  ids: number[];
-  nextCursor?: number;
-  hasMore: boolean;
-};
 
 export type CardNft2UnrevealedCandidatePageArgs = {
   rawPool: unknown;

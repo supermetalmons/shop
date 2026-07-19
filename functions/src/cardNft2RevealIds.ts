@@ -1,9 +1,10 @@
 import { readFileSync } from 'fs';
+import { CARD_NFT_2_MAX_CARD_ID } from './shared/cardNft2AssetCore.js';
+import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from './shared/cardNft2CommonIds.js';
 
-export const CARD_NFT_2_MAX_CARD_ID = 11133;
+export { CARD_NFT_2_MAX_CARD_ID };
 
-function readCardNft2IdList(label: string, relativePath: string): readonly number[] {
-  const raw = JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8')) as unknown;
+function validateCardNft2IdList(label: string, raw: unknown): readonly number[] {
   if (!Array.isArray(raw)) {
     throw new Error(`${label} must be a JSON array`);
   }
@@ -23,10 +24,14 @@ function readCardNft2IdList(label: string, relativePath: string): readonly numbe
   return Object.freeze(ids);
 }
 
-export const CARD_NFT_2_COMMON_CARD_IDS = readCardNft2IdList(
-  'card_nft_2 common ids',
-  '../src/cardNft2CommonIds.json',
-);
+function readCardNft2IdList(label: string, relativePath: string): readonly number[] {
+  return validateCardNft2IdList(
+    label,
+    JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8')) as unknown,
+  );
+}
+
+export const CARD_NFT_2_COMMON_CARD_IDS = CARD_NFT_2_COMMON_CARD_ID_VALUES;
 export const CARD_NFT_2_SUPER_RARE_CARD_IDS = readCardNft2IdList(
   'card_nft_2 super rare ids',
   '../src/cardNft2SuperRareIds.json',

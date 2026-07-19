@@ -1,28 +1,168 @@
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { CARD_NFT_2_BOX_MEDIA } from '../../src/config/dropMediaDefaults.ts';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import ts from 'typescript';
+import {
+  defaultBoxMediaConfigForDropFamily,
+  defaultFigureMediaConfigForDropFamily,
+} from '../../functions/src/shared/dropMediaDefaults.ts';
+import {
+  DEPLOYMENT_REGISTRY_DROP_FIELDS,
+  getDeploymentDrop,
+  type DeploymentMediaMapConfig,
+  type DeploymentRegistryDrop,
+} from '../../functions/src/shared/deploymentRegistry.ts';
+import {
+  normalizeMediaMapConfig,
+} from '../../functions/src/shared/mediaMap.ts';
+import {
+  assertStripeLivePriceConfigured,
+  CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
+  defaultStripeCheckoutEnabledForDropFamily,
+  defaultStripeProductTaxCodeForDropFamily,
+  normalizeStripeUnitAmountCents,
+  resolveStripeCheckoutEnabledForDropFamily,
+  resolveStripeProductTaxCodeForDropFamily,
+  STRIPE_UNIT_AMOUNT_CENTS_MAX,
+  STRIPE_UNIT_AMOUNT_CENTS_MIN,
+  type StripeCheckoutEnabledResolution,
+} from '../../functions/src/shared/stripeCheckoutCore.ts';
+import {
+  BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
+  BOX_MINTER_MAX_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
+} from '../../functions/src/shared/boxMinterProtocol.ts';
+import {
+  canonicalizeDropAssetUrl,
+  defaultDropFamilyForDropId,
+  dropPathsFromBase,
+  normalizeDiscountMintsPerWallet,
+  normalizeDropBase,
+  normalizeDropFamily,
+  normalizeDropId,
+  normalizeMetadataPathFormat,
+  normalizeMintSelectionConfig,
+  type DropFamily,
+  type DropPaths,
+  type MetadataPathFormat,
+  type MintSelectionConfig,
+  type SolanaCluster,
+} from '../../functions/src/shared/deploymentCore.ts';
+import {
+  isOptimisticTextFilePostCommitVerificationError,
+  writeOptimisticTextFile,
+  type OptimisticTextFileWriteIo,
+} from './optimisticTextFile.ts';
 
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-export type MetadataPathFormat = 'legacy' | 'compact';
+export {
+  CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
+  canonicalizeDropAssetUrl,
+  defaultDropFamilyForDropId,
+  dropPathsFromBase,
+  normalizeDropBase,
+  normalizeDropFamily,
+  normalizeDropId,
+  resolveStripeCheckoutEnabledForDropFamily,
+  resolveStripeProductTaxCodeForDropFamily,
+};
+export type {
+  DropFamily,
+  DropPaths,
+  MetadataPathFormat,
+  MintSelectionConfig,
+  SolanaCluster,
+  StripeCheckoutEnabledResolution,
+};
 
-export const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
+export type MediaMapConfigSerialized = DeploymentMediaMapConfig;
+
+export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
+export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
+export type MintSelectionConfigSerialized = MintSelectionConfig;
+
+export type FrontendDropConfigSerialized = Omit<
+  DeploymentRegistryDrop,
+  'stripeProductTaxCode' | 'receiptsMerkleTree' | 'deliveryLookupTable'
+>;
+
+export type FunctionsDropConfigSerialized = DeploymentRegistryDrop;
+
+export type DeploymentDropConfigSerialized = DeploymentRegistryDrop;
+
+export type FrontendDropRegistry = {
+  drops: Record<string, FrontendDropConfigSerialized>;
+};
+
+export type FunctionsDropRegistry = {
+  drops: Record<string, FunctionsDropConfigSerialized>;
+};
+
+export type DeploymentDropRegistry = {
+  drops: Record<string, DeploymentDropConfigSerialized>;
+  sourceContent: string;
+};
+
+const DEPLOYMENT_REGISTRY_START =
+  '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
+const DEPLOYMENT_REGISTRY_END =
+  '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
+const SAFE_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const DROP_METADATA_IPFS_GATEWAY =
+  'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
+const IPFS_PROTOCOL = 'ipfs://';
+
+export function normalizeAndValidateDropId(
+  value: string | null | undefined,
+  label = 'dropId',
+): string {
+  const normalized = normalizeDropId(String(value ?? ''));
+  if (
+    !SAFE_DROP_ID_PATTERN.test(normalized) ||
+    Object.prototype.hasOwnProperty.call(Object.prototype, normalized)
+  ) {
+    throw new Error(
+      `Invalid ${label}: ${String(value ?? '')} (expected 1-64 lowercase letters, numbers, underscores, or hyphens, starting with a letter or number)`,
+    );
+  }
+  return normalized;
+}
 
 export function acquireDeploymentRegistryMutationLock(args: {
   root: string;
   operation: string;
 }): () => boolean {
-  const lockPath = join(args.root, '.cache', 'deployment-registry-mutation.lock');
+  const lockPath = join(
+    args.root,
+    '.cache',
+    'deployment-registry-mutation.lock',
+  );
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const payload = `${JSON.stringify({
-    operation: args.operation,
-    pid: process.pid,
-    startedAt: new Date().toISOString(),
-    token,
-  }, null, 2)}\n`;
+  const payload = `${JSON.stringify(
+    {
+      operation: args.operation,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      token,
+    },
+    null,
+    2,
+  )}\n`;
   mkdirSync(dirname(lockPath), { recursive: true });
   try {
-    writeFileSync(lockPath, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    writeFileSync(lockPath, payload, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
     let owner = 'owner details unavailable';
@@ -55,11 +195,15 @@ export function acquireDeploymentRegistryMutationLock(args: {
         released = true;
         return true;
       }
-      const current = JSON.parse(readFileSync(lockPath, 'utf8')) as { token?: unknown };
+      const current = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+        token?: unknown;
+      };
       if (current.token !== token) {
         released = true;
         try {
-          console.warn(`⚠️  Preserved deployment-registry lock because its owner changed: ${lockPath}`);
+          console.warn(
+            `⚠️  Preserved deployment-registry lock because its owner changed: ${lockPath}`,
+          );
         } catch {
           // Cleanup warnings must not disrupt the caller.
         }
@@ -83,232 +227,94 @@ export function acquireDeploymentRegistryMutationLock(args: {
   };
 }
 
-type MediaMapConfigSerialized = {
-  strategy?: 'direct' | 'cyclic';
-  count?: number;
-  overrides?: Record<number, number>;
-};
-
-export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
-export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
-
-type MintSelectionOptionSerialized = {
-  key: string;
-  label: string;
-  startId: number;
-  endId: number;
-};
-
-export type MintSelectionConfigSerialized = {
-  kind: 'size';
-  options: MintSelectionOptionSerialized[];
-};
-
-export type FrontendDropConfigSerialized = {
-  solanaCluster: string;
-  dropId: string;
-  dropFamily: DropFamily;
-  collectionName: string;
-  metadataBase: string;
-  metadataPathFormat: MetadataPathFormat;
-  secondaryMarketHref?: string;
-  figureMedia?: FigureMediaConfigSerialized;
-  boxMedia?: BoxMediaConfigSerialized;
-  forceSoldOut?: boolean;
-  mintSelection?: MintSelectionConfigSerialized;
-  treasury: string;
-  priceSol: number;
-  discountPriceSol: number;
-  stripeCheckoutEnabled?: boolean;
-  stripeLiveUnitAmountCents?: number;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-  collectionMint: string;
-};
-
-export type FunctionsDropConfigSerialized = FrontendDropConfigSerialized & {
-  stripeProductTaxCode?: string;
-  receiptsMerkleTree: string;
-  deliveryLookupTable: string;
-};
-
-export type FrontendDropRegistry = {
-  drops: Record<string, FrontendDropConfigSerialized>;
-};
-
-export type FunctionsDropRegistry = {
-  drops: Record<string, FunctionsDropConfigSerialized>;
-};
-
-export type DropPaths = {
-  base: string;
-  collectionJson: string;
-  boxesJsonBase: string;
-  figuresJsonBase: string;
-  receiptsBoxesJsonBase: string;
-  receiptsFiguresJsonBase: string;
-};
-
-const FRONTEND_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY';
-const FRONTEND_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FRONTEND DROP REGISTRY';
-const FUNCTIONS_DEPLOYMENT_REGISTRY_START = '// BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY';
-const FUNCTIONS_DEPLOYMENT_REGISTRY_END = '// END AUTO-GENERATED FUNCTIONS DROP REGISTRY';
-
-function tsStringLiteral(value: string): string {
-  return JSON.stringify(value);
-}
-
 function asTrimmedString(value: unknown): string {
   return String(value ?? '').trim();
 }
 
 function asFiniteNumber(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function asOptionalStripeUnitAmountCents(value: unknown): number | undefined {
-  if (value == null || value === '') return undefined;
-  const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= 50 && n <= 99_999_999 ? n : undefined;
-}
-
-const IPFS_PROTOCOL = 'ipfs://';
-const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
-const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
-const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
-const HTTP_PROTOCOL = 'http://';
-const HTTPS_PROTOCOL = 'https://';
-
-const BASE32_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
-  Object.fromEntries(Array.from(BASE32_ALPHABET).map((char, index) => [char, index] as const)),
-);
-
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, '');
-}
-
-function normalizeMetadataPathFormat(value: unknown, fallback: MetadataPathFormat = 'legacy'): MetadataPathFormat {
-  return value === 'compact' || value === 'legacy' ? value : fallback;
-}
-
-function decodeBase32Lower(value: string): Uint8Array | null {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const out: number[] = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const char of normalized) {
-    const digit = BASE32_LOOKUP[char];
-    if (typeof digit !== 'number') return null;
-    buffer = (buffer << 5) | digit;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      out.push((buffer >> bits) & 0xff);
-      buffer &= (1 << bits) - 1;
-    }
+function asSolanaCluster(value: unknown): SolanaCluster {
+  if (
+    value === 'devnet' ||
+    value === 'testnet' ||
+    value === 'mainnet-beta'
+  ) {
+    return value;
   }
-  if (bits > 0 && (buffer & ((1 << bits) - 1)) !== 0) return null;
-  return Uint8Array.from(out);
+  return String(value || '').trim() as SolanaCluster;
 }
 
-function readUvarint(bytes: Uint8Array, offset: number): { value: number; nextOffset: number } | null {
-  let value = 0;
-  let shift = 0;
-  for (let index = offset; index < bytes.length; index += 1) {
-    const byte = bytes[index];
-    value += (byte & 0x7f) * 2 ** shift;
-    if (byte < 0x80) return { value, nextOffset: index + 1 };
-    shift += 7;
-    if (shift > 49) return null;
+function defaultSecondaryMarketHref(dropId: string): string | undefined {
+  const normalizedDropId = normalizeDropId(dropId);
+  return normalizedDropId
+    ? `https://www.tensor.trade/trade/${normalizedDropId}`
+    : undefined;
+}
+
+export function defaultFrontendFigureMediaForDropFamily(
+  dropFamily: DropFamily,
+): FigureMediaConfigSerialized | undefined {
+  return defaultFigureMediaConfigForDropFamily(dropFamily);
+}
+
+export function defaultFrontendBoxMediaForDropFamily(
+  dropFamily: DropFamily,
+): BoxMediaConfigSerialized | undefined {
+  return defaultBoxMediaConfigForDropFamily(dropFamily);
+}
+
+export function requireDropFamily(
+  value: string,
+  label: string,
+): DropFamily {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (
+    normalized === 'default' ||
+    normalized === 'little_swag_boxes' ||
+    normalized === 'little_swag_hoodies' ||
+    normalized === 'poncho_drifella' ||
+    normalized === 'drifella_binder' ||
+    normalized === 'drifella_shirt' ||
+    normalized === 'card_nft_2'
+  ) {
+    return normalized;
   }
-  return null;
-}
-
-function isRawCidV1(value: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized.startsWith('b')) return false;
-  const bytes = decodeBase32Lower(normalized.slice(1));
-  if (!bytes?.length) return false;
-
-  const version = readUvarint(bytes, 0);
-  if (!version || version.value !== 1) return false;
-  const codec = readUvarint(bytes, version.nextOffset);
-  if (!codec) return false;
-  const multihashCode = readUvarint(bytes, codec.nextOffset);
-  if (!multihashCode) return false;
-  const multihashLength = readUvarint(bytes, multihashCode.nextOffset);
-  if (!multihashLength || multihashLength.value < 1) return false;
-  return bytes.length === multihashLength.nextOffset + multihashLength.value;
-}
-
-function isRawIpfsCid(value: string): boolean {
-  return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
-}
-
-function hasUrlScheme(value: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value);
-}
-
-function hasSupportedMetadataBaseScheme(value: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase();
-  return (
-    normalized.startsWith(HTTPS_PROTOCOL) ||
-    normalized.startsWith(HTTP_PROTOCOL) ||
-    normalized.startsWith(IPFS_PROTOCOL)
+  throw new Error(
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, drifella_binder, drifella_shirt, or card_nft_2)`,
   );
-}
-
-function isSupportedMetadataBaseInput(base: string): boolean {
-  const trimmed = trimTrailingSlashes(String(base || '').trim());
-  if (!trimmed) return false;
-  return hasSupportedMetadataBaseScheme(trimmed) || isRawIpfsCid(trimmed);
-}
-
-function hasInvalidMetadataBasePath(base: string): boolean {
-  const normalized = trimTrailingSlashes(String(base || '').trim());
-  if (!normalized) return false;
-  const lower = normalized.toLowerCase();
-  return (
-    lower.endsWith('.json') ||
-    lower.includes('/json/boxes') ||
-    lower.includes('/json/figures') ||
-    lower.includes('/json/receipts')
-  );
-}
-
-function hasMetadataBaseQueryOrFragment(base: string): boolean {
-  const normalized = String(base || '').trim();
-  return normalized.includes('?') || normalized.includes('#');
 }
 
 export function normalizeAndValidateMetadataBaseInput(base: string): string {
-  const trimmed = trimTrailingSlashes(String(base || '').trim());
+  const trimmed = String(base || '').trim().replace(/\/+$/, '');
   if (!trimmed) {
-    throw new Error('metadataBase is required and must be an https://..., ipfs://..., or raw IPFS CID value.');
-  }
-  if (!isSupportedMetadataBaseInput(trimmed)) {
     throw new Error(
-      `Invalid metadataBase: ${trimmed}. Expected https://..., http://..., ipfs://..., or a raw IPFS CID.`,
+      'metadataBase is required and must be an https://..., ipfs://..., or raw IPFS CID value.',
     );
   }
-  if (hasMetadataBaseQueryOrFragment(trimmed)) {
+  if (trimmed.includes('?') || trimmed.includes('#')) {
     throw new Error(
       `Invalid metadataBase: ${trimmed}. Expected the drop root without query strings or fragments.`,
     );
   }
   const normalized = normalizeDropBase(trimmed);
-  if (hasInvalidMetadataBasePath(normalized)) {
+  const supported =
+    /^https?:\/\//i.test(normalized) ||
+    normalized.toLowerCase().startsWith(IPFS_PROTOCOL);
+  if (!supported) {
+    throw new Error(
+      `Invalid metadataBase: ${trimmed}. Expected https://..., http://..., ipfs://..., or a raw IPFS CID.`,
+    );
+  }
+  const lower = normalized.toLowerCase();
+  if (
+    lower.endsWith('.json') ||
+    lower.includes('/json/boxes') ||
+    lower.includes('/json/figures') ||
+    lower.includes('/json/receipts')
+  ) {
     throw new Error(
       `Invalid metadataBase: ${trimmed}. Expected the drop root, not collection.json or a metadata asset path.`,
     );
@@ -316,1569 +322,987 @@ export function normalizeAndValidateMetadataBaseInput(base: string): string {
   return normalized;
 }
 
-function normalizeIpfsProtocolUrl(value: string): string {
-  const trimmed = trimTrailingSlashes(String(value || '').trim());
-  if (!trimmed) return '';
-  if (!trimmed.toLowerCase().startsWith(IPFS_PROTOCOL)) return trimmed;
-  const withoutProtocol = trimmed.slice(IPFS_PROTOCOL.length).replace(/^ipfs\//i, '');
-  return `${IPFS_PROTOCOL}${withoutProtocol.replace(/^\/+/, '')}`;
-}
-
-export function normalizeDropBase(base: string): string {
-  const trimmed = trimTrailingSlashes(String(base || '').trim());
-  if (!trimmed) return '';
-  if (isRawIpfsCid(trimmed)) return `${IPFS_PROTOCOL}${trimmed}`;
-  return normalizeIpfsProtocolUrl(trimmed);
-}
-
-export function canonicalizeDropAssetUrl(url: string): string {
-  const trimmed = String(url || '').trim();
-  if (!trimmed) return '';
-
-  const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
-  if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
-  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
-
-  try {
-    const parsed = new URL(trimmed);
-    const hostMatch = parsed.hostname.match(/^([^./]+)\.ipfs\./i);
-    if (hostMatch?.[1]) {
-      return `${IPFS_PROTOCOL}${hostMatch[1]}${trimTrailingSlashes(parsed.pathname)}${parsed.search}${parsed.hash}`;
-    }
-    const pathMatch = parsed.pathname.match(/^\/ipfs\/([^/]+)(\/.*)?$/i);
-    if (pathMatch?.[1]) {
-      return `${IPFS_PROTOCOL}${pathMatch[1]}${trimTrailingSlashes(pathMatch[2] || '')}${parsed.search}${parsed.hash}`;
-    }
-  } catch {
-    // Non-URL strings should pass through unchanged.
-  }
-
-  return trimmed;
-}
-
 export function resolveDropAssetUrl(url: string): string {
   const canonical = canonicalizeDropAssetUrl(url);
   if (!canonical.toLowerCase().startsWith(IPFS_PROTOCOL)) return canonical;
-  const path = canonical.slice(IPFS_PROTOCOL.length).replace(/^\/+/, '');
-  return `${DROP_METADATA_IPFS_GATEWAY}${path}`;
+  return `${DROP_METADATA_IPFS_GATEWAY}${canonical
+    .slice(IPFS_PROTOCOL.length)
+    .replace(/^\/+/, '')}`;
 }
 
-export function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
-  const base = normalizeDropBase(dropBase);
-  if (metadataPathFormat === 'legacy') {
-    return {
-      base,
-      collectionJson: `${base}/collection.json`,
-      boxesJsonBase: `${base}/json/boxes/`,
-      figuresJsonBase: `${base}/json/figures/`,
-      receiptsBoxesJsonBase: `${base}/json/receipts/boxes/`,
-      receiptsFiguresJsonBase: `${base}/json/receipts/figures/`,
-    };
-  }
-  return {
-    base,
-    collectionJson: `${base}/collection.json`,
-    boxesJsonBase: `${base}/b`,
-    figuresJsonBase: `${base}/f`,
-    receiptsBoxesJsonBase: `${base}/rb`,
-    receiptsFiguresJsonBase: `${base}/rf`,
-  };
-}
-
-export function normalizeDropId(value: string | undefined): string {
-  return String(value || '').trim().toLowerCase();
-}
-
-const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
-  card_nft_2: 'card_nft_2',
-  drifella_binder: 'drifella_binder',
-  drifella_shirt: 'drifella_shirt',
-  little_swag_boxes: 'little_swag_boxes',
-  little_swag_boxes_devnet: 'little_swag_boxes',
-  poncho_drifella: 'poncho_drifella',
+type DeploymentDropNormalizationOptions = {
+  forceSoldOutFallback?: (dropId: string) => boolean;
 };
 
-export function defaultDropFamilyForDropId(dropId: string): DropFamily {
-  const normalizedDropId = normalizeDropId(dropId);
-  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
-}
-
-function asDropFamily(value: unknown): DropFamily | undefined {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (
-    normalized === 'little_swag_boxes' ||
-    normalized === 'little_swag_hoodies' ||
-    normalized === 'poncho_drifella' ||
-    normalized === 'drifella_binder' ||
-    normalized === 'drifella_shirt' ||
-    normalized === 'card_nft_2' ||
-    normalized === 'default'
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function requireDropFamily(value: string, label: string): DropFamily {
-  const normalized = asDropFamily(value);
-  if (normalized) return normalized;
-  throw new Error(
-    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, drifella_binder, drifella_shirt, or card_nft_2)`,
-  );
-}
-
-export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
-  const normalized = asDropFamily(value);
-  if (normalized) return normalized;
-  return defaultDropFamilyForDropId(dropId || '');
-}
-
-type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
-
-type SecondaryMarketplaceLink = {
-  key: SecondaryMarketplaceKey;
-  label: string;
-  href: string;
-};
-
-const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  little_swag_boxes: 'https://magiceden.io/marketplace/little_swag_boxes',
-  poncho_drifella: 'https://magiceden.io/marketplace/poncho_drifella',
-};
-
-const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  card_nft_2: 'https://www.tensor.trade/trade/card_nft_2',
-  little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
-  poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
-};
-
-const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
-  card_nft_2: true,
-  poncho_drifella: true,
-};
-
-function defaultSecondaryMarketHref(dropId: string): string | undefined {
-  return secondaryMarketplaceLinksForDropId(dropId).find((link) => link.key === 'tensor')?.href;
-}
-
-function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
-  const normalizedDropId = normalizeDropId(dropId);
-  if (!normalizedDropId) return [];
-  return [
-    {
-      key: 'magiceden',
-      label: 'Magic Eden',
-      href: MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || `https://magiceden.io/marketplace/${normalizedDropId}`,
-    },
-    {
-      key: 'tensor',
-      label: 'Tensor',
-      href: TENSOR_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || `https://www.tensor.trade/trade/${normalizedDropId}`,
-    },
-  ];
-}
-
-function defaultFrontendForceSoldOutForDropId(dropId: string): boolean {
-  const normalizedDropId = normalizeDropId(dropId);
-  return FORCE_SOLD_OUT_DROP_OVERRIDES[normalizedDropId] === true;
-}
-
-function normalizePositiveInteger(value: unknown): number | undefined {
-  const normalized = Math.floor(Number(value));
-  if (!Number.isFinite(normalized) || normalized <= 0) return undefined;
-  return normalized;
-}
-
-function normalizeDiscountMintsPerWallet(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
-  return parsed;
-}
-
-const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfigSerialized = {
-  strategy: 'cyclic',
-  count: 333,
-  overrides: {
-    344: 1,
-    353: 90,
-    360: 3,
-    505: 163,
-    650: 285,
-    660: 13,
-    661: 206,
-    662: 82,
-    663: 175,
-    664: 19,
-    665: 92,
-    666: 86,
-    677: 1,
-    686: 90,
-    693: 3,
-    838: 163,
-    983: 285,
-    993: 49,
-    994: 206,
-    995: 21,
-    996: 175,
-    997: 19,
-    998: 92,
-    999: 86,
-  },
-};
-
-function normalizeMediaMapConfigForRegistry(raw: unknown): MediaMapConfigSerialized | undefined {
+function normalizeDeploymentDropForRegistry(
+  raw: unknown,
+  options: DeploymentDropNormalizationOptions = {},
+): DeploymentDropConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const obj = raw as Record<string, unknown>;
-  const strategy = obj.strategy === 'cyclic' ? 'cyclic' : obj.strategy === 'direct' ? 'direct' : undefined;
-  const count = normalizePositiveInteger(obj.count);
-  const overrideEntries = Object.entries((obj.overrides as Record<string, unknown>) || {}).flatMap(([tokenIdRaw, mediaIdRaw]) => {
-    const tokenId = normalizePositiveInteger(tokenIdRaw);
-    const mediaId = normalizePositiveInteger(mediaIdRaw);
-    if (!tokenId || !mediaId) return [];
-    return [[tokenId, mediaId] as const];
-  });
-  const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
-  if (!strategy && !count && !overrides) return undefined;
-  return {
-    ...(strategy ? { strategy } : {}),
-    ...(count ? { count } : {}),
-    ...(overrides ? { overrides } : {}),
-  };
-}
-
-function normalizeFigureMediaConfigForRegistry(raw: unknown): FigureMediaConfigSerialized | undefined {
-  return normalizeMediaMapConfigForRegistry(raw);
-}
-
-function normalizeBoxMediaConfigForRegistry(raw: unknown): BoxMediaConfigSerialized | undefined {
-  return normalizeMediaMapConfigForRegistry(raw);
-}
-
-function normalizeMintSelectionConfigForRegistry(raw: unknown): MintSelectionConfigSerialized | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const obj = raw as Record<string, unknown>;
-  if (obj.kind !== 'size') return undefined;
-  const optionsRaw = Array.isArray(obj.options) ? obj.options : [];
-  const options = optionsRaw.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
-    const option = entry as Record<string, unknown>;
-    const key = asTrimmedString(option.key);
-    const label = asTrimmedString(option.label) || key;
-    const startId = normalizePositiveInteger(option.startId);
-    const endId = normalizePositiveInteger(option.endId);
-    if (!key || !label || !startId || !endId || endId < startId) return [];
-    return [{ key, label, startId, endId }];
-  });
-  if (options.length !== 3) return undefined;
-  return {
-    kind: 'size',
-    options,
-  };
-}
-
-export function defaultFrontendFigureMediaForDropFamily(dropFamily: DropFamily): FigureMediaConfigSerialized | undefined {
-  if (dropFamily !== 'little_swag_boxes') return undefined;
-  return normalizeFigureMediaConfigForRegistry(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
-}
-
-export function defaultFrontendBoxMediaForDropFamily(dropFamily: DropFamily): BoxMediaConfigSerialized | undefined {
-  if (dropFamily !== 'card_nft_2') return undefined;
-  return normalizeBoxMediaConfigForRegistry(CARD_NFT_2_BOX_MEDIA);
-}
-
-function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
-  return dropFamily === 'card_nft_2';
-}
-
-function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
-  if (dropFamily !== 'card_nft_2') return undefined;
-  return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
-}
-
-export type StripeCheckoutEnabledResolution = {
-  enabled: boolean;
-  disabledOverride: boolean;
-};
-
-export function resolveStripeCheckoutEnabledForDropFamily(
-  value: unknown,
-  dropFamily: DropFamily,
-): StripeCheckoutEnabledResolution {
-  if (value === true) return { enabled: true, disabledOverride: false };
-  if (value === false) {
-    return {
-      enabled: false,
-      disabledOverride: defaultStripeCheckoutEnabledForDropFamily(dropFamily),
-    };
-  }
-  return {
-    enabled: defaultStripeCheckoutEnabledForDropFamily(dropFamily),
-    disabledOverride: false,
-  };
-}
-
-export function resolveStripeProductTaxCodeForDropFamily(
-  value: unknown,
-  dropFamily: DropFamily,
-  stripeCheckoutEnabled: boolean,
-): string | undefined {
-  const explicitTaxCode = asTrimmedString(value);
-  if (explicitTaxCode) return explicitTaxCode;
-  return stripeCheckoutEnabled ? defaultStripeProductTaxCodeForDropFamily(dropFamily) : undefined;
-}
-
-function renderableStripeCheckoutEnabled(
-  stripeCheckout: StripeCheckoutEnabledResolution,
-): Pick<FrontendDropConfigSerialized, 'stripeCheckoutEnabled'> {
-  if (stripeCheckout.enabled) return { stripeCheckoutEnabled: true };
-  return stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {};
-}
-
-function normalizeFrontendDropForRegistry(raw: unknown): FrontendDropConfigSerialized | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const obj = raw as Record<string, unknown>;
-  const dropId = normalizeDropId(asTrimmedString(obj.dropId));
+  const object = raw as Record<string, unknown>;
+  const dropId = normalizeDropId(asTrimmedString(object.dropId));
   if (!dropId) return undefined;
-  const dropFamily = normalizeDropFamily(obj.dropFamily, dropId);
-  const metadataBase = asTrimmedString(obj.metadataBase) || asTrimmedString((obj.paths as any)?.base);
-  const secondaryMarketHref = asTrimmedString(obj.secondaryMarketHref);
-  const defaultMarketHref = defaultSecondaryMarketHref(dropId);
-  const figureMedia = normalizeFigureMediaConfigForRegistry(obj.figureMedia) || defaultFrontendFigureMediaForDropFamily(dropFamily);
-  const boxMedia = normalizeBoxMediaConfigForRegistry(obj.boxMedia) || defaultFrontendBoxMediaForDropFamily(dropFamily);
-  const forceSoldOut = obj.forceSoldOut === true || defaultFrontendForceSoldOutForDropId(dropId);
-  const mintSelection = normalizeMintSelectionConfigForRegistry(obj.mintSelection);
-  const boxMinterConfigPda = asTrimmedString(obj.boxMinterConfigPda);
-  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(obj.stripeCheckoutEnabled, dropFamily);
-  const stripeLiveUnitAmountCents = asOptionalStripeUnitAmountCents(obj.stripeLiveUnitAmountCents);
-  const solanaCluster = asTrimmedString(obj.solanaCluster);
-  if (stripeCheckout.enabled && solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
-    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${dropId}`);
-  }
+  const dropFamily = normalizeDropFamily(object.dropFamily, dropId);
+  const solanaCluster = asSolanaCluster(object.solanaCluster);
+  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(
+    object.stripeCheckoutEnabled,
+    dropFamily,
+  );
+  const stripeLiveUnitAmountCents =
+    normalizeStripeUnitAmountCents(object.stripeLiveUnitAmountCents) ??
+    undefined;
+  assertStripeLivePriceConfigured({
+    dropId,
+    solanaCluster,
+    stripeCheckoutEnabled: stripeCheckout.enabled,
+    stripeLiveUnitAmountCents,
+  });
+  const stripeProductTaxCode =
+    resolveStripeProductTaxCodeForDropFamily(
+      object.stripeProductTaxCode,
+      dropFamily,
+      stripeCheckout.enabled,
+    );
+  const mintSelection = normalizeMintSelectionConfig(
+    object.mintSelection as MintSelectionConfig | undefined,
+  );
+  const boxMinterConfigPda = asTrimmedString(object.boxMinterConfigPda);
+  const secondaryMarketHref =
+    asTrimmedString(object.secondaryMarketHref) ||
+    defaultSecondaryMarketHref(dropId);
+  const figureMedia =
+    normalizeMediaMapConfig(object.figureMedia) ||
+    defaultFrontendFigureMediaForDropFamily(dropFamily);
+  const boxMedia =
+    normalizeMediaMapConfig(object.boxMedia) ||
+    defaultFrontendBoxMediaForDropFamily(dropFamily);
+  const forceSoldOut =
+    object.forceSoldOut === true ||
+    options.forceSoldOutFallback?.(dropId) === true;
+
   return {
     solanaCluster,
     dropId,
     dropFamily,
-    collectionName: asTrimmedString(obj.collectionName) || dropId,
-    metadataBase: normalizeDropBase(metadataBase),
-    metadataPathFormat: normalizeMetadataPathFormat(obj.metadataPathFormat),
-    ...(secondaryMarketHref && secondaryMarketHref !== defaultMarketHref ? { secondaryMarketHref } : {}),
+    collectionName: asTrimmedString(object.collectionName) || dropId,
+    metadataBase: normalizeDropBase(
+      asTrimmedString(object.metadataBase) ||
+        asTrimmedString(
+          (object.paths as Record<string, unknown> | undefined)?.base,
+        ),
+    ),
+    metadataPathFormat: normalizeMetadataPathFormat(
+      object.metadataPathFormat,
+    ),
+    ...(secondaryMarketHref ? { secondaryMarketHref } : {}),
     ...(figureMedia ? { figureMedia } : {}),
     ...(boxMedia ? { boxMedia } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     ...(mintSelection ? { mintSelection } : {}),
-    treasury: asTrimmedString(obj.treasury),
-    priceSol: asFiniteNumber(obj.priceSol),
-    discountPriceSol: asFiniteNumber(obj.discountPriceSol),
-    ...renderableStripeCheckoutEnabled(stripeCheckout),
-    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
-    discountMintsPerWallet: normalizeDiscountMintsPerWallet(obj.discountMintsPerWallet),
-    discountMerkleRoot: asTrimmedString(obj.discountMerkleRoot),
-    maxSupply: Math.floor(asFiniteNumber(obj.maxSupply)),
-    itemsPerBox: Math.floor(asFiniteNumber(obj.itemsPerBox)),
-    maxPerTx: Math.floor(asFiniteNumber(obj.maxPerTx)),
-    namePrefix: asTrimmedString(obj.namePrefix),
-    figureNamePrefix: asTrimmedString(obj.figureNamePrefix) || 'figure',
-    symbol: asTrimmedString(obj.symbol),
-    boxMinterProgramId: asTrimmedString(obj.boxMinterProgramId),
-    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
-    collectionMint: asTrimmedString(obj.collectionMint),
-  };
-}
-
-function normalizeFunctionsDropForRegistry(raw: unknown): FunctionsDropConfigSerialized | undefined {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const obj = raw as Record<string, unknown>;
-  const frontendShape = normalizeFrontendDropForRegistry(raw);
-  if (!frontendShape) return undefined;
-  const stripeProductTaxCode = resolveStripeProductTaxCodeForDropFamily(
-    obj.stripeProductTaxCode,
-    frontendShape.dropFamily,
-    frontendShape.stripeCheckoutEnabled === true,
-  );
-  return {
-    ...frontendShape,
+    treasury: asTrimmedString(object.treasury),
+    priceSol: asFiniteNumber(object.priceSol),
+    discountPriceSol: asFiniteNumber(object.discountPriceSol),
+    ...(stripeCheckout.enabled
+      ? { stripeCheckoutEnabled: true }
+      : stripeCheckout.disabledOverride
+        ? { stripeCheckoutEnabled: false }
+        : {}),
+    ...(stripeLiveUnitAmountCents != null
+      ? { stripeLiveUnitAmountCents }
+      : {}),
     ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
-    receiptsMerkleTree: asTrimmedString(obj.receiptsMerkleTree),
-    deliveryLookupTable: asTrimmedString(obj.deliveryLookupTable),
+    discountMintsPerWallet: normalizeDiscountMintsPerWallet(
+      object.discountMintsPerWallet,
+    ),
+    discountMerkleRoot: asTrimmedString(object.discountMerkleRoot),
+    maxSupply: Math.floor(asFiniteNumber(object.maxSupply)),
+    itemsPerBox: Math.floor(asFiniteNumber(object.itemsPerBox)),
+    maxPerTx: Math.floor(asFiniteNumber(object.maxPerTx)),
+    namePrefix: asTrimmedString(object.namePrefix),
+    figureNamePrefix:
+      asTrimmedString(object.figureNamePrefix) || 'figure',
+    symbol: asTrimmedString(object.symbol),
+    boxMinterProgramId: asTrimmedString(object.boxMinterProgramId),
+    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
+    collectionMint: asTrimmedString(object.collectionMint),
+    receiptsMerkleTree: asTrimmedString(object.receiptsMerkleTree),
+    deliveryLookupTable: asTrimmedString(object.deliveryLookupTable),
   };
 }
 
-async function importModuleFresh(filePath: string): Promise<Record<string, unknown>> {
-  const href = pathToFileURL(filePath).href;
-  const mtimeMs = existsSync(filePath) ? statSync(filePath).mtimeMs : Date.now();
-  return (await import(`${href}?t=${mtimeMs}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)) as Record<string, unknown>;
+function projectFrontendSerialized(
+  drop: DeploymentDropConfigSerialized,
+): FrontendDropConfigSerialized {
+  const {
+    secondaryMarketHref,
+    stripeProductTaxCode: _stripeProductTaxCode,
+    receiptsMerkleTree: _receiptsMerkleTree,
+    deliveryLookupTable: _deliveryLookupTable,
+    ...frontend
+  } = drop;
+  const defaultMarket = defaultSecondaryMarketHref(drop.dropId);
+  return {
+    ...frontend,
+    ...(secondaryMarketHref && secondaryMarketHref !== defaultMarket
+      ? { secondaryMarketHref }
+      : {}),
+  };
 }
 
-export async function readFrontendDropRegistry(filePath: string): Promise<FrontendDropRegistry> {
+function projectFunctionsSerialized(
+  drop: DeploymentDropConfigSerialized,
+): FunctionsDropConfigSerialized {
+  return {
+    ...projectFrontendSerialized(drop),
+    ...(drop.stripeProductTaxCode
+      ? { stripeProductTaxCode: drop.stripeProductTaxCode }
+      : {}),
+    receiptsMerkleTree: drop.receiptsMerkleTree,
+    deliveryLookupTable: drop.deliveryLookupTable,
+  };
+}
+
+function setOwnDrop<T>(
+  drops: Record<string, T>,
+  dropId: string,
+  drop: T,
+): void {
+  Object.defineProperty(drops, dropId, {
+    value: drop,
+    configurable: true,
+    enumerable: true,
+    writable: true,
+  });
+}
+
+async function importModuleFresh(
+  filePath: string,
+): Promise<Record<string, unknown>> {
+  const href = pathToFileURL(filePath).href;
+  const mtimeMs = existsSync(filePath)
+    ? statSync(filePath).mtimeMs
+    : Date.now();
+  return (await import(
+    `${href}?t=${mtimeMs}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
+  )) as Record<string, unknown>;
+}
+
+async function readModule(filePath: string, label: string) {
+  try {
+    return await importModuleFresh(filePath);
+  } catch (err) {
+    throw new Error(
+      `Failed to load existing ${label} at ${filePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+const DEPLOYMENT_REGISTRY_DROP_KEYS = new Set(
+  Object.keys(DEPLOYMENT_REGISTRY_DROP_FIELDS),
+);
+const DEPLOYMENT_REGISTRY_REQUIRED_DROP_KEYS = Object.entries(
+  DEPLOYMENT_REGISTRY_DROP_FIELDS,
+)
+  .filter(([, descriptor]) => descriptor.required)
+  .map(([field]) => field);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function assertValidCanonicalRegistryRow(args: {
+  registryKey: string;
+  value: unknown;
+  filePath: string;
+}): asserts args is {
+  registryKey: string;
+  value: Record<string, unknown>;
+  filePath: string;
+} {
+  const invalid = (reason: string): never => {
+    throw new Error(
+      `Invalid canonical deployment registry row ${args.registryKey}: ${reason}: ${args.filePath}`,
+    );
+  };
+  if (!isPlainRecord(args.value)) invalid('expected an object');
+  const row = args.value;
+  const unknownKey = Object.keys(row).find(
+    (key) => !DEPLOYMENT_REGISTRY_DROP_KEYS.has(key),
+  );
+  if (unknownKey) invalid(`unknown field ${unknownKey}`);
+  const missingRequiredKey = DEPLOYMENT_REGISTRY_REQUIRED_DROP_KEYS.find(
+    (key) => !Object.prototype.hasOwnProperty.call(row, key),
+  );
+  if (missingRequiredKey) {
+    invalid(`${missingRequiredKey} is required`);
+  }
+
+  const requireString = (
+    field: string,
+    options: { allowEmpty?: boolean } = {},
+  ): string => {
+    const value = row[field];
+    if (
+      typeof value !== 'string' ||
+      value !== value.trim() ||
+      (!options.allowEmpty && !value)
+    ) {
+      invalid(`${field} must be a${options.allowEmpty ? '' : ' non-empty'} trimmed string`);
+    }
+    return value;
+  };
+  const requireNumber = (
+    field: string,
+    options: {
+      integer?: boolean;
+      min?: number;
+      max?: number;
+    } = {},
+  ): number => {
+    const value = row[field];
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      (options.integer && !Number.isInteger(value)) ||
+      (options.min != null && value < options.min) ||
+      (options.max != null && value > options.max)
+    ) {
+      invalid(`${field} has an invalid numeric value`);
+    }
+    return value;
+  };
+  const assertOptionalString = (field: string): void => {
+    if (!Object.prototype.hasOwnProperty.call(row, field)) return;
+    requireString(field);
+  };
+  const assertOptionalBoolean = (field: string): void => {
+    if (
+      Object.prototype.hasOwnProperty.call(row, field) &&
+      typeof row[field] !== 'boolean'
+    ) {
+      invalid(`${field} must be a boolean`);
+    }
+  };
+
+  const solanaCluster = requireString('solanaCluster');
+  if (
+    solanaCluster !== 'devnet' &&
+    solanaCluster !== 'testnet' &&
+    solanaCluster !== 'mainnet-beta'
+  ) {
+    invalid('solanaCluster is unsupported');
+  }
+  let normalizedRegistryKey: string;
+  try {
+    normalizedRegistryKey = normalizeAndValidateDropId(
+      args.registryKey,
+      'deployment registry key',
+    );
+  } catch {
+    invalid('registry key is not a safe normalized dropId');
+  }
+  if (normalizedRegistryKey !== args.registryKey) {
+    invalid('registry key must be normalized');
+  }
+  const dropId = requireString('dropId');
+  let normalizedDropId: string;
+  try {
+    normalizedDropId = normalizeAndValidateDropId(dropId);
+  } catch {
+    invalid('dropId is not a safe deployment slug');
+  }
+  if (normalizedDropId !== dropId) {
+    invalid('dropId must be normalized');
+  }
+  const dropFamily = requireString('dropFamily');
+  if (normalizeDropFamily(dropFamily, dropId) !== dropFamily) {
+    invalid('dropFamily is unsupported');
+  }
+  requireString('collectionName');
+  const metadataBase = requireString('metadataBase');
+  if (normalizeAndValidateMetadataBaseInput(metadataBase) !== metadataBase) {
+    invalid('metadataBase must be canonical');
+  }
+  const metadataPathFormat = requireString('metadataPathFormat');
+  if (
+    metadataPathFormat !== 'legacy' &&
+    metadataPathFormat !== 'compact'
+  ) {
+    invalid('metadataPathFormat is unsupported');
+  }
+
+  requireString('treasury');
+  requireNumber('priceSol', { min: 0 });
+  requireNumber('discountPriceSol', { min: 0 });
+  requireNumber('discountMintsPerWallet', {
+    integer: true,
+    min: BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
+    max: BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
+  });
+  const discountMerkleRoot = requireString('discountMerkleRoot');
+  if (!/^[0-9a-f]{64}$/.test(discountMerkleRoot)) {
+    invalid('discountMerkleRoot must be 32 lowercase hexadecimal bytes');
+  }
+  const maxSupply = requireNumber('maxSupply', {
+    integer: true,
+    min: 1,
+    max: 0xffff_ffff,
+  });
+  const itemsPerBox = requireNumber('itemsPerBox', {
+    integer: true,
+    min: BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
+    max: BOX_MINTER_MAX_ITEMS_PER_BOX,
+  });
+  if (maxSupply * itemsPerBox > 0xffff) {
+    invalid('maxSupply and itemsPerBox exceed the supported figure ID range');
+  }
+  requireNumber('maxPerTx', { integer: true, min: 1, max: 0xff });
+  requireString('namePrefix');
+  requireString('figureNamePrefix');
+  requireString('symbol');
+  requireString('boxMinterProgramId');
+  requireString('collectionMint');
+  requireString('receiptsMerkleTree');
+  requireString('deliveryLookupTable', { allowEmpty: true });
+
+  assertOptionalString('secondaryMarketHref');
+  assertOptionalString('stripeProductTaxCode');
+  assertOptionalString('boxMinterConfigPda');
+  assertOptionalBoolean('forceSoldOut');
+  assertOptionalBoolean('stripeCheckoutEnabled');
+  if (Object.prototype.hasOwnProperty.call(row, 'stripeLiveUnitAmountCents')) {
+    requireNumber('stripeLiveUnitAmountCents', {
+      integer: true,
+      min: STRIPE_UNIT_AMOUNT_CENTS_MIN,
+      max: STRIPE_UNIT_AMOUNT_CENTS_MAX,
+    });
+  }
+
+  for (const field of ['figureMedia', 'boxMedia'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(row, field)) continue;
+    const normalized = normalizeMediaMapConfig(row[field]);
+    if (!normalized || !isDeepStrictEqual(normalized, row[field])) {
+      invalid(`${field} is malformed or non-canonical`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'mintSelection')) {
+    const mintSelection = row['mintSelection'];
+    const normalized = normalizeMintSelectionConfig(
+      mintSelection as MintSelectionConfig | undefined,
+    );
+    if (!normalized || !isDeepStrictEqual(normalized, mintSelection)) {
+      invalid('mintSelection is malformed or non-canonical');
+    }
+  }
+}
+
+export async function readDeploymentDropRegistry(
+  filePath: string,
+): Promise<DeploymentDropRegistry> {
+  if (!existsSync(filePath)) {
+    throw new Error(`Missing canonical deployment registry: ${filePath}`);
+  }
+  const sourceBeforeImport = readFileSync(filePath, 'utf8');
+  const markerBounds = validateDeploymentRegistryMarkerLines({
+    filePath,
+    content: sourceBeforeImport,
+  });
+  const drops: Record<string, DeploymentDropConfigSerialized> = {};
+  const mod = await readModule(filePath, 'deployment registry');
+  const sourceContent = readFileSync(filePath, 'utf8');
+  if (sourceContent !== sourceBeforeImport) {
+    throw new Error(
+      `Canonical deployment registry changed while it was being loaded: ${filePath}`,
+    );
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(mod, 'DEPLOYMENT_DROPS') ||
+    !mod.DEPLOYMENT_DROPS ||
+    typeof mod.DEPLOYMENT_DROPS !== 'object' ||
+    Array.isArray(mod.DEPLOYMENT_DROPS) ||
+    !isPlainRecord(mod.DEPLOYMENT_DROPS)
+  ) {
+    throw new Error(
+      `Canonical deployment registry must export DEPLOYMENT_DROPS as an object: ${filePath}`,
+    );
+  }
+  assertDeploymentDropsExportInsideMarkers({
+    filePath,
+    content: sourceContent,
+    markerBounds,
+  });
+  const candidate = mod.DEPLOYMENT_DROPS;
+  for (const [registryKey, value] of Object.entries(
+    candidate as Record<string, unknown>,
+  )) {
+    if (
+      isPlainRecord(value) &&
+      Object.prototype.hasOwnProperty.call(value, 'dropId') &&
+      value.dropId !== registryKey
+    ) {
+      throw new Error(
+        `Canonical deployment registry key ${registryKey} does not match embedded dropId ${String(value.dropId)}: ${filePath}`,
+      );
+    }
+    const rowArgs = { registryKey, value, filePath };
+    assertValidCanonicalRegistryRow(rowArgs);
+    const normalized = normalizeDeploymentDropForRegistry(rowArgs.value);
+    if (!normalized) {
+      throw new Error(
+        `Invalid canonical deployment registry row ${registryKey}: ${filePath}`,
+      );
+    }
+    const embeddedDropId = rowArgs.value.dropId;
+    if (
+      embeddedDropId !== registryKey ||
+      registryKey !== normalized.dropId
+    ) {
+      throw new Error(
+        `Canonical deployment registry key ${registryKey} does not match embedded dropId ${String(embeddedDropId)}: ${filePath}`,
+      );
+    }
+    Object.defineProperty(drops, registryKey, {
+      value: normalized,
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+  }
+  // Validate the mutation boundary while the source is still unchanged. This
+  // rejects missing/malformed markers before deploy or wipe can mutate remote
+  // state, without requiring the rendered formatting to equal hand-written
+  // source byte-for-byte.
+  renderDeploymentRegistryFileFromSource({
+    filePath,
+    existingContent: sourceContent,
+    drops,
+  });
+  return { drops, sourceContent };
+}
+
+function canonicalForceSoldOutForLegacyDropId(dropId: string): boolean {
+  return getDeploymentDrop(dropId)?.forceSoldOut === true;
+}
+
+export async function readFrontendDropRegistry(
+  filePath: string,
+): Promise<FrontendDropRegistry> {
   const drops: Record<string, FrontendDropConfigSerialized> = {};
   if (!existsSync(filePath)) return { drops };
-
-  let mod: Record<string, unknown> = {};
-  try {
-    mod = await importModuleFresh(filePath);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load existing frontend deployment config at ${filePath}: ${reason}`);
-  }
-
-  const dropsCandidate = mod.FRONTEND_DROPS;
-  if (dropsCandidate && typeof dropsCandidate === 'object' && !Array.isArray(dropsCandidate)) {
-    Object.values(dropsCandidate as Record<string, unknown>).forEach((value) => {
-      const normalized = normalizeFrontendDropForRegistry(value);
-      if (!normalized) return;
-      drops[normalized.dropId] = normalized;
+  const mod = await readModule(filePath, 'frontend deployment config');
+  const candidate = mod.FRONTEND_DROPS;
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    Object.values(candidate as Record<string, unknown>).forEach((value) => {
+      const normalized = normalizeDeploymentDropForRegistry({
+        ...(value as Record<string, unknown>),
+        receiptsMerkleTree: '',
+        deliveryLookupTable: '',
+      }, {
+        forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
+      });
+      if (normalized) {
+        setOwnDrop(
+          drops,
+          normalized.dropId,
+          projectFrontendSerialized(normalized),
+        );
+      }
     });
   }
-
   if (!Object.keys(drops).length) {
     const legacy = mod.FRONTEND_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
-    const normalized = normalizeFrontendDropForRegistry(legacy);
-    if (normalized) drops[normalized.dropId] = normalized;
+    const normalized = normalizeDeploymentDropForRegistry({
+      ...(legacy && typeof legacy === 'object'
+        ? (legacy as Record<string, unknown>)
+        : {}),
+      receiptsMerkleTree: '',
+      deliveryLookupTable: '',
+    }, {
+      forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
+    });
+    if (normalized) {
+      setOwnDrop(
+        drops,
+        normalized.dropId,
+        projectFrontendSerialized(normalized),
+      );
+    }
   }
-
   return { drops };
 }
 
-export async function readFunctionsDropRegistry(filePath: string): Promise<FunctionsDropRegistry> {
+export async function readFunctionsDropRegistry(
+  filePath: string,
+): Promise<FunctionsDropRegistry> {
   const drops: Record<string, FunctionsDropConfigSerialized> = {};
   if (!existsSync(filePath)) return { drops };
-
-  let mod: Record<string, unknown> = {};
-  try {
-    mod = await importModuleFresh(filePath);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load existing functions deployment config at ${filePath}: ${reason}`);
-  }
-
-  const dropsCandidate = mod.FUNCTIONS_DROPS;
-  if (dropsCandidate && typeof dropsCandidate === 'object' && !Array.isArray(dropsCandidate)) {
-    Object.values(dropsCandidate as Record<string, unknown>).forEach((value) => {
-      const normalized = normalizeFunctionsDropForRegistry(value);
-      if (!normalized) return;
-      drops[normalized.dropId] = normalized;
+  const mod = await readModule(filePath, 'Functions deployment config');
+  const candidate = mod.FUNCTIONS_DROPS;
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    Object.values(candidate as Record<string, unknown>).forEach((value) => {
+      const normalized = normalizeDeploymentDropForRegistry(value, {
+        forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
+      });
+      if (normalized) {
+        setOwnDrop(
+          drops,
+          normalized.dropId,
+          projectFunctionsSerialized(normalized),
+        );
+      }
     });
   }
-
   if (!Object.keys(drops).length) {
     const legacy = mod.FUNCTIONS_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
-    const normalized = normalizeFunctionsDropForRegistry(legacy);
-    if (normalized) drops[normalized.dropId] = normalized;
+    const normalized = normalizeDeploymentDropForRegistry(legacy, {
+      forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
+    });
+    if (normalized) {
+      setOwnDrop(
+        drops,
+        normalized.dropId,
+        projectFunctionsSerialized(normalized),
+      );
+    }
   }
-
   return { drops };
+}
+
+function tsStringLiteral(value: string): string {
+  return `'${value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')}'`;
+}
+
+function tsPropertyName(value: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value)
+    ? value
+    : tsStringLiteral(value);
+}
+
+function mediaMapConfigsEqual(
+  left: MediaMapConfigSerialized | undefined,
+  right: MediaMapConfigSerialized | undefined,
+): boolean {
+  return JSON.stringify(normalizeMediaMapConfig(left)) ===
+    JSON.stringify(normalizeMediaMapConfig(right));
 }
 
 function renderMediaMapConfigLiteral(
   propertyName: 'figureMedia' | 'boxMedia',
   config: MediaMapConfigSerialized,
-  indent = '    ',
-): string {
-  const lines = [`${indent}${propertyName}: {`];
+): string[] {
+  const lines = [`    ${propertyName}: {`];
   if (config.strategy) {
-    lines.push(`${indent}  strategy: ${tsStringLiteral(config.strategy)},`);
+    lines.push(`      strategy: ${tsStringLiteral(config.strategy)},`);
   }
-  if (typeof config.count === 'number' && Number.isFinite(config.count) && config.count > 0) {
-    lines.push(`${indent}  count: ${Math.floor(config.count)},`);
-  }
-  const overrideEntries = Object.entries(config.overrides || {})
-    .map(([tokenId, mediaId]) => [Math.floor(Number(tokenId)), Math.floor(Number(mediaId))] as const)
-    .filter(([tokenId, mediaId]) => Number.isFinite(tokenId) && tokenId > 0 && Number.isFinite(mediaId) && mediaId > 0)
-    .sort((a, b) => a[0] - b[0]);
-  if (overrideEntries.length) {
-    lines.push(`${indent}  overrides: {`);
-    overrideEntries.forEach(([tokenId, mediaId]) => {
-      lines.push(`${indent}    ${tokenId}: ${mediaId},`);
+  if (config.count) lines.push(`      count: ${Math.floor(config.count)},`);
+  const overrides = Object.entries(config.overrides || {})
+    .map(
+      ([tokenId, mediaId]) =>
+        [Math.floor(Number(tokenId)), Math.floor(Number(mediaId))] as const,
+    )
+    .filter(
+      ([tokenId, mediaId]) =>
+        Number.isFinite(tokenId) &&
+        tokenId > 0 &&
+        Number.isFinite(mediaId) &&
+        mediaId > 0,
+    )
+    .sort(([left], [right]) => left - right);
+  if (overrides.length) {
+    lines.push('      overrides: {');
+    overrides.forEach(([tokenId, mediaId]) => {
+      lines.push(`        ${tokenId}: ${mediaId},`);
     });
-    lines.push(`${indent}  },`);
+    lines.push('      },');
   }
-  lines.push(`${indent}},`);
-  return lines.join('\n');
+  lines.push('    },');
+  return lines;
 }
 
-function renderFigureMediaConfigLiteral(config: FigureMediaConfigSerialized, indent = '    '): string {
-  return renderMediaMapConfigLiteral('figureMedia', config, indent);
-}
-
-function renderBoxMediaConfigLiteral(config: BoxMediaConfigSerialized, indent = '    '): string {
-  return renderMediaMapConfigLiteral('boxMedia', config, indent);
-}
-
-function mediaMapConfigsEqual(left: MediaMapConfigSerialized | undefined, right: MediaMapConfigSerialized | undefined): boolean {
-  const normalizedLeft = normalizeMediaMapConfigForRegistry(left);
-  const normalizedRight = normalizeMediaMapConfigForRegistry(right);
-  if (!normalizedLeft && !normalizedRight) return true;
-  if (!normalizedLeft || !normalizedRight) return false;
-  if ((normalizedLeft.strategy || '') !== (normalizedRight.strategy || '')) return false;
-  if ((normalizedLeft.count || 0) !== (normalizedRight.count || 0)) return false;
-  const leftOverrides = Object.entries(normalizedLeft.overrides || {}).sort(([a], [b]) => Number(a) - Number(b));
-  const rightOverrides = Object.entries(normalizedRight.overrides || {}).sort(([a], [b]) => Number(a) - Number(b));
-  if (leftOverrides.length !== rightOverrides.length) return false;
-  return leftOverrides.every(([tokenId, mediaId], index) => {
-    const [rightTokenId, rightMediaId] = rightOverrides[index];
-    return Number(tokenId) === Number(rightTokenId) && Number(mediaId) === Number(rightMediaId);
-  });
-}
-
-function renderMintSelectionConfigLiteral(config: MintSelectionConfigSerialized, indent = '    '): string {
-  const lines = [`${indent}mintSelection: {`, `${indent}  kind: ${tsStringLiteral(config.kind)},`, `${indent}  options: [`];
-  config.options.forEach((option) => {
-    lines.push(`${indent}    {`);
-    lines.push(`${indent}      key: ${tsStringLiteral(option.key)},`);
-    lines.push(`${indent}      label: ${tsStringLiteral(option.label)},`);
-    lines.push(`${indent}      startId: ${Math.floor(Number(option.startId))},`);
-    lines.push(`${indent}      endId: ${Math.floor(Number(option.endId))},`);
-    lines.push(`${indent}    },`);
-  });
-  lines.push(`${indent}  ],`);
-  lines.push(`${indent}},`);
-  return lines.join('\n');
-}
-
-function renderOptionalBoxMinterConfigPdaLine(boxMinterConfigPda?: string): string {
-  return boxMinterConfigPda ? `    boxMinterConfigPda: ${tsStringLiteral(boxMinterConfigPda)},\n` : '';
-}
-
-function renderStripeCheckoutEnabledLine(drop: { dropFamily: DropFamily; stripeCheckoutEnabled?: boolean }): string {
-  const defaultEnabled = defaultStripeCheckoutEnabledForDropFamily(drop.dropFamily);
-  if (drop.stripeCheckoutEnabled === true && !defaultEnabled) return `    stripeCheckoutEnabled: true,\n`;
-  if (drop.stripeCheckoutEnabled === false && defaultEnabled) {
-    return `    stripeCheckoutEnabled: false,\n`;
-  }
-  return '';
-}
-
-function renderSharedProgramConfigPdaAssertion(registryName: string, registryLabel: string): string {
-  return [
-    `function assertSharedProgramDropsUseExplicitConfigPdas<`,
-    `  T extends { dropId: string; solanaCluster: SolanaCluster; boxMinterProgramId: string; boxMinterConfigPda?: string },`,
-    `>(drops: Record<string, T>, registryLabel: string): void {`,
-    `  const counts = new Map<string, number>();`,
-    `  Object.values(drops).forEach((drop) => {`,
-    '    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;',
-    `    counts.set(key, (counts.get(key) || 0) + 1);`,
-    `  });`,
-    `  Object.values(drops).forEach((drop) => {`,
-    '    const key = `${drop.solanaCluster}:${drop.boxMinterProgramId}`;',
-    `    if ((counts.get(key) || 0) < 2) return;`,
-    `    if (String(drop.boxMinterConfigPda || '').trim()) return;`,
-    `    throw new Error(`,
-    '      `${registryLabel} drop ${drop.dropId} shares program ${drop.boxMinterProgramId} on ${drop.solanaCluster} and must set boxMinterConfigPda.`,',
-    `    );`,
-    `  });`,
-    `}`,
-    ``,
-    `assertSharedProgramDropsUseExplicitConfigPdas(${registryName}, ${tsStringLiteral(registryLabel)});`,
-  ].join('\n');
-}
-
-function renderFrontendDropEntry(drop: FrontendDropConfigSerialized): string {
-  const defaultBoxMedia = defaultFrontendBoxMediaForDropFamily(drop.dropFamily);
-  const boxMedia = mediaMapConfigsEqual(drop.boxMedia, defaultBoxMedia) ? undefined : drop.boxMedia;
-  const metadataOptionBlocks = [
-    drop.secondaryMarketHref ? `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},` : '',
-    drop.forceSoldOut ? `    forceSoldOut: true,` : '',
-    drop.figureMedia ? renderFigureMediaConfigLiteral(drop.figureMedia) : '',
-    boxMedia ? renderBoxMediaConfigLiteral(boxMedia) : '',
-    drop.mintSelection ? renderMintSelectionConfigLiteral(drop.mintSelection) : '',
-  ].filter(Boolean);
-  const metadataOptionLines = metadataOptionBlocks.length ? `\n${metadataOptionBlocks.join('\n')}` : '';
-  const stripeCheckoutEnabledLine = renderStripeCheckoutEnabledLine(drop);
-  const stripeLiveUnitAmountCentsLine =
-    drop.stripeLiveUnitAmountCents != null
-      ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
-      : '';
-  return `  ${tsStringLiteral(drop.dropId)}: createFrontendDrop({
-    solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
-    dropId: ${tsStringLiteral(drop.dropId)},
-    dropFamily: ${tsStringLiteral(drop.dropFamily)},
-    collectionName: ${tsStringLiteral(drop.collectionName)},
-
-    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
-    metadataBase: ${tsStringLiteral(drop.metadataBase)},
-    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},${metadataOptionLines}
-
-    // Drop config (kept in sync with on-chain config; useful for UI defaults)
-    treasury: ${tsStringLiteral(drop.treasury)},
-    priceSol: ${Number(drop.priceSol)},
-    discountPriceSol: ${Number(drop.discountPriceSol)},
-${stripeCheckoutEnabledLine}${stripeLiveUnitAmountCentsLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
-    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
-    maxSupply: ${Math.floor(Number(drop.maxSupply))},
-    itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
-    maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
-    namePrefix: ${tsStringLiteral(drop.namePrefix)},
-    figureNamePrefix: ${tsStringLiteral(drop.figureNamePrefix)},
-    symbol: ${tsStringLiteral(drop.symbol)},
-
-    // On-chain ids
-    boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
-${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMint: ${tsStringLiteral(drop.collectionMint)},
-  }),`;
-}
-
-function renderFunctionsDropEntry(drop: FunctionsDropConfigSerialized): string {
-  const stripeCheckoutEnabledLine = renderStripeCheckoutEnabledLine(drop);
-  const stripeLiveUnitAmountCentsLine =
-    drop.stripeLiveUnitAmountCents != null
-      ? `    stripeLiveUnitAmountCents: ${Math.floor(Number(drop.stripeLiveUnitAmountCents))},\n`
-      : '';
-  const stripeProductTaxCode = String(drop.stripeProductTaxCode || '').trim();
-  const defaultStripeProductTaxCode = defaultStripeProductTaxCodeForDropFamily(drop.dropFamily);
-  const stripeProductTaxCodeLine = stripeProductTaxCode && stripeProductTaxCode !== defaultStripeProductTaxCode
-    ? `    stripeProductTaxCode: ${tsStringLiteral(stripeProductTaxCode)},\n`
-    : '';
-  return `  ${tsStringLiteral(drop.dropId)}: createFunctionsDrop({
-    solanaCluster: ${tsStringLiteral(drop.solanaCluster)},
-    dropId: ${tsStringLiteral(drop.dropId)},
-    dropFamily: ${tsStringLiteral(drop.dropFamily)},
-    collectionName: ${tsStringLiteral(drop.collectionName)},
-
-    // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
-    metadataBase: ${tsStringLiteral(drop.metadataBase)},
-    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},
-${drop.mintSelection ? `${renderMintSelectionConfigLiteral(drop.mintSelection)}\n` : ''}
-
-    // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-    treasury: ${tsStringLiteral(drop.treasury)},
-    priceSol: ${Number(drop.priceSol)},
-    discountPriceSol: ${Number(drop.discountPriceSol)},
-${stripeCheckoutEnabledLine}${stripeLiveUnitAmountCentsLine}${stripeProductTaxCodeLine}    discountMintsPerWallet: ${Math.floor(Number(drop.discountMintsPerWallet))},
-    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},
-    maxSupply: ${Math.floor(Number(drop.maxSupply))},
-    itemsPerBox: ${Math.floor(Number(drop.itemsPerBox))},
-    maxPerTx: ${Math.floor(Number(drop.maxPerTx))},
-    namePrefix: ${tsStringLiteral(drop.namePrefix)},
-    figureNamePrefix: ${tsStringLiteral(drop.figureNamePrefix)},
-    symbol: ${tsStringLiteral(drop.symbol)},
-
-    // On-chain ids
-    boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},
-${renderOptionalBoxMinterConfigPdaLine(drop.boxMinterConfigPda)}    collectionMint: ${tsStringLiteral(drop.collectionMint)},
-    receiptsMerkleTree: ${tsStringLiteral(drop.receiptsMerkleTree)},
-    deliveryLookupTable: ${tsStringLiteral(drop.deliveryLookupTable)},
-  }),`;
-}
-
-function renderFrontendDeploymentRegistrySection(args: {
-  drops: Record<string, FrontendDropConfigSerialized>;
-}): string {
-  const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
-  const entries = dropIds.map((dropId) => renderFrontendDropEntry(args.drops[dropId])).join('\n');
-  return `${FRONTEND_DEPLOYMENT_REGISTRY_START}
-export const FRONTEND_DROPS: FrontendDropsMap = {
-${entries}
-};
-${FRONTEND_DEPLOYMENT_REGISTRY_END}`;
-}
-
-export function renderFrontendDeploymentRegistryFile(args: {
-  drops: Record<string, FrontendDropConfigSerialized>;
-}): string {
-  const registrySection = renderFrontendDeploymentRegistrySection(args);
-  return `/**
- * Frontend deployment constants (COMMITTED).
- *
- * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain -- <dropId>\`) after
- * an on-chain deployment.
- * Manual edits outside the auto-generated registry section are preserved.
- *
- * Secrets:
- * - Do NOT put secrets here.
- * - \`VITE_HELIUS_API_KEY\` and \`VITE_FIREBASE_API_KEY\` may be provided via env to
- *   override the bundled frontend defaults in \`src/lib/helius.ts\` and \`src/lib/firebase.ts\`.
- */
-
-import { CARD_NFT_2_BOX_MEDIA } from './dropMediaDefaults.ts';
-
-export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-type MetadataPathFormat = 'legacy' | 'compact';
-
-type MediaMapStrategy = 'direct' | 'cyclic';
-
-export type MediaMapConfig = {
-  strategy?: MediaMapStrategy;
-  count?: number;
-  overrides?: Record<number, number>;
-};
-
-export type FigureMediaConfig = MediaMapConfig;
-type BoxMediaConfig = MediaMapConfig;
-
-type MintSelectionOption = {
-  key: string;
-  label: string;
-  startId: number;
-  endId: number;
-};
-
-export type MintSelectionConfig = {
-  kind: 'size';
-  options: MintSelectionOption[];
-};
-
-export type FrontendDropConfig = {
-  solanaCluster: SolanaCluster;
-  dropId: string;
-  dropFamily: DropFamily;
-  collectionName: string;
-
-  // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
-  metadataBase: string;
-  metadataPathFormat: MetadataPathFormat;
-  secondaryMarketHref?: string;
-  figureMedia?: FigureMediaConfig;
-  boxMedia?: BoxMediaConfig;
-  forceSoldOut?: boolean;
-  mintSelection?: MintSelectionConfig;
-
-  // Drop config (kept in sync with on-chain config; useful for UI defaults)
-  treasury: string;
-  priceSol: number;
-  discountPriceSol: number;
-  stripeCheckoutEnabled?: boolean;
-  stripeLiveUnitAmountCents?: number;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-
-  // On-chain ids
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-  collectionMint: string;
-
-  // Canonical derived drop paths (avoid duplicating URL strings).
-  paths: DropPaths;
-};
-
-// Backward-compatible type alias.
-export type FrontendDeploymentConfig = FrontendDropConfig;
-
-export type FrontendDropsMap = Record<string, FrontendDropConfig>;
-
-type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
-
-export type SecondaryMarketplaceLink = {
-  key: SecondaryMarketplaceKey;
-  label: string;
-  href: string;
-};
-
-type DropPaths = {
-  /** Normalized drop base (no trailing slash). */
-  base: string;
-  collectionJson: string;
-  boxesJsonBase: string;
-  figuresJsonBase: string;
-  receiptsBoxesJsonBase: string;
-  receiptsFiguresJsonBase: string;
-};
-
-export const DROP_METADATA_IPFS_GATEWAY = 'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
-const IPFS_PROTOCOL = 'ipfs://';
-const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
-const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
-
-const BASE32_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
-  Object.fromEntries(Array.from(BASE32_ALPHABET).map((char, index) => [char, index] as const)),
-);
-
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\\/+$/, '');
-}
-
-function normalizeMetadataPathFormat(value: unknown, fallback: MetadataPathFormat = 'legacy'): MetadataPathFormat {
-  return value === 'compact' || value === 'legacy' ? value : fallback;
-}
-
-function decodeBase32Lower(value: string): Uint8Array | null {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const out: number[] = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const char of normalized) {
-    const digit = BASE32_LOOKUP[char];
-    if (typeof digit !== 'number') return null;
-    buffer = (buffer << 5) | digit;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      out.push((buffer >> bits) & 0xff);
-      buffer &= (1 << bits) - 1;
-    }
-  }
-  if (bits > 0 && (buffer & ((1 << bits) - 1)) !== 0) return null;
-  return Uint8Array.from(out);
-}
-
-function readUvarint(bytes: Uint8Array, offset: number): { value: number; nextOffset: number } | null {
-  let value = 0;
-  let shift = 0;
-  for (let index = offset; index < bytes.length; index += 1) {
-    const byte = bytes[index];
-    value += (byte & 0x7f) * 2 ** shift;
-    if (byte < 0x80) return { value, nextOffset: index + 1 };
-    shift += 7;
-    if (shift > 49) return null;
-  }
-  return null;
-}
-
-function isRawCidV1(value: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized.startsWith('b')) return false;
-  const bytes = decodeBase32Lower(normalized.slice(1));
-  if (!bytes?.length) return false;
-
-  const version = readUvarint(bytes, 0);
-  if (!version || version.value !== 1) return false;
-  const codec = readUvarint(bytes, version.nextOffset);
-  if (!codec) return false;
-  const multihashCode = readUvarint(bytes, codec.nextOffset);
-  if (!multihashCode) return false;
-  const multihashLength = readUvarint(bytes, multihashCode.nextOffset);
-  if (!multihashLength || multihashLength.value < 1) return false;
-  return bytes.length === multihashLength.nextOffset + multihashLength.value;
-}
-
-function isRawIpfsCid(value: string): boolean {
-  return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
-}
-
-function hasUrlScheme(value: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value);
-}
-
-function normalizeIpfsProtocolUrl(value: string): string {
-  const trimmed = trimTrailingSlashes(String(value || '').trim());
-  if (!trimmed) return '';
-  if (!trimmed.toLowerCase().startsWith(IPFS_PROTOCOL)) return trimmed;
-  const withoutProtocol = trimmed.slice(IPFS_PROTOCOL.length).replace(/^ipfs\\//i, '');
-  return \`\${IPFS_PROTOCOL}\${withoutProtocol.replace(/^\\/+/, '')}\`;
-}
-
-export function normalizeDropBase(base: string): string {
-  // Accept either \`https://...\`, \`ipfs://...\`, or a raw CID like \`bafy...\`.
-  const trimmed = trimTrailingSlashes(String(base || '').trim());
-  if (!trimmed) return '';
-  if (isRawIpfsCid(trimmed)) return \`\${IPFS_PROTOCOL}\${trimmed}\`;
-  return normalizeIpfsProtocolUrl(trimmed);
-}
-
-export function canonicalizeDropAssetUrl(url: string): string {
-  const trimmed = String(url || '').trim();
-  if (!trimmed) return '';
-
-  const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
-  if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
-  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
-
-  try {
-    const parsed = new URL(trimmed);
-    const hostMatch = parsed.hostname.match(/^([^./]+)\\.ipfs\\./i);
-    if (hostMatch?.[1]) {
-      return \`\${IPFS_PROTOCOL}\${hostMatch[1]}\${trimTrailingSlashes(parsed.pathname)}\${parsed.search}\${parsed.hash}\`;
-    }
-    const pathMatch = parsed.pathname.match(/^\\/ipfs\\/([^/]+)(\\/.*)?$/i);
-    if (pathMatch?.[1]) {
-      return \`\${IPFS_PROTOCOL}\${pathMatch[1]}\${trimTrailingSlashes(pathMatch[2] || '')}\${parsed.search}\${parsed.hash}\`;
-    }
-  } catch {
-    // Non-URL strings should pass through unchanged.
-  }
-
-  return trimmed;
-}
-
-export function resolveDropAssetUrl(url: string): string {
-  const canonical = canonicalizeDropAssetUrl(url);
-  if (!canonical.toLowerCase().startsWith(IPFS_PROTOCOL)) return canonical;
-  const path = canonical.slice(IPFS_PROTOCOL.length).replace(/^\\/+/, '');
-  return \`\${DROP_METADATA_IPFS_GATEWAY}\${path}\`;
-}
-
-export function normalizeDropId(dropId: string): string {
-  return String(dropId || '').trim().toLowerCase();
-}
-
-const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
-  card_nft_2: 'card_nft_2',
-  drifella_binder: 'drifella_binder',
-  drifella_shirt: 'drifella_shirt',
-  little_swag_boxes: 'little_swag_boxes',
-  little_swag_boxes_devnet: 'little_swag_boxes',
-  poncho_drifella: 'poncho_drifella',
-};
-
-export function defaultDropFamilyForDropId(dropId: string): DropFamily {
-  const normalizedDropId = normalizeDropId(dropId);
-  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
-}
-
-export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  if (
-    normalized === 'little_swag_boxes' ||
-    normalized === 'little_swag_hoodies' ||
-    normalized === 'poncho_drifella' ||
-    normalized === 'drifella_binder' ||
-    normalized === 'drifella_shirt' ||
-    normalized === 'card_nft_2' ||
-    normalized === 'default'
-  ) {
-    return normalized as DropFamily;
-  }
-  return defaultDropFamilyForDropId(dropId || '');
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  const trimmed = String(value ?? '').trim();
-  return trimmed || undefined;
-}
-
-const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  little_swag_boxes: 'https://magiceden.io/marketplace/little_swag_boxes',
-  poncho_drifella: 'https://magiceden.io/marketplace/poncho_drifella',
-};
-
-const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
-  card_nft_2: 'https://www.tensor.trade/trade/card_nft_2',
-  little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
-  poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
-};
-
-const FORCE_SOLD_OUT_DROP_OVERRIDES: Record<string, true> = {
-  card_nft_2: true,
-  poncho_drifella: true,
-};
-
-function normalizeDiscountMintsPerWallet(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
-  return parsed;
-}
-
-function defaultSecondaryMarketHref(dropId: string): string | undefined {
-  return secondaryMarketplaceLinksForDropId(dropId).find((link) => link.key === 'tensor')?.href;
-}
-
-export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
-  const normalizedDropId = normalizeDropId(dropId);
-  if (!normalizedDropId) return [];
-  return [
-    {
-      key: 'magiceden',
-      label: 'Magic Eden',
-      href: MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || \`https://magiceden.io/marketplace/\${normalizedDropId}\`,
-    },
-    {
-      key: 'tensor',
-      label: 'Tensor',
-      href: TENSOR_MARKETPLACE_HREF_OVERRIDES[normalizedDropId] || \`https://www.tensor.trade/trade/\${normalizedDropId}\`,
-    },
+function renderMintSelectionConfigLiteral(
+  config: MintSelectionConfigSerialized,
+): string[] {
+  const lines = [
+    '    mintSelection: {',
+    `      kind: ${tsStringLiteral(config.kind)},`,
+    '      options: [',
   ];
-}
-
-function defaultForceSoldOutForDropId(dropId: string): boolean {
-  const normalizedDropId = normalizeDropId(dropId);
-  return FORCE_SOLD_OUT_DROP_OVERRIDES[normalizedDropId] === true;
-}
-
-function normalizeMediaMapConfig(raw: MediaMapConfig | undefined): MediaMapConfig | undefined {
-  if (!raw) return undefined;
-  const strategy = raw.strategy === 'cyclic' ? 'cyclic' : raw.strategy === 'direct' ? 'direct' : undefined;
-  const countRaw = Number(raw.count);
-  const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : undefined;
-  const overrideEntries = Object.entries(raw.overrides || {}).flatMap(([tokenIdRaw, mediaIdRaw]) => {
-    const tokenId = Math.floor(Number(tokenIdRaw));
-    const mediaId = Math.floor(Number(mediaIdRaw));
-    if (!Number.isFinite(tokenId) || tokenId <= 0) return [];
-    if (!Number.isFinite(mediaId) || mediaId <= 0) return [];
-    return [[tokenId, mediaId] as const];
+  config.options.forEach((option) => {
+    lines.push(
+      `        { key: ${tsStringLiteral(option.key)}, label: ${tsStringLiteral(option.label)}, startId: ${Math.floor(option.startId)}, endId: ${Math.floor(option.endId)} },`,
+    );
   });
-  const overrides = overrideEntries.length ? Object.fromEntries(overrideEntries) : undefined;
-  if (!strategy && !count && !overrides) return undefined;
-  return {
-    ...(strategy ? { strategy } : {}),
-    ...(count ? { count } : {}),
-    ...(overrides ? { overrides } : {}),
-  };
+  lines.push('      ],', '    },');
+  return lines;
 }
 
-function normalizeFigureMediaConfig(raw: FigureMediaConfig | undefined): FigureMediaConfig | undefined {
-  return normalizeMediaMapConfig(raw);
-}
-
-function normalizeBoxMediaConfig(raw: BoxMediaConfig | undefined): BoxMediaConfig | undefined {
-  return normalizeMediaMapConfig(raw);
-}
-
-function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
-  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
-  const options = raw.options.flatMap((entry) => {
-    const key = String(entry?.key || '').trim();
-    const label = String(entry?.label || key).trim();
-    const startId = Math.floor(Number(entry?.startId));
-    const endId = Math.floor(Number(entry?.endId));
-    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
-      return [];
-    }
-    return [{ key, label, startId, endId }];
-  });
-  if (options.length !== 3) return undefined;
-  return {
-    kind: 'size',
-    options,
-  };
-}
-
-const LITTLE_SWAG_BOXES_FIGURE_MEDIA: FigureMediaConfig = {
-  strategy: 'cyclic',
-  count: 333,
-  overrides: {
-    344: 1,
-    353: 90,
-    360: 3,
-    505: 163,
-    650: 285,
-    660: 13,
-    661: 206,
-    662: 82,
-    663: 175,
-    664: 19,
-    665: 92,
-    666: 86,
-    677: 1,
-    686: 90,
-    693: 3,
-    838: 163,
-    983: 285,
-    993: 49,
-    994: 206,
-    995: 21,
-    996: 175,
-    997: 19,
-    998: 92,
-    999: 86,
-  },
-};
-
-function defaultFigureMediaConfigForDropFamily(dropFamily: DropFamily): FigureMediaConfig | undefined {
-  if (dropFamily !== 'little_swag_boxes') return undefined;
-  return normalizeFigureMediaConfig(LITTLE_SWAG_BOXES_FIGURE_MEDIA);
-}
-
-function defaultBoxMediaConfigForDropFamily(dropFamily: DropFamily): BoxMediaConfig | undefined {
-  if (dropFamily !== 'card_nft_2') return undefined;
-  return normalizeBoxMediaConfig(CARD_NFT_2_BOX_MEDIA);
-}
-
-function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
-  return dropFamily === 'card_nft_2';
-}
-
-function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
-  if (value === true) return true;
-  if (value === false) return false;
-  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
-}
-
-function dropPathsFromBase(dropBase: string, metadataPathFormat: MetadataPathFormat = 'compact'): DropPaths {
-  const base = normalizeDropBase(dropBase);
-  if (metadataPathFormat === 'legacy') {
-    return {
-      base,
-      collectionJson: \`\${base}/collection.json\`,
-      boxesJsonBase: \`\${base}/json/boxes/\`,
-      figuresJsonBase: \`\${base}/json/figures/\`,
-      receiptsBoxesJsonBase: \`\${base}/json/receipts/boxes/\`,
-      receiptsFiguresJsonBase: \`\${base}/json/receipts/figures/\`,
-    };
+function renderDeploymentDropEntry(
+  drop: DeploymentDropConfigSerialized,
+): string {
+  const lines = [
+    `  ${tsPropertyName(drop.dropId)}: {`,
+    `    solanaCluster: ${tsStringLiteral(drop.solanaCluster)},`,
+    `    dropId: ${tsStringLiteral(drop.dropId)},`,
+    `    dropFamily: ${tsStringLiteral(drop.dropFamily)},`,
+    `    collectionName: ${tsStringLiteral(drop.collectionName)},`,
+    `    metadataBase: ${tsStringLiteral(drop.metadataBase)},`,
+    `    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},`,
+  ];
+  const defaultMarket = defaultSecondaryMarketHref(drop.dropId);
+  if (
+    drop.secondaryMarketHref &&
+    drop.secondaryMarketHref !== defaultMarket
+  ) {
+    lines.push(
+      `    secondaryMarketHref: ${tsStringLiteral(drop.secondaryMarketHref)},`,
+    );
   }
-  return {
-    base,
-    collectionJson: \`\${base}/collection.json\`,
-    boxesJsonBase: \`\${base}/b\`,
-    figuresJsonBase: \`\${base}/f\`,
-    receiptsBoxesJsonBase: \`\${base}/rb\`,
-    receiptsFiguresJsonBase: \`\${base}/rf\`,
-  };
-}
-
-function createFrontendDrop(
-  config: Omit<FrontendDropConfig, 'dropId' | 'paths' | 'metadataPathFormat'> & {
-    dropId: string;
-    metadataPathFormat?: MetadataPathFormat;
-  },
-): FrontendDropConfig {
-  const { stripeCheckoutEnabled: rawStripeCheckoutEnabled, ...baseConfig } = config;
-  const normalizedDropId = normalizeDropId(config.dropId);
-  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
-  const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
-  const figureMedia = normalizeFigureMediaConfig(config.figureMedia) || defaultFigureMediaConfigForDropFamily(normalizedDropFamily);
-  const boxMedia = normalizeBoxMediaConfig(config.boxMedia) || defaultBoxMediaConfigForDropFamily(normalizedDropFamily);
-  const forceSoldOut = config.forceSoldOut === true || defaultForceSoldOutForDropId(normalizedDropId);
-  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
-  const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
-  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
-  const stripeCheckoutDisabledOverride =
-    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
-  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
-    throw new Error(\`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop \${normalizedDropId}\`);
+  const defaultFigureMedia = defaultFrontendFigureMediaForDropFamily(
+    drop.dropFamily,
+  );
+  if (
+    drop.figureMedia &&
+    !mediaMapConfigsEqual(drop.figureMedia, defaultFigureMedia)
+  ) {
+    lines.push(...renderMediaMapConfigLiteral('figureMedia', drop.figureMedia));
   }
-  return {
-    ...baseConfig,
-    dropId: normalizedDropId,
-    dropFamily: normalizedDropFamily,
-    metadataBase: normalizeDropBase(config.metadataBase),
-    metadataPathFormat,
-    secondaryMarketHref: normalizeOptionalString(config.secondaryMarketHref) || defaultSecondaryMarketHref(normalizedDropId),
-    ...(figureMedia ? { figureMedia } : {}),
-    ...(boxMedia ? { boxMedia } : {}),
-    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
-    ...(mintSelection ? { mintSelection } : {}),
-    figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
-    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
-    ...(forceSoldOut ? { forceSoldOut: true } : {}),
-    paths: dropPathsFromBase(config.metadataBase, metadataPathFormat),
-  };
+  const defaultBoxMedia = defaultFrontendBoxMediaForDropFamily(drop.dropFamily);
+  if (
+    drop.boxMedia &&
+    !mediaMapConfigsEqual(drop.boxMedia, defaultBoxMedia)
+  ) {
+    lines.push(...renderMediaMapConfigLiteral('boxMedia', drop.boxMedia));
+  }
+  if (drop.forceSoldOut === true) {
+    lines.push('    forceSoldOut: true,');
+  }
+  if (drop.mintSelection) {
+    lines.push(...renderMintSelectionConfigLiteral(drop.mintSelection));
+  }
+  lines.push(
+    `    treasury: ${tsStringLiteral(drop.treasury)},`,
+    `    priceSol: ${Number(drop.priceSol)},`,
+    `    discountPriceSol: ${Number(drop.discountPriceSol)},`,
+  );
+  const defaultStripeEnabled =
+    defaultStripeCheckoutEnabledForDropFamily(drop.dropFamily);
+  if (drop.stripeCheckoutEnabled === true && !defaultStripeEnabled) {
+    lines.push('    stripeCheckoutEnabled: true,');
+  } else if (
+    drop.stripeCheckoutEnabled === false &&
+    defaultStripeEnabled
+  ) {
+    lines.push('    stripeCheckoutEnabled: false,');
+  }
+  if (drop.stripeLiveUnitAmountCents != null) {
+    lines.push(
+      `    stripeLiveUnitAmountCents: ${Math.floor(drop.stripeLiveUnitAmountCents)},`,
+    );
+  }
+  const defaultTaxCode = defaultStripeProductTaxCodeForDropFamily(
+    drop.dropFamily,
+  );
+  const stripeCheckoutEnabled = resolveStripeCheckoutEnabledForDropFamily(
+    drop.stripeCheckoutEnabled,
+    drop.dropFamily,
+  ).enabled;
+  if (
+    drop.stripeProductTaxCode &&
+    (drop.stripeProductTaxCode !== defaultTaxCode ||
+      !stripeCheckoutEnabled)
+  ) {
+    lines.push(
+      `    stripeProductTaxCode: ${tsStringLiteral(drop.stripeProductTaxCode)},`,
+    );
+  }
+  lines.push(
+    `    discountMintsPerWallet: ${Math.floor(drop.discountMintsPerWallet)},`,
+    `    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},`,
+    `    maxSupply: ${Math.floor(drop.maxSupply)},`,
+    `    itemsPerBox: ${Math.floor(drop.itemsPerBox)},`,
+    `    maxPerTx: ${Math.floor(drop.maxPerTx)},`,
+    `    namePrefix: ${tsStringLiteral(drop.namePrefix)},`,
+    `    figureNamePrefix: ${tsStringLiteral(drop.figureNamePrefix)},`,
+    `    symbol: ${tsStringLiteral(drop.symbol)},`,
+    `    boxMinterProgramId: ${tsStringLiteral(drop.boxMinterProgramId)},`,
+  );
+  if (drop.boxMinterConfigPda) {
+    lines.push(
+      `    boxMinterConfigPda: ${tsStringLiteral(drop.boxMinterConfigPda)},`,
+    );
+  }
+  lines.push(
+    `    collectionMint: ${tsStringLiteral(drop.collectionMint)},`,
+    `    receiptsMerkleTree: ${tsStringLiteral(drop.receiptsMerkleTree)},`,
+    `    deliveryLookupTable: ${tsStringLiteral(drop.deliveryLookupTable)},`,
+    '  },',
+  );
+  return lines.join('\n');
 }
 
-${registrySection}
-
-${renderSharedProgramConfigPdaAssertion('FRONTEND_DROPS', 'Frontend deployment config')}
-
-export function getFrontendDrop(dropId: string): FrontendDropConfig | undefined {
-  const normalizedDropId = normalizeDropId(dropId);
-  return FRONTEND_DROPS[normalizedDropId];
-}
-
-function dropFamilyForDrop(dropOrId?: FrontendDropConfig | string): DropFamily {
-  const drop =
-    typeof dropOrId === 'string'
-      ? getFrontendDrop(dropOrId)
-      : dropOrId && typeof dropOrId === 'object'
-        ? dropOrId
-        : undefined;
-  const fallbackDropId = typeof dropOrId === 'string' ? dropOrId : drop?.dropId;
-  return normalizeDropFamily(drop?.dropFamily, fallbackDropId);
-}
-
-export function isDropFamily(dropOrId: FrontendDropConfig | string | undefined, dropFamily: DropFamily): boolean {
-  return dropFamilyForDrop(dropOrId) === dropFamily;
-}
-
-export function listFrontendDrops(): FrontendDropConfig[] {
-  return Object.keys(FRONTEND_DROPS)
-    .sort((a, b) => a.localeCompare(b))
-    .map((dropId) => FRONTEND_DROPS[dropId]);
-}
-`;
-}
-
-function renderFunctionsDeploymentRegistrySection(args: {
-  drops: Record<string, FunctionsDropConfigSerialized>;
+function renderDeploymentRegistrySection(args: {
+  drops: Record<string, DeploymentDropConfigSerialized>;
 }): string {
-  const dropIds = Object.keys(args.drops).sort((a, b) => a.localeCompare(b));
-  const entries = dropIds.map((dropId) => renderFunctionsDropEntry(args.drops[dropId])).join('\n');
-  return `${FUNCTIONS_DEPLOYMENT_REGISTRY_START}
-export const FUNCTIONS_DROPS: FunctionsDropsMap = {
+  const entries = Object.keys(args.drops)
+    .sort((left, right) => left.localeCompare(right))
+    .map((registryKey) => {
+      if (!Object.prototype.hasOwnProperty.call(args.drops, registryKey)) {
+        throw new Error(
+          `Canonical deployment registry row is not an own property: ${registryKey}`,
+        );
+      }
+      const normalizedRegistryKey = normalizeAndValidateDropId(
+        registryKey,
+        'deployment registry key',
+      );
+      if (normalizedRegistryKey !== registryKey) {
+        throw new Error(
+          `Canonical deployment registry key must be normalized: ${registryKey}`,
+        );
+      }
+      const drop = args.drops[registryKey];
+      const normalizedDropId = normalizeAndValidateDropId(
+        drop?.dropId,
+        'deployment registry row dropId',
+      );
+      if (drop.dropId !== normalizedDropId || normalizedDropId !== registryKey) {
+        throw new Error(
+          `Canonical deployment registry key ${registryKey} does not match embedded dropId ${String(drop?.dropId)}`,
+        );
+      }
+      return renderDeploymentDropEntry(drop);
+    })
+    .join('\n');
+  return `${DEPLOYMENT_REGISTRY_START}
+export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
 ${entries}
 };
-${FUNCTIONS_DEPLOYMENT_REGISTRY_END}`;
+${DEPLOYMENT_REGISTRY_END}`;
 }
 
-export function renderFunctionsDeploymentRegistryFile(args: {
-  drops: Record<string, FunctionsDropConfigSerialized>;
-}): string {
-  const registrySection = renderFunctionsDeploymentRegistrySection(args);
-  return `/**
- * Cloud Functions deployment constants (COMMITTED).
- *
- * This file is intended to be updated by \`scripts/deploy-all-onchain.ts\` (\`npm run deploy-all-onchain -- <dropId>\`) after
- * an on-chain deployment, so functions can run with minimal env usage.
- * Manual edits outside the auto-generated registry section are preserved.
- *
- * Secrets:
- * - HELIUS_API_KEY (env/runtime config)
- * - COSIGNER_SECRET (Firebase Functions secret / Google Secret Manager)
- */
-
-export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-export type DropFamily = 'default' | 'little_swag_boxes' | 'poncho_drifella' | 'drifella_binder' | 'drifella_shirt' | 'little_swag_hoodies' | 'card_nft_2';
-type MetadataPathFormat = 'legacy' | 'compact';
-
-type MintSelectionOption = {
-  key: string;
-  label: string;
-  startId: number;
-  endId: number;
+type DeploymentRegistryMarkerBounds = {
+  startLineStart: number;
+  startLineEnd: number;
+  endLineStart: number;
+  endLineEnd: number;
 };
 
-export type MintSelectionConfig = {
-  kind: 'size';
-  options: MintSelectionOption[];
-};
-
-export type FunctionsDropConfig = {
-  solanaCluster: SolanaCluster;
-  dropId: string;
-  dropFamily: DropFamily;
-  collectionName: string;
-
-  // Drop metadata base (collection.json + legacy/compact metadata JSON + images/*)
-  metadataBase: string;
-  metadataPathFormat: MetadataPathFormat;
-  mintSelection?: MintSelectionConfig;
-
-  // Drop config (kept in sync with on-chain config; useful for server-side defaults/validation)
-  treasury: string;
-  priceSol: number;
-  discountPriceSol: number;
-  stripeCheckoutEnabled?: boolean;
-  stripeLiveUnitAmountCents?: number;
-  stripeProductTaxCode?: string;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-
-  // On-chain ids
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-  collectionMint: string;
-  receiptsMerkleTree: string;
-  deliveryLookupTable: string;
-};
-
-export type FunctionsDropsMap = Record<string, FunctionsDropConfig>;
-
-const IPFS_PROTOCOL = 'ipfs://';
-const RAW_CID_V0_RE = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
-const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
-
-const BASE32_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
-  Object.fromEntries(Array.from(BASE32_ALPHABET).map((char, index) => [char, index] as const)),
-);
-
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\\/+$/, '');
+function malformedDeploymentRegistryMarkers(filePath: string): never {
+  throw new Error(
+    `Malformed or missing canonical deployment registry markers in ${filePath}`,
+  );
 }
 
-function normalizeMetadataPathFormat(value: unknown, fallback: MetadataPathFormat = 'legacy'): MetadataPathFormat {
-  return value === 'compact' || value === 'legacy' ? value : fallback;
-}
-
-function decodeBase32Lower(value: string): Uint8Array | null {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return null;
-
-  const out: number[] = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const char of normalized) {
-    const digit = BASE32_LOOKUP[char];
-    if (typeof digit !== 'number') return null;
-    buffer = (buffer << 5) | digit;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      out.push((buffer >> bits) & 0xff);
-      buffer &= (1 << bits) - 1;
-    }
-  }
-  if (bits > 0 && (buffer & ((1 << bits) - 1)) !== 0) return null;
-  return Uint8Array.from(out);
-}
-
-function readUvarint(bytes: Uint8Array, offset: number): { value: number; nextOffset: number } | null {
-  let value = 0;
-  let shift = 0;
-  for (let index = offset; index < bytes.length; index += 1) {
-    const byte = bytes[index];
-    value += (byte & 0x7f) * 2 ** shift;
-    if (byte < 0x80) return { value, nextOffset: index + 1 };
-    shift += 7;
-    if (shift > 49) return null;
-  }
-  return null;
-}
-
-function isRawCidV1(value: string): boolean {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized.startsWith('b')) return false;
-  const bytes = decodeBase32Lower(normalized.slice(1));
-  if (!bytes?.length) return false;
-
-  const version = readUvarint(bytes, 0);
-  if (!version || version.value !== 1) return false;
-  const codec = readUvarint(bytes, version.nextOffset);
-  if (!codec) return false;
-  const multihashCode = readUvarint(bytes, codec.nextOffset);
-  if (!multihashCode) return false;
-  const multihashLength = readUvarint(bytes, multihashCode.nextOffset);
-  if (!multihashLength || multihashLength.value < 1) return false;
-  return bytes.length === multihashLength.nextOffset + multihashLength.value;
-}
-
-function isRawIpfsCid(value: string): boolean {
-  return RAW_CID_V0_RE.test(value) || isRawCidV1(value);
-}
-
-function hasUrlScheme(value: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(value);
-}
-
-function normalizeIpfsProtocolUrl(value: string): string {
-  const trimmed = trimTrailingSlashes(String(value || '').trim());
-  if (!trimmed) return '';
-  if (!trimmed.toLowerCase().startsWith(IPFS_PROTOCOL)) return trimmed;
-  const withoutProtocol = trimmed.slice(IPFS_PROTOCOL.length).replace(/^ipfs\\//i, '');
-  return \`\${IPFS_PROTOCOL}\${withoutProtocol.replace(/^\\/+/, '')}\`;
-}
-
-export function normalizeDropBase(base: string): string {
-  // Accept either \`https://...\`, \`ipfs://...\`, or a raw CID like \`bafy...\`.
-  const trimmed = trimTrailingSlashes(String(base || '').trim());
-  if (!trimmed) return '';
-  if (isRawIpfsCid(trimmed)) return \`\${IPFS_PROTOCOL}\${trimmed}\`;
-  return normalizeIpfsProtocolUrl(trimmed);
-}
-
-export function canonicalizeDropAssetUrl(url: string): string {
-  const trimmed = String(url || '').trim();
-  if (!trimmed) return '';
-
-  const normalizedIpfs = normalizeIpfsProtocolUrl(trimmed);
-  if (normalizedIpfs.toLowerCase().startsWith(IPFS_PROTOCOL)) return normalizedIpfs;
-  if (!hasUrlScheme(normalizedIpfs)) return normalizedIpfs;
-
-  try {
-    const parsed = new URL(trimmed);
-    const hostMatch = parsed.hostname.match(/^([^./]+)\\.ipfs\\./i);
-    if (hostMatch?.[1]) {
-      return \`\${IPFS_PROTOCOL}\${hostMatch[1]}\${trimTrailingSlashes(parsed.pathname)}\${parsed.search}\${parsed.hash}\`;
-    }
-    const pathMatch = parsed.pathname.match(/^\\/ipfs\\/([^/]+)(\\/.*)?$/i);
-    if (pathMatch?.[1]) {
-      return \`\${IPFS_PROTOCOL}\${pathMatch[1]}\${trimTrailingSlashes(pathMatch[2] || '')}\${parsed.search}\${parsed.hash}\`;
-    }
-  } catch {
-    // Non-URL strings should pass through unchanged.
-  }
-
-  return trimmed;
-}
-
-export function normalizeDropId(dropId: string): string {
-  return String(dropId || '').trim().toLowerCase();
-}
-
-const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
-  card_nft_2: 'card_nft_2',
-  drifella_binder: 'drifella_binder',
-  drifella_shirt: 'drifella_shirt',
-  little_swag_boxes: 'little_swag_boxes',
-  little_swag_boxes_devnet: 'little_swag_boxes',
-  poncho_drifella: 'poncho_drifella',
-};
-
-export function defaultDropFamilyForDropId(dropId: string): DropFamily {
-  const normalizedDropId = normalizeDropId(dropId);
-  return DROP_FAMILY_BY_DROP_ID[normalizedDropId] || 'default';
-}
-
-export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily {
-  const normalized = String(value ?? '').trim().toLowerCase();
+function findUniqueDeploymentRegistryMarkerLine(args: {
+  filePath: string;
+  content: string;
+  marker: string;
+}): { lineStart: number; lineEnd: number } {
+  const markerStart = args.content.indexOf(args.marker);
   if (
-    normalized === 'little_swag_boxes' ||
-    normalized === 'little_swag_hoodies' ||
-    normalized === 'poncho_drifella' ||
-    normalized === 'drifella_binder' ||
-    normalized === 'drifella_shirt' ||
-    normalized === 'card_nft_2' ||
-    normalized === 'default'
+    markerStart === -1 ||
+    markerStart !== args.content.lastIndexOf(args.marker) ||
+    (markerStart !== 0 && args.content[markerStart - 1] !== '\n')
   ) {
-    return normalized as DropFamily;
+    return malformedDeploymentRegistryMarkers(args.filePath);
   }
-  return defaultDropFamilyForDropId(dropId || '');
+
+  const afterMarker = markerStart + args.marker.length;
+  if (afterMarker === args.content.length) {
+    return { lineStart: markerStart, lineEnd: afterMarker };
+  }
+  if (args.content[afterMarker] === '\n') {
+    return { lineStart: markerStart, lineEnd: afterMarker + 1 };
+  }
+  if (
+    args.content[afterMarker] === '\r' &&
+    args.content[afterMarker + 1] === '\n'
+  ) {
+    return { lineStart: markerStart, lineEnd: afterMarker + 2 };
+  }
+  return malformedDeploymentRegistryMarkers(args.filePath);
 }
 
-const CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE = 'txcd_99999999';
-
-function defaultStripeCheckoutEnabledForDropFamily(dropFamily: DropFamily): boolean {
-  return dropFamily === 'card_nft_2';
+function validateDeploymentRegistryMarkerLines(args: {
+  filePath: string;
+  content: string;
+}): DeploymentRegistryMarkerBounds {
+  const start = findUniqueDeploymentRegistryMarkerLine({
+    ...args,
+    marker: DEPLOYMENT_REGISTRY_START,
+  });
+  const end = findUniqueDeploymentRegistryMarkerLine({
+    ...args,
+    marker: DEPLOYMENT_REGISTRY_END,
+  });
+  if (end.lineStart < start.lineEnd) {
+    return malformedDeploymentRegistryMarkers(args.filePath);
+  }
+  return {
+    startLineStart: start.lineStart,
+    startLineEnd: start.lineEnd,
+    endLineStart: end.lineStart,
+    endLineEnd: end.lineEnd,
+  };
 }
 
-function defaultStripeProductTaxCodeForDropFamily(dropFamily: DropFamily): string | undefined {
-  if (dropFamily !== 'card_nft_2') return undefined;
-  return CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE;
-}
-
-function resolveStripeCheckoutEnabled(value: unknown, dropFamily: DropFamily): boolean {
-  if (value === true) return true;
-  if (value === false) return false;
-  return defaultStripeCheckoutEnabledForDropFamily(dropFamily);
-}
-
-function normalizeDiscountMintsPerWallet(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3) return 1;
-  return parsed;
-}
-
-function normalizeMintSelectionConfig(raw: MintSelectionConfig | undefined): MintSelectionConfig | undefined {
-  if (!raw || raw.kind !== 'size' || !Array.isArray(raw.options)) return undefined;
-  const options = raw.options.flatMap((entry) => {
-    const key = String(entry?.key || '').trim();
-    const label = String(entry?.label || key).trim();
-    const startId = Math.floor(Number(entry?.startId));
-    const endId = Math.floor(Number(entry?.endId));
-    if (!key || !label || !Number.isFinite(startId) || !Number.isFinite(endId) || startId < 1 || endId < startId) {
+function assertDeploymentDropsExportInsideMarkers(args: {
+  filePath: string;
+  content: string;
+  markerBounds: DeploymentRegistryMarkerBounds;
+}): void {
+  const sourceFile = ts.createSourceFile(
+    args.filePath,
+    args.content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declarations = sourceFile.statements.flatMap((statement) => {
+    if (
+      !ts.isVariableStatement(statement) ||
+      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    ) {
       return [];
     }
-    return [{ key, label, startId, endId }];
+    return statement.declarationList.declarations
+      .filter(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'DEPLOYMENT_DROPS',
+      )
+      .map(() => statement);
   });
-  if (options.length !== 3) return undefined;
-  return {
-    kind: 'size',
-    options,
-  };
-}
-
-function createFunctionsDrop(
-  config: Omit<FunctionsDropConfig, 'dropId' | 'metadataPathFormat'> & {
-    dropId: string;
-    metadataPathFormat?: MetadataPathFormat;
-  },
-): FunctionsDropConfig {
-  const {
-    stripeCheckoutEnabled: rawStripeCheckoutEnabled,
-    stripeProductTaxCode: rawStripeProductTaxCode,
-    ...baseConfig
-  } = config;
-  const normalizedDropId = normalizeDropId(config.dropId);
-  const normalizedDropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
-  const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
-  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
-  const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
-  const stripeCheckoutEnabled = resolveStripeCheckoutEnabled(rawStripeCheckoutEnabled, normalizedDropFamily);
-  const stripeCheckoutDisabledOverride =
-    rawStripeCheckoutEnabled === false && defaultStripeCheckoutEnabledForDropFamily(normalizedDropFamily);
-  if (stripeCheckoutEnabled && baseConfig.solanaCluster === 'mainnet-beta' && config.stripeLiveUnitAmountCents == null) {
-    throw new Error(\`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop \${normalizedDropId}\`);
+  const declaration = declarations[0];
+  if (
+    declarations.length !== 1 ||
+    declaration.getStart(sourceFile) < args.markerBounds.startLineEnd ||
+    declaration.end > args.markerBounds.endLineStart
+  ) {
+    throw new Error(
+      `Canonical deployment registry must contain exactly one DEPLOYMENT_DROPS export inside its generated markers: ${args.filePath}`,
+    );
   }
-  const stripeProductTaxCode =
-    String(rawStripeProductTaxCode || '').trim() ||
-    (stripeCheckoutEnabled ? defaultStripeProductTaxCodeForDropFamily(normalizedDropFamily) || '' : '');
-  return {
-    ...baseConfig,
-    dropId: normalizedDropId,
-    dropFamily: normalizedDropFamily,
-    metadataBase: normalizeDropBase(config.metadataBase),
-    metadataPathFormat,
-    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
-    ...(mintSelection ? { mintSelection } : {}),
-    ...(stripeCheckoutEnabled ? { stripeCheckoutEnabled: true } : stripeCheckoutDisabledOverride ? { stripeCheckoutEnabled: false } : {}),
-    ...(stripeProductTaxCode ? { stripeProductTaxCode } : {}),
-    figureNamePrefix: String(config.figureNamePrefix || '').trim() || 'figure',
-    discountMintsPerWallet: normalizeDiscountMintsPerWallet(config.discountMintsPerWallet),
-  };
-}
-
-${registrySection}
-
-${renderSharedProgramConfigPdaAssertion('FUNCTIONS_DROPS', 'Functions deployment config')}
-
-export function getFunctionsDrop(dropId: string): FunctionsDropConfig | undefined {
-  const normalizedDropId = normalizeDropId(dropId);
-  return FUNCTIONS_DROPS[normalizedDropId];
-}
-
-export function requireFunctionsDrop(dropId: string): FunctionsDropConfig {
-  const found = getFunctionsDrop(dropId);
-  if (!found) {
-    throw new Error(\`Unknown functions dropId: \${dropId}\`);
-  }
-  return found;
-}
-
-`;
 }
 
 function replaceMarkedSection(args: {
   filePath: string;
   existingContent: string;
-  startMarker: string;
-  endMarker: string;
   nextSection: string;
-}): string | undefined {
-  const start = args.existingContent.indexOf(args.startMarker);
-  const end = args.existingContent.indexOf(args.endMarker);
-  if (start === -1 && end === -1) return undefined;
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error(`Malformed auto-generated section markers in ${args.filePath}`);
+}): string {
+  const markerBounds = validateDeploymentRegistryMarkerLines({
+    filePath: args.filePath,
+    content: args.existingContent,
+  });
+  assertDeploymentDropsExportInsideMarkers({
+    filePath: args.filePath,
+    content: args.existingContent,
+    markerBounds,
+  });
+  const nextSection = args.nextSection.endsWith('\n')
+    ? args.nextSection
+    : `${args.nextSection}\n`;
+  return `${
+    args.existingContent.slice(0, markerBounds.startLineStart)
+  }${nextSection}${
+    args.existingContent.slice(markerBounds.endLineEnd)
+  }`;
+}
+
+function canonicalRegistryTemplatePath(): string {
+  return fileURLToPath(
+    new URL(
+      '../../functions/src/shared/deploymentRegistry.ts',
+      import.meta.url,
+    ),
+  );
+}
+
+export function renderDeploymentRegistryFile(args: {
+  drops: Record<string, DeploymentDropConfigSerialized>;
+}): string {
+  const templatePath = canonicalRegistryTemplatePath();
+  return renderDeploymentRegistryFileFromSource({
+    filePath: templatePath,
+    existingContent: readFileSync(templatePath, 'utf8'),
+    drops: args.drops,
+  });
+}
+
+export function renderDeploymentRegistryFileFromSource(args: {
+  filePath: string;
+  existingContent: string;
+  drops: Record<string, DeploymentDropConfigSerialized>;
+}): string {
+  const next = replaceMarkedSection({
+    filePath: args.filePath,
+    existingContent: args.existingContent,
+    nextSection: renderDeploymentRegistrySection({ drops: args.drops }),
+  });
+  return next.endsWith('\n') ? next : `${next}\n`;
+}
+
+export class DeploymentRegistryPostCommitVerificationError extends Error {
+  constructor(filePath: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Canonical deployment registry was durably committed, but post-commit verification failed for ${filePath}: ${detail}`,
+      { cause },
+    );
+    this.name = 'DeploymentRegistryPostCommitVerificationError';
   }
-
-  const sectionStart = args.existingContent.lastIndexOf('\n', start);
-  const prefixEnd = sectionStart === -1 ? 0 : sectionStart + 1;
-  const sectionEndLine = args.existingContent.indexOf('\n', end);
-  const suffixStart = sectionEndLine === -1 ? args.existingContent.length : sectionEndLine + 1;
-  const nextSection = args.nextSection.endsWith('\n') ? args.nextSection : `${args.nextSection}\n`;
-  return `${args.existingContent.slice(0, prefixEnd)}${nextSection}${args.existingContent.slice(suffixStart)}`;
 }
 
-function writeTextFileIfChanged(filePath: string, content: string): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const next = content.endsWith('\n') ? content : `${content}\n`;
-  const prev = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
-  if (prev === next) return;
-  writeFileSync(filePath, next, 'utf8');
+export function isDeploymentRegistryPostCommitVerificationError(
+  error: unknown,
+): error is DeploymentRegistryPostCommitVerificationError {
+  return error instanceof DeploymentRegistryPostCommitVerificationError;
 }
 
-export function writeFrontendDeploymentRegistryFile(args: {
+export function writeDeploymentRegistryFile(args: {
   filePath: string;
-  drops: Record<string, FrontendDropConfigSerialized>;
-}): void {
-  const prevContent = existsSync(args.filePath) ? readFileSync(args.filePath, 'utf8') : '';
-  const section = renderFrontendDeploymentRegistrySection({ drops: args.drops });
-  const content =
-    replaceMarkedSection({
-      filePath: args.filePath,
-      existingContent: prevContent,
-      startMarker: FRONTEND_DEPLOYMENT_REGISTRY_START,
-      endMarker: FRONTEND_DEPLOYMENT_REGISTRY_END,
-      nextSection: section,
-    }) || renderFrontendDeploymentRegistryFile({ drops: args.drops });
-  writeTextFileIfChanged(args.filePath, content);
+  expectedContent: string;
+  nextContent: string;
+}, ioOverrides: Partial<OptimisticTextFileWriteIo> = {}): void {
+  try {
+    writeOptimisticTextFile(
+      {
+        ...args,
+        targetLabel: 'canonical deployment registry',
+      },
+      ioOverrides,
+    );
+  } catch (error) {
+    if (isOptimisticTextFilePostCommitVerificationError(error)) {
+      throw new DeploymentRegistryPostCommitVerificationError(
+        args.filePath,
+        error.cause,
+      );
+    }
+    throw error;
+  }
 }
 
-export function writeFunctionsDeploymentRegistryFile(args: {
-  filePath: string;
-  drops: Record<string, FunctionsDropConfigSerialized>;
-}): void {
-  const prevContent = existsSync(args.filePath) ? readFileSync(args.filePath, 'utf8') : '';
-  const section = renderFunctionsDeploymentRegistrySection({ drops: args.drops });
-  const content =
-    replaceMarkedSection({
-      filePath: args.filePath,
-      existingContent: prevContent,
-      startMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_START,
-      endMarker: FUNCTIONS_DEPLOYMENT_REGISTRY_END,
-      nextSection: section,
-    }) || renderFunctionsDeploymentRegistryFile({ drops: args.drops });
-  writeTextFileIfChanged(args.filePath, content);
+export function asDeploymentDropConfigSerialized(
+  drop: DeploymentRegistryDrop,
+): DeploymentDropConfigSerialized {
+  const normalized = normalizeDeploymentDropForRegistry(drop);
+  if (!normalized) throw new Error('Invalid deployment registry drop');
+  return normalized;
 }

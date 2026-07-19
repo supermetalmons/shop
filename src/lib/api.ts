@@ -2,6 +2,7 @@ import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp, firestore } from './firebase';
 import {
   AdminIrlRedeemFinalizeResult,
@@ -13,8 +14,9 @@ import {
   FulfillmentOrdersCursor,
   InventoryItem,
   IssueReceiptsResult,
+  ListCardNft2UnrevealedCardsRequest,
+  ListCardNft2UnrevealedCardsResponse,
   PackStatusBreakdown,
-  PackStatusBreakdownItem,
   PackStatusDisplayLabels,
   PendingOpenBox,
   PreparedTxResponse,
@@ -22,17 +24,15 @@ import {
   ProfileAddress,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
+  StripeCheckoutSessionRequest,
+  StripeCheckoutSessionResponse,
   StripeReceiptClaimResult,
+  SubscribeToNotificationsRequest,
+  SubscribeToNotificationsResponse,
 } from '../types';
 import { getHeliusApiKey } from './helius';
 import { normalizeBoxDisplayImage, normalizeCertificateDisplayImage, normalizeFigureDisplayImage } from './dropContent';
 import { dropAssetLabel } from './dropLabels';
-import {
-  boxIdFromMetadataUri,
-  dudeIdFromMetadataUri,
-  metadataKindFromUri,
-  selectMetadataUri,
-} from './dropMetadataUri';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS, uniqueAssetGroupingCollectionMint } from './dasAssetCollections';
 import {
   FRONTEND_DROPS,
@@ -40,6 +40,39 @@ import {
   type FrontendDeploymentConfig,
   type SolanaCluster,
 } from '../config/deployment';
+import {
+  decodePendingOpenData,
+  normalizePendingOpenDudeCount,
+  PENDING_OPEN_BOX_DISCRIMINATOR,
+} from '../../functions/src/shared/pendingOpenCodec.ts';
+import {
+  PACK_STATUS_DEFAULT_CARDS_PER_PACK,
+  isPackStatusSupportedDropId,
+  normalizePackStatusAmount,
+  normalizePackStatusBreakdown,
+} from '../../functions/src/shared/packStatus.ts';
+import {
+  dasAssetBoxId,
+  dasAssetDudeId,
+  dasAssetKind,
+  dasAssetLooksBurntOrClosed,
+  dasAssetMetadataName,
+  type DasAsset,
+} from '../../functions/src/shared/dasAsset.ts';
+import {
+  heliusSearchAssetsHasNextPage,
+  heliusSearchAssetsItems,
+} from '../../functions/src/shared/heliusDas.ts';
+import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
+
+export type {
+  ListCardNft2UnrevealedCardsRequest,
+  ListCardNft2UnrevealedCardsResponse,
+  StripeCheckoutSessionRequest,
+  StripeCheckoutSessionResponse,
+  SubscribeToNotificationsRequest,
+  SubscribeToNotificationsResponse,
+} from '../types';
 
 const region = FIREBASE_FUNCTIONS_REGION;
 const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
@@ -88,25 +121,6 @@ const DEBUG_FUNCTIONS =
   import.meta.env?.DEV ||
   (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugFunctions') === '1');
 
-function summarizeValue(value: unknown) {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return `array(${value.length})`;
-  if (typeof value === 'string') return `string(${value.length})`;
-  return typeof value;
-}
-
-function summarizePayload(payload: unknown) {
-  if (!payload || typeof payload !== 'object') return { type: summarizeValue(payload) };
-  const obj = payload as Record<string, unknown>;
-  const allKeys = Object.keys(obj);
-  const keys = allKeys.slice(0, 30);
-  const types: Record<string, string> = {};
-  keys.forEach((k) => {
-    types[k] = summarizeValue(obj[k]);
-  });
-  return { keys, types, truncated: allKeys.length > keys.length };
-}
-
 function summarizeError(err: unknown) {
   const anyErr = err as any;
   if (anyErr && typeof anyErr === 'object') {
@@ -138,7 +152,7 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
       : (basePayload as Req);
 
   if (DEBUG_FUNCTIONS) {
-    console.info(`[mons/functions] → ${name}`, { callId, payload: summarizePayload(payload) });
+    console.info(`[mons/functions] → ${name}`, { callId, payload: summarizePayloadShape(payload) });
   }
 
   try {
@@ -147,7 +161,7 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
       console.info(`[mons/functions] ← ${name}`, {
         callId,
         ms: Date.now() - startedAt,
-        data: summarizePayload(result.data),
+        data: summarizePayloadShape(result.data),
       });
     }
     return result.data;
@@ -163,8 +177,6 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 }
 
 const heliusApiKey = getHeliusApiKey();
-const MIN_OPENABLE_ITEMS_PER_BOX = 1;
-const MAX_ITEMS_PER_BOX = 5;
 const HELIUS_SEARCH_ASSETS_LIMIT = 1000;
 const HELIUS_SEARCH_ASSETS_MAX_PAGES = 50;
 
@@ -189,25 +201,6 @@ type PendingOpenRecordCandidate = {
 
 export type DropFetchOptions = {
   includeDevnet?: boolean;
-};
-
-export type ListCardNft2UnrevealedCardsRequest = {
-  limit?: number;
-  cursor?: number;
-};
-
-export type ListCardNft2UnrevealedCardsResponse = {
-  ids: number[];
-  nextCursor?: number;
-  hasMore: boolean;
-};
-
-export type SubscribeToNotificationsRequest = {
-  email: string;
-};
-
-export type SubscribeToNotificationsResponse = {
-  subscribed: true;
 };
 
 const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS)
@@ -367,8 +360,14 @@ export function rememberPendingOpenDropId(solanaCluster: SolanaCluster, boxAsset
   setPendingOpenDropIdCache(solanaCluster, boxAssetId, drop.dropId);
 }
 
-type DasAsset = Record<string, any>;
 const ASSET_DROP_ID_FIELD = '__monsDropId';
+const FRONTEND_DAS_NAME_POLICY = { metadataNameMode: 'string-only' } as const;
+const FRONTEND_DAS_BURN_POLICY = {
+  missingAssetResult: false,
+  nonBooleanFlagIsBurnt: true,
+  includeAlternateFlagNames: false,
+  includeOwnershipState: false,
+} as const;
 
 type HeliusSearchAssetsContext = {
   cluster: SolanaCluster;
@@ -376,113 +375,15 @@ type HeliusSearchAssetsContext = {
   mode: 'grouped';
 };
 
-function heliusSearchAssetsItems(result: any): DasAsset[] {
-  return Array.isArray(result?.items) ? result.items : [];
-}
-
-function heliusSearchAssetsHasNextPage(result: any, page: number, items: DasAsset[], fallbackLimit: number): boolean {
-  if (!items.length) return false;
-  const responseLimit = Number(result?.limit);
-  const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : fallbackLimit;
-  if (items.length < limit) return false;
-
-  const total = Number(result?.total);
-  const resultPage = Number(result?.page ?? page);
-  if (Number.isFinite(total) && total >= 0 && Number.isFinite(resultPage)) {
-    return resultPage * limit < total;
-  }
-
-  return true;
-}
-
-function readU32(buf: Uint8Array, offset: number): number {
-  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset, true);
-}
-
-function readU64(buf: Uint8Array, offset: number): bigint {
-  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigUint64(offset, true);
-}
-
-// Anchor discriminator = sha256("account:PendingOpenBox")[0..8]
-const ACCOUNT_PENDING_OPEN_BOX = Uint8Array.from([0x45, 0x07, 0x45, 0x1a, 0xf0, 0x0c, 0x43, 0xa1]);
-// base58(ACCOUNT_PENDING_OPEN_BOX)
-const ACCOUNT_PENDING_OPEN_BOX_B58 = 'CYfPji7s3EQ';
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
-function normalizeOpenableItemsPerBox(value: unknown): number | null {
-  const count = Number(value);
-  return Number.isInteger(count) && count >= MIN_OPENABLE_ITEMS_PER_BOX && count <= MAX_ITEMS_PER_BOX ? count : null;
-}
-
-function pendingOpenLegacyFixedLen(itemsPerBox: number): number {
-  return 8 + 32 + 32 + 32 * itemsPerBox + 8 + 1;
-}
+const ACCOUNT_PENDING_OPEN_BOX_B58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
 
 function pendingOpenRecordCandidateItemCounts(scope: Pick<PendingOpenProgramScope, 'drops'>): number[] {
   const counts = new Set<number>();
   scope.drops.forEach((drop) => {
-    const count = normalizeOpenableItemsPerBox(drop.itemsPerBox);
+    const count = normalizePendingOpenDudeCount(drop.itemsPerBox);
     if (count != null) counts.add(count);
   });
   return Array.from(counts).sort((a, b) => a - b);
-}
-
-function decodeLegacyFixedPendingOpenPayload(
-  buf: Uint8Array,
-  itemsPerBox: number,
-): { dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
-  if (buf.length !== pendingOpenLegacyFixedLen(itemsPerBox)) return null;
-  const dudeAssetIds: string[] = [];
-  let o = 8 + 32 + 32;
-  for (let i = 0; i < itemsPerBox; i += 1) {
-    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
-    o += 32;
-  }
-  const createdSlotBig = readU64(buf, o);
-  o += 8 + 1; // slot + bump
-  if (o !== buf.length) return null;
-  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
-  return {
-    dudeAssetIds,
-    ...(createdSlot != null ? { createdSlot } : {}),
-  };
-}
-
-function decodeVecPendingOpenPayload(buf: Uint8Array): { dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
-  if (buf.length < 8 + 32 + 32 + 4 + 8 + 1) return null;
-  const dudeAssetIds: string[] = [];
-  let o = 8 + 32 + 32;
-  const dudeCount = readU32(buf, o);
-  o += 4;
-  if (buf.length < 8 + 32 + 32 + 4 + 32 * dudeCount + 8 + 1) return null;
-  for (let i = 0; i < dudeCount; i += 1) {
-    dudeAssetIds.push(new PublicKey(buf.subarray(o, o + 32)).toBase58());
-    o += 32;
-  }
-
-  const createdSlotBig = readU64(buf, o);
-  o += 8;
-  o += 1; // bump
-  const createdSlot = createdSlotBig <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(createdSlotBig) : undefined;
-  let configPda: string | undefined;
-  if (o < buf.length) {
-    const trailing = buf.length - o;
-    if (trailing !== 32) return null;
-    configPda = new PublicKey(buf.subarray(o, o + 32)).toBase58();
-  }
-
-  return {
-    dudeAssetIds,
-    ...(createdSlot != null ? { createdSlot } : {}),
-    ...(configPda ? { configPda } : {}),
-  };
 }
 
 export function decodePendingOpenRecordData(
@@ -490,20 +391,27 @@ export function decodePendingOpenRecordData(
   scope: Pick<PendingOpenProgramScope, 'drops'>,
 ): { owner: string; boxAssetId: string; dudeAssetIds: string[]; createdSlot?: number; configPda?: string } | null {
   const buf = Uint8Array.from(data);
-  if (buf.length < 8 + 32 + 32 + 8 + 1) return null;
-  if (!bytesEqual(buf.subarray(0, 8), ACCOUNT_PENDING_OPEN_BOX)) return null;
-
-  const owner = new PublicKey(buf.subarray(8, 8 + 32)).toBase58();
-  const boxAssetId = new PublicKey(buf.subarray(8 + 32, 8 + 32 + 32)).toBase58();
-
-  const itemCounts = pendingOpenRecordCandidateItemCounts(scope);
-  for (const count of itemCounts) {
-    const legacy = decodeLegacyFixedPendingOpenPayload(buf, count);
-    if (legacy) return { owner, boxAssetId, ...legacy };
+  try {
+    const decoded = decodePendingOpenData(buf, {
+      legacyDudeCounts: pendingOpenRecordCandidateItemCounts(scope),
+    });
+    const createdSlot =
+      decoded.createdSlot <= BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number(decoded.createdSlot)
+        : undefined;
+    const configPda = decoded.config
+      ? new PublicKey(decoded.config).toBase58()
+      : undefined;
+    return {
+      owner: new PublicKey(decoded.owner).toBase58(),
+      boxAssetId: new PublicKey(decoded.boxAsset).toBase58(),
+      dudeAssetIds: decoded.dudeAssets.map((asset) => new PublicKey(asset).toBase58()),
+      ...(createdSlot != null ? { createdSlot } : {}),
+      ...(configPda ? { configPda } : {}),
+    };
+  } catch {
+    return null;
   }
-
-  const vec = decodeVecPendingOpenPayload(buf);
-  return vec ? { owner, boxAssetId, ...vec } : null;
 }
 
 function heliusRpcUrl(cluster: SolanaCluster) {
@@ -517,7 +425,7 @@ async function heliusRpc<T>(cluster: SolanaCluster, method: string, params: unkn
   const url = heliusRpcUrl(cluster);
   const body = { jsonrpc: '2.0', id: method, method, params };
   if (DEBUG_FUNCTIONS) {
-    console.info('[mons/helius] →', method, { cluster, params: summarizePayload(params) });
+    console.info('[mons/helius] →', method, { cluster, params: summarizePayloadShape(params) });
   }
   const res = await fetch(url, {
     method: 'POST',
@@ -531,7 +439,7 @@ async function heliusRpc<T>(cluster: SolanaCluster, method: string, params: unkn
       ms: Date.now() - startedAt,
       ok: res.ok,
       status: res.status,
-      ...(json?.error ? { error: summarizeError(json?.error) } : { result: summarizePayload(json?.result) }),
+      ...(json?.error ? { error: summarizeError(json?.error) } : { result: summarizePayloadShape(json?.result) }),
     });
   }
   if (!res.ok || (json as any)?.error) {
@@ -566,7 +474,7 @@ async function fetchHeliusSearchAssetPages(
       return out;
     }
 
-    const items = heliusSearchAssetsItems(result);
+    const items = heliusSearchAssetsItems<DasAsset>(result);
     out.push(...items);
     if (!heliusSearchAssetsHasNextPage(result, page, items, limit)) return out;
   }
@@ -579,52 +487,18 @@ async function fetchHeliusSearchAssetPages(
 }
 
 function getAssetKind(asset: DasAsset): InventoryItem['kind'] | null {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'type');
-  const value = kindAttr?.value;
-  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
-
-  const uri = assetMetadataUri(asset);
-  const kindFromUri = metadataKindFromUri(uri);
-  if (kindFromUri) return kindFromUri;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
-  if (lowerName.includes('blind box')) return 'box';
-  if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
-  if (lowerName.includes('figure')) return 'dude';
-
-  // New compact on-chain metadata: allow very short names like `b123` or `box123`.
-  const compact = lowerName.replace(/\s+/g, '');
-  if (/^(b|box)#?\d+$/.test(compact)) return 'box';
-  return null;
+  return dasAssetKind(asset, FRONTEND_DAS_NAME_POLICY);
 }
 
 function getBoxIdFromAsset(asset: DasAsset): string | undefined {
-  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'box_id');
-  const value = boxAttr?.value;
-  if (typeof value === 'string' && value) return value;
-
-  const uri = assetMetadataUri(asset);
-  const uriBoxId = boxIdFromMetadataUri(uri);
-  if (uriBoxId) return uriBoxId;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
-  const match = normalized.match(/^(b|box)#?(\d+)$/);
-  if (match?.[2]) return match[2];
-  return undefined;
+  return dasAssetBoxId(asset, FRONTEND_DAS_NAME_POLICY);
 }
 
 function getDudeIdFromAsset(asset: DasAsset): number | undefined {
-  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'dude_id');
-  const num = Number(dudeAttr?.value);
-  if (Number.isFinite(num)) return num;
-
-  const uri = assetMetadataUri(asset);
-  const idFromUri = dudeIdFromMetadataUri(uri);
-  if (typeof idFromUri === 'number') return idFromUri;
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  if (typeof name === 'string' && name) {
+  const decodedId = dasAssetDudeId(asset);
+  if (decodedId != null) return decodedId;
+  const name = dasAssetMetadataName(asset);
+  if (name) {
     const match = name.match(/(?:figure|dude)\s*#?\s*(\d+)/i);
     const n = Number(match?.[1]);
     if (Number.isFinite(n)) return n;
@@ -632,30 +506,8 @@ function getDudeIdFromAsset(asset: DasAsset): number | undefined {
   return undefined;
 }
 
-function assetMetadataUri(asset: DasAsset): string {
-  return selectMetadataUri(
-    asset?.content?.json_uri,
-    asset?.content?.jsonUri,
-    asset?.content?.metadata?.json_uri,
-    asset?.content?.metadata?.jsonUri,
-    asset?.content?.metadata?.uri,
-  );
-}
-
 function isBurntAsset(asset: DasAsset): boolean {
-  const anyAsset = asset as any;
-  const burnt =
-    anyAsset?.burnt ??
-    anyAsset?.burned ??
-    anyAsset?.compression?.burnt ??
-    anyAsset?.compression?.burned ??
-    anyAsset?.ownership?.burnt ??
-    anyAsset?.ownership?.burned;
-
-  if (burnt === true) return true;
-  // Some APIs return a non-boolean marker (slot/object). Treat any defined, non-false value as burnt.
-  if (burnt != null && burnt !== false) return true;
-  return false;
+  return dasAssetLooksBurntOrClosed(asset, FRONTEND_DAS_BURN_POLICY);
 }
 
 function resolveSingleDropRuntime(
@@ -875,7 +727,7 @@ async function fetchAssetsOwned(owner: string, options?: DropFetchOptions): Prom
         try {
           // Ungrouped search scans the owner's whole wallet; keep this fallback bounded.
           const ungrouped = await heliusRpc<any>(drop.solanaCluster, 'searchAssets', { ...baseParams, page: 1 });
-          const ungroupedItems = heliusSearchAssetsItems(ungrouped);
+          const ungroupedItems = heliusSearchAssetsItems<DasAsset>(ungrouped);
           ungroupedByCluster.set(drop.solanaCluster, ungroupedItems);
         } catch (err) {
           console.warn('[mons/helius] ungrouped search failed', {
@@ -1012,19 +864,6 @@ export async function saveEncryptedAddress(
   >('saveAddress', { encrypted, country, countryCode, hint, email });
 }
 
-type StripeCheckoutSessionRequest = {
-  dropId: string;
-  variantKey?: string;
-  quantity?: number;
-  returnUrl?: string;
-};
-
-type StripeCheckoutSessionResponse = {
-  id: string;
-  url: string;
-  livemode?: boolean;
-};
-
 function stripeCheckoutRequestQuantity(quantity: StripeCheckoutSessionRequest['quantity']): number | undefined {
   if (quantity === undefined) return undefined;
   if (!Number.isInteger(quantity) || quantity < 1) {
@@ -1057,35 +896,18 @@ export async function createStripeCheckoutSession(args: StripeCheckoutSessionReq
   );
 }
 
-function normalizePackStatusAmount(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
-}
-
-const PACK_STATUS_DEFAULT_CARDS_PER_PACK = 3;
-
-type PackStatusFrontendConfig = {
-  unsealedLabel: string;
-};
-
-const PACK_STATUS_FRONTEND_CONFIGS_BY_DROP_ID: Record<string, PackStatusFrontendConfig> = {
-  card_nft_2: {
-    unsealedLabel: 'Unpacked',
-  },
-  poncho_drifella: {
-    unsealedLabel: 'Unpacked',
-  },
-  little_swag_boxes: {
-    unsealedLabel: 'Unboxed',
-  },
-};
-
-function packStatusFrontendConfigForDropId(dropId: string): PackStatusFrontendConfig | null {
+function packStatusFrontendDropForDropId(dropId: string): FrontendDeploymentConfig | null {
   const normalizedDropId = normalizeDropId(dropId);
-  const config = PACK_STATUS_FRONTEND_CONFIGS_BY_DROP_ID[normalizedDropId];
   const drop = FRONTEND_DROPS[normalizedDropId];
-  if (!config || !drop || drop.solanaCluster !== 'mainnet-beta' || normalizePackStatusAmount(drop.itemsPerBox) <= 0) return null;
-  return config;
+  if (
+    !isPackStatusSupportedDropId(normalizedDropId) ||
+    !drop ||
+    drop.solanaCluster !== 'mainnet-beta' ||
+    normalizePackStatusAmount(drop.itemsPerBox) <= 0
+  ) {
+    return null;
+  }
+  return drop;
 }
 
 function packStatusCardsPerPackForDropId(dropId: string): number {
@@ -1098,7 +920,7 @@ export function packStatusDisplayLabelsForDropId(dropId: string | undefined): Pa
   if (!dropId) return null;
   const normalizedDropId = normalizeDropId(dropId);
   const drop = FRONTEND_DROPS[normalizedDropId];
-  if (!drop || !packStatusFrontendConfigForDropId(normalizedDropId)) return null;
+  if (!drop || !packStatusFrontendDropForDropId(normalizedDropId)) return null;
   return {
     itemColumnLabel: dropAssetLabel(drop, 'figure', 2, { capitalize: true }),
     ariaLabel: `${dropAssetLabel(drop, 'figure', 1, { capitalize: true })} status`,
@@ -1106,65 +928,7 @@ export function packStatusDisplayLabelsForDropId(dropId: string | undefined): Pa
 }
 
 export function supportsFrontendPackStatus(dropId: string | undefined): boolean {
-  return Boolean(dropId && packStatusFrontendConfigForDropId(dropId));
-}
-
-function packStatusPercentage(amount: number, total: number): number {
-  if (total <= 0) return 0;
-  return Math.round((amount / total) * 10_000) / 100;
-}
-
-function packStatusItem(
-  key: PackStatusBreakdownItem['key'],
-  label: string,
-  amount: number,
-  total: number,
-): PackStatusBreakdownItem {
-  return {
-    key,
-    label,
-    amount,
-    percentage: key === 'total' && total > 0 ? 100 : packStatusPercentage(amount, total),
-  };
-}
-
-function normalizePackStatusBreakdown(raw: any, dropId: string): PackStatusBreakdown | null {
-  if (!raw || typeof raw !== 'object') return null;
-  if (normalizePackStatusAmount(raw.version) !== 1) return null;
-  if (typeof raw.dropId === 'string' && raw.dropId && raw.dropId !== dropId) return null;
-  const totalInitialSupply = normalizePackStatusAmount(raw.totalInitialSupply);
-  if (totalInitialSupply <= 0) return null;
-  const config = packStatusFrontendConfigForDropId(dropId);
-  const cardsPerPack = normalizePackStatusAmount(raw.cardsPerPack) || packStatusCardsPerPackForDropId(dropId);
-  const totalCards = normalizePackStatusAmount(raw.totalCards) || totalInitialSupply * cardsPerPack;
-  const total = totalCards;
-  const unsealedOnline = normalizePackStatusAmount(raw.unsealedOnline);
-  const unsealedCards = unsealedOnline * cardsPerPack;
-  const redeemedIrlNormal = normalizePackStatusAmount(raw.redeemedIrlNormal);
-  const redeemedIrlStripe = normalizePackStatusAmount(raw.redeemedIrlStripe);
-  const redeemedUnsealedCards = normalizePackStatusAmount(raw.redeemedUnsealedCards);
-  const redeemedIrl = redeemedIrlNormal + redeemedIrlStripe;
-  const redeemedCards = redeemedIrl * cardsPerPack + redeemedUnsealedCards;
-  const items: PackStatusBreakdownItem[] = [
-    packStatusItem('unsealed', config?.unsealedLabel || 'Unpacked', unsealedCards, total),
-    packStatusItem('redeemed', 'Redeemed', redeemedCards, total),
-    packStatusItem('total', 'Total', total, total),
-  ];
-  return {
-    dropId,
-    total,
-    totalInitialSupply,
-    totalCards,
-    cardsPerPack,
-    unsealedOnline,
-    unsealedCards,
-    redeemedIrl,
-    redeemedIrlNormal,
-    redeemedIrlStripe,
-    redeemedUnsealedCards,
-    redeemedCards,
-    items,
-  };
+  return Boolean(dropId && packStatusFrontendDropForDropId(dropId));
 }
 
 export async function getDropPackStatus(dropId: string): Promise<PackStatusBreakdown | null> {
@@ -1174,7 +938,11 @@ export async function getDropPackStatus(dropId: string): Promise<PackStatusBreak
   await ensureAuthenticated();
   const snap = await getDoc(doc(firestore, 'drops', normalizedDropId, 'meta', 'packStatus'));
   if (!snap.exists()) return null;
-  return normalizePackStatusBreakdown(snap.data(), normalizedDropId);
+  return normalizePackStatusBreakdown(
+    snap.data(),
+    normalizedDropId,
+    packStatusCardsPerPackForDropId(normalizedDropId),
+  );
 }
 
 export async function listFulfillmentOrders(args: {

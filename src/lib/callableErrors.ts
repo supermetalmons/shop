@@ -1,3 +1,5 @@
+import { normalizeCallableErrorCode } from '../../functions/src/shared/callableErrorCode';
+
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -13,7 +15,7 @@ type RetryWithBackoffOptions = {
 export function isRetryableCallableError(err: unknown): boolean {
   const anyErr = err as any;
   const code = typeof anyErr?.code === 'string' ? anyErr.code : '';
-  const normalized = code.startsWith('functions/') ? code.slice('functions/'.length) : code;
+  const normalized = normalizeCallableErrorCode(code);
 
   if (
     normalized === 'unavailable' ||

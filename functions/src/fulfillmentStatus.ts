@@ -1,13 +1,5 @@
-export const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
-
-export type FulfillmentStatus = (typeof FULFILLMENT_STATUS_OPTIONS)[number];
-
-const FULFILLMENT_STATUS_SET = new Set<string>(FULFILLMENT_STATUS_OPTIONS);
-
-function isFulfillmentStatus(value: unknown): value is FulfillmentStatus {
-  return typeof value === 'string' && FULFILLMENT_STATUS_SET.has(value);
-}
-
-export function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | undefined {
-  return isFulfillmentStatus(value) ? value : undefined;
-}
+export {
+  FULFILLMENT_STATUS_OPTIONS,
+  normalizeFulfillmentStatus,
+} from './shared/fulfillmentStatus.js';
+export type { FulfillmentStatus } from './shared/fulfillmentStatus.js';

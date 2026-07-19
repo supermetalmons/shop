@@ -4,6 +4,7 @@ import { PublicKey } from '@solana/web3.js';
 import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
 import { encodeFinalizeOpenBoxArgs } from '../functions/src/finalizeOpenBoxArgs.ts';
 import { ACCOUNT_PENDING_OPEN_BOX, decodePendingOpenBox } from '../functions/src/pendingOpenBox.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import { decodePendingOpenRecordData } from '../src/lib/api.ts';
 
@@ -41,7 +42,7 @@ function liveOpenableFrontendDrop(dropId: string) {
 function configPdaForDrop(drop: { boxMinterProgramId: string; boxMinterConfigPda?: string }): PublicKey {
   return drop.boxMinterConfigPda
     ? pk(drop.boxMinterConfigPda)
-    : PublicKey.findProgramAddressSync([Buffer.from('config')], pk(drop.boxMinterProgramId))[0];
+    : PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], pk(drop.boxMinterProgramId))[0];
 }
 
 function buildVecPendingRecord(args: {

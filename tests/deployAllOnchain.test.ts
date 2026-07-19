@@ -6,7 +6,8 @@ import path from 'node:path';
 import { PublicKey } from '@solana/web3.js';
 import {
   assertMplCoreCollectionHasUpdateDelegates,
-  commitDeploymentRegistryPair,
+  commitDeploymentRegistry,
+  decodeBoxMinterConfigForDeployPreflight,
   decodeMplCoreCollectionUpdateDelegates,
   finalizeDiscountMerkleAndDeploymentRegistry,
   formatFreshProgramKeypairNotice,
@@ -15,10 +16,17 @@ import {
   revalidateReusableProgramResolution,
   validateDiscountMerkleDatasetForDeploy,
 } from '../scripts/deploy-all-onchain.ts';
+import { BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS } from '../functions/src/shared/boxMinterConfigCodec.ts';
 import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
 import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
 import { NEW_DROP as LITTLE_SWAG_HOODIES_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies.ts';
 import { NEW_DROP as LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies_devnet.ts';
+import {
+  DeploymentRegistryPostCommitVerificationError,
+  isDeploymentRegistryPostCommitVerificationError,
+  type DeploymentDropConfigSerialized,
+} from '../scripts/shared/deploymentRegistry.ts';
+import { loadNewDropConfigById } from '../scripts/shared/newDropLoader.ts';
 
 function u8(value: number): Buffer {
   return Buffer.from([value & 0xff]);
@@ -45,15 +53,29 @@ function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
 }
 
+test('deploy config decoding preserves its size error and ownership-gated discriminator policy', () => {
+  assert.throws(
+    () =>
+      decodeBoxMinterConfigForDeployPreflight(
+        Buffer.alloc(BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS - 1),
+      ),
+    new RegExp(
+      `expected config account size >= ${BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS} bytes`,
+    ),
+  );
+
+  const decoded = decodeBoxMinterConfigForDeployPreflight(
+    Buffer.alloc(BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS),
+  );
+  assert.equal(decoded.itemsPerBox, 0);
+  assert.equal(decoded.admin.toBase58(), PublicKey.default.toBase58());
+});
+
 function makeDiscountMerkleFinalizationFixture() {
   const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-proof-finalization-'));
   const root = Buffer.alloc(32, 7);
   const rootHex = root.toString('hex');
   const proofs = { [pubkey(90).toBase58()]: [] };
-  const frontendConfigPath = path.join(rootDir, 'frontend.mjs');
-  const functionsConfigPath = path.join(rootDir, 'functions.mjs');
-  writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = {};\n', 'utf8');
-  writeFileSync(functionsConfigPath, 'export const FUNCTIONS_DROPS = {};\n', 'utf8');
   return {
     rootDir,
     root,
@@ -61,8 +83,6 @@ function makeDiscountMerkleFinalizationFixture() {
     proofs,
     payload: `${JSON.stringify({ root: rootHex, proofs }, null, 2)}\n`,
     filePath: path.join(rootDir, 'default.json'),
-    frontendConfigPath,
-    functionsConfigPath,
   };
 }
 
@@ -97,19 +117,12 @@ function makeDeploymentCleanupRuntime() {
   };
 }
 
-type DeploymentRegistryTestDrop = {
-  dropId: string;
-  solanaCluster: 'devnet';
-  dropFamily: string;
-  metadataPathFormat: 'legacy' | 'compact';
-  discountMerkleRoot: string;
-  boxMinterProgramId: string;
-};
+type DeploymentRegistryTestDrop = DeploymentDropConfigSerialized;
 
 function deploymentRegistryTestDrop(args: {
   dropId: string;
   programId: string;
-  dropFamily?: string;
+  dropFamily?: DeploymentDropConfigSerialized['dropFamily'];
   metadataPathFormat?: 'legacy' | 'compact';
   discountMerkleRoot?: string;
 }): DeploymentRegistryTestDrop {
@@ -117,39 +130,56 @@ function deploymentRegistryTestDrop(args: {
     dropId: args.dropId,
     solanaCluster: 'devnet',
     dropFamily: args.dropFamily || 'default',
+    collectionName: args.dropId,
+    metadataBase: `https://assets.example.com/drops/${args.dropId}`,
     metadataPathFormat: args.metadataPathFormat || 'compact',
+    treasury: pubkey(10).toBase58(),
+    priceSol: 1,
+    discountPriceSol: 0.5,
+    discountMintsPerWallet: 1,
     discountMerkleRoot: args.discountMerkleRoot || '11'.repeat(32),
+    maxSupply: 10,
+    itemsPerBox: 1,
+    maxPerTx: 5,
+    namePrefix: 'box',
+    figureNamePrefix: 'figure',
+    symbol: 'mons',
     boxMinterProgramId: args.programId,
+    collectionMint: pubkey(11).toBase58(),
+    receiptsMerkleTree: pubkey(12).toBase58(),
+    deliveryLookupTable: pubkey(13).toBase58(),
   };
 }
 
 function makeDeploymentRegistryFixture(
-  frontendDrops: DeploymentRegistryTestDrop[],
-  functionsDrops: DeploymentRegistryTestDrop[] = frontendDrops,
+  drops: DeploymentRegistryTestDrop[],
 ) {
   const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-deploy-registry-'));
-  const frontendConfigPath = path.join(rootDir, 'src', 'config', 'deployment.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions', 'src', 'config', 'deployment.ts');
-  mkdirSync(path.dirname(frontendConfigPath), { recursive: true });
-  mkdirSync(path.dirname(functionsConfigPath), { recursive: true });
-
-  const writeDrops = (
-    nextFrontendDrops: DeploymentRegistryTestDrop[],
-    nextFunctionsDrops: DeploymentRegistryTestDrop[] = nextFrontendDrops,
-  ) => {
-    writeFileSync(
-      frontendConfigPath,
-      `export const FRONTEND_DROPS = ${JSON.stringify(Object.fromEntries(nextFrontendDrops.map((drop) => [drop.dropId, drop])))};\n`,
-      'utf8',
+  const registryPath = path.join(
+    rootDir,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  mkdirSync(path.dirname(registryPath), { recursive: true });
+  const writeDrops = (nextDrops: DeploymentRegistryTestDrop[]) => {
+    const serialized = JSON.stringify(
+      Object.fromEntries(nextDrops.map((drop) => [drop.dropId, drop])),
     );
     writeFileSync(
-      functionsConfigPath,
-      `export const FUNCTIONS_DROPS = ${JSON.stringify(Object.fromEntries(nextFunctionsDrops.map((drop) => [drop.dropId, drop])))};\n`,
+      registryPath,
+      [
+        '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
+        `export const DEPLOYMENT_DROPS = ${serialized};`,
+        '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
+        '',
+      ].join('\n'),
       'utf8',
     );
   };
-  writeDrops(frontendDrops, functionsDrops);
-  return { rootDir, frontendConfigPath, functionsConfigPath, writeDrops };
+  writeDrops(drops);
+  return { rootDir, registryPath, writeDrops };
 }
 
 async function captureRejection(action: () => Promise<unknown>): Promise<unknown> {
@@ -160,6 +190,69 @@ async function captureRejection(action: () => Promise<unknown>): Promise<unknown
   }
   assert.fail('Expected promise to reject');
 }
+
+test('new-drop loading validates IDs before path traversal or module import', async (t) => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-new-drop-loader-'));
+  t.after(() => rmSync(rootDir, { recursive: true, force: true }));
+  const configsDir = path.join(rootDir, 'scripts', 'newDrops');
+  mkdirSync(configsDir, { recursive: true });
+  writeFileSync(
+    path.join(configsDir, 'constructor.ts'),
+    "throw new Error('unsafe config module was imported');\n",
+    'utf8',
+  );
+
+  for (const dropId of [
+    'constructor',
+    '../outside',
+    'bad id',
+    'a'.repeat(65),
+  ]) {
+    await assert.rejects(
+      loadNewDropConfigById({ root: rootDir, dropId }),
+      /Invalid requested dropId/,
+      dropId,
+    );
+  }
+
+  const boundaryDropId = `a${'b'.repeat(63)}`;
+  writeFileSync(
+    path.join(configsDir, `${boundaryDropId}.ts`),
+    `export const NEW_DROP = {
+      shared: {},
+      deploy: {},
+      onchain: { dropId: '${boundaryDropId}' },
+    };\n`,
+    'utf8',
+  );
+  const loaded = await loadNewDropConfigById({
+    root: rootDir,
+    dropId: boundaryDropId.toUpperCase(),
+  });
+  assert.equal(loaded.config.onchain.dropId, boundaryDropId);
+  assert.equal(loaded.configPath, path.join(configsDir, `${boundaryDropId}.ts`));
+});
+
+test('new-drop loading rejects an unsafe configured ID after loading a safe file', async (t) => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-new-drop-config-'));
+  t.after(() => rmSync(rootDir, { recursive: true, force: true }));
+  const configsDir = path.join(rootDir, 'scripts', 'newDrops');
+  mkdirSync(configsDir, { recursive: true });
+  writeFileSync(
+    path.join(configsDir, 'safe_file.ts'),
+    `export const NEW_DROP = {
+      shared: {},
+      deploy: {},
+      onchain: { dropId: 'constructor' },
+    };\n`,
+    'utf8',
+  );
+
+  await assert.rejects(
+    loadNewDropConfigById({ root: rootDir, dropId: 'safe_file' }),
+    /Invalid NEW_DROP\.onchain\.dropId/,
+  );
+});
 
 test('deploy discount Merkle preflight reuses an exact family dataset', async (t) => {
   const root = Buffer.alloc(32, 7);
@@ -493,184 +586,127 @@ test('discount Merkle finalization rejects a conflicting pre-existing proof befo
   assert.equal(readFileSync(fixture.filePath, 'utf8'), existingSource);
 });
 
-test('paired registry commit restores an existing frontend registry when the Functions commit fails', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
+test('canonical registry commit keeps durable bytes when verification reading fails', async (t) => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-commit-'));
   t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  const frontendBefore = 'export const FRONTEND_DROPS = { before: true };\n';
-  const functionsBefore = 'export const FUNCTIONS_DROPS = { before: true };\n';
-  writeFileSync(frontendConfigPath, frontendBefore, 'utf8');
-  writeFileSync(functionsConfigPath, functionsBefore, 'utf8');
-  const commitError = new Error('functions registry commit failed');
+  const registryPath = path.join(rootDir, 'deploymentRegistry.ts');
+  const before = 'export const DEPLOYMENT_DROPS = { before: true };\n';
+  const written = 'export const DEPLOYMENT_DROPS = { after: true };\n';
+  writeFileSync(registryPath, before, 'utf8');
+  const verificationError = new Error('verification read failed');
+  let snapshotCalls = 0;
 
   const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      commitFrontend: () => {
-        writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = { after: true };\n', 'utf8');
-        return frontendConfigPath;
+    commitDeploymentRegistry(
+      {
+        registryPath,
+        expectedSnapshot: { exists: true, content: before },
+        expectedWrittenSnapshot: { exists: true, content: written },
       },
-      commitFunctions: () => {
-        throw commitError;
+      {
+        snapshot(filePath) {
+          snapshotCalls += 1;
+          if (snapshotCalls === 2) throw verificationError;
+          return {
+            exists: true,
+            content: readFileSync(filePath, 'utf8'),
+          };
+        },
       },
-    }),
+    ),
   );
 
-  assert.strictEqual(rejected, commitError);
-  assert.equal(readFileSync(frontendConfigPath, 'utf8'), frontendBefore);
-  assert.equal(readFileSync(functionsConfigPath, 'utf8'), functionsBefore);
+  assert.equal(
+    isDeploymentRegistryPostCommitVerificationError(rejected),
+    true,
+  );
+  assert.equal(
+    rejected instanceof DeploymentRegistryPostCommitVerificationError,
+    true,
+  );
+  assert.strictEqual(
+    (rejected as DeploymentRegistryPostCommitVerificationError).cause,
+    verificationError,
+  );
+  assert.equal(snapshotCalls, 2);
+  assert.equal(readFileSync(registryPath, 'utf8'), written);
 });
 
-test('paired registry commit restores a frontend mutation when its callback throws', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
+test('canonical registry verification preserves a concurrent post-write change', async (t) => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-commit-'));
   t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  const frontendBefore = 'export const FRONTEND_DROPS = { before: true };\n';
-  const functionsBefore = 'export const FUNCTIONS_DROPS = { before: true };\n';
-  writeFileSync(frontendConfigPath, frontendBefore, 'utf8');
-  writeFileSync(functionsConfigPath, functionsBefore, 'utf8');
-  const commitError = new Error('frontend registry commit failed');
-  let functionsCommitCalled = false;
+  const registryPath = path.join(rootDir, 'deploymentRegistry.ts');
+  const before = 'export const DEPLOYMENT_DROPS = { before: true };\n';
+  const written = 'export const DEPLOYMENT_DROPS = { after: true };\n';
+  const concurrent = 'export const DEPLOYMENT_DROPS = { concurrent: true };\n';
+  writeFileSync(registryPath, before, 'utf8');
+  let snapshotCalls = 0;
 
   const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      commitFrontend: () => {
-        writeFileSync(frontendConfigPath, 'partially written frontend', 'utf8');
-        throw commitError;
+    commitDeploymentRegistry(
+      {
+        registryPath,
+        expectedSnapshot: { exists: true, content: before },
+        expectedWrittenSnapshot: { exists: true, content: written },
       },
-      commitFunctions: () => {
-        functionsCommitCalled = true;
+      {
+        snapshot(filePath) {
+          snapshotCalls += 1;
+          if (snapshotCalls === 2) {
+            writeFileSync(filePath, concurrent, 'utf8');
+          }
+          return {
+            exists: true,
+            content: readFileSync(filePath, 'utf8'),
+          };
+        },
       },
-    }),
+    ),
   );
 
-  assert.strictEqual(rejected, commitError);
-  assert.equal(functionsCommitCalled, false);
-  assert.equal(readFileSync(frontendConfigPath, 'utf8'), frontendBefore);
-  assert.equal(readFileSync(functionsConfigPath, 'utf8'), functionsBefore);
+  assert.equal(
+    isDeploymentRegistryPostCommitVerificationError(rejected),
+    true,
+  );
+  assert.equal(
+    rejected instanceof DeploymentRegistryPostCommitVerificationError,
+    true,
+  );
+  assert.match(
+    String((rejected as DeploymentRegistryPostCommitVerificationError).cause),
+    /write did not produce the prepared content/,
+  );
+  assert.equal(readFileSync(registryPath, 'utf8'), concurrent);
 });
 
-test('paired registry commit restores both registry mutations when the Functions callback throws', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
+test('canonical registry commit rejects source drift before mutation', async (t) => {
+  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-commit-'));
   t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  const frontendBefore = 'export const FRONTEND_DROPS = { before: true };\n';
-  const functionsBefore = 'export const FUNCTIONS_DROPS = { before: true };\n';
-  writeFileSync(frontendConfigPath, frontendBefore, 'utf8');
-  writeFileSync(functionsConfigPath, functionsBefore, 'utf8');
-  const commitError = new Error('functions registry commit failed');
+  const registryPath = path.join(rootDir, 'deploymentRegistry.ts');
+  const prepared = 'export const DEPLOYMENT_DROPS = { prepared: true };\n';
+  const changed = 'export const DEPLOYMENT_DROPS = { changed: true };\n';
+  writeFileSync(registryPath, changed, 'utf8');
 
   const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      commitFrontend: () => {
-        writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = { after: true };\n', 'utf8');
-      },
-      commitFunctions: () => {
-        writeFileSync(functionsConfigPath, 'partially written functions', 'utf8');
-        throw commitError;
+    commitDeploymentRegistry({
+      registryPath,
+      expectedSnapshot: { exists: true, content: prepared },
+      expectedWrittenSnapshot: {
+        exists: true,
+        content: 'export const DEPLOYMENT_DROPS = { after: true };\n',
       },
     }),
   );
 
-  assert.strictEqual(rejected, commitError);
-  assert.equal(readFileSync(frontendConfigPath, 'utf8'), frontendBefore);
-  assert.equal(readFileSync(functionsConfigPath, 'utf8'), functionsBefore);
-});
-
-test('paired registry commit removes a newly created frontend registry when the Functions commit fails', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
-  t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  writeFileSync(functionsConfigPath, 'export const FUNCTIONS_DROPS = {};\n', 'utf8');
-  const commitError = new Error('functions registry commit failed');
-
-  const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      commitFrontend: () => {
-        writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = { after: true };\n', 'utf8');
-      },
-      commitFunctions: () => {
-        throw commitError;
-      },
-    }),
+  assert.match(
+    String(rejected),
+    /Canonical deployment registry changed after it was prepared/,
   );
-
-  assert.strictEqual(rejected, commitError);
-  assert.equal(existsSync(frontendConfigPath), false);
-});
-
-test('paired registry rollback preserves a concurrent frontend change', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
-  t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = { before: true };\n', 'utf8');
-  writeFileSync(functionsConfigPath, 'export const FUNCTIONS_DROPS = {};\n', 'utf8');
-  const concurrentSource = 'export const FRONTEND_DROPS = { concurrent: true };\n';
-  const commitError = new Error('functions registry commit failed');
-
-  const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      commitFrontend: () => {
-        writeFileSync(frontendConfigPath, 'export const FRONTEND_DROPS = { after: true };\n', 'utf8');
-      },
-      commitFunctions: () => {
-        writeFileSync(frontendConfigPath, concurrentSource, 'utf8');
-        throw commitError;
-      },
-    }),
+  assert.equal(
+    isDeploymentRegistryPostCommitVerificationError(rejected),
+    false,
   );
-
-  assert.strictEqual(rejected, commitError);
-  assert.equal(readFileSync(frontendConfigPath, 'utf8'), concurrentSource);
-});
-
-test('paired registry commit rejects source drift before either registry is mutated', async (t) => {
-  const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-registry-pair-'));
-  t.after(() => rmSync(rootDir, { recursive: true, force: true }));
-  const frontendConfigPath = path.join(rootDir, 'frontend.ts');
-  const functionsConfigPath = path.join(rootDir, 'functions.ts');
-  const frontendPreparedSource = 'export const FRONTEND_DROPS = { prepared: true };\n';
-  const frontendChangedSource = 'export const FRONTEND_DROPS = { changed: true };\n';
-  const functionsPreparedSource = 'export const FUNCTIONS_DROPS = { prepared: true };\n';
-  writeFileSync(frontendConfigPath, frontendChangedSource, 'utf8');
-  writeFileSync(functionsConfigPath, functionsPreparedSource, 'utf8');
-  let frontendCommitCalled = false;
-  let functionsCommitCalled = false;
-
-  const rejected = await captureRejection(() =>
-    commitDeploymentRegistryPair({
-      frontendConfigPath,
-      functionsConfigPath,
-      expectedFrontendSnapshot: { exists: true, content: frontendPreparedSource },
-      expectedFunctionsSnapshot: { exists: true, content: functionsPreparedSource },
-      commitFrontend: () => {
-        frontendCommitCalled = true;
-      },
-      commitFunctions: () => {
-        functionsCommitCalled = true;
-      },
-    }),
-  );
-
-  assert.match(String(rejected), /Frontend deployment registry changed after it was prepared/);
-  assert.equal(frontendCommitCalled, false);
-  assert.equal(functionsCommitCalled, false);
-  assert.equal(readFileSync(frontendConfigPath, 'utf8'), frontendChangedSource);
-  assert.equal(readFileSync(functionsConfigPath, 'utf8'), functionsPreparedSource);
+  assert.equal(readFileSync(registryPath, 'utf8'), changed);
 });
 
 function encodePluginAuthority(kind: number, address?: PublicKey): Buffer {

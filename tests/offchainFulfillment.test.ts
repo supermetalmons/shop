@@ -51,6 +51,7 @@ import {
   runStripeCheckoutFulfillmentWithRetry,
   isStripeCheckoutManualReviewCandidate,
   startStripeCheckoutFulfillmentDocument,
+  stripeApiModeForCluster,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
   stripeCheckoutProductName,
@@ -1519,6 +1520,16 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       }),
     /invalid mode/,
   );
+  assert.throws(
+    () =>
+      validateStripeCheckoutDocumentData({
+        dropId: 'little_swag_hoodies_devnet',
+        variantKey: 'XL',
+        sessionId: 'cs_test_123',
+        checkout: { ...checkout, unitAmountCents: 100.9 },
+      }),
+    /invalid unit amount/,
+  );
 });
 
 test('Stripe checkout contract accepts pack documents without variantKey up to max quantity', () => {
@@ -1609,6 +1620,19 @@ test('stripeApiKeysForMode preserves matching fallback keys', () => {
   ]);
 });
 
+test('stripeApiModeForCluster preserves supported modes and exact unsupported-cluster error', () => {
+  assert.equal(stripeApiModeForCluster('devnet'), 'test');
+  assert.equal(stripeApiModeForCluster('mainnet-beta'), 'live');
+  assert.throws(
+    () => stripeApiModeForCluster('testnet'),
+    (error: any) => {
+      assert.equal(error?.code, 'failed-precondition');
+      assert.equal(error?.message, 'Stripe checkout is only enabled for devnet and mainnet drops.');
+      return true;
+    },
+  );
+});
+
 test('stripeCheckoutKindForDrop accepts size variants and standard packs only', () => {
   assert.equal(
     stripeCheckoutKindForDrop({
@@ -1694,6 +1718,14 @@ test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet liv
       } as any),
       250,
     );
+    process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = '250.9';
+    assert.equal(
+      stripeCheckoutUnitAmountCentsForDrop({
+        cluster: 'devnet',
+        config: {},
+      } as any),
+      250,
+    );
     assert.equal(
       stripeCheckoutUnitAmountCentsForDrop({
         cluster: 'mainnet-beta',
@@ -1708,6 +1740,22 @@ test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet liv
           config: {},
         } as any),
       /Stripe live unit amount is not configured/,
+    );
+    assert.throws(
+      () =>
+        stripeCheckoutUnitAmountCentsForDrop({
+          cluster: 'mainnet-beta',
+          config: { stripeLiveUnitAmountCents: 49 },
+        } as any),
+      /Stripe live unit amount must be an integer from 50 to 99999999/,
+    );
+    assert.throws(
+      () =>
+        stripeCheckoutUnitAmountCentsForDrop({
+          cluster: 'mainnet-beta',
+          config: { stripeLiveUnitAmountCents: 100_000_000 },
+        } as any),
+      /Stripe live unit amount must be an integer from 50 to 99999999/,
     );
   } finally {
     if (previous === undefined) {

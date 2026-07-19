@@ -9,44 +9,32 @@ import {
 } from '@solana/web3.js';
 import type { MintStats } from '../types';
 import { normalizeDropBase, type FrontendDeploymentConfig, type MintSelectionConfig } from '../config/deployment.ts';
+import {
+  BoxMinterConfigCodecError,
+  decodeBoxMinterConfigData,
+} from '../../functions/src/shared/boxMinterConfigCodec.ts';
+import {
+  BOX_MINTER_CONFIG_SEED as CONFIG_SEED,
+  BOX_MINTER_MAX_ITEMS_PER_BOX as MAX_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX as MIN_OPENABLE_ITEMS_PER_BOX,
+  BOX_MINTER_MINT_VARIANT_KIND_NONE as MINT_VARIANT_KIND_NONE,
+  BOX_MINTER_MINT_VARIANT_KIND_SIZE as MINT_VARIANT_KIND_SIZE,
+  BOX_MINTER_MINT_VARIANT_OPTION_COUNT as MINT_VARIANT_OPTION_COUNT,
+  BOX_MINTER_PENDING_OPEN_SEED as PENDING_OPEN_SEED,
+  isOpenableBoxMinterItemsPerBox,
+  type BoxMinterMintVariantTuple,
+} from '../../functions/src/shared/boxMinterProtocol.ts';
+import { normalizeBoxMinterMetadataBaseForComparison } from '../../functions/src/shared/deploymentCore.ts';
+import {
+  MPL_CORE_PROGRAM_ADDRESS,
+  SPL_NOOP_PROGRAM_ADDRESS,
+} from '../../functions/src/shared/solanaProgramAddresses.ts';
 
-const CONFIG_SEED = 'config';
 const BOX_ASSET_SEED = 'box';
 const DISCOUNT_RECORD_SEED = 'discount';
-const PENDING_OPEN_SEED = 'open';
 const PENDING_DUDE_ASSET_SEED = 'pdude';
-const MIN_CONFIGURED_ITEMS_PER_BOX = 0;
-const MIN_OPENABLE_ITEMS_PER_BOX = 1;
-const MAX_ITEMS_PER_BOX = 5;
-const MINT_VARIANT_KIND_NONE = 0;
-const MINT_VARIANT_KIND_SIZE = 1;
-const MINT_VARIANT_OPTION_COUNT = 3;
 const MINT_COMPUTE_UNIT_LIMIT = 1_400_000;
 const SIZE_SELECTION_REQUIRED_ERROR = 'This drop requires a size selection before minting';
-const LEGACY_FIXED_ITEMS_PER_BOX = 3;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS =
-  8 + // discriminator
-  32 * 3 +
-  8 +
-  8 +
-  32 +
-  4 +
-  1 +
-  4 +
-  4 +
-  8 +
-  4 +
-  10 +
-  4 +
-  96 +
-  1 +
-  1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS = BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS + 1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT = BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS + 1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT + 4 + 12;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
-  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED = BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
 
 const TE = new TextEncoder();
 const utf8 = (value: string) => TE.encode(value);
@@ -80,11 +68,10 @@ const IX_MINT_DISCOUNTED_BOX = Uint8Array.from([0x1d, 0xe3, 0xc9, 0x63, 0xa4, 0x
 const IX_MINT_VARIANT_BOX = Uint8Array.from([0x0e, 0x56, 0x06, 0xf6, 0x1c, 0x1d, 0x02, 0x9b]);
 const IX_MINT_DISCOUNTED_VARIANT_BOX = Uint8Array.from([0x02, 0x8d, 0x83, 0x46, 0x2f, 0x1f, 0x5b, 0x62]);
 const IX_START_OPEN_BOX = Uint8Array.from([0xc6, 0x64, 0x6b, 0xb4, 0x1b, 0xf3, 0x28, 0x8f]);
-const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 const ACCOUNT_DISCOUNT_MINT_RECORD = Uint8Array.from([0x63, 0xca, 0x74, 0x83, 0xde, 0x9f, 0x0f, 0x70]);
 
-const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
-const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
+const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 
 export interface BoxMinterConfigAccount {
   pubkey: PublicKey;
@@ -106,9 +93,9 @@ export interface BoxMinterConfigAccount {
   uriBase: string;
   bump: number;
   mintVariantKind: number;
-  mintVariantStartIds: [number, number, number];
-  mintVariantEndIds: [number, number, number];
-  mintVariantNextIds: [number, number, number];
+  mintVariantStartIds: BoxMinterMintVariantTuple;
+  mintVariantEndIds: BoxMinterMintVariantTuple;
+  mintVariantNextIds: BoxMinterMintVariantTuple;
   dropSeed?: Uint8Array;
 }
 
@@ -142,12 +129,6 @@ type ScopedConfigPda = Pick<BoxMinterConfigAccount, 'pubkey'>;
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
   const parsed = Number(config?.maxPerTx);
   if (!Number.isInteger(parsed) || parsed < 1) return 1;
-  return parsed;
-}
-
-function normalizeDiscountMintsPerWallet(value: number | undefined): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 3) return 1;
   return parsed;
 }
 
@@ -208,13 +189,6 @@ function resolveConfiguredBoxMinterConfigPda(dropConfig: DropProgramScopeConfig,
   return configured ? new PublicKey(configured) : boxMinterConfigPda(programId)[0];
 }
 
-function normalizeConfiguredUriBaseForComparison(uriBase: string): string {
-  const normalized = normalizeDropBase(uriBase);
-  // Legacy singleton configs stored `${dropBase}/json/boxes/` instead of the canonical drop base.
-  // Keep accepting that older shape so untouched singleton drops continue to work.
-  return normalized.replace(/\/json\/boxes$/i, '');
-}
-
 export function assertBoxMinterConfigMatchesDropConfig(
   cfg: Pick<BoxMinterConfigAccount, 'coreCollection' | 'uriBase'>,
   dropConfig: DropProgramValidationConfig,
@@ -227,7 +201,7 @@ export function assertBoxMinterConfigMatchesDropConfig(
 
   const expectedMetadataBase =
     typeof dropConfig.metadataBase === 'string' ? normalizeDropBase(dropConfig.metadataBase) : '';
-  if (expectedMetadataBase && normalizeConfiguredUriBaseForComparison(cfg.uriBase) !== expectedMetadataBase) {
+  if (expectedMetadataBase && normalizeBoxMinterMetadataBaseForComparison(cfg.uriBase) !== expectedMetadataBase) {
     throw new Error('Deployment config is out of sync with the on-chain metadata base');
   }
 }
@@ -273,72 +247,11 @@ function pendingDudeAssetPda(
   programId: PublicKey,
 ): [PublicKey, number] {
   const i = Number(index);
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_OPENABLE_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+  if (!isOpenableBoxMinterItemsPerBox(itemsPerBox)) {
     throw new Error(`Invalid itemsPerBox in config (expected ${MIN_OPENABLE_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX} for openable drops)`);
   }
   if (!Number.isFinite(i) || i < 0 || i >= itemsPerBox) throw new Error('Invalid pending dude index');
   return PublicKey.findProgramAddressSync([Buffer.from(PENDING_DUDE_ASSET_SEED), pending.toBuffer(), Buffer.from([i & 0xff])], programId);
-}
-
-function readU32(buf: Uint8Array, offset: number): number {
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  return view.getUint32(offset, true);
-}
-
-function readU64(buf: Uint8Array, offset: number): bigint {
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  return view.getBigUint64(offset, true);
-}
-
-function readPubkey(buf: Uint8Array, offset: number): PublicKey {
-  return new PublicKey(buf.subarray(offset, offset + 32));
-}
-
-function readBorshString(buf: Uint8Array, offset: number): { value: string; next: number } {
-  const len = readU32(buf, offset);
-  const start = offset + 4;
-  const end = start + len;
-  const value = new TextDecoder().decode(buf.subarray(start, end));
-  return { value, next: end };
-}
-
-function readU32Tuple(
-  buf: Uint8Array,
-  offset: number,
-): { value: [number, number, number]; next: number } {
-  const value: [number, number, number] = [0, 0, 0];
-  let next = offset;
-  for (let i = 0; i < MINT_VARIANT_OPTION_COUNT; i += 1) {
-    value[i] = readU32(buf, next);
-    next += 4;
-  }
-  return { value, next };
-}
-
-function hasAnyNonZeroByte(data: Uint8Array): boolean {
-  for (let i = 0; i < data.length; i += 1) {
-    if (data[i] !== 0) return true;
-  }
-  return false;
-}
-
-function decodeOptionalTrailingDropSeed(data: Uint8Array, offset: number): Uint8Array | undefined {
-  // `getAccountInfo` returns the full allocated account buffer, so legacy configs have trailing
-  // zero padding beyond the serialized payload. Treat all-zero trailing bytes as padding, not v2 data.
-  if (offset >= data.length) return undefined;
-  const trailing = data.subarray(offset);
-  if (!hasAnyNonZeroByte(trailing)) return undefined;
-  if (trailing.length < 32) {
-    throw new Error('Unsupported box minter config schema. Drop seed data is truncated.');
-  }
-  const dropSeed = data.slice(offset, offset + 32);
-  if (!hasAnyNonZeroByte(dropSeed)) {
-    throw new Error('Unsupported box minter config schema. Unexpected trailing data after config payload.');
-  }
-  if (hasAnyNonZeroByte(trailing.subarray(32))) {
-    throw new Error('Unsupported box minter config schema. Unexpected trailing data after drop seed.');
-  }
-  return dropSeed;
 }
 
 function resolveMintSelectionAvailability(
@@ -389,115 +302,40 @@ function resolveMintVariantIndex(
 }
 
 export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array): BoxMinterConfigAccount {
-  if (data.length < 8) throw new Error('Invalid config account: empty');
-  for (let i = 0; i < 8; i += 1) {
-    if (data[i] !== ACCOUNT_BOX_MINTER_CONFIG[i]) {
-      throw new Error('Invalid config account discriminator');
+  let decoded;
+  try {
+    decoded = decodeBoxMinterConfigData(data);
+  } catch (error) {
+    if (error instanceof BoxMinterConfigCodecError) {
+      throw new Error(error.message);
     }
+    throw error;
   }
-
-  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
-    throw new Error('Unsupported box minter config schema. Config data is truncated.');
-  }
-
-  // Layout matches `onchain/programs/box_minter/src/lib.rs` BoxMinterConfig.
-  let o = 8;
-  const admin = readPubkey(data, o);
-  o += 32;
-  const treasury = readPubkey(data, o);
-  o += 32;
-  const coreCollection = readPubkey(data, o);
-  o += 32;
-
-  const priceLamports = readU64(data, o);
-  o += 8;
-  const discountPriceLamports = readU64(data, o);
-  o += 8;
-  const discountMerkleRoot = data.subarray(o, o + 32);
-  o += 32;
-  const maxSupply = readU32(data, o);
-  o += 4;
-  const maxPerTx = data[o];
-  o += 1;
-  let itemsPerBox = LEGACY_FIXED_ITEMS_PER_BOX;
-  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
-    itemsPerBox = data[o];
-    o += 1;
-  }
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_CONFIGURED_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
-    throw new Error(`Invalid on-chain itemsPerBox: ${itemsPerBox} (expected ${MIN_CONFIGURED_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`);
-  }
-  const minted = readU32(data, o);
-  o += 4;
-
-  const namePrefix = readBorshString(data, o);
-  o = namePrefix.next;
-  const symbol = readBorshString(data, o);
-  o = symbol.next;
-  const uriBase = readBorshString(data, o);
-  o = uriBase.next;
-  const started = Boolean(data[o]);
-  o += 1;
-  const bump = data[o] ?? 0;
-  o += 1;
-  let discountMintsPerWallet = 1;
-  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT) {
-    discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o] ?? 1);
-    o += 1;
-  }
-  let figureNamePrefix = 'figure';
-  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX) {
-    const decoded = readBorshString(data, o);
-    figureNamePrefix = decoded.value;
-    o = decoded.next;
-  }
-  let mintVariantKind = MINT_VARIANT_KIND_NONE;
-  let mintVariantStartIds: [number, number, number] = [0, 0, 0];
-  let mintVariantEndIds: [number, number, number] = [0, 0, 0];
-  let mintVariantNextIds: [number, number, number] = [0, 0, 0];
-  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS) {
-    const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
-    if (o + mintVariantBytes > data.length) {
-      throw new Error('Unsupported box minter config schema. Variant mint data is truncated.');
-    }
-    mintVariantKind = data[o] ?? MINT_VARIANT_KIND_NONE;
-    o += 1;
-    const startIds = readU32Tuple(data, o);
-    mintVariantStartIds = startIds.value;
-    o = startIds.next;
-    const endIds = readU32Tuple(data, o);
-    mintVariantEndIds = endIds.value;
-    o = endIds.next;
-    const nextIds = readU32Tuple(data, o);
-    mintVariantNextIds = nextIds.value;
-    o = nextIds.next;
-  }
-  const dropSeed =
-    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED ? decodeOptionalTrailingDropSeed(data, o) : undefined;
+  const dropSeed = decoded.dropSeed;
 
   return {
     pubkey,
-    admin,
-    treasury,
-    coreCollection,
-    priceLamports,
-    discountPriceLamports,
-    discountMerkleRoot,
-    discountMintsPerWallet,
-    maxSupply,
-    maxPerTx,
-    itemsPerBox,
-    started,
-    minted,
-    namePrefix: namePrefix.value,
-    figureNamePrefix,
-    symbol: symbol.value,
-    uriBase: uriBase.value,
-    bump,
-    mintVariantKind,
-    mintVariantStartIds,
-    mintVariantEndIds,
-    mintVariantNextIds,
+    admin: new PublicKey(decoded.admin),
+    treasury: new PublicKey(decoded.treasury),
+    coreCollection: new PublicKey(decoded.coreCollection),
+    priceLamports: decoded.priceLamports,
+    discountPriceLamports: decoded.discountPriceLamports,
+    discountMerkleRoot: decoded.discountMerkleRoot,
+    discountMintsPerWallet: decoded.discountMintsPerWallet,
+    maxSupply: decoded.maxSupply,
+    maxPerTx: decoded.maxPerTx,
+    itemsPerBox: decoded.itemsPerBox,
+    started: decoded.started,
+    minted: decoded.minted,
+    namePrefix: decoded.namePrefix,
+    figureNamePrefix: decoded.figureNamePrefix,
+    symbol: decoded.symbol,
+    uriBase: decoded.uriBase,
+    bump: decoded.bump,
+    mintVariantKind: decoded.mintVariantKind,
+    mintVariantStartIds: decoded.mintVariantStartIds,
+    mintVariantEndIds: decoded.mintVariantEndIds,
+    mintVariantNextIds: decoded.mintVariantNextIds,
     ...(dropSeed ? { dropSeed } : {}),
   };
 }

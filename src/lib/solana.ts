@@ -1,6 +1,13 @@
 import bs58 from 'bs58';
 import { Connection, PublicKey, VersionedTransaction, type SignatureStatus } from '@solana/web3.js';
-import nacl from 'tweetnacl';
+import {
+  ADDRESS_CIPHER_PUBLIC_KEY_LENGTH,
+  addressCipherHint,
+  encryptAddressCipherText,
+  serializeAddressCipherPayload,
+} from '../../functions/src/shared/addressCipher.js';
+
+export { normalizeCountryCode } from '../../functions/src/shared/countryNormalization.ts';
 
 function unwrapTxErrorMessage(err: unknown): string {
   if (!err) return 'Unexpected error';
@@ -280,17 +287,6 @@ function describeRequiredSigners(tx: VersionedTransaction): { required: string[]
   return { required, missingNonPayer };
 }
 
-export function normalizeCountryCode(country?: string) {
-  const normalized = (country || '').trim().toUpperCase();
-  if (!normalized) return '';
-  if (normalized.length === 2) return normalized;
-  const compact = normalized.replace(/[\s._-]/g, '');
-  if (compact === 'UNITEDSTATES' || compact === 'UNITEDSTATESOFAMERICA' || compact === 'USA' || compact === 'US') {
-    return 'US';
-  }
-  return '';
-}
-
 type SendPreparedTransactionOptions = {
   onSubmitted?: (signature: string, tx: VersionedTransaction) => void | Promise<void>;
 };
@@ -382,27 +378,25 @@ export function encryptAddressPayload(
     remoteKey = new Uint8Array();
   }
 
-  if (remoteKey.length !== nacl.box.publicKeyLength) {
+  if (remoteKey.length !== ADDRESS_CIPHER_PUBLIC_KEY_LENGTH) {
     const looksBase58 = /^[1-9A-HJ-NP-Za-km-z]+$/.test(rawKey);
     const hint = looksBase58
       ? ' It looks like you pasted a base58 Solana address. This must be a TweetNaCl box (Curve25519) public key encoded in base64.'
       : '';
     throw new Error(
-      `Invalid address encryption public key: expected base64 Curve25519 public key (${nacl.box.publicKeyLength} bytes), got ${remoteKey.length} bytes after base64 decode.${hint}`,
+      `Invalid address encryption public key: expected base64 Curve25519 public key (${ADDRESS_CIPHER_PUBLIC_KEY_LENGTH} bytes), got ${remoteKey.length} bytes after base64 decode.${hint}`,
     );
   }
-  const ephemeral = nacl.box.keyPair();
-  const nonce = nacl.randomBytes(nacl.box.nonceLength);
-  const message = new TextEncoder().encode(plaintext);
-  const cipher = nacl.box(message, nonce, remoteKey, ephemeral.secretKey);
-  const payload = [nonce, ephemeral.publicKey, cipher]
-    .map((arr) => Buffer.from(arr).toString('base64'))
-    .join('.');
+  const parts = encryptAddressCipherText(plaintext, remoteKey);
+  const cipherText = serializeAddressCipherPayload(
+    parts,
+    (value) => Buffer.from(value).toString('base64'),
+  );
 
   // Very small hint to display in UI without leaking full address
-  const hint = plaintext.slice(0, 1) + '...' + plaintext.slice(-2);
+  const hint = addressCipherHint(plaintext);
 
-  return { cipherText: payload, hint };
+  return { cipherText, hint };
 }
 
 export function shortAddress(addr: string, chars = 4) {

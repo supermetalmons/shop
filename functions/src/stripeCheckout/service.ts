@@ -54,13 +54,24 @@ import {
   stripeCredentialErrorSummary,
   type StripeApiMode,
 } from './client.js';
+import type {
+  StripeCheckoutManualReviewAddress,
+  StripeCheckoutManualReviewSummary as SharedStripeCheckoutManualReviewSummary,
+  StripeCheckoutSessionServerResponse,
+} from '../shared/contracts.js';
+import {
+  STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
+  STRIPE_UNIT_AMOUNT_CENTS_MAX,
+  STRIPE_UNIT_AMOUNT_CENTS_MIN,
+  classifyStripeCheckoutKind,
+  normalizeStripeUnitAmountCents,
+  resolveStripeCheckoutUnitAmountCents,
+  stripeCheckoutModeForCluster,
+  type StripeCheckoutKind as SharedStripeCheckoutKind,
+} from '../shared/stripeCheckoutCore.js';
 import { toMillisMaybe } from '../time.js';
 
-export type StripeCheckoutSessionResponse = {
-  id: string;
-  url: string;
-  livemode: boolean;
-};
+export type StripeCheckoutSessionResponse = StripeCheckoutSessionServerResponse;
 
 type StripeCheckoutSessionSnapshot = {
   id: string;
@@ -80,27 +91,8 @@ type StripeCheckoutDocumentRecord = {
   checkout: any;
 } & StripeCheckoutDocumentData;
 
-type StripeCheckoutManualReviewAddress = {
-  email?: string;
-  country?: string;
-  countryCode?: string;
-  full?: string | null;
-};
-
-export type StripeCheckoutManualReviewSummary = {
-  dropId: string;
-  sessionId: string;
-  owner: string;
-  firebaseUid?: string;
-  quantity?: number;
-  amountTotal?: number;
-  currency?: string;
-  createdAt?: number;
-  failedAt?: number;
-  manualRefundReviewReason?: string;
-  errorMessage?: string;
-  address: StripeCheckoutManualReviewAddress;
-};
+export type StripeCheckoutManualReviewSummary =
+  SharedStripeCheckoutManualReviewSummary;
 
 type StripeCheckoutFulfillmentEnqueueReason =
   | 'not_app_fulfillment'
@@ -213,7 +205,7 @@ type StripeCheckoutPrograms = {
   mplCoreCpiSigner: PublicKey;
 };
 
-export type StripeCheckoutKind = 'size_variant' | 'standard_pack';
+export type StripeCheckoutKind = SharedStripeCheckoutKind;
 
 type DropRuntimeDeps<Runtime extends StripeCheckoutDropRuntime> = {
   requireDropId: (rawDropId: unknown) => string;
@@ -466,15 +458,18 @@ export function stripeApiKeyForMode(apiKeys: readonly string[], mode: StripeApiM
 }
 
 export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
-  if (cluster === 'devnet') return 'test';
-  if (cluster === 'mainnet-beta') return 'live';
+  const mode = stripeCheckoutModeForCluster(cluster);
+  if (mode) return mode;
   throw new HttpsError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
 }
 
 function requireStripeUnitAmountCents(value: unknown, label: string): number {
-  const parsed = Math.floor(Number(value));
-  if (Number.isFinite(parsed) && parsed >= 50 && parsed <= 99_999_999) return parsed;
-  throw new HttpsError('failed-precondition', `${label} must be an integer from 50 to 99999999.`);
+  const parsed = normalizeStripeUnitAmountCents(value);
+  if (parsed != null) return parsed;
+  throw new HttpsError(
+    'failed-precondition',
+    `${label} must be an integer from ${STRIPE_UNIT_AMOUNT_CENTS_MIN} to ${STRIPE_UNIT_AMOUNT_CENTS_MAX}.`,
+  );
 }
 
 const STRIPE_PRODUCT_TAX_CODE_RE = /^txcd_\d{8}$/;
@@ -495,17 +490,22 @@ export function stripeCheckoutProductTaxCodeForDrop(dropRuntime: StripeCheckoutD
 
 export function stripeCheckoutUnitAmountCentsForDrop(dropRuntime: StripeCheckoutDropRuntime): number {
   const mode = stripeApiModeForCluster(dropRuntime.cluster);
+  const configuredLiveUnitAmountCents = dropRuntime.config.stripeLiveUnitAmountCents;
   if (mode === 'live') {
-    const configured = dropRuntime.config.stripeLiveUnitAmountCents;
-    if (configured == null) {
+    if (configuredLiveUnitAmountCents == null) {
       throw new HttpsError('failed-precondition', 'Stripe live unit amount is not configured for this drop.');
     }
-    return requireStripeUnitAmountCents(configured, 'Stripe live unit amount');
   }
 
-  const parsed = Math.floor(Number(process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS));
-  if (Number.isFinite(parsed) && parsed >= 50 && parsed <= 99_999_999) return parsed;
-  return 100;
+  const unitAmountCents = resolveStripeCheckoutUnitAmountCents({
+    mode,
+    testConfiguredUnitAmountCents: process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS,
+    testFallbackUnitAmountCents: STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
+    liveConfiguredUnitAmountCents: configuredLiveUnitAmountCents,
+  });
+  return mode === 'live'
+    ? requireStripeUnitAmountCents(unitAmountCents, 'Stripe live unit amount')
+    : unitAmountCents || STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT;
 }
 
 export function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
@@ -579,10 +579,11 @@ function normalizeSizeStripeVariantKey(
 }
 
 export function stripeCheckoutKindForDrop(dropRuntime: StripeCheckoutDropRuntime): StripeCheckoutKind {
-  const itemsPerBox = Math.floor(Number(dropRuntime.itemsPerBox));
-  const hasSizeSelection = dropRuntime.config.mintSelection?.kind === 'size';
-  if (itemsPerBox === 0 && hasSizeSelection) return 'size_variant';
-  if (itemsPerBox > 0 && !dropRuntime.config.mintSelection) return 'standard_pack';
+  const checkoutKind = classifyStripeCheckoutKind({
+    itemsPerBox: dropRuntime.itemsPerBox,
+    mintSelection: dropRuntime.config.mintSelection,
+  });
+  if (checkoutKind) return checkoutKind;
   throw new HttpsError(
     'failed-precondition',
     'Stripe checkout is only enabled for direct-delivery size drops or standard pack drops.',

@@ -2,6 +2,13 @@
 
 React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Inventory is fetched client-side via Helius DAS.
 
+## Shared domain core
+
+Runtime-neutral code used by the frontend, Cloud Functions, and repository tools
+lives in `functions/src/shared`. Keep Firebase, Node-only, browser/React, Solana
+SDK, secrets, and environment access in thin runtime adapters. See
+`functions/src/shared/README.md` for the boundary rules.
+
 ## Frontend
 - Install deps: `npm install`
 - Optional env overrides for the frontend's public client-side API keys (local dev: in your shell, or a local `.env` that you do NOT commit):
@@ -11,7 +18,8 @@ React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fu
 - Configure everything else in **committed config**:
   - `src/lib/firebase.ts` (Firebase non-secret config, functions region)
   - `src/App.tsx` (delivery encryption public key)
-  - `src/config/deployment.ts` (drop-specific frontend deployment config, auto-updated by `npm run deploy-all-onchain`)
+  - `functions/src/shared/deploymentRegistry.ts` (canonical secret-free drop deployment registry, auto-updated by `npm run deploy-all-onchain`)
+  - `src/config/deployment.ts` (frontend projection of the canonical registry; do not add registry rows here)
 - Run dev server: `npm run dev`
 - Build for production: `npm run build` (outputs `dist/`)
 
@@ -74,7 +82,7 @@ The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amp
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
 - Stripe Checkout is enabled per drop with `stripeCheckoutEnabled`; `card_nft_2` drops default to enabled unless explicitly opted out. Enabled drops must also configure a Stripe product tax code (`stripeProductTaxCode`), and `card_nft_2` drops default to the tangible-goods tax code. Live enabled drops additionally require committed `stripeLiveUnitAmountCents`. Publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
 
-Everything else is committed in `functions/src/config/deployment.ts` (auto-updated by the deploy script).
+Everything else is committed in `functions/src/shared/deploymentRegistry.ts` (auto-updated by the deploy script). `functions/src/config/deployment.ts` projects the server-safe Functions shape from that canonical registry.
 
 Stripe test Checkout only performs a pre-payment availability check; it intentionally does not reserve on-chain supply before payment. If supply sells out before webhook fulfillment, the fulfillment queue/session is marked failed with `manualRefundReviewRequired` and the Stripe `sessionId`/`stripeCheckoutSessionId` can be used for a manual refund in Stripe.
 
@@ -88,12 +96,12 @@ Stripe test Checkout only performs a pre-payment availability check; it intentio
     - `NEW_DROP.onchain.metadataBase` accepts either `https://...`, `ipfs://...`, or a raw IPFS CID like `bafy...` (raw CIDs are normalized to canonical `ipfs://CID`).
     - The first compact-metadata drop in a lineage must set `NEW_DROP.deploy.reuseProgramId = false` so existing legacy `/json/...` drops keep their current program binary. Later compact drops can reuse that fresh lineage with `reuseProgramId = true`; set `reuseProgramIdFromDropId` when you want to pin reuse to a specific deployed drop's program id. Reused drops skip program build/deploy entirely; use `npm run upgrade-onchain -- <dropId>` for intentional program upgrades.
     - Fresh MPL-Core collections use the deployer/admin wallet as root update authority for marketplace verification, with the program config PDA added as an UpdateDelegate for on-chain mint/reveal CPIs.
-  - Updates tracked config files:
-    - `src/config/deployment.ts` (frontend)
-    - `functions/src/config/deployment.ts` (cloud functions)
+  - Updates one tracked registry:
+    - `functions/src/shared/deploymentRegistry.ts` (canonical secret-free superset)
+    - `src/config/deployment.ts` and `functions/src/config/deployment.ts` are compatibility projections and are not rewritten per drop.
   - Prints remaining required config keys (does **not** print `COSIGNER_SECRET`).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).
 - Upgrade an existing box minter program:
-  - `npm run upgrade-onchain -- <dropId>` builds the program for the deployed program id in `src/config/deployment.ts`, verifies the current upgrade authority, prompts for that private key, deploys the upgrade, then dumps the deployed binary to verify its hash.
+  - `npm run upgrade-onchain -- <dropId>` builds the program for the deployed program id in the canonical `functions/src/shared/deploymentRegistry.ts`, verifies the current upgrade authority, prompts for that private key, deploys the upgrade, then dumps the deployed binary to verify its hash.
   - Rehearse with the devnet drop id first, for example `npm run upgrade-onchain -- little_swag_hoodies_devnet`, then run the corresponding mainnet drop id.
   - Use `--dry-run` to build and compare hashes without prompting or sending transactions.

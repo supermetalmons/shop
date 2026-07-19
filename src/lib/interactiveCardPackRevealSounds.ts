@@ -1,6 +1,7 @@
 import { isDropFamily } from '../config/deployment.ts';
+import { CARD_NFT_2_CDN_BASE_URL, PONCHO_DRIFELLA_CDN_BASE_URL } from '../config/dropMediaDefaults.ts';
 
-const PONCHO_DRIFELLA_SOUND_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella/sounds';
+const PONCHO_DRIFELLA_SOUND_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/sounds`;
 
 export const PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL = `${PONCHO_DRIFELLA_SOUND_BASE_URL}/crash.mp3`;
 export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS = [
@@ -9,7 +10,7 @@ export const PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS = [
   `${PONCHO_DRIFELLA_SOUND_BASE_URL}/hit3.mp3`,
 ] as const;
 
-const CARD_NFT_2_SOUND_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2/sounds';
+const CARD_NFT_2_SOUND_BASE_URL = `${CARD_NFT_2_CDN_BASE_URL}/sounds`;
 
 export const CARD_NFT_2_BOX_SOUND_REVEAL_URL = `${CARD_NFT_2_SOUND_BASE_URL}/crash.mp3`;
 export const CARD_NFT_2_BOX_SOUND_CLICK_URLS = [

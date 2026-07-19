@@ -6,6 +6,8 @@ import {
   buildPackStatusBreakdown,
   buildPackStatusCountersFromRebuildInputs,
   countNormalIrlPackStatus,
+  normalizePackStatusBreakdown,
+  shouldTrackPackStatusForDrop,
   type PackStatusDropRuntime,
 } from '../functions/src/packStatus.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
@@ -136,6 +138,76 @@ test('pack status breakdown treats missing raw counter fields safely without sea
   assert.equal(excessive.totalCards, 15);
   assert.equal(excessive.unsealedCards, 12);
   assert.equal(excessive.redeemedCards, 24);
+});
+
+test('pack status raw normalization preserves schema, drop, and fallback validation', () => {
+  const normalized = normalizePackStatusBreakdown(
+    {
+      version: 1,
+      dropId: 'little_swag_boxes',
+      totalInitialSupply: 10,
+      unsealedOnline: 2,
+      redeemedIrlNormal: 1,
+      redeemedIrlStripe: 1,
+      redeemedUnsealedCards: 2,
+    },
+    'little_swag_boxes',
+    3,
+  );
+
+  assert.equal(normalized?.totalCards, 30);
+  assert.equal(normalized?.items[0]?.label, 'Unboxed');
+  assert.equal(normalized?.items[0]?.amount, 6);
+  assert.equal(normalized?.items[1]?.amount, 8);
+  assert.equal(
+    normalizePackStatusBreakdown(
+      { version: 2, dropId: 'little_swag_boxes', totalInitialSupply: 10 },
+      'little_swag_boxes',
+      3,
+    ),
+    null,
+  );
+  assert.equal(
+    normalizePackStatusBreakdown(
+      { version: 1, dropId: 'card_nft_2', totalInitialSupply: 10 },
+      'little_swag_boxes',
+      3,
+    ),
+    null,
+  );
+  assert.equal(
+    normalizePackStatusBreakdown(
+      { version: 1, dropId: 'little_swag_boxes', totalInitialSupply: 0 },
+      'little_swag_boxes',
+      3,
+    ),
+    null,
+  );
+});
+
+test('pack status tracking gates on supported mainnet drops with configured supply', () => {
+  assert.equal(shouldTrackPackStatusForDrop(CARD_NFT_2_RUNTIME), true);
+  assert.equal(
+    shouldTrackPackStatusForDrop({
+      ...CARD_NFT_2_RUNTIME,
+      cluster: 'devnet',
+    }),
+    false,
+  );
+  assert.equal(
+    shouldTrackPackStatusForDrop({
+      ...CARD_NFT_2_RUNTIME,
+      dropId: 'card_nft_2_devnet_final',
+    }),
+    false,
+  );
+  assert.equal(
+    shouldTrackPackStatusForDrop({
+      ...CARD_NFT_2_RUNTIME,
+      maxSupply: 0,
+    }),
+    false,
+  );
 });
 
 test('historical pack status counting separates online reveals, normal/Admin IRL, and Stripe IRL', () => {

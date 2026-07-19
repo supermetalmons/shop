@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
-import { existsSync } from 'fs';
-import path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   clusterApiUrl,
   Connection,
@@ -12,46 +11,35 @@ import {
   TransactionInstruction,
 } from '@solana/web3.js';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
+import {
+  DEPLOYMENT_DROPS,
+  getDeploymentDrop,
+  type DeploymentRegistryDrop,
+} from '../functions/src/shared/deploymentRegistry.ts';
+import {
+  normalizeDropId,
+  type SolanaCluster,
+} from '../functions/src/shared/deploymentCore.ts';
+import {
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
+  BoxMinterConfigCodecError,
+  decodeBoxMinterConfigData,
+} from '../functions/src/shared/boxMinterConfigCodec.ts';
 
-type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
-
-type DeploymentDropConfig = {
-  solanaCluster: SolanaCluster;
-  dropId: string;
-  metadataBase: string;
-  priceSol: number;
-  discountPriceSol: number;
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-};
-
-type DecodedBoxMinterConfig = {
-  admin: PublicKey;
-  treasury: PublicKey;
-  coreCollection: PublicKey;
-  priceLamports: bigint;
-  discountPriceLamports: bigint;
-  maxSupply: number;
-  maxPerTx: number;
-  itemsPerBox: number;
-  minted: number;
-  namePrefix: string;
-  symbol: string;
-  uriBase: string;
-  started: boolean;
-  bump: number;
-  discountMintsPerWallet: number;
-};
+type DeploymentDropConfig = Pick<
+  DeploymentRegistryDrop,
+  | 'solanaCluster'
+  | 'dropId'
+  | 'priceSol'
+  | 'discountPriceSol'
+  | 'boxMinterProgramId'
+  | 'boxMinterConfigPda'
+>;
 
 const IX_SET_MINT_PRICES = createHash('sha256').update('global:set_mint_prices').digest().subarray(0, 8);
-const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 
 function usage(): string {
   return `Run:\n  npm run set-mint-prices -- <dropId>\n  npm run set-mint-prices -- <dropId> --dry-run\n`;
-}
-
-function normalizeDropId(value: string | undefined): string {
-  return String(value || '').trim().toLowerCase();
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -80,7 +68,6 @@ function readDropConfig(value: unknown, label: string): DeploymentDropConfig {
   return {
     solanaCluster: assertSolanaCluster(value.solanaCluster, `${label}.solanaCluster`),
     dropId: requireString(value.dropId, `${label}.dropId`),
-    metadataBase: requireString(value.metadataBase, `${label}.metadataBase`),
     priceSol: requireNumber(value.priceSol, `${label}.priceSol`),
     discountPriceSol: requireNumber(value.discountPriceSol, `${label}.discountPriceSol`),
     boxMinterProgramId: requireString(value.boxMinterProgramId, `${label}.boxMinterProgramId`),
@@ -90,59 +77,18 @@ function readDropConfig(value: unknown, label: string): DeploymentDropConfig {
   };
 }
 
-async function loadDropFromRegistry(args: {
-  filePath: string;
-  exportName: string;
-  dropId: string;
-  label: string;
-}): Promise<DeploymentDropConfig> {
-  if (!existsSync(args.filePath)) {
-    throw new Error(`Missing ${args.label} deployment config: ${args.filePath}`);
-  }
-
-  let mod: Record<string, unknown>;
-  try {
-    mod = (await import(pathToFileURL(args.filePath).href)) as Record<string, unknown>;
-  } catch (err) {
-    throw new Error(`Could not load ${args.label} deployment config from ${args.filePath}: ${String(err)}`);
-  }
-
-  const registry = mod[args.exportName];
-  if (!isObjectRecord(registry)) {
-    throw new Error(`Could not read ${args.exportName} from ${args.filePath}.`);
-  }
-
-  const entry = registry[args.dropId];
+function loadDropFromRegistry(dropId: string): DeploymentDropConfig {
+  const entry = getDeploymentDrop(dropId);
   if (!entry) {
-    const knownDropIds = Object.keys(registry).sort((a, b) => a.localeCompare(b));
+    const knownDropIds = Object.keys(DEPLOYMENT_DROPS).sort((a, b) =>
+      a.localeCompare(b),
+    );
     throw new Error(
-      `Drop ${args.dropId} is not present in ${args.filePath}.\n` +
+      `Drop ${dropId} is not present in functions/src/shared/deploymentRegistry.ts.\n` +
         `Known drops: ${knownDropIds.length ? knownDropIds.join(', ') : '(none)'}`,
     );
   }
-
-  return readDropConfig(entry, `${args.label}.${args.dropId}`);
-}
-
-function assertMatchingConfig(frontend: DeploymentDropConfig, functionsDrop: DeploymentDropConfig) {
-  const fields = [
-    'solanaCluster',
-    'dropId',
-    'metadataBase',
-    'priceSol',
-    'discountPriceSol',
-    'boxMinterProgramId',
-    'boxMinterConfigPda',
-  ] as const;
-  for (const field of fields) {
-    if (frontend[field] !== functionsDrop[field]) {
-      throw new Error(
-        `Frontend/functions deployment config mismatch for ${field}.\n` +
-          `- frontend : ${String(frontend[field])}\n` +
-          `- functions: ${String(functionsDrop[field])}`,
-      );
-    }
-  }
+  return readDropConfig(entry, `deployment registry.${dropId}`);
 }
 
 function solToLamports(value: number, label: string): bigint {
@@ -183,95 +129,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function readBorshString(buf: Buffer, offset: number): { value: string; offset: number } {
-  if (offset + 4 > buf.length) {
-    throw new Error('Unsupported box minter config schema while decoding string length.');
+export function decodeBoxMinterConfigForPriceUpdate(data: Buffer) {
+  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
+    throw new Error(
+      `Unsupported box minter config schema: expected at least ${BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS} bytes, got ${data.length}.`,
+    );
   }
-  const len = buf.readUInt32LE(offset);
-  const start = offset + 4;
-  const end = start + len;
-  if (end > buf.length) {
-    throw new Error('Unsupported box minter config schema while decoding string bytes.');
-  }
-  return { value: buf.subarray(start, end).toString('utf8'), offset: end };
-}
-
-function decodeBoxMinterConfig(data: Buffer): DecodedBoxMinterConfig {
-  const expectedMinLen =
-    8 +
-    32 * 3 +
-    8 +
-    8 +
-    32 +
-    4 +
-    1 +
-    1 +
-    4 +
-    4 +
-    8 +
-    4 +
-    10 +
-    4 +
-    96 +
-    1 +
-    1;
-  if (data.length < expectedMinLen) {
-    throw new Error(`Unsupported box minter config schema: expected at least ${expectedMinLen} bytes, got ${data.length}.`);
-  }
-  for (let i = 0; i < ACCOUNT_BOX_MINTER_CONFIG.length; i += 1) {
-    if (data[i] !== ACCOUNT_BOX_MINTER_CONFIG[i]) {
+  try {
+    const decoded = decodeBoxMinterConfigData(data, {
+      validateDiscriminator: true,
+      validateItemsPerBox: false,
+      normalizeDiscountMintsPerWallet: false,
+      decodeExtensions: false,
+      stringDecodeErrorMessages: {
+        length:
+          'Unsupported box minter config schema while decoding string length.',
+        bytes:
+          'Unsupported box minter config schema while decoding string bytes.',
+      },
+    });
+    return {
+      ...decoded,
+      admin: new PublicKey(decoded.admin),
+      treasury: new PublicKey(decoded.treasury),
+      coreCollection: new PublicKey(decoded.coreCollection),
+    };
+  } catch (err) {
+    if (
+      err instanceof BoxMinterConfigCodecError &&
+      err.reason === 'invalid-discriminator'
+    ) {
       throw new Error('Invalid box minter config discriminator.');
     }
+    throw err;
   }
-
-  let o = 8;
-  const admin = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const treasury = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const coreCollection = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const priceLamports = data.readBigUInt64LE(o);
-  o += 8;
-  const discountPriceLamports = data.readBigUInt64LE(o);
-  o += 8 + 32;
-  const maxSupply = data.readUInt32LE(o);
-  o += 4;
-  const maxPerTx = data[o];
-  o += 1;
-  const itemsPerBox = data[o];
-  o += 1;
-  const minted = data.readUInt32LE(o);
-  o += 4;
-  const namePrefix = readBorshString(data, o);
-  o = namePrefix.offset;
-  const symbol = readBorshString(data, o);
-  o = symbol.offset;
-  const uriBase = readBorshString(data, o);
-  o = uriBase.offset;
-  const started = Boolean(data[o]);
-  o += 1;
-  const bump = data[o];
-  o += 1;
-  const discountMintsPerWallet = data[o];
-
-  return {
-    admin,
-    treasury,
-    coreCollection,
-    priceLamports,
-    discountPriceLamports,
-    maxSupply,
-    maxPerTx,
-    itemsPerBox,
-    minted,
-    namePrefix: namePrefix.value,
-    symbol: symbol.value,
-    uriBase: uriBase.value,
-    started,
-    bump,
-    discountMintsPerWallet,
-  };
 }
 
 function buildSetMintPricesIx(args: {
@@ -298,30 +189,12 @@ async function main() {
   if (positionalArgs.length !== 1) {
     throw new Error(`This script requires exactly one dropId argument.\n${usage()}`);
   }
-  const requestedDropId = normalizeDropId(positionalArgs[0]);
+  const requestedDropId = normalizeDropId(positionalArgs[0] || '');
   if (!requestedDropId) {
     throw new Error(`Missing dropId.\n${usage()}`);
   }
 
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const root = path.resolve(__dirname, '..');
-  const frontendConfigPath = path.join(root, 'src', 'config', 'deployment.ts');
-  const functionsConfigPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
-
-  const frontendDrop = await loadDropFromRegistry({
-    filePath: frontendConfigPath,
-    exportName: 'FRONTEND_DROPS',
-    dropId: requestedDropId,
-    label: 'frontend',
-  });
-  const functionsDrop = await loadDropFromRegistry({
-    filePath: functionsConfigPath,
-    exportName: 'FUNCTIONS_DROPS',
-    dropId: requestedDropId,
-    label: 'functions',
-  });
-  assertMatchingConfig(frontendDrop, functionsDrop);
+  const frontendDrop = loadDropFromRegistry(requestedDropId);
 
   const targetPriceLamports = solToLamports(frontendDrop.priceSol, 'priceSol');
   const targetDiscountPriceLamports = solToLamports(frontendDrop.discountPriceSol, 'discountPriceSol');
@@ -341,7 +214,9 @@ async function main() {
         `- actual owner     : ${info.owner.toBase58()}`,
     );
   }
-  const onchainConfig = decodeBoxMinterConfig(Buffer.from(info.data));
+  const onchainConfig = decodeBoxMinterConfigForPriceUpdate(
+    Buffer.from(info.data),
+  );
 
   console.log('--- set mint prices (box_minter) ---');
   console.log('cluster:', frontendDrop.solanaCluster);
@@ -429,11 +304,15 @@ async function main() {
   const sig = await sendAndConfirmTransaction(connection, sendTx, [admin], { commitment: 'confirmed' });
   console.log('\n✅ set_mint_prices confirmed:', sig);
 
-  let updatedConfig: DecodedBoxMinterConfig | undefined;
+  let updatedConfig:
+    | ReturnType<typeof decodeBoxMinterConfigForPriceUpdate>
+    | undefined;
   for (let attempt = 1; attempt <= 10; attempt += 1) {
     const updatedInfo = await connection.getAccountInfo(configPda, { commitment: 'finalized' });
     if (updatedInfo) {
-      const candidate = decodeBoxMinterConfig(Buffer.from(updatedInfo.data));
+      const candidate = decodeBoxMinterConfigForPriceUpdate(
+        Buffer.from(updatedInfo.data),
+      );
       if (candidate.priceLamports === targetPriceLamports && candidate.discountPriceLamports === targetDiscountPriceLamports) {
         updatedConfig = candidate;
         break;
@@ -459,7 +338,14 @@ async function main() {
   );
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  return Boolean(entry) && path.resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectRun()) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
+import { PONCHO_DRIFELLA_CDN_BASE_URL } from '../config/dropMediaDefaults.ts';
 import { drifCardIdentityKey, getDrifCardAssetSources, type DrifCardConfig } from '../drifCards';
+
+const DRIF_GRAIN_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/misc/grain.webp`;
+const DRIF_GLITTER_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/misc/glitter.png`;
 
 type SpringVec2 = { x: number; y: number };
 type SpringVec3 = { x: number; y: number; o: number };
@@ -250,6 +254,8 @@ export default function DrifEffectCard({
       ['--seedy' as never]: String(randomSeed.y),
       ['--cosmosbg' as never]: `${bgPosition1.x}px ${bgPosition1.y}px`,
       ['--birthdaybg' as never]: `${bgPosition2.x}px ${bgPosition2.y}px`,
+      ['--grain' as never]: `url('${DRIF_GRAIN_URL}')`,
+      ['--glitter' as never]: `url('${DRIF_GLITTER_URL}')`,
     };
   }, []);
 

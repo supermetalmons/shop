@@ -19,7 +19,7 @@
     },
     "functions": {
       "entry": ["src/index.ts", "scripts/*.ts", "../tests/*.test.ts"],
-      "project": ["src/**/*.ts", "scripts/**/*.ts", "../tests/**/*.ts"],
+      "project": ["src/**/*.{ts,js}", "scripts/**/*.ts", "../tests/**/*.ts"],
       "ignoreBinaries": ["firebase"]
     }
   }

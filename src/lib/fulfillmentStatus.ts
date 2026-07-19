@@ -1,15 +1,14 @@
-export const FULFILLMENT_STATUS_OPTIONS = ['Preparing', 'Shipped'] as const;
+import {
+  isFulfillmentStatus,
+  normalizeFulfillmentStatus as normalizeSharedFulfillmentStatus,
+} from '../../functions/src/shared/fulfillmentStatus.js';
+import type { FulfillmentStatus } from '../../functions/src/shared/fulfillmentStatus.js';
 
-export type FulfillmentStatus = (typeof FULFILLMENT_STATUS_OPTIONS)[number];
-
-const FULFILLMENT_STATUS_SET = new Set<string>(FULFILLMENT_STATUS_OPTIONS);
-
-function isFulfillmentStatus(value: unknown): value is FulfillmentStatus {
-  return typeof value === 'string' && FULFILLMENT_STATUS_SET.has(value);
-}
+export { FULFILLMENT_STATUS_OPTIONS } from '../../functions/src/shared/fulfillmentStatus.js';
+export type { FulfillmentStatus } from '../../functions/src/shared/fulfillmentStatus.js';
 
 export function normalizeFulfillmentStatus(value: unknown): FulfillmentStatus | '' {
-  return isFulfillmentStatus(value) ? value : '';
+  return normalizeSharedFulfillmentStatus(value) || '';
 }
 
 export function normalizeFulfillmentStatusOrNull(value: unknown): FulfillmentStatus | null {

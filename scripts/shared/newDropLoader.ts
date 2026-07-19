@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
+import { normalizeAndValidateDropId } from './deploymentRegistry.ts';
 import type { NewDropConfig } from './newDropConfig.ts';
 
 const NEW_DROP_CONFIGS_DIR_RELATIVE_PATH = path.join('scripts', 'newDrops');
@@ -22,7 +23,7 @@ function getNewDropConfigsDir(root: string): string {
 }
 
 function getNewDropConfigPath(root: string, dropId: string): string {
-  return path.join(getNewDropConfigsDir(root), `${normalizeNewDropId(dropId)}.ts`);
+  return path.join(getNewDropConfigsDir(root), `${dropId}.ts`);
 }
 
 function listNewDropConfigIds(root: string): string[] {
@@ -68,12 +69,14 @@ export async function loadNewDropConfigById(args: {
   configPath: string;
   knownDropIds: string[];
 }> {
-  const requestedDropId = normalizeNewDropId(args.dropId);
-  const knownDropIds = listNewDropConfigIds(args.root);
-
-  if (!requestedDropId) {
+  if (!String(args.dropId || '').trim()) {
     throw new Error(`Missing dropId.\n${newDropConfigUsage()}`);
   }
+  const requestedDropId = normalizeAndValidateDropId(
+    args.dropId,
+    'requested dropId',
+  );
+  const knownDropIds = listNewDropConfigIds(args.root);
 
   const configPath = getNewDropConfigPath(args.root, requestedDropId);
   const relativeConfigPath = path.relative(args.root, configPath) || configPath;
@@ -103,10 +106,13 @@ export async function loadNewDropConfigById(args: {
     );
   }
 
-  const configuredDropId = normalizeNewDropId(
-    typeof candidate.onchain.dropId === 'string' ? candidate.onchain.dropId : undefined,
+  const configuredDropId = normalizeAndValidateDropId(
+    typeof candidate.onchain.dropId === 'string'
+      ? candidate.onchain.dropId
+      : undefined,
+    'NEW_DROP.onchain.dropId',
   );
-  if (configuredDropId && configuredDropId !== requestedDropId) {
+  if (configuredDropId !== requestedDropId) {
     throw new Error(
       `Drop config file name must match NEW_DROP.onchain.dropId.\n` +
         `- requested dropId : ${requestedDropId}\n` +

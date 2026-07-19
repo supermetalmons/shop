@@ -15,23 +15,48 @@ import {
 } from './shared/discountMerkleDataset.ts';
 import {
   acquireDeploymentRegistryMutationLock,
-  defaultFrontendBoxMediaForDropFamily,
-  defaultFrontendFigureMediaForDropFamily,
+  DeploymentRegistryPostCommitVerificationError,
   normalizeDropBase,
-  readFrontendDropRegistry,
-  readFunctionsDropRegistry,
+  normalizeAndValidateDropId,
+  readDeploymentDropRegistry,
+  renderDeploymentRegistryFileFromSource,
   resolveDropAssetUrl,
   resolveStripeCheckoutEnabledForDropFamily,
   resolveStripeProductTaxCodeForDropFamily,
   requireDropFamily,
-  writeFrontendDeploymentRegistryFile,
-  writeFunctionsDeploymentRegistryFile,
+  writeDeploymentRegistryFile,
+  type DeploymentDropConfigSerialized,
   type DropFamily,
-  type FrontendDropConfigSerialized,
-  type FunctionsDropConfigSerialized,
   type MetadataPathFormat,
   type MintSelectionConfigSerialized,
 } from './shared/deploymentRegistry.ts';
+import {
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
+  decodeBoxMinterConfigData,
+} from '../functions/src/shared/boxMinterConfigCodec.ts';
+import {
+  assertStripeLivePriceConfigured,
+  STRIPE_UNIT_AMOUNT_CENTS_MAX,
+  STRIPE_UNIT_AMOUNT_CENTS_MIN,
+} from '../functions/src/shared/stripeCheckoutCore.ts';
+import {
+  BOX_MINTER_CONFIG_SEED,
+  BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
+  BOX_MINTER_MAX_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
+  BOX_MINTER_MINT_VARIANT_KIND_NONE,
+  BOX_MINTER_MINT_VARIANT_KIND_SIZE,
+  BOX_MINTER_MINT_VARIANT_OPTION_COUNT,
+} from '../functions/src/shared/boxMinterProtocol.ts';
+import {
+  BUBBLEGUM_PROGRAM_ADDRESS,
+  MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
+  MPL_CORE_CPI_SIGNER_ADDRESS,
+  MPL_CORE_PROGRAM_ADDRESS,
+  MPL_NOOP_PROGRAM_ADDRESS,
+  SPL_NOOP_PROGRAM_ADDRESS,
+} from '../functions/src/shared/solanaProgramAddresses.ts';
 import {
   clusterApiUrl,
   AddressLookupTableProgram,
@@ -47,15 +72,19 @@ import {
 } from '@solana/web3.js';
 
 // MPL Core program id.
-const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 // SPL Noop program (Metaplex "log wrapper").
-const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 // Metaplex Noop program (Bubblegum v2 log wrapper).
-const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 // Metaplex Account Compression program (used by Bubblegum v2 trees).
-const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(
+  MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
+);
 // Metaplex Bubblegum program.
-const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
+const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
+// Bubblegum -> MPL-Core CPI signer.
+const MPL_CORE_CPI_SIGNER_ID = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 // NOTE: This repo uses uncompressed MPL-Core for boxes/figures and Bubblegum v2 cNFTs for receipts.
 
 const MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY = 2;
@@ -304,7 +333,7 @@ function trimToUndefined(value: string | undefined): string | undefined {
 
 function describeExistingBoxMinterConfig(configData: Buffer): string {
   try {
-    const cfg = decodeBoxMinterConfig(configData);
+    const cfg = decodeBoxMinterConfigForDeployPreflight(configData);
     return (
       `- existing admin   : ${cfg.admin.toBase58()}\n` +
       `- existing minted  : ${cfg.minted}/${cfg.maxSupply}\n` +
@@ -391,19 +420,12 @@ async function retryRpcRead<T>(
   throw new Error(`${label} failed after ${retries + 1} attempts: ${errorMessage(lastErr)}`);
 }
 
-const MIN_ITEMS_PER_BOX = 0;
-const MAX_ITEMS_PER_BOX = 5;
-const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
-const MAX_DISCOUNT_MINTS_PER_WALLET = 3;
-const MIN_STRIPE_UNIT_AMOUNT_CENTS = 50;
-const MAX_STRIPE_UNIT_AMOUNT_CENTS = 99_999_999;
-
 function requireItemsPerBox(value: number, label: string): number {
   return requireIntegerInRange({
     value,
     label,
-    min: MIN_ITEMS_PER_BOX,
-    max: MAX_ITEMS_PER_BOX,
+    min: BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
+    max: BOX_MINTER_MAX_ITEMS_PER_BOX,
   });
 }
 
@@ -411,8 +433,8 @@ function requireDiscountMintsPerWallet(value: number, label: string): number {
   return requireIntegerInRange({
     value,
     label,
-    min: MIN_DISCOUNT_MINTS_PER_WALLET,
-    max: MAX_DISCOUNT_MINTS_PER_WALLET,
+    min: BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
+    max: BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
   });
 }
 
@@ -420,8 +442,8 @@ function requireStripeLiveUnitAmountCents(value: number, label: string): number 
   return requireIntegerInRange({
     value,
     label,
-    min: MIN_STRIPE_UNIT_AMOUNT_CENTS,
-    max: MAX_STRIPE_UNIT_AMOUNT_CENTS,
+    min: STRIPE_UNIT_AMOUNT_CENTS_MIN,
+    max: STRIPE_UNIT_AMOUNT_CENTS_MAX,
   });
 }
 
@@ -443,22 +465,17 @@ export function prepareStripeCheckoutConfig(args: {
       ? undefined
       : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
 
-  if (stripeCheckout.enabled && args.solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
-    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizeDropId(args.dropId)}`);
-  }
+  assertStripeLivePriceConfigured({
+    dropId: normalizeDropId(args.dropId),
+    solanaCluster: args.solanaCluster,
+    stripeCheckoutEnabled: stripeCheckout.enabled,
+    stripeLiveUnitAmountCents,
+  });
 
   return {
     ...(stripeCheckout.enabled ? { stripeCheckoutEnabled: true } : stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {}),
     ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
   };
-}
-
-function normalizeDiscountMintsPerWallet(value: unknown): number {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed) || parsed < MIN_DISCOUNT_MINTS_PER_WALLET || parsed > MAX_DISCOUNT_MINTS_PER_WALLET) {
-    return 1;
-  }
-  return parsed;
 }
 
 function requireMaxFigureIdWithinU16(args: {
@@ -570,8 +587,10 @@ function prepareMintSelectionConfig(dropCfg: NewDropOnchainConfig): MintSelectio
     );
   }
   const options = Array.isArray(selection.options) ? selection.options : [];
-  if (options.length !== 3) {
-    throw new Error('NEW_DROP.onchain.mintSelection.options must contain exactly 3 size options.');
+  if (options.length !== BOX_MINTER_MINT_VARIANT_OPTION_COUNT) {
+    throw new Error(
+      `NEW_DROP.onchain.mintSelection.options must contain exactly ${BOX_MINTER_MINT_VARIANT_OPTION_COUNT} size options.`,
+    );
   }
   const normalized = options.map((option, index) => {
     const key = requireNonEmptyString(option.key, `NEW_DROP.onchain.mintSelection.options[${index}].key`);
@@ -933,15 +952,20 @@ export async function validateDiscountMerkleDatasetForDeploy(args: {
     rootHex: args.merkleRoot.toString('hex'),
     source: `${getActiveNewDropConfigPath()}:${args.dropId}`,
   });
-  const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
-  const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(frontendPath),
-    readFunctionsDropRegistry(functionsPath),
-  ]);
+  const registryPath = path.join(
+    args.root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  const registry = await readDeploymentDropRegistry(registryPath);
   validateDiscountMerkleFamilyRootInvariant([
-    ...discountMerkleRegistryReferences(args.root, frontendPath, frontendRegistry.drops),
-    ...discountMerkleRegistryReferences(args.root, functionsPath, functionsRegistry.drops),
+    ...discountMerkleRegistryReferences(
+      args.root,
+      registryPath,
+      registry.drops,
+    ),
     {
       dropFamily: desired.dropFamily,
       rootHex: desired.rootHex,
@@ -984,8 +1008,6 @@ export async function finalizeDiscountMerkleAndDeploymentRegistry<T>(args: {
   root: Buffer;
   proofs: Record<string, string[]>;
   filePath: string;
-  frontendConfigPath: string;
-  functionsConfigPath: string;
   commitRegistryChanges: () => Promise<T>;
 }): Promise<T> {
   // The initialize transaction may already have committed this root. Registry
@@ -1000,6 +1022,10 @@ type TextFileSnapshot =
       exists: true;
       content: string;
     };
+type ExistingTextFileSnapshot = Extract<
+  TextFileSnapshot,
+  { exists: true }
+>;
 
 function snapshotTextFile(filePath: string): TextFileSnapshot {
   return existsSync(filePath)
@@ -1011,121 +1037,87 @@ function textFileSnapshotsMatch(left: TextFileSnapshot, right: TextFileSnapshot)
   return left.exists === right.exists && (!left.exists || (right.exists && left.content === right.content));
 }
 
-function restoreTextFileSnapshot(filePath: string, snapshot: TextFileSnapshot): void {
-  if (snapshot.exists) {
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, snapshot.content, 'utf8');
-    return;
+type DeploymentRegistryCommitIo = {
+  snapshot: typeof snapshotTextFile;
+  write: typeof writeDeploymentRegistryFile;
+};
+
+const DEFAULT_DEPLOYMENT_REGISTRY_COMMIT_IO: DeploymentRegistryCommitIo = {
+  snapshot: snapshotTextFile,
+  write: writeDeploymentRegistryFile,
+};
+
+export async function commitDeploymentRegistry(args: {
+  registryPath: string;
+  expectedSnapshot: ExistingTextFileSnapshot;
+  expectedWrittenSnapshot: ExistingTextFileSnapshot;
+}, ioOverrides: Partial<DeploymentRegistryCommitIo> = {}): Promise<string> {
+  const io = {
+    ...DEFAULT_DEPLOYMENT_REGISTRY_COMMIT_IO,
+    ...ioOverrides,
+  };
+  const before = io.snapshot(args.registryPath);
+  if (!textFileSnapshotsMatch(before, args.expectedSnapshot)) {
+    throw new Error(
+      `Canonical deployment registry changed after it was prepared: ${args.registryPath}`,
+    );
   }
-  if (existsSync(filePath)) unlinkSync(filePath);
+
+  io.write({
+    filePath: args.registryPath,
+    expectedContent: args.expectedSnapshot.content,
+    nextContent: args.expectedWrittenSnapshot.content,
+  });
+
+  // Verification failures occur after the same inode has been committed.
+  // Never restore older bytes here: on-chain deployment work has already
+  // landed, and a later reader failure must not erase its registry row.
+  try {
+    const written = io.snapshot(args.registryPath);
+    if (!textFileSnapshotsMatch(written, args.expectedWrittenSnapshot)) {
+      throw new Error(
+        `Canonical deployment registry write did not produce the prepared content: ${args.registryPath}`,
+      );
+    }
+  } catch (verificationError) {
+    throw new DeploymentRegistryPostCommitVerificationError(
+      args.registryPath,
+      verificationError,
+    );
+  }
+  return args.registryPath;
 }
 
-function warnRegistryRollbackSkipped(filePath: string, reason: string): void {
-  try {
-    console.warn(`⚠️  Could not roll back deployment registry: ${filePath} (${reason})`);
-  } catch {
-    // Logging must never replace the original registry commit error.
-  }
-}
-
-export async function commitDeploymentRegistryPair<TFrontend, TFunctions>(args: {
-  frontendConfigPath: string;
-  functionsConfigPath: string;
-  expectedFrontendSnapshot?: TextFileSnapshot;
-  expectedFunctionsSnapshot?: TextFileSnapshot;
-  commitFrontend: () => Promise<TFrontend> | TFrontend;
-  commitFunctions: () => Promise<TFunctions> | TFunctions;
-}): Promise<{ frontend: TFrontend; functions: TFunctions }> {
-  if (path.resolve(args.frontendConfigPath) === path.resolve(args.functionsConfigPath)) {
-    throw new Error('Frontend and Functions deployment registries must be different files');
-  }
-
-  // Snapshot both inputs before the first mutation. This also fails early if an
-  // existing registry cannot be read.
-  const frontendBefore = snapshotTextFile(args.frontendConfigPath);
-  const functionsBefore = snapshotTextFile(args.functionsConfigPath);
-  if (
-    args.expectedFrontendSnapshot &&
-    !textFileSnapshotsMatch(frontendBefore, args.expectedFrontendSnapshot)
-  ) {
-    throw new Error(`Frontend deployment registry changed after it was prepared: ${args.frontendConfigPath}`);
-  }
-  if (
-    args.expectedFunctionsSnapshot &&
-    !textFileSnapshotsMatch(functionsBefore, args.expectedFunctionsSnapshot)
-  ) {
-    throw new Error(`Functions deployment registry changed after it was prepared: ${args.functionsConfigPath}`);
-  }
-
-  let frontend: TFrontend;
-  try {
-    frontend = await args.commitFrontend();
-  } catch (commitError) {
-    try {
-      const frontendCurrent = snapshotTextFile(args.frontendConfigPath);
-      if (!textFileSnapshotsMatch(frontendCurrent, frontendBefore)) {
-        restoreTextFileSnapshot(args.frontendConfigPath, frontendBefore);
-      }
-    } catch (rollbackError) {
-      warnRegistryRollbackSkipped(args.frontendConfigPath, errorMessage(rollbackError));
-    }
-    throw commitError;
-  }
-
-  const frontendWritten = snapshotTextFile(args.frontendConfigPath);
-  try {
-    const functions = await args.commitFunctions();
-    return { frontend, functions };
-  } catch (commitError) {
-    try {
-      const functionsCurrent = snapshotTextFile(args.functionsConfigPath);
-      if (!textFileSnapshotsMatch(functionsCurrent, functionsBefore)) {
-        restoreTextFileSnapshot(args.functionsConfigPath, functionsBefore);
-      }
-    } catch (rollbackError) {
-      warnRegistryRollbackSkipped(args.functionsConfigPath, errorMessage(rollbackError));
-    }
-    try {
-      const frontendCurrent = snapshotTextFile(args.frontendConfigPath);
-      if (textFileSnapshotsMatch(frontendCurrent, frontendWritten)) {
-        restoreTextFileSnapshot(args.frontendConfigPath, frontendBefore);
-      } else {
-        warnRegistryRollbackSkipped(
-          args.frontendConfigPath,
-          'file contents changed after this run wrote it',
-        );
-      }
-    } catch (rollbackError) {
-      warnRegistryRollbackSkipped(args.frontendConfigPath, errorMessage(rollbackError));
-    }
-    throw commitError;
-  }
-}
-
-async function assertDropIdNotConfiguredInDeploymentFiles(args: {
+async function assertDropIdNotConfiguredInDeploymentRegistry(args: {
   dropId: string;
-  frontendConfigPath: string;
-  functionsConfigPath: string;
+  registryPath: string;
 }) {
-  const normalizedDropId = normalizeDropId(args.dropId);
-  if (!normalizedDropId) {
-    throw new Error('Missing NEW_DROP.onchain.dropId');
-  }
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(args.frontendConfigPath),
-    readFunctionsDropRegistry(args.functionsConfigPath),
-  ]);
-  const frontendHas = Boolean(frontendRegistry.drops[normalizedDropId]);
-  const functionsHas = Boolean(functionsRegistry.drops[normalizedDropId]);
-  if (!frontendHas && !functionsHas) return;
-  const presentIn: string[] = [];
-  if (frontendHas) presentIn.push(path.relative(process.cwd(), args.frontendConfigPath));
-  if (functionsHas) presentIn.push(path.relative(process.cwd(), args.functionsConfigPath));
-  throw new Error(
-    `Drop ${normalizedDropId} already exists in deployment registry (${presentIn.join(', ')}).\n` +
-      `This script only supports fresh deployments and will not update an existing drop.\n` +
-      `Choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()}.`,
+  const normalizedDropId = normalizeAndValidateDropId(
+    args.dropId,
+    'NEW_DROP.onchain.dropId',
   );
+  const registry = await readDeploymentDropRegistry(args.registryPath);
+  if (
+    Object.prototype.hasOwnProperty.call(
+      registry.drops,
+      normalizedDropId,
+    )
+  ) {
+    throw new Error(
+      `Drop ${normalizedDropId} already exists in deployment registry (${path.relative(process.cwd(), args.registryPath)}).\n` +
+        `This script only supports fresh deployments and will not update an existing drop.\n` +
+        `Choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()}.`,
+    );
+  }
+  // A no-op conditional write opens the existing target with r+ and checks
+  // the prepared bytes without changing timestamps or content. Do this before
+  // credentials or RPC mutations so a read-only registry cannot strand an
+  // otherwise successful fresh deployment.
+  writeDeploymentRegistryFile({
+    filePath: args.registryPath,
+    expectedContent: registry.sourceContent,
+    nextContent: registry.sourceContent,
+  });
 }
 
 function throwFreshDeployOnlyForExistingConfig(args: {
@@ -1148,9 +1140,9 @@ function throwFreshDeployOnlyForExistingConfig(args: {
   );
 }
 
-async function prepareFrontendDeploymentConfig(args: {
+async function prepareDeploymentRegistry(args: {
   root: string;
-  solanaCluster: string;
+  solanaCluster: SolanaCluster;
   dropId: string;
   dropFamily: DropFamily;
   collectionName: string;
@@ -1162,94 +1154,6 @@ async function prepareFrontendDeploymentConfig(args: {
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
   stripeLiveUnitAmountCents?: number;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-  collectionMint: string;
-}): Promise<{
-  filePath: string;
-  drops: Record<string, FrontendDropConfigSerialized>;
-  sourceSnapshot: TextFileSnapshot;
-}> {
-  const filePath = path.join(args.root, 'src', 'config', 'deployment.ts');
-  const normalizedDropId = normalizeDropId(args.dropId);
-  if (!normalizedDropId) {
-    throw new Error('Missing dropId while writing src/config/deployment.ts');
-  }
-  const sourceBefore = snapshotTextFile(filePath);
-  const existing = await readFrontendDropRegistry(filePath);
-  const sourceSnapshot = snapshotTextFile(filePath);
-  if (!textFileSnapshotsMatch(sourceBefore, sourceSnapshot)) {
-    throw new Error(`Frontend deployment registry changed while it was being prepared: ${filePath}`);
-  }
-  if (existing.drops[normalizedDropId]) {
-    throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
-  }
-  const nextDrops = { ...existing.drops };
-  const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
-  const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
-  const figureMedia = defaultFrontendFigureMediaForDropFamily(dropFamily);
-  const boxMedia = defaultFrontendBoxMediaForDropFamily(dropFamily);
-  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(args.stripeCheckoutEnabled, dropFamily);
-  const stripeLiveUnitAmountCents =
-    args.stripeLiveUnitAmountCents == null
-      ? undefined
-      : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
-  if (stripeCheckout.enabled && args.solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
-    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
-  }
-  nextDrops[normalizedDropId] = {
-    solanaCluster: args.solanaCluster,
-    dropId: normalizedDropId,
-    dropFamily,
-    collectionName,
-    metadataBase: normalizeDropBase(args.metadataBase),
-    metadataPathFormat: args.metadataPathFormat,
-    ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
-    ...(figureMedia ? { figureMedia } : {}),
-    ...(boxMedia ? { boxMedia } : {}),
-    treasury: args.treasury,
-    priceSol: Number(args.priceSol),
-    discountPriceSol: Number(args.discountPriceSol),
-    ...(stripeCheckout.enabled ? { stripeCheckoutEnabled: true } : stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {}),
-    ...(stripeLiveUnitAmountCents != null ? { stripeLiveUnitAmountCents } : {}),
-    discountMintsPerWallet: requireDiscountMintsPerWallet(args.discountMintsPerWallet, 'discountMintsPerWallet'),
-    discountMerkleRoot: args.discountMerkleRoot,
-    maxSupply: Math.floor(Number(args.maxSupply)),
-    itemsPerBox: Math.floor(Number(args.itemsPerBox)),
-    maxPerTx: Math.floor(Number(args.maxPerTx)),
-    namePrefix: args.namePrefix,
-    figureNamePrefix: args.figureNamePrefix,
-    symbol: args.symbol,
-    boxMinterProgramId: args.boxMinterProgramId,
-    ...(trimToUndefined(args.boxMinterConfigPda) ? { boxMinterConfigPda: trimToUndefined(args.boxMinterConfigPda) } : {}),
-    collectionMint: args.collectionMint,
-  };
-  return { filePath, drops: nextDrops, sourceSnapshot };
-}
-
-async function prepareFunctionsDeploymentConfig(args: {
-  root: string;
-  solanaCluster: string;
-  dropId: string;
-  dropFamily: DropFamily;
-  collectionName: string;
-  metadataBase: string;
-  metadataPathFormat: MetadataPathFormat;
-  mintSelection?: MintSelectionConfigSerialized;
-  treasury: string;
-  priceSol: number;
-  discountPriceSol: number;
-  stripeCheckoutEnabled?: boolean;
-  stripeLiveUnitAmountCents?: number;
-  stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
@@ -1263,36 +1167,54 @@ async function prepareFunctionsDeploymentConfig(args: {
   collectionMint: string;
   receiptsMerkleTree: string;
   deliveryLookupTable: string;
+  stripeProductTaxCode?: string;
 }): Promise<{
   filePath: string;
-  drops: Record<string, FunctionsDropConfigSerialized>;
-  sourceSnapshot: TextFileSnapshot;
+  drops: Record<string, DeploymentDropConfigSerialized>;
+  sourceSnapshot: ExistingTextFileSnapshot;
+  expectedWrittenSnapshot: ExistingTextFileSnapshot;
 }> {
-  const filePath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
-  const normalizedDropId = normalizeDropId(args.dropId);
-  if (!normalizedDropId) {
-    throw new Error('Missing dropId while writing functions/src/config/deployment.ts');
-  }
-  const sourceBefore = snapshotTextFile(filePath);
-  const existing = await readFunctionsDropRegistry(filePath);
-  const sourceSnapshot = snapshotTextFile(filePath);
-  if (!textFileSnapshotsMatch(sourceBefore, sourceSnapshot)) {
-    throw new Error(`Functions deployment registry changed while it was being prepared: ${filePath}`);
-  }
-  if (existing.drops[normalizedDropId]) {
-    throw new Error(`Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`);
+  const filePath = path.join(
+    args.root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  const normalizedDropId = normalizeAndValidateDropId(
+    args.dropId,
+    'deployment registry dropId',
+  );
+  const existing = await readDeploymentDropRegistry(filePath);
+  const sourceSnapshot: ExistingTextFileSnapshot = {
+    exists: true,
+    content: existing.sourceContent,
+  };
+  if (
+    Object.prototype.hasOwnProperty.call(
+      existing.drops,
+      normalizedDropId,
+    )
+  ) {
+    throw new Error(
+      `Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`,
+    );
   }
   const nextDrops = { ...existing.drops };
-  const collectionName = String(args.collectionName ?? '').trim() || normalizedDropId;
+  const collectionName =
+    String(args.collectionName ?? '').trim() || normalizedDropId;
   const dropFamily = requireDropFamily(args.dropFamily, 'dropFamily');
+  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(args.stripeCheckoutEnabled, dropFamily);
   const stripeLiveUnitAmountCents =
     args.stripeLiveUnitAmountCents == null
       ? undefined
       : requireStripeLiveUnitAmountCents(args.stripeLiveUnitAmountCents, 'stripeLiveUnitAmountCents');
-  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(args.stripeCheckoutEnabled, dropFamily);
-  if (stripeCheckout.enabled && args.solanaCluster === 'mainnet-beta' && stripeLiveUnitAmountCents == null) {
-    throw new Error(`stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop ${normalizedDropId}`);
-  }
+  assertStripeLivePriceConfigured({
+    dropId: normalizedDropId,
+    solanaCluster: args.solanaCluster,
+    stripeCheckoutEnabled: stripeCheckout.enabled,
+    stripeLiveUnitAmountCents,
+  });
   const stripeProductTaxCode = resolveStripeProductTaxCodeForDropFamily(
     args.stripeProductTaxCode,
     dropFamily,
@@ -1326,7 +1248,20 @@ async function prepareFunctionsDeploymentConfig(args: {
     receiptsMerkleTree: args.receiptsMerkleTree,
     deliveryLookupTable: args.deliveryLookupTable,
   };
-  return { filePath, drops: nextDrops, sourceSnapshot };
+  const expectedWrittenContent = renderDeploymentRegistryFileFromSource({
+    filePath,
+    existingContent: sourceSnapshot.content,
+    drops: nextDrops,
+  });
+  return {
+    filePath,
+    drops: nextDrops,
+    sourceSnapshot,
+    expectedWrittenSnapshot: {
+      exists: true,
+      content: expectedWrittenContent,
+    },
+  };
 }
 
 function u64LE(value: bigint): Buffer {
@@ -1359,17 +1294,33 @@ function u8(value: number): Buffer {
 }
 
 function encodeMintSelectionInitializeArgs(mintSelection: MintSelectionConfigSerialized | undefined): Buffer {
-  const zeroArray = Array.from({ length: 3 }, () => u32LE(0));
+  const zeroArray = Array.from(
+    { length: BOX_MINTER_MINT_VARIANT_OPTION_COUNT },
+    () => u32LE(0),
+  );
   if (!mintSelection) {
-    return Buffer.concat([u8(0), ...zeroArray, ...zeroArray, ...zeroArray]);
+    return Buffer.concat([
+      u8(BOX_MINTER_MINT_VARIANT_KIND_NONE),
+      ...zeroArray,
+      ...zeroArray,
+      ...zeroArray,
+    ]);
   }
-  if (mintSelection.kind !== 'size' || mintSelection.options.length !== 3) {
+  if (
+    mintSelection.kind !== 'size' ||
+    mintSelection.options.length !== BOX_MINTER_MINT_VARIANT_OPTION_COUNT
+  ) {
     throw new Error('Invalid mintSelection config for initialize');
   }
   const startIds = mintSelection.options.map((option) => u32LE(option.startId));
   const endIds = mintSelection.options.map((option) => u32LE(option.endId));
   const nextIds = mintSelection.options.map((option) => u32LE(option.startId));
-  return Buffer.concat([u8(1), ...startIds, ...endIds, ...nextIds]);
+  return Buffer.concat([
+    u8(BOX_MINTER_MINT_VARIANT_KIND_SIZE),
+    ...startIds,
+    ...endIds,
+    ...nextIds,
+  ]);
 }
 
 function borshOption(value: Buffer | null | undefined): Buffer {
@@ -1614,13 +1565,6 @@ async function upsertMplCoreCollectionRoyalties(args: {
   tx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(add core collection royalties)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
   const sig = await sendAndConfirmTx({ connection, tx, signers: [payer], label: 'add core collection royalties', commitment: 'confirmed' });
   console.log('✅ Collection royalties added:', sig);
-}
-
-function readBorshString(buf: Buffer, offset: number): { value: string; offset: number } {
-  const len = buf.readUInt32LE(offset);
-  const start = offset + 4;
-  const end = start + len;
-  return { value: buf.subarray(start, end).toString('utf8'), offset: end };
 }
 
 function canRead(buf: Buffer, offset: number, length: number): boolean {
@@ -1923,93 +1867,37 @@ async function ensureMplCoreCollectionRoyalties(args: {
   });
 }
 
-function decodeBoxMinterConfig(data: Buffer) {
-  const expectedMinLen =
-    8 + // anchor discriminator
-    32 * 3 +
-    8 +
-    8 +
-    32 +
-    4 +
-    1 +
-    1 +
-    4 +
-    4 +
-    8 +
-    4 +
-    10 +
-    4 +
-    96 +
-    1 +
-    1;
-  if (data.length < expectedMinLen) {
+export function decodeBoxMinterConfigForDeployPreflight(data: Buffer) {
+  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
     throw new Error(
       `Existing on-chain config uses an older schema and cannot be reused.\n` +
-        `- expected config account size >= ${expectedMinLen} bytes\n` +
+        `- expected config account size >= ${BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS} bytes\n` +
         `- actual config account size      : ${data.length} bytes\n` +
         `\n` +
         `This configurable items-per-box change requires a fresh deployment/init.\n` +
         `Fix: deploy to a fresh program id and rerun this script.`,
     );
   }
-  // Anchor account discriminator is the first 8 bytes.
-  let o = 8;
-  const admin = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const treasury = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const coreCollection = new PublicKey(data.subarray(o, o + 32));
-  o += 32;
-  const priceLamports = data.readBigUInt64LE(o);
-  o += 8;
-  const discountPriceLamports = data.readBigUInt64LE(o);
-  o += 8;
-  const discountMerkleRoot = data.subarray(o, o + 32);
-  o += 32;
-  const maxSupply = data.readUInt32LE(o);
-  o += 4;
-  const maxPerTx = data[o];
-  o += 1;
-  const itemsPerBox = data[o];
-  o += 1;
-  const minted = data.readUInt32LE(o);
-  o += 4;
-  const namePrefix = readBorshString(data, o);
-  o = namePrefix.offset;
-  const symbol = readBorshString(data, o);
-  o = symbol.offset;
-  const uriBase = readBorshString(data, o);
-  o = uriBase.offset;
-  const started = Boolean(data[o]);
-  o += 1;
-  const bump = data[o];
-  o += 1;
-  const discountMintsPerWallet = normalizeDiscountMintsPerWallet(data[o]);
-
+  // Preserve the historical deploy preflight policy: the discriminator is not
+  // consulted here because ownership is validated by the caller.
+  const decoded = decodeBoxMinterConfigData(data, {
+    validateDiscriminator: false,
+    validateItemsPerBox: false,
+    decodeExtensions: false,
+  });
   return {
-    admin,
-    treasury,
-    coreCollection,
-    priceLamports,
-    discountPriceLamports,
-    discountMerkleRoot,
-    maxSupply,
-    maxPerTx,
-    itemsPerBox,
-    started,
-    minted,
-    namePrefix: namePrefix.value,
-    symbol: symbol.value,
-    uriBase: uriBase.value,
-    bump,
-    discountMintsPerWallet,
+    ...decoded,
+    admin: new PublicKey(decoded.admin),
+    treasury: new PublicKey(decoded.treasury),
+    coreCollection: new PublicKey(decoded.coreCollection),
+    discountMerkleRoot: Buffer.from(decoded.discountMerkleRoot),
   };
 }
 
 function boxMinterConfigPda(programId: PublicKey, dropSeed?: Buffer): PublicKey {
   return (dropSeed?.length === 32
-    ? PublicKey.findProgramAddressSync([Buffer.from('config'), dropSeed], programId)
-    : PublicKey.findProgramAddressSync([Buffer.from('config')], programId))[0];
+    ? PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED), dropSeed], programId)
+    : PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], programId))[0];
 }
 
 async function assertLegacySingletonConfigAbsentForSharedProgramReuse(args: {
@@ -2040,17 +1928,19 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
   programId: string;
   desiredMetadataPathFormat: MetadataPathFormat;
 }): Promise<void> {
-  const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
-  const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(frontendPath),
-    readFunctionsDropRegistry(functionsPath),
-  ]);
-
-  const matches = [
-    ...Object.values(frontendRegistry.drops).map((drop) => ({ source: 'frontend', filePath: frontendPath, drop })),
-    ...Object.values(functionsRegistry.drops).map((drop) => ({ source: 'functions', filePath: functionsPath, drop })),
-  ].filter(
+  const registryPath = path.join(
+    args.root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  const registry = await readDeploymentDropRegistry(registryPath);
+  const matches = Object.values(registry.drops).map((drop) => ({
+    source: 'canonical',
+    filePath: registryPath,
+    drop,
+  })).filter(
     ({ drop }) =>
       drop.dropId !== args.dropId &&
       drop.solanaCluster === args.solanaCluster &&
@@ -2072,7 +1962,7 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
       `Deployment registry metadata path formats are inconsistent for program ${args.programId} on ${args.solanaCluster}.\n` +
         inconsistentDrops.map(([dropId, formats]) => `- ${dropId}: ${Array.from(formats).sort().join(', ')}`).join('\n') +
         `\n` +
-        `Fix src/config/deployment.ts and functions/src/config/deployment.ts before reusing this program id.`,
+        `Fix functions/src/shared/deploymentRegistry.ts before reusing this program id.`,
     );
   }
 
@@ -2329,17 +2219,26 @@ async function resolveReusableProgramId(args: {
   desiredMetadataPathFormat: MetadataPathFormat;
   referenceDropId?: string;
 }): Promise<ReusableProgramResolution> {
-  const frontendPath = path.join(args.root, 'src', 'config', 'deployment.ts');
-  const functionsPath = path.join(args.root, 'functions', 'src', 'config', 'deployment.ts');
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(frontendPath),
-    readFunctionsDropRegistry(functionsPath),
-  ]);
-  const entries = [
-    ...Object.values(frontendRegistry.drops).map((drop) => ({ source: path.relative(args.root, frontendPath), drop })),
-    ...Object.values(functionsRegistry.drops).map((drop) => ({ source: path.relative(args.root, functionsPath), drop })),
-  ];
-  const referenceDropId = normalizeDropId(args.referenceDropId);
+  const dropId = normalizeAndValidateDropId(args.dropId);
+  const rawReferenceDropId = trimToUndefined(args.referenceDropId);
+  const referenceDropId = rawReferenceDropId
+    ? normalizeAndValidateDropId(
+        rawReferenceDropId,
+        'NEW_DROP.deploy.reuseProgramIdFromDropId',
+      )
+    : undefined;
+  const registryPath = path.join(
+    args.root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
+  const registry = await readDeploymentDropRegistry(registryPath);
+  const entries = Object.values(registry.drops).map((drop) => ({
+    source: path.relative(args.root, registryPath),
+    drop,
+  }));
 
   if (referenceDropId) {
     const matches = entries.filter(({ drop }) => drop.dropId === referenceDropId && drop.solanaCluster === args.solanaCluster);
@@ -2364,7 +2263,7 @@ async function resolveReusableProgramId(args: {
 
   const candidates = entries.filter(
     ({ drop }) =>
-      drop.dropId !== args.dropId &&
+      drop.dropId !== dropId &&
       drop.solanaCluster === args.solanaCluster &&
       drop.metadataPathFormat === args.desiredMetadataPathFormat &&
       String(drop.boxMinterProgramId || '').trim(),
@@ -2467,8 +2366,7 @@ async function ensureDeliveryLookupTable(args: {
     MPL_NOOP_PROGRAM_ID,
     MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
     BUBBLEGUM_PROGRAM_ID,
-    // Bubblegum -> MPL-Core CPI signer.
-    new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk'),
+    MPL_CORE_CPI_SIGNER_ID,
     // Also include the receipt tree + its Bubblegum PDA so claim txs can stay tiny.
     ...(receiptsMerkleTree ? [receiptsMerkleTree, bubblegumTreeConfigPda(receiptsMerkleTree)] : []),
   ]);
@@ -2693,17 +2591,25 @@ async function main() {
         `${newDropConfigUsage()}`,
     );
   }
-  const requestedDropId = String(extraArgs[0] || '').trim().toLowerCase();
-  if (!requestedDropId) {
+  if (!String(extraArgs[0] || '').trim()) {
     throw new Error(`Missing dropId.\n${newDropConfigUsage()}`);
   }
+  const requestedDropId = normalizeAndValidateDropId(
+    extraArgs[0],
+    'requested dropId',
+  );
 
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const root = path.resolve(__dirname, '..');
   const onchainDir = path.join(root, 'onchain');
-  const frontendDeploymentCfgPath = path.join(root, 'src', 'config', 'deployment.ts');
-  const functionsDeploymentCfgPath = path.join(root, 'functions', 'src', 'config', 'deployment.ts');
+  const deploymentRegistryPath = path.join(
+    root,
+    'functions',
+    'src',
+    'shared',
+    'deploymentRegistry.ts',
+  );
   const { config: newDropConfig, configPath } = await loadNewDropConfigById({
     root,
     dropId: requestedDropId,
@@ -2713,7 +2619,10 @@ async function main() {
   const dropCfg = newDropConfig.onchain;
   const metadataPathFormat: MetadataPathFormat = 'compact';
   const cluster: SolanaCluster = deployCfg.solanaCluster;
-  const dropId = normalizeDropId(requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId'));
+  const dropId = normalizeAndValidateDropId(
+    requireNonEmptyString(dropCfg.dropId, 'NEW_DROP.onchain.dropId'),
+    'NEW_DROP.onchain.dropId',
+  );
   const dropFamily = requireDropFamily(dropCfg.dropFamily, 'NEW_DROP.onchain.dropFamily');
   const stripeCheckoutConfig = prepareStripeCheckoutConfig({
     solanaCluster: cluster,
@@ -2723,10 +2632,9 @@ async function main() {
     stripeLiveUnitAmountCents: dropCfg.stripeLiveUnitAmountCents,
   });
   const dropSeed = deriveDropSeed(dropId);
-  await assertDropIdNotConfiguredInDeploymentFiles({
+  await assertDropIdNotConfiguredInDeploymentRegistry({
     dropId,
-    frontendConfigPath: frontendDeploymentCfgPath,
-    functionsConfigPath: functionsDeploymentCfgPath,
+    registryPath: deploymentRegistryPath,
   });
   const dropMetadataBase = normalizeDropBase(requireNonEmptyString(dropCfg.metadataBase, 'NEW_DROP.onchain.metadataBase'));
   const collectionMetadata = prepareCollectionMetadata(dropCfg);
@@ -2861,10 +2769,9 @@ async function main() {
   try {
   // The first check happened before the private-key prompt. Recheck under the
   // repository lock so another completed deployment cannot slip through.
-  await assertDropIdNotConfiguredInDeploymentFiles({
+  await assertDropIdNotConfiguredInDeploymentRegistry({
     dropId,
-    frontendConfigPath: frontendDeploymentCfgPath,
-    functionsConfigPath: functionsDeploymentCfgPath,
+    registryPath: deploymentRegistryPath,
   });
   if (reusableProgram) {
     await revalidateReusableProgramResolution({
@@ -3251,95 +3158,51 @@ async function main() {
   // For fresh deployments, never reuse a previous drop's LUT: use the newly created LUT or leave empty.
   const deliveryLutStr = deliveryLut?.toBase58() || '';
 
-  const [preparedFrontendCfg, preparedFunctionsCfg] = await Promise.all([
-    prepareFrontendDeploymentConfig({
-      root,
-      solanaCluster: cluster,
-      dropId,
-      dropFamily,
-      collectionName: collectionMetadata.name,
-      metadataBase: requiredDropMetadataBase,
-      metadataPathFormat,
-      mintSelection: boxMinterConfig.mintSelection,
-      treasury: treasury.toBase58(),
-      priceSol: Number(boxMinterConfig.priceSol),
-      discountPriceSol: Number(boxMinterConfig.discountPriceSol),
-      stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
-      stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
-      discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
-      discountMerkleRoot: discountMerkleRoot.toString('hex'),
-      maxSupply: Number(boxMinterConfig.maxSupply),
-      itemsPerBox: Number(boxMinterConfig.itemsPerBox),
-      maxPerTx: Number(boxMinterConfig.maxPerTx),
-      namePrefix: boxMinterConfig.namePrefix,
-      figureNamePrefix: boxMinterConfig.figureNamePrefix,
-      symbol: boxMinterConfig.symbol,
-      boxMinterProgramId: programPk.toBase58(),
-      boxMinterConfigPda: configPda.toBase58(),
-      collectionMint: resolvedCoreCollection.toBase58(),
-    }),
-    prepareFunctionsDeploymentConfig({
-      root,
-      solanaCluster: cluster,
-      dropId,
-      dropFamily,
-      collectionName: collectionMetadata.name,
-      metadataBase: requiredDropMetadataBase,
-      metadataPathFormat,
-      mintSelection: boxMinterConfig.mintSelection,
-      treasury: treasury.toBase58(),
-      priceSol: Number(boxMinterConfig.priceSol),
-      discountPriceSol: Number(boxMinterConfig.discountPriceSol),
-      stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
-      stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
-      stripeProductTaxCode: boxMinterConfig.stripeProductTaxCode,
-      discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
-      discountMerkleRoot: discountMerkleRoot.toString('hex'),
-      maxSupply: Number(boxMinterConfig.maxSupply),
-      itemsPerBox: Number(boxMinterConfig.itemsPerBox),
-      maxPerTx: Number(boxMinterConfig.maxPerTx),
-      namePrefix: boxMinterConfig.namePrefix,
-      figureNamePrefix: boxMinterConfig.figureNamePrefix,
-      symbol: boxMinterConfig.symbol,
-      boxMinterProgramId: programPk.toBase58(),
-      boxMinterConfigPda: configPda.toBase58(),
-      collectionMint: resolvedCoreCollection.toBase58(),
-      receiptsMerkleTree: receiptsTreeStr,
-      deliveryLookupTable: deliveryLutStr,
-    }),
-  ]);
-  const { frontendCfgPath, functionsCfgWrittenPath } = await finalizeDiscountMerkleAndDeploymentRegistry({
+  const preparedRegistry = await prepareDeploymentRegistry({
+    root,
+    solanaCluster: cluster,
+    dropId,
+    dropFamily,
+    collectionName: collectionMetadata.name,
+    metadataBase: requiredDropMetadataBase,
+    metadataPathFormat,
+    mintSelection: boxMinterConfig.mintSelection,
+    treasury: treasury.toBase58(),
+    priceSol: Number(boxMinterConfig.priceSol),
+    discountPriceSol: Number(boxMinterConfig.discountPriceSol),
+    stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
+    stripeLiveUnitAmountCents: boxMinterConfig.stripeLiveUnitAmountCents,
+    stripeProductTaxCode: boxMinterConfig.stripeProductTaxCode,
+    discountMintsPerWallet: Number(boxMinterConfig.discountMintsPerWallet),
+    discountMerkleRoot: discountMerkleRoot.toString('hex'),
+    maxSupply: Number(boxMinterConfig.maxSupply),
+    itemsPerBox: Number(boxMinterConfig.itemsPerBox),
+    maxPerTx: Number(boxMinterConfig.maxPerTx),
+    namePrefix: boxMinterConfig.namePrefix,
+    figureNamePrefix: boxMinterConfig.figureNamePrefix,
+    symbol: boxMinterConfig.symbol,
+    boxMinterProgramId: programPk.toBase58(),
+    boxMinterConfigPda: configPda.toBase58(),
+    collectionMint: resolvedCoreCollection.toBase58(),
+    receiptsMerkleTree: receiptsTreeStr,
+    deliveryLookupTable: deliveryLutStr,
+  });
+  const registryWrittenPath = await finalizeDiscountMerkleAndDeploymentRegistry({
     root: discountMerkleRoot,
     proofs: discountMerkle.proofs,
     filePath: discountMerkleDataset.filePath,
-    frontendConfigPath: frontendDeploymentCfgPath,
-    functionsConfigPath: functionsDeploymentCfgPath,
     commitRegistryChanges: async () => {
-      const committed = await commitDeploymentRegistryPair({
-        frontendConfigPath: preparedFrontendCfg.filePath,
-        functionsConfigPath: preparedFunctionsCfg.filePath,
-        expectedFrontendSnapshot: preparedFrontendCfg.sourceSnapshot,
-        expectedFunctionsSnapshot: preparedFunctionsCfg.sourceSnapshot,
-        commitFrontend: () => {
-          writeFrontendDeploymentRegistryFile(preparedFrontendCfg);
-          return preparedFrontendCfg.filePath;
-        },
-        commitFunctions: () => {
-          writeFunctionsDeploymentRegistryFile(preparedFunctionsCfg);
-          return preparedFunctionsCfg.filePath;
-        },
+      return commitDeploymentRegistry({
+        registryPath: preparedRegistry.filePath,
+        expectedSnapshot: preparedRegistry.sourceSnapshot,
+        expectedWrittenSnapshot: preparedRegistry.expectedWrittenSnapshot,
       });
-      return {
-        frontendCfgPath: committed.frontend,
-        functionsCfgWrittenPath: committed.functions,
-      };
     },
   });
 
   console.log('');
   console.log('--- updated tracked config ---');
-  console.log(`- ${path.relative(root, frontendCfgPath)}`);
-  console.log(`- ${path.relative(root, functionsCfgWrittenPath)}`);
+  console.log(`- ${path.relative(root, registryWrittenPath)}`);
   console.log('');
   } finally {
     deploymentCleanup.cleanup();

@@ -6,6 +6,7 @@ import {
   requireStripeReceiptClaimCode,
 } from './stripeCheckout/contract.js';
 import type { DropFamily } from './config/deployment.js';
+import { isAdminIrlRedeemDropFamily } from './shared/adminIrlEligibility.js';
 
 export const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
   label: 'Redeemed for IRL',
@@ -86,7 +87,9 @@ export function getAdminIrlRedeemUnsupportedReason(args: {
   itemsPerBox: number;
   sharesCollectionMint: boolean;
 }): string | null {
-  if (args.dropFamily !== 'card_nft_2') return 'Admin IRL redeem is only available for card_nft_2 packs.';
+  if (!isAdminIrlRedeemDropFamily(args.dropFamily)) {
+    return 'Admin IRL redeem is only available for card_nft_2 packs.';
+  }
   if (!Number.isFinite(args.itemsPerBox) || args.itemsPerBox < 1) return 'Admin IRL redeem requires pack-based drops.';
   if (args.sharesCollectionMint) return 'Admin IRL redeem cannot be disambiguated for a shared collection mint.';
   return null;

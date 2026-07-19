@@ -137,6 +137,13 @@ import {
 } from './lib/fulfillmentTracking';
 import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from './lib/stripeReceiptClaims';
 import {
+  STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
+  classifyStripeCheckoutKind,
+  resolveStripeCheckoutUnitAmountCents,
+  stripeCheckoutModeForDrop,
+  type StripeCheckoutMode as StripePaymentMode,
+} from '../functions/src/shared/stripeCheckoutCore.ts';
+import {
   DeliveryOrderSummary,
   InventoryItem,
   InventoryPreviewVideo,
@@ -225,7 +232,6 @@ type ReceiptViewerImage = {
   image?: string;
 };
 type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-count'?: string };
-type StripePaymentMode = 'test' | 'live';
 type StripeCheckoutReturn =
   | {
       status: 'success';
@@ -239,46 +245,9 @@ type CardNft2PackVideoSources = readonly PreviewVideoSource[];
 
 const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
-const STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT = 100;
-const STRIPE_UNIT_AMOUNT_CENTS_MIN = 50;
-const STRIPE_UNIT_AMOUNT_CENTS_MAX = 99_999_999;
 
 function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
   return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
-}
-
-function stripeCheckoutModeForDrop(drop: FrontendDeploymentConfig | null | undefined): StripePaymentMode | null {
-  if (!drop?.stripeCheckoutEnabled) return null;
-  const { solanaCluster } = drop;
-  if (solanaCluster === 'devnet') return 'test';
-  if (solanaCluster === 'mainnet-beta') return 'live';
-  return null;
-}
-
-type StripeCheckoutKind = 'size_variant' | 'standard_pack';
-
-function stripeCheckoutKindForDrop(drop: FrontendDeploymentConfig | null | undefined): StripeCheckoutKind | null {
-  if (!drop) return null;
-  const itemsPerBox = Math.floor(Number(drop.itemsPerBox));
-  if (itemsPerBox === 0 && drop.mintSelection?.kind === 'size') return 'size_variant';
-  if (itemsPerBox > 0 && !drop.mintSelection) return 'standard_pack';
-  return null;
-}
-
-function normalizeStripeUnitAmountCents(value: unknown): number | null {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed)) return null;
-  if (parsed < STRIPE_UNIT_AMOUNT_CENTS_MIN || parsed > STRIPE_UNIT_AMOUNT_CENTS_MAX) return null;
-  return parsed;
-}
-
-function stripeTestUnitAmountCents(): number {
-  const configuredAmountCents =
-    import.meta.env.STRIPE_TEST_UNIT_AMOUNT_CENTS ?? import.meta.env.VITE_STRIPE_TEST_UNIT_AMOUNT_CENTS;
-  return (
-    normalizeStripeUnitAmountCents(configuredAmountCents) ||
-    STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT
-  );
 }
 
 function stripeCheckoutUnitAmountCentsForDrop(
@@ -286,9 +255,13 @@ function stripeCheckoutUnitAmountCentsForDrop(
   mode: StripePaymentMode | null,
 ): number | null {
   if (!drop || !mode) return null;
-  return mode === 'test'
-    ? stripeTestUnitAmountCents()
-    : normalizeStripeUnitAmountCents(drop.stripeLiveUnitAmountCents);
+  return resolveStripeCheckoutUnitAmountCents({
+    mode,
+    testConfiguredUnitAmountCents:
+      import.meta.env.STRIPE_TEST_UNIT_AMOUNT_CENTS ?? import.meta.env.VITE_STRIPE_TEST_UNIT_AMOUNT_CENTS,
+    testFallbackUnitAmountCents: STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
+    liveConfiguredUnitAmountCents: drop.stripeLiveUnitAmountCents,
+  });
 }
 
 function formatStripeUsdAmountCents(amountCents: number): string {
@@ -1654,7 +1627,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     routeStripePaymentUnitAmountCents == null
       ? undefined
       : formatStripeUsdAmountCents(routeStripePaymentUnitAmountCents);
-  const routeStripeCheckoutKind = stripeCheckoutKindForDrop(routeDrop);
+  const routeStripeCheckoutKind = classifyStripeCheckoutKind(routeDrop);
   const routeStripePaymentVisible = Boolean(
     routeDrop && routeStripePaymentMode && routeStripePaymentUnitAmountCents != null && routeStripeCheckoutKind,
   );
@@ -4014,7 +3987,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       showToast('Stripe payment is not enabled for this drop');
       return;
     }
-    const stripeCheckoutKind = stripeCheckoutKindForDrop(mintDrop);
+    const stripeCheckoutKind = classifyStripeCheckoutKind(mintDrop);
     if (!stripeCheckoutKind) {
       showToast('Stripe payment is not available for this drop');
       return;

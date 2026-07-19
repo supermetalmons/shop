@@ -1,16 +1,27 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, type QueryDocumentSnapshot, Timestamp } from 'firebase-admin/firestore';
 import { PublicKey } from '@solana/web3.js';
+import {
+  createFirebaseCliFirestoreRestClient,
+  decodeFirestoreRestDocument,
+} from '../../scripts/shared/firebaseCliFirestoreRest.ts';
 import { normalizeDropId, requireFunctionsDrop, type SolanaCluster } from '../src/config/deployment.ts';
 import {
-  boxIdFromMetadataUri,
-  dudeIdFromMetadataUri,
-  metadataKindFromUri,
-  selectMetadataUri,
-} from '../src/dropMetadataUri.ts';
+  dasAssetBoxId,
+  dasAssetDudeId,
+  dasAssetKind,
+  dasAssetLooksBurntOrClosed,
+  dasAssetMatchesCollection,
+  dasAssetMetadataName,
+  dasAssetMetadataUri,
+  type DasAsset,
+} from '../src/shared/dasAsset.ts';
+import {
+  heliusSearchAssetsHasNextPage,
+  heliusSearchAssetsItems,
+} from '../src/shared/heliusDas.ts';
 
 type Args = {
   code?: string;
@@ -53,12 +64,16 @@ type ClaimInspection = ClaimRecord & {
   };
 };
 
-type DasAsset = Record<string, any>;
-
 const PROJECT_ID = 'mons-shop';
 const IRL_CODE_DIGITS = 10;
-const FIREBASE_CLI_CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
-const FIREBASE_CLI_CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi';
+const CHECK_IRL_CLAIMS_DAS_NAME_OPTIONS = { metadataNameMode: 'string-only' } as const;
+const CHECK_IRL_CLAIMS_DAS_BURN_OPTIONS = {
+  missingAssetResult: false,
+  nonBooleanFlagIsBurnt: true,
+} as const;
+const firestoreRestClient = createFirebaseCliFirestoreRestClient({
+  projectId: PROJECT_ID,
+});
 
 function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
   return cluster === 'mainnet-beta'
@@ -247,99 +262,31 @@ function limitClaims(claims: ClaimRecord[], limit: number | undefined): ClaimRec
 }
 
 function getAssetKind(asset: DasAsset): 'box' | 'dude' | 'certificate' | null {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'type');
-  const value = kindAttr?.value;
-  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
-
-  const kindFromUri = metadataKindFromUri(getAssetJsonUri(asset) || '');
-  if (kindFromUri) return kindFromUri;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
-  if (lowerName.includes('blind box')) return 'box';
-  if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
-  if (lowerName.includes('figure')) return 'dude';
-
-  const compact = lowerName.replace(/\s+/g, '');
-  if (/^(b|box)#?\d+$/.test(compact)) return 'box';
-  return null;
+  return dasAssetKind(asset, CHECK_IRL_CLAIMS_DAS_NAME_OPTIONS);
 }
 
 function getBoxIdFromAsset(asset: DasAsset): string | undefined {
-  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'box_id');
-  const value = boxAttr?.value;
-  if (typeof value === 'string' && value) return value;
-
-  const boxId = boxIdFromMetadataUri(getAssetJsonUri(asset) || '');
-  if (boxId) return boxId;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
-  const match = normalized.match(/^(b|box)#?(\d+)$/);
-  if (match?.[2]) return match[2];
-  return undefined;
+  return dasAssetBoxId(asset, CHECK_IRL_CLAIMS_DAS_NAME_OPTIONS);
 }
 
 function getDudeIdFromAsset(asset: DasAsset): number | undefined {
-  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'dude_id');
-  const num = Number(dudeAttr?.value);
-  if (Number.isFinite(num)) return num;
-
-  const idFromUri = dudeIdFromMetadataUri(getAssetJsonUri(asset) || '');
-  if (typeof idFromUri === 'number') return idFromUri;
-  return undefined;
+  return dasAssetDudeId(asset);
 }
 
 function getAssetJsonUri(asset: DasAsset): string | undefined {
-  return (
-    selectMetadataUri(
-      asset?.content?.json_uri,
-      asset?.content?.jsonUri,
-      asset?.content?.metadata?.json_uri,
-      asset?.content?.metadata?.jsonUri,
-      asset?.content?.metadata?.uri,
-    ) || undefined
-  );
+  return dasAssetMetadataUri(asset) || undefined;
 }
 
 function getAssetName(asset: DasAsset): string | undefined {
-  const name = asset?.content?.metadata?.name || asset?.content?.metadata?.title;
-  return typeof name === 'string' && name ? name : undefined;
+  return dasAssetMetadataName(asset);
 }
 
 function looksBurntOrClosedInHelius(asset: DasAsset | null | undefined): boolean {
-  if (!asset || typeof asset !== 'object') return false;
-  const anyAsset = asset as any;
-  const burntFlag =
-    anyAsset?.burnt ??
-    anyAsset?.burned ??
-    anyAsset?.is_burnt ??
-    anyAsset?.isBurnt ??
-    anyAsset?.compression?.burnt ??
-    anyAsset?.compression?.burned ??
-    anyAsset?.compression?.is_burnt ??
-    anyAsset?.compression?.isBurnt ??
-    anyAsset?.ownership?.burnt ??
-    anyAsset?.ownership?.burned;
-  if (typeof burntFlag === 'boolean') return burntFlag;
-  if (burntFlag != null && burntFlag !== false) return true;
-
-  const ownershipState = String(
-    anyAsset?.ownership?.ownership_state || anyAsset?.ownership?.ownershipState || anyAsset?.ownership?.state || '',
-  ).toLowerCase();
-  if (ownershipState && /burn/.test(ownershipState)) return true;
-  return false;
+  return dasAssetLooksBurntOrClosed(asset, CHECK_IRL_CLAIMS_DAS_BURN_OPTIONS);
 }
 
 function assetMatchesCollection(asset: DasAsset, expectedCollectionMint: string): boolean {
-  const grouped = asset?.grouping;
-  if (Array.isArray(grouped)) {
-    for (const group of grouped) {
-      if (group?.group_key === 'collection' && group?.group_value === expectedCollectionMint) return true;
-    }
-  }
-  const collectionKey = asset?.content?.metadata?.collection?.key;
-  return typeof collectionKey === 'string' && collectionKey === expectedCollectionMint;
+  return dasAssetMatchesCollection(asset, expectedCollectionMint);
 }
 
 function isMonsAsset(asset: DasAsset): boolean {
@@ -368,9 +315,24 @@ async function fetchCollectionAssets(): Promise<DasAsset[]> {
             showUnverifiedCollections: true,
           },
         });
-        const items = Array.isArray(result?.items) ? result.items : [];
+        const items = heliusSearchAssetsItems<DasAsset>(result);
         out.push(...items.filter(isMonsAsset));
-        if (items.length < limit) break;
+        // This audit has always paged against its requested size, even when
+        // Helius echoes a different response limit.
+        const paginationResult = { ...result, limit };
+        if (
+          !heliusSearchAssetsHasNextPage(
+            paginationResult,
+            page,
+            items,
+            limit,
+            {
+              totalPolicy: 'ignore',
+            },
+          )
+        ) {
+          break;
+        }
       }
 
       return out;
@@ -421,133 +383,33 @@ function parseClaimDoc(doc: QueryDocumentSnapshot): ClaimRecord | null {
   return parseClaimData(doc.data() as any, doc.id);
 }
 
-function decodeFirestoreValue(value: any): unknown {
-  if (!value || typeof value !== 'object') return undefined;
-  if ('stringValue' in value) return String(value.stringValue);
-  if ('integerValue' in value) return Number(value.integerValue);
-  if ('doubleValue' in value) return Number(value.doubleValue);
-  if ('booleanValue' in value) return Boolean(value.booleanValue);
-  if ('timestampValue' in value) return String(value.timestampValue);
-  if ('arrayValue' in value) {
-    const values = Array.isArray(value.arrayValue?.values) ? value.arrayValue.values : [];
-    return values.map((entry: any) => decodeFirestoreValue(entry));
-  }
-  if ('mapValue' in value) {
-    const fields = value.mapValue?.fields || {};
-    const out: Record<string, unknown> = {};
-    for (const [key, inner] of Object.entries(fields)) {
-      out[key] = decodeFirestoreValue(inner);
-    }
-    return out;
-  }
-  if ('nullValue' in value) return null;
-  return undefined;
-}
-
-function decodeFirestoreDocument(doc: any): ClaimRecord | null {
-  const rawFields = doc?.fields && typeof doc.fields === 'object' ? doc.fields : {};
-  const data: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(rawFields)) {
-    data[key] = decodeFirestoreValue(value);
-  }
-  const name = typeof doc?.name === 'string' ? doc.name : '';
-  const docId = name ? name.split('/').pop() || '' : '';
-  return parseClaimData(data, docId);
-}
-
-let cachedFirebaseCliAccessTokenPromise: Promise<string> | null = null;
-
-function firebaseCliAuthState(): { refreshToken: string; scope?: string } {
-  const result = spawnSync('firebase', ['login:list', '--json'], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      FIREBASE_CLI_DISABLE_UPDATE_CHECK: '1',
-    },
-  });
-
-  if (result.status !== 0) {
-    const message = result.stderr?.trim() || result.stdout?.trim() || 'firebase login:list failed';
-    throw new Error(message);
-  }
-
-  const payload = JSON.parse(result.stdout || '{}') as any;
-  const refreshToken = payload?.result?.[0]?.tokens?.refresh_token;
-  const scope = payload?.result?.[0]?.tokens?.scope;
-  if (typeof refreshToken !== 'string' || !refreshToken) {
-    throw new Error('No Firebase CLI refresh token available');
-  }
-  return { refreshToken, ...(typeof scope === 'string' && scope ? { scope } : {}) };
-}
-
-async function firebaseCliAccessToken(): Promise<string> {
-  if (!cachedFirebaseCliAccessTokenPromise) {
-    cachedFirebaseCliAccessTokenPromise = (async () => {
-      const authState = firebaseCliAuthState();
-      const body = new URLSearchParams({
-        refresh_token: authState.refreshToken,
-        client_id: FIREBASE_CLI_CLIENT_ID,
-        client_secret: FIREBASE_CLI_CLIENT_SECRET,
-        grant_type: 'refresh_token',
-        ...(authState.scope ? { scope: authState.scope } : {}),
-      });
-
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || typeof (json as any)?.access_token !== 'string') {
-        const message = (json as any)?.error_description || (json as any)?.error || res.statusText || 'OAuth token refresh failed';
-        throw new Error(message);
-      }
-      return String((json as any).access_token);
-    })().catch((err) => {
-      cachedFirebaseCliAccessTokenPromise = null;
-      throw err;
-    });
-  }
-
-  return cachedFirebaseCliAccessTokenPromise;
-}
-
-async function firestoreRest(path: string, params?: Record<string, string>): Promise<any> {
-  const url = new URL(`https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${path}`);
-  for (const [key, value] of Object.entries(params || {})) {
-    url.searchParams.set(key, value);
-  }
-
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${await firebaseCliAccessToken()}`,
-    },
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || (json as any)?.error) {
-    const message = (json as any)?.error?.message || res.statusText || 'Firestore REST request failed';
-    throw new Error(message);
-  }
-  return json;
-}
-
 async function loadClaimsViaRest(args: Args): Promise<ClaimRecord[]> {
   if (args.code) {
-    const json = await firestoreRest(`claimCodes/${encodeURIComponent(args.code)}`);
-    const parsed = decodeFirestoreDocument(json);
+    const json = await firestoreRestClient.request({
+      url: firestoreRestClient.documentUrl(`claimCodes/${args.code}`),
+    });
+    const document = decodeFirestoreRestDocument(json);
+    const parsed = document
+      ? parseClaimData(document.data, document.id)
+      : null;
     return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
   }
 
   const claims: ClaimRecord[] = [];
   let pageToken: string | undefined;
   do {
-    const json = await firestoreRest('claimCodes', {
-      pageSize: '1000',
-      ...(pageToken ? { pageToken } : {}),
+    const url = firestoreRestClient.documentUrl('claimCodes');
+    url.searchParams.set('pageSize', '1000');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const json = await firestoreRestClient.request({
+      url,
     });
     const docs = Array.isArray(json?.documents) ? json.documents : [];
     for (const doc of docs) {
-      const parsed = decodeFirestoreDocument(doc);
+      const document = decodeFirestoreRestDocument(doc);
+      const parsed = document
+        ? parseClaimData(document.data, document.id)
+        : null;
       if (parsed && claimMatchesSelectedDrop(parsed)) claims.push(parsed);
     }
     pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;

@@ -12,7 +12,11 @@ export type DiscountMerkleDatasetIdentity = {
 };
 
 export type DiscountMerkleDatasetRemovalPlan = DiscountMerkleDatasetIdentity & {
-  targetRegistryState: 'paired' | 'frontend-only' | 'functions-only';
+  targetRegistryState:
+    | 'canonical'
+    | 'paired'
+    | 'frontend-only'
+    | 'functions-only';
   deleteCanonicalFile: boolean;
   remainingRootReferences: number;
 };
@@ -129,6 +133,30 @@ export function planDiscountMerkleDatasetRemoval(args: {
   return {
     ...removedIdentity,
     targetRegistryState,
+    deleteCanonicalFile: remainingRootReferences === 0,
+    remainingRootReferences,
+  };
+}
+
+export function planCanonicalDiscountMerkleDatasetRemoval(args: {
+  removed?: DiscountMerkleDatasetReference;
+  remaining: readonly DiscountMerkleDatasetReference[];
+}): DiscountMerkleDatasetRemovalPlan | null {
+  if (!args.removed) return null;
+  const removedIdentity = requireDiscountMerkleDatasetIdentity(
+    args.removed,
+    'removed canonical registry reference',
+  );
+  validateDiscountMerkleFamilyRootInvariant([
+    args.removed,
+    ...args.remaining,
+  ]);
+  const remainingRootReferences = args.remaining.filter(
+    (reference) => reference.rootHex === removedIdentity.rootHex,
+  ).length;
+  return {
+    ...removedIdentity,
+    targetRegistryState: 'canonical',
     deleteCanonicalFile: remainingRootReferences === 0,
     remainingRootReferences,
   };

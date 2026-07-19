@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../functions/src/shared/cardNft2CommonIds.ts';
 import { DROP_METADATA_IPFS_GATEWAY, FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
+  CARD_NFT_2_CDN_BASE_URL,
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
@@ -32,6 +34,15 @@ import {
   resolveDropContent,
 } from '../src/lib/dropContent.ts';
 import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
+import {
+  dropAssetCount,
+  dropAssetLabel,
+  dropAssetReference,
+  dropMintSelectionLabel,
+  dropOpenActionLabel,
+  dropOpenActionProgress,
+  dropOpenGerund,
+} from '../src/lib/dropLabels.ts';
 import {
   CARD_NFT_2_ASSET_CDN_BASES,
   CARD_NFT_2_COMMON_CARD_IDS,
@@ -81,6 +92,30 @@ test('media map helper cycles ids and honors overrides', () => {
   assert.equal(getMediaIdForTokenId(0, cyclic), null);
   assert.equal(getMediaIdForTokenId(-1, cyclic), null);
   assert.equal(getMediaIdForTokenId(undefined, cyclic), null);
+});
+
+test('shared drop labels preserve pluralization, actions, and mint selection ranges', () => {
+  const labels = { namePrefix: 'box', figureNamePrefix: 'party' };
+  assert.equal(dropAssetLabel(labels, 'box', 2), 'boxes');
+  assert.equal(dropAssetLabel(labels, 'figure', 2), 'parties');
+  assert.equal(dropAssetCount(labels, 'figure', 2, { capitalize: true }), '2 Parties');
+  assert.equal(dropAssetReference(labels, 'box', 12), 'Box 12');
+  assert.equal(dropOpenActionLabel(labels), 'Unbox');
+  assert.equal(dropOpenActionProgress(labels), 'Unboxing…');
+  assert.equal(dropOpenGerund({ namePrefix: 'pack' }), 'opening');
+  assert.equal(
+    dropMintSelectionLabel(
+      {
+        mintSelection: {
+          kind: 'size',
+          options: [{ label: 'XL', startId: 11, endId: 20 }],
+        },
+      },
+      16,
+    ),
+    'XL',
+  );
+  assert.equal(dropMintSelectionLabel(undefined, 16), undefined);
 });
 
 test('card_nft_2 box inventory images resolve from token id', () => {
@@ -381,18 +416,17 @@ test('poncho and hoodie receipt display images resolve from CDN overrides', () =
 });
 
 test('card_nft_2 bundled common ids are valid and unique', () => {
-  const commonIds = JSON.parse(
-    readFileSync(new URL('../src/lib/cardNft2CommonIds.json', import.meta.url), 'utf8'),
-  ) as unknown[];
+  const commonIds = CARD_NFT_2_COMMON_CARD_ID_VALUES;
   assert.ok(Array.isArray(commonIds));
+  assert.equal(Object.isFrozen(commonIds), true);
+  assert.equal(commonIds.length, 4_983);
   assert.equal(commonIds.length, CARD_NFT_2_COMMON_CARD_IDS.size);
   commonIds.forEach((commonId) => {
-    assert.equal(typeof commonId, 'string');
-    const normalizedCommonId = Number(commonId);
-    assert.equal(Number.isInteger(normalizedCommonId), true);
-    assert.equal(normalizedCommonId >= 1, true);
-    assert.equal(normalizedCommonId <= CARD_NFT_2_MAX_CARD_ID, true);
-    assert.equal(isCardNft2CommonCardId(normalizedCommonId), true);
+    assert.equal(typeof commonId, 'number');
+    assert.equal(Number.isInteger(commonId), true);
+    assert.equal(commonId >= 1, true);
+    assert.equal(commonId <= CARD_NFT_2_MAX_CARD_ID, true);
+    assert.equal(isCardNft2CommonCardId(commonId), true);
   });
 });
 
@@ -445,13 +479,13 @@ test('interactive pack reveal sounds resolve by drop family', () => {
     cardSpread: CARD_NFT_2_CARD_SOUND_SPREAD_URL,
   });
   assert.deepEqual(CARD_NFT_2_BOX_SOUND_CLICK_URLS, [
-    'https://cdn.lil.org/nft/card_nft_2/sounds/hit1.mp3',
-    'https://cdn.lil.org/nft/card_nft_2/sounds/hit2.mp3',
-    'https://cdn.lil.org/nft/card_nft_2/sounds/hit3.mp3',
+    `${CARD_NFT_2_CDN_BASE_URL}/sounds/hit1.mp3`,
+    `${CARD_NFT_2_CDN_BASE_URL}/sounds/hit2.mp3`,
+    `${CARD_NFT_2_CDN_BASE_URL}/sounds/hit3.mp3`,
   ]);
-  assert.equal(CARD_NFT_2_BOX_SOUND_REVEAL_URL, 'https://cdn.lil.org/nft/card_nft_2/sounds/crash.mp3');
-  assert.equal(CARD_NFT_2_CARD_SOUND_SWIPE_URL, 'https://cdn.lil.org/nft/card_nft_2/sounds/swipe.mp3');
-  assert.equal(CARD_NFT_2_CARD_SOUND_SPREAD_URL, 'https://cdn.lil.org/nft/card_nft_2/sounds/spread.mp3');
+  assert.equal(CARD_NFT_2_BOX_SOUND_REVEAL_URL, `${CARD_NFT_2_CDN_BASE_URL}/sounds/crash.mp3`);
+  assert.equal(CARD_NFT_2_CARD_SOUND_SWIPE_URL, `${CARD_NFT_2_CDN_BASE_URL}/sounds/swipe.mp3`);
+  assert.equal(CARD_NFT_2_CARD_SOUND_SPREAD_URL, `${CARD_NFT_2_CDN_BASE_URL}/sounds/spread.mp3`);
 
   assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('poncho_drifella_devnet_x10'), {
     click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
@@ -585,14 +619,26 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   );
 });
 
-test('poncho interactive card lookup still returns drif card configs', () => {
-  const firstDrifCard = getDrifCardByFigureId(1);
-  assert.ok(firstDrifCard);
-  assert.equal(firstDrifCard.imageSrc, `${PONCHO_DRIFELLA_FRONT_CDN_BASE_URL}/1.webp`);
-  assert.equal(firstDrifCard.foilSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/foils/1.webp`);
-  assert.equal(firstDrifCard.textureSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/textures/1.webp`);
+test('poncho interactive cards preserve all media, effect, and glow assignments', () => {
+  const cards = Array.from({ length: 207 }, (_, index) => {
+    const assetId = index + 1;
+    const card = getDrifCardByFigureId(assetId);
+    assert.ok(card);
+    assert.equal(card.imageSrc, `${PONCHO_DRIFELLA_FRONT_CDN_BASE_URL}/${assetId}.webp`);
+    assert.equal(card.foilSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/foils/${assetId}.webp`);
+    assert.equal(card.textureSrc, `${PONCHO_DRIFELLA_CDN_BASE_URL}/textures/${assetId}.webp`);
+    return card;
+  });
+
+  assert.equal(getDrifCardByFigureId(208), undefined);
+  assert.equal(
+    createHash('sha256')
+      .update(JSON.stringify(cards.map((card) => [card.effect.id, card.glowType])))
+      .digest('hex'),
+    '24e1cde649d14dd3855f819cda719672b387687b9257349f02a2ea48c532729d',
+  );
   assert.equal(
     getInteractiveCardPackCardByFigureId('poncho_drifella', 1),
-    firstDrifCard,
+    cards[0],
   );
 });

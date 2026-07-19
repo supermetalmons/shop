@@ -6,18 +6,28 @@ import {
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
 } from '../shared/stripeReceiptClaims.js';
+import {
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+} from '../shared/fulfillmentSources.js';
+import {
+  STRIPE_UNIT_AMOUNT_CENTS_MAX,
+  STRIPE_UNIT_AMOUNT_CENTS_MIN,
+} from '../shared/stripeCheckoutCore.js';
 export {
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
 } from '../shared/stripeReceiptClaims.js';
+export {
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+  isReceiptClaimDeliveryOrderSource,
+} from '../shared/fulfillmentSources.js';
 export { stripeAssignedIrlClaimForBox } from '../cardAssignment.js';
 
 const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
 const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
-export const STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE = 'stripe_offchain';
-export const ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE = 'admin_irl_redeem';
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
@@ -207,10 +217,6 @@ export function hasPluralStripeReceiptClaims(order: any): boolean {
   const byBoxId = order?.stripeReceiptClaimsByBoxId;
   if (plainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
   return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
-}
-
-export function isReceiptClaimDeliveryOrderSource(source: unknown): boolean {
-  return source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
 }
 
 export function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
@@ -430,7 +436,11 @@ export function validateStripeCheckoutDocumentData(params: {
     throw new Error('App-created Stripe checkout has invalid mode');
   }
 
-  const unitAmountCents = integerInRangeOrNull(checkout.unitAmountCents, 50, 99_999_999);
+  const unitAmountCents = integerInRangeOrNull(
+    checkout.unitAmountCents,
+    STRIPE_UNIT_AMOUNT_CENTS_MIN,
+    STRIPE_UNIT_AMOUNT_CENTS_MAX,
+  );
   if (unitAmountCents == null) {
     throw new Error('App-created Stripe checkout has invalid unit amount');
   }

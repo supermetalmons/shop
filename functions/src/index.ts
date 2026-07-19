@@ -24,13 +24,7 @@ import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
-import { FUNCTIONS_DROPS, normalizeDropBase, type DropFamily, type FunctionsDropConfig } from './config/deployment.js';
-import {
-  boxIdFromMetadataUri,
-  dudeIdFromMetadataUri,
-  metadataKindFromUri,
-  selectMetadataUri,
-} from './dropMetadataUri.js';
+import { FUNCTIONS_DROPS, normalizeDropBase, type FunctionsDropConfig } from './config/deployment.js';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
   assetGroupingAllowsTreeVerifiedCollectionMatch,
@@ -168,7 +162,6 @@ import {
 import {
   FULFILLMENT_STATUS_OPTIONS,
   normalizeFulfillmentStatus,
-  type FulfillmentStatus,
 } from './fulfillmentStatus.js';
 import { parseRequest } from './request.js';
 import {
@@ -196,6 +189,94 @@ import {
   type ListCardNft2UnrevealedCardsRequest,
   type ListCardNft2UnrevealedCardsResponse,
 } from './cardNft2Unrevealed.js';
+import type {
+  DeliveryOrderItemSummary,
+  DeliveryOrderSummary,
+  DeliveryRecoveryOutcome,
+  DeliveryRecoveryState,
+  FulfillmentOrderAddress,
+  FulfillmentOrderBox,
+  FulfillmentOrderCardClaim,
+  FulfillmentOrderWithCardClaims as FulfillmentOrder,
+  RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
+  RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
+} from './shared/contracts.js';
+import {
+  dasAssetBoxId,
+  dasAssetDudeId,
+  dasAssetKind,
+  dasAssetLooksBurntOrClosed,
+} from './shared/dasAsset.js';
+import {
+  normalizeBoxMinterMetadataBaseForComparison,
+  normalizeDropId as normalizeDropIdShared,
+} from './shared/deploymentCore.js';
+import {
+  BOX_MINTER_CONFIG_SEED,
+  BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET as MAX_DISCOUNT_MINTS_PER_WALLET,
+  BOX_MINTER_MAX_ITEMS_PER_BOX as MAX_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX as MIN_ITEMS_PER_BOX,
+  BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET as MIN_DISCOUNT_MINTS_PER_WALLET,
+  BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX as MIN_OPENABLE_ITEMS_PER_BOX,
+  BOX_MINTER_MINT_VARIANT_KIND_NONE as MINT_VARIANT_KIND_NONE,
+  BOX_MINTER_MINT_VARIANT_KIND_SIZE as MINT_VARIANT_KIND_SIZE,
+  BOX_MINTER_MINT_VARIANT_OPTION_COUNT as MINT_VARIANT_OPTION_COUNT,
+  BOX_MINTER_PENDING_OPEN_SEED,
+  isBoxMinterDiscountMintsPerWallet,
+  isConfiguredBoxMinterItemsPerBox,
+  type BoxMinterMintVariantTuple,
+} from './shared/boxMinterProtocol.js';
+import {
+  heliusSearchAssetsHasNextPage,
+  heliusSearchAssetsItems,
+} from './shared/heliusDas.js';
+import {
+  CARD_NFT_2_BASE_DELIVERY_CARD_COUNT,
+  CARD_NFT_2_EXTRA_LAMPORTS,
+  CARD_NFT_2_INTL_BASE_LAMPORTS,
+  INTL_DELIVERY_BASE_LAMPORTS,
+  INTL_DELIVERY_EXTRA_LAMPORTS,
+  LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS,
+  LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS,
+  calculateDeliveryLamports,
+  isDirectDeliveryItemsPerBox,
+  normalizeDeliveryUnitsPerBox,
+} from './shared/shipping.js';
+import {
+  ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  SHIPPER_FULFILLMENT_ACCESS,
+  walletCanViewSensitiveFulfillmentAddress,
+  walletHasAdminAccess,
+  walletHasAdminIrlRedeemAccess,
+  walletHasFulfillmentDropAccess,
+} from './shared/fulfillmentAccess.js';
+import {
+  getAdminIrlRedeemTargetEligibility,
+  type AdminIrlRedeemTargetKind,
+} from './shared/adminIrlEligibility.js';
+import {
+  BoxMinterConfigCodecError,
+  decodeBoxMinterConfigData as decodeBoxMinterConfigDataShared,
+} from './shared/boxMinterConfigCodec.js';
+import {
+  ADDRESS_CIPHER_SECRET_KEY_LENGTH,
+  addressCipherHint,
+  decryptAddressCipherText,
+  encryptAddressCipherText,
+  parseAddressCipherPayload,
+  serializeAddressCipherPayload,
+} from './shared/addressCipher.js';
+import { summarizePayloadShape } from './shared/logSummaries.js';
+import {
+  BUBBLEGUM_PROGRAM_ADDRESS,
+  MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
+  MPL_CORE_CPI_SIGNER_ADDRESS,
+  MPL_CORE_PROGRAM_ADDRESS,
+  MPL_NOOP_PROGRAM_ADDRESS,
+  SPL_NOOP_PROGRAM_ADDRESS,
+} from './shared/solanaProgramAddresses.js';
+import { normalizeCallableErrorCode } from './shared/callableErrorCode.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -276,11 +357,6 @@ function requireAuth(request: CallableReq<any>): string {
 
 const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const MIN_ITEMS_PER_BOX = 0;
-const MIN_OPENABLE_ITEMS_PER_BOX = 1;
-const MAX_ITEMS_PER_BOX = 5;
-const MIN_DISCOUNT_MINTS_PER_WALLET = 1;
-const MAX_DISCOUNT_MINTS_PER_WALLET = 3;
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
 // Issue-receipts tx retry/confirm tuning.
@@ -313,14 +389,6 @@ type DropRuntime = {
   maxDudeId: number;
 };
 
-function isDirectDeliveryItemsPerBox(itemsPerBox: number): boolean {
-  return Math.floor(Number(itemsPerBox)) === 0;
-}
-
-function normalizeDeliveryUnitsPerBox(itemsPerBox: number): number {
-  return isDirectDeliveryItemsPerBox(itemsPerBox) ? 1 : Math.max(MIN_OPENABLE_ITEMS_PER_BOX, Math.floor(Number(itemsPerBox)));
-}
-
 function isOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>): boolean {
   return dropRuntime.itemsPerBox >= MIN_OPENABLE_ITEMS_PER_BOX;
 }
@@ -332,7 +400,7 @@ function assertOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>, messa
 }
 
 function normalizeDropId(dropId: string): string {
-  const value = String(dropId || '').trim().toLowerCase();
+  const value = normalizeDropIdShared(dropId);
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value)) {
     throw new HttpsError('invalid-argument', 'Invalid dropId');
   }
@@ -364,7 +432,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     throw new Error(`solanaCluster is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.solanaCluster}`);
   }
   const itemsPerBox = Number(config.itemsPerBox);
-  if (!Number.isInteger(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
+  if (!isConfiguredBoxMinterItemsPerBox(itemsPerBox)) {
     throw new Error(
       `itemsPerBox is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.itemsPerBox} (expected integer ${MIN_ITEMS_PER_BOX}..${MAX_ITEMS_PER_BOX})`,
     );
@@ -373,16 +441,13 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   if (!Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff) {
     throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.maxSupply}`);
   }
-  const discountMintsPerWallet = Number(config.discountMintsPerWallet);
-  if (
-    !Number.isInteger(discountMintsPerWallet) ||
-    discountMintsPerWallet < MIN_DISCOUNT_MINTS_PER_WALLET ||
-    discountMintsPerWallet > MAX_DISCOUNT_MINTS_PER_WALLET
-  ) {
+  const discountMintsPerWalletRaw = Number(config.discountMintsPerWallet);
+  if (!isBoxMinterDiscountMintsPerWallet(discountMintsPerWalletRaw)) {
     throw new Error(
       `discountMintsPerWallet is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.discountMintsPerWallet} (expected integer ${MIN_DISCOUNT_MINTS_PER_WALLET}..${MAX_DISCOUNT_MINTS_PER_WALLET})`,
     );
   }
+  const discountMintsPerWallet = discountMintsPerWalletRaw;
   const maxDudeId = maxSupply * itemsPerBox;
   if (!Number.isFinite(maxDudeId) || maxDudeId > 0xffff) {
     throw new Error(
@@ -393,7 +458,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   const configuredBoxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
   const boxMinterConfigPda = configuredBoxMinterConfigPda
     ? requireConfiguredPubkey('BOX_MINTER_CONFIG_PDA', configuredBoxMinterConfigPda)
-    : PublicKey.findProgramAddressSync([Buffer.from('config')], boxMinterProgramId)[0];
+    : PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', config.collectionMint);
   const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree);
   const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable);
@@ -421,7 +486,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   };
 }
 
-const DROP_RUNTIMES: Record<string, DropRuntime> = {};
+const DROP_RUNTIMES: Record<string, DropRuntime> = Object.create(null);
 Object.entries(FUNCTIONS_DROPS).forEach(([dropIdKey, dropConfig]) => {
   const runtime = buildDropRuntime(dropConfig);
   DROP_RUNTIMES[normalizeDropId(dropIdKey)] = runtime;
@@ -454,13 +519,6 @@ function getDropRuntime(dropId: string): DropRuntime {
     throw new HttpsError('invalid-argument', `Unsupported dropId: ${normalizedDropId}`);
   }
   return runtime;
-}
-
-function normalizeConfiguredUriBaseForComparison(uriBase: string): string {
-  const normalized = normalizeDropBase(uriBase);
-  // Legacy singleton configs stored `${dropBase}/json/boxes/` instead of the canonical drop base.
-  // Keep accepting that older shape so untouched singleton drops continue to work.
-  return normalized.replace(/\/json\/boxes$/i, '');
 }
 
 function requiresRevealAssetDisambiguation(
@@ -542,30 +600,10 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
   return { uid, wallet: normalizeWallet(wallet) };
 }
 
-type ShipperFulfillmentAccessConfig = {
-  wallet: string;
-  dropIds: string[];
-};
-
 type ShipperReadyToShipNotificationConfig = {
   dropIds: string[];
   emails: string[];
 };
-
-const SHIPPER_FULFILLMENT_ACCESS: ShipperFulfillmentAccessConfig[] = [
-  {
-    wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'],
-  },
-  {
-    wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    dropIds: ['poncho_drifella', 'card_nft_2'],
-  },
-  {
-    wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'],
-  },
-];
 
 const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
   {
@@ -624,9 +662,7 @@ SHIPPER_READY_TO_SHIP_NOTIFICATIONS.forEach(({ dropIds: rawDropIds, emails: rawE
 });
 
 const ADMIN_WALLETS = new Set<string>();
-[
-  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
-].forEach((raw) => {
+FULFILLMENT_ADMIN_WALLET_ADDRESSES.forEach((raw) => {
   try {
     ADMIN_WALLETS.add(new PublicKey(raw).toBase58());
   } catch (err) {
@@ -635,10 +671,7 @@ const ADMIN_WALLETS = new Set<string>();
 });
 
 const ADMIN_IRL_REDEEM_WALLETS = new Set<string>(ADMIN_WALLETS);
-[
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-  'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-].forEach((raw) => {
+ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES.forEach((raw) => {
   try {
     ADMIN_IRL_REDEEM_WALLETS.add(new PublicKey(raw).toBase58());
   } catch (err) {
@@ -647,12 +680,11 @@ const ADMIN_IRL_REDEEM_WALLETS = new Set<string>(ADMIN_WALLETS);
 });
 
 function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
-  if (ADMIN_WALLETS.has(wallet)) return true;
-  return Boolean(SHIPPER_DROP_IDS_BY_WALLET.get(wallet)?.has(dropId));
+  return walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
 
 function canViewSensitiveFulfillmentAddress(wallet: string, dropId: string): boolean {
-  return !ADMIN_WALLETS.has(wallet) && hasFulfillmentDropAccess(wallet, dropId);
+  return walletCanViewSensitiveFulfillmentAddress(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
 
 async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: string): Promise<{ uid: string; wallet: string }> {
@@ -665,7 +697,7 @@ async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: s
 
 async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
-  if (!ADMIN_WALLETS.has(wallet)) {
+  if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
     throw new HttpsError('permission-denied', 'Admin access denied.');
   }
   return { uid, wallet };
@@ -673,24 +705,24 @@ async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: str
 
 async function requireAdminIrlRedeemAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
-  if (!ADMIN_IRL_REDEEM_WALLETS.has(wallet)) {
+  if (!walletHasAdminIrlRedeemAccess(wallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new HttpsError('permission-denied', 'Admin IRL Redeem access denied.');
   }
   return { uid, wallet };
 }
 
 // MPL Core program id (uncompressed Core assets).
-const MPL_CORE_PROGRAM_ID = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
+const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 // Solana SPL Noop program (commonly used as Metaplex "log wrapper").
-const SPL_NOOP_PROGRAM_ID = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
+const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 // Metaplex Noop program (used by Bubblegum v2).
-const MPL_NOOP_PROGRAM_ID = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
+const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 // MPL Account Compression program (used by Bubblegum v2).
-const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
 // Bubblegum program (compressed NFTs).
-const BUBBLEGUM_PROGRAM_ID = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
+const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
 // Bubblegum -> MPL-Core CPI signer (used when minting cNFTs to an MPL-Core collection).
-const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk');
+const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 
 // Anchor discriminator = sha256("account:DeliveryRecord")[0..8]
 const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
@@ -704,18 +736,8 @@ const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
 // Bubblegum v2 burn discriminator (kinobi generated).
 const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 
-const INTL_DELIVERY_BASE_LAMPORTS = 250_000_000;
-const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
-const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
-const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
-const CARD_NFT_2_BASE_DELIVERY_CARD_COUNT = 3;
-const CARD_NFT_2_US_BASE_LAMPORTS = 200_000_000;
-const CARD_NFT_2_INTL_BASE_LAMPORTS = 400_000_000;
-const CARD_NFT_2_EXTRA_LAMPORTS = 60_000_000;
-const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
-const LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS = 600_000_000;
-const LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS = 500_000_000;
 const MAX_DELIVERY_ITEMS = 32;
+const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
@@ -732,7 +754,9 @@ const ADMIN_IRL_REDEEM_RECEIPT_INDEX_POLL_MS = 2_000;
 const ADMIN_IRL_REDEEM_ASSET_FETCH_CONCURRENCY = 4;
 const MAX_CONFIGURED_ITEMS_PER_BOX = Math.max(
   1,
-  ...Object.values(DROP_RUNTIMES).map((runtime) => normalizeDeliveryUnitsPerBox(runtime.itemsPerBox)),
+  ...Object.values(DROP_RUNTIMES).map((runtime) =>
+    normalizeDeliveryUnitsPerBox(runtime.itemsPerBox, SERVER_INVALID_DELIVERY_UNITS_POLICY),
+  ),
 );
 const MAX_DELIVERY_FIGURES = MAX_DELIVERY_ITEMS * MAX_CONFIGURED_ITEMS_PER_BOX;
 const MIN_DELIVERY_LAMPORTS = 0;
@@ -807,7 +831,7 @@ function addressDecryptKeyMaybe(): Uint8Array | null {
     cachedAddressDecryptKey = decodeBase64Secret(
       ADDRESS_DECRYPTION_SECRET.value(),
       'ADDRESS_DECRYPTION_SECRET',
-      nacl.box.secretKeyLength,
+      ADDRESS_CIPHER_SECRET_KEY_LENGTH,
     );
     cachedAddressDecryptKeyState = 'ready';
     return cachedAddressDecryptKey;
@@ -829,21 +853,11 @@ function decodeAddressCipherPart(part: string): Uint8Array | null {
 
 function decryptAddressPayload(payload: string): string | null {
   try {
-    const raw = (payload || '').trim();
-    if (!raw) return null;
-    const parts = raw.split('.');
-    if (parts.length !== 3) return null;
-    const [nonceRaw, pubRaw, cipherRaw] = parts;
-    const nonce = decodeAddressCipherPart(nonceRaw);
-    const pubkey = decodeAddressCipherPart(pubRaw);
-    const cipher = decodeAddressCipherPart(cipherRaw);
-    if (!nonce || !pubkey || !cipher) return null;
-    if (nonce.length !== nacl.box.nonceLength || pubkey.length !== nacl.box.publicKeyLength) return null;
+    const parts = parseAddressCipherPayload(payload, decodeAddressCipherPart);
+    if (!parts) return null;
     const secret = addressDecryptKeyMaybe();
     if (!secret) return null;
-    const opened = nacl.box.open(cipher, nonce, pubkey, secret);
-    if (!opened) return null;
-    return new TextDecoder().decode(opened);
+    return decryptAddressCipherText(parts, secret);
   } catch {
     return null;
   }
@@ -858,14 +872,12 @@ function encryptAddressPayloadForFulfillment(plaintext: string): { encrypted: st
       throw new HttpsError('unavailable', 'ADDRESS_DECRYPTION_SECRET is not configured for Stripe fulfillment');
     }
     const recipient = nacl.box.keyPair.fromSecretKey(secret).publicKey;
-    const ephemeral = nacl.box.keyPair();
-    const nonce = nacl.randomBytes(nacl.box.nonceLength);
-    const message = new TextEncoder().encode(messageText);
-    const cipher = nacl.box(message, nonce, recipient, ephemeral.secretKey);
-    const encrypted = [nonce, ephemeral.publicKey, cipher]
-      .map((arr) => Buffer.from(arr).toString('base64'))
-      .join('.');
-    const hint = messageText.slice(0, 1) + '...' + messageText.slice(-2);
+    const parts = encryptAddressCipherText(messageText, recipient);
+    const encrypted = serializeAddressCipherPayload(
+      parts,
+      (value) => Buffer.from(value).toString('base64'),
+    );
+    const hint = addressCipherHint(messageText);
     return { encrypted, hint };
   } catch (err) {
     if (err instanceof HttpsError) throw err;
@@ -1083,25 +1095,6 @@ function isGrpcAlreadyExists(err: unknown): boolean {
   return code === 6 || code === '6' || code === 'ALREADY_EXISTS';
 }
 
-function summarizeValue(value: unknown) {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return `array(${value.length})`;
-  if (typeof value === 'string') return `string(${value.length})`;
-  return typeof value;
-}
-
-function summarizePayload(payload: unknown) {
-  if (!payload || typeof payload !== 'object') return { type: summarizeValue(payload) };
-  const obj = payload as Record<string, unknown>;
-  const allKeys = Object.keys(obj);
-  const keys = allKeys.slice(0, 30);
-  const types: Record<string, string> = {};
-  keys.forEach((k) => {
-    types[k] = summarizeValue(obj[k]);
-  });
-  return { keys, types, truncated: allKeys.length > keys.length };
-}
-
 function callableMeta(request: CallableReq<any>) {
   const raw = (request as any).rawRequest as any;
   const headers = raw?.headers || {};
@@ -1154,7 +1147,7 @@ function onCallLogged<TReq, TRes>(
     const debugCallId = typeof debug?.callId === 'string' ? debug.callId : null;
     const baseMeta = { ...callableMeta(request), debugCallId };
     try {
-      logger.info(`${name}:call`, { ...baseMeta, data: summarizePayload((request as any).data) });
+      logger.info(`${name}:call`, { ...baseMeta, data: summarizePayloadShape((request as any).data) });
     } catch (logErr) {
       // Never fail the function because structured logging couldn't serialize something.
       console.error(`${name}:call logger failed`, { logError: summarizeError(logErr), meta: baseMeta });
@@ -1524,13 +1517,13 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false):
       },
     );
   }
-  if (normalizeConfiguredUriBaseForComparison(decoded.uriBase) !== normalizeDropBase(dropRuntime.config.metadataBase)) {
+  if (normalizeBoxMinterMetadataBaseForComparison(decoded.uriBase) !== normalizeDropBase(dropRuntime.config.metadataBase)) {
     throw new HttpsError(
       'failed-precondition',
       'functions/src/config/deployment.ts is out of sync with the on-chain metadata base for this drop.',
       {
         configuredMetadataBase: normalizeDropBase(dropRuntime.config.metadataBase),
-        onchainMetadataBase: normalizeConfiguredUriBaseForComparison(decoded.uriBase),
+        onchainMetadataBase: normalizeBoxMinterMetadataBaseForComparison(decoded.uriBase),
         onchainMetadataBaseRaw: decoded.uriBase,
         configPda: dropRuntime.boxMinterConfigPda.toBase58(),
         dropId: dropRuntime.dropId,
@@ -1636,6 +1629,11 @@ async function heliusRpc<T>(dropRuntime: DropRuntime, method: string, params: an
 
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
+const FUNCTIONS_DAS_NAME_POLICY = { metadataNameMode: 'string-only' } as const;
+const FUNCTIONS_DAS_BURN_POLICY = {
+  missingAssetResult: true,
+  nonBooleanFlagIsBurnt: false,
+} as const;
 
 function heliusSearchAssetsParams(owner: string, page: number, grouping?: readonly [string, string]) {
   const params: any = {
@@ -1646,23 +1644,6 @@ function heliusSearchAssetsParams(owner: string, page: number, grouping?: readon
   };
   if (grouping) params.grouping = grouping;
   return params;
-}
-
-function heliusSearchAssetsItems(result: any): any[] {
-  return Array.isArray(result?.items) ? result.items : [];
-}
-
-function heliusSearchAssetsHasNextPage(result: any, page: number, items: any[]): boolean {
-  if (!items.length) return false;
-  const responseLimit = Number(result?.limit);
-  const limit = Number.isFinite(responseLimit) && responseLimit > 0 ? responseLimit : HELIUS_ASSETS_PAGE_LIMIT;
-  if (items.length < limit) return false;
-  const total = Number(result?.total);
-  const resultPage = Number(result?.page ?? page);
-  if (Number.isFinite(total) && total >= 0 && Number.isFinite(limit) && limit > 0 && Number.isFinite(resultPage)) {
-    return resultPage * limit < total;
-  }
-  return true;
 }
 
 async function findOwnedAssetByPredicate(params: {
@@ -1727,7 +1708,9 @@ async function scanOwnedAssetPages(params: {
     sawItems ||= items.length > 0;
 
     if (await params.visitPage(items)) return { sawItems, stopped: true };
-    if (!heliusSearchAssetsHasNextPage(result, page, items)) return { sawItems, stopped: false };
+    if (!heliusSearchAssetsHasNextPage(result, page, items, HELIUS_ASSETS_PAGE_LIMIT)) {
+      return { sawItems, stopped: false };
+    }
   }
 
   logger.warn('Helius searchAssets page cap reached while finding asset', {
@@ -1767,25 +1750,7 @@ async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
 }
 
 function looksBurntOrClosedInHelius(asset: any): boolean {
-  if (!asset || typeof asset !== 'object') return true;
-  const anyAsset = asset as any;
-  const burntFlag =
-    anyAsset?.burnt ??
-    anyAsset?.burned ??
-    anyAsset?.is_burnt ??
-    anyAsset?.isBurnt ??
-    anyAsset?.compression?.burnt ??
-    anyAsset?.compression?.burned ??
-    anyAsset?.compression?.is_burnt ??
-    anyAsset?.compression?.isBurnt ??
-    anyAsset?.ownership?.burnt ??
-    anyAsset?.ownership?.burned;
-  if (typeof burntFlag === 'boolean') return burntFlag;
-  const ownershipState = String(
-    anyAsset?.ownership?.ownership_state || anyAsset?.ownership?.ownershipState || anyAsset?.ownership?.state || '',
-  ).toLowerCase();
-  if (ownershipState && /burn/.test(ownershipState)) return true;
-  return false;
+  return dasAssetLooksBurntOrClosed(asset, FUNCTIONS_DAS_BURN_POLICY);
 }
 
 async function fetchAsset(assetId: string, dropRuntime: DropRuntime) {
@@ -1846,58 +1811,15 @@ async function fetchAssetProof(assetId: string, dropRuntime: DropRuntime) {
 }
 
 function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
-  const kindAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'type');
-  const value = kindAttr?.value;
-  if (value === 'box' || value === 'dude' || value === 'certificate') return value;
-
-  const kindFromUri = metadataKindFromUri(assetMetadataUri(asset));
-  if (kindFromUri) return kindFromUri;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const lowerName = typeof name === 'string' ? name.toLowerCase() : '';
-  if (lowerName.includes('blind box')) return 'box';
-  if (lowerName.includes('receipt') || lowerName.includes('authenticity')) return 'certificate';
-  if (lowerName.includes('figure')) return 'dude';
-
-  // New compact on-chain metadata: allow very short names like `b123` or `box123`.
-  const compact = lowerName.replace(/\s+/g, '');
-  if (/^(b|box)#?\d+$/.test(compact)) return 'box';
-  return null;
+  return dasAssetKind(asset, FUNCTIONS_DAS_NAME_POLICY);
 }
 
 function getBoxIdFromAsset(asset: any): string | undefined {
-  const boxAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'box_id');
-  const value = boxAttr?.value;
-  if (typeof value === 'string' && value) return value;
-
-  const uriBoxId = boxIdFromMetadataUri(assetMetadataUri(asset));
-  if (uriBoxId) return uriBoxId;
-
-  const name: string = asset?.content?.metadata?.name || asset?.content?.metadata?.title || '';
-  const normalized = typeof name === 'string' ? name.toLowerCase().replace(/\s+/g, '') : '';
-  const match = normalized.match(/^(b|box)#?(\d+)$/);
-  if (match?.[2]) return match[2];
-  return undefined;
+  return dasAssetBoxId(asset, FUNCTIONS_DAS_NAME_POLICY);
 }
 
 function getDudeIdFromAsset(asset: any): number | undefined {
-  const dudeAttr = asset?.content?.metadata?.attributes?.find((a: any) => a?.trait_type === 'dude_id');
-  const num = Number(dudeAttr?.value);
-  if (Number.isFinite(num)) return num;
-
-  const idFromUri = dudeIdFromMetadataUri(assetMetadataUri(asset));
-  if (typeof idFromUri === 'number') return idFromUri;
-  return undefined;
-}
-
-function assetMetadataUri(asset: any): string {
-  return selectMetadataUri(
-    asset?.content?.json_uri,
-    asset?.content?.jsonUri,
-    asset?.content?.metadata?.json_uri,
-    asset?.content?.metadata?.jsonUri,
-    asset?.content?.metadata?.uri,
-  );
+  return dasAssetDudeId(asset);
 }
 
 function assetMatchesDropCollection(
@@ -2021,7 +1943,9 @@ function encodeCloseDeliveryArgs(args: { deliveryId: number; deliveryBump: numbe
 }
 
 function isLegacySingletonConfigPda(programId: PublicKey, configPda: PublicKey): boolean {
-  return configPda.equals(PublicKey.findProgramAddressSync([Buffer.from('config')], programId)[0]);
+  return configPda.equals(
+    PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], programId)[0],
+  );
 }
 
 function deriveDeliveryPda(
@@ -2184,36 +2108,6 @@ function bubblegumBurnV2Ix(args: {
   });
 }
 
-const LEGACY_FIXED_ITEMS_PER_BOX = 3;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS =
-  8 + // discriminator
-  32 * 3 +
-  8 +
-  8 +
-  32 +
-  4 +
-  1 +
-  4 +
-  4 +
-  8 +
-  4 +
-  10 +
-  4 +
-  96 +
-  1 +
-  1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS = BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS + 1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT = BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS + 1;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT + 4 + 12;
-const MINT_VARIANT_KIND_NONE = 0;
-const MINT_VARIANT_KIND_SIZE = 1;
-const MINT_VARIANT_OPTION_COUNT = 3;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
-  BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX + 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
-const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED = BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
-
-type MintVariantTuple = [number, number, number];
-
 type DecodedBoxMinterConfig = {
   admin: PublicKey;
   treasury: PublicKey;
@@ -2225,157 +2119,80 @@ type DecodedBoxMinterConfig = {
   started: boolean;
   discountMintsPerWallet: number;
   mintVariantKind: number;
-  mintVariantStartIds: MintVariantTuple;
-  mintVariantEndIds: MintVariantTuple;
-  mintVariantNextIds: MintVariantTuple;
+  mintVariantStartIds: BoxMinterMintVariantTuple;
+  mintVariantEndIds: BoxMinterMintVariantTuple;
+  mintVariantNextIds: BoxMinterMintVariantTuple;
   uriBase: string;
   dropSeed?: Buffer;
 };
 
-function normalizeDiscountMintsPerWallet(value: number | undefined): number {
-  const parsed = Number(value);
-  if (
-    !Number.isInteger(parsed) ||
-    parsed < MIN_DISCOUNT_MINTS_PER_WALLET ||
-    parsed > MAX_DISCOUNT_MINTS_PER_WALLET
-  ) {
-    return 1;
+function throwBoxMinterConfigHttpsError(error: BoxMinterConfigCodecError): never {
+  switch (error.reason) {
+    case 'config-truncated':
+      throw new HttpsError(
+        'failed-precondition',
+        'Box minter config data is truncated.',
+        error.details,
+      );
+    case 'invalid-items-per-box':
+      throw new HttpsError(
+        'failed-precondition',
+        'On-chain config has invalid itemsPerBox',
+        { itemsPerBox: error.details?.itemsPerBox },
+      );
+    case 'variant-data-truncated':
+      throw new HttpsError(
+        'failed-precondition',
+        'Box minter config variant data is truncated',
+      );
+    case 'drop-seed-truncated':
+      throw new HttpsError(
+        'failed-precondition',
+        'Box minter config drop seed data is truncated',
+      );
+    case 'unexpected-config-trailing-data':
+      throw new HttpsError(
+        'failed-precondition',
+        'Unexpected trailing data after the box minter config payload',
+      );
+    case 'unexpected-drop-seed-trailing-data':
+      throw new HttpsError(
+        'failed-precondition',
+        'Unexpected trailing data after the box minter drop seed',
+      );
+    default:
+      throw error;
   }
-  return parsed;
-}
-
-function readBorshString(data: Buffer, offset: number): { value: string; next: number } {
-  const len = data.readUInt32LE(offset);
-  const start = offset + 4;
-  const end = start + len;
-  return { value: data.subarray(start, end).toString('utf8'), next: end };
-}
-
-function readU32Tuple(data: Buffer, offset: number): { value: MintVariantTuple; next: number } {
-  const value: MintVariantTuple = [0, 0, 0];
-  let next = offset;
-  for (let i = 0; i < MINT_VARIANT_OPTION_COUNT; i += 1) {
-    value[i] = data.readUInt32LE(next);
-    next += 4;
-  }
-  return { value, next };
-}
-
-function hasAnyNonZeroByte(data: Uint8Array): boolean {
-  for (let i = 0; i < data.length; i += 1) {
-    if (data[i] !== 0) return true;
-  }
-  return false;
-}
-
-function decodeOptionalTrailingDropSeed(data: Buffer, offset: number): Buffer | undefined {
-  // RPC returns the full allocated account data, so legacy configs have trailing zero padding
-  // after the serialized payload. Treat all-zero trailing bytes as padding, not v2 data.
-  if (offset >= data.length) return undefined;
-  const trailing = data.subarray(offset);
-  if (!hasAnyNonZeroByte(trailing)) return undefined;
-  if (trailing.length < 32) {
-    throw new HttpsError('failed-precondition', 'Box minter config drop seed data is truncated');
-  }
-  const dropSeed = Buffer.from(data.subarray(offset, offset + 32));
-  if (!hasAnyNonZeroByte(dropSeed)) {
-    throw new HttpsError('failed-precondition', 'Unexpected trailing data after the box minter config payload');
-  }
-  if (hasAnyNonZeroByte(trailing.subarray(32))) {
-    throw new HttpsError('failed-precondition', 'Unexpected trailing data after the box minter drop seed');
-  }
-  return dropSeed;
 }
 
 function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterConfig {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (buf.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Box minter config data is truncated.',
-      { expectedMinBytes: BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS, actualBytes: buf.length },
-    );
-  }
-
-  let o = 8;
-  const admin = new PublicKey(buf.subarray(o, o + 32));
-  o += 32;
-  const treasury = new PublicKey(buf.subarray(o, o + 32));
-  o += 32;
-  const coreCollection = new PublicKey(buf.subarray(o, o + 32));
-  o += 32;
-  o += 8; // priceLamports
-  o += 8; // discountPriceLamports
-  o += 32; // discountMerkleRoot
-  const maxSupply = buf.readUInt32LE(o);
-  o += 4;
-  const maxPerTx = buf.readUInt8(o);
-  o += 1;
-  let itemsPerBox = LEGACY_FIXED_ITEMS_PER_BOX;
-  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
-    itemsPerBox = buf.readUInt8(o);
-    o += 1;
-  }
-  const minted = buf.readUInt32LE(o);
-  o += 4;
-  o = readBorshString(buf, o).next;
-  o = readBorshString(buf, o).next;
-  const uriBase = readBorshString(buf, o);
-  o = uriBase.next;
-  const started = Boolean(buf[o]);
-  o += 1;
-  o += 1; // bump
-  let discountMintsPerWallet = 1;
-  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT) {
-    discountMintsPerWallet = normalizeDiscountMintsPerWallet(buf[o]);
-    o += 1;
-  }
-  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX) {
-    o = readBorshString(buf, o).next; // figureNamePrefix
-  }
-  let mintVariantKind = MINT_VARIANT_KIND_NONE;
-  let mintVariantStartIds: MintVariantTuple = [0, 0, 0];
-  let mintVariantEndIds: MintVariantTuple = [0, 0, 0];
-  let mintVariantNextIds: MintVariantTuple = [0, 0, 0];
-  if (buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS) {
-    const mintVariantBytes = 1 + 4 * MINT_VARIANT_OPTION_COUNT * 3;
-    if (o + mintVariantBytes > buf.length) {
-      throw new HttpsError('failed-precondition', 'Box minter config variant data is truncated');
+  let decoded;
+  try {
+    decoded = decodeBoxMinterConfigDataShared(buf, { validateDiscriminator: false });
+  } catch (error) {
+    if (error instanceof BoxMinterConfigCodecError) {
+      throwBoxMinterConfigHttpsError(error);
     }
-    mintVariantKind = buf[o] ?? MINT_VARIANT_KIND_NONE;
-    o += 1;
-    const startIds = readU32Tuple(buf, o);
-    mintVariantStartIds = startIds.value;
-    o = startIds.next;
-    const endIds = readU32Tuple(buf, o);
-    mintVariantEndIds = endIds.value;
-    o = endIds.next;
-    const nextIds = readU32Tuple(buf, o);
-    mintVariantNextIds = nextIds.value;
-    o = nextIds.next;
-  }
-  const dropSeed =
-    buf.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED ? decodeOptionalTrailingDropSeed(buf, o) : undefined;
-
-  if (!Number.isFinite(itemsPerBox) || itemsPerBox < MIN_ITEMS_PER_BOX || itemsPerBox > MAX_ITEMS_PER_BOX) {
-    throw new HttpsError('failed-precondition', 'On-chain config has invalid itemsPerBox', { itemsPerBox });
+    throw error;
   }
 
+  const dropSeed = decoded.dropSeed ? Buffer.from(decoded.dropSeed) : undefined;
   return {
-    admin,
-    treasury,
-    coreCollection,
-    maxSupply,
-    maxPerTx,
-    itemsPerBox,
-    minted,
-    started,
-    discountMintsPerWallet,
-    mintVariantKind,
-    mintVariantStartIds,
-    mintVariantEndIds,
-    mintVariantNextIds,
-    uriBase: uriBase.value,
+    admin: new PublicKey(decoded.admin),
+    treasury: new PublicKey(decoded.treasury),
+    coreCollection: new PublicKey(decoded.coreCollection),
+    maxSupply: decoded.maxSupply,
+    maxPerTx: decoded.maxPerTx,
+    itemsPerBox: decoded.itemsPerBox,
+    minted: decoded.minted,
+    started: decoded.started,
+    discountMintsPerWallet: decoded.discountMintsPerWallet,
+    mintVariantKind: decoded.mintVariantKind,
+    mintVariantStartIds: decoded.mintVariantStartIds,
+    mintVariantEndIds: decoded.mintVariantEndIds,
+    mintVariantNextIds: decoded.mintVariantNextIds,
+    uriBase: decoded.uriBase,
     ...(dropSeed ? { dropSeed } : {}),
   };
 }
@@ -2683,8 +2500,6 @@ type AdminIrlRedeemRequestItem =
       refId: number;
     };
 
-type AdminIrlRedeemTargetKind = 'pack' | 'card_receipt';
-
 function normalizeAdminIrlRedeemRequestItems(request: any): {
   itemIds: string[];
   items: AdminIrlRedeemRequestItem[];
@@ -2714,7 +2529,11 @@ function normalizeAdminIrlRedeemRequestItems(request: any): {
   if (storedTargetKind !== targetKind) {
     throw new HttpsError('failed-precondition', 'Admin IRL redeem request target kind mismatch');
   }
-  if (targetKind === 'card_receipt' && items.length !== 1) {
+  const targetEligibility = getAdminIrlRedeemTargetEligibility({
+    targetKind,
+    itemCount: items.length,
+  });
+  if ('reason' in targetEligibility && targetEligibility.reason === 'invalid-card-receipt-count') {
     throw new HttpsError('failed-precondition', 'Admin IRL redeem supports one card receipt at a time');
   }
 
@@ -2794,7 +2613,10 @@ function requireCardNft2AdminIrlRedeemDrop(dropRuntime: DropRuntime): void {
 }
 
 function pendingOpenPdaForBox(dropRuntime: DropRuntime, boxAsset: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from('open'), boxAsset.toBuffer()], dropRuntime.boxMinterProgramId)[0];
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(BOX_MINTER_PENDING_OPEN_SEED), boxAsset.toBuffer()],
+    dropRuntime.boxMinterProgramId,
+  )[0];
 }
 
 function normalizeAdminIrlResponseDudeIds(raw: unknown): number[] {
@@ -4333,7 +4155,6 @@ async function getDeliveryLookupTable(conn: Connection, dropRuntime: DropRuntime
 
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
-
 function transactionEncodingTooLarge(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (
@@ -4412,68 +4233,6 @@ async function buildTxWithOptionalDeliveryLookupTable(params: {
 
   return { tx, raw };
 }
-
-function countDeliveryFigures(items: Array<{ kind: 'box' | 'dude' }>, itemsPerBox: number): number {
-  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
-  return items.reduce((total, item) => total + (item.kind === 'box' ? deliveryUnitsPerBox : 1), 0);
-}
-
-function calculateUsDeliveryLamports(figureCount: number, itemsPerBox: number, dropFamily: DropFamily): number {
-  if (figureCount <= 0) return 0;
-  if (isDirectDeliveryItemsPerBox(itemsPerBox)) return 0;
-  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
-  if (dropFamily === 'little_swag_boxes') {
-    const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
-    return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
-  }
-  if (dropFamily === 'card_nft_2') {
-    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
-    return CARD_NFT_2_US_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
-  }
-  if (dropFamily === 'poncho_drifella') {
-    return PONCHO_DRIFELLA_US_FLAT_LAMPORTS;
-  }
-  return 0;
-}
-
-function calculateDeliveryLamports(
-  items: Array<{ kind: 'box' | 'dude' }>,
-  countryCode: string | undefined,
-  itemsPerBox: number,
-  dropFamily: DropFamily,
-): number {
-  const figureCount = countDeliveryFigures(items, itemsPerBox);
-  if (figureCount <= 0) return 0;
-  const normalized = normalizeCountryCode(countryCode);
-  if (dropFamily === 'little_swag_hoodies') {
-    if (normalized === 'US') return 0;
-    const extraFigures = Math.max(0, figureCount - 1);
-    return LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS + extraFigures * LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS;
-  }
-  if (normalized === 'US') return calculateUsDeliveryLamports(figureCount, itemsPerBox, dropFamily);
-  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
-  if (dropFamily === 'card_nft_2') {
-    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
-    return CARD_NFT_2_INTL_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
-  }
-  const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
-  return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
-}
-
-type DeliveryOrderItemSummary = { kind: 'box' | 'dude'; refId: number };
-type DeliveryOrderSummary = {
-  dropId: string;
-  deliveryId: number;
-  status: string;
-  stripeCheckoutSessionId?: string;
-  createdAt?: number;
-  processingAt?: number;
-  processedAt?: number;
-  items: DeliveryOrderItemSummary[];
-  fulfillmentStatus?: FulfillmentStatus;
-  fulfillmentTrackingCode?: string;
-  fulfillmentUpdatedAt?: number;
-};
 
 type DeliveryOrderOwnersCursor = {
   path: string;
@@ -5395,51 +5154,6 @@ function parseDeliveryOrderOwnersCursor(rawCursor: unknown): DeliveryOrderOwners
   }
 }
 
-type FulfillmentOrderAddress = {
-  label?: string;
-  email?: string;
-  phone?: string;
-  country?: string;
-  countryCode?: string;
-  hint?: string;
-  encrypted?: string;
-  full?: string | null;
-};
-
-type FulfillmentOrderBox = {
-  boxId: number;
-  assetId?: string;
-  claimCode?: string;
-  receiptClaimCode?: string;
-  receiptClaimStatus?: string;
-  dudeIds: number[];
-};
-
-type FulfillmentOrderCardClaim = {
-  figureId: number;
-  assetId?: string;
-  receiptClaimCode?: string;
-  receiptClaimStatus?: string;
-};
-
-type FulfillmentOrder = {
-  dropId: string;
-  deliveryId: number;
-  owner: string;
-  source?: string;
-  status: string;
-  createdAt?: number;
-  processedAt?: number;
-  fulfillmentStatus?: FulfillmentStatus;
-  fulfillmentTrackingCode?: string;
-  fulfillmentUpdatedAt?: number;
-  fulfillmentInternalStatus?: string;
-  address: FulfillmentOrderAddress;
-  boxes: FulfillmentOrderBox[];
-  looseDudes: number[];
-  cardClaims: FulfillmentOrderCardClaim[];
-};
-
 function toFulfillmentOrder(
   docId: string,
   order: any,
@@ -5604,38 +5318,6 @@ function getPayerFromTx(tx: any): PublicKey | null {
   return accounts.length ? accounts[0] : null;
 }
 
-type DeliveryRecoveryOutcome =
-  | 'recovered'
-  | 'failed'
-  | 'lease_active'
-  | 'attempt_capped'
-  | 'not_eligible'
-  | 'missing_delivery'
-  | 'not_found'
-  | 'skipped_status';
-
-type RecoverMyDeliveryOrdersItemResult = {
-  dropId: string;
-  deliveryId: number;
-  statusBefore: string;
-  outcome: DeliveryRecoveryOutcome;
-  verification: 'delivery_pda';
-  message?: string;
-  errorCode?: string;
-};
-
-type RecoverMyDeliveryOrdersResult = {
-  attempted: number;
-  recovered: number;
-  remainingProcessing: number;
-  nextCheckAt?: number;
-  results: RecoverMyDeliveryOrdersItemResult[];
-};
-
-type DeliveryRecoveryState = {
-  nextCheckAt?: number;
-};
-
 type DeliveryOrderDoc = {
   id: string;
   ref: FirebaseFirestore.DocumentReference;
@@ -5644,7 +5326,7 @@ type DeliveryOrderDoc = {
 
 function normalizeRecoveryErrorCode(err: unknown): string | undefined {
   const code = typeof (err as any)?.code === 'string' ? String((err as any).code) : '';
-  const normalized = code.startsWith('functions/') ? code.slice('functions/'.length) : code;
+  const normalized = normalizeCallableErrorCode(code);
   return normalized || undefined;
 }
 
@@ -6990,10 +6672,17 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
     );
     const assetKinds = assets.map((asset) => getAssetKind(asset));
     const isCardReceiptRequest = assetKinds.some((kind) => kind === 'certificate');
-    if (isCardReceiptRequest && (assets.length !== 1 || assetKinds[0] !== 'certificate')) {
+    const targetKind: AdminIrlRedeemTargetKind = isCardReceiptRequest ? 'card_receipt' : 'pack';
+    const targetEligibility = getAdminIrlRedeemTargetEligibility({
+      targetKind,
+      itemCount: assets.length,
+    });
+    if (
+      isCardReceiptRequest &&
+      (!targetEligibility.eligible || assetKinds[0] !== 'certificate')
+    ) {
       throw new HttpsError('failed-precondition', 'Admin IRL redeem supports one card receipt at a time and cannot mix item types');
     }
-    const targetKind: AdminIrlRedeemTargetKind = isCardReceiptRequest ? 'card_receipt' : 'pack';
     const orderItems: AdminIrlRedeemRequestItem[] = assets.map((asset, index) => {
       const assetId = uniqueItemIds[index];
       const kind = assetKinds[index];
@@ -7444,6 +7133,7 @@ export const prepareDeliveryTx = onCallLogged(
     addressCountry,
     dropRuntime.itemsPerBox,
     dropRuntime.config.dropFamily,
+    SERVER_INVALID_DELIVERY_UNITS_POLICY,
   );
   const conn = connection(dropRuntime);
 
