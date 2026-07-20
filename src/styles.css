@@ -1651,10 +1651,17 @@ header.top--shop.top--spacer {
   grid-template-rows:
     minmax(var(--drops-panel-full-min-height), 1fr)
     minmax(var(--drops-panel-half-min-height), 1fr)
-    minmax(var(--drops-panel-full-min-height), 1fr)
-    minmax(var(--drops-panel-half-min-height), 1fr);
+    minmax(var(--drops-panel-full-min-height), 1fr);
   align-items: stretch;
   gap: var(--drops-panel-gap);
+}
+
+.drops-panel__grid--with-drifella-items {
+  grid-template-rows:
+    minmax(var(--drops-panel-full-min-height), 1fr)
+    minmax(var(--drops-panel-half-min-height), 1fr)
+    minmax(var(--drops-panel-half-min-height), 1fr)
+    minmax(var(--drops-panel-full-min-height), 1fr);
 }
 
 .drops-panel__tile {
@@ -1808,8 +1815,15 @@ header.top--shop.top--spacer {
     grid-template-rows:
       minmax(var(--drops-panel-card-nft-2-min-height), auto)
       minmax(var(--drops-panel-half-min-height), auto)
-      minmax(var(--drops-panel-full-min-height), auto)
-      minmax(var(--drops-panel-half-min-height), auto);
+      minmax(var(--drops-panel-full-min-height), auto);
+  }
+
+  .drops-panel__grid--with-drifella-items {
+    grid-template-rows:
+      minmax(var(--drops-panel-card-nft-2-min-height), auto)
+      minmax(var(--drops-panel-half-min-height), auto)
+      minmax(var(--drops-panel-half-min-height), auto)
+      minmax(var(--drops-panel-full-min-height), auto);
   }
 
   .drops-panel__tile--full {

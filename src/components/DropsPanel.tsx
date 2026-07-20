@@ -14,6 +14,8 @@ const lsbImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectR
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('poncho_drifella'));
 const upcomingDropRoutes = listUpcomingDropRoutes();
+// Temporary: re-enable these upcoming drops when they are ready to be listed.
+const SHOW_DRIFELLA_SHIRT_AND_CARD_NFT_BINDER = false;
 
 function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return undefined;
@@ -228,60 +230,46 @@ export function DropsPanel() {
       imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
       compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
-    {
-      key: 'drifella_shirt',
-      size: 'half',
-      image: drifellaShirt.image,
-      imageDimensions: drifellaShirt.imageDimensions,
-      alt: drifellaShirt.alt,
-      title: drifellaShirt.title,
-      path: drifellaShirt.path,
-      imageMaxWidth: '88%',
-      imageMaxHeight: 'clamp(140px, 23.5cqw, 230px)',
-      compactImageMaxHeight: 'clamp(120px, 28cqw, 150px)',
-      imageScale: 1.03,
-      compactImageScale: 1,
-      imageGap: 'clamp(28px, 3.3cqw, 38px)',
-      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
-      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
-    },
-    {
-      key: 'drifella_binder',
-      size: 'half',
-      image: drifellaBinder.image,
-      imageDimensions: drifellaBinder.imageDimensions,
-      alt: drifellaBinder.alt,
-      title: drifellaBinder.title,
-      path: drifellaBinder.path,
-      imageMaxWidth: '78%',
-      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
-      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
-      imageScale: 0.92,
-      compactImageScale: 0.88,
-      imageGap: 'clamp(26px, 3cqw, 34px)',
-      compactImageGap: 'clamp(10px, 3cqw, 16px)',
-      imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
-    },
-    {
-      key: 'little_swag_hoodies',
-      size: 'full',
-      image: littleSwagHoodies.image,
-      imageDimensions: littleSwagHoodies.imageDimensions,
-      alt: littleSwagHoodies.alt,
-      title: littleSwagHoodies.title,
-      path: littleSwagHoodies.path,
-      imageMaxWidth: '82%',
-      imageMaxHeight: 'clamp(150px, 24cqw, 240px)',
-      compactImageMaxHeight: 'clamp(150px, 32cqw, 180px)',
-      imageScale: 1.04,
-      compactImageScale: 1,
-      imageGap: 'clamp(28px, 3.3cqw, 38px)',
-      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
-      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
-    },
+    ...(SHOW_DRIFELLA_SHIRT_AND_CARD_NFT_BINDER
+      ? [
+          {
+            key: 'drifella_shirt',
+            size: 'half' as const,
+            image: drifellaShirt.image,
+            imageDimensions: drifellaShirt.imageDimensions,
+            alt: drifellaShirt.alt,
+            title: drifellaShirt.title,
+            path: drifellaShirt.path,
+            imageMaxWidth: '88%',
+            imageMaxHeight: 'clamp(140px, 23.5cqw, 230px)',
+            compactImageMaxHeight: 'clamp(120px, 28cqw, 150px)',
+            imageScale: 1.03,
+            compactImageScale: 1,
+            imageGap: 'clamp(28px, 3.3cqw, 38px)',
+            compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
+            imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
+            compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+          },
+          {
+            key: 'drifella_binder',
+            size: 'half' as const,
+            image: drifellaBinder.image,
+            imageDimensions: drifellaBinder.imageDimensions,
+            alt: drifellaBinder.alt,
+            title: drifellaBinder.title,
+            path: drifellaBinder.path,
+            imageMaxWidth: '78%',
+            imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
+            compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
+            imageScale: 0.92,
+            compactImageScale: 0.88,
+            imageGap: 'clamp(26px, 3cqw, 34px)',
+            compactImageGap: 'clamp(10px, 3cqw, 16px)',
+            imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
+            compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+          },
+        ]
+      : []),
     {
       key: 'little_swag_boxes',
       size: 'half',
@@ -318,11 +306,31 @@ export function DropsPanel() {
       imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
       compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
+    {
+      key: 'little_swag_hoodies',
+      size: 'full',
+      image: littleSwagHoodies.image,
+      imageDimensions: littleSwagHoodies.imageDimensions,
+      alt: littleSwagHoodies.alt,
+      title: littleSwagHoodies.title,
+      path: littleSwagHoodies.path,
+      imageMaxWidth: '82%',
+      imageMaxHeight: 'clamp(150px, 24cqw, 240px)',
+      compactImageMaxHeight: 'clamp(150px, 32cqw, 180px)',
+      imageScale: 1.04,
+      compactImageScale: 1,
+      imageGap: 'clamp(28px, 3.3cqw, 38px)',
+      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
+      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+    },
   ];
 
   return (
     <section className="drops-panel">
-      <div className="drops-panel__grid">
+      <div
+        className={`drops-panel__grid${SHOW_DRIFELLA_SHIRT_AND_CARD_NFT_BINDER ? ' drops-panel__grid--with-drifella-items' : ''}`}
+      >
         {items.map((item) => (
           <DropPanelTile
             key={item.key}
