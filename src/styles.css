@@ -1668,6 +1668,7 @@ header.top--shop.top--spacer {
   --drops-panel-tile-bg: var(--surface);
   --drops-panel-title-color: var(--fg);
   --drops-panel-image-max-width: 74%;
+  --drops-panel-active-image-max-width: var(--drops-panel-image-max-width);
   --drops-panel-image-max-height: 68%;
   --drops-panel-active-image-max-height: var(--drops-panel-image-max-height);
   --drops-panel-image-x: 0%;
@@ -1781,7 +1782,7 @@ header.top--shop.top--spacer {
   display: block;
   width: auto;
   height: auto;
-  max-width: var(--drops-panel-image-max-width);
+  max-width: var(--drops-panel-active-image-max-width);
   max-height: var(--drops-panel-active-image-max-height);
   object-fit: contain;
   user-select: none;
@@ -1821,7 +1822,7 @@ header.top--shop.top--spacer {
   .drops-panel__grid--with-drifella-items {
     grid-template-rows:
       minmax(var(--drops-panel-card-nft-2-min-height), auto)
-      minmax(var(--drops-panel-half-min-height), auto)
+      auto
       minmax(var(--drops-panel-half-min-height), auto)
       minmax(var(--drops-panel-full-min-height), auto);
   }
@@ -1838,8 +1839,15 @@ header.top--shop.top--spacer {
     line-height: 1.06;
   }
 
+  .drops-panel__tile--drifella_shirt .drops-panel__title,
+  .drops-panel__tile--drifella_binder .drops-panel__title {
+    font-size: clamp(14px, 4.6cqw, 22px);
+    white-space: nowrap;
+  }
+
   .drops-panel__tile {
     --drops-panel-image-y: 0%;
+    --drops-panel-active-image-max-width: var(--drops-panel-compact-image-max-width, var(--drops-panel-image-max-width));
     --drops-panel-active-image-max-height: var(--drops-panel-compact-image-max-height, var(--drops-panel-image-max-height));
     --drops-panel-active-image-scale: var(--drops-panel-compact-image-scale, var(--drops-panel-image-scale));
     --drops-panel-active-image-gap: var(--drops-panel-compact-image-gap, clamp(16px, 5cqw, 26px));
@@ -1860,6 +1868,11 @@ header.top--shop.top--spacer {
 
   .drops-panel__tile--card_nft_2 .drops-panel__image-stage {
     align-items: center;
+    min-height: 0;
+  }
+
+  .drops-panel__tile--drifella_shirt .drops-panel__image-stage,
+  .drops-panel__tile--drifella_binder .drops-panel__image-stage {
     min-height: 0;
   }
 

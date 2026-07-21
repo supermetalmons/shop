@@ -69,7 +69,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     label: 'Drifella Shirt',
     title: 'Drifella Shirt',
     previewImageUrl: 'https://cdn.lil.org/wip/shirt_1.webp',
-    previewAspectRatio: 1781 / 1400,
+    previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
   },
 ];

@@ -63,6 +63,7 @@ type DropPanelItem = {
   background?: string;
   titleColor?: string;
   imageMaxWidth?: string;
+  compactImageMaxWidth?: string;
   imageMaxHeight?: string;
   compactImageMaxHeight?: string;
   imageOffsetX?: string;
@@ -79,6 +80,7 @@ type DropPanelTileStyle = CSSProperties & {
   '--drops-panel-tile-bg'?: string;
   '--drops-panel-title-color'?: string;
   '--drops-panel-image-max-width'?: string;
+  '--drops-panel-compact-image-max-width'?: string;
   '--drops-panel-image-max-height'?: string;
   '--drops-panel-compact-image-max-height'?: string;
   '--drops-panel-image-x'?: string;
@@ -106,6 +108,7 @@ function dropPanelTileStyle(item: DropPanelItem): DropPanelTileStyle {
     '--drops-panel-tile-bg': item.background,
     '--drops-panel-title-color': item.titleColor,
     '--drops-panel-image-max-width': item.imageMaxWidth,
+    '--drops-panel-compact-image-max-width': item.compactImageMaxWidth,
     '--drops-panel-image-max-height': item.imageMaxHeight,
     '--drops-panel-compact-image-max-height': item.compactImageMaxHeight,
     '--drops-panel-image-x': item.imageOffsetX,
@@ -255,6 +258,7 @@ export function DropsPanel() {
       title: drifellaBinder.title,
       path: drifellaBinder.path,
       imageMaxWidth: '78%',
+      compactImageMaxWidth: '58%',
       imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
       compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
       imageScale: 0.92,
@@ -262,7 +266,7 @@ export function DropsPanel() {
       imageGap: 'clamp(26px, 3cqw, 34px)',
       compactImageGap: 'clamp(10px, 3cqw, 16px)',
       imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+      compactImageBottomSpace: 'clamp(4px, 1.4cqw, 7px)',
     },
     {
       key: 'little_swag_hoodies',
