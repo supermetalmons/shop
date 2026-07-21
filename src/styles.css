@@ -532,6 +532,10 @@ header.top--shop.top--fixed {
   background: transparent;
   box-shadow: none;
   isolation: isolate;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform;
 }
 
 header.top--shop.top--fixed::before {
