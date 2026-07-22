@@ -3,6 +3,8 @@ import { INTERACTIVE_CARD_PACK_REVEAL_TIMING } from '../lib/interactiveCardPackR
 import {
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+  DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL,
   LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
   LITTLE_SWAG_BOXES_CDN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
@@ -95,7 +97,22 @@ export type DropExtraContentOverride = {
 };
 
 const PONCHO_DRIFELLA_PACK_PREVIEW_ASPECT_RATIO = 637 / 1092;
+const DRIFELLA_SHIRT_CLEAN_IMAGE_ASPECT_RATIO = 1585 / 1242;
 const HOODIE_CLEAN_IMAGE_ASPECT_RATIO = 1445 / 877;
+const DRIFELLA_SHIRT_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  box: {
+    previewImageUrl: DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+    aspectRatio: DRIFELLA_SHIRT_CLEAN_IMAGE_ASPECT_RATIO,
+  },
+  mintPanel: {
+    previewImageUrl: DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+    aspectRatio: DRIFELLA_SHIRT_CLEAN_IMAGE_ASPECT_RATIO,
+  },
+  certificates: {
+    boxInventoryImageBaseUrl: DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL,
+    boxInventoryMedia: { strategy: 'direct' },
+  },
+};
 const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     previewImageUrl: PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL,
@@ -237,6 +254,7 @@ function mergeDropExtraContentOverrides(
 }
 
 function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraContentOverride | undefined {
+  if (isDropFamily(normalizedDropId, 'drifella_shirt')) return DRIFELLA_SHIRT_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'poncho_drifella')) return PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'little_swag_boxes')) return LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;

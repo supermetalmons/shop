@@ -27,6 +27,7 @@ import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from '../functions/src/orderEmailItems.ts';
+import { DRIFELLA_SHIRT_CLEAN_IMAGE_URL } from '../functions/src/shared/dropMediaDefaults.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
 
 function escapeRegExp(value: string): string {
@@ -440,6 +441,31 @@ test('buyer order email items include direct-delivery size labels and thumbnails
   assert.equal(items.length, 2);
   assert.match(items[0].thumbnailUrl || '', /hoodie_clean\.webp/);
   assert.match(items[1].thumbnailUrl || '', /hoodie_clean\.webp/);
+});
+
+test('drifella shirt order email items use size labels and the clean thumbnail for every audience', async () => {
+  const order = {
+    items: [
+      { kind: 'box', refId: 25 },
+      { kind: 'box', refId: 1 },
+    ],
+  };
+  const selectedOrder = { dropId: 'drifella_shirt_devnet' };
+
+  const [buyerItems, shipperItems] = await Promise.all([
+    buildBuyerVisibleOrderEmailItems(order, selectedOrder),
+    buildShipperVisibleOrderEmailItems(order, selectedOrder),
+  ]);
+
+  assert.deepEqual(
+    buyerItems.map((item) => item.label),
+    ['L', '2XL'],
+  );
+  assert.deepEqual(
+    buyerItems.map((item) => item.thumbnailUrl),
+    [DRIFELLA_SHIRT_CLEAN_IMAGE_URL, DRIFELLA_SHIRT_CLEAN_IMAGE_URL],
+  );
+  assert.deepEqual(shipperItems, buyerItems);
 });
 
 test('order email items keep assigned card contents hidden for card nft 2 packs', async () => {

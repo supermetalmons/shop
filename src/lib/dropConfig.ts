@@ -10,6 +10,7 @@ import {
 } from '../config/deployment';
 import { getHeliusApiKey } from './helius';
 import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
+import { DRIFELLA_SHIRT_CLEAN_IMAGE_URL } from '../config/dropMediaDefaults';
 
 function normalizePathname(pathname: string): string {
   const normalized = String(pathname || '').replace(/\/+$/, '');
@@ -68,7 +69,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Drifella Shirt',
     title: 'Drifella Shirt',
-    previewImageUrl: 'https://cdn.lil.org/nft/drifella_shirt/images/clean.webp',
+    previewImageUrl: DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
     previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
   },

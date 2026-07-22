@@ -12,6 +12,7 @@ import { cardNft2AssetUrl } from './shared/cardNft2AssetCore.js';
 import {
   CARD_NFT_2_BOX_MEDIA,
   CARD_NFT_2_PACK_BASE_URL,
+  DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   LITTLE_SWAG_BOXES_BOX_PREVIEW_IMAGE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_MEDIA,
@@ -76,6 +77,7 @@ function boxThumbnailUrl(dropId: string, drop: FunctionsDropConfig | undefined, 
     const mediaId = getMediaIdForTokenId(boxId, CARD_NFT_2_BOX_MEDIA);
     return mediaId ? `${CARD_NFT_2_PACK_BASE_URL}/${mediaId}/initial.webp` : undefined;
   }
+  if (family === 'drifella_shirt') return DRIFELLA_SHIRT_CLEAN_IMAGE_URL;
   if (family === 'little_swag_boxes') return LITTLE_SWAG_BOXES_BOX_PREVIEW_IMAGE_URL;
   if (family === 'little_swag_hoodies') return LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL;
   if (family === 'poncho_drifella') return PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL;

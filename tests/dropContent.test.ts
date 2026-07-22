@@ -9,6 +9,10 @@ import {
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  DRIFELLA_SHIRT_CDN_BASE_URL,
+  DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+  DRIFELLA_SHIRT_IMAGE_BASE_URL,
+  DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL,
   LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
   LITTLE_SWAG_BOXES_CDN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
@@ -26,6 +30,8 @@ import {
   CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS,
 } from '../src/lib/cardNft2Packs.ts';
 import {
+  mintPanelPreviewAspectRatio,
+  mintPanelPreviewImage,
   normalizeBoxDisplayImage,
   normalizeCertificateDisplayImage,
   normalizeFigureDisplayImage,
@@ -187,6 +193,47 @@ test('card_nft_2 asset helper pads ids and enforces range', () => {
   );
   assert.equal(cardNft2AssetUrl('img', 11134), undefined);
   assert.equal(cardNft2AssetUrl('img', 1.5), undefined);
+});
+
+test('drifella shirt display media uses the clean item and direct receipt ids', () => {
+  assert.equal(DRIFELLA_SHIRT_CDN_BASE_URL, 'https://cdn.lil.org/nft/drifella_shirt');
+  assert.equal(DRIFELLA_SHIRT_IMAGE_BASE_URL, `${DRIFELLA_SHIRT_CDN_BASE_URL}/images`);
+  assert.equal(DRIFELLA_SHIRT_CLEAN_IMAGE_URL, `${DRIFELLA_SHIRT_IMAGE_BASE_URL}/clean.webp`);
+  assert.equal(DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL, DRIFELLA_SHIRT_IMAGE_BASE_URL);
+
+  const content = resolveDropContent('drifella_shirt_devnet');
+  assert.equal(content.box.previewImageUrl, DRIFELLA_SHIRT_CLEAN_IMAGE_URL);
+  assert.equal(content.box.aspectRatio, 1585 / 1242);
+  assert.equal(content.mintPanel.previewImageUrl, DRIFELLA_SHIRT_CLEAN_IMAGE_URL);
+  assert.equal(content.mintPanel.aspectRatio, 1585 / 1242);
+  assert.equal(content.certificates.boxInventoryImageBaseUrl, DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL);
+  assert.deepEqual(content.certificates.boxInventoryMedia, { strategy: 'direct' });
+  assert.equal(mintPanelPreviewImage('drifella_shirt_devnet'), DRIFELLA_SHIRT_CLEAN_IMAGE_URL);
+  assert.equal(mintPanelPreviewAspectRatio('drifella_shirt_devnet'), 1585 / 1242);
+
+  assert.equal(
+    normalizeBoxDisplayImage({
+      dropId: 'drifella_shirt_devnet',
+      imageRaw: 'https://metadata.example.com/shirt.webp',
+      boxId: 16,
+    }),
+    DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({ dropId: 'drifella_shirt_devnet', boxId: 1 }),
+    `${DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL}/1.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({ dropId: 'drifella_shirt_devnet', boxId: 26 }),
+    `${DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL}/26.webp`,
+  );
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'drifella_shirt_devnet',
+      imageRaw: 'https://metadata.example.com/shirt-receipt.webp',
+    }),
+    'https://metadata.example.com/shirt-receipt.webp',
+  );
 });
 
 test('legacy display media urls rewrite to CDN paths with metadata fallback preserved', () => {
