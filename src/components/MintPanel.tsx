@@ -14,6 +14,7 @@ import { FaCircleQuestion } from 'react-icons/fa6';
 import { LuInfo } from 'react-icons/lu';
 import { MintStats, type PackStatusBreakdown, type PackStatusDisplayLabels, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
+import { resolveDropSizeGuide } from '../lib/dropSizeGuide';
 import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 import {
@@ -70,7 +71,6 @@ interface MintPanelProps {
   stripePaymentPriceLabel?: string;
   stripePaymentUnitAmountCents?: number;
   mintSelection?: MintSelectionConfig;
-  showSizeInfo?: boolean;
   successfulMintToken?: number;
   terminalAction?: MintPanelTerminalAction;
   showPackStatusInfo?: boolean;
@@ -670,7 +670,6 @@ export function MintPanel({
   stripePaymentPriceLabel,
   stripePaymentUnitAmountCents,
   mintSelection,
-  showSizeInfo,
   successfulMintToken = 0,
   terminalAction,
   showPackStatusInfo,
@@ -685,6 +684,7 @@ export function MintPanel({
   const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
   const sizeSelection = mintSelection?.kind === 'size' ? mintSelection : undefined;
   const sizeOptions = sizeSelection?.options ?? [];
+  const sizeGuide = sizeSelection ? resolveDropSizeGuide(dropId) : null;
   const sizeAvailability = useMemo(
     () => stats?.mintSelectionAvailability ?? deriveMintSelectionAvailabilityFromConfig(sizeSelection) ?? {},
     [stats?.mintSelectionAvailability, sizeSelection],
@@ -1221,7 +1221,7 @@ export function MintPanel({
                       : 'mint-panel__sizes'
                   }
                   role="radiogroup"
-                  aria-label="Hoodie size"
+                  aria-label={sizeGuide?.selectionAriaLabel ?? 'Size'}
                 >
                   {sizeOptions.map((size) => {
                     const selected = selectedSize === size.key;
@@ -1249,7 +1249,7 @@ export function MintPanel({
                     );
                   })}
                 </div>
-                {showSizeInfo ? (
+                {sizeGuide ? (
                   <div className="mint-panel__size-info-wrap" ref={sizeInfoRef}>
                     <button
                       type="button"
@@ -1265,7 +1265,7 @@ export function MintPanel({
                       <div
                         className="mint-panel__size-popover"
                         role="dialog"
-                        aria-label="Hoodie sizing"
+                        aria-label={sizeGuide.dialogAriaLabel}
                       >
                         <table className="mint-panel__size-table">
                           <thead>
@@ -1277,24 +1277,14 @@ export function MintPanel({
                             </tr>
                           </thead>
                           <tbody>
-                            <tr>
-                              <th scope="row">L</th>
-                              <td>28 1/2</td>
-                              <td>25 1/2</td>
-                              <td>24 3/4</td>
-                            </tr>
-                            <tr>
-                              <th scope="row">XL</th>
-                              <td>29 1/2</td>
-                              <td>27 1/2</td>
-                              <td>25 1/4</td>
-                            </tr>
-                            <tr>
-                              <th scope="row">2XL</th>
-                              <td>30 1/2</td>
-                              <td>29 1/2</td>
-                              <td>26</td>
-                            </tr>
+                            {sizeGuide.rows.map((row) => (
+                              <tr key={row.size}>
+                                <th scope="row">{row.size}</th>
+                                <td>{row.bodyLength}</td>
+                                <td>{row.chestWidth}</td>
+                                <td>{row.sleeveLength}</td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
                         <p className="mint-panel__size-quote">
