@@ -38,8 +38,8 @@ const DRIFELLA_UPCOMING_ROUTES = [
     solanaCluster: 'mainnet-beta',
     label: 'Drifella Shirt',
     title: 'Drifella Shirt',
-    previewImageUrl: 'https://cdn.lil.org/wip/shirt_1.webp',
-    previewAspectRatio: 1781 / 1400,
+    previewImageUrl: 'https://cdn.lil.org/nft/drifella_shirt/images/clean.webp',
+    previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
   },
 ] as const;

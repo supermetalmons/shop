@@ -68,7 +68,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Drifella Shirt',
     title: 'Drifella Shirt',
-    previewImageUrl: 'https://cdn.lil.org/wip/shirt_1.webp',
+    previewImageUrl: 'https://cdn.lil.org/nft/drifella_shirt/images/clean.webp',
     previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
   },
