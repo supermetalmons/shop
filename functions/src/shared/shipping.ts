@@ -9,6 +9,8 @@ export const CARD_NFT_2_BASE_DELIVERY_CARD_COUNT = 3;
 const CARD_NFT_2_US_BASE_LAMPORTS = 200_000_000;
 export const CARD_NFT_2_INTL_BASE_LAMPORTS = 400_000_000;
 export const CARD_NFT_2_EXTRA_LAMPORTS = 60_000_000;
+const DRIFELLA_SHIRT_US_FLAT_LAMPORTS = 100_000_000;
+const DRIFELLA_SHIRT_INTL_FLAT_LAMPORTS = 250_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 export const LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS = 600_000_000;
 export const LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS = 500_000_000;
@@ -81,6 +83,11 @@ export function calculateDeliveryLamports(
   const normalized = normalizeCountryCode(countryCode);
   const figureCount = countDeliveryFigures(items, itemsPerBox, invalidPolicy);
   if (figureCount <= 0) return 0;
+  if (dropFamily === 'drifella_shirt') {
+    return normalized === 'US'
+      ? DRIFELLA_SHIRT_US_FLAT_LAMPORTS
+      : DRIFELLA_SHIRT_INTL_FLAT_LAMPORTS;
+  }
   if (dropFamily === 'little_swag_hoodies') {
     if (normalized === 'US') return 0;
     const extraFigures = Math.max(0, figureCount - 1);

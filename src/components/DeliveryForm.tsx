@@ -58,7 +58,12 @@ export function DeliveryForm({
   const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, baseDeliveryUnitCount);
   const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
   let shippingNote = `International delivery: 0.25 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
-  if (dropFamily === 'little_swag_hoodies') {
+  if (dropFamily === 'drifella_shirt') {
+    shippingNote =
+      selectedCountryCode === 'US'
+        ? 'US delivery: 0.1 SOL.'
+        : 'International delivery: 0.25 SOL.';
+  } else if (dropFamily === 'little_swag_hoodies') {
     shippingNote =
       selectedCountryCode === 'US'
         ? 'Free US shipping'

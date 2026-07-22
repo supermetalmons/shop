@@ -28,6 +28,15 @@ test('card_nft_2 delivery charges 0.4 SOL internationally up to three cards plus
   assert.equal(calculateDeliveryLamports([box, dude], 'INTL', 3, 'card_nft_2'), 460_000_000);
 });
 
+test('drifella_shirt delivery is flat at 0.1 SOL in the US and 0.25 SOL internationally', () => {
+  assert.equal(calculateDeliveryLamports([box], 'US', 0, 'drifella_shirt'), 100_000_000);
+  assert.equal(calculateDeliveryLamports([box, box, box], 'US', 0, 'drifella_shirt'), 100_000_000);
+  assert.equal(calculateDeliveryLamports([box], 'CA', 0, 'drifella_shirt'), 250_000_000);
+  assert.equal(calculateDeliveryLamports([box, box, box], 'TR', 0, 'drifella_shirt'), 250_000_000);
+  assert.equal(calculateDeliveryLamports([], 'US', 0, 'drifella_shirt'), 0);
+  assert.equal(calculateDeliveryLamports([], 'TR', 0, 'drifella_shirt'), 0);
+});
+
 test('delivery formulas preserve every drop-family pricing branch', () => {
   assert.equal(calculateDeliveryLamports([box], 'US', 3, 'little_swag_boxes'), 100_000_000);
   assert.equal(calculateDeliveryLamports([box, dude], 'US', 3, 'little_swag_boxes'), 125_000_000);
