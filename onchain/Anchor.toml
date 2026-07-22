@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-box_minter = "7h4JRc5vELpaahm11AeshFEQHe1jePauRnMFWaPSRNpV"
+box_minter = "Hr39xMTdeQFPkLb9D6yYxxzTTkfW6QgVyyUETT7jyfZw"
 
 [programs.localnet]
 box_minter = "FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd"
