@@ -607,7 +607,7 @@ type ShipperReadyToShipNotificationConfig = {
 
 const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
   {
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'],
+    dropIds: ['little_swag_boxes', 'poncho_drifella', 'drifella_shirt', 'little_swag_hoodies', 'card_nft_2'],
     emails: ['supermetalxbosch@gmail.com'],
   },
 ];

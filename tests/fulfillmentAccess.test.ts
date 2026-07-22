@@ -15,7 +15,13 @@ import {
 } from '../src/lib/fulfillmentAccess.ts';
 
 const ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const ALL_DROP_IDS = ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'];
+const ALL_DROP_IDS = [
+  'little_swag_boxes',
+  'poncho_drifella',
+  'drifella_shirt',
+  'little_swag_hoodies',
+  'card_nft_2',
+];
 const LIMITED_SHIPPER_WALLET = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
@@ -37,7 +43,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
     SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
     [
       ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ALL_DROP_IDS],
-      [LIMITED_SHIPPER_WALLET, ['poncho_drifella', 'card_nft_2']],
+      [LIMITED_SHIPPER_WALLET, ['poncho_drifella', 'drifella_shirt', 'card_nft_2']],
       [FULFILLMENT_ONLY_WALLET, ALL_DROP_IDS],
     ],
   );
@@ -65,7 +71,7 @@ test('frontend allowed-drop lists retain caller and configured array references'
   const firstShipperResult = listAllowedFulfillmentDropIds(LIMITED_SHIPPER_WALLET, [...ALL_DROP_IDS]);
   const secondShipperResult = listAllowedFulfillmentDropIds(LIMITED_SHIPPER_WALLET, []);
   assert.equal(firstShipperResult, secondShipperResult);
-  assert.deepEqual(firstShipperResult, ['poncho_drifella', 'card_nft_2']);
+  assert.deepEqual(firstShipperResult, ['poncho_drifella', 'drifella_shirt', 'card_nft_2']);
 
   assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), ALL_DROP_IDS);
   assert.deepEqual(listAllowedFulfillmentDropIds('11111111111111111111111111111111', ALL_DROP_IDS), []);

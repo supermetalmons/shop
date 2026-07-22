@@ -17,15 +17,27 @@ export const ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES: readonly string[] = O
 export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig[] = Object.freeze([
   Object.freeze({
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    dropIds: Object.freeze(['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2']),
+    dropIds: Object.freeze([
+      'little_swag_boxes',
+      'poncho_drifella',
+      'drifella_shirt',
+      'little_swag_hoodies',
+      'card_nft_2',
+    ]),
   }),
   Object.freeze({
     wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    dropIds: Object.freeze(['poncho_drifella', 'card_nft_2']),
+    dropIds: Object.freeze(['poncho_drifella', 'drifella_shirt', 'card_nft_2']),
   }),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: Object.freeze(['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2']),
+    dropIds: Object.freeze([
+      'little_swag_boxes',
+      'poncho_drifella',
+      'drifella_shirt',
+      'little_swag_hoodies',
+      'card_nft_2',
+    ]),
   }),
 ]);
 

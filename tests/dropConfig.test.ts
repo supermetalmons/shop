@@ -52,15 +52,22 @@ test('Drifella upcoming routes expose their exact preview configuration', () => 
   }
 });
 
-test('Drifella upcoming routes resolve with trailing slashes but not deployed drops', () => {
+test('Drifella upcoming routes resolve with trailing slashes and reflect deployment state', () => {
   for (const expected of DRIFELLA_UPCOMING_ROUTES) {
     const route = resolveUpcomingDropRouteByPath(`${expected.path}/`);
 
     assert.deepEqual(route, expected);
     assert.equal(resolveUpcomingRouteDrop(route, []), null);
-    assert.equal(FRONTEND_DROPS[expected.dropFamily], undefined);
-    assert.equal(FUNCTIONS_DROPS[expected.dropFamily], undefined);
   }
+
+  assert.equal(FRONTEND_DROPS.drifella_binder, undefined);
+  assert.equal(FUNCTIONS_DROPS.drifella_binder, undefined);
+  assert.equal(FRONTEND_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
+  assert.equal(FUNCTIONS_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
+  assert.equal(
+    resolveUpcomingRouteDrop(resolveUpcomingDropRouteByPath('/drifella_shirt/'))?.dropId,
+    'drifella_shirt',
+  );
 });
 
 test('Drifella family names normalize and default from IDs across registry contracts', () => {
