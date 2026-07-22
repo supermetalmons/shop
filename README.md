@@ -24,15 +24,37 @@ SDK, secrets, and environment access in thin runtime adapters. See
 - Build for production: `npm run build` (outputs `dist/`)
 
 ## Deployment
-The frontend is a static Vite build (`dist/`). Deploy it to any static host (Amplify, Netlify, Vercel, S3/CloudFront, etc). The two env vars above are optional overrides; everything else is in committed config.
+The frontend is an asset-only Cloudflare Worker named `mons-shop`. Firebase,
+Firestore, and Cloud Functions remain independently deployed to Firebase.
 
-### Deploy to Amplify
-- Set Amplify branch env vars if you want to override the bundled frontend API-key defaults:
-  - `VITE_HELIUS_API_KEY`
-  - `VITE_FIREBASE_API_KEY`
-- Deploy: `npm run deploy -- <branch>`
-  - Dry run (prints keys only): `npm run deploy -- <branch> --dry-run`
-  - Wait for the Amplify job to finish: `npm run deploy -- <branch> --wait`
+- Prerequisite: Node.js 22.12 or newer.
+- Install dependencies: `npm install --legacy-peer-deps`
+- Validate the build and Wrangler config without authenticating:
+  - `npm run deploy -- dry-run`
+- Upload a non-production Worker version with the `candidate` preview alias:
+  - `npm run deploy -- preview --token-file /path/to/cloudflare-token`
+- Build and deploy to `mons.shop` and `www.mons.shop`:
+  - `npm run deploy -- production --token-file /path/to/cloudflare-token`
+
+The token file must contain only a scoped Cloudflare API token. Alternatively,
+set `CLOUDFLARE_API_TOKEN` in the invoking shell. The deploy helper strips
+Cloudflare credentials and all local `VITE_*` overrides from the Vite build
+environment, sets `VITE_BUILD_DATETIME`, and only passes the token to the pinned
+local Wrangler process. Deployment builds therefore use the committed Firebase
+and Helius client fallbacks; no Worker runtime variables are required. Never
+commit the token or expose it through a `VITE_*` variable.
+
+Wrangler can upload a preview version only after the Worker exists. The
+`mons-shop` Worker was bootstrapped once without routes during this migration;
+subsequent releases can use the preview command directly.
+
+To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
+inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,
+and run `node_modules/.bin/wrangler rollback <known-good-production-version-id> --config wrangler.jsonc`.
+Always provide the version ID: a bare rollback can
+select a preview-only upload rather than the prior production deployment. The
+Amplify app and its CloudFront DNS targets were retired after the migration, so
+subsequent application rollbacks must use an explicit Worker version.
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `src/App.tsx` (`ADDRESS_ENCRYPTION_PUBLIC_KEY`):

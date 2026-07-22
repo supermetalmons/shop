@@ -2,6 +2,9 @@
   "name": "shop",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "description": "mons.shop – physically redeemable nft drops",
   "scripts": {
     "dev": "vite",
@@ -22,7 +25,7 @@
     "rebuild-pack-status": "tsx functions/scripts/rebuildPackStatus.ts",
     "test-resend-notification-email": "tsx functions/scripts/sendTestResendNotificationEmail.ts",
     "wipe-drop": "node --experimental-strip-types functions/scripts/wipeDrop.ts",
-    "deploy": "node --experimental-strip-types scripts/deploy-amplify.ts",
+    "deploy": "node --experimental-strip-types scripts/deploy-cloudflare.ts",
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy:functions": "firebase deploy --only functions",
     "deploy:firebaseNewDrops": "firebase deploy --only firestore:indexes,functions:solanaAuth,functions:getProfile,functions:listFulfillmentOrders,functions:listFulfillmentManualReviewCheckouts,functions:updateFulfillmentStatus,functions:updateFulfillmentInternalStatus,functions:listCardNft2UnrevealedCards,functions:revealDudes,functions:prepareAdminIrlRedeemTx,functions:finalizeAdminIrlRedeem,functions:prepareDeliveryTx,functions:issueReceipts,functions:recoverMyDeliveryOrders,functions:prepareIrlClaimTx,functions:claimStripeReceipt,functions:getAnonymousStripeDeliveryHistory,functions:createStripeCheckoutSession,functions:createTestStripeCheckoutSession,functions:stripeWebhook,functions:resendInboundWebhook,functions:subscribeToNotifications,functions:processStripeCheckoutFulfillment,functions:notifyShippersOnDeliveryReadyToShip,functions:notifyBuyerOnDeliveryShipped,functions:notifyStripeCheckoutManualReview",
@@ -79,6 +82,7 @@
     "knip": "^6.27.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "wrangler": "4.113.0"
   }
 }

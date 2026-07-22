@@ -14,7 +14,7 @@
         "scripts/**/*.{ts,cjs}",
         "tests/**/*.ts"
       ],
-      "ignoreDependencies": ["buffer"],
+      "ignoreDependencies": ["buffer", "wrangler"],
       "ignoreBinaries": ["firebase", "solana"]
     },
     "functions": {

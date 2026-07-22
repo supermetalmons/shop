@@ -23,6 +23,7 @@ node_modules/
 dist/
 .vite/
 .cache/
+.wrangler/
 renderer-samples/
 scripts/collection-files/
 *.tsbuildinfo
