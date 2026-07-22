@@ -814,18 +814,18 @@ function ReceiptImageViewerOverlay({
             </div>
           ))}
         </div>
-        {explorerHref ? (
-          <a
-            className="receipt-viewer-overlay__explorer-link"
-            href={explorerHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(evt) => evt.stopPropagation()}
-          >
-            View on block explorer
-          </a>
-        ) : null}
       </div>
+      {explorerHref ? (
+        <a
+          className="receipt-viewer-overlay__explorer-link"
+          href={explorerHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(evt) => evt.stopPropagation()}
+        >
+          View on block explorer
+        </a>
+      ) : null}
       {adminIrlRedeem ? (
         <div className="receipt-viewer-overlay__admin-irl" onClick={(evt) => evt.stopPropagation()}>
           <button

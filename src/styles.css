@@ -2895,7 +2895,7 @@ button.no-focus-style:focus-visible {
 
 .receipt-viewer-overlay__explorer-link {
   position: absolute;
-  top: calc(100% + clamp(10px, 1.8svh, 18px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px));
   left: 50%;
   z-index: 2;
   transform: translateX(-50%);
@@ -2911,7 +2911,20 @@ button.no-focus-style:focus-visible {
   text-align: center;
   text-decoration: none;
   white-space: nowrap;
+  opacity: 0;
+  transition: opacity 260ms ease;
+  pointer-events: none;
   touch-action: manipulation;
+}
+
+.reveal-overlay--active .receipt-viewer-overlay__explorer-link {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reveal-overlay--closing .receipt-viewer-overlay__explorer-link {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .receipt-viewer-overlay__explorer-link:hover,
@@ -2937,6 +2950,10 @@ button.no-focus-style:focus-visible {
   transition: opacity 260ms ease;
   pointer-events: none;
   touch-action: manipulation;
+}
+
+.receipt-viewer-overlay__explorer-link + .receipt-viewer-overlay__admin-irl {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px) + 44px);
 }
 
 .reveal-overlay--active .receipt-viewer-overlay__admin-irl {
@@ -3394,6 +3411,7 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   .reveal-overlay__media,
   .reveal-overlay__shine,
   .reveal-overlay__media-item,
+  .receipt-viewer-overlay__explorer-link,
   .receipt-viewer-overlay__admin-irl {
     transition-duration: 1ms;
   }
