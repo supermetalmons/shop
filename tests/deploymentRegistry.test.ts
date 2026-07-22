@@ -426,6 +426,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
   );
   const soldOutDropIds = [
     'card_nft_2',
+    'drifella_shirt',
     'little_swag_boxes',
     'poncho_drifella',
   ];
@@ -516,6 +517,25 @@ test('shared family and marketplace helpers ignore inherited prototype values', 
       ],
     );
   }
+});
+
+test('drifella shirt secondary marketplaces use the mainnet collection address', () => {
+  const collectionAddress = DEPLOYMENT_DROPS.drifella_shirt.collectionMint;
+  assert.deepEqual(
+    secondaryMarketplaceLinksForDropId('drifella_shirt').map(
+      ({ key, href }) => ({ key, href }),
+    ),
+    [
+      {
+        key: 'magiceden',
+        href: `https://magiceden.io/marketplace/${collectionAddress}`,
+      },
+      {
+        key: 'tensor',
+        href: `https://www.tensor.trade/trade/${collectionAddress}`,
+      },
+    ],
+  );
 });
 
 test('checked-in projection modules contain no registry rows or generated core templates', async () => {

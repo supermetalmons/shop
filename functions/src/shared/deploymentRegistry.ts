@@ -162,6 +162,7 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     collectionName: 'Drifella Shirt',
     metadataBase: 'https://cdn.lil.org/nft/drifella_shirt/json',
     metadataPathFormat: 'compact',
+    forceSoldOut: true,
     mintSelection: {
       kind: 'size',
       options: [
