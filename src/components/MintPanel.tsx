@@ -1326,7 +1326,7 @@ export function MintPanel({
                     <>
                       <span className="mint-panel__stripe-text mint-panel__stripe-text--busy">
                         <span className="mint-panel__stripe-text-anchor" aria-hidden="true">
-                          Pay with card
+                          Checkout
                         </span>
                         <span className="mint-panel__stripe-text-busy" data-mint-action-fit="label">Opening Stripe…</span>
                       </span>
@@ -1341,7 +1341,7 @@ export function MintPanel({
                   ) : (
                     <>
                       <span className="mint-panel__stripe-text" data-mint-action-fit="label">
-                        <span>Pay with card</span>
+                        <span>Checkout</span>
                       </span>
                       <span className="mint-panel__stripe-price" data-mint-action-fit="price">
                         {stripePaymentDisplayPriceLabel}

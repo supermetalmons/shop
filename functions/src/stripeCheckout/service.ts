@@ -1872,7 +1872,6 @@ export async function createStripeCheckoutSessionForRequest<
   const session = await createStripeCheckoutSession(
     {
       mode: 'payment',
-      payment_method_types: ['card'],
       automatic_tax: { enabled: true },
       billing_address_collection: 'auto',
       success_url: successUrl,
