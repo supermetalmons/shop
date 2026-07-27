@@ -11,6 +11,10 @@
   touch-action: none;
 }
 
+.clear-card-wip:focus {
+  outline: none;
+}
+
 .clear-card-wip__backdrop {
   position: absolute;
   inset: 0;
@@ -51,10 +55,15 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Oversized so falling pack shards and sparkles are not clipped at the viewport edge;
+   the viewer compensates with a matching camera-distance factor. */
 .clear-card-wip__canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  left: -25%;
+  top: -25%;
+  width: 150%;
+  height: 150%;
   opacity: 0;
   transform: translate3d(0, 8px, 0) scale(0.97);
   filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
