@@ -532,6 +532,8 @@ export function InventoryGrid({
         } = interaction;
         const hasFooter = Boolean(item.assignedDudes?.length);
         const isInteractiveCardFigure = item.kind === 'dude' && isDropFamily(item.dropId, 'card_nft_2');
+        const isDrifellaShirtReceipt =
+          isReceipt && isDropFamily(item.dropId, 'drifella_shirt');
         const sizeLabel = isSelected
           ? dropMintSelectionLabel(getFrontendDrop(item.dropId), item.boxId ?? item.dudeId)
           : '';
@@ -572,6 +574,7 @@ export function InventoryGrid({
               hasFooter ? 'inventory__item--hasFooter' : '',
               isPendingReveal ? 'inventory__item--pending' : '',
               isReceipt ? 'inventory__item--receipt' : '',
+              isDrifellaShirtReceipt ? 'inventory__item--receipt-drifella-shirt' : '',
               isInteractiveCardFigure ? 'inventory__item--interactive-card-figure' : '',
               itemClassName || '',
             ]

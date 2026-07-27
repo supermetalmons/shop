@@ -2323,6 +2323,23 @@ button.no-focus-style:focus-visible {
   height: 88%;
 }
 
+.inventory__item--receipt-drifella-shirt {
+  aspect-ratio: 932 / 1006;
+}
+
+.inventory__item--receipt-drifella-shirt .inventory__image {
+  aspect-ratio: 932 / 1006;
+  height: auto;
+  max-height: 88%;
+}
+
+@media (max-width: 720px) {
+  .inventory--receipts .inventory__item--receipt-drifella-shirt .inventory__image {
+    height: auto;
+    max-height: 100%;
+  }
+}
+
 .inventory__item--pending {
   border: 2px dashed rgba(0, 0, 0, 0.2);
   background: rgba(0, 0, 0, 0.02);
