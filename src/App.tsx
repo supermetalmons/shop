@@ -875,7 +875,14 @@ function ReceiptImageViewerOverlay({
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog || interactionSuspended || dialog.contains(document.activeElement)) return;
+    if (
+      !dialog ||
+      dialog.closest('[inert]') ||
+      interactionSuspended ||
+      dialog.contains(document.activeElement)
+    ) {
+      return;
+    }
     focusFirstControl(dialog);
   }, [active, interactionSuspended]);
 
@@ -884,12 +891,12 @@ function ReceiptImageViewerOverlay({
     const onKeyDown = (evt: KeyboardEvent) => {
       if (!interactionActiveRef.current || evt.key !== 'Tab') return;
       const dialog = dialogRef.current;
-      if (dialog) trapTabFocusWithin(dialog, evt);
+      if (dialog && !dialog.closest('[inert]')) trapTabFocusWithin(dialog, evt);
     };
     const onFocusIn = (evt: FocusEvent) => {
       if (!interactionActiveRef.current) return;
       const dialog = dialogRef.current;
-      if (!dialog || dialog.contains(evt.target as Node | null)) return;
+      if (!dialog || dialog.closest('[inert]') || dialog.contains(evt.target as Node | null)) return;
       focusFirstControl(dialog);
     };
 
@@ -6716,10 +6723,19 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               type="button"
               className="link small top__submenu-nav"
               onClick={() => {
-                navigate('/wip');
+                navigate('/card_nft_2/wip');
               }}
             >
-              {adminMenuLabel('/wip')}
+              {adminMenuLabel('/card_nft_2/wip')}
+            </button>
+            <button
+              type="button"
+              className="link small top__submenu-nav"
+              onClick={() => {
+                navigate('/clear_cards/wip');
+              }}
+            >
+              {adminMenuLabel('/clear_cards/wip')}
             </button>
             {adminMenuDrops.map((drop) => (
               <button

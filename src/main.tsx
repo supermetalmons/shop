@@ -22,6 +22,8 @@ const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
 const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
+const canonicalCardNft2WipPath = '/card_nft_2/wip';
+const canonicalClearCardsWipPath = '/clear_cards/wip';
 const canonicalClaimPath = '/claim';
 const drifPaths = new Set([canonicalDrifPath]);
 const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));
@@ -67,7 +69,8 @@ const resolveCurrentRoute = (): CurrentRoute => {
     normalizedPath === '/' ||
     normalizedPath === canonicalFulfillmentPath ||
     normalizedPath === canonicalCardNft2UnrevealedPath ||
-    normalizedPath === '/wip' ||
+    normalizedPath === canonicalCardNft2WipPath ||
+    normalizedPath === canonicalClearCardsWipPath ||
     drifPaths.has(normalizedPath) ||
     resolveUpcomingDropRouteByPath(normalizedPath) ||
     resolveFrontendDropByPath(normalizedPath)
@@ -110,7 +113,12 @@ type RoutedContentProps = {
 function RoutedContent({ route }: RoutedContentProps) {
   const { path } = route;
   const isDrifRoute = drifPaths.has(path);
-  const isWipRoute = path === '/wip';
+  const wipExperience =
+    path === canonicalCardNft2WipPath
+      ? 'card_nft_2'
+      : path === canonicalClearCardsWipPath
+        ? 'clear_cards'
+        : null;
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
   const isCardNft2UnrevealedRoute = path === canonicalCardNft2UnrevealedPath;
   const routeDrop = isCardNft2UnrevealedRoute ? null : resolveFrontendDropByPath(path);
@@ -145,7 +153,7 @@ function RoutedContent({ route }: RoutedContentProps) {
       cluster={routeDrop?.solanaCluster || upcomingRoute?.solanaCluster || NEUTRAL_WALLET_CLUSTER}
       currentPath={path}
       claimDeepLinkCode={route.claimDeepLinkCode}
-      isWipRoute={isWipRoute}
+      wipExperience={wipExperience}
     />
   );
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   InteractiveCardPackRevealOverlay,
   PonchoRevealOverlay,
@@ -141,6 +141,7 @@ function LocalPlayWipApp() {
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const packSequence = useMemo(
@@ -267,18 +268,6 @@ function LocalPlayWipApp() {
   }, []);
 
   useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
-    const html = document.documentElement;
-    const body = document.body;
-    html.classList.add('wip-scroll-lock');
-    body.classList.add('wip-scroll-lock');
-    return () => {
-      html.classList.remove('wip-scroll-lock');
-      body.classList.remove('wip-scroll-lock');
-    };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === 'undefined') return;
     preloadPonchoDrifellaPackAssets(ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' }, packSequence);
   }, [packSequence]);
@@ -347,8 +336,19 @@ function LocalPlayWipApp() {
     };
   }, [handleReset]);
 
+  useLayoutEffect(() => {
+    pageRef.current?.focus({ preventScroll: true });
+  }, []);
+
   return (
-    <div className="wip-page">
+    <div
+      ref={pageRef}
+      className="wip-page"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Card pack preview"
+      tabIndex={-1}
+    >
       <PonchoRevealOverlay
         overlayStyle={revealOverlayStyle}
         active

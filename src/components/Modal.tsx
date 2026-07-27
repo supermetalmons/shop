@@ -100,6 +100,7 @@ export function Modal({
     const onKeyDown = (evt: KeyboardEvent) => {
       if (!activeRef.current) return;
       const dialog = dialogRef.current;
+      if (!dialog || dialog.closest('[inert]')) return;
       if (evt.key === 'Tab' && dialog) {
         trapTabFocusWithin(dialog, evt);
         return;
@@ -112,7 +113,7 @@ export function Modal({
     const onFocusIn = (evt: FocusEvent) => {
       if (!activeRef.current) return;
       const dialog = dialogRef.current;
-      if (!dialog || dialog.contains(evt.target as Node | null)) return;
+      if (!dialog || dialog.closest('[inert]') || dialog.contains(evt.target as Node | null)) return;
       focusFirstControl(dialog);
     };
 

@@ -78,10 +78,15 @@ body {
 }
 
 html.overlay-scroll-lock,
-body.overlay-scroll-lock,
+body.overlay-scroll-lock {
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
 html.wip-scroll-lock,
 body.wip-scroll-lock {
-  overflow: hidden;
+  overflow: hidden !important;
   overscroll-behavior: none;
   touch-action: none;
 }
@@ -2797,6 +2802,10 @@ button.no-focus-style:focus-visible {
   z-index: 1110;
 }
 
+.wip-page:focus {
+  outline: none;
+}
+
 .wip-overlay .reveal-overlay__shine {
   display: none;
 }
@@ -3395,14 +3404,13 @@ button.wip-reset-btn:active:not(:disabled) {
   color: rgba(29, 29, 31, 0.68);
 }
 
-button.wip-close-btn:focus-visible,
 button.wip-reset-btn:focus-visible {
   outline: 1px solid currentColor;
   outline-offset: 3px;
   border-radius: 2px;
 }
 
-button.wip-close-btn:focus:not(:focus-visible),
+button.wip-close-btn:focus,
 button.wip-reset-btn:focus:not(:focus-visible) {
   outline: none;
 }

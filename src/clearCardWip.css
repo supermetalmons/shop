@@ -1,0 +1,129 @@
+.clear-card-wip {
+  position: fixed;
+  inset: 0;
+  z-index: 1110;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: transparent;
+  touch-action: none;
+}
+
+.clear-card-wip__backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: transparent;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  animation: clear-card-wip-backdrop-in 320ms ease both;
+}
+
+.clear-card-wip__stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  padding:
+    max(32px, env(safe-area-inset-top, 0px))
+    max(24px, env(safe-area-inset-right, 0px))
+    max(32px, env(safe-area-inset-bottom, 0px))
+    max(24px, env(safe-area-inset-left, 0px));
+  pointer-events: none;
+}
+
+.clear-card-wip__viewport {
+  position: relative;
+  width: min(76vw, 500px, 55.7svh);
+  aspect-ratio: var(--interactive-card-aspect);
+  min-width: 1px;
+  min-height: 1px;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.clear-card-wip__viewport:active {
+  cursor: grabbing;
+}
+
+.clear-card-wip__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.97);
+  filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
+  transition:
+    opacity 360ms ease,
+    transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+
+.clear-card-wip__viewport--ready .clear-card-wip__canvas {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.clear-card-wip__status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, var(--fg) 52%, transparent);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+.clear-card-wip__status--error {
+  color: #b42318;
+}
+
+@keyframes clear-card-wip-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .clear-card-wip__backdrop {
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .clear-card-wip__canvas {
+    filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.38));
+  }
+
+  .clear-card-wip__status--error {
+    color: #ff6961;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clear-card-wip__backdrop {
+    animation-duration: 1ms;
+  }
+
+  .clear-card-wip__canvas {
+    transform: none;
+    transition-duration: 1ms;
+  }
+}
