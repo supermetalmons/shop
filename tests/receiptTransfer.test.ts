@@ -435,19 +435,20 @@ test('receipt transfer target rejects disconnected and admin read-only inventory
   assert.equal(resolveReceiptTransferTarget({ ...base, isAdminReadOnly: true }), null);
 });
 
-test('receipt transfer dialog renders its address input, summary, and Cancel/OK actions', () => {
+test('receipt transfer dialog renders its thumbnail above the title and omits debug details', () => {
   const markup = renderToStaticMarkup(
     createElement(Modal, {
       open: true,
       title: 'Transfer receipt',
+      ariaLabel: 'Transfer receipt: Card receipt #7',
+      titleAbove: createElement('img', {
+        className: 'receipt-transfer-modal__thumbnail',
+        src: '/receipt.webp',
+        alt: '',
+      }),
       onClose: () => undefined,
       showCloseButton: false,
       children: createElement(ReceiptTransferForm, {
-        receipt: {
-          id: RECEIPT_ASSET_ID,
-          name: 'Card receipt #7',
-        },
-        network: 'Devnet',
         feePayer: OWNER,
         onTransfer: async () => undefined,
         onCancel: () => undefined,
@@ -459,13 +460,21 @@ test('receipt transfer dialog renders its address input, summary, and Cancel/OK 
   assert.match(markup, /aria-modal="true"/);
   assert.match(markup, /tabindex="-1"/);
   assert.match(markup, /data-overlay-scroll-allow=""/);
+  assert.match(markup, /aria-label="Transfer receipt: Card receipt #7"/);
   assert.match(markup, /Transfer receipt/);
+  assert.match(markup, /class="receipt-transfer-modal__thumbnail"/);
+  assert.match(markup, /src="\/receipt.webp"/);
+  const titleIndex = markup.indexOf('<div class="card__title">Transfer receipt</div>');
+  const thumbnailIndex = markup.indexOf('class="receipt-transfer-modal__thumbnail"');
+  assert.ok(titleIndex >= 0);
+  assert.ok(thumbnailIndex >= 0);
+  assert.ok(thumbnailIndex < titleIndex);
   assert.match(markup, /aria-label="Destination address"/);
   assert.match(markup, /placeholder="Destination address"/);
   assert.match(markup, /required=""/);
-  assert.match(markup, /Receipt: <strong>Card receipt #7<\/strong>/);
-  assert.match(markup, /Network: Devnet/);
-  assert.match(markup, /Fee-paying wallet: A87U\.\.\.iNpz/);
+  assert.doesNotMatch(markup, /Receipt:/);
+  assert.doesNotMatch(markup, /Network:/);
+  assert.doesNotMatch(markup, /Fee-paying wallet:/);
   assert.match(markup, />Cancel<\/button>/);
   assert.match(markup, />OK<\/button>/);
 });

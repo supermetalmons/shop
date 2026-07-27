@@ -2898,13 +2898,14 @@ button.no-focus-style:focus-visible {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.receipt-viewer-overlay__actions {
+.receipt-viewer-overlay__controls {
   position: absolute;
   bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px));
   left: 50%;
   z-index: 2;
   transform: translateX(-50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -2915,20 +2916,30 @@ button.no-focus-style:focus-visible {
   touch-action: manipulation;
 }
 
-.reveal-overlay--active .receipt-viewer-overlay__actions {
+.reveal-overlay--active .receipt-viewer-overlay__controls {
   opacity: 1;
   pointer-events: auto;
 }
 
-.reveal-overlay--closing .receipt-viewer-overlay__actions {
+.reveal-overlay--closing .receipt-viewer-overlay__controls {
   opacity: 0;
   pointer-events: none;
+}
+
+.receipt-viewer-overlay__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  touch-action: manipulation;
 }
 
 .receipt-viewer-overlay__action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-width: 0;
   min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--border);
@@ -2944,7 +2955,8 @@ button.no-focus-style:focus-visible {
   line-height: 1.25;
   text-align: center;
   text-decoration: none;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   cursor: pointer;
   touch-action: manipulation;
   transition: background 150ms ease, border-color 150ms ease;
@@ -2958,8 +2970,8 @@ button.receipt-viewer-overlay__action:hover:not(:disabled) {
 }
 
 .receipt-viewer-overlay__action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: none;
 }
 
 button.receipt-viewer-overlay__transfer-button[aria-disabled='true'] {
@@ -2967,32 +2979,10 @@ button.receipt-viewer-overlay__transfer-button[aria-disabled='true'] {
 }
 
 .receipt-viewer-overlay__admin-irl {
-  position: absolute;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px));
-  z-index: 2;
-  transform: translateX(-50%);
   display: flex;
   justify-content: center;
-  width: min(100% - 32px, 360px);
-  opacity: 0;
-  transition: opacity 260ms ease;
-  pointer-events: none;
+  width: 100%;
   touch-action: manipulation;
-}
-
-.receipt-viewer-overlay__actions + .receipt-viewer-overlay__admin-irl {
-  bottom: calc(env(safe-area-inset-bottom, 0px) + clamp(14px, 3.2svh, 34px) + 54px);
-}
-
-.reveal-overlay--active .receipt-viewer-overlay__admin-irl {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.reveal-overlay--closing .receipt-viewer-overlay__admin-irl {
-  opacity: 0;
-  pointer-events: none;
 }
 
 button.receipt-viewer-overlay__admin-irl-button {
@@ -3017,8 +3007,7 @@ button.receipt-viewer-overlay__admin-irl-button:focus-visible {
 }
 
 button.receipt-viewer-overlay__admin-irl-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .wip-reveal__media {
@@ -3440,8 +3429,7 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   .reveal-overlay__media,
   .reveal-overlay__shine,
   .reveal-overlay__media-item,
-  .receipt-viewer-overlay__actions,
-  .receipt-viewer-overlay__admin-irl {
+  .receipt-viewer-overlay__controls {
     transition-duration: 1ms;
   }
 
@@ -4537,6 +4525,18 @@ button.fulfillment-secret-code-download svg {
   -webkit-tap-highlight-color: transparent;
 }
 
+.modal__title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.modal__title-above {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
 .modal__head * {
   user-select: none;
   -webkit-user-select: none;
@@ -4699,39 +4699,59 @@ button.fulfillment-secret-code-download svg {
 }
 
 .receipt-transfer-modal .modal__head {
-  padding: 20px 20px 12px;
+  padding: 20px 20px 18px;
 }
 
-.receipt-transfer-form__summary {
-  display: flex;
+.receipt-transfer-modal .modal__title {
   flex-direction: column;
-  gap: 2px;
-  padding: 0 18px 14px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
-  text-align: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
 }
 
-.receipt-transfer-form__summary strong {
-  color: var(--fg);
-  font-weight: 600;
+.receipt-transfer-modal__thumbnail {
+  display: block;
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border-radius: 0;
+  filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.16));
+}
+
+.receipt-transfer-modal__thumbnail--placeholder {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  filter: none;
+}
+
+.receipt-transfer-modal__thumbnail--placeholder svg {
+  width: 16px;
+  height: 16px;
+}
+
+.receipt-transfer-modal:focus,
+.receipt-transfer-modal:focus-visible {
+  outline: none;
 }
 
 .receipt-transfer-form input:focus,
 .receipt-transfer-form input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-color: var(--accent);
+  outline: none;
+  border-color: color-mix(in srgb, var(--fg) 22%, transparent);
+  background: color-mix(in srgb, var(--surface) 96%, var(--fg) 4%);
+  box-shadow: none;
 }
 
 .receipt-transfer-form__actions button[aria-disabled='true'] {
   cursor: progress;
 }
 
+.receipt-transfer-form__actions button:focus,
 .receipt-transfer-form__actions button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
   box-shadow: none;
 }
 

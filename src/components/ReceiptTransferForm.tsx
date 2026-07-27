@@ -8,14 +8,8 @@ import {
 } from 'react';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { normalizeReceiptTransferDestination } from '../lib/receiptTransfer';
-import { shortAddress } from '../lib/solana';
 
 export type ReceiptTransferFormProps = {
-  receipt: {
-    id: string;
-    name: string;
-  };
-  network: string;
   feePayer: string;
   onTransfer: (destination: string) => Promise<void>;
   onCancel: () => void;
@@ -27,8 +21,6 @@ function readableTransferError(error: unknown): string {
 }
 
 export function ReceiptTransferForm({
-  receipt,
-  network,
   feePayer,
   onTransfer,
   onCancel,
@@ -106,13 +98,6 @@ export function ReceiptTransferForm({
       noValidate
       aria-busy={pending}
     >
-      <div className="receipt-transfer-form__summary" aria-label="Transfer details">
-        <div>
-          Receipt: <strong>{receipt.name || shortAddress(receipt.id)}</strong>
-        </div>
-        <div>Network: {network}</div>
-        <div title={feePayer}>Fee-paying wallet: {shortAddress(feePayer)}</div>
-      </div>
       <input
         ref={destinationInputRef}
         type="text"

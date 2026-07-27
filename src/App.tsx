@@ -13,7 +13,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { onAuthStateChanged } from 'firebase/auth';
-import { FaBoxOpen, FaCheck, FaPlane, FaTableCellsLarge } from 'react-icons/fa6';
+import { FaBoxOpen, FaCheck, FaPlane, FaReceipt, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel, type MintPanelBoxMedia } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
@@ -942,52 +942,56 @@ function ReceiptImageViewerOverlay({
           ))}
         </div>
       </div>
-      {explorerHref || transfer ? (
-        <div className="receipt-viewer-overlay__actions" onClick={(evt) => evt.stopPropagation()}>
-          {explorerHref ? (
-            <a
-              className="receipt-viewer-overlay__action receipt-viewer-overlay__explorer-link"
-              href={explorerHref}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              View on explorer
-            </a>
+      {explorerHref || transfer || adminIrlRedeem ? (
+        <div className="receipt-viewer-overlay__controls" onClick={(evt) => evt.stopPropagation()}>
+          {adminIrlRedeem ? (
+            <div className="receipt-viewer-overlay__admin-irl">
+              <button
+                type="button"
+                className="ghost receipt-viewer-overlay__admin-irl-button"
+                disabled={interactionSuspended || adminIrlRedeem.loading}
+                aria-busy={adminIrlRedeem.loading}
+                onClick={(evt) => {
+                  evt.stopPropagation();
+                  if (interactionSuspended) return;
+                  adminIrlRedeem.onClick();
+                }}
+              >
+                <FaBoxOpen aria-hidden="true" focusable="false" size={16} />
+                <span>{adminIrlRedeem.loading ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
+              </button>
+            </div>
           ) : null}
-          {transfer ? (
-            <button
-              type="button"
-              className="receipt-viewer-overlay__action receipt-viewer-overlay__transfer-button"
-              disabled={interactionSuspended || transfer.disabled}
-              aria-disabled={interactionSuspended || transfer.disabled || transfer.unavailable || undefined}
-              aria-busy={transfer.busy || undefined}
-              onClick={(evt) => {
-                evt.stopPropagation();
-                if (interactionSuspended || transfer.disabled) return;
-                transfer.onClick(evt.currentTarget);
-              }}
-            >
-              {transfer.label || 'Transfer'}
-            </button>
+          {explorerHref || transfer ? (
+            <div className="receipt-viewer-overlay__actions">
+              {explorerHref ? (
+                <a
+                  className="receipt-viewer-overlay__action receipt-viewer-overlay__explorer-link"
+                  href={explorerHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View on explorer
+                </a>
+              ) : null}
+              {transfer ? (
+                <button
+                  type="button"
+                  className="receipt-viewer-overlay__action receipt-viewer-overlay__transfer-button"
+                  disabled={interactionSuspended || transfer.disabled}
+                  aria-disabled={interactionSuspended || transfer.disabled || transfer.unavailable || undefined}
+                  aria-busy={transfer.busy || undefined}
+                  onClick={(evt) => {
+                    evt.stopPropagation();
+                    if (interactionSuspended || transfer.disabled) return;
+                    transfer.onClick(evt.currentTarget);
+                  }}
+                >
+                  {transfer.label || 'Transfer'}
+                </button>
+              ) : null}
+            </div>
           ) : null}
-        </div>
-      ) : null}
-      {adminIrlRedeem ? (
-        <div className="receipt-viewer-overlay__admin-irl" onClick={(evt) => evt.stopPropagation()}>
-          <button
-            type="button"
-            className="ghost receipt-viewer-overlay__admin-irl-button"
-            disabled={interactionSuspended || adminIrlRedeem.loading}
-            aria-busy={adminIrlRedeem.loading}
-            onClick={(evt) => {
-              evt.stopPropagation();
-              if (interactionSuspended) return;
-              adminIrlRedeem.onClick();
-            }}
-          >
-            <FaBoxOpen aria-hidden="true" focusable="false" size={16} />
-            <span>{adminIrlRedeem.loading ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
-          </button>
         </div>
       ) : null}
     </div>
@@ -6501,6 +6505,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             : notifyOpen
               ? 'notify'
               : null;
+  const receiptTransferThumbnail =
+    receiptTransferTarget?.image ||
+    (receiptTransferTarget
+      ? revealOverlay?.receiptImages?.find((image) => image.key === receiptTransferTarget.id)?.image
+      : undefined);
   const revealOverlayNode = revealOverlay ? (
     revealOverlayUsesPonchoViewer ? (
       <PonchoCardViewerOverlay
@@ -6894,6 +6903,33 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       <Modal
         open={Boolean(receiptTransferTarget)}
         title="Transfer receipt"
+        ariaLabel={
+          receiptTransferTarget
+            ? `Transfer receipt: ${receiptTransferTarget.name || shortAddress(receiptTransferTarget.id)}`
+            : 'Transfer receipt'
+        }
+        titleAbove={
+          receiptTransferTarget ? (
+            <>
+              {receiptTransferThumbnail ? (
+                <img
+                  className="receipt-transfer-modal__thumbnail"
+                  src={receiptTransferThumbnail}
+                  alt=""
+                  draggable={false}
+                  onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
+                  onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                />
+              ) : null}
+              <span
+                className="receipt-transfer-modal__thumbnail receipt-transfer-modal__thumbnail--placeholder"
+                hidden={Boolean(receiptTransferThumbnail)}
+              >
+                <FaReceipt aria-hidden="true" focusable="false" />
+              </span>
+            </>
+          ) : undefined
+        }
         onClose={closeReceiptTransferModal}
         className="compact-modal receipt-transfer-modal"
         overlayClassName="receipt-transfer-modal-overlay"
@@ -6904,8 +6940,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       >
         {receiptTransferTarget ? (
           <ReceiptTransferForm
-            receipt={{ id: receiptTransferTarget.id, name: receiptTransferTarget.name }}
-            network={getDropConfig(receiptTransferTarget.dropId)?.solanaCluster || 'Solana'}
             feePayer={connectedWallet || ''}
             onCancel={closeReceiptTransferModal}
             onTransfer={handleReceiptTransfer}

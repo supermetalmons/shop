@@ -5,6 +5,8 @@ import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from '../lib/f
 interface ModalProps {
   open: boolean;
   title: string;
+  ariaLabel?: string;
+  titleAbove?: ReactNode;
   onClose: () => void;
   className?: string;
   overlayClassName?: string;
@@ -18,6 +20,8 @@ interface ModalProps {
 export function Modal({
   open,
   title,
+  ariaLabel,
+  titleAbove,
   onClose,
   className,
   overlayClassName,
@@ -138,12 +142,19 @@ export function Modal({
         aria-modal={suspended ? undefined : 'true'}
         aria-hidden={suspended || undefined}
         inert={suspended || undefined}
-        aria-label={title}
+        aria-label={ariaLabel || title}
         data-overlay-scroll-allow=""
         tabIndex={-1}
       >
         <div className="modal__head">
-          <div className="card__title">{title}</div>
+          <div className="modal__title">
+            {titleAbove ? (
+              <div className="modal__title-above" aria-hidden="true">
+                {titleAbove}
+              </div>
+            ) : null}
+            <div className="card__title">{title}</div>
+          </div>
           {showCloseButton ? (
             <button type="button" className="ghost" onClick={onClose}>
               Close
