@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type TransitionEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type TransitionEvent,
+} from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,6 +21,7 @@ import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
 import { NotifyForm } from './components/NotifyForm';
 import { ClaimForm } from './components/ClaimForm';
+import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
 import { useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
@@ -29,6 +39,7 @@ import {
   listDeliveryOrderOwners,
   packStatusDisplayLabelsForDropId,
   prepareAdminIrlRedeemTx,
+  prepareReceiptTransferTx,
   recoverMyDeliveryOrders,
   rememberPendingOpenDropId,
   requestClaimTx,
@@ -44,7 +55,6 @@ import {
   forgetPendingAdminIrlRedeem,
   removeHiddenAssetIds,
   rememberPendingAdminIrlRedeem,
-  retainTransientHiddenAssetIdsPresentInInventory,
 } from './lib/adminIrlRedeem';
 import { auth } from './lib/firebase';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
@@ -120,15 +130,34 @@ import {
 import { interactiveCardPackRevealSoundUrlsForDropId } from './lib/interactiveCardPackRevealSounds';
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
+  classifySignedTransactionSendError,
   encryptAddressPayload,
   isBlockhashExpiredError,
+  isPotentiallySubmittedTransactionError,
   isSubmittedTransactionFailureError,
+  reconcileSubmittedTransaction,
   recoverAlreadyProcessedAccounts,
   recoverAlreadyProcessedSignature,
   sendPreparedTransaction,
+  sendSignedTransactionViaConnection,
   shortAddress,
 } from './lib/solana';
 import { solanaExplorerAddressUrl } from './lib/solanaExplorer';
+import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from './lib/focusTrap';
+import {
+  canonicalReceiptPublicKey,
+  canSignReceiptTransferTransaction,
+  rebaseReceiptOperationsAfterWalletChange,
+  removeReceiptOperationsForAssets,
+  receiptOperationAssetIds,
+  receiptOperationKey,
+  receiptReconciliationDisposition,
+  resolveReceiptTransferTarget,
+  setReceiptOperation,
+  transitionReceiptOperation,
+  type ReceiptOperation,
+  type ReceiptOperationRegistry,
+} from './lib/receiptTransfer';
 import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
 import {
   normalizeOptionalFulfillmentTrackingCode,
@@ -202,6 +231,9 @@ import {
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
 const REVEAL_CLOSE_FALLBACK_MS = 380;
+const RECEIPT_SIGNED_SEND_TIMEOUT_MS = 10_000;
+const RECEIPT_STATUS_CHECK_TIMEOUT_MS = 12_000;
+const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hidden']);
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
@@ -677,6 +709,10 @@ const DEFAULT_BOX_SOUND_REVEAL_URL = 'https://cdn.lil.org/nft/little_swag_boxes/
 const DEFAULT_BOX_SOUND_CLICK_URL = 'https://cdn.lil.org/nft/little_swag_boxes/sounds/click.mp3';
 const ADMIN_OWNER_DOC_PAGE_SIZE = 200;
 const ADMIN_VIEWER_READ_ONLY_MESSAGE = 'Admin viewer mode is read-only.';
+const RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE =
+  'This wallet cannot safely sign receipt transfers. Use a wallet with Solana v0 transaction support.';
+const RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE =
+  'The connected wallet changed. Start the receipt transfer again.';
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
@@ -749,12 +785,20 @@ type ReceiptImageViewerOverlayProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
+  suspended?: boolean;
   images?: readonly ReceiptViewerImage[];
   imageSrc?: string;
   alt: string;
   viewerSize?: ImageViewerSize;
   explorerHref?: string;
   onDismiss?: () => void;
+  transfer?: {
+    unavailable?: boolean;
+    disabled?: boolean;
+    busy?: boolean;
+    label?: string;
+    onClick: (opener: HTMLButtonElement) => void;
+  };
   adminIrlRedeem?: {
     loading: boolean;
     onClick: () => void;
@@ -766,28 +810,111 @@ function ReceiptImageViewerOverlay({
   overlayStyle,
   active,
   closing,
+  suspended = false,
   images,
   imageSrc,
   alt,
   viewerSize = 'receipt',
   explorerHref,
   onDismiss,
+  transfer,
   adminIrlRedeem,
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
+  const interactionSuspended = closing || suspended;
   const receiptImages = images?.length ? images : [{ key: 'receipt-image', name: alt, image: imageSrc }];
   const multiReceiptClass = receiptImages.length > 1 ? ' receipt-viewer-overlay__image-shell--multi' : '';
   const imageShellStyle: ReceiptViewerImageShellStyle | undefined =
     receiptImages.length > 1
       ? { '--receipt-viewer-count': String(receiptImages.length) }
       : undefined;
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openerFocusRestoredRef = useRef(false);
+  const suspendedRef = useRef(suspended);
+  const interactionActiveRef = useRef(!interactionSuspended);
+  suspendedRef.current = suspended;
+  interactionActiveRef.current = !interactionSuspended;
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    const activeElement = document.activeElement;
+    if (
+      dialog &&
+      activeElement instanceof HTMLElement &&
+      activeElement !== document.body &&
+      !dialog.contains(activeElement)
+    ) {
+      openerRef.current = activeElement;
+    }
+
+    return () => {
+      const opener = openerRef.current;
+      openerRef.current = null;
+      if (
+        !openerFocusRestoredRef.current &&
+        !suspendedRef.current &&
+        opener &&
+        canRestoreFocus(opener)
+      ) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!closing || suspended || openerFocusRestoredRef.current) return;
+    const opener = openerRef.current;
+    if (!opener || !canRestoreFocus(opener)) return;
+    opener.focus({ preventScroll: true });
+    if (document.activeElement === opener) {
+      openerFocusRestoredRef.current = true;
+      openerRef.current = null;
+    }
+  }, [closing, suspended]);
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || interactionSuspended || dialog.contains(document.activeElement)) return;
+    focusFirstControl(dialog);
+  }, [active, interactionSuspended]);
+
+  useEffect(() => {
+    if (interactionSuspended) return;
+    const onKeyDown = (evt: KeyboardEvent) => {
+      if (!interactionActiveRef.current || evt.key !== 'Tab') return;
+      const dialog = dialogRef.current;
+      if (dialog) trapTabFocusWithin(dialog, evt);
+    };
+    const onFocusIn = (evt: FocusEvent) => {
+      if (!interactionActiveRef.current) return;
+      const dialog = dialogRef.current;
+      if (!dialog || dialog.contains(evt.target as Node | null)) return;
+      focusFirstControl(dialog);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('focusin', onFocusIn);
+    };
+  }, [interactionSuspended]);
 
   return (
     <div
+      ref={dialogRef}
       className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
-      role="presentation"
+      role="dialog"
+      aria-modal={interactionSuspended ? undefined : 'true'}
+      aria-hidden={interactionSuspended || undefined}
+      aria-label={`${alt} viewer`}
+      inert={interactionSuspended || undefined}
+      tabIndex={-1}
       style={overlayStyle}
-      onClick={() => onDismiss?.()}
+      onClick={() => {
+        if (!interactionSuspended) onDismiss?.();
+      }}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -815,26 +942,46 @@ function ReceiptImageViewerOverlay({
           ))}
         </div>
       </div>
-      {explorerHref ? (
-        <a
-          className="receipt-viewer-overlay__explorer-link"
-          href={explorerHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(evt) => evt.stopPropagation()}
-        >
-          View on block explorer
-        </a>
+      {explorerHref || transfer ? (
+        <div className="receipt-viewer-overlay__actions" onClick={(evt) => evt.stopPropagation()}>
+          {explorerHref ? (
+            <a
+              className="receipt-viewer-overlay__action receipt-viewer-overlay__explorer-link"
+              href={explorerHref}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View on explorer
+            </a>
+          ) : null}
+          {transfer ? (
+            <button
+              type="button"
+              className="receipt-viewer-overlay__action receipt-viewer-overlay__transfer-button"
+              disabled={interactionSuspended || transfer.disabled}
+              aria-disabled={interactionSuspended || transfer.disabled || transfer.unavailable || undefined}
+              aria-busy={transfer.busy || undefined}
+              onClick={(evt) => {
+                evt.stopPropagation();
+                if (interactionSuspended || transfer.disabled) return;
+                transfer.onClick(evt.currentTarget);
+              }}
+            >
+              {transfer.label || 'Transfer'}
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {adminIrlRedeem ? (
         <div className="receipt-viewer-overlay__admin-irl" onClick={(evt) => evt.stopPropagation()}>
           <button
             type="button"
             className="ghost receipt-viewer-overlay__admin-irl-button"
-            disabled={adminIrlRedeem.loading}
+            disabled={interactionSuspended || adminIrlRedeem.loading}
             aria-busy={adminIrlRedeem.loading}
             onClick={(evt) => {
               evt.stopPropagation();
+              if (interactionSuspended) return;
               adminIrlRedeem.onClick();
             }}
           >
@@ -1074,6 +1221,10 @@ function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingR
 
 type SendViaConnectionOptions = {
   onAlreadyProcessedWithoutSignature?: (err: unknown) => Promise<boolean>;
+  surfaceSignedSubmissionImmediately?: boolean;
+  assertWalletCurrent?: () => void;
+  signedSendTimeoutMs?: number;
+  onBroadcastAttempt?: (signature: string, tx: VersionedTransaction) => void;
 };
 
 async function recoverConnectionSendError(
@@ -1082,13 +1233,20 @@ async function recoverConnectionSendError(
   err: unknown,
   options?: SendViaConnectionOptions,
 ): Promise<string | null> {
+  const immediateClassification =
+    tx && options?.surfaceSignedSubmissionImmediately
+      ? classifySignedTransactionSendError(tx, err)
+      : null;
+  if (isPotentiallySubmittedTransactionError(immediateClassification)) {
+    throw immediateClassification;
+  }
   const recoveredSignature = await recoverAlreadyProcessedSignature(tx, targetConnection, err);
   if (recoveredSignature) return recoveredSignature;
   if (options?.onAlreadyProcessedWithoutSignature) {
     const recovered = await options.onAlreadyProcessedWithoutSignature(err);
     if (recovered) return null;
   }
-  throw err;
+  throw immediateClassification ?? (tx ? classifySignedTransactionSendError(tx, err) : err);
 }
 
 type AppProps = {
@@ -1519,11 +1677,19 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [deliveryCountryCode, setDeliveryCountryCode] = useState('US');
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [claimOpen, setClaimOpen] = useState(false);
+  const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [claimInitialCode, setClaimInitialCode] = useState('');
   const [claimOpenedFromDeepLink, setClaimOpenedFromDeepLink] = useState(false);
+  const [receiptTransferTarget, setReceiptTransferTarget] = useState<InventoryItem | null>(null);
+  const [receiptTransferInFlight, setReceiptTransferInFlight] = useState(false);
+  const receiptTransferWalletAdapter = wallet.wallet?.adapter ?? null;
+  const receiptTransferWalletSupported = canSignReceiptTransferTransaction(
+    wallet.signTransaction,
+    receiptTransferWalletAdapter?.supportedTransactionVersions,
+  );
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
-  const [transientHiddenAssets, setTransientHiddenAssets] = useState<Set<string>>(new Set());
+  const [receiptOperations, setReceiptOperations] = useState<ReceiptOperationRegistry>(() => new Map());
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
     loadPendingReveals(connectedWallet),
   );
@@ -1548,6 +1714,18 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const lastScheduledDeliveryRecoveryAtRef = useRef<number | null>(null);
   const authReadyRef = useRef(false);
   const authLoadingRef = useRef(false);
+  const receiptTransferWalletSupportedRef = useRef(receiptTransferWalletSupported);
+  const receiptTransferWalletAdapterRef = useRef(receiptTransferWalletAdapter);
+  const receiptTransferReturnFocusRef = useRef<HTMLElement | null>(null);
+  const receiptOperationsRef = useRef<ReceiptOperationRegistry>(receiptOperations);
+  const receiptOperationGenerationRef = useRef(0);
+  const claimModalGenerationRef = useRef(0);
+  const receiptTransferWalletSessionGenerationRef = useRef(0);
+  const receiptTransferWalletContextRef = useRef({
+    wallet: connectedWallet || null,
+    adapter: receiptTransferWalletAdapter,
+    supported: receiptTransferWalletSupported,
+  });
   const mintActionLockRef = useRef<null | 'mint' | 'discount'>(null);
   const openSelectedLockRef = useRef(false);
   const openSelectedBoxIdRef = useRef<string | null>(null);
@@ -1582,6 +1760,56 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const stripeCheckoutCompletionHandledRef = useRef(false);
   const stripeCheckoutWalletRefreshStartedRef = useRef(false);
   const stripeCheckoutReturnWalletRefreshSessionRef = useRef<string | null>(null);
+  const receiptTransferInFlightRef = useRef(false);
+
+  const updateReceiptOperations = useCallback(
+    (update: (current: ReceiptOperationRegistry) => ReceiptOperationRegistry) => {
+      const current = receiptOperationsRef.current;
+      const next = update(current);
+      if (next === current) return;
+      receiptOperationsRef.current = next;
+      setReceiptOperations(next);
+    },
+    [],
+  );
+
+  const beginReceiptOperation = useCallback(
+    (args: { wallet: string; assetId: string; dropId: string }): ReceiptOperation => {
+      const wallet = canonicalReceiptPublicKey(args.wallet);
+      const assetId = canonicalReceiptPublicKey(args.assetId);
+      if (!wallet || !assetId) throw new Error('Invalid receipt operation identity');
+      const operation: ReceiptOperation = {
+        key: receiptOperationKey(wallet, assetId),
+        wallet,
+        assetId,
+        dropId: args.dropId,
+        createdGeneration: ++receiptOperationGenerationRef.current,
+        generation: receiptOperationGenerationRef.current,
+        phase: 'in-flight',
+      };
+      updateReceiptOperations((current) => setReceiptOperation(current, operation));
+      return operation;
+    },
+    [updateReceiptOperations],
+  );
+
+  const updateReceiptOperation = useCallback(
+    (
+      operation: Pick<ReceiptOperation, 'key' | 'generation'>,
+      update: (current: ReceiptOperation) => ReceiptOperation | null,
+    ): boolean => {
+      let applied = false;
+      updateReceiptOperations((current) =>
+        transitionReceiptOperation(current, operation.key, operation.generation, (entry) => {
+          const replacement = update(entry);
+          applied = replacement !== entry;
+          return replacement;
+        }),
+      );
+      return applied;
+    },
+    [updateReceiptOperations],
+  );
 
   const boxImageForDropId = useCallback(
     (dropId?: string): string | undefined => {
@@ -1871,9 +2099,44 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     };
   }, [settingsOpen]);
 
-  useEffect(() => {
-    connectedWalletRef.current = connectedWallet || null;
-  }, [connectedWallet]);
+  useLayoutEffect(() => {
+    const nextWallet = connectedWallet || null;
+    const previousContext = receiptTransferWalletContextRef.current;
+    const walletContextChanged =
+      previousContext.wallet !== nextWallet ||
+      previousContext.adapter !== receiptTransferWalletAdapter ||
+      previousContext.supported !== receiptTransferWalletSupported;
+    if (walletContextChanged) {
+      claimModalGenerationRef.current += 1;
+      receiptTransferWalletSessionGenerationRef.current += 1;
+      receiptTransferReturnFocusRef.current = null;
+      setReceiptTransferTarget(null);
+      if (previousContext.wallet) {
+        updateReceiptOperations((current) => {
+          const rebased = rebaseReceiptOperationsAfterWalletChange(
+            current,
+            previousContext.wallet,
+            receiptOperationGenerationRef.current,
+          );
+          receiptOperationGenerationRef.current = rebased.lastGeneration;
+          return rebased.registry;
+        });
+      }
+    }
+    receiptTransferWalletContextRef.current = {
+      wallet: nextWallet,
+      adapter: receiptTransferWalletAdapter,
+      supported: receiptTransferWalletSupported,
+    };
+    connectedWalletRef.current = nextWallet;
+    receiptTransferWalletSupportedRef.current = receiptTransferWalletSupported;
+    receiptTransferWalletAdapterRef.current = receiptTransferWalletAdapter;
+  }, [
+    connectedWallet,
+    receiptTransferWalletAdapter,
+    receiptTransferWalletSupported,
+    updateReceiptOperations,
+  ]);
 
   useEffect(() => {
     authTokenRef.current = null;
@@ -2020,10 +2283,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   useEffect(() => {
     setNotifyOpen(false);
+    if (!receiptTransferInFlightRef.current) {
+      setReceiptTransferTarget(null);
+    }
   }, [normalizedCurrentPath]);
 
   useEffect(() => {
     if (claimDeepLinkCode === null) return;
+    claimModalGenerationRef.current += 1;
     setClaimInitialCode(claimDeepLinkCode);
     setClaimOpenedFromDeepLink(true);
     setClaimOpen(true);
@@ -2031,6 +2298,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   useEffect(() => {
     if (claimDeepLinkCode !== null || !claimOpenedFromDeepLink) return;
+    claimModalGenerationRef.current += 1;
     setClaimOpenedFromDeepLink(false);
     setClaimInitialCode('');
     setClaimOpen(false);
@@ -2763,23 +3031,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     }
     setSelected(new Set());
     setDeliveryOpen(false);
+    if (!receiptTransferInFlightRef.current) {
+      setReceiptTransferTarget(null);
+    }
   }, [closeRevealOverlay, connectedWallet, discardRevealOverlay, owner]);
 
   useEffect(() => {
     setHiddenAssets(loadHiddenAssets(connectedWallet));
-    setTransientHiddenAssets(new Set());
   }, [connectedWallet]);
-
-  useEffect(() => {
-    if (!connectedWallet || isViewerMode || !inventoryFetched || !inventoryData || !transientHiddenAssets.size) return;
-    setTransientHiddenAssets((prev) => {
-      const next = retainTransientHiddenAssetIdsPresentInInventory(
-        prev,
-        inventoryData.map((item) => item.id),
-      );
-      return next.size === prev.size ? prev : next;
-    });
-  }, [connectedWallet, inventoryData, inventoryFetched, isViewerMode, transientHiddenAssets.size]);
 
   useEffect(() => {
     const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
@@ -3053,10 +3312,16 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, [revealFrameCountForDropId, revealMediaStartForDropId, revealOverlay, revealOverlayClosing]);
 
   const handleRevealOverlayEscape = useCallback(() => {
+    if (walletModalVisible || receiptTransferTarget) return;
     if (canDismissRevealOverlayFromKeyboard()) {
       closeRevealOverlay();
     }
-  }, [canDismissRevealOverlayFromKeyboard, closeRevealOverlay]);
+  }, [
+    canDismissRevealOverlayFromKeyboard,
+    closeRevealOverlay,
+    receiptTransferTarget,
+    walletModalVisible,
+  ]);
 
   useOverlayScrollLock({ active: revealOverlayOpen, onEscape: handleRevealOverlayEscape });
 
@@ -3180,34 +3445,30 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     };
   }, [connectedWallet, isViewerMode]);
 
-  const markAssetsTransientlyHidden = useMemo(() => {
-    if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
-    return (ids: string[]) => {
-      setTransientHiddenAssets((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id) => {
-          if (typeof id === 'string' && id) next.add(id);
-        });
-        return next;
-      });
-    };
-  }, [connectedWallet, isViewerMode]);
+  const unhideAssetsForWallet = useCallback((wallet: string, ids: readonly string[]) => {
+    const stored = loadHiddenAssets(wallet);
+    const nextStored = removeHiddenAssetIds(stored, ids);
+    if (nextStored.size !== stored.size) {
+      persistHiddenAssets(wallet, nextStored);
+    }
+    if (connectedWalletRef.current !== wallet) return;
+    setHiddenAssets((prev) => {
+      if (connectedWalletRef.current !== wallet) return prev;
+      const next = removeHiddenAssetIds(prev, ids);
+      if (next.size === prev.size) return prev;
+      persistHiddenAssets(wallet, next);
+      return next;
+    });
+  }, []);
 
-  const unhideAssets = useMemo(() => {
-    if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
-    return (ids: string[]) => {
-      setHiddenAssets((prev) => {
-        const next = removeHiddenAssetIds(prev, ids);
-        if (next.size === prev.size) return prev;
-        persistHiddenAssets(connectedWallet, next);
-        return next;
-      });
-      setTransientHiddenAssets((prev) => {
-        const next = removeHiddenAssetIds(prev, ids);
-        return next.size === prev.size ? prev : next;
-      });
-    };
-  }, [connectedWallet, isViewerMode]);
+  const clearAuthoritativelyReturnedReceiptOperations = useCallback(
+    (wallet: string, assetIds: readonly string[], maximumCreatedGeneration: number) => {
+      updateReceiptOperations((current) =>
+        removeReceiptOperationsForAssets(current, wallet, assetIds, maximumCreatedGeneration),
+      );
+    },
+    [updateReceiptOperations],
+  );
 
   const localRevealedDudes = useMemo(() => {
     if (isViewerMode) return EMPTY_INVENTORY;
@@ -3244,11 +3505,16 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     return entries.length ? entries : EMPTY_LOCAL_MINTED_BOXES;
   }, [localMintedBoxes, isViewerMode]);
 
+  const receiptOperationHiddenAssets = useMemo(
+    () => receiptOperationAssetIds(receiptOperations, connectedWallet, RECEIPT_HIDDEN_OPERATION_PHASES),
+    [connectedWallet, receiptOperations],
+  );
+
   const visibleInventory = useMemo(() => {
     const baseRaw =
-      isViewerMode || (!hiddenAssets.size && !transientHiddenAssets.size)
+      isViewerMode || (!hiddenAssets.size && !receiptOperationHiddenAssets.size)
         ? inventoryView
-        : inventoryView.filter((item) => !hiddenAssets.has(item.id) && !transientHiddenAssets.has(item.id));
+        : inventoryView.filter((item) => !hiddenAssets.has(item.id) && !receiptOperationHiddenAssets.has(item.id));
     const base = withoutLocallyMintedUnresolvedCardNft2Boxes(baseRaw, pendingCardNft2LocalMintedBoxes);
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
@@ -3272,7 +3538,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, [
     inventoryView,
     hiddenAssets,
-    transientHiddenAssets,
+    receiptOperationHiddenAssets,
     pendingCardNft2LocalMintedBoxes,
     localRevealedDudes,
     figureMetadataByKey,
@@ -3511,8 +3777,19 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }),
     [adminIrlRedeemSelection, connectedWallet, isSignedInWallet],
   );
+  const receiptViewerOperation = useMemo(() => {
+    if (!connectedWallet) return null;
+    if (revealOverlay?.viewerMode !== 'receipt-image' || revealOverlay.imageViewerSize !== 'receipt') return null;
+    const receiptImages = revealOverlay.receiptImages || [];
+    if (receiptImages.length !== 1) return null;
+    const wallet = canonicalReceiptPublicKey(connectedWallet);
+    const assetId = canonicalReceiptPublicKey(receiptImages[0]?.key);
+    if (!wallet || !assetId) return null;
+    return receiptOperations.get(receiptOperationKey(wallet, assetId)) ?? null;
+  }, [connectedWallet, receiptOperations, revealOverlay]);
   const adminIrlRedeemOverlayReceipt = useMemo(() => {
     if (revealOverlay?.viewerMode !== 'receipt-image' || revealOverlay.imageViewerSize !== 'receipt') return null;
+    if (receiptViewerOperation) return null;
     const receipt = revealOverlay.adminIrlRedeemReceipt;
     const receiptImages = revealOverlay.receiptImages || [];
     if (!receipt || receiptImages.length !== 1 || receiptImages[0]?.key !== receipt.id) return null;
@@ -3526,7 +3803,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     })
       ? receipt
       : null;
-  }, [connectedWallet, getDropConfig, isSignedInWallet, owner, revealOverlay]);
+  }, [connectedWallet, getDropConfig, isSignedInWallet, owner, receiptViewerOperation, revealOverlay]);
   const receiptExplorerHref = useMemo(() => {
     if (revealOverlay?.viewerMode !== 'receipt-image' || revealOverlay.imageViewerSize !== 'receipt') return undefined;
     const receiptImages = revealOverlay.receiptImages || [];
@@ -3535,6 +3812,30 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     const cluster = getDropConfig(revealOverlay.dropId)?.solanaCluster;
     return receiptId && cluster ? solanaExplorerAddressUrl(receiptId, cluster) ?? undefined : undefined;
   }, [getDropConfig, revealOverlay]);
+  const transferableReceipt = useMemo(
+    () =>
+      resolveReceiptTransferTarget({
+        wallet: connectedWallet,
+        inventoryOwner: owner,
+        inventoryItems: inventory,
+        dropId: revealOverlay?.dropId,
+        viewerMode: revealOverlay?.viewerMode,
+        viewerSize: revealOverlay?.imageViewerSize,
+        receiptImages: revealOverlay?.receiptImages,
+        isAdminReadOnly: isViewerMode,
+      }),
+    [connectedWallet, inventory, isViewerMode, owner, revealOverlay],
+  );
+  const receiptTransferActionTarget =
+    transferableReceipt ||
+    (receiptTransferTarget &&
+      revealOverlay?.viewerMode === 'receipt-image' &&
+      revealOverlay.imageViewerSize === 'receipt' &&
+      revealOverlay.dropId === receiptTransferTarget.dropId &&
+      revealOverlay.receiptImages?.length === 1 &&
+      revealOverlay.receiptImages[0]?.key === receiptTransferTarget.id
+      ? receiptTransferTarget
+      : null);
   const selectionSummary = useMemo(() => {
     const boxCount = deliverableItems.filter((item) => item.kind === 'box').length;
     const figureCount = deliverableItems.filter((item) => item.kind === 'dude').length;
@@ -3680,7 +3981,22 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       options?: SendViaConnectionOptions,
     ): Promise<string | null> => {
       if (wallet.signTransaction) {
+        options?.assertWalletCurrent?.();
         const signed = await wallet.signTransaction(tx);
+        options?.assertWalletCurrent?.();
+        if (options?.signedSendTimeoutMs) {
+          return sendSignedTransactionViaConnection(signed, targetConnection, {
+            timeoutMs: options.signedSendTimeoutMs,
+            sendOptions: {
+              skipPreflight: false,
+              preflightCommitment: 'confirmed',
+              maxRetries: 3,
+            },
+            onBroadcastAttempt: (signature) => {
+              options.onBroadcastAttempt?.(signature, signed);
+            },
+          });
+        }
         const raw = signed.serialize();
         try {
           return await targetConnection.sendRawTransaction(raw, {
@@ -3725,8 +4041,18 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }
 
   const signAndSendPreparedViaConnection = useCallback(
-    async (tx: VersionedTransaction, targetConnection: Connection): Promise<string> => {
-      const signature = await signAndSendViaConnection(tx, targetConnection);
+    async (
+      tx: VersionedTransaction,
+      targetConnection: Connection,
+      options?: Pick<
+        SendViaConnectionOptions,
+        'assertWalletCurrent' | 'signedSendTimeoutMs' | 'onBroadcastAttempt'
+      >,
+    ): Promise<string> => {
+      const signature = await signAndSendViaConnection(tx, targetConnection, {
+        surfaceSignedSubmissionImmediately: true,
+        ...options,
+      });
       if (!signature) {
         throw new Error('Wallet submitted the transaction but did not provide a recoverable signature');
       }
@@ -4726,9 +5052,178 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     }
   };
 
+  const assertReceiptTransferWalletReady = (
+    expectedWallet: string,
+    expectedAdapter: typeof receiptTransferWalletAdapter,
+    expectedWalletSessionGeneration: number,
+  ) => {
+    const adapterWallet = expectedAdapter?.publicKey?.toBase58() || null;
+    if (
+      receiptTransferWalletSessionGenerationRef.current !== expectedWalletSessionGeneration ||
+      connectedWalletRef.current !== expectedWallet ||
+      receiptTransferWalletAdapterRef.current !== expectedAdapter ||
+      adapterWallet !== expectedWallet
+    ) {
+      throw new Error(RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE);
+    }
+    if (
+      !receiptTransferWalletSupportedRef.current ||
+      typeof wallet.signTransaction !== 'function' ||
+      expectedAdapter?.supportedTransactionVersions?.has(0) !== true
+    ) {
+      throw new Error(RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE);
+    }
+  };
+
+  const refreshInventoryAfterReceiptReconciliation = () => {
+    void refetchInventory()
+      .then((result) => {
+        if (result.error) {
+          console.warn('[mons] failed to refresh inventory after receipt transfer reconciliation', result.error);
+        }
+      })
+      .catch((refreshErr) => {
+        console.warn('[mons] failed to refresh inventory after receipt transfer reconciliation', refreshErr);
+      });
+  };
+
+  const settleReceiptOperation = (
+    operation: ReceiptOperation,
+    resolution: Awaited<ReturnType<typeof reconcileSubmittedTransaction>>,
+    options?: { manual?: boolean; reconciliationError?: unknown },
+  ) => {
+    const disposition = receiptReconciliationDisposition(resolution);
+    const applied = updateReceiptOperation(operation, (current) => {
+      if (disposition === 'available') return null;
+      return {
+        ...current,
+        phase: disposition === 'hidden' ? 'hidden' : 'unverified',
+      };
+    });
+    if (!applied) return;
+    if (disposition === 'available' && operation.adminFinalizeRequestId) {
+      forgetPendingAdminIrlRedeem(operation.wallet, operation.adminFinalizeRequestId);
+    }
+    if (connectedWalletRef.current !== operation.wallet) return;
+
+    if (disposition === 'hidden') {
+      showToast(
+        operation.adminFinalizeRequestId
+          ? 'Admin IRL transfer confirmed'
+          : operation.signature
+            ? `Receipt transfer confirmed · ${shortAddress(operation.signature)}`
+            : 'Receipt transfer confirmed',
+      );
+    } else if (disposition === 'available') {
+      showToast(
+        operation.adminFinalizeRequestId
+          ? 'Admin IRL transfer did not complete · receipt restored'
+          : 'Receipt transfer did not complete · receipt restored',
+      );
+    } else {
+      console.warn('[mons] receipt transfer confirmation remains unresolved', {
+        signature: operation.signature,
+        recentBlockhash: operation.recentBlockhash,
+        receiptId: operation.assetId,
+        adminFinalizeRequestId: operation.adminFinalizeRequestId || null,
+        error: options?.reconciliationError,
+      });
+      showToast(
+        options?.manual
+          ? 'Receipt transfer status is still unavailable · no new transfer was sent'
+          : operation.adminFinalizeRequestId
+            ? 'Admin IRL transfer status could not be verified · receipt is view-only for now'
+            : 'Receipt transfer status could not be verified · receipt is view-only for now',
+      );
+    }
+    refreshInventoryAfterReceiptReconciliation();
+  };
+
+  const reconcilePendingReceiptSubmission = (args: {
+    connection: Connection;
+    operation: ReceiptOperation;
+  }) => {
+    if (!args.operation.signature || !args.operation.recentBlockhash) {
+      console.warn('[mons] cannot reconcile pending receipt transfer without submission identifiers', {
+        receiptId: args.operation.assetId,
+        generation: args.operation.generation,
+      });
+      settleReceiptOperation(args.operation, 'unknown');
+      return;
+    }
+    void reconcileSubmittedTransaction(args.connection, {
+      signature: args.operation.signature,
+      recentBlockhash: args.operation.recentBlockhash,
+    })
+      .then((resolution) => {
+        settleReceiptOperation(args.operation, resolution);
+      })
+      .catch((err) => {
+        settleReceiptOperation(args.operation, 'unknown', { reconciliationError: err });
+      });
+  };
+
+  const checkReceiptOperationStatus = (operation: ReceiptOperation) => {
+    if (
+      operation.phase !== 'unverified' ||
+      !operation.signature ||
+      !operation.recentBlockhash ||
+      connectedWalletRef.current !== operation.wallet
+    ) {
+      return;
+    }
+    const started = updateReceiptOperation(operation, (current) => {
+      if (current.phase !== 'unverified') return current;
+      return {
+        ...current,
+        generation: ++receiptOperationGenerationRef.current,
+        phase: 'checking',
+      };
+    });
+    const checkingOperation = receiptOperationsRef.current.get(operation.key);
+    if (
+      !started ||
+      !checkingOperation ||
+      checkingOperation.phase !== 'checking' ||
+      checkingOperation.generation === operation.generation ||
+      !checkingOperation.signature ||
+      !checkingOperation.recentBlockhash
+    ) {
+      return;
+    }
+    let statusConnection: Connection;
+    try {
+      statusConnection = getDropConnection(checkingOperation.dropId);
+    } catch (err) {
+      settleReceiptOperation(checkingOperation, 'unknown', { manual: true, reconciliationError: err });
+      return;
+    }
+    void reconcileSubmittedTransaction(
+      statusConnection,
+      {
+        signature: checkingOperation.signature,
+        recentBlockhash: checkingOperation.recentBlockhash,
+      },
+      { timeoutMs: RECEIPT_STATUS_CHECK_TIMEOUT_MS },
+    )
+      .then((resolution) => {
+        settleReceiptOperation(checkingOperation, resolution, { manual: true });
+      })
+      .catch((err) => {
+        settleReceiptOperation(checkingOperation, 'unknown', { manual: true, reconciliationError: err });
+      });
+  };
+
   const handleAdminIrlRedeem = async (receiptTarget?: InventoryItem) => {
     if (blockViewerModeAction()) return;
     if (adminIrlRedeeming) return;
+    const isReceiptTarget = receiptTarget?.kind === 'certificate';
+    const operationWalletAdapter = isReceiptTarget ? receiptTransferWalletAdapter : null;
+    const operationWalletSessionGeneration = receiptTransferWalletSessionGenerationRef.current;
+    if (receiptTransferInFlightRef.current || receiptTransferTarget) {
+      showToast('Finish the receipt transfer first');
+      return;
+    }
     if (!publicKey) {
       setVisible(true);
       showToast(
@@ -4738,11 +5233,27 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       );
       return;
     }
+    if (isReceiptTarget && !receiptTransferWalletSupported) {
+      showToast(RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE);
+      return;
+    }
     const signedIn = isSignedInWallet ? true : await ensureSignedIn();
     if (!signedIn) return;
     const wallet = publicKey.toBase58();
+    if (connectedWalletRef.current !== wallet) return;
+    if (isReceiptTarget && receiptTransferWalletAdapterRef.current !== operationWalletAdapter) return;
+    if (isReceiptTarget && !receiptTransferWalletSupportedRef.current) {
+      showToast(RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE);
+      return;
+    }
+    if (
+      isReceiptTarget &&
+      receiptOperationsRef.current.has(receiptOperationKey(wallet, receiptTarget.id))
+    ) {
+      showToast('Check the existing receipt transfer status before starting another action');
+      return;
+    }
     const currentOverlay = revealOverlayRef.current;
-    const isReceiptTarget = receiptTarget?.kind === 'certificate';
     const currentOverlayReceiptCount = currentOverlay?.receiptImages?.length || 0;
     const receiptTargetMatchesOverlay = Boolean(
       isReceiptTarget &&
@@ -4752,6 +5263,20 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         currentOverlayReceiptCount === 1 &&
         currentOverlay.receiptImages?.[0]?.key === receiptTarget.id,
     );
+    const closeReceiptTargetOverlayIfCurrent = () => {
+      if (!isReceiptTarget) return;
+      const overlay = revealOverlayRef.current;
+      if (
+        overlay?.viewerMode !== 'receipt-image' ||
+        overlay.imageViewerSize !== 'receipt' ||
+        overlay.adminIrlRedeemReceipt?.id !== receiptTarget.id ||
+        overlay.receiptImages?.length !== 1 ||
+        overlay.receiptImages[0]?.key !== receiptTarget.id
+      ) {
+        return;
+      }
+      closeRevealOverlay();
+    };
     const eligible = isReceiptTarget
       ? canAdminIrlRedeemCardReceipt({
           wallet,
@@ -4779,24 +5304,116 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     const redeemIds = isReceiptTarget ? [receiptTarget.id] : deliverableItems.map((item) => item.id);
     let pendingFinalizeRequestId = '';
     let pendingFinalizeTransferSignature = '';
+    let pendingFinalizeRecentBlockhash = '';
+    let pendingFinalizeConnection: Connection | null = null;
+    let broadcastAttemptRequestId = '';
+    let transferConfirmed = false;
+    let receiptOperation: ReceiptOperation | null = null;
     try {
       setAdminIrlRedeeming(true);
       const adminIrlDrop = requireKnownDropConfig(adminIrlDropId, 'Admin IRL redeem selection');
       const adminIrlConnection = getDropConnection(adminIrlDrop.dropId);
-      const requestTx = () =>
-        prepareAdminIrlRedeemTx({
+      pendingFinalizeConnection = adminIrlConnection;
+      if (isReceiptTarget) {
+        receiptOperation = beginReceiptOperation({
+          wallet,
+          assetId: receiptTarget.id,
+          dropId: adminIrlDrop.dropId,
+        });
+      }
+      const requestTx = () => {
+        if (isReceiptTarget) {
+          assertReceiptTransferWalletReady(
+            wallet,
+            operationWalletAdapter,
+            operationWalletSessionGeneration,
+          );
+        }
+        return prepareAdminIrlRedeemTx({
           owner: wallet,
           dropId: adminIrlDrop.dropId,
           itemIds: redeemIds,
         });
+      };
+      const recordReceiptSubmissionState = (
+        phase: Extract<ReceiptOperation['phase'], 'in-flight' | 'hidden'>,
+        signature: string,
+        submittedTx: VersionedTransaction,
+        requestId: string,
+      ): boolean => {
+        if (!receiptOperation) return false;
+        const previousOperation = receiptOperation;
+        const nextOperation: ReceiptOperation = {
+          ...previousOperation,
+          phase,
+          signature,
+          recentBlockhash: submittedTx.message.recentBlockhash,
+          adminFinalizeRequestId: requestId,
+        };
+        const applied = updateReceiptOperation(previousOperation, () => nextOperation);
+        receiptOperation = nextOperation;
+        return applied;
+      };
+      const receiptOperationIsCurrent = () =>
+        !isReceiptTarget ||
+        Boolean(
+          receiptOperation &&
+            receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
+        );
+      const resetReceiptSubmissionForRetry = () => {
+        if (!receiptOperation) return;
+        const previousOperation = receiptOperation;
+        const nextOperation: ReceiptOperation = {
+          ...previousOperation,
+          phase: 'in-flight',
+          signature: undefined,
+          recentBlockhash: undefined,
+          adminFinalizeRequestId: undefined,
+        };
+        if (updateReceiptOperation(previousOperation, () => nextOperation)) {
+          receiptOperation = nextOperation;
+        }
+      };
 
-      const submitTransfer = (encodedTx: string, requestId: string): Promise<string> =>
-        sendPreparedTransaction(
+      const submitTransfer = (encodedTx: string, requestId: string): Promise<string> => {
+        if (isReceiptTarget) {
+          assertReceiptTransferWalletReady(
+            wallet,
+            operationWalletAdapter,
+            operationWalletSessionGeneration,
+          );
+        }
+        return sendPreparedTransaction(
           encodedTx,
           adminIrlConnection,
-          (tx) => signAndSendPreparedViaConnection(tx, adminIrlConnection),
+          (tx) =>
+            signAndSendPreparedViaConnection(
+              tx,
+              adminIrlConnection,
+              isReceiptTarget
+                ? {
+                    assertWalletCurrent: () =>
+                      assertReceiptTransferWalletReady(
+                        wallet,
+                        operationWalletAdapter,
+                        operationWalletSessionGeneration,
+                      ),
+                    signedSendTimeoutMs: RECEIPT_SIGNED_SEND_TIMEOUT_MS,
+                    onBroadcastAttempt: (signature, submittedTx) => {
+                      recordReceiptSubmissionState('in-flight', signature, submittedTx, requestId);
+                      rememberPendingAdminIrlRedeem(wallet, {
+                        dropId: adminIrlDrop.dropId,
+                        requestId,
+                        transferSignature: signature,
+                        itemIds: redeemIds,
+                      });
+                      broadcastAttemptRequestId = requestId;
+                    },
+                  }
+                : undefined,
+            ),
           {
-            onSubmitted: (submittedSig) => {
+            onSubmitted: (submittedSig, submittedTx) => {
               rememberPendingAdminIrlRedeem(wallet, {
                 dropId: adminIrlDrop.dropId,
                 requestId,
@@ -4805,9 +5422,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               });
               pendingFinalizeRequestId = requestId;
               pendingFinalizeTransferSignature = submittedSig;
+              pendingFinalizeRecentBlockhash = submittedTx.message.recentBlockhash;
+              recordReceiptSubmissionState('hidden', submittedSig, submittedTx, requestId);
             },
           },
         );
+      };
 
       let resp = await requestTx();
       let sig: string;
@@ -4815,66 +5435,314 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         sig = await submitTransfer(resp.encodedTx, resp.requestId);
       } catch (err) {
         if (pendingFinalizeRequestId || !isBlockhashExpiredError(err)) throw err;
-        showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        if (broadcastAttemptRequestId) {
+          forgetPendingAdminIrlRedeem(wallet, broadcastAttemptRequestId);
+          broadcastAttemptRequestId = '';
+        }
+        resetReceiptSubmissionForRetry();
+        if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+          showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        }
         resp = await requestTx();
         sig = await submitTransfer(resp.encodedTx, resp.requestId);
       }
 
-      if (isReceiptTarget) markAssetsTransientlyHidden(redeemIds);
-      else markAssetsHidden(redeemIds);
-      if (isReceiptTarget) closeRevealOverlay();
-      else setSelected(new Set());
-      showToast(`Admin IRL transfer confirmed · finalizing…`);
+      transferConfirmed = true;
+      if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+        if (!isReceiptTarget) markAssetsHidden(redeemIds);
+        if (isReceiptTarget) closeReceiptTargetOverlayIfCurrent();
+        else setSelected(new Set());
+        showToast(`Admin IRL transfer confirmed · finalizing…`);
+      }
       const finalized = await finalizeAdminIrlRedeemWithRetry({
         dropId: adminIrlDrop.dropId,
         requestId: resp.requestId,
         transferSignature: sig,
       });
       forgetPendingAdminIrlRedeem(wallet, resp.requestId);
+      pendingFinalizeRequestId = '';
+      pendingFinalizeTransferSignature = '';
+      pendingFinalizeRecentBlockhash = '';
+      broadcastAttemptRequestId = '';
 
-      const codeCount = Math.max(
-        0,
-        finalized.claimCodes?.length || finalized.cards?.length || finalized.boxes?.length || redeemIds.length,
-      );
-      const codeLabel = codeCount === 1 ? 'code' : 'codes';
-      const orderSuffix = finalized.deliveryId ? ` · order ${finalized.deliveryId}` : '';
-      showToast(`Admin IRL redeem ready${orderSuffix} · ${codeCount} ${codeLabel}`);
-      if (!isReceiptTarget) setDeliveryOpen(false);
-      await Promise.all([refetchInventory(), refreshProfile().catch(() => null)]);
+      if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+        const codeCount = Math.max(
+          0,
+          finalized.claimCodes?.length || finalized.cards?.length || finalized.boxes?.length || redeemIds.length,
+        );
+        const codeLabel = codeCount === 1 ? 'code' : 'codes';
+        const orderSuffix = finalized.deliveryId ? ` · order ${finalized.deliveryId}` : '';
+        showToast(`Admin IRL redeem ready${orderSuffix} · ${codeCount} ${codeLabel}`);
+        if (!isReceiptTarget) setDeliveryOpen(false);
+        await Promise.all([
+          refetchInventory().catch((refreshErr) => {
+            console.warn('[mons] failed to refresh inventory after Admin IRL finalization', refreshErr);
+          }),
+          refreshProfile().catch((refreshErr) => {
+            console.warn('[mons] failed to refresh profile after Admin IRL finalization', refreshErr);
+          }),
+        ]);
+      }
     } catch (err) {
-      console.error(err);
-      if (!isUserRejectedError(err)) {
+      const hadPendingSubmission = Boolean(pendingFinalizeRequestId);
+      if (!hadPendingSubmission && broadcastAttemptRequestId) {
+        forgetPendingAdminIrlRedeem(wallet, broadcastAttemptRequestId);
+        broadcastAttemptRequestId = '';
+      }
+      if (hadPendingSubmission || !isUserRejectedError(err)) {
+        console.error(err);
         if (pendingFinalizeRequestId && isSubmittedTransactionFailureError(err)) {
           forgetPendingAdminIrlRedeem(wallet, pendingFinalizeRequestId);
           pendingFinalizeRequestId = '';
           pendingFinalizeTransferSignature = '';
+          pendingFinalizeRecentBlockhash = '';
         }
         if (pendingFinalizeRequestId) {
+          if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+            if (isReceiptTarget) closeReceiptTargetOverlayIfCurrent();
+            else {
+              setSelected(new Set());
+              setDeliveryOpen(false);
+            }
+            void refetchInventory().catch((refreshErr) => {
+              console.warn('[mons] failed to refresh inventory after pending Admin IRL redeem transfer', refreshErr);
+            });
+          }
           console.warn('[mons] Admin IRL redeem transfer submitted but finalization did not complete', {
             dropId: adminIrlDropId,
             requestId: pendingFinalizeRequestId,
             transferSignature: pendingFinalizeTransferSignature,
             error: err,
           });
-          if (isReceiptTarget) closeRevealOverlay();
-          else {
-            setSelected(new Set());
-            setDeliveryOpen(false);
+          if (
+            isReceiptTarget &&
+            !transferConfirmed &&
+            pendingFinalizeConnection &&
+            pendingFinalizeRecentBlockhash &&
+            receiptOperation
+          ) {
+            reconcilePendingReceiptSubmission({
+              connection: pendingFinalizeConnection,
+              operation: receiptOperation,
+            });
           }
-          void refetchInventory().catch((refreshErr) => {
-            console.warn('[mons] failed to refresh inventory after pending Admin IRL redeem transfer', refreshErr);
-          });
         }
-        showToast(
-          pendingFinalizeRequestId
-            ? 'Admin IRL transfer submitted; finalization details saved locally for support'
-            : err instanceof Error
-              ? err.message
-              : 'Failed to run Admin IRL Redeem',
-        );
+        if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+          showToast(
+            pendingFinalizeRequestId
+              ? 'Admin IRL transfer submitted; finalization details saved locally for support'
+              : err instanceof Error
+                ? err.message
+                : 'Failed to run Admin IRL Redeem',
+          );
+        }
       }
     } finally {
+      if (receiptOperation && !pendingFinalizeRequestId && !transferConfirmed) {
+        updateReceiptOperation(receiptOperation, () => null);
+      }
       setAdminIrlRedeeming(false);
+    }
+  };
+
+  const closeReceiptTransferModal = () => {
+    if (receiptTransferInFlightRef.current) return;
+    setReceiptTransferTarget(null);
+  };
+
+  const handleReceiptTransfer = async (destination: string): Promise<void> => {
+    const target = receiptTransferTarget;
+    if (!target || target.kind !== 'certificate') {
+      throw new Error('Receipt is no longer available to transfer');
+    }
+    if (adminIrlRedeeming) {
+      throw new Error('Wait for Admin IRL Redeem to finish before transferring');
+    }
+    if (blockViewerModeAction()) {
+      throw new Error(ADMIN_VIEWER_READ_ONLY_MESSAGE);
+    }
+    const operationWalletAdapter = receiptTransferWalletAdapter;
+    const operationWalletSessionGeneration = receiptTransferWalletSessionGenerationRef.current;
+    const wallet = publicKey?.toBase58();
+    if (!wallet || owner !== wallet) {
+      throw new Error('Connect the receipt owner wallet to transfer');
+    }
+    if (connectedWalletRef.current !== wallet) {
+      throw new Error(RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE);
+    }
+    if (receiptTransferWalletAdapterRef.current !== operationWalletAdapter) {
+      throw new Error(RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE);
+    }
+    if (!receiptTransferWalletSupported || !receiptTransferWalletSupportedRef.current) {
+      throw new Error(RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE);
+    }
+    if (receiptOperationsRef.current.has(receiptOperationKey(wallet, target.id))) {
+      throw new Error('Check the existing receipt transfer status before starting another transfer');
+    }
+    if (receiptTransferInFlightRef.current) {
+      throw new Error('A receipt transfer is already in progress');
+    }
+
+    receiptTransferInFlightRef.current = true;
+    setReceiptTransferInFlight(true);
+    let receiptOperation: ReceiptOperation | null = null;
+    let submittedSignature = '';
+    try {
+      const transferDrop = requireKnownDropConfig(target.dropId, 'receipt transfer');
+      const transferConnection = getDropConnection(transferDrop.dropId);
+      receiptOperation = beginReceiptOperation({
+        wallet,
+        assetId: target.id,
+        dropId: transferDrop.dropId,
+      });
+      const requestTx = () => {
+        assertReceiptTransferWalletReady(
+          wallet,
+          operationWalletAdapter,
+          operationWalletSessionGeneration,
+        );
+        return prepareReceiptTransferTx({
+          owner: wallet,
+          dropId: transferDrop.dropId,
+          receiptAssetId: target.id,
+          destination,
+        });
+      };
+      const recordReceiptSubmissionState = (
+        phase: Extract<ReceiptOperation['phase'], 'in-flight' | 'hidden'>,
+        signature: string,
+        submittedTx: VersionedTransaction,
+      ): boolean => {
+        if (!receiptOperation) return false;
+        const previousOperation = receiptOperation;
+        const nextOperation: ReceiptOperation = {
+          ...previousOperation,
+          phase,
+          signature,
+          recentBlockhash: submittedTx.message.recentBlockhash,
+        };
+        const applied = updateReceiptOperation(previousOperation, () => nextOperation);
+        receiptOperation = nextOperation;
+        return applied;
+      };
+      const receiptOperationIsCurrent = () =>
+        Boolean(
+          receiptOperation &&
+            receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
+        );
+      const resetReceiptSubmissionForRetry = () => {
+        if (!receiptOperation) return;
+        const previousOperation = receiptOperation;
+        const nextOperation: ReceiptOperation = {
+          ...previousOperation,
+          phase: 'in-flight',
+          signature: undefined,
+          recentBlockhash: undefined,
+        };
+        if (updateReceiptOperation(previousOperation, () => nextOperation)) {
+          receiptOperation = nextOperation;
+        }
+      };
+      const submitTransfer = (encodedTx: string) => {
+        assertReceiptTransferWalletReady(
+          wallet,
+          operationWalletAdapter,
+          operationWalletSessionGeneration,
+        );
+        return sendPreparedTransaction(
+          encodedTx,
+          transferConnection,
+          (tx) =>
+            signAndSendPreparedViaConnection(tx, transferConnection, {
+              assertWalletCurrent: () =>
+                assertReceiptTransferWalletReady(
+                  wallet,
+                  operationWalletAdapter,
+                  operationWalletSessionGeneration,
+                ),
+              signedSendTimeoutMs: RECEIPT_SIGNED_SEND_TIMEOUT_MS,
+              onBroadcastAttempt: (signature, submittedTx) => {
+                recordReceiptSubmissionState('in-flight', signature, submittedTx);
+              },
+            }),
+          {
+            simulateBeforeSigning: true,
+            onSubmitted: (signature, submittedTx) => {
+              submittedSignature = signature;
+              const applied = recordReceiptSubmissionState('hidden', signature, submittedTx);
+              if (applied && connectedWalletRef.current === wallet) {
+                showToast(`Receipt transfer submitted · ${shortAddress(signature)}`);
+              }
+            },
+          },
+        );
+      };
+      const finishPendingTransfer = (signature: string) => {
+        if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+          setReceiptTransferTarget(null);
+          closeRevealOverlay();
+          showToast(`Receipt transfer submitted · confirmation pending · ${shortAddress(signature)}`);
+          void refetchInventory().catch((refreshErr) => {
+            console.warn('[mons] failed to refresh inventory after pending receipt transfer', refreshErr);
+          });
+        }
+        if (receiptOperation?.signature && receiptOperation.recentBlockhash) {
+          reconcilePendingReceiptSubmission({
+            connection: transferConnection,
+            operation: receiptOperation,
+          });
+        } else {
+          console.warn('[mons] cannot reconcile pending receipt transfer without its recent blockhash', {
+            signature,
+            receiptId: target.id,
+          });
+        }
+      };
+
+      const submitWithBlockhashRetry = async (): Promise<string | null> => {
+        for (let attempt = 0; ; attempt += 1) {
+          const prepared = await requestTx();
+          try {
+            return await submitTransfer(prepared.encodedTx);
+          } catch (err) {
+            if (isPotentiallySubmittedTransactionError(err)) {
+              submittedSignature = err.signature;
+            }
+            if (submittedSignature && !isSubmittedTransactionFailureError(err)) {
+              finishPendingTransfer(submittedSignature);
+              return null;
+            }
+            if (attempt > 0 || submittedSignature || !isBlockhashExpiredError(err)) throw err;
+            resetReceiptSubmissionForRetry();
+            if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+              showToast('Prepared transaction expired. Preparing a fresh one…');
+            }
+          }
+        }
+      };
+
+      const signature = await submitWithBlockhashRetry();
+      if (!signature) return;
+
+      if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+        setReceiptTransferTarget(null);
+        closeRevealOverlay();
+        showToast(`Receipt transferred to ${shortAddress(destination)} · ${shortAddress(signature)}`);
+        void refetchInventory().catch((err) => {
+          console.warn('[mons] failed to refresh inventory after receipt transfer', err);
+        });
+      }
+    } catch (err) {
+      if (receiptOperation && (!submittedSignature || isSubmittedTransactionFailureError(err))) {
+        updateReceiptOperation(receiptOperation, () => null);
+      }
+      throw err;
+    } finally {
+      receiptTransferInFlightRef.current = false;
+      setReceiptTransferInFlight(false);
+      if (connectedWalletRef.current !== wallet) {
+        setReceiptTransferTarget(null);
+      }
     }
   };
 
@@ -4900,6 +5768,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const handleClaim = async ({ code, recipient }: { code: string; recipient?: string }) => {
     if (blockViewerModeAction()) return { deferred: true };
+    const claimGeneration = claimModalGenerationRef.current;
+    const receiptOperationCreatedGenerationAtClaimStart = receiptOperationGenerationRef.current;
+    const claimUiIsCurrent = () => claimModalGenerationRef.current === claimGeneration;
     if (isStripeReceiptClaimCode(code)) {
       let recipientWallet: string;
       try {
@@ -4910,13 +5781,20 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
       const result = await claimStripeReceipt({ code, recipient: recipientWallet });
       const returnedReceiptAssetIds = result.receiptAssetIds || [];
-      if (owner === recipientWallet) unhideAssets(returnedReceiptAssetIds);
-      closeClaimModal();
+      unhideAssetsForWallet(recipientWallet, returnedReceiptAssetIds);
+      clearAuthoritativelyReturnedReceiptOperations(
+        recipientWallet,
+        returnedReceiptAssetIds,
+        receiptOperationCreatedGenerationAtClaimStart,
+      );
       const count = Math.max(0, Math.floor(Number(result.receiptsTransferred || 0)));
       const displayCount = count || 1;
       const receiptBaseLabel = result.receiptKind === 'figure' ? 'card receipt' : 'receipt';
       const receiptLabel = displayCount === 1 ? receiptBaseLabel : `${receiptBaseLabel}s`;
-      showToast(`Claim submitted · ${displayCount} ${receiptLabel} sent to ${shortAddress(recipientWallet)}`);
+      if (claimUiIsCurrent()) {
+        closeClaimModal();
+        showToast(`Claim submitted · ${displayCount} ${receiptLabel} sent to ${shortAddress(recipientWallet)}`);
+      }
       if (owner && (owner === recipientWallet || returnedReceiptAssetIds.length)) {
         void refetchInventory().catch((err) => {
           console.warn('[mons] failed to refresh inventory after receipt claim', err);
@@ -4930,9 +5808,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     if (!publicKey) setPendingClaimSignIn(true);
     const signedIn = await ensureSignedIn();
     if (!signedIn || !publicKey) return { deferred: true };
+    if (!claimUiIsCurrent()) return { deferred: true };
     const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
     let resp = await requestTx();
+    if (!claimUiIsCurrent()) return { deferred: true };
     let claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
     let claimConnection = getDropConnection(claimDrop.dropId);
     try {
@@ -4941,8 +5821,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       );
     } catch (err) {
       if (!isBlockhashExpiredError(err)) throw err;
+      if (!claimUiIsCurrent()) return { deferred: true };
       showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
       resp = await requestTx();
+      if (!claimUiIsCurrent()) return { deferred: true };
       claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
       claimConnection = getDropConnection(claimDrop.dropId);
       await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
@@ -4950,7 +5832,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       );
     }
     const claimedFigureIds = normalizeClaimedReceiptIds(resp.certificates);
+    if (!claimUiIsCurrent()) {
+      void refetchInventory().catch((err) => {
+        console.warn('[mons] failed to refresh inventory after claim', err);
+      });
+      return { deferred: true };
+    }
     closeClaimModal();
+    const previewGeneration = claimModalGenerationRef.current;
+    const claimPreviewIsCurrent = () => claimModalGenerationRef.current === previewGeneration;
 
     let opened = false;
     const openClaimedReceiptPreview = (
@@ -4958,6 +5848,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       snapshot: InventoryItem[],
       options?: { allowPlaceholders?: boolean },
     ) => {
+      if (!claimPreviewIsCurrent()) return;
       if (opened || revealOverlayRef.current) return;
       if (!previewItems.length) return;
       if (!options?.allowPlaceholders && previewItems.some((item) => !item.image)) return;
@@ -5026,6 +5917,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       itemsPerBox: claimDrop.itemsPerBox,
       boxNamePrefix: claimDrop.namePrefix,
       figureNamePrefix: claimDrop.figureNamePrefix,
+      deferred: true,
     };
   };
 
@@ -5109,7 +6001,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         !shipmentsLookupPendingForReceipts &&
         !shipmentsLookupFailedForReceipts));
   const closeClaimModal = useCallback(() => {
+    claimModalGenerationRef.current += 1;
     setClaimOpen(false);
+    setClaimSubmitting(false);
     setClaimInitialCode('');
     setClaimOpenedFromDeepLink(false);
     if (claimOpenedFromDeepLink || claimDeepLinkCode !== null) {
@@ -5593,6 +6487,20 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       </div>
     </div>
   ) : null;
+  const activeModalLayer =
+    walletModalVisible
+      ? 'wallet'
+      : receiptTransferTarget
+      ? 'transfer'
+      : revealOverlayOpen && !revealOverlayClosing
+        ? 'reveal'
+        : claimOpen
+          ? 'claim'
+          : deliveryOpen
+            ? 'shipment'
+            : notifyOpen
+              ? 'notify'
+              : null;
   const revealOverlayNode = revealOverlay ? (
     revealOverlayUsesPonchoViewer ? (
       <PonchoCardViewerOverlay
@@ -5609,11 +6517,47 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
+        suspended={activeModalLayer === 'wallet' || activeModalLayer === 'transfer'}
         images={revealOverlay.receiptImages}
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
         viewerSize={revealOverlay.imageViewerSize}
         explorerHref={receiptExplorerHref}
+        transfer={
+          receiptViewerOperation?.phase === 'unverified' || receiptViewerOperation?.phase === 'checking'
+            ? {
+                label: receiptViewerOperation.phase === 'checking' ? 'Checking status…' : 'Check status',
+                disabled: receiptViewerOperation.phase === 'checking',
+                busy: receiptViewerOperation.phase === 'checking',
+                onClick: () => {
+                  checkReceiptOperationStatus(receiptViewerOperation);
+                },
+              }
+            : receiptTransferActionTarget
+            ? {
+                unavailable:
+                  adminIrlRedeeming ||
+                  revealOverlayClosing ||
+                  !receiptTransferWalletSupported ||
+                  Boolean(receiptTransferTarget) ||
+                  receiptTransferInFlight,
+                onClick: (opener) => {
+                  if (revealOverlayClosing || revealOverlayClosingRef.current) return;
+                  if (adminIrlRedeeming) {
+                    showToast('Wait for Admin IRL Redeem to finish before transferring');
+                    return;
+                  }
+                  if (!receiptTransferWalletSupported || !receiptTransferWalletSupportedRef.current) {
+                    showToast(RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE);
+                    return;
+                  }
+                  if (receiptTransferTarget || receiptTransferInFlightRef.current) return;
+                  receiptTransferReturnFocusRef.current = opener;
+                  setReceiptTransferTarget(receiptTransferActionTarget);
+                },
+              }
+            : undefined
+        }
         adminIrlRedeem={
           adminIrlRedeemOverlayReceipt
             ? {
@@ -5818,7 +6762,13 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   return (
     <div className="page" ref={pageRef}>
       {toast ? (
-        <div className={`toast${toastVisible ? '' : ' toast--hidden'}`} role="status" aria-live="polite">
+        <div
+          className={`toast${toastVisible ? '' : ' toast--hidden'}${
+            receiptTransferTarget || revealOverlayUsesReceiptImage ? ' toast--above-modal' : ''
+          }`}
+          role="status"
+          aria-live="polite"
+        >
           {toast}
         </div>
       ) : null}
@@ -5833,7 +6783,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           <FaCheck aria-hidden="true" focusable="false" />
         </div>
       ) : null}
-      {revealOverlayNode}
       <div className={primaryFrameClassName}>
         <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
 
@@ -5934,11 +6883,34 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         open={notifyOpen}
         title="Notify me"
         onClose={() => setNotifyOpen(false)}
-        className="notify-modal"
+        className="compact-modal notify-modal"
         overlayClassName="notify-modal-overlay"
         showCloseButton={false}
+        suspended={notifyOpen && activeModalLayer !== 'notify'}
       >
         <NotifyForm onSuccess={handleNotifySuccess} onCancel={() => setNotifyOpen(false)} />
+      </Modal>
+
+      <Modal
+        open={Boolean(receiptTransferTarget)}
+        title="Transfer receipt"
+        onClose={closeReceiptTransferModal}
+        className="compact-modal receipt-transfer-modal"
+        overlayClassName="receipt-transfer-modal-overlay"
+        showCloseButton={false}
+        closeOnEscape={!receiptTransferInFlight}
+        suspended={Boolean(receiptTransferTarget) && activeModalLayer !== 'transfer'}
+        returnFocusRef={receiptTransferReturnFocusRef}
+      >
+        {receiptTransferTarget ? (
+          <ReceiptTransferForm
+            receipt={{ id: receiptTransferTarget.id, name: receiptTransferTarget.name }}
+            network={getDropConfig(receiptTransferTarget.dropId)?.solanaCluster || 'Solana'}
+            feePayer={connectedWallet || ''}
+            onCancel={closeReceiptTransferModal}
+            onTransfer={handleReceiptTransfer}
+          />
+        ) : null}
       </Modal>
 
       <Modal
@@ -5947,6 +6919,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         onClose={() => {
           setDeliveryOpen(false);
         }}
+        suspended={deliveryOpen && activeModalLayer !== 'shipment'}
       >
         <div className="modal-form delivery-modal">
           <div className="delivery-modal__summary">
@@ -5987,11 +6960,17 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         </div>
       </Modal>
 
-      <Modal open={claimOpen} title="Secret Code" onClose={closeClaimModal} closeOnEscape={false}>
+      <Modal
+        open={claimOpen}
+        title="Secret Code"
+        onClose={closeClaimModal}
+        closeOnEscape={!claimSubmitting}
+        suspended={claimOpen && activeModalLayer !== 'claim'}
+      >
         <ClaimForm
           onClaim={handleClaim}
           onSuccess={closeClaimModal}
-          onDismiss={closeClaimModal}
+          onLoadingChange={setClaimSubmitting}
           mode="modal"
           showTitle={false}
           itemsPerBox={routeDrop?.itemsPerBox}
@@ -6000,6 +6979,8 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           initialCode={claimInitialCode}
         />
       </Modal>
+
+      {revealOverlayNode}
 
       {activeError ? <div className="error">{activeError}</div> : null}
       <section className="app-section shipments-section">
@@ -6067,6 +7048,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               className="receipts-section__code-button"
               onClick={() => {
                 if (blockViewerModeAction()) return;
+                claimModalGenerationRef.current += 1;
                 setClaimInitialCode('');
                 setClaimOpenedFromDeepLink(false);
                 setClaimOpen(true);

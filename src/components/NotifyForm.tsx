@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
 import { subscribeToNotifications } from '../lib/api';
 
@@ -11,24 +11,6 @@ const NOTIFICATION_EMAIL_SCHEMA = z.string().email().max(254);
 
 function isValidEmail(email: string): boolean {
   return NOTIFICATION_EMAIL_SCHEMA.safeParse(email).success;
-}
-
-function keepFocusInNotifyForm(event: KeyboardEvent<HTMLFormElement>) {
-  if (event.key !== 'Tab') return;
-  const controls = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)'),
-  );
-  const firstControl = controls[0];
-  const lastControl = controls.at(-1);
-  if (!firstControl || !lastControl) return;
-
-  if (event.shiftKey && document.activeElement === firstControl) {
-    event.preventDefault();
-    lastControl.focus({ preventScroll: true });
-  } else if (!event.shiftKey && document.activeElement === lastControl) {
-    event.preventDefault();
-    firstControl.focus({ preventScroll: true });
-  }
 }
 
 export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
@@ -85,9 +67,8 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
 
   return (
     <form
-      className="modal-form notify-form"
+      className="modal-form compact-modal-form notify-form"
       onSubmit={submit}
-      onKeyDown={keepFocusInNotifyForm}
       noValidate
       aria-busy={pending}
     >
@@ -114,7 +95,7 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
           {error}
         </div>
       ) : null}
-      <div className="notify-form__actions">
+      <div className="compact-modal-form__actions notify-form__actions">
         <button type="button" onClick={onCancel} disabled={pending}>
           Cancel
         </button>

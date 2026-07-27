@@ -1007,6 +1007,18 @@ export async function requestDeliveryTx(
   });
 }
 
+export async function prepareReceiptTransferTx(args: {
+  owner: string;
+  dropId: string;
+  receiptAssetId: string;
+  destination: string;
+}): Promise<PreparedTxResponse> {
+  return callFunction<
+    { owner: string; dropId: string; receiptAssetId: string; destination: string },
+    PreparedTxResponse
+  >('prepareReceiptTransferTx', args);
+}
+
 export async function prepareAdminIrlRedeemTx(args: {
   owner: string;
   dropId: string;

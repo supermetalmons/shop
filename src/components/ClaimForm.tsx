@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
 
 type ClaimFormResult = {
@@ -11,7 +12,7 @@ type ClaimFormResult = {
 interface ClaimFormProps {
   onClaim: (payload: { code: string; recipient?: string }) => Promise<ClaimFormResult | void>;
   onSuccess?: () => void;
-  onDismiss?: () => void;
+  onLoadingChange?: (loading: boolean) => void;
   mode?: 'card' | 'modal';
   showTitle?: boolean;
   itemsPerBox?: number;
@@ -34,15 +35,10 @@ function normalizeItemsPerBoxCount(value: number | undefined, fallback = 1): num
   return Number.isFinite(value) ? Math.max(0, Math.floor(Number(value))) : fallback;
 }
 
-function shouldAutoFocusClaimCodeInput(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  return !window.matchMedia('(pointer: coarse)').matches;
-}
-
 export function ClaimForm({
   onClaim,
   onSuccess,
-  onDismiss,
+  onLoadingChange,
   mode = 'card',
   showTitle = true,
   itemsPerBox,
@@ -50,9 +46,12 @@ export function ClaimForm({
   figureNamePrefix,
   initialCode = '',
 }: ClaimFormProps) {
+  const mountedRef = useRef(false);
   const codeInputRef = useRef<HTMLInputElement | null>(null);
   const recipientInputRef = useRef<HTMLInputElement | null>(null);
-  const shouldAutoFocusCodeInput = shouldAutoFocusClaimCodeInput();
+  const onLoadingChangeRef = useRef(onLoadingChange);
+  onLoadingChangeRef.current = onLoadingChange;
+  const shouldAutoFocusCodeInput = shouldAutoFocusFormControl();
   const [code, setCode] = useState(initialCode);
   const [recipient, setRecipient] = useState('');
   const [loading, setLoading] = useState(false);
@@ -71,18 +70,12 @@ export function ClaimForm({
   }, [initialCode]);
 
   useEffect(() => {
-    if (!onDismiss) return;
-
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape' && !loading) {
-        evt.preventDefault();
-        onDismiss();
-      }
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      onLoadingChangeRef.current?.(false);
     };
-
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [loading, onDismiss]);
+  }, []);
 
   useLayoutEffect(() => {
     if (!shouldAutoFocusCodeInput) return;
@@ -109,6 +102,7 @@ export function ClaimForm({
       recipientInputRef.current?.blur();
     }
     setLoading(true);
+    onLoadingChangeRef.current?.(true);
     setError(null);
     setSuccess(null);
     try {
@@ -116,6 +110,7 @@ export function ClaimForm({
         code: code.trim(),
         ...(isStripeCode ? { recipient: recipient.trim() } : {}),
       });
+      if (!mountedRef.current) return;
       if (result?.deferred) return;
       if (onSuccess) {
         onSuccess();
@@ -123,9 +118,14 @@ export function ClaimForm({
         setSuccess(buildSuccessMessage(result || {}));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to claim certificates');
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Unable to claim certificates');
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        onLoadingChangeRef.current?.(false);
+      }
     }
   };
 

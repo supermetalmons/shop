@@ -1,5 +1,12 @@
 import bs58 from 'bs58';
-import { Connection, PublicKey, VersionedTransaction, type SignatureStatus } from '@solana/web3.js';
+import {
+  Connection,
+  PublicKey,
+  SIGNATURE_LENGTH_IN_BYTES,
+  VersionedTransaction,
+  type SendOptions,
+  type SignatureStatus,
+} from '@solana/web3.js';
 import {
   ADDRESS_CIPHER_PUBLIC_KEY_LENGTH,
   addressCipherHint,
@@ -25,15 +32,21 @@ function sleep(ms: number) {
 }
 
 const ALREADY_PROCESSED_ERROR_RE = /this transaction has already been processed|already been processed/i;
+const BLOCKHASH_EXPIRED_ERROR_RE =
+  /blockhash[\s_-]*not[\s_-]*found|blockhash expired|transaction expired|expired blockhash|signature has expired|block height exceeded|TransactionExpiredBlockheightExceededError/i;
 
-export function isBlockhashExpiredError(err: unknown): boolean {
-  if (!err) return false;
+export function isBlockhashExpiredError(err: unknown, seen = new Set<unknown>(), depth = 0): boolean {
+  if (!err || depth > 6) return false;
+  if (typeof err === 'object') {
+    if (seen.has(err)) return false;
+    seen.add(err);
+  }
   const anyErr = err as any;
-  if (anyErr?.cause) return isBlockhashExpiredError(anyErr.cause);
   const msg = unwrapTxErrorMessage(err);
-  return /blockhash not found|blockhash expired|transaction expired|expired blockhash|signature has expired|block height exceeded|TransactionExpiredBlockheightExceededError/i.test(
-    msg,
-  );
+  if (BLOCKHASH_EXPIRED_ERROR_RE.test(msg)) return true;
+  if (anyErr?.simulationError && isBlockhashExpiredError(anyErr.simulationError, seen, depth + 1)) return true;
+  if (anyErr?.cause && isBlockhashExpiredError(anyErr.cause, seen, depth + 1)) return true;
+  return false;
 }
 
 function isAlreadyProcessedError(err: unknown): boolean {
@@ -45,31 +58,117 @@ function isAlreadyProcessedError(err: unknown): boolean {
   return false;
 }
 
-function isLikelyBase58Signature(value: string): boolean {
-  return value.length >= 64 && value.length <= 88 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(value);
+function isValidTransactionSignatureBytes(value: unknown): value is Uint8Array {
+  if (!(value instanceof Uint8Array) || value.length !== SIGNATURE_LENGTH_IN_BYTES) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] !== 0) return true;
+  }
+  return false;
 }
 
-type WaitForConditionOptions = {
+function isLikelyBase58Signature(value: string): boolean {
+  if (value.length < 64 || value.length > 88 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(value)) return false;
+  try {
+    return isValidTransactionSignatureBytes(bs58.decode(value));
+  } catch {
+    return false;
+  }
+}
+
+function requireValidTransactionSignature(value: unknown): string {
+  if (typeof value === 'string' && isLikelyBase58Signature(value)) return value;
+  throw new Error('Wallet returned an invalid transaction signature');
+}
+
+type AttemptPollingOptions = {
   attempts?: number;
   delayMs?: number;
+};
+
+type SignatureWaitOptions = AttemptPollingOptions & {
+  timeoutMs?: number;
+  requestTimeoutMs?: number;
 };
 
 // Only the duplicate-submit recovery path uses this longer window.
 // That keeps normal failures fast while giving devnet/load-balanced RPCs
 // enough time to surface a transaction we already know was accepted elsewhere.
-const ALREADY_PROCESSED_RECOVERY_WAIT: WaitForConditionOptions = {
+const ALREADY_PROCESSED_RECOVERY_WAIT: AttemptPollingOptions = {
   attempts: 15,
   delayMs: 1_000,
 };
 
 // Keep post-submit confirmation bounded and explicit. This is one status RPC call
 // per interval for a single active transaction, plus one history lookup at the end.
-const SUBMITTED_SIGNATURE_WAIT: WaitForConditionOptions = {
-  attempts: 20,
+const SUBMITTED_SIGNATURE_WAIT: SignatureWaitOptions = {
   delayMs: 500,
+  timeoutMs: 12_000,
+  requestTimeoutMs: 2_000,
 };
 
-async function waitForCondition(check: () => Promise<boolean>, opts: WaitForConditionOptions = {}): Promise<boolean> {
+const DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS = 2_000;
+const DEFAULT_RECONCILIATION_TIMEOUT_MS = 3 * 60_000;
+const DEFAULT_RECONCILIATION_POLL_INTERVAL_MS = 3_000;
+const DEFAULT_PREPARED_TRANSACTION_SIMULATION_TIMEOUT_MS = 10_000;
+const DEFAULT_SIGNED_TRANSACTION_SEND_TIMEOUT_MS = 10_000;
+
+function normalizeIntegerOption(value: unknown, fallback: number, minimum: number): number {
+  const candidate = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  return Math.max(minimum, Math.floor(candidate));
+}
+
+function normalizeOptionalIntegerOption(value: unknown, minimum: number): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(minimum, Math.floor(value))
+    : null;
+}
+
+const DEADLINE_REACHED = Symbol('deadline-reached');
+
+type Deadline = {
+  promise: Promise<typeof DEADLINE_REACHED>;
+  reached: () => boolean;
+  cancel: () => void;
+};
+
+function createDeadline(timeoutMs: number): Deadline {
+  let reached = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const promise = new Promise<typeof DEADLINE_REACHED>((resolve) => {
+    timer = setTimeout(() => {
+      reached = true;
+      resolve(DEADLINE_REACHED);
+    }, Math.max(0, timeoutMs));
+  });
+  return {
+    promise,
+    reached: () => reached,
+    cancel: () => {
+      if (timer != null) clearTimeout(timer);
+      timer = null;
+    },
+  };
+}
+
+async function raceDeadline<T>(promise: Promise<T>, deadline: Deadline): Promise<T | typeof DEADLINE_REACHED> {
+  if (deadline.reached()) return DEADLINE_REACHED;
+  return Promise.race([promise, deadline.promise]);
+}
+
+async function withRequestTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  const deadline = createDeadline(Math.max(1, timeoutMs));
+  try {
+    const result = await raceDeadline(promise, deadline);
+    if (result === DEADLINE_REACHED) {
+      throw new Error('Solana RPC request timed out');
+    }
+    return result;
+  } finally {
+    deadline.cancel();
+  }
+}
+
+async function waitForCondition(check: () => Promise<boolean>, opts: AttemptPollingOptions = {}): Promise<boolean> {
   const attempts = Math.max(1, Math.floor(opts.attempts ?? 6));
   const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
 
@@ -113,17 +212,9 @@ async function extractSendTransactionLogs(err: unknown): Promise<string[] | unde
   return undefined;
 }
 
-function isZeroSignature(sig: Uint8Array | null | undefined): boolean {
-  if (!sig || !(sig instanceof Uint8Array)) return true;
-  for (let i = 0; i < sig.length; i += 1) {
-    if (sig[i] !== 0) return false;
-  }
-  return true;
-}
-
 function extractTransactionSignature(tx: VersionedTransaction): string | null {
   const signature = tx.signatures[0];
-  if (isZeroSignature(signature)) return null;
+  if (!isValidTransactionSignatureBytes(signature)) return null;
   return bs58.encode(signature);
 }
 
@@ -138,7 +229,7 @@ function extractSignatureCandidate(value: unknown, seen = new Set<unknown>(), de
   if (typeof directSignature === 'string' && isLikelyBase58Signature(directSignature)) {
     return directSignature;
   }
-  if (directSignature instanceof Uint8Array && !isZeroSignature(directSignature)) {
+  if (isValidTransactionSignatureBytes(directSignature)) {
     return bs58.encode(directSignature);
   }
 
@@ -162,6 +253,44 @@ function describeSignatureStatusError(err: unknown): string {
   }
 }
 
+class PreparedTransactionSimulationError extends Error {
+  readonly simulationError: unknown;
+  readonly logs: string[];
+
+  constructor(simulationError: unknown, logs: string[] | null) {
+    super(`Transaction simulation failed: ${describeSignatureStatusError(simulationError)}`);
+    this.name = 'PreparedTransactionSimulationError';
+    this.simulationError = simulationError;
+    this.logs = logs ?? [];
+  }
+}
+
+export class PotentiallySubmittedTransactionError extends Error {
+  readonly signature: string;
+  readonly cause: unknown;
+
+  constructor(signature: string, cause: unknown) {
+    const detail = unwrapTxErrorMessage(cause);
+    super(
+      `Transaction may have been submitted, but its status is uncertain (${signature})${
+        detail && detail !== 'Unexpected error' ? `: ${detail}` : ''
+      }`,
+    );
+    this.name = 'PotentiallySubmittedTransactionError';
+    this.signature = signature;
+    this.cause = cause;
+  }
+}
+
+export function isPotentiallySubmittedTransactionError(err: unknown): err is PotentiallySubmittedTransactionError {
+  const anyErr = err as any;
+  return (
+    (err instanceof PotentiallySubmittedTransactionError || anyErr?.name === 'PotentiallySubmittedTransactionError') &&
+    typeof anyErr?.signature === 'string' &&
+    isLikelyBase58Signature(anyErr.signature)
+  );
+}
+
 export class SubmittedTransactionFailureError extends Error {
   readonly signature: string;
   readonly transactionError: unknown;
@@ -175,17 +304,107 @@ export class SubmittedTransactionFailureError extends Error {
 }
 
 export function isSubmittedTransactionFailureError(err: unknown): err is SubmittedTransactionFailureError {
-  if (err instanceof SubmittedTransactionFailureError) return true;
   const anyErr = err as any;
-  return anyErr?.name === 'SubmittedTransactionFailureError' && typeof anyErr?.signature === 'string';
+  return (
+    (err instanceof SubmittedTransactionFailureError || anyErr?.name === 'SubmittedTransactionFailureError') &&
+    typeof anyErr?.signature === 'string' &&
+    isLikelyBase58Signature(anyErr.signature)
+  );
+}
+
+function isDeterministicSignedTransactionSendError(err: unknown, seen = new Set<unknown>(), depth = 0): boolean {
+  if (!err || depth > 4) return false;
+  if (typeof err !== 'object') {
+    const message = unwrapTxErrorMessage(err);
+    return (
+      isBlockhashExpiredError(err) ||
+      /simulation failed|transaction simulation failed|preflight failure|signature verification failure|user rejected|user declined/i.test(
+        message,
+      )
+    );
+  }
+  if (seen.has(err)) return false;
+  seen.add(err);
+
+  if (isBlockhashExpiredError(err) || isSubmittedTransactionFailureError(err)) return true;
+  const anyErr = err as any;
+  if (anyErr?.name === 'PreparedTransactionSimulationError') return true;
+  if (anyErr?.code === 4001 || anyErr?.code === 4100) return true;
+  if (anyErr?.transactionError != null) return true;
+  if (Array.isArray(anyErr?.logs) && anyErr.logs.length > 0) return true;
+
+  const message = unwrapTxErrorMessage(err);
+  if (
+    /simulation failed|transaction simulation failed|preflight failure|signature verification failure|invalid params|invalid request|method not found|parse error|unsupported transaction version|user rejected|user declined/i.test(
+      message,
+    )
+  ) {
+    return true;
+  }
+  return anyErr?.cause ? isDeterministicSignedTransactionSendError(anyErr.cause, seen, depth + 1) : false;
+}
+
+/**
+ * Classify an error thrown after a signed transaction was handed to an RPC send call.
+ * Callers should invoke this only at that boundary: signing or wallet-approval errors
+ * happen before submission is possible and must remain ordinary failures.
+ */
+export function classifySignedTransactionSendError(tx: VersionedTransaction, err: unknown): unknown {
+  if (isPotentiallySubmittedTransactionError(err)) return err;
+  const signature = extractTransactionSignature(tx) || extractSignatureCandidate(err);
+  if (isAlreadyProcessedError(err)) {
+    return signature ? new PotentiallySubmittedTransactionError(signature, err) : err;
+  }
+  if (isDeterministicSignedTransactionSendError(err)) return err;
+  return signature ? new PotentiallySubmittedTransactionError(signature, err) : err;
+}
+
+export type SendSignedTransactionViaConnectionOptions = {
+  timeoutMs?: number;
+  sendOptions?: SendOptions;
+  onBroadcastAttempt?: (signature: string) => void;
+};
+
+/**
+ * Submit an already-signed transaction through the provided RPC connection.
+ * The deadline starts after local serialization, so only the ambiguous network
+ * submission boundary is timed and classified as potentially submitted.
+ */
+export async function sendSignedTransactionViaConnection(
+  tx: VersionedTransaction,
+  connection: Connection,
+  options: SendSignedTransactionViaConnectionOptions = {},
+): Promise<string> {
+  const raw = tx.serialize();
+  const signature = extractTransactionSignature(tx);
+  if (!signature) {
+    throw new Error('Signed transaction is missing the fee payer signature');
+  }
+  const timeoutMs = normalizeIntegerOption(
+    options.timeoutMs,
+    DEFAULT_SIGNED_TRANSACTION_SEND_TIMEOUT_MS,
+    1,
+  );
+
+  options.onBroadcastAttempt?.(signature);
+  try {
+    await withRequestTimeout(connection.sendRawTransaction(raw, options.sendOptions), timeoutMs);
+    return signature;
+  } catch (err) {
+    throw classifySignedTransactionSendError(tx, err);
+  }
 }
 
 async function getSignatureStatusValue(
   connection: Connection,
   signature: string,
   searchTransactionHistory: boolean,
+  requestTimeoutMs = DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
 ): Promise<SignatureStatus | null> {
-  const status = await connection.getSignatureStatus(signature, { searchTransactionHistory });
+  const status = await withRequestTimeout(
+    connection.getSignatureStatus(signature, { searchTransactionHistory }),
+    requestTimeoutMs,
+  );
   return status.value ?? null;
 }
 
@@ -208,13 +427,52 @@ function assertSignatureStatusSucceeded(signature: string, status: SignatureStat
 async function waitForSuccessfulSignature(
   connection: Connection,
   signature: string,
-  opts: WaitForConditionOptions = {},
+  opts: SignatureWaitOptions = {},
 ): Promise<boolean> {
+  const timeoutMs = normalizeOptionalIntegerOption(opts.timeoutMs, 1);
+  const requestTimeoutMs = normalizeIntegerOption(
+    opts.requestTimeoutMs,
+    DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
+    1,
+  );
+  if (timeoutMs != null) {
+    const overallDeadline = createDeadline(timeoutMs);
+    const pollingDeadline = createDeadline(Math.max(0, timeoutMs - requestTimeoutMs));
+    const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
+    try {
+      while (!pollingDeadline.reached()) {
+        const statusResult = await raceDeadline(
+          getSignatureStatusValue(connection, signature, false, requestTimeoutMs).catch(() => null),
+          pollingDeadline,
+        );
+        if (statusResult === DEADLINE_REACHED) break;
+        assertSignatureStatusSucceeded(signature, statusResult);
+        if (isConfirmedSignatureStatus(statusResult)) return true;
+
+        if (delayMs > 0) {
+          const delayResult = await raceDeadline(sleep(delayMs), pollingDeadline);
+          if (delayResult === DEADLINE_REACHED) break;
+        }
+      }
+
+      const historicalResult = await raceDeadline(
+        getSignatureStatusValue(connection, signature, true, requestTimeoutMs).catch(() => null),
+        overallDeadline,
+      );
+      if (historicalResult === DEADLINE_REACHED) return false;
+      assertSignatureStatusSucceeded(signature, historicalResult);
+      return isConfirmedSignatureStatus(historicalResult);
+    } finally {
+      pollingDeadline.cancel();
+      overallDeadline.cancel();
+    }
+  }
+
   const attempts = Math.max(1, Math.floor(opts.attempts ?? 6));
   const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const status = await getSignatureStatusValue(connection, signature, false).catch(() => null);
+    const status = await getSignatureStatusValue(connection, signature, false, requestTimeoutMs).catch(() => null);
     assertSignatureStatusSucceeded(signature, status);
     if (isConfirmedSignatureStatus(status)) return true;
 
@@ -223,9 +481,125 @@ async function waitForSuccessfulSignature(
     }
   }
 
-  const historicalStatus = await getSignatureStatusValue(connection, signature, true).catch(() => null);
+  const historicalStatus = await getSignatureStatusValue(connection, signature, true, requestTimeoutMs).catch(
+    () => null,
+  );
   assertSignatureStatusSucceeded(signature, historicalStatus);
   return isConfirmedSignatureStatus(historicalStatus);
+}
+
+export type SubmittedTransactionReconciliationResult = 'confirmed' | 'failed' | 'expired' | 'unknown';
+
+export type SubmittedTransactionReconciliationOptions = {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  requestTimeoutMs?: number;
+};
+
+function requireValidRecentBlockhash(value: unknown): string {
+  if (typeof value !== 'string' || !value) {
+    throw new Error('Invalid recent blockhash');
+  }
+  try {
+    if (bs58.decode(value).length === 32) return value;
+  } catch {
+    // Fall through to the stable validation error below.
+  }
+  throw new Error('Invalid recent blockhash');
+}
+
+/**
+ * Observe a transaction that may already have been submitted. This never sends or
+ * resends the transaction. Expiration is conclusive only when the signature is
+ * absent from the live cache and history after its recent blockhash becomes invalid.
+ */
+export async function reconcileSubmittedTransaction(
+  connection: Connection,
+  submission: { signature: string; recentBlockhash: string },
+  options: SubmittedTransactionReconciliationOptions = {},
+): Promise<SubmittedTransactionReconciliationResult> {
+  const signature = requireValidTransactionSignature(submission.signature);
+  const recentBlockhash = requireValidRecentBlockhash(submission.recentBlockhash);
+  const timeoutMs = normalizeIntegerOption(
+    options.timeoutMs,
+    DEFAULT_RECONCILIATION_TIMEOUT_MS,
+    1,
+  );
+  const pollIntervalMs = normalizeIntegerOption(
+    options.pollIntervalMs,
+    DEFAULT_RECONCILIATION_POLL_INTERVAL_MS,
+    0,
+  );
+  const requestTimeoutMs = normalizeIntegerOption(
+    options.requestTimeoutMs,
+    DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
+    1,
+  );
+  const deadline = createDeadline(timeoutMs);
+
+  try {
+    while (!deadline.reached()) {
+      let status: SignatureStatus | null;
+      try {
+        const statusResult = await raceDeadline(
+          getSignatureStatusValue(connection, signature, false, requestTimeoutMs),
+          deadline,
+        );
+        if (statusResult === DEADLINE_REACHED) return 'unknown';
+        status = statusResult;
+      } catch {
+        status = null;
+        if (pollIntervalMs > 0) {
+          const delayResult = await raceDeadline(sleep(pollIntervalMs), deadline);
+          if (delayResult === DEADLINE_REACHED) return 'unknown';
+        }
+        continue;
+      }
+
+      if (status?.err) return 'failed';
+      if (isConfirmedSignatureStatus(status)) return 'confirmed';
+
+      if (status == null) {
+        let blockhashValid: boolean;
+        try {
+          const validityResult = await raceDeadline(
+            withRequestTimeout(
+              connection.isBlockhashValid(recentBlockhash, { commitment: 'confirmed' }),
+              requestTimeoutMs,
+            ),
+            deadline,
+          );
+          if (validityResult === DEADLINE_REACHED) return 'unknown';
+          blockhashValid = validityResult.value;
+        } catch {
+          blockhashValid = true;
+        }
+
+        if (!blockhashValid) {
+          try {
+            const historicalResult = await raceDeadline(
+              getSignatureStatusValue(connection, signature, true, requestTimeoutMs),
+              deadline,
+            );
+            if (historicalResult === DEADLINE_REACHED) return 'unknown';
+            if (historicalResult?.err) return 'failed';
+            if (isConfirmedSignatureStatus(historicalResult)) return 'confirmed';
+            if (historicalResult == null) return 'expired';
+          } catch {
+            // A failed history lookup cannot prove expiration; keep observing.
+          }
+        }
+      }
+
+      if (pollIntervalMs > 0) {
+        const delayResult = await raceDeadline(sleep(pollIntervalMs), deadline);
+        if (delayResult === DEADLINE_REACHED) return 'unknown';
+      }
+    }
+    return 'unknown';
+  } finally {
+    deadline.cancel();
+  }
 }
 
 export async function recoverAlreadyProcessedSignature(
@@ -248,7 +622,7 @@ export async function recoverAlreadyProcessedSignature(
 async function waitForAccounts(
   connection: Connection,
   accounts: readonly PublicKey[],
-  opts: WaitForConditionOptions = {},
+  opts: AttemptPollingOptions = {},
 ): Promise<boolean> {
   return waitForCondition(async () => {
     const infos = await connection.getMultipleAccountsInfo([...accounts], { commitment: 'confirmed' });
@@ -282,13 +656,15 @@ function describeRequiredSigners(tx: VersionedTransaction): { required: string[]
   const required = staticKeys.slice(0, num).map((k: any) => (typeof k?.toBase58 === 'function' ? k.toBase58() : String(k)));
   const missingNonPayer: string[] = [];
   for (let i = 1; i < Math.min(required.length, tx.signatures.length); i += 1) {
-    if (isZeroSignature(tx.signatures[i])) missingNonPayer.push(required[i]);
+    if (!isValidTransactionSignatureBytes(tx.signatures[i])) missingNonPayer.push(required[i]);
   }
   return { required, missingNonPayer };
 }
 
 type SendPreparedTransactionOptions = {
   onSubmitted?: (signature: string, tx: VersionedTransaction) => void | Promise<void>;
+  simulateBeforeSigning?: boolean;
+  simulationTimeoutMs?: number;
 };
 
 export async function sendPreparedTransaction(
@@ -319,7 +695,25 @@ export async function sendPreparedTransaction(
   };
 
   try {
-    const signature = await signer(tx);
+    if (options.simulateBeforeSigning) {
+      const simulationTimeoutMs = normalizeIntegerOption(
+        options.simulationTimeoutMs,
+        DEFAULT_PREPARED_TRANSACTION_SIMULATION_TIMEOUT_MS,
+        1,
+      );
+      const simulation = await withRequestTimeout(
+        connection.simulateTransaction(tx, {
+          sigVerify: false,
+          commitment: 'confirmed',
+        }),
+        simulationTimeoutMs,
+      );
+      if (simulation.value.err) {
+        throw new PreparedTransactionSimulationError(simulation.value.err, simulation.value.logs);
+      }
+    }
+
+    const signature = requireValidTransactionSignature(await signer(tx));
     await notifySubmitted(signature);
     const submitted = await waitForSuccessfulSignature(connection, signature, SUBMITTED_SIGNATURE_WAIT);
     if (!submitted) {
@@ -329,6 +723,12 @@ export async function sendPreparedTransaction(
     }
     return signature;
   } catch (err) {
+    if (isPotentiallySubmittedTransactionError(err)) {
+      await notifySubmitted(err.signature);
+      const submitted = await waitForSuccessfulSignature(connection, err.signature, SUBMITTED_SIGNATURE_WAIT);
+      if (submitted) return err.signature;
+      throw err;
+    }
     const recoveredSignature = await recoverAlreadyProcessedSignature(tx, connection, err);
     if (recoveredSignature) {
       await notifySubmitted(recoveredSignature);
