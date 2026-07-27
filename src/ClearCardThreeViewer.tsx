@@ -11,10 +11,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const CLEAR_CARD_MODEL_URL = '/clear_card_sample.glb';
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
-const MAX_TILT_X = THREE.MathUtils.degToRad(8);
-const MAX_TILT_Y = THREE.MathUtils.degToRad(11);
-const SPRING_STIFFNESS = 72;
-const SPRING_DAMPING = 15;
+const MAX_TILT_X = THREE.MathUtils.degToRad(25);
+const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
+const SPRING_STIFFNESS = 60;
+const SPRING_DAMPING = 11;
 const SPRING_EPSILON = 0.0001;
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
@@ -31,10 +31,6 @@ type TiltState = {
   targetY: number;
   velocityX: number;
   velocityY: number;
-};
-
-type InteractionState = {
-  pointerId: number | null;
 };
 
 function disposeObject3D(root: THREE.Object3D) {
@@ -85,7 +81,6 @@ export default function ClearCardThreeViewer({
   const requestRenderRef = useRef<(() => void) | null>(null);
   const reducedMotionRef = useRef(false);
   const viewerReadyRef = useRef(false);
-  const interactionRef = useRef<InteractionState>({ pointerId: null });
   const tiltRef = useRef<TiltState>({
     currentX: 0,
     currentY: 0,
@@ -95,7 +90,6 @@ export default function ClearCardThreeViewer({
     velocityY: 0,
   });
   const resetTilt = useCallback(() => {
-    interactionRef.current.pointerId = null;
     tiltRef.current.targetX = 0;
     tiltRef.current.targetY = 0;
     requestRenderRef.current?.();
@@ -108,63 +102,17 @@ export default function ClearCardThreeViewer({
     const pointerX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
     const pointerY = THREE.MathUtils.clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
     tiltRef.current.targetX = -(pointerY * 2 - 1) * MAX_TILT_X;
-    tiltRef.current.targetY = (pointerX * 2 - 1) * MAX_TILT_Y;
+    tiltRef.current.targetY = -(pointerX * 2 - 1) * MAX_TILT_Y;
     requestRenderRef.current?.();
   }, []);
 
-  const handlePointerEnter = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (event.pointerType === 'mouse') updateTilt(event);
-    },
-    [updateTilt],
-  );
-
-  const handlePointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (
-        event.pointerType === 'mouse' ||
-        interactionRef.current.pointerId === event.pointerId
-      ) {
-        updateTilt(event);
-      }
-    },
-    [updateTilt],
-  );
-
-  const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (event.pointerType !== 'mouse') {
-        interactionRef.current.pointerId = event.pointerId;
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }
-      updateTilt(event);
-    },
-    [updateTilt],
-  );
+  const handlePointerEnter = updateTilt;
+  const handlePointerMove = updateTilt;
+  const handlePointerDown = updateTilt;
 
   const handlePointerUp = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       if (event.pointerType === 'mouse') return;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      resetTilt();
-    },
-    [resetTilt],
-  );
-
-  const handlePointerLeave = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (event.pointerType === 'mouse') resetTilt();
-    },
-    [resetTilt],
-  );
-
-  const handlePointerCancel = useCallback(
-    (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
       resetTilt();
     },
     [resetTilt],
@@ -440,9 +388,8 @@ export default function ClearCardThreeViewer({
       onPointerMove={handlePointerMove}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
-      onPointerLeave={handlePointerLeave}
-      onPointerCancel={handlePointerCancel}
-      onLostPointerCapture={resetTilt}
+      onPointerLeave={resetTilt}
+      onPointerCancel={resetTilt}
     />
   );
 }

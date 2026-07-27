@@ -16,7 +16,6 @@ export default function ClearCardWipApp() {
   }, []);
 
   const ready = status === 'ready';
-  const statusMessage = status === 'error' ? 'Unable to display 3D card.' : 'Loading…';
 
   return (
     <div
@@ -34,15 +33,12 @@ export default function ClearCardWipApp() {
           <Suspense fallback={null}>
             <ClearCardThreeViewer ready={ready} onStatusChange={handleStatusChange} />
           </Suspense>
-          {!ready ? (
+          {status === 'error' ? (
             <div
-              className={`clear-card-wip__status${
-                status === 'error' ? ' clear-card-wip__status--error' : ''
-              }`}
-              role={status === 'error' ? 'alert' : 'status'}
-              aria-live="polite"
+              className="clear-card-wip__status clear-card-wip__status--error"
+              role="alert"
             >
-              {statusMessage}
+              Unable to display 3D card.
             </div>
           ) : null}
         </div>

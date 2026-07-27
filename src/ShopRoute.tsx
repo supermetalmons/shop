@@ -49,21 +49,23 @@ function WipRouteShell({ experience, status }: WipRouteShellProps) {
           WebkitBackdropFilter: 'blur(18px)',
         }}
       />
-      <div
-        role={status === 'error' ? 'alert' : 'status'}
-        aria-live="polite"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'grid',
-          placeItems: 'center',
-          color: 'color-mix(in srgb, var(--fg) 52%, transparent)',
-          fontSize: 12,
-          lineHeight: 1.35,
-        }}
-      >
-        {status === 'error' ? 'Unable to load preview.' : 'Loading…'}
-      </div>
+      {status === 'error' || !clearCard ? (
+        <div
+          role={status === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'grid',
+            placeItems: 'center',
+            color: 'color-mix(in srgb, var(--fg) 52%, transparent)',
+            fontSize: 12,
+            lineHeight: 1.35,
+          }}
+        >
+          {status === 'error' ? 'Unable to load preview.' : 'Loading…'}
+        </div>
+      ) : null}
       <button
         type="button"
         className="wip-close-btn"
