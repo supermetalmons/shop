@@ -97,6 +97,10 @@ type DropPanelPackFrameStyle = CSSProperties & {
   '--drops-panel-pack-aspect-ratio'?: string;
 };
 
+type DropPanelImageFrameStyle = CSSProperties & {
+  '--drops-panel-image-aspect-ratio'?: string;
+};
+
 function imageAspectRatio(dimensions: DropPanelImageDimensions | undefined): string | undefined {
   if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) return undefined;
 
@@ -125,6 +129,12 @@ function dropPanelTileStyle(item: DropPanelItem): DropPanelTileStyle {
 function dropPanelPackFrameStyle(dimensions: DropPanelImageDimensions | undefined): DropPanelPackFrameStyle {
   return {
     '--drops-panel-pack-aspect-ratio': imageAspectRatio(dimensions),
+  };
+}
+
+function dropPanelImageFrameStyle(dimensions: DropPanelImageDimensions | undefined): DropPanelImageFrameStyle {
+  return {
+    '--drops-panel-image-aspect-ratio': imageAspectRatio(dimensions),
   };
 }
 
@@ -187,13 +197,27 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
               );
             })}
           </span>
+        ) : item.image && item.imageDimensions ? (
+          <span
+            className="drops-panel__image-frame"
+            style={dropPanelImageFrameStyle(item.imageDimensions)}
+          >
+            <img
+              className="drops-panel__image"
+              src={item.image}
+              alt={item.alt}
+              width={item.imageDimensions.width}
+              height={item.imageDimensions.height}
+              draggable={false}
+              decoding="async"
+              onDragStart={(evt) => evt.preventDefault()}
+            />
+          </span>
         ) : item.image ? (
           <img
             className="drops-panel__image"
             src={item.image}
             alt={item.alt}
-            width={item.imageDimensions?.width}
-            height={item.imageDimensions?.height}
             draggable={false}
             decoding="async"
             onDragStart={(evt) => evt.preventDefault()}
