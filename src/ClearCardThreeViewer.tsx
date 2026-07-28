@@ -46,6 +46,38 @@ const PACK_TRANSMISSION_BACKDROP_ALPHA = 0.62;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 
+// Tilting the revealed card sweeps the reflection of RoomEnvironment's front light
+// panel — the only emitter on the camera side, and the sole cause of the white-out —
+// across its face. Head-on that reflection covers a fraction of the card and reads as
+// a highlight; rolled up by 6-13 degrees it covers most of it and the artwork
+// disappears into white. Nothing static fixes this, because the same reflection
+// produces both the resting highlight and the blow-out.
+//
+// So the environment is dimmed only across the band of tilt angles where that
+// reflection lands. The falloff has FINITE support: outside the ellipse the factor is
+// exactly 1, so the resting card and every angle beyond the flare band render exactly
+// as they did before. Values are in radians to match the tilt springs directly.
+const FLARE_CENTER_X = THREE.MathUtils.degToRad(-9.4);
+const FLARE_CENTER_Y = 0;
+const FLARE_RADIUS_X = THREE.MathUtils.degToRad(9.4);
+const FLARE_RADIUS_Y = THREE.MathUtils.degToRad(9);
+// Fraction of the radius held at full attenuation before easing back out to 1.
+const FLARE_PLATEAU = 0.6;
+const FLARE_MIN_ENVIRONMENT_INTENSITY = 0.22;
+
+function computeFlareAttenuation(tiltX: number, tiltY: number) {
+  const dx = (tiltX - FLARE_CENTER_X) / FLARE_RADIUS_X;
+  const dy = (tiltY - FLARE_CENTER_Y) / FLARE_RADIUS_Y;
+  const radius = Math.sqrt(dx * dx + dy * dy);
+  if (radius >= 1) return 1;
+  if (radius <= FLARE_PLATEAU) return FLARE_MIN_ENVIRONMENT_INTENSITY;
+  const t = (radius - FLARE_PLATEAU) / (1 - FLARE_PLATEAU);
+  const eased = t * t * (3 - 2 * t);
+  return (
+    FLARE_MIN_ENVIRONMENT_INTENSITY + (1 - FLARE_MIN_ENVIRONMENT_INTENSITY) * eased
+  );
+}
+
 type ViewerStatus = 'loading' | 'ready' | 'error';
 
 type UnboxStage = 'pack' | 'breaking' | 'revealed';
@@ -847,6 +879,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
         pivot.rotation.x = tilt.currentX;
         pivot.rotation.y = tilt.currentY;
+        // Only the revealed card is corrected; the pack stage keeps its original look.
+        scene.environmentIntensity =
+          stageRef.current === 'revealed'
+            ? computeFlareAttenuation(tilt.currentX, tilt.currentY)
+            : 1;
         renderer.render(scene, camera);
 
         const tiltUnsettled =
