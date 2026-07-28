@@ -59,7 +59,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
-    previewImageUrl: 'https://cdn.lil.org/wip/binder.webp',
+    previewImageUrl: 'https://cdn.lil.org/nft/card_nft_binder/clean.webp',
     previewAspectRatio: 1034 / 1400,
     boxNamePrefix: 'binder',
   },
