@@ -7,7 +7,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -46,36 +45,80 @@ const PACK_TRANSMISSION_BACKDROP_ALPHA = 0.62;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 
-// Tilting the revealed card sweeps the reflection of RoomEnvironment's front light
-// panel — the only emitter on the camera side, and the sole cause of the white-out —
-// across its face. Head-on that reflection covers a fraction of the card and reads as
-// a highlight; rolled up by 6-13 degrees it covers most of it and the artwork
-// disappears into white. Nothing static fixes this, because the same reflection
-// produces both the resting highlight and the blow-out.
+// Spherical environment: an HDR equirectangular sky, in place of three's cubic
+// RoomEnvironment. The room's lighting came from six flat emissive boxes, and the one
+// facing the camera was the sole cause of the white-out — tilting swept its reflection
+// across the card and the artwork vanished into white.
 //
-// So the environment is dimmed only across the band of tilt angles where that
-// reflection lands. The falloff has FINITE support: outside the ellipse the factor is
-// exactly 1, so the resting card and every angle beyond the flare band render exactly
-// as they did before. Values are in radians to match the tilt springs directly.
-const FLARE_CENTER_X = THREE.MathUtils.degToRad(-9.4);
-const FLARE_CENTER_Y = 0;
-const FLARE_RADIUS_X = THREE.MathUtils.degToRad(9.4);
-const FLARE_RADIUS_Y = THREE.MathUtils.degToRad(9);
-// Fraction of the radius held at full attenuation before easing back out to 1.
-const FLARE_PLATEAU = 0.6;
-const FLARE_MIN_ENVIRONMENT_INTENSITY = 0.22;
+// A sphere has no flat panel to mirror, and the key light here is centred on the VIEW
+// AXIS, which is the property that actually fixes the flare: the resting card already
+// reflects the brightest point, so tilting can only walk down the falloff. Getting
+// brighter by rotating is not merely tuned out, it is geometrically impossible.
+//
+// Radiance is linear and unbounded (float texture), so the key can stay hot enough to
+// keep the blown highlight the card reads as gloss.
+const SKY_TEXTURE_WIDTH = 512;
+const SKY_TEXTURE_HEIGHT = 256;
+// Vertical gradient, in linear RGB.
+const SKY_GROUND: readonly [number, number, number] = [0.04, 0.045, 0.05];
+const SKY_HORIZON: readonly [number, number, number] = [0.3, 0.32, 0.35];
+const SKY_ZENITH: readonly [number, number, number] = [0.55, 0.58, 0.62];
+// Key light. Latitude is lifted slightly so the highlight sits high on the card, but
+// staying near the view axis is what keeps it flare-free — past ~18 degrees off axis
+// the reflection starts swinging into view on tilt and the blow-out returns.
+const SKY_KEY_LATITUDE = THREE.MathUtils.degToRad(12);
+const SKY_KEY_LONGITUDE = 0;
+const SKY_KEY_RADIUS = THREE.MathUtils.degToRad(45);
+const SKY_KEY_FALLOFF = 1;
+const SKY_KEY_INTENSITY = 521;
 
-function computeFlareAttenuation(tiltX: number, tiltY: number) {
-  const dx = (tiltX - FLARE_CENTER_X) / FLARE_RADIUS_X;
-  const dy = (tiltY - FLARE_CENTER_Y) / FLARE_RADIUS_Y;
-  const radius = Math.sqrt(dx * dx + dy * dy);
-  if (radius >= 1) return 1;
-  if (radius <= FLARE_PLATEAU) return FLARE_MIN_ENVIRONMENT_INTENSITY;
-  const t = (radius - FLARE_PLATEAU) / (1 - FLARE_PLATEAU);
-  const eased = t * t * (3 - 2 * t);
-  return (
-    FLARE_MIN_ENVIRONMENT_INTENSITY + (1 - FLARE_MIN_ENVIRONMENT_INTENSITY) * eased
+function createSkyEnvironmentTexture(): THREE.DataTexture {
+  const data = new Float32Array(SKY_TEXTURE_WIDTH * SKY_TEXTURE_HEIGHT * 4);
+  const keyX = Math.cos(SKY_KEY_LATITUDE) * Math.sin(SKY_KEY_LONGITUDE);
+  const keyY = Math.sin(SKY_KEY_LATITUDE);
+  const keyZ = Math.cos(SKY_KEY_LATITUDE) * Math.cos(SKY_KEY_LONGITUDE);
+  const cosRadius = Math.cos(SKY_KEY_RADIUS);
+
+  for (let y = 0; y < SKY_TEXTURE_HEIGHT; y += 1) {
+    const latitude = (0.5 - (y + 0.5) / SKY_TEXTURE_HEIGHT) * Math.PI;
+    const sinLat = Math.sin(latitude);
+    const cosLat = Math.cos(latitude);
+    const blend = Math.abs(sinLat);
+    const target = sinLat >= 0 ? SKY_ZENITH : SKY_GROUND;
+    const baseR = SKY_HORIZON[0] + (target[0] - SKY_HORIZON[0]) * blend;
+    const baseG = SKY_HORIZON[1] + (target[1] - SKY_HORIZON[1]) * blend;
+    const baseB = SKY_HORIZON[2] + (target[2] - SKY_HORIZON[2]) * blend;
+
+    for (let x = 0; x < SKY_TEXTURE_WIDTH; x += 1) {
+      const longitude = ((x + 0.5) / SKY_TEXTURE_WIDTH) * Math.PI * 2 - Math.PI;
+      const dot =
+        cosLat * Math.sin(longitude) * keyX + sinLat * keyY + cosLat * Math.cos(longitude) * keyZ;
+      let key = 0;
+      if (dot > cosRadius) {
+        key = SKY_KEY_INTENSITY * Math.pow((dot - cosRadius) / (1 - cosRadius), SKY_KEY_FALLOFF);
+      }
+      const offset = (y * SKY_TEXTURE_WIDTH + x) * 4;
+      data[offset] = baseR + key;
+      data[offset + 1] = baseG + key;
+      data[offset + 2] = baseB + key;
+      data[offset + 3] = 1;
+    }
+  }
+
+  const texture = new THREE.DataTexture(
+    data,
+    SKY_TEXTURE_WIDTH,
+    SKY_TEXTURE_HEIGHT,
+    THREE.RGBAFormat,
+    THREE.FloatType,
   );
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.colorSpace = THREE.LinearSRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
@@ -879,11 +922,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
         pivot.rotation.x = tilt.currentX;
         pivot.rotation.y = tilt.currentY;
-        // Only the revealed card is corrected; the pack stage keeps its original look.
-        scene.environmentIntensity =
-          stageRef.current === 'revealed'
-            ? computeFlareAttenuation(tilt.currentX, tilt.currentY)
-            : 1;
         renderer.render(scene, camera);
 
         const tiltUnsettled =
@@ -915,15 +953,15 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const rebuildEnvironment = () => {
         if (!renderer) throw new Error('Clear-card renderer is unavailable');
-        const environment = new RoomEnvironment();
+        const skyTexture = createSkyEnvironmentTexture();
         const pmremGenerator = new THREE.PMREMGenerator(renderer);
         try {
-          const nextEnvironmentRenderTarget = pmremGenerator.fromScene(environment);
+          const nextEnvironmentRenderTarget = pmremGenerator.fromEquirectangular(skyTexture);
           environmentRenderTarget?.dispose();
           environmentRenderTarget = nextEnvironmentRenderTarget;
           scene.environment = nextEnvironmentRenderTarget.texture;
         } finally {
-          disposeObject3D(environment);
+          skyTexture.dispose();
           pmremGenerator.dispose();
         }
       };
