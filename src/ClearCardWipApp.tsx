@@ -23,10 +23,14 @@ const BREAK_SOUND_URL = `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/sounds/unbox1p.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
 const CARD_MODEL_OPTIONS = [
-  { label: 'Sample', url: '/clear_card_sample.glb' },
-  { label: 'Sample 15', url: '/clear_card_sample_15.glb' },
-  { label: 'Sample 17', url: '/clear_card_sample_17.glb' },
-  { label: 'Sample 19', url: '/clear_card_sample_19.glb' },
+  { label: 'Card: Sample', url: '/clear_card_sample.glb' },
+  { label: 'Card: Sample 15', url: '/clear_card_sample_15.glb' },
+  { label: 'Card: Sample 17', url: '/clear_card_sample_17.glb' },
+  { label: 'Card: Sample 19', url: '/clear_card_sample_19.glb' },
+] as const;
+const PACK_MODEL_OPTIONS = [
+  { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
+  { label: 'Pack: Sample 1', url: '/clear_pack_sample_1.glb' },
 ] as const;
 
 function isWipShortcutTarget(target: EventTarget | null) {
@@ -45,6 +49,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[1].url);
+  const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[0].url);
   const [cardRevealed, setCardRevealed] = useState(false);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
@@ -68,6 +73,15 @@ export default function ClearCardWipApp() {
       setCardModelUrl(nextModelUrl);
     },
     [cardModelUrl],
+  );
+  const handlePackModelChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextModelUrl = event.currentTarget.value;
+      if (nextModelUrl === packModelUrl) return;
+      setStatus('loading');
+      setPackModelUrl(nextModelUrl);
+    },
+    [packModelUrl],
   );
 
   const ensureSoundReady = useCallback(() => {
@@ -162,10 +176,11 @@ export default function ClearCardWipApp() {
         >
           <Suspense fallback={null}>
             <ClearCardThreeViewer
-              key={cardModelUrl}
+              key={`${cardModelUrl}:${packModelUrl}`}
               ref={viewerRef}
               ready={ready}
               cardModelUrl={cardModelUrl}
+              packModelUrl={packModelUrl}
               initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
               onPackHit={handlePackHit}
@@ -182,18 +197,32 @@ export default function ClearCardWipApp() {
           ) : null}
         </div>
       </div>
-      <select
-        className="clear-card-wip__model-picker"
-        aria-label="Card model"
-        value={cardModelUrl}
-        onChange={handleModelChange}
-      >
-        {CARD_MODEL_OPTIONS.map((option) => (
-          <option key={option.url} value={option.url}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      <div className="clear-card-wip__model-pickers">
+        <select
+          className="clear-card-wip__model-picker"
+          aria-label="Card model"
+          value={cardModelUrl}
+          onChange={handleModelChange}
+        >
+          {CARD_MODEL_OPTIONS.map((option) => (
+            <option key={option.url} value={option.url}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="clear-card-wip__model-picker"
+          aria-label="Pack model"
+          value={packModelUrl}
+          onChange={handlePackModelChange}
+        >
+          {PACK_MODEL_OPTIONS.map((option) => (
+            <option key={option.url} value={option.url}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
       <button
         type="button"
         className="wip-close-btn"

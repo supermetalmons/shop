@@ -11,7 +11,6 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const CLEAR_PACK_MODEL_URL = '/clear_pack_sample.glb';
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
@@ -43,7 +42,12 @@ const SHARD_GRAVITY_FACTOR = 9;
 const MAX_SPARKLES = 64;
 const HIT_SPARKLE_COUNT = 12;
 const BREAK_SPARKLE_COUNT = 28;
-const TRANSMISSION_BACKDROP_ALPHA = 0.72;
+const CARD_TRANSMISSION_BACKDROP_COLOR = 0x191919;
+const CARD_TRANSMISSION_BACKDROP_ALPHA = 0.72;
+const PACK_TRANSMISSION_BACKDROP_COLOR = 0x777777;
+const PACK_TRANSMISSION_BACKDROP_ALPHA = 0.62;
+const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
+const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
 
@@ -57,6 +61,7 @@ export type ClearCardThreeViewerHandle = {
 type ClearCardThreeViewerProps = {
   ready: boolean;
   cardModelUrl: string;
+  packModelUrl: string;
   initiallyRevealed: boolean;
   onStatusChange: (status: ViewerStatus) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -233,7 +238,15 @@ function createSparkleTexture(): THREE.CanvasTexture | null {
 
 const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThreeViewerProps>(
   function ClearCardThreeViewer(
-    { ready, cardModelUrl, initiallyRevealed, onStatusChange, onPackHit, onPackBreak },
+    {
+      ready,
+      cardModelUrl,
+      packModelUrl,
+      initiallyRevealed,
+      onStatusChange,
+      onPackHit,
+      onPackBreak,
+    },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -339,6 +352,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let resize: (() => void) | null = null;
 
       let packMesh: THREE.Mesh | null = null;
+      const packMeshes: THREE.Mesh[] = [];
+      let packUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
       let hitCount = 0;
       let breakElapsed = 0;
@@ -370,8 +385,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       camera.add(ambientLight, directionalLight);
       const transmissionBackdropMaterial = new THREE.ShaderMaterial({
         uniforms: {
-          backdropColor: { value: new THREE.Color(0x191919) },
-          backdropAlpha: { value: TRANSMISSION_BACKDROP_ALPHA },
+          backdropColor: { value: new THREE.Color(CARD_TRANSMISSION_BACKDROP_COLOR) },
+          backdropAlpha: { value: CARD_TRANSMISSION_BACKDROP_ALPHA },
         },
         vertexShader: `
           void main() {
@@ -427,6 +442,15 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const setStage = (nextStage: UnboxStage) => {
         stageRef.current = nextStage;
+        const usePackBackdrop = nextStage === 'pack' && packUsesTransmission;
+        transmissionBackdropMaterial.uniforms.backdropColor.value.setHex(
+          usePackBackdrop
+            ? PACK_TRANSMISSION_BACKDROP_COLOR
+            : CARD_TRANSMISSION_BACKDROP_COLOR,
+        );
+        transmissionBackdropMaterial.uniforms.backdropAlpha.value = usePackBackdrop
+          ? PACK_TRANSMISSION_BACKDROP_ALPHA
+          : CARD_TRANSMISSION_BACKDROP_ALPHA;
       };
       setStage('pack');
 
@@ -612,8 +636,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           pointerNdc.set(0, 0);
         }
         raycaster.setFromCamera(pointerNdc, camera);
-        if (packMesh) {
-          const intersections = raycaster.intersectObject(packMesh, false);
+        if (packMeshes.length > 0) {
+          const intersections = raycaster.intersectObjects(packMeshes, false);
           if (intersections.length > 0) {
             return targetPoint.copy(intersections[0].point);
           }
@@ -629,7 +653,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const finishBreakInstant = () => {
         packGroup.visible = false;
-        if (packMesh) packMesh.visible = false;
+        packMeshes.forEach((mesh) => {
+          mesh.visible = false;
+        });
         if (fragmentsGroup) fragmentsGroup.visible = false;
         cardGroup.visible = true;
         cardGroup.scale.setScalar(1);
@@ -653,7 +679,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         resetTilt();
         punchSpring.target = 1;
         armShards();
-        packMesh.visible = false;
+        packMeshes.forEach((mesh) => {
+          mesh.visible = false;
+        });
         fragmentsGroup.visible = true;
         cardGroup.visible = true;
         cardSpring.current = CARD_REVEAL_START_SCALE;
@@ -693,7 +721,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         breakElapsed = 0;
         packGroup.visible = true;
         packGroup.scale.setScalar(1);
-        if (packMesh) packMesh.visible = true;
+        packMeshes.forEach((mesh) => {
+          mesh.visible = true;
+        });
         if (fragmentsGroup) fragmentsGroup.visible = false;
         shards.forEach((shard) => {
           shard.holder.position.copy(shard.home);
@@ -959,7 +989,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         modelLoader.setDRACOLoader(dracoLoader);
 
         void Promise.all([
-          modelLoader.loadAsync(CLEAR_PACK_MODEL_URL),
+          modelLoader.loadAsync(packModelUrl),
           modelLoader.loadAsync(cardModelUrl),
         ])
           .then(([packGltf, cardGltf]) => {
@@ -973,7 +1003,33 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             centerObject(packRoot, packSize);
             packGroup.add(packRoot);
             packRoot.traverse((object) => {
-              if (!packMesh && object instanceof THREE.Mesh) packMesh = object;
+              if (!(object instanceof THREE.Mesh)) return;
+              packMeshes.push(object);
+              const materials = Array.isArray(object.material) ? object.material : [object.material];
+              if (
+                materials.some(
+                  (material) =>
+                    material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
+                )
+              ) {
+                packUsesTransmission = true;
+              }
+            });
+            setStage(stageRef.current);
+            if (packUsesTransmission) {
+              packGroup.rotation.set(
+                TRANSMISSIVE_PACK_ROTATION_X,
+                TRANSMISSIVE_PACK_ROTATION_Y,
+                0,
+              );
+            }
+            let largestMeshSizeSq = -1;
+            packMeshes.forEach((mesh) => {
+              const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+              const meshSizeSq = meshSize.lengthSq();
+              if (meshSizeSq <= largestMeshSizeSq) return;
+              largestMeshSizeSq = meshSizeSq;
+              packMesh = mesh;
             });
             if (packMesh) buildPackShards(packMesh);
 
@@ -1043,7 +1099,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         renderer?.dispose();
         renderer?.forceContextLoss();
       };
-    }, [cardModelUrl, onStatusChange]);
+    }, [cardModelUrl, onStatusChange, packModelUrl]);
 
     return (
       <canvas
