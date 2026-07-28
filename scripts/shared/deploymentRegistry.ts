@@ -19,6 +19,7 @@ import {
   getDeploymentDrop,
   type DeploymentMediaMapConfig,
   type DeploymentRegistryDrop,
+  type ReceiptPoolDeployment,
 } from '../../functions/src/shared/deploymentRegistry.ts';
 import {
   normalizeMediaMapConfig,
@@ -49,9 +50,11 @@ import {
   normalizeDropBase,
   normalizeDropFamily,
   normalizeDropId,
+  normalizeDropSalesMode,
   normalizeMetadataPathFormat,
   normalizeMintSelectionConfig,
   type DropFamily,
+  type DropSalesMode,
   type DropPaths,
   type MetadataPathFormat,
   type MintSelectionConfig,
@@ -71,14 +74,17 @@ export {
   normalizeDropBase,
   normalizeDropFamily,
   normalizeDropId,
+  normalizeDropSalesMode,
   resolveStripeCheckoutEnabledForDropFamily,
   resolveStripeProductTaxCodeForDropFamily,
 };
 export type {
   DropFamily,
+  DropSalesMode,
   DropPaths,
   MetadataPathFormat,
   MintSelectionConfig,
+  ReceiptPoolDeployment,
   SolanaCluster,
   StripeCheckoutEnabledResolution,
 };
@@ -91,7 +97,10 @@ export type MintSelectionConfigSerialized = MintSelectionConfig;
 
 export type FrontendDropConfigSerialized = Omit<
   DeploymentRegistryDrop,
-  'stripeProductTaxCode' | 'receiptsMerkleTree' | 'deliveryLookupTable'
+  | 'stripeProductTaxCode'
+  | 'receiptsTreeMaxDepth'
+  | 'receiptsTreeCanopyDepth'
+  | 'deliveryLookupTable'
 >;
 
 export type FunctionsDropConfigSerialized = DeploymentRegistryDrop;
@@ -108,6 +117,7 @@ export type FunctionsDropRegistry = {
 
 export type DeploymentDropRegistry = {
   drops: Record<string, DeploymentDropConfigSerialized>;
+  receiptPools: Record<string, ReceiptPoolDeployment>;
   sourceContent: string;
 };
 
@@ -267,13 +277,14 @@ export function requireDropFamily(
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'drifella_binder' ||
+    normalized === 'card_nft_binder' ||
     normalized === 'drifella_shirt' ||
     normalized === 'card_nft_2'
   ) {
     return normalized;
   }
   throw new Error(
-    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, drifella_binder, drifella_shirt, or card_nft_2)`,
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, drifella_binder, card_nft_binder, drifella_shirt, or card_nft_2)`,
   );
 }
 
@@ -356,6 +367,13 @@ function normalizeDeploymentDropForRegistry(
   const mintSelection = normalizeMintSelectionConfig(
     object.mintSelection as MintSelectionConfig | undefined,
   );
+  const displayName = asTrimmedString(object.displayName);
+  const salesMode = normalizeDropSalesMode(object.salesMode);
+  const hasExplicitSalesMode = Object.prototype.hasOwnProperty.call(
+    object,
+    'salesMode',
+  );
+  const receiptPoolId = asTrimmedString(object.receiptPoolId).toLowerCase();
   const boxMinterConfigPda = asTrimmedString(object.boxMinterConfigPda);
   const secondaryMarketHref =
     asTrimmedString(object.secondaryMarketHref) ||
@@ -375,6 +393,9 @@ function normalizeDeploymentDropForRegistry(
     dropId,
     dropFamily,
     collectionName: asTrimmedString(object.collectionName) || dropId,
+    ...(displayName ? { displayName } : {}),
+    ...(hasExplicitSalesMode ? { salesMode } : {}),
+    ...(receiptPoolId ? { receiptPoolId } : {}),
     metadataBase: normalizeDropBase(
       asTrimmedString(object.metadataBase) ||
         asTrimmedString(
@@ -416,6 +437,20 @@ function normalizeDeploymentDropForRegistry(
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     collectionMint: asTrimmedString(object.collectionMint),
     receiptsMerkleTree: asTrimmedString(object.receiptsMerkleTree),
+    ...(Number.isInteger(object.receiptsTreeMaxDepth)
+      ? {
+          receiptsTreeMaxDepth: Math.floor(
+            asFiniteNumber(object.receiptsTreeMaxDepth),
+          ),
+        }
+      : {}),
+    ...(Number.isInteger(object.receiptsTreeCanopyDepth)
+      ? {
+          receiptsTreeCanopyDepth: Math.floor(
+            asFiniteNumber(object.receiptsTreeCanopyDepth),
+          ),
+        }
+      : {}),
     deliveryLookupTable: asTrimmedString(object.deliveryLookupTable),
   };
 }
@@ -426,7 +461,8 @@ function projectFrontendSerialized(
   const {
     secondaryMarketHref,
     stripeProductTaxCode: _stripeProductTaxCode,
-    receiptsMerkleTree: _receiptsMerkleTree,
+    receiptsTreeMaxDepth: _receiptsTreeMaxDepth,
+    receiptsTreeCanopyDepth: _receiptsTreeCanopyDepth,
     deliveryLookupTable: _deliveryLookupTable,
     ...frontend
   } = drop;
@@ -448,6 +484,12 @@ function projectFunctionsSerialized(
       ? { stripeProductTaxCode: drop.stripeProductTaxCode }
       : {}),
     receiptsMerkleTree: drop.receiptsMerkleTree,
+    ...(drop.receiptsTreeMaxDepth != null
+      ? { receiptsTreeMaxDepth: drop.receiptsTreeMaxDepth }
+      : {}),
+    ...(drop.receiptsTreeCanopyDepth != null
+      ? { receiptsTreeCanopyDepth: drop.receiptsTreeCanopyDepth }
+      : {}),
     deliveryLookupTable: drop.deliveryLookupTable,
   };
 }
@@ -504,6 +546,206 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeReceiptPoolDeployment(
+  raw: Record<string, unknown>,
+): ReceiptPoolDeployment {
+  return {
+    solanaCluster: asSolanaCluster(raw.solanaCluster),
+    receiptPoolId: asTrimmedString(raw.receiptPoolId).toLowerCase(),
+    collectionMint: asTrimmedString(raw.collectionMint),
+    receiptsMerkleTree: asTrimmedString(raw.receiptsMerkleTree),
+    authority: asTrimmedString(raw.authority),
+    collectionMetadataUri: asTrimmedString(raw.collectionMetadataUri),
+    collectionName: asTrimmedString(raw.collectionName),
+    collectionSymbol: asTrimmedString(raw.collectionSymbol),
+    royaltiesBasisPoints: Math.floor(
+      asFiniteNumber(raw.royaltiesBasisPoints),
+    ),
+    royaltiesRecipient: asTrimmedString(raw.royaltiesRecipient),
+    receiptsTreeMaxDepth: Math.floor(
+      asFiniteNumber(raw.receiptsTreeMaxDepth),
+    ),
+    receiptsTreeMaxBufferSize: Math.floor(
+      asFiniteNumber(raw.receiptsTreeMaxBufferSize),
+    ),
+    receiptsTreeCanopyDepth: Math.floor(
+      asFiniteNumber(raw.receiptsTreeCanopyDepth),
+    ),
+  };
+}
+
+function assertValidReceiptPoolDeployment(args: {
+  registryKey: string;
+  value: unknown;
+  filePath: string;
+}): asserts args is {
+  registryKey: string;
+  value: Record<string, unknown>;
+  filePath: string;
+} {
+  const invalid = (reason: string): never => {
+    throw new Error(
+      `Invalid receipt pool deployment ${args.registryKey}: ${reason}: ${args.filePath}`,
+    );
+  };
+  if (!isPlainRecord(args.value)) invalid('expected an object');
+  const row = args.value;
+  const allowed = new Set([
+    'solanaCluster',
+    'receiptPoolId',
+    'collectionMint',
+    'receiptsMerkleTree',
+    'authority',
+    'collectionMetadataUri',
+    'collectionName',
+    'collectionSymbol',
+    'royaltiesBasisPoints',
+    'royaltiesRecipient',
+    'receiptsTreeMaxDepth',
+    'receiptsTreeMaxBufferSize',
+    'receiptsTreeCanopyDepth',
+  ]);
+  const unknown = Object.keys(row).find((key) => !allowed.has(key));
+  if (unknown) invalid(`unknown field ${unknown}`);
+  for (const field of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(row, field)) {
+      invalid(`${field} is required`);
+    }
+  }
+  const requireString = (field: string): string => {
+    const value = row[field];
+    if (typeof value !== 'string' || !value || value !== value.trim()) {
+      invalid(`${field} must be a non-empty trimmed string`);
+    }
+    return value;
+  };
+  const requireInteger = (
+    field: string,
+    min: number,
+    max: number,
+  ): number => {
+    const value = row[field];
+    if (
+      typeof value !== 'number' ||
+      !Number.isInteger(value) ||
+      value < min ||
+      value > max
+    ) {
+      invalid(`${field} has an invalid integer value`);
+    }
+    return value;
+  };
+  const cluster = requireString('solanaCluster');
+  if (
+    cluster !== 'devnet' &&
+    cluster !== 'testnet' &&
+    cluster !== 'mainnet-beta'
+  ) {
+    invalid('solanaCluster is unsupported');
+  }
+  const receiptPoolId = requireString('receiptPoolId');
+  if (
+    normalizeAndValidateDropId(receiptPoolId, 'receiptPoolId') !==
+    receiptPoolId
+  ) {
+    invalid('receiptPoolId must be normalized');
+  }
+  if (args.registryKey !== `${cluster}:${receiptPoolId}`) {
+    invalid('registry key must equal solanaCluster:receiptPoolId');
+  }
+  for (const field of [
+    'collectionMint',
+    'receiptsMerkleTree',
+    'authority',
+    'collectionMetadataUri',
+    'collectionName',
+    'collectionSymbol',
+    'royaltiesRecipient',
+  ]) {
+    requireString(field);
+  }
+  requireInteger('royaltiesBasisPoints', 0, 10_000);
+  const maxDepth = requireInteger('receiptsTreeMaxDepth', 1, 30);
+  requireInteger('receiptsTreeMaxBufferSize', 1, 2048);
+  const canopyDepth = requireInteger(
+    'receiptsTreeCanopyDepth',
+    0,
+    29,
+  );
+  if (canopyDepth >= maxDepth) {
+    invalid('receiptsTreeCanopyDepth must be smaller than max depth');
+  }
+}
+
+export function assertReceiptPoolDropRelations(args: {
+  drops: Record<string, DeploymentDropConfigSerialized>;
+  receiptPools: Record<string, ReceiptPoolDeployment>;
+}): void {
+  const metadataByPool = new Map<string, Map<string, string>>();
+  const poolIdsByIdentity = new Map<string, string>();
+  Object.entries(args.receiptPools).forEach(([key, pool]) => {
+    const identity =
+      `${pool.solanaCluster}:${pool.collectionMint}:${pool.receiptsMerkleTree}`;
+    const duplicate = poolIdsByIdentity.get(identity);
+    if (duplicate) {
+      throw new Error(
+        `Receipt pools ${duplicate} and ${key} use the same collection and tree`,
+      );
+    }
+    poolIdsByIdentity.set(identity, key);
+  });
+  Object.values(args.drops).forEach((drop) => {
+    const salesMode = normalizeDropSalesMode(drop.salesMode);
+    if (!drop.receiptPoolId && salesMode !== 'stripe_receipt_only') {
+      return;
+    }
+    if (!drop.receiptPoolId || salesMode !== 'stripe_receipt_only') {
+      throw new Error(
+        `Deployment registry drop ${drop.dropId} must pair receiptPoolId with salesMode=stripe_receipt_only`,
+      );
+    }
+    const key = `${drop.solanaCluster}:${drop.receiptPoolId}`;
+    const pool = args.receiptPools[key];
+    if (!pool) {
+      throw new Error(
+        `Deployment registry drop ${drop.dropId} references missing receipt pool ${key}`,
+      );
+    }
+    const mismatches = [
+      drop.collectionMint === pool.collectionMint ? '' : 'collectionMint',
+      drop.collectionName === pool.collectionName ? '' : 'collectionName',
+      drop.symbol === pool.collectionSymbol ? '' : 'symbol',
+      drop.receiptsMerkleTree === pool.receiptsMerkleTree
+        ? ''
+        : 'receiptsMerkleTree',
+      drop.receiptsTreeMaxDepth === pool.receiptsTreeMaxDepth
+        ? ''
+        : 'receiptsTreeMaxDepth',
+      drop.receiptsTreeCanopyDepth === pool.receiptsTreeCanopyDepth
+        ? ''
+        : 'receiptsTreeCanopyDepth',
+    ].filter(Boolean);
+    if (mismatches.length) {
+      throw new Error(
+        `Deployment registry drop ${drop.dropId} does not match receipt pool ${key}: ${mismatches.join(', ')}`,
+      );
+    }
+    const normalizedMetadataBase = normalizeDropBase(drop.metadataBase);
+    const identity =
+      `${pool.solanaCluster}:${pool.collectionMint}:${pool.receiptsMerkleTree}`;
+    const seen =
+      metadataByPool.get(identity) ?? new Map<string, string>();
+    const duplicateDropId = seen.get(normalizedMetadataBase);
+    if (duplicateDropId) {
+      throw new Error(
+        `Receipt pool ${key} has duplicate metadataBase for ${duplicateDropId} and ${drop.dropId}`,
+      );
+    }
+    seen.set(normalizedMetadataBase, drop.dropId);
+    metadataByPool.set(identity, seen);
+  });
 }
 
 function assertValidCanonicalRegistryRow(args: {
@@ -615,6 +857,29 @@ function assertValidCanonicalRegistryRow(args: {
     invalid('dropFamily is unsupported');
   }
   requireString('collectionName');
+  assertOptionalString('displayName');
+  assertOptionalString('receiptPoolId');
+  if (
+    Object.prototype.hasOwnProperty.call(row, 'salesMode') &&
+    normalizeDropSalesMode(row['salesMode']) !== row['salesMode']
+  ) {
+    invalid('salesMode is unsupported or non-canonical');
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'receiptPoolId')) {
+    const receiptPoolId = requireString('receiptPoolId');
+    let normalizedReceiptPoolId: string;
+    try {
+      normalizedReceiptPoolId = normalizeAndValidateDropId(
+        receiptPoolId,
+        'receiptPoolId',
+      );
+    } catch {
+      invalid('receiptPoolId is not a safe normalized identifier');
+    }
+    if (normalizedReceiptPoolId !== receiptPoolId) {
+      invalid('receiptPoolId must be normalized');
+    }
+  }
   const metadataBase = requireString('metadataBase');
   if (normalizeAndValidateMetadataBaseInput(metadataBase) !== metadataBase) {
     invalid('metadataBase must be canonical');
@@ -652,7 +917,11 @@ function assertValidCanonicalRegistryRow(args: {
   if (maxSupply * itemsPerBox > 0xffff) {
     invalid('maxSupply and itemsPerBox exceed the supported figure ID range');
   }
-  requireNumber('maxPerTx', { integer: true, min: 1, max: 0xff });
+  const maxPerTx = requireNumber('maxPerTx', {
+    integer: true,
+    min: 1,
+    max: 0xff,
+  });
   requireString('namePrefix');
   requireString('figureNamePrefix');
   requireString('symbol');
@@ -660,6 +929,32 @@ function assertValidCanonicalRegistryRow(args: {
   requireString('collectionMint');
   requireString('receiptsMerkleTree');
   requireString('deliveryLookupTable', { allowEmpty: true });
+  if (Object.prototype.hasOwnProperty.call(row, 'receiptsTreeMaxDepth')) {
+    requireNumber('receiptsTreeMaxDepth', {
+      integer: true,
+      min: 1,
+      max: 30,
+    });
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(row, 'receiptsTreeCanopyDepth')
+  ) {
+    const canopyDepth = requireNumber('receiptsTreeCanopyDepth', {
+      integer: true,
+      min: 0,
+      max: 29,
+    });
+    const maxDepth = row['receiptsTreeMaxDepth'];
+    if (
+      typeof maxDepth !== 'number' ||
+      !Number.isInteger(maxDepth) ||
+      canopyDepth >= maxDepth
+    ) {
+      invalid(
+        'receiptsTreeCanopyDepth requires receiptsTreeMaxDepth and must be smaller',
+      );
+    }
+  }
 
   assertOptionalString('secondaryMarketHref');
   assertOptionalString('stripeProductTaxCode');
@@ -688,6 +983,52 @@ function assertValidCanonicalRegistryRow(args: {
     );
     if (!normalized || !isDeepStrictEqual(normalized, mintSelection)) {
       invalid('mintSelection is malformed or non-canonical');
+    }
+  }
+  if (
+    normalizeDropSalesMode(row['salesMode']) === 'stripe_receipt_only'
+  ) {
+    if (!requireString('displayName')) {
+      invalid('displayName is required for stripe_receipt_only');
+    }
+    if (!requireString('receiptPoolId')) {
+      invalid('receiptPoolId is required for stripe_receipt_only');
+    }
+    if (itemsPerBox !== 0) {
+      invalid('stripe_receipt_only requires itemsPerBox=0');
+    }
+    if (
+      row['priceSol'] !== 1_000_000 ||
+      row['discountPriceSol'] !== 1_000_000
+    ) {
+      invalid(
+        'stripe_receipt_only requires sentinel SOL prices of 1000000',
+      );
+    }
+    if (maxPerTx !== 1) {
+      invalid('stripe_receipt_only requires maxPerTx=1');
+    }
+    if (Object.prototype.hasOwnProperty.call(row, 'mintSelection')) {
+      invalid('stripe_receipt_only does not support mintSelection');
+    }
+    if (
+      !resolveStripeCheckoutEnabledForDropFamily(
+        row['stripeCheckoutEnabled'],
+        dropFamily as DropFamily,
+      ).enabled
+    ) {
+      invalid('stripe_receipt_only requires Stripe checkout');
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(row, 'receiptsTreeMaxDepth') ||
+      !Object.prototype.hasOwnProperty.call(
+        row,
+        'receiptsTreeCanopyDepth',
+      )
+    ) {
+      invalid(
+        'stripe_receipt_only requires receipt tree depth and canopy fields',
+      );
     }
   }
 }
@@ -764,6 +1105,29 @@ export async function readDeploymentDropRegistry(
     });
   }
 
+  const receiptPools: Record<string, ReceiptPoolDeployment> = {};
+  const receiptPoolCandidate = mod.RECEIPT_POOL_DEPLOYMENTS;
+  if (
+    receiptPoolCandidate !== undefined &&
+    !isPlainRecord(receiptPoolCandidate)
+  ) {
+    throw new Error(
+      `Canonical deployment registry RECEIPT_POOL_DEPLOYMENTS must be an object: ${filePath}`,
+    );
+  }
+  for (const [registryKey, value] of Object.entries(
+    receiptPoolCandidate ?? {},
+  )) {
+    const rowArgs = { registryKey, value, filePath };
+    assertValidReceiptPoolDeployment(rowArgs);
+    Object.defineProperty(receiptPools, registryKey, {
+      value: normalizeReceiptPoolDeployment(rowArgs.value),
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+  }
+
   // Validate the mutation boundary while the source is still unchanged. This
   // rejects a missing or malformed declaration before deploy or wipe can mutate
   // remote state without requiring rendered formatting to equal hand-written
@@ -773,7 +1137,15 @@ export async function readDeploymentDropRegistry(
     existingContent: sourceContent,
     drops,
   });
-  return { drops, sourceContent };
+  if (receiptPoolCandidate !== undefined) {
+    renderReceiptPoolDeploymentsFileFromSource({
+      filePath,
+      existingContent: sourceContent,
+      receiptPools,
+    });
+  }
+  assertReceiptPoolDropRelations({ drops, receiptPools });
+  return { drops, receiptPools, sourceContent };
 }
 
 function canonicalForceSoldOutForLegacyDropId(dropId: string): boolean {
@@ -790,9 +1162,9 @@ export async function readFrontendDropRegistry(
   if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
     Object.values(candidate as Record<string, unknown>).forEach((value) => {
       const normalized = normalizeDeploymentDropForRegistry({
-        ...(value as Record<string, unknown>),
         receiptsMerkleTree: '',
         deliveryLookupTable: '',
+        ...(value as Record<string, unknown>),
       }, {
         forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
       });
@@ -808,11 +1180,11 @@ export async function readFrontendDropRegistry(
   if (!Object.keys(drops).length) {
     const legacy = mod.FRONTEND_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
     const normalized = normalizeDeploymentDropForRegistry({
+      receiptsMerkleTree: '',
+      deliveryLookupTable: '',
       ...(legacy && typeof legacy === 'object'
         ? (legacy as Record<string, unknown>)
         : {}),
-      receiptsMerkleTree: '',
-      deliveryLookupTable: '',
     }, {
       forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
     });
@@ -948,9 +1320,20 @@ function renderDeploymentDropEntry(
     `    dropId: ${tsStringLiteral(drop.dropId)},`,
     `    dropFamily: ${tsStringLiteral(drop.dropFamily)},`,
     `    collectionName: ${tsStringLiteral(drop.collectionName)},`,
+  ];
+  if (drop.displayName) {
+    lines.push(`    displayName: ${tsStringLiteral(drop.displayName)},`);
+  }
+  if (drop.salesMode) {
+    lines.push(`    salesMode: ${tsStringLiteral(drop.salesMode)},`);
+  }
+  if (drop.receiptPoolId) {
+    lines.push(`    receiptPoolId: ${tsStringLiteral(drop.receiptPoolId)},`);
+  }
+  lines.push(
     `    metadataBase: ${tsStringLiteral(drop.metadataBase)},`,
     `    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},`,
-  ];
+  );
   const defaultMarket = defaultSecondaryMarketHref(drop.dropId);
   if (
     drop.secondaryMarketHref &&
@@ -1037,6 +1420,18 @@ function renderDeploymentDropEntry(
   lines.push(
     `    collectionMint: ${tsStringLiteral(drop.collectionMint)},`,
     `    receiptsMerkleTree: ${tsStringLiteral(drop.receiptsMerkleTree)},`,
+  );
+  if (drop.receiptsTreeMaxDepth != null) {
+    lines.push(
+      `    receiptsTreeMaxDepth: ${Math.floor(drop.receiptsTreeMaxDepth)},`,
+    );
+  }
+  if (drop.receiptsTreeCanopyDepth != null) {
+    lines.push(
+      `    receiptsTreeCanopyDepth: ${Math.floor(drop.receiptsTreeCanopyDepth)},`,
+    );
+  }
+  lines.push(
     `    deliveryLookupTable: ${tsStringLiteral(drop.deliveryLookupTable)},`,
     '  },',
   );
@@ -1077,6 +1472,50 @@ function renderDeploymentRegistrySection(args: {
     })
     .join('\n');
   return `export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
+${entries}
+};`;
+}
+
+function renderReceiptPoolDeploymentEntry(
+  registryKey: string,
+  pool: ReceiptPoolDeployment,
+): string {
+  return [
+    `  ${tsPropertyName(registryKey)}: {`,
+    `    solanaCluster: ${tsStringLiteral(pool.solanaCluster)},`,
+    `    receiptPoolId: ${tsStringLiteral(pool.receiptPoolId)},`,
+    `    collectionMint: ${tsStringLiteral(pool.collectionMint)},`,
+    `    receiptsMerkleTree: ${tsStringLiteral(pool.receiptsMerkleTree)},`,
+    `    authority: ${tsStringLiteral(pool.authority)},`,
+    `    collectionMetadataUri: ${tsStringLiteral(pool.collectionMetadataUri)},`,
+    `    collectionName: ${tsStringLiteral(pool.collectionName)},`,
+    `    collectionSymbol: ${tsStringLiteral(pool.collectionSymbol)},`,
+    `    royaltiesBasisPoints: ${Math.floor(pool.royaltiesBasisPoints)},`,
+    `    royaltiesRecipient: ${tsStringLiteral(pool.royaltiesRecipient)},`,
+    `    receiptsTreeMaxDepth: ${Math.floor(pool.receiptsTreeMaxDepth)},`,
+    `    receiptsTreeMaxBufferSize: ${Math.floor(pool.receiptsTreeMaxBufferSize)},`,
+    `    receiptsTreeCanopyDepth: ${Math.floor(pool.receiptsTreeCanopyDepth)},`,
+    '  },',
+  ].join('\n');
+}
+
+function renderReceiptPoolDeploymentsSection(args: {
+  receiptPools: Record<string, ReceiptPoolDeployment>;
+}): string {
+  const entries = Object.keys(args.receiptPools)
+    .sort((left, right) => left.localeCompare(right))
+    .map((registryKey) => {
+      const pool = args.receiptPools[registryKey];
+      const rowArgs = {
+        registryKey,
+        value: pool,
+        filePath: 'rendered deployment registry',
+      };
+      assertValidReceiptPoolDeployment(rowArgs);
+      return renderReceiptPoolDeploymentEntry(registryKey, pool);
+    })
+    .join('\n');
+  return `export const RECEIPT_POOL_DEPLOYMENTS: ReceiptPoolDeploymentsMap = {
 ${entries}
 };`;
 }
@@ -1142,6 +1581,64 @@ function replaceDeploymentDropsExport(args: {
   }${args.nextDeclaration}${
     args.existingContent.slice(bounds.end)
   }`;
+}
+
+function findUniqueReceiptPoolDeploymentsExport(args: {
+  filePath: string;
+  content: string;
+}): DeploymentDropsExportBounds {
+  const sourceFile = ts.createSourceFile(
+    args.filePath,
+    args.content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declarations = sourceFile.statements.flatMap((statement) => {
+    if (
+      !ts.isVariableStatement(statement) ||
+      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
+      statement.declarationList.declarations.length !== 1 ||
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    ) {
+      return [];
+    }
+    return statement.declarationList.declarations
+      .filter(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'RECEIPT_POOL_DEPLOYMENTS',
+      )
+      .map(() => statement);
+  });
+  const declaration = declarations[0];
+  if (declarations.length !== 1) {
+    throw new Error(
+      `Canonical deployment registry must contain exactly one top-level exported const RECEIPT_POOL_DEPLOYMENTS declaration: ${args.filePath}`,
+    );
+  }
+  return {
+    start: declaration.getStart(sourceFile),
+    end: declaration.end,
+  };
+}
+
+export function renderReceiptPoolDeploymentsFileFromSource(args: {
+  filePath: string;
+  existingContent: string;
+  receiptPools: Record<string, ReceiptPoolDeployment>;
+}): string {
+  const bounds = findUniqueReceiptPoolDeploymentsExport({
+    filePath: args.filePath,
+    content: args.existingContent,
+  });
+  const nextDeclaration = renderReceiptPoolDeploymentsSection({
+    receiptPools: args.receiptPools,
+  });
+  const next = `${args.existingContent.slice(0, bounds.start)}${nextDeclaration}${args.existingContent.slice(bounds.end)}`;
+  return next.endsWith('\n') ? next : `${next}\n`;
 }
 
 function canonicalRegistryTemplatePath(): string {

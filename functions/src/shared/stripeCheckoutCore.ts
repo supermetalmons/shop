@@ -1,10 +1,11 @@
 import type {
+  DropSalesMode,
   DropFamily,
   SolanaCluster,
 } from './deploymentCore.js';
 
 export type StripeCheckoutMode = 'test' | 'live';
-export type StripeCheckoutKind = 'size_variant' | 'standard_pack';
+export type StripeCheckoutKind = 'size_variant' | 'standard_pack' | 'receipt_only';
 
 export type StripeCheckoutModeDropSource = {
   stripeCheckoutEnabled?: unknown;
@@ -13,6 +14,7 @@ export type StripeCheckoutModeDropSource = {
 
 export type StripeCheckoutKindSource = {
   itemsPerBox?: unknown;
+  salesMode?: DropSalesMode | unknown;
   mintSelection?: {
     kind?: unknown;
   } | null;
@@ -114,9 +116,27 @@ export function classifyStripeCheckoutKind(
 ): StripeCheckoutKind | null {
   if (!source) return null;
   const itemsPerBox = Math.floor(Number(source.itemsPerBox));
+  const salesMode =
+    source.salesMode === 'stripe_receipt_only'
+      ? 'stripe_receipt_only'
+      : 'standard';
+  if (salesMode === 'stripe_receipt_only') {
+    return itemsPerBox === 0 && !source.mintSelection
+      ? 'receipt_only'
+      : null;
+  }
   if (itemsPerBox === 0 && source.mintSelection?.kind === 'size') return 'size_variant';
   if (itemsPerBox > 0 && !source.mintSelection) return 'standard_pack';
   return null;
+}
+
+export function assertStripeCheckoutQuantityForKind(
+  checkoutKind: StripeCheckoutKind,
+  quantity: number,
+): void {
+  if (checkoutKind === 'receipt_only' && quantity !== 1) {
+    throw new Error('Stripe receipt-only checkout quantity must be exactly 1.');
+  }
 }
 
 export function normalizeStripeUnitAmountCents(value: unknown): number | null {

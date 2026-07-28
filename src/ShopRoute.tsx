@@ -9,7 +9,7 @@ import { canRestoreFocus, focusFirstControl } from './lib/focusTrap';
 const CardNft2WipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
 
-export type ShopWipExperience = 'card_nft_2' | 'clear_cards';
+type ShopWipExperience = 'card_nft_2' | 'clear_cards';
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;

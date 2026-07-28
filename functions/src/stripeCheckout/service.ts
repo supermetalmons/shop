@@ -13,6 +13,7 @@ import {
 import type Stripe from 'stripe';
 import { z } from 'zod';
 import type { MintSelectionConfig, SolanaCluster } from '../config/deployment.js';
+import type { DropSalesMode } from '../shared/deploymentCore.js';
 import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
 import { countStripeIrlPackStatus, type PackStatusDropRuntime } from '../packStatus.js';
 import {
@@ -63,6 +64,7 @@ import {
   STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
+  assertStripeCheckoutQuantityForKind,
   classifyStripeCheckoutKind,
   normalizeStripeUnitAmountCents,
   resolveStripeCheckoutUnitAmountCents,
@@ -184,8 +186,10 @@ export type StripeCheckoutDropRuntime = {
   receiptsMerkleTreeStr?: string;
   config: {
     collectionName?: string;
+    displayName?: string;
     namePrefix?: string;
     mintSelection?: MintSelectionConfig;
+    salesMode?: DropSalesMode;
     stripeCheckoutEnabled?: boolean;
     stripeLiveUnitAmountCents?: number;
     stripeProductTaxCode?: string;
@@ -582,11 +586,12 @@ export function stripeCheckoutKindForDrop(dropRuntime: StripeCheckoutDropRuntime
   const checkoutKind = classifyStripeCheckoutKind({
     itemsPerBox: dropRuntime.itemsPerBox,
     mintSelection: dropRuntime.config.mintSelection,
+    salesMode: dropRuntime.config.salesMode,
   });
   if (checkoutKind) return checkoutKind;
   throw new HttpsError(
     'failed-precondition',
-    'Stripe checkout is only enabled for direct-delivery size drops or standard pack drops.',
+    'Stripe checkout is only enabled for direct-delivery size drops, receipt-only drops, or standard pack drops.',
   );
 }
 
@@ -596,7 +601,7 @@ function normalizeStripeCheckoutVariantKey(
   checkoutKind: StripeCheckoutKind,
 ): string | undefined {
   const raw = String(rawVariantKey || '').trim();
-  if (checkoutKind === 'standard_pack') {
+  if (checkoutKind !== 'size_variant') {
     if (raw) throw new HttpsError('invalid-argument', 'variantKey is only supported for size Stripe checkout.');
     return undefined;
   }
@@ -612,7 +617,11 @@ function itemNameWithCollectionCasing(itemName: string, collectionSuffix: string
 }
 
 function stripeCheckoutBaseProductName(dropRuntime: StripeCheckoutDropRuntime): string {
-  const collectionName = String(dropRuntime.config.collectionName || dropRuntime.dropId).trim();
+  const collectionName = String(
+    dropRuntime.config.displayName ||
+    dropRuntime.config.collectionName ||
+    dropRuntime.dropId,
+  ).trim();
   const itemName = String(dropRuntime.config.namePrefix || 'item').trim();
   if (!itemName) return collectionName;
 
@@ -1853,6 +1862,7 @@ export async function createStripeCheckoutSessionForRequest<
   let quantity: number;
   try {
     quantity = normalizeStripeCheckoutQuantity(rawQuantity);
+    assertStripeCheckoutQuantityForKind(checkoutKind, quantity);
   } catch (err) {
     throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
   }

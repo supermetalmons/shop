@@ -4,6 +4,12 @@ import { fetchMintStatsFromProgram } from '../lib/boxMinter';
 import { MintStats } from '../types';
 import type { FrontendDeploymentConfig } from '../config/deployment';
 
+export function shouldFetchMintProgress(
+  dropConfig: Pick<FrontendDeploymentConfig, 'forceSoldOut' | 'salesMode'> | null | undefined,
+): boolean {
+  return Boolean(dropConfig && !dropConfig.forceSoldOut);
+}
+
 export function useMintProgress(
   connection: Connection | null,
   dropConfig:

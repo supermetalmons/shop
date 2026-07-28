@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_NFT_2_PACK_BASE_URL } from '../src/config/dropMediaDefaults.ts';
-import { fetchInventory } from '../src/lib/api.ts';
+import {
+  fetchInventory,
+  listUniqueInventoryCollectionScopes,
+  resolveInventoryAssetDropId,
+  type InventoryDropResolutionCandidate,
+} from '../src/lib/api.ts';
 
 const CARD_NFT_2_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
 const LITTLE_SWAG_BOXES_COLLECTION = '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr';
+const SHARED_RECEIPTS_COLLECTION = 'SharedReceiptCollection11111111111111111111111';
+const SHARED_RECEIPTS_TREE = 'SharedReceiptTree111111111111111111111111111111';
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
 type SearchAssetsParams = {
@@ -115,6 +122,162 @@ function unknownWalletAsset(index: number) {
     },
   };
 }
+
+test('shared receipt collections resolve drops by metadata base and share one query scope', () => {
+  const candidates: InventoryDropResolutionCandidate[] = [
+    {
+      dropId: 'card_nft_binder',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: SHARED_RECEIPTS_COLLECTION,
+      receiptsMerkleTree: SHARED_RECEIPTS_TREE,
+      metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
+      receiptPoolId: 'mons_shop_receipts',
+      maxSupply: 15,
+    },
+    {
+      dropId: 'future_receipts_drop',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: SHARED_RECEIPTS_COLLECTION,
+      receiptsMerkleTree: SHARED_RECEIPTS_TREE,
+      metadataBase: 'https://cdn.lil.org/nft/future_receipts_drop/json',
+      receiptPoolId: 'mons_shop_receipts',
+      maxSupply: 8,
+    },
+    {
+      dropId: 'card_nft_binder_devnet',
+      solanaCluster: 'devnet',
+      collectionMint: SHARED_RECEIPTS_COLLECTION,
+      receiptsMerkleTree: SHARED_RECEIPTS_TREE,
+      metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
+      receiptPoolId: 'mons_shop_receipts',
+      maxSupply: 15,
+    },
+  ];
+  const binderAsset = {
+    id: 'binder-receipt',
+    grouping: [{ group_key: 'collection', group_value: SHARED_RECEIPTS_COLLECTION }],
+    compression: { tree: SHARED_RECEIPTS_TREE },
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb3.json',
+    },
+  };
+  const futureAsset = {
+    id: 'future-receipt',
+    grouping: [{ group_key: 'collection', group_value: SHARED_RECEIPTS_COLLECTION }],
+    compression: { tree: SHARED_RECEIPTS_TREE },
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/future_receipts_drop/json/rb2.json',
+    },
+  };
+  const unknownAsset = {
+    id: 'unknown-receipt',
+    grouping: [{ group_key: 'collection', group_value: SHARED_RECEIPTS_COLLECTION }],
+    compression: { tree: SHARED_RECEIPTS_TREE },
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/unknown_receipts_drop/json/rb1.json',
+    },
+  };
+  const wrongKindAsset = {
+    ...binderAsset,
+    id: 'binder-box',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/b3.json',
+    },
+  };
+  const outOfRangeAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-out-of-range',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb16.json',
+    },
+  };
+  const nonCanonicalIdAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-leading-zero',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb03.json',
+    },
+  };
+  const wrongTreeAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-wrong-tree',
+    compression: { tree: 'WrongReceiptTree1111111111111111111111111111111' },
+  };
+  const missingTreeAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-missing-tree',
+    compression: undefined,
+  };
+  const uppercaseUriAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-uppercase-uri',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/RB3.JSON',
+    },
+  };
+  const legacyUriAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-legacy-uri',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/json/receipts/boxes/3.json',
+    },
+  };
+  const queryUriAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-query-uri',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb3.json?v=1',
+    },
+  };
+  const fragmentUriAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-fragment-uri',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb3.json#receipt',
+    },
+  };
+
+  assert.equal(
+    resolveInventoryAssetDropId(binderAsset, candidates, 'mainnet-beta'),
+    'card_nft_binder',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(futureAsset, candidates, 'mainnet-beta'),
+    'future_receipts_drop',
+  );
+  assert.equal(resolveInventoryAssetDropId(unknownAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(wrongKindAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(outOfRangeAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(nonCanonicalIdAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(wrongTreeAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(missingTreeAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(uppercaseUriAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(legacyUriAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(queryUriAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(resolveInventoryAssetDropId(fragmentUriAsset, candidates, 'mainnet-beta'), null);
+  assert.equal(
+    resolveInventoryAssetDropId(
+      { ...unknownAsset, content: {} },
+      candidates,
+      'mainnet-beta',
+    ),
+    null,
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(binderAsset, [candidates[0]], 'mainnet-beta'),
+    'card_nft_binder',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(unknownAsset, [candidates[0]], 'mainnet-beta'),
+    null,
+  );
+
+  const scopes = listUniqueInventoryCollectionScopes(candidates);
+  assert.deepEqual(
+    scopes.map((drop) => drop.dropId),
+    ['card_nft_binder', 'card_nft_binder_devnet'],
+  );
+});
 
 test('fetchInventory requests unburned Helius assets and includes paginated boxes', async () => {
   await withMockedFetch(async (body) => {

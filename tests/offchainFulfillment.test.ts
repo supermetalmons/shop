@@ -1633,7 +1633,7 @@ test('stripeApiModeForCluster preserves supported modes and exact unsupported-cl
   );
 });
 
-test('stripeCheckoutKindForDrop accepts size variants and standard packs only', () => {
+test('stripeCheckoutKindForDrop accepts size variants, standard packs, and explicit receipt-only drops', () => {
   assert.equal(
     stripeCheckoutKindForDrop({
       dropId: 'little_swag_hoodies_devnet',
@@ -1652,6 +1652,14 @@ test('stripeCheckoutKindForDrop accepts size variants and standard packs only', 
     } as any),
     'standard_pack',
   );
+  assert.equal(
+    stripeCheckoutKindForDrop({
+      dropId: 'card_nft_binder_devnet',
+      itemsPerBox: 0,
+      config: { salesMode: 'stripe_receipt_only' },
+    } as any),
+    'receipt_only',
+  );
   assert.throws(
     () =>
       stripeCheckoutKindForDrop({
@@ -1659,7 +1667,7 @@ test('stripeCheckoutKindForDrop accepts size variants and standard packs only', 
         itemsPerBox: 0,
         config: {},
       } as any),
-    /direct-delivery size drops or standard pack drops/,
+    /receipt-only drops/,
   );
   assert.throws(
     () =>
@@ -1670,11 +1678,26 @@ test('stripeCheckoutKindForDrop accepts size variants and standard packs only', 
           mintSelection: { kind: 'size', options: [{ key: 'L' }] },
         },
       } as any),
-    /direct-delivery size drops or standard pack drops/,
+    /receipt-only drops/,
   );
 });
 
 test('stripeCheckoutProductName uses a singular, non-duplicated item label', () => {
+  assert.equal(
+    stripeCheckoutProductName(
+      {
+        dropId: 'card_nft_binder',
+        config: {
+          collectionName: 'Mons Shop Receipts',
+          displayName: 'Card NFT Binder',
+          namePrefix: 'binder',
+        },
+      } as any,
+      undefined,
+      'live',
+    ),
+    'Card NFT Binder',
+  );
   assert.equal(
     stripeCheckoutProductName(
       {

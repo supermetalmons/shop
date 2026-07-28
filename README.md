@@ -102,13 +102,17 @@ subsequent application rollbacks must use an explicit Worker version.
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
-- Stripe Checkout is enabled per drop with `stripeCheckoutEnabled`; `card_nft_2` drops default to enabled unless explicitly opted out. Enabled drops must also configure a Stripe product tax code (`stripeProductTaxCode`), and `card_nft_2` drops default to the tangible-goods tax code. Live enabled drops additionally require committed `stripeLiveUnitAmountCents`. Publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
+- Stripe Checkout is enabled per drop with `stripeCheckoutEnabled`; `card_nft_2` drops default to enabled unless explicitly opted out. Enabled drops must also configure a Stripe product tax code (`stripeProductTaxCode`), and `card_nft_2` drops default to the tangible-goods tax code. Live enabled drops additionally require committed `stripeLiveUnitAmountCents`. `salesMode: 'stripe_receipt_only'` removes the SOL mint surface and requires a reusable receipt pool, `itemsPerBox: 0`, and no mint selection. Publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
 
 Everything else is committed in `functions/src/shared/deploymentRegistry.ts` (auto-updated by the deploy script). `functions/src/config/deployment.ts` projects the server-safe Functions shape from that canonical registry.
 
 Stripe test Checkout only performs a pre-payment availability check; it intentionally does not reserve on-chain supply before payment. If supply sells out before webhook fulfillment, the fulfillment queue/session is marked failed with `manualRefundReviewRequired` and the Stripe `sessionId`/`stripeCheckoutSessionId` can be used for a manual refund in Stripe.
 
 ### On-chain + address helpers
+- Provision a reusable receipt-only collection and Bubblegum V2 tree:
+  - `npm run deploy-receipt-pool -- <poolId> <devnet|mainnet-beta>`
+  - Receipt pools are cluster-scoped. The same logical pool id resolves to separate devnet and mainnet collection/tree addresses.
+  - Pool metadata, royalties, authority, and tree dimensions are fixed by `scripts/shared/receiptPoolConfig.ts`. Existing pools are validated read-only and are never rewritten for an individual drop.
 - Deploy box minter (program + MPL Core collection + config):
   - Prereqs: Solana CLI + Anchor CLI installed; a deploy wallet funded.
   - One-command deploy:
@@ -117,12 +121,17 @@ Stripe test Checkout only performs a pre-payment availability check; it intentio
     - To change cluster/RPC, pin an existing MPL-Core collection, or choose whether to reuse the shared program id, edit `NEW_DROP.deploy` in that drop's config file.
     - `NEW_DROP.onchain.metadataBase` accepts either `https://...`, `ipfs://...`, or a raw IPFS CID like `bafy...` (raw CIDs are normalized to canonical `ipfs://CID`).
     - The first compact-metadata drop in a lineage must set `NEW_DROP.deploy.reuseProgramId = false` so existing legacy `/json/...` drops keep their current program binary. Later compact drops can reuse that fresh lineage with `reuseProgramId = true`; set `reuseProgramIdFromDropId` when you want to pin reuse to a specific deployed drop's program id. Reused drops skip program build/deploy entirely; use `npm run upgrade-onchain -- <dropId>` for intentional program upgrades.
-    - Fresh MPL-Core collections use the deployer/admin wallet as root update authority for marketplace verification, with the program config PDA added as an UpdateDelegate for on-chain mint/reveal CPIs.
+    - Fresh dedicated MPL-Core collections use the deployer/admin wallet as root update authority for marketplace verification, with the program config PDA added as an UpdateDelegate for on-chain mint/reveal CPIs.
+    - Receipt-only pooled drops deliberately do not add their config PDA as a collection delegate. Admin receipt delivery remains authorized by the fixed pool authority while direct SOL mint attempts fail atomically.
   - Updates one tracked registry:
     - `functions/src/shared/deploymentRegistry.ts` (canonical secret-free superset)
     - `src/config/deployment.ts` and `functions/src/config/deployment.ts` are compatibility projections and are not rewritten per drop.
   - Prints remaining required config keys (does **not** print `COSIGNER_SECRET`).
 - Single-master-key mode: the deploy/admin keypair is also the delivery treasury/vault (no separate vault keypair).
+- Card NFT Binder deployment order:
+  - Devnet: `npm run deploy-receipt-pool -- mons_shop_receipts devnet`, then `npm run deploy-all-onchain -- card_nft_binder_devnet`
+  - Mainnet after devnet acceptance: `npm run deploy-receipt-pool -- mons_shop_receipts mainnet-beta`, then `npm run deploy-all-onchain -- card_nft_binder`
+  - Deploy Functions and the web app before running `npm run start-mint -- <dropId>` as the final go-live action.
 - Upgrade an existing box minter program:
   - `npm run upgrade-onchain -- <dropId>` builds the program for the deployed program id in the canonical `functions/src/shared/deploymentRegistry.ts`, verifies the current upgrade authority, prompts for that private key, deploys the upgrade, then dumps the deployed binary to verify its hash.
   - Rehearse with the devnet drop id first, for example `npm run upgrade-onchain -- little_swag_hoodies_devnet`, then run the corresponding mainnet drop id.

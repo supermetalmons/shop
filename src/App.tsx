@@ -23,7 +23,7 @@ import { NotifyForm } from './components/NotifyForm';
 import { ClaimForm } from './components/ClaimForm';
 import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
-import { useMintProgress } from './hooks/useMintProgress';
+import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
 import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
@@ -1272,6 +1272,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   );
   const restoreHomeOnNextNavigation = useHomePageScrollRestoration(normalizedCurrentPath);
   const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
+  const routeStripeOnly = routeDrop?.salesMode === 'stripe_receipt_only';
   const upcomingDropRoute = useMemo(
     () => (routeDrop ? null : resolveUpcomingDropRouteByPath(normalizedCurrentPath)),
     [normalizedCurrentPath, routeDrop],
@@ -1462,7 +1463,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     () => (routeDrop ? discountUsedScope(routeDrop) : `${DISCOUNT_USED_STORAGE_PREFIX}:none`),
     [routeDrop],
   );
-  const shouldFetchMintStats = Boolean(routeDrop && !routeDrop.forceSoldOut);
+  const shouldFetchMintStats = shouldFetchMintProgress(routeDrop);
   const { data: mintStats, refetch: refetchStats } = useMintProgress(routeConnection, routeDrop, shouldFetchMintStats);
   const packStatusDropId = routeDrop?.dropId && supportsFrontendPackStatus(routeDrop.dropId) ? routeDrop.dropId : null;
   const packStatusDisplayLabels = packStatusDisplayLabelsForDropId(packStatusDropId || undefined);
@@ -4083,7 +4084,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     Boolean(publicKey) && !mintedOut && !walletBusy && !discountChecking && discountEligible && discountRemainingCount > 0;
 
   useEffect(() => {
-    if (!routeDrop || !routeConnection || !publicKey || mintedOut) {
+    if (!routeDrop || routeStripeOnly || !routeConnection || !publicKey || mintedOut) {
       setDiscountEligible(false);
       setDiscountRemainingCount(0);
       setDiscountChecking(false);
@@ -4129,6 +4130,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     publicKey,
     routeConnection,
     routeDrop,
+    routeStripeOnly,
   ]);
 
   const toggleSelected = (id: string) => {
@@ -4159,11 +4161,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const handleMint = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
+    const mintDrop = requireRouteDrop('mint');
+    if (mintDrop.salesMode === 'stripe_receipt_only') {
+      showToast('This drop is available through Stripe checkout only');
+      return;
+    }
     if (!publicKey) {
       setVisible(true);
       return;
     }
-    const mintDrop = requireRouteDrop('mint');
     if (!routeConnection) throw new Error('Missing route connection for mint');
     if (mintedOut || minting || discountMinting || mintActionLockRef.current) return;
     if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
@@ -4215,11 +4221,15 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const handleDiscountMint = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
+    const mintDrop = requireRouteDrop('discount mint');
+    if (mintDrop.salesMode === 'stripe_receipt_only') {
+      showToast('This drop is available through Stripe checkout only');
+      return;
+    }
     if (!publicKey) {
       setVisible(true);
       return;
     }
-    const mintDrop = requireRouteDrop('discount mint');
     if (!routeConnection) throw new Error('Missing route connection for discount mint');
     if (mintedOut || discountMinting || minting || mintActionLockRef.current) return;
     if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
@@ -6837,9 +6847,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           <MintPanel
             stats={effectiveMintStats}
             onMint={handleMint}
+            solanaMintVisible={!routeStripeOnly}
             busy={minting}
             onError={showToast}
-            title={routeDrop.collectionName}
+            title={routeDrop.displayName || routeDrop.collectionName}
             boxMedia={mintPreviewMedia}
             boxNamePrefix={routeDrop.namePrefix}
             dropId={routeDrop.dropId}
@@ -6847,9 +6858,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             discountPriceSol={routeDrop.discountPriceSol}
             maxSupply={routeDrop.maxSupply}
             maxPerTx={routeDrop.maxPerTx}
-            discountAvailable={discountAvailable}
-            discountMaxQuantity={publicKey ? discountRemainingCount : undefined}
-            onDiscountMint={handleDiscountMint}
+            discountAvailable={!routeStripeOnly && discountAvailable}
+            discountMaxQuantity={!routeStripeOnly && publicKey ? discountRemainingCount : undefined}
+            onDiscountMint={routeStripeOnly ? undefined : handleDiscountMint}
             discountBusy={discountMinting || minting || walletBusy}
             onStripePaymentClick={handleStripePayment}
             stripePaymentVisible={routeStripePaymentVisible}
@@ -7046,7 +7057,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
                 <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
                   <div className="delivery-row__head">
                     <div>
-                      <div className="delivery-row__title">{dropById.get(order.dropId)?.collectionName || order.dropId}</div>
+                      <div className="delivery-row__title">
+                        {dropById.get(order.dropId)?.displayName || dropById.get(order.dropId)?.collectionName || order.dropId}
+                      </div>
                       <div className="muted small">{formatOrderDate(order)}</div>
                     </div>
                     <div className="delivery-status">

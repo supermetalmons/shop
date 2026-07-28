@@ -15,8 +15,10 @@ import {
 } from './shared/discountMerkleDataset.ts';
 import {
   acquireDeploymentRegistryMutationLock,
+  assertReceiptPoolDropRelations,
   DeploymentRegistryPostCommitVerificationError,
   normalizeDropBase,
+  normalizeDropSalesMode,
   normalizeAndValidateDropId,
   readDeploymentDropRegistry,
   renderDeploymentRegistryFileFromSource,
@@ -27,9 +29,15 @@ import {
   writeDeploymentRegistryFile,
   type DeploymentDropConfigSerialized,
   type DropFamily,
+  type DropSalesMode,
   type MetadataPathFormat,
   type MintSelectionConfigSerialized,
+  type ReceiptPoolDeployment,
 } from './shared/deploymentRegistry.ts';
+import {
+  requireReceiptPoolSpec,
+  type ReceiptPoolSpec,
+} from './shared/receiptPoolConfig.ts';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
   decodeBoxMinterConfigData,
@@ -69,6 +77,7 @@ import {
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
+  type Commitment,
 } from '@solana/web3.js';
 
 // MPL Core program id.
@@ -109,7 +118,7 @@ function getActiveNewDropConfigPath(): string {
   return activeNewDropConfigPath;
 }
 
-function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
+export function getConcurrentMerkleTreeAccountSize(maxDepth: number, maxBufferSize: number, canopyDepth: number): number {
   // Matches @solana/spl-account-compression sizing (ConcurrentMerkleTreeHeaderDataV1 + tree + optional canopy).
   const headerSize = 4 + 4 + 32 + 8 + 1 + 5;
   const nodeSize = 40 + 32 * maxDepth;
@@ -355,7 +364,7 @@ function requireNonEmptyString(value: string, label: string): string {
   return trimmed;
 }
 
-function requireRoyaltiesBps(value: number): number {
+function requireRoyaltiesBps(value: number | undefined): number {
   const bps = Number(value);
   if (!Number.isInteger(bps) || bps < 0 || bps > 10_000) {
     throw new Error(`Invalid NEW_DROP.onchain.coreCollectionRoyaltiesBps: ${value} (expected an integer from 0 to 10000)`);
@@ -505,11 +514,16 @@ function requireMaxFigureIdWithinU16(args: {
   }
 }
 
-function prepareReceiptsTreeConfig(dropCfg: NewDropOnchainConfig): PreparedReceiptsTreeConfig {
-  if (!dropCfg.receiptsTree || typeof dropCfg.receiptsTree !== 'object') {
+function prepareReceiptsTreeConfig(
+  dropCfg: NewDropOnchainConfig,
+  receiptPoolSpec?: ReceiptPoolSpec | null,
+): PreparedReceiptsTreeConfig {
+  const configuredTree =
+    receiptPoolSpec?.receiptsTree || dropCfg.receiptsTree;
+  if (!configuredTree || typeof configuredTree !== 'object') {
     throw new Error(`Missing NEW_DROP.onchain.receiptsTree in ${getActiveNewDropConfigPath()}`);
   }
-  const receiptsTreeCfg = dropCfg.receiptsTree;
+  const receiptsTreeCfg = configuredTree;
   const maxDepth = requireIntegerInRange({
     value: receiptsTreeCfg.maxDepth,
     label: 'NEW_DROP.onchain.receiptsTree.maxDepth',
@@ -567,6 +581,93 @@ function assertReceiptsTreeCapacityForMaxSupply(args: {
         `Fix: increase NEW_DROP.onchain.receiptsTree.maxDepth in ${getActiveNewDropConfigPath()}.`,
     );
   }
+}
+
+function assertReceiptPoolDeploymentMatchesSpec(args: {
+  deployment: ReceiptPoolDeployment;
+  spec: ReceiptPoolSpec;
+  solanaCluster: SolanaCluster;
+}): void {
+  const expected: Omit<
+    ReceiptPoolDeployment,
+    'collectionMint' | 'receiptsMerkleTree'
+  > = {
+    solanaCluster: args.solanaCluster,
+    receiptPoolId: args.spec.receiptPoolId,
+    authority: args.spec.authority,
+    collectionMetadataUri: args.spec.collectionMetadataUri,
+    collectionName: args.spec.collectionName,
+    collectionSymbol: args.spec.collectionSymbol,
+    royaltiesBasisPoints: args.spec.royaltiesBasisPoints,
+    royaltiesRecipient: args.spec.royaltiesRecipient,
+    receiptsTreeMaxDepth: args.spec.receiptsTree.maxDepth,
+    receiptsTreeMaxBufferSize: args.spec.receiptsTree.maxBufferSize,
+    receiptsTreeCanopyDepth: args.spec.receiptsTree.canopyDepth,
+  };
+  for (const [field, value] of Object.entries(expected)) {
+    if (
+      args.deployment[field as keyof ReceiptPoolDeployment] !== value
+    ) {
+      throw new Error(
+        `Receipt pool ${args.solanaCluster}:${args.spec.receiptPoolId} ${field} mismatch`,
+      );
+    }
+  }
+  new PublicKey(args.deployment.collectionMint);
+  new PublicKey(args.deployment.receiptsMerkleTree);
+}
+
+export function assertReceiptPoolCapacity(args: {
+  solanaCluster: SolanaCluster;
+  receiptPoolId: string;
+  metadataBase: string;
+  maxSupply: number;
+  treeMaxDepth: number;
+  existingDrops: Record<string, DeploymentDropConfigSerialized>;
+  onchainNumMinted?: number;
+}): { reservedLeaves: number; capacity: number } {
+  const members = Object.values(args.existingDrops).filter(
+    (drop) =>
+      drop.solanaCluster === args.solanaCluster &&
+      drop.receiptPoolId === args.receiptPoolId,
+  );
+  if (
+    members.some(
+      (drop) =>
+        normalizeDropBase(drop.metadataBase) ===
+        normalizeDropBase(args.metadataBase),
+    )
+  ) {
+    throw new Error(
+      `Receipt pool ${args.solanaCluster}:${args.receiptPoolId} already has a drop using metadataBase ${args.metadataBase}`,
+    );
+  }
+  const existingReservation = members.reduce(
+    (sum, drop) => sum + drop.maxSupply,
+    0,
+  );
+  const maxSupply = requireIntegerInRange({
+    value: args.maxSupply,
+    label: 'receipt pool maxSupply',
+    min: 1,
+    max: 0xffff_ffff,
+  });
+  const reservedLeaves = existingReservation + maxSupply;
+  const capacity = 2 ** args.treeMaxDepth;
+  if (reservedLeaves > capacity) {
+    throw new Error(
+      `Receipt pool ${args.solanaCluster}:${args.receiptPoolId} capacity exceeded: ${reservedLeaves}/${capacity} reserved leaves`,
+    );
+  }
+  if (
+    args.onchainNumMinted != null &&
+    args.onchainNumMinted > existingReservation
+  ) {
+    throw new Error(
+      `Receipt pool ${args.solanaCluster}:${args.receiptPoolId} has ${args.onchainNumMinted} minted leaves but only ${existingReservation} registered leaves before this drop`,
+    );
+  }
+  return { reservedLeaves, capacity };
 }
 
 type PreparedInitDropInputs = {
@@ -654,7 +755,20 @@ type PreparedCollectionMetadata = {
   image?: string;
 };
 
-function prepareCollectionMetadata(dropCfg: NewDropOnchainConfig): PreparedCollectionMetadata {
+function prepareCollectionMetadata(
+  dropCfg: NewDropOnchainConfig,
+  receiptPoolSpec?: ReceiptPoolSpec | null,
+): PreparedCollectionMetadata {
+  if (receiptPoolSpec) {
+    return {
+      name: receiptPoolSpec.collectionName,
+      symbol: receiptPoolSpec.collectionSymbol,
+      sellerFeeBasisPoints: receiptPoolSpec.royaltiesBasisPoints,
+      description: receiptPoolSpec.collectionDescription,
+      externalUrl: receiptPoolSpec.collectionExternalUrl,
+      image: receiptPoolSpec.collectionImage,
+    };
+  }
   if (!dropCfg.collectionMetadata || typeof dropCfg.collectionMetadata !== 'object') {
     throw new Error(`Missing NEW_DROP.onchain.collectionMetadata in ${getActiveNewDropConfigPath()}`);
   }
@@ -697,9 +811,13 @@ function extractIntegerField(value: unknown): number | undefined {
 
 async function assertCollectionMetadataJsonMatchesNewDrop(args: {
   metadataBase: string;
+  collectionMetadataUri?: string;
+  expectedCreator?: string;
   expected: PreparedCollectionMetadata;
 }) {
-  const collectionJsonUrl = `${args.metadataBase}/collection.json`;
+  const collectionJsonUrl =
+    trimToUndefined(args.collectionMetadataUri) ||
+    `${args.metadataBase}/collection.json`;
   const collectionJsonFetchUrl = resolveDropAssetUrl(collectionJsonUrl);
   let response: Response;
   const controller = new AbortController();
@@ -778,6 +896,27 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
   if (typeof args.expected.image === 'string') {
     checkStringField('image', args.expected.image, json.image);
   }
+  if (args.expectedCreator) {
+    const properties =
+      json.properties &&
+      typeof json.properties === 'object' &&
+      !Array.isArray(json.properties)
+        ? (json.properties as Record<string, unknown>)
+        : {};
+    const creators = Array.isArray(properties.creators)
+      ? properties.creators
+      : [];
+    const creator = creators[0] as Record<string, unknown> | undefined;
+    if (
+      creators.length !== 1 ||
+      creator?.address !== args.expectedCreator ||
+      creator?.share !== 100
+    ) {
+      mismatches.push(
+        `properties.creators: expected ${args.expectedCreator} (100%)`,
+      );
+    }
+  }
 
   if (mismatches.length) {
     throw new Error(
@@ -789,6 +928,94 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
         `Fix ${getActiveNewDropConfigPath()} or the collection.json content before deploying.`,
     );
   }
+}
+
+export async function assertReceiptMetadataRange(args: {
+  metadataBase: string;
+  maxSupply: number;
+  treeCapacity: number;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  const treeCapacity = requireIntegerInRange({
+    value: args.treeCapacity,
+    label: 'receipt metadata treeCapacity',
+    min: 1,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  const maxSupply = requireIntegerInRange({
+    value: args.maxSupply,
+    label: 'receipt metadata maxSupply',
+    min: 1,
+    max: treeCapacity,
+  });
+  const fetchImpl = args.fetchImpl ?? fetch;
+  let nextIndex = 0;
+  let failed = false;
+  let firstError: unknown;
+  const validateNext = async (): Promise<void> => {
+    while (!failed) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= maxSupply) return;
+      const expectedId = index + 1;
+      const url = `${args.metadataBase}/rb${expectedId}.json`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      let response: Response;
+      try {
+        response = await fetchImpl(resolveDropAssetUrl(url), {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+        return;
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!response.ok) {
+        if (!failed) {
+          firstError = new Error(
+            `Receipt metadata ${expectedId} returned ${response.status}: ${url}`,
+          );
+        }
+        failed = true;
+        return;
+      }
+      let value: Record<string, unknown>;
+      try {
+        value = (await response.json()) as Record<string, unknown>;
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+        return;
+      }
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        value.id !== expectedId ||
+        !extractTrimmedStringField(value.name) ||
+        !extractTrimmedStringField(value.image)
+      ) {
+        if (!failed) {
+          firstError = new Error(
+            `Receipt metadata ${expectedId} is missing sequential id, name, or image: ${url}`,
+          );
+        }
+        failed = true;
+        return;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(16, maxSupply) },
+      () => validateNext(),
+    ),
+  );
+  if (failed) throw firstError;
 }
 
 function prepareInitDropInputs(args: {
@@ -1146,6 +1373,9 @@ async function prepareDeploymentRegistry(args: {
   dropId: string;
   dropFamily: DropFamily;
   collectionName: string;
+  displayName?: string;
+  salesMode?: DropSalesMode;
+  receiptPoolId?: string;
   metadataBase: string;
   metadataPathFormat: MetadataPathFormat;
   mintSelection?: MintSelectionConfigSerialized;
@@ -1166,6 +1396,8 @@ async function prepareDeploymentRegistry(args: {
   boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
+  receiptsTreeMaxDepth?: number;
+  receiptsTreeCanopyDepth?: number;
   deliveryLookupTable: string;
   stripeProductTaxCode?: string;
 }): Promise<{
@@ -1225,6 +1457,15 @@ async function prepareDeploymentRegistry(args: {
     dropId: normalizedDropId,
     dropFamily,
     collectionName,
+    ...(trimToUndefined(args.displayName)
+      ? { displayName: trimToUndefined(args.displayName) }
+      : {}),
+    ...(args.salesMode && args.salesMode !== 'standard'
+      ? { salesMode: args.salesMode }
+      : {}),
+    ...(trimToUndefined(args.receiptPoolId)
+      ? { receiptPoolId: trimToUndefined(args.receiptPoolId) }
+      : {}),
     metadataBase: normalizeDropBase(args.metadataBase),
     metadataPathFormat: args.metadataPathFormat,
     ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
@@ -1246,8 +1487,26 @@ async function prepareDeploymentRegistry(args: {
     ...(trimToUndefined(args.boxMinterConfigPda) ? { boxMinterConfigPda: trimToUndefined(args.boxMinterConfigPda) } : {}),
     collectionMint: args.collectionMint,
     receiptsMerkleTree: args.receiptsMerkleTree,
+    ...(args.receiptsTreeMaxDepth != null
+      ? {
+          receiptsTreeMaxDepth: Math.floor(
+            Number(args.receiptsTreeMaxDepth),
+          ),
+        }
+      : {}),
+    ...(args.receiptsTreeCanopyDepth != null
+      ? {
+          receiptsTreeCanopyDepth: Math.floor(
+            Number(args.receiptsTreeCanopyDepth),
+          ),
+        }
+      : {}),
     deliveryLookupTable: args.deliveryLookupTable,
   };
+  assertReceiptPoolDropRelations({
+    drops: nextDrops,
+    receiptPools: existing.receiptPools,
+  });
   const expectedWrittenContent = renderDeploymentRegistryFileFromSource({
     filePath,
     existingContent: sourceSnapshot.content,
@@ -1415,7 +1674,7 @@ function mplCorePluginAuthorityPairUpdateDelegate(additionalDelegates: PublicKey
  * We include it here so Bubblegum v2 can mint receipt cNFTs into this MPL-Core collection.
  */
 const IX_MPL_CORE_CREATE_COLLECTION_V2 = 21;
-function buildCreateMplCoreCollectionV2Ix(args: {
+export function buildCreateMplCoreCollectionV2Ix(args: {
   collection: PublicKey;
   updateAuthority: PublicKey;
   updateDelegates: PublicKey[];
@@ -1425,7 +1684,12 @@ function buildCreateMplCoreCollectionV2Ix(args: {
   uri: string;
   royaltiesBps: number;
   royaltiesRecipient: PublicKey;
+  royaltiesAuthority?: PublicKey | null;
 }): TransactionInstruction {
+  const royaltiesAuthority =
+    args.royaltiesAuthority === undefined
+      ? args.payer
+      : args.royaltiesAuthority;
   const pluginsOpt = borshOption(
     encodeUmiArray([
       // Collection-level royalties to the same treasury used for primary mint payments.
@@ -1434,7 +1698,7 @@ function buildCreateMplCoreCollectionV2Ix(args: {
       mplCorePluginAuthorityPairRoyalties({
         basisPoints: args.royaltiesBps,
         creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
-        authority: args.payer,
+        authority: royaltiesAuthority,
       }),
       mplCorePluginAuthorityPairBubblegumV2(),
       mplCorePluginAuthorityPairUpdateDelegate(uniquePubkeys(args.updateDelegates)),
@@ -1655,7 +1919,7 @@ function readMplCoreCollectionPluginRecords(data: Buffer): MplCoreCollectionPlug
   return records;
 }
 
-function decodeMplCoreCollectionRoyalties(data: Buffer): {
+export function decodeMplCoreCollectionRoyalties(data: Buffer): {
   basisPoints: number;
   creators: { address: PublicKey; percentage: number }[];
   ruleSetKind: number;
@@ -1767,6 +2031,24 @@ export function assertMplCoreCollectionHasUpdateDelegates(args: {
       `Actual delegates  : ${updateDelegate.delegates.map((delegate) => delegate.toBase58()).join(', ') || '(none)'}\n` +
       `Missing delegates : ${missing.map((delegate) => delegate.toBase58()).join(', ')}`,
   );
+}
+
+export function assertReceiptPoolCollectionUpdateDelegatePolicy(args: {
+  data: Buffer;
+  authority: PublicKey;
+}): void {
+  const updateDelegate = decodeMplCoreCollectionUpdateDelegates(args.data);
+  if (
+    !updateDelegate ||
+    updateDelegate.authorityKind !==
+      MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY ||
+    updateDelegate.delegates.length !== 1 ||
+    !updateDelegate.delegates[0].equals(args.authority)
+  ) {
+    throw new Error(
+      'Receipt pool collection must delegate only to its fixed authority',
+    );
+  }
 }
 
 async function assertMplCoreCollectionRoyalties(args: {
@@ -1892,6 +2174,101 @@ export function decodeBoxMinterConfigForDeployPreflight(data: Buffer) {
     coreCollection: new PublicKey(decoded.coreCollection),
     discountMerkleRoot: Buffer.from(decoded.discountMerkleRoot),
   };
+}
+
+export function assertExistingConfigMatchesResume(args: {
+  data: Buffer;
+  admin: PublicKey;
+  treasury: PublicKey;
+  coreCollection: PublicKey;
+  priceLamports: bigint;
+  discountPriceLamports: bigint;
+  discountMintsPerWallet: number;
+  discountMerkleRoot: Buffer;
+  maxSupply: number;
+  itemsPerBox: number;
+  maxPerTx: number;
+  namePrefix: string;
+  figureNamePrefix: string;
+  symbol: string;
+  metadataBase: string;
+  mintSelection?: MintSelectionConfigSerialized;
+  dropSeed: Buffer;
+}): void {
+  const decodedRaw = decodeBoxMinterConfigData(args.data, {
+    validateDiscriminator: true,
+    validateItemsPerBox: true,
+    decodeExtensions: true,
+  });
+  const decoded = {
+    ...decodedRaw,
+    admin: new PublicKey(decodedRaw.admin),
+    treasury: new PublicKey(decodedRaw.treasury),
+    coreCollection: new PublicKey(decodedRaw.coreCollection),
+    discountMerkleRoot: Buffer.from(decodedRaw.discountMerkleRoot),
+  };
+  const expectedVariantKind = args.mintSelection
+    ? BOX_MINTER_MINT_VARIANT_KIND_SIZE
+    : BOX_MINTER_MINT_VARIANT_KIND_NONE;
+  const expectedStarts = args.mintSelection
+    ? args.mintSelection.options.map((option) => option.startId)
+    : [0, 0, 0];
+  const expectedEnds = args.mintSelection
+    ? args.mintSelection.options.map((option) => option.endId)
+    : [0, 0, 0];
+  const expectedNext = expectedStarts;
+  const mismatches = [
+    decoded.admin.equals(args.admin) ? '' : 'admin',
+    decoded.treasury.equals(args.treasury) ? '' : 'treasury',
+    decoded.coreCollection.equals(args.coreCollection)
+      ? ''
+      : 'coreCollection',
+    decoded.priceLamports === args.priceLamports ? '' : 'priceLamports',
+    decoded.discountPriceLamports === args.discountPriceLamports
+      ? ''
+      : 'discountPriceLamports',
+    decoded.discountMintsPerWallet === args.discountMintsPerWallet
+      ? ''
+      : 'discountMintsPerWallet',
+    decoded.discountMerkleRoot.equals(args.discountMerkleRoot)
+      ? ''
+      : 'discountMerkleRoot',
+    decoded.maxSupply === args.maxSupply ? '' : 'maxSupply',
+    decoded.itemsPerBox === args.itemsPerBox ? '' : 'itemsPerBox',
+    decoded.maxPerTx === args.maxPerTx ? '' : 'maxPerTx',
+    decoded.namePrefix === args.namePrefix ? '' : 'namePrefix',
+    decoded.figureNamePrefix === args.figureNamePrefix
+      ? ''
+      : 'figureNamePrefix',
+    decoded.symbol === args.symbol ? '' : 'symbol',
+    normalizeDropBase(decoded.uriBase) ===
+    normalizeDropBase(args.metadataBase)
+      ? ''
+      : 'metadataBase',
+    decoded.mintVariantKind === expectedVariantKind
+      ? ''
+      : 'mintVariantKind',
+    isDeepStrictEqual(decoded.mintVariantStartIds, expectedStarts)
+      ? ''
+      : 'mintVariantStartIds',
+    isDeepStrictEqual(decoded.mintVariantEndIds, expectedEnds)
+      ? ''
+      : 'mintVariantEndIds',
+    isDeepStrictEqual(decoded.mintVariantNextIds, expectedNext)
+      ? ''
+      : 'mintVariantNextIds',
+    decoded.dropSeed &&
+    Buffer.from(decoded.dropSeed).equals(args.dropSeed)
+      ? ''
+      : 'dropSeed',
+    !decoded.started ? '' : 'started',
+    decoded.minted === 0 ? '' : 'minted',
+  ].filter(Boolean);
+  if (mismatches.length) {
+    throw new Error(
+      `Existing unregistered config cannot be resumed because ${mismatches.join(', ')} differ`,
+    );
+  }
 }
 
 function boxMinterConfigPda(programId: PublicKey, dropSeed?: Buffer): PublicKey {
@@ -2408,11 +2785,11 @@ async function ensureDeliveryLookupTable(args: {
 // ---------------------------------------------------------------------------
 const IX_BUBBLEGUM_CREATE_TREE_CONFIG_V2 = Buffer.from([55, 99, 95, 215, 142, 203, 227, 205]);
 
-function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
+export function bubblegumTreeConfigPda(merkleTree: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
-function buildCreateBubblegumTreeConfigV2Ix(args: {
+export function buildCreateBubblegumTreeConfigV2Ix(args: {
   merkleTree: PublicKey;
   payer: PublicKey;
   treeCreator: PublicKey;
@@ -2583,6 +2960,208 @@ async function getMplCoreCollectionUpdateAuthority(connection: Connection, coreC
   return decodeMplCoreCollectionUpdateAuthority(info.data);
 }
 
+export function decodeMplCoreCollectionBase(data: Buffer): {
+  updateAuthority: PublicKey;
+  name: string;
+  uri: string;
+} {
+  if (data[0] !== 5 || data.length < 33) {
+    throw new Error('Not an MPL-Core CollectionV1 account');
+  }
+  let offset = 33;
+  const readString = (label: string): string => {
+    if (!canRead(data, offset, 4)) {
+      throw new Error(`Truncated MPL-Core collection ${label}`);
+    }
+    const length = data.readUInt32LE(offset);
+    offset += 4;
+    if (!canRead(data, offset, length)) {
+      throw new Error(`Truncated MPL-Core collection ${label}`);
+    }
+    const value = data.subarray(offset, offset + length).toString('utf8');
+    offset += length;
+    return value;
+  };
+  return {
+    updateAuthority: new PublicKey(data.subarray(1, 33)),
+    name: readString('name'),
+    uri: readString('uri'),
+  };
+}
+
+export type DecodedReceiptTreeState = {
+  maxDepth: number;
+  maxBufferSize: number;
+  authority: PublicKey;
+  creator: PublicKey;
+  delegate: PublicKey;
+  totalCapacity: number;
+  numMinted: number;
+  isPublic: boolean;
+  version: number;
+};
+
+const BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR = Buffer.from([
+  122, 245, 175, 248, 171, 34, 0, 207,
+]);
+
+function readSafeU64(data: Buffer, offset: number, label: string): number {
+  if (!canRead(data, offset, 8)) {
+    throw new Error(`Truncated ${label}`);
+  }
+  const value = data.readBigUInt64LE(offset);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} exceeds the JavaScript safe integer range`);
+  }
+  return Number(value);
+}
+
+export function decodeReceiptTreeState(args: {
+  merkleTreeData: Buffer;
+  treeConfigData: Buffer;
+}): DecodedReceiptTreeState {
+  const merkle = args.merkleTreeData;
+  const config = args.treeConfigData;
+  if (merkle.length < 56 || merkle[0] !== 1 || merkle[1] !== 0) {
+    throw new Error('Invalid concurrent Merkle tree account header');
+  }
+  if (
+    config.length < 96 ||
+    !config
+      .subarray(0, BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR.length)
+      .equals(BUBBLEGUM_TREE_CONFIG_V2_DISCRIMINATOR)
+  ) {
+    throw new Error('Invalid Bubblegum TreeConfig account');
+  }
+  return {
+    maxBufferSize: merkle.readUInt32LE(2),
+    maxDepth: merkle.readUInt32LE(6),
+    authority: new PublicKey(merkle.subarray(10, 42)),
+    creator: new PublicKey(config.subarray(8, 40)),
+    delegate: new PublicKey(config.subarray(40, 72)),
+    totalCapacity: readSafeU64(config, 72, 'TreeConfig totalCapacity'),
+    numMinted: readSafeU64(config, 80, 'TreeConfig numMinted'),
+    isPublic: config[88] !== 0,
+    version: config[90],
+  };
+}
+
+export async function validateReceiptPoolDeploymentOnchain(args: {
+  connection: Connection;
+  collectionMint: PublicKey;
+  receiptsMerkleTree: PublicKey;
+  authority: PublicKey;
+  collectionMetadataUri: string;
+  collectionName: string;
+  royaltiesBasisPoints: number;
+  royaltiesRecipient: PublicKey;
+  receiptsTreeMaxDepth: number;
+  receiptsTreeMaxBufferSize: number;
+  receiptsTreeCanopyDepth: number;
+  commitment?: Commitment;
+}): Promise<DecodedReceiptTreeState> {
+  const commitment = args.commitment || 'confirmed';
+  const treeConfig = bubblegumTreeConfigPda(args.receiptsMerkleTree);
+  const [collectionInfo, merkleTreeInfo, treeConfigInfo] =
+    await retryRpcRead('getMultipleAccountsInfo(receipt pool)', () =>
+      args.connection.getMultipleAccountsInfo(
+        [args.collectionMint, args.receiptsMerkleTree, treeConfig],
+        { commitment },
+      ),
+    );
+  if (!collectionInfo) {
+    throw new Error(
+      `Missing receipt pool collection ${args.collectionMint.toBase58()}`,
+    );
+  }
+  if (!collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
+    throw new Error('Receipt pool collection has the wrong owner');
+  }
+  if (!merkleTreeInfo) {
+    throw new Error(
+      `Missing receipt pool Merkle tree ${args.receiptsMerkleTree.toBase58()}`,
+    );
+  }
+  if (!merkleTreeInfo.owner.equals(MPL_ACCOUNT_COMPRESSION_PROGRAM_ID)) {
+    throw new Error('Receipt pool Merkle tree has the wrong owner');
+  }
+  if (!treeConfigInfo) {
+    throw new Error(`Missing receipt pool TreeConfig ${treeConfig.toBase58()}`);
+  }
+  if (!treeConfigInfo.owner.equals(BUBBLEGUM_PROGRAM_ID)) {
+    throw new Error('Receipt pool TreeConfig has the wrong owner');
+  }
+
+  const collection = decodeMplCoreCollectionBase(
+    Buffer.from(collectionInfo.data),
+  );
+  if (!collection.updateAuthority.equals(args.authority)) {
+    throw new Error('Receipt pool collection update authority mismatch');
+  }
+  if (
+    collection.name !== args.collectionName ||
+    collection.uri !== args.collectionMetadataUri
+  ) {
+    throw new Error(
+      `Receipt pool collection identity mismatch: ${collection.name} ${collection.uri}`,
+    );
+  }
+  const pluginRecords = readMplCoreCollectionPluginRecords(
+    Buffer.from(collectionInfo.data),
+  );
+  if (!pluginRecords?.some((record) => record.pluginType === 15)) {
+    throw new Error('Receipt pool collection is missing BubblegumV2');
+  }
+  const royalties = decodeMplCoreCollectionRoyalties(
+    Buffer.from(collectionInfo.data),
+  );
+  if (
+    !royalties ||
+    royalties.basisPoints !== args.royaltiesBasisPoints ||
+    royalties.ruleSetKind !== 0 ||
+    royalties.authorityKind !==
+      MPL_CORE_BASE_PLUGIN_AUTHORITY_UPDATE_AUTHORITY ||
+    royalties.creators.length !== 1 ||
+    !royalties.creators[0].address.equals(args.royaltiesRecipient) ||
+    royalties.creators[0].percentage !== 100
+  ) {
+    throw new Error('Receipt pool collection royalties mismatch');
+  }
+  assertReceiptPoolCollectionUpdateDelegatePolicy({
+    data: Buffer.from(collectionInfo.data),
+    authority: args.authority,
+  });
+
+  const tree = decodeReceiptTreeState({
+    merkleTreeData: Buffer.from(merkleTreeInfo.data),
+    treeConfigData: Buffer.from(treeConfigInfo.data),
+  });
+  const expectedTreeSize = getConcurrentMerkleTreeAccountSize(
+    args.receiptsTreeMaxDepth,
+    args.receiptsTreeMaxBufferSize,
+    args.receiptsTreeCanopyDepth,
+  );
+  if (merkleTreeInfo.data.length !== expectedTreeSize) {
+    throw new Error(
+      `Receipt pool Merkle tree size mismatch: expected ${expectedTreeSize}, got ${merkleTreeInfo.data.length}`,
+    );
+  }
+  if (
+    tree.maxDepth !== args.receiptsTreeMaxDepth ||
+    tree.maxBufferSize !== args.receiptsTreeMaxBufferSize ||
+    !tree.authority.equals(treeConfig) ||
+    !tree.creator.equals(args.authority) ||
+    !tree.delegate.equals(args.authority) ||
+    tree.totalCapacity !== 2 ** args.receiptsTreeMaxDepth ||
+    tree.numMinted > tree.totalCapacity ||
+    tree.isPublic ||
+    tree.version !== 1
+  ) {
+    throw new Error('Receipt pool Merkle tree configuration mismatch');
+  }
+  return tree;
+}
+
 async function main() {
   const extraArgs = process.argv.slice(2);
   if (extraArgs.length !== 1) {
@@ -2631,15 +3210,42 @@ async function main() {
     stripeCheckoutEnabled: dropCfg.stripeCheckoutEnabled,
     stripeLiveUnitAmountCents: dropCfg.stripeLiveUnitAmountCents,
   });
+  const salesMode = normalizeDropSalesMode(dropCfg.salesMode);
+  const receiptPoolId = trimToUndefined(dropCfg.receiptPoolId);
+  if (
+    (salesMode === 'stripe_receipt_only') !== Boolean(receiptPoolId)
+  ) {
+    throw new Error(
+      'NEW_DROP.onchain.receiptPoolId must be paired with salesMode=stripe_receipt_only',
+    );
+  }
+  const receiptPoolSpec = receiptPoolId
+    ? requireReceiptPoolSpec(receiptPoolId)
+    : null;
   const dropSeed = deriveDropSeed(dropId);
   await assertDropIdNotConfiguredInDeploymentRegistry({
     dropId,
     registryPath: deploymentRegistryPath,
   });
   const dropMetadataBase = normalizeDropBase(requireNonEmptyString(dropCfg.metadataBase, 'NEW_DROP.onchain.metadataBase'));
-  const collectionMetadata = prepareCollectionMetadata(dropCfg);
-  const receiptsTreeConfig = prepareReceiptsTreeConfig(dropCfg);
-  const coreCollectionRoyaltiesBps = requireRoyaltiesBps(dropCfg.coreCollectionRoyaltiesBps);
+  const collectionMetadata = prepareCollectionMetadata(
+    dropCfg,
+    receiptPoolSpec,
+  );
+  const effectiveDropSymbol =
+    receiptPoolSpec?.collectionSymbol ||
+    requireNonEmptyString(
+      dropCfg.symbol || '',
+      'NEW_DROP.onchain.symbol',
+    );
+  const receiptsTreeConfig = prepareReceiptsTreeConfig(
+    dropCfg,
+    receiptPoolSpec,
+  );
+  const coreCollectionRoyaltiesBps = requireRoyaltiesBps(
+    receiptPoolSpec?.royaltiesBasisPoints ??
+      dropCfg.coreCollectionRoyaltiesBps,
+  );
   if (collectionMetadata.sellerFeeBasisPoints !== coreCollectionRoyaltiesBps) {
     throw new Error(
       `Mismatch in ${getActiveNewDropConfigPath()} for collection royalties.\n` +
@@ -2648,6 +3254,61 @@ async function main() {
         `\n` +
         `These values must match before deploying.`,
     );
+  }
+  const preflightRegistry = await readDeploymentDropRegistry(
+    deploymentRegistryPath,
+  );
+  let receiptMetadataTreeCapacity: number | null = null;
+  const receiptPoolDeployment = receiptPoolSpec
+    ? preflightRegistry.receiptPools[
+        `${cluster}:${receiptPoolSpec.receiptPoolId}`
+      ]
+    : undefined;
+  if (receiptPoolSpec && !receiptPoolDeployment) {
+    throw new Error(
+      `Receipt pool ${cluster}:${receiptPoolSpec.receiptPoolId} is not deployed.\nRun: npm run deploy-receipt-pool -- ${receiptPoolSpec.receiptPoolId} ${cluster}`,
+    );
+  }
+  if (receiptPoolSpec && receiptPoolDeployment) {
+    if (
+      dropCfg.collectionMetadata ||
+      dropCfg.receiptsTree ||
+      dropCfg.coreCollectionRoyaltiesBps != null
+    ) {
+      throw new Error(
+        'Receipt pool drops must derive collection metadata, royalties, and tree dimensions exclusively from the pool spec',
+      );
+    }
+    assertReceiptPoolDeploymentMatchesSpec({
+      deployment: receiptPoolDeployment,
+      spec: receiptPoolSpec,
+      solanaCluster: cluster,
+    });
+    if (
+      !stripeCheckoutConfig.stripeCheckoutEnabled ||
+      dropCfg.itemsPerBox !== 0 ||
+      dropCfg.maxPerTx !== 1 ||
+      dropCfg.mintSelection ||
+      dropCfg.priceSol !== 1_000_000 ||
+      dropCfg.discountPriceSol !== 1_000_000
+    ) {
+      throw new Error(
+        'stripe_receipt_only requires Stripe enabled, itemsPerBox=0, maxPerTx=1, no mintSelection, and sentinel SOL prices of 1_000_000',
+      );
+    }
+    if (deployCfg.coreCollectionPubkey) {
+      throw new Error(
+        'Receipt pool drops resolve their collection from the canonical pool and must not set coreCollectionPubkey',
+      );
+    }
+    receiptMetadataTreeCapacity = assertReceiptPoolCapacity({
+      solanaCluster: cluster,
+      receiptPoolId: receiptPoolSpec.receiptPoolId,
+      metadataBase: dropMetadataBase,
+      maxSupply: dropCfg.maxSupply,
+      treeMaxDepth: receiptPoolSpec.receiptsTree.maxDepth,
+      existingDrops: preflightRegistry.drops,
+    }).capacity;
   }
   const programKeypair = path.join(onchainDir, 'target', 'deploy', 'box_minter-keypair.json');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
@@ -2664,20 +3325,65 @@ async function main() {
     `depth=${receiptsTreeConfig.maxDepth}, buffer=${receiptsTreeConfig.maxBufferSize}, canopy=${receiptsTreeConfig.canopyDepth}`,
   );
   console.log('config  :', getActiveNewDropConfigPath());
-  console.log('collection metadata url:', `${dropMetadataBase}/collection.json`);
+  console.log(
+    'collection metadata url:',
+    receiptPoolSpec?.collectionMetadataUri ||
+      `${dropMetadataBase}/collection.json`,
+  );
   if (deployCfg.coreCollectionPubkey) console.log('core collection:', deployCfg.coreCollectionPubkey);
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
 
   await assertCollectionMetadataJsonMatchesNewDrop({
     metadataBase: dropMetadataBase,
+    collectionMetadataUri: receiptPoolSpec?.collectionMetadataUri,
+    expectedCreator: receiptPoolSpec?.royaltiesRecipient,
     expected: collectionMetadata,
   });
+  if (receiptPoolSpec) {
+    await assertReceiptMetadataRange({
+      metadataBase: dropMetadataBase,
+      maxSupply: dropCfg.maxSupply,
+      treeCapacity: receiptMetadataTreeCapacity!,
+    });
+  }
   console.log(`✅ collection.json preflight matches ${getActiveNewDropConfigPath()}`);
 
   // Fail fast if the target cluster/RPC does not have the Metaplex programs we depend on.
   const connection = new Connection(rpcUrlForApps, { commitment: 'confirmed' });
   await assertExternalProgramsDeployed(connection, cluster);
+  if (receiptPoolSpec && receiptPoolDeployment) {
+    const treeState = await validateReceiptPoolDeploymentOnchain({
+      connection,
+      collectionMint: new PublicKey(
+        receiptPoolDeployment.collectionMint,
+      ),
+      receiptsMerkleTree: new PublicKey(
+        receiptPoolDeployment.receiptsMerkleTree,
+      ),
+      authority: new PublicKey(receiptPoolSpec.authority),
+      collectionMetadataUri: receiptPoolSpec.collectionMetadataUri,
+      collectionName: receiptPoolSpec.collectionName,
+      royaltiesBasisPoints: receiptPoolSpec.royaltiesBasisPoints,
+      royaltiesRecipient: new PublicKey(
+        receiptPoolSpec.royaltiesRecipient,
+      ),
+      receiptsTreeMaxDepth: receiptPoolSpec.receiptsTree.maxDepth,
+      receiptsTreeMaxBufferSize:
+        receiptPoolSpec.receiptsTree.maxBufferSize,
+      receiptsTreeCanopyDepth:
+        receiptPoolSpec.receiptsTree.canopyDepth,
+    });
+    assertReceiptPoolCapacity({
+      solanaCluster: cluster,
+      receiptPoolId: receiptPoolSpec.receiptPoolId,
+      metadataBase: dropMetadataBase,
+      maxSupply: dropCfg.maxSupply,
+      treeMaxDepth: receiptPoolSpec.receiptsTree.maxDepth,
+      existingDrops: preflightRegistry.drops,
+      onchainNumMinted: treeState.numMinted,
+    });
+  }
 
   const reuseProgramId = deployCfg.reuseProgramId;
   let expectedProgramId: string | undefined;
@@ -2726,13 +3432,21 @@ async function main() {
     connection.getAccountInfo(preflightConfigPda, { commitment: 'confirmed' }),
   );
   if (preflightCfgInfo) {
-    throwFreshDeployOnlyForExistingConfig({
-      stage: 'preflight',
-      dropId,
-      programId: preflightProgramId,
-      configPda: preflightConfigPda,
-      configData: preflightCfgInfo.data,
-    });
+    const decoded = decodeBoxMinterConfigForDeployPreflight(
+      preflightCfgInfo.data,
+    );
+    if (decoded.started || decoded.minted !== 0) {
+      throwFreshDeployOnlyForExistingConfig({
+        stage: 'preflight',
+        dropId,
+        programId: preflightProgramId,
+        configPda: preflightConfigPda,
+        configData: preflightCfgInfo.data,
+      });
+    }
+    console.log(
+      `Resumable unstarted config found: ${preflightConfigPda.toBase58()}`,
+    );
   }
   assertReceiptsTreeCapacityForMaxSupply({
     tree: receiptsTreeConfig,
@@ -2758,6 +3472,14 @@ async function main() {
   console.log('Accepted formats: base58 secret key, or JSON array (like ~/.config/solana/id.json contents).');
   const payer = parsePrivateKeyInput(await promptMaskedInput('deployer private key: '));
   console.log('deployer pubkey:', payer.publicKey.toBase58());
+  if (
+    receiptPoolSpec &&
+    !payer.publicKey.equals(new PublicKey(receiptPoolSpec.authority))
+  ) {
+    throw new Error(
+      `Receipt pool drops must use admin ${receiptPoolSpec.authority}`,
+    );
+  }
 
   const releaseDeploymentRegistryLock = acquireDeploymentRegistryMutationLock({
     root,
@@ -2773,6 +3495,58 @@ async function main() {
     dropId,
     registryPath: deploymentRegistryPath,
   });
+  if (receiptPoolSpec && receiptPoolDeployment) {
+    const lockedRegistry = await readDeploymentDropRegistry(
+      deploymentRegistryPath,
+    );
+    const lockedPool =
+      lockedRegistry.receiptPools[
+        `${cluster}:${receiptPoolSpec.receiptPoolId}`
+      ];
+    if (
+      !lockedPool ||
+      lockedPool.collectionMint !== receiptPoolDeployment.collectionMint ||
+      lockedPool.receiptsMerkleTree !==
+        receiptPoolDeployment.receiptsMerkleTree
+    ) {
+      throw new Error(
+        `Receipt pool ${cluster}:${receiptPoolSpec.receiptPoolId} changed while awaiting credentials`,
+      );
+    }
+    assertReceiptPoolDeploymentMatchesSpec({
+      deployment: lockedPool,
+      spec: receiptPoolSpec,
+      solanaCluster: cluster,
+    });
+    const treeState = await validateReceiptPoolDeploymentOnchain({
+      connection,
+      collectionMint: new PublicKey(lockedPool.collectionMint),
+      receiptsMerkleTree: new PublicKey(
+        lockedPool.receiptsMerkleTree,
+      ),
+      authority: new PublicKey(receiptPoolSpec.authority),
+      collectionMetadataUri: receiptPoolSpec.collectionMetadataUri,
+      collectionName: receiptPoolSpec.collectionName,
+      royaltiesBasisPoints: receiptPoolSpec.royaltiesBasisPoints,
+      royaltiesRecipient: new PublicKey(
+        receiptPoolSpec.royaltiesRecipient,
+      ),
+      receiptsTreeMaxDepth: receiptPoolSpec.receiptsTree.maxDepth,
+      receiptsTreeMaxBufferSize:
+        receiptPoolSpec.receiptsTree.maxBufferSize,
+      receiptsTreeCanopyDepth:
+        receiptPoolSpec.receiptsTree.canopyDepth,
+    });
+    assertReceiptPoolCapacity({
+      solanaCluster: cluster,
+      receiptPoolId: receiptPoolSpec.receiptPoolId,
+      metadataBase: dropMetadataBase,
+      maxSupply: dropCfg.maxSupply,
+      treeMaxDepth: receiptPoolSpec.receiptsTree.maxDepth,
+      existingDrops: lockedRegistry.drops,
+      onchainNumMinted: treeState.numMinted,
+    });
+  }
   if (reusableProgram) {
     await revalidateReusableProgramResolution({
       root,
@@ -2893,14 +3667,10 @@ async function main() {
   const existingCfg = await retryRpcRead(`getAccountInfo(post-deploy config ${configPda.toBase58()})`, () =>
     connection.getAccountInfo(configPda, { commitment: 'confirmed' }),
   );
-  if (existingCfg) {
-    throwFreshDeployOnlyForExistingConfig({
-      stage: 'post-deploy',
-      dropId,
-      programId,
-      configPda,
-      configData: existingCfg.data,
-    });
+  if (existingCfg && !existingCfg.owner.equals(programPk)) {
+    throw new Error(
+      `Existing config PDA has unexpected owner ${existingCfg.owner.toBase58()}`,
+    );
   }
   const requiredDropMetadataBase = initDropInputs.requiredDropMetadataBase;
   const discountMerkle = initDropInputs.discountMerkle;
@@ -2928,7 +3698,7 @@ async function main() {
     // Box metadata (stored on-chain)
     namePrefix: dropCfg.namePrefix,
     figureNamePrefix: dropCfg.figureNamePrefix,
-    symbol: dropCfg.symbol,
+    symbol: effectiveDropSymbol,
     // Canonical drop base. The on-chain program derives:
     // - boxes   : `${metadataBase}/b{id}.json`
     // - figures : `${metadataBase}/f{id}.json`
@@ -2950,7 +3720,14 @@ async function main() {
   // IMPORTANT: root collection update authority stays with the deployer/admin wallet for marketplace
   // verification. The program config PDA must be an UpdateDelegate so the on-chain program can mint
   // and update collection assets through PDA-signed MPL-Core CPIs.
-  const coreCollection = deployCfg.coreCollectionPubkey ? new PublicKey(deployCfg.coreCollectionPubkey) : undefined;
+  const decodedExistingConfig = existingCfg
+    ? decodeBoxMinterConfigForDeployPreflight(existingCfg.data)
+    : null;
+  const coreCollection = receiptPoolDeployment
+    ? new PublicKey(receiptPoolDeployment.collectionMint)
+    : deployCfg.coreCollectionPubkey
+      ? new PublicKey(deployCfg.coreCollectionPubkey)
+      : decodedExistingConfig?.coreCollection;
   const collectionUpdateAuthority = payer.publicKey;
   const requiredCollectionUpdateDelegates = uniquePubkeys([configPda, payer.publicKey]);
 
@@ -2960,7 +3737,13 @@ async function main() {
   };
 
   let resolvedCoreCollection: PublicKey;
-  if (coreCollection) {
+  if (receiptPoolDeployment) {
+    resolvedCoreCollection = new PublicKey(
+      receiptPoolDeployment.collectionMint,
+    );
+    console.log('\n[2/3] Using shared receipt pool collection…');
+    console.log('  core collection:', resolvedCoreCollection.toBase58());
+  } else if (coreCollection) {
     resolvedCoreCollection = coreCollection;
     await assertMplCoreCollection(connection, resolvedCoreCollection);
     const updateAuthority = await getMplCoreCollectionUpdateAuthority(connection, resolvedCoreCollection);
@@ -3040,7 +3823,7 @@ async function main() {
 
   // If we are using a pre-existing collection (NEW_DROP.deploy.coreCollectionPubkey), enforce royalties here.
   // For freshly created collections, royalties are already set in `create_collection_v2`.
-  if (coreCollection) {
+  if (coreCollection && !receiptPoolDeployment) {
     await ensureMplCoreCollectionRoyalties({
       connection,
       payer,
@@ -3049,7 +3832,7 @@ async function main() {
       royaltiesBps: coreCollectionRoyaltiesBps,
     });
   }
-  if (!coreCollection) {
+  if (!coreCollection && !receiptPoolDeployment) {
     // Read-only check: newly-created collections should already contain the expected royalties plugin.
     await assertMplCoreCollectionRoyalties({
       connection,
@@ -3081,37 +3864,56 @@ async function main() {
     dropSeed,
   });
 
-  const setupTx = new Transaction().add(initIx);
-  setupTx.feePayer = payer.publicKey;
-  setupTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(initialize box minter)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
-  // This root is committed by initialize and cannot reconstruct its proofs. Persist
-  // the canonical family dataset before the transaction has any chance to land.
   writeDiscountMerkleJson({
     root: discountMerkleRoot,
     proofs: discountMerkle.proofs,
     filePath: discountMerkleDataset.filePath,
   });
-  let setupSig: string;
-  try {
-    setupSig = await sendAndConfirmTx({
-      connection,
-      tx: setupTx,
-      signers: [payer],
-      label: 'initialize box minter',
-      commitment: 'confirmed',
+  if (existingCfg) {
+    assertExistingConfigMatchesResume({
+      data: existingCfg.data,
+      admin: payer.publicKey,
+      treasury,
+      coreCollection: resolvedCoreCollection,
+      priceLamports,
+      discountPriceLamports,
+      discountMintsPerWallet:
+        boxMinterConfig.discountMintsPerWallet,
+      discountMerkleRoot,
+      maxSupply,
+      itemsPerBox,
+      maxPerTx,
+      namePrefix: boxMinterConfig.namePrefix,
+      figureNamePrefix: boxMinterConfig.figureNamePrefix,
+      symbol: boxMinterConfig.symbol,
+      metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
+      mintSelection: boxMinterConfig.mintSelection,
+      dropSeed,
     });
-  } catch (err) {
+    console.log('✅ Existing unstarted box minter config matches exactly');
+  } else {
+    const setupTx = new Transaction().add(initIx);
+    setupTx.feePayer = payer.publicKey;
+    setupTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(initialize box minter)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
     try {
-      console.warn(
-        `⚠️  Preserved discount proof because initialize may have landed: ${discountMerkleDataset.filePath}\n` +
-          `Verify config PDA ${configPda.toBase58()} before retrying or deleting this file.`,
-      );
-    } catch {
-      // Logging must never replace the transaction error.
+      const setupSig = await sendAndConfirmTx({
+        connection,
+        tx: setupTx,
+        signers: [payer],
+        label: 'initialize box minter',
+        commitment: 'confirmed',
+      });
+      console.log('✅ Box minter configured:', setupSig);
+    } catch (err) {
+      try {
+        console.warn(
+          `⚠️  Preserved discount proof because initialize may have landed: ${discountMerkleDataset.filePath}\n` +
+            `Verify config PDA ${configPda.toBase58()} before retrying or deleting this file.`,
+        );
+      } catch {}
+      throw err;
     }
-    throw err;
   }
-  console.log('✅ Box minter configured:', setupSig);
   console.log('  Config PDA:', configPda.toBase58());
   console.log('  Payment treasury:', treasury.toBase58());
   console.log('  Price (lamports):', priceLamports.toString());
@@ -3120,22 +3922,29 @@ async function main() {
   console.log('');
 
   let receiptsTree: PublicKey;
-  try {
-    receiptsTree = await createReceiptsMerkleTree({
-      connection,
-      payer,
-      tree: receiptsTreeConfig,
-    });
-    console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
-  } catch (err) {
-    throw new Error(
-      `Failed to create receipts Merkle tree for a fresh deployment.\n` +
-        `- configured tree : ${formatReceiptsTreeConfig(receiptsTreeConfig)}\n` +
-        `- error           : ${errorMessage(err)}\n` +
-        `\n` +
-        `Aborting to avoid writing stale receipts tree values from previous deployments.\n` +
-        `Fix NEW_DROP.onchain.receiptsTree in ${getActiveNewDropConfigPath()} and rerun.`,
+  if (receiptPoolDeployment) {
+    receiptsTree = new PublicKey(
+      receiptPoolDeployment.receiptsMerkleTree,
     );
+    console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+  } else {
+    try {
+      receiptsTree = await createReceiptsMerkleTree({
+        connection,
+        payer,
+        tree: receiptsTreeConfig,
+      });
+      console.log(`RECEIPTS_MERKLE_TREE=${receiptsTree.toBase58()}`);
+    } catch (err) {
+      throw new Error(
+        `Failed to create receipts Merkle tree for a fresh deployment.\n` +
+          `- configured tree : ${formatReceiptsTreeConfig(receiptsTreeConfig)}\n` +
+          `- error           : ${errorMessage(err)}\n` +
+          `\n` +
+          `Aborting to avoid writing stale receipts tree values from previous deployments.\n` +
+          `Fix NEW_DROP.onchain.receiptsTree in ${getActiveNewDropConfigPath()} and rerun.`,
+      );
+    }
   }
 
   let deliveryLut: PublicKey | null = null;
@@ -3151,12 +3960,17 @@ async function main() {
     });
     console.log(`DELIVERY_LOOKUP_TABLE=${deliveryLut.toBase58()}`);
   } catch (err) {
-    console.warn('⚠️  Failed to create/reuse delivery ALT:', errorMessage(err));
+    throw new Error(
+      `Failed to create delivery ALT: ${errorMessage(err)}`,
+    );
   }
 
   const receiptsTreeStr = receiptsTree.toBase58();
   // For fresh deployments, never reuse a previous drop's LUT: use the newly created LUT or leave empty.
-  const deliveryLutStr = deliveryLut?.toBase58() || '';
+  if (!deliveryLut) {
+    throw new Error('Delivery ALT is required before registry commit');
+  }
+  const deliveryLutStr = deliveryLut.toBase58();
 
   const preparedRegistry = await prepareDeploymentRegistry({
     root,
@@ -3164,6 +3978,9 @@ async function main() {
     dropId,
     dropFamily,
     collectionName: collectionMetadata.name,
+    displayName: dropCfg.displayName,
+    salesMode,
+    receiptPoolId,
     metadataBase: requiredDropMetadataBase,
     metadataPathFormat,
     mintSelection: boxMinterConfig.mintSelection,
@@ -3185,6 +4002,8 @@ async function main() {
     boxMinterConfigPda: configPda.toBase58(),
     collectionMint: resolvedCoreCollection.toBase58(),
     receiptsMerkleTree: receiptsTreeStr,
+    receiptsTreeMaxDepth: receiptsTreeConfig.maxDepth,
+    receiptsTreeCanopyDepth: receiptsTreeConfig.canopyDepth,
     deliveryLookupTable: deliveryLutStr,
   });
   const registryWrittenPath = await finalizeDiscountMerkleAndDeploymentRegistry({

@@ -9,6 +9,10 @@ import {
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  CARD_NFT_BINDER_CDN_BASE_URL,
+  CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   DRIFELLA_SHIRT_CDN_BASE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_IMAGE_BASE_URL,
@@ -233,6 +237,29 @@ test('drifella shirt display media uses the clean item and direct receipt ids', 
       imageRaw: 'https://metadata.example.com/shirt-receipt.webp',
     }),
     'https://metadata.example.com/shirt-receipt.webp',
+  );
+});
+
+test('card NFT binder uses its clean preview and shared receipt display image', () => {
+  assert.equal(CARD_NFT_BINDER_CDN_BASE_URL, 'https://cdn.lil.org/nft/card_nft_binder');
+  assert.equal(CARD_NFT_BINDER_CLEAN_IMAGE_URL, `${CARD_NFT_BINDER_CDN_BASE_URL}/clean.webp`);
+  assert.equal(CARD_NFT_BINDER_RECEIPT_IMAGE_URL, `${CARD_NFT_BINDER_CDN_BASE_URL}/receipt.webp`);
+
+  const content = resolveDropContent('card_nft_binder_devnet');
+  assert.equal(content.box.previewImageUrl, CARD_NFT_BINDER_CLEAN_IMAGE_URL);
+  assert.equal(content.box.aspectRatio, CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO);
+  assert.equal(content.mintPanel.previewImageUrl, CARD_NFT_BINDER_CLEAN_IMAGE_URL);
+  assert.equal(content.mintPanel.aspectRatio, CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO);
+  assert.equal(content.certificates.inventoryImageUrl, CARD_NFT_BINDER_RECEIPT_IMAGE_URL);
+  assert.equal(mintPanelPreviewImage('card_nft_binder_devnet'), CARD_NFT_BINDER_CLEAN_IMAGE_URL);
+  assert.equal(mintPanelPreviewAspectRatio('card_nft_binder_devnet'), CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO);
+  assert.equal(
+    normalizeCertificateDisplayImage({
+      dropId: 'card_nft_binder_devnet',
+      imageRaw: 'https://cdn.lil.org/nft/card_nft_binder/receipt.png',
+      boxId: 1,
+    }),
+    CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   );
 });
 

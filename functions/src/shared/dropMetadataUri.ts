@@ -59,6 +59,27 @@ export function canonicalMetadataBase(baseRaw: string): string {
   return canonicalMetadataUri(normalizeDropBase(baseRaw));
 }
 
+export function pooledReceiptBoxIdFromMetadataUri(
+  uriRaw: string,
+  metadataBaseRaw: string,
+): number | undefined {
+  const uri = canonicalMetadataUri(uriRaw);
+  const metadataBase = canonicalMetadataBase(metadataBaseRaw);
+  if (!uri || !metadataBase) return undefined;
+
+  const prefix = `${metadataBase}/rb`;
+  if (!uri.startsWith(prefix) || !uri.endsWith('.json')) return undefined;
+
+  const rawId = uri.slice(prefix.length, -'.json'.length);
+  if (!/^[1-9]\d*$/.test(rawId)) return undefined;
+
+  const id = Number(rawId);
+  if (!Number.isSafeInteger(id) || `${metadataBase}/rb${id}.json` !== uri) {
+    return undefined;
+  }
+  return id;
+}
+
 export function metadataKindFromUri(uriRaw: string): DropMetadataAssetKind | null {
   const uri = canonicalMetadataUri(uriRaw);
   if (!uri) return null;

@@ -5,7 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getNormalizedPathname, subscribeToNavigation } from './navigation';
 import { getBuildInfo } from './lib/buildInfo';
 import type { SolanaCluster } from './config/deployment';
-import { resolveFrontendDropByPath, resolveUpcomingDropRouteByPath } from './lib/dropConfig';
+import {
+  LEGACY_DROP_ROUTE_ALIASES,
+  resolveFrontendDropByPath,
+  resolveUpcomingDropRouteByPath,
+} from './lib/dropConfig';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import ShopRoute from './ShopRoute';
 import './styles.css';
@@ -40,6 +44,7 @@ const ROUTE_ALIASES: Record<string, RouteAlias> = {
   '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
   '/fullfillment': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
   '/notify-me': { targetPath: canonicalDrifPath, replaceUrl: true },
+  ...LEGACY_DROP_ROUTE_ALIASES,
   [canonicalClaimPath]: { targetPath: '/', replaceUrl: false },
 };
 

@@ -15,7 +15,7 @@ const RECEIPT_TRANSFER_CALLER_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:call
 const RECEIPT_TRANSFER_ASSET_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:asset';
 
 export type ReceiptTransferRateLimitCluster = SolanaCluster;
-export type ReceiptTransferRateLimitScope = 'caller' | 'asset';
+type ReceiptTransferRateLimitScope = 'caller' | 'asset';
 
 export type ReceiptTransferRateLimitDecision =
   | {

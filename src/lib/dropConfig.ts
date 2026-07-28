@@ -10,7 +10,11 @@ import {
 } from '../config/deployment';
 import { getHeliusApiKey } from './helius';
 import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
-import { DRIFELLA_SHIRT_CLEAN_IMAGE_URL } from '../config/dropMediaDefaults';
+import {
+  CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+} from '../config/dropMediaDefaults';
 
 function normalizePathname(pathname: string): string {
   const normalized = String(pathname || '').replace(/\/+$/, '');
@@ -33,6 +37,13 @@ export type UpcomingDropRouteConfig = {
   boxNamePrefix?: string;
 };
 
+export const LEGACY_DROP_ROUTE_ALIASES = {
+  '/drifella_binder': {
+    targetPath: '/card_nft_binder',
+    replaceUrl: true,
+  },
+} as const;
+
 const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
   {
     path: '/card_nft_2',
@@ -54,13 +65,13 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     boxNamePrefix: 'hoodie',
   },
   {
-    path: '/drifella_binder',
-    dropFamily: 'drifella_binder',
+    path: '/card_nft_binder',
+    dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
-    previewImageUrl: 'https://cdn.lil.org/nft/card_nft_binder/clean.webp',
-    previewAspectRatio: 1034 / 1400,
+    previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+    previewAspectRatio: CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
     boxNamePrefix: 'binder',
   },
   {

@@ -9,6 +9,7 @@
 
 import type {
   DropFamily,
+  DropSalesMode,
   MetadataPathFormat,
   MintSelectionConfig,
   SolanaCluster,
@@ -22,6 +23,9 @@ export type DeploymentRegistryDrop = {
   dropId: string;
   dropFamily: DropFamily;
   collectionName: string;
+  displayName?: string;
+  salesMode?: DropSalesMode;
+  receiptPoolId?: string;
 
   metadataBase: string;
   metadataPathFormat: MetadataPathFormat;
@@ -50,6 +54,8 @@ export type DeploymentRegistryDrop = {
   boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
+  receiptsTreeMaxDepth?: number;
+  receiptsTreeCanopyDepth?: number;
   deliveryLookupTable: string;
 };
 
@@ -73,6 +79,9 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
   dropId: { required: true },
   dropFamily: { required: true },
   collectionName: { required: true },
+  displayName: { required: false },
+  salesMode: { required: false },
+  receiptPoolId: { required: false },
   metadataBase: { required: true },
   metadataPathFormat: { required: true },
   secondaryMarketHref: { required: false },
@@ -98,8 +107,31 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
   boxMinterConfigPda: { required: false },
   collectionMint: { required: true },
   receiptsMerkleTree: { required: true },
+  receiptsTreeMaxDepth: { required: false },
+  receiptsTreeCanopyDepth: { required: false },
   deliveryLookupTable: { required: true },
 } as const satisfies DeploymentRegistryDropFieldSpecs;
+
+export type ReceiptPoolDeployment = {
+  solanaCluster: SolanaCluster;
+  receiptPoolId: string;
+  collectionMint: string;
+  receiptsMerkleTree: string;
+  authority: string;
+  collectionMetadataUri: string;
+  collectionName: string;
+  collectionSymbol: string;
+  royaltiesBasisPoints: number;
+  royaltiesRecipient: string;
+  receiptsTreeMaxDepth: number;
+  receiptsTreeMaxBufferSize: number;
+  receiptsTreeCanopyDepth: number;
+};
+
+export type ReceiptPoolDeploymentsMap = Record<
+  string,
+  ReceiptPoolDeployment
+>;
 
 export type DeploymentDropsMap = Record<string, DeploymentRegistryDrop>;
 
@@ -384,6 +416,26 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     deliveryLookupTable: 'F5tFuFeb2iQ4i42grSNjyokS2T9HxZDwMLjKRSERPgcL',
   },
 };
+
+export const RECEIPT_POOL_DEPLOYMENTS: ReceiptPoolDeploymentsMap = {};
+
+export function receiptPoolDeploymentKey(
+  solanaCluster: SolanaCluster,
+  receiptPoolId: string,
+): string {
+  return `${solanaCluster}:${String(receiptPoolId || '').trim().toLowerCase()}`;
+}
+
+export function getReceiptPoolDeployment(
+  solanaCluster: SolanaCluster,
+  receiptPoolId: string,
+): ReceiptPoolDeployment | undefined {
+  const key = receiptPoolDeploymentKey(solanaCluster, receiptPoolId);
+  return Object.prototype.hasOwnProperty.call(RECEIPT_POOL_DEPLOYMENTS, key)
+    ? RECEIPT_POOL_DEPLOYMENTS[key]
+    : undefined;
+}
+
 function assertRegistryKeysMatchDropIds(drops: DeploymentDropsMap): void {
   Object.entries(drops).forEach(([registryKey, drop]) => {
     if (registryKey !== drop.dropId) {

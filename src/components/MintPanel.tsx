@@ -51,6 +51,7 @@ export type MintPanelBoxMedia = {
 interface MintPanelProps {
   stats?: MintStats;
   onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
+  solanaMintVisible?: boolean;
   busy: boolean;
   onError?: (message: string) => void;
   title?: string;
@@ -635,6 +636,7 @@ function MintPanelBoxVideo({
 export function MintPanel({
   stats,
   onMint,
+  solanaMintVisible = true,
   busy,
   onError,
   title,
@@ -929,8 +931,13 @@ export function MintPanel({
       : undefined;
   const exceedsDiscountAllowance = normalizedDiscountMaxQuantity !== undefined && quantity > normalizedDiscountMaxQuantity;
   const hasDiscountAllowance = normalizedDiscountMaxQuantity === undefined || normalizedDiscountMaxQuantity > 0;
+  const showSolanaMintButton = solanaMintVisible;
   const useDiscountMint =
-    Boolean(discountAvailable && onDiscountMint) && !soldOut && hasDiscountAllowance && !exceedsDiscountAllowance;
+    showSolanaMintButton &&
+    Boolean(discountAvailable && onDiscountMint) &&
+    !soldOut &&
+    hasDiscountAllowance &&
+    !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick && stripePaymentDisplayPriceLabel) && !soldOut;
   const submitBusy = busy || discountSubmitPending || (useDiscountMint && Boolean(discountBusy));
   const controlsBusy = submitBusy || stripePaymentPending;
@@ -942,24 +949,28 @@ export function MintPanel({
   const submitAriaLabel = useDiscountMint
     ? `Mint with discount for ${totalDiscountPriceLabel} SOL. Regular price ${totalPriceLabel} SOL.`
     : undefined;
-  const ctaStackClassName = showStripePaymentButton
+  const ctaStackClassName = showStripePaymentButton && showSolanaMintButton
     ? 'mint-panel__cta-stack mint-panel__cta-stack--with-payment'
     : 'mint-panel__cta-stack';
   const stripeActionTextFit = useActionTextFit(stripePaymentButtonRef, [
     showStripePaymentButton,
+    showSolanaMintButton,
     stripePaymentPending,
     stripePaymentDisplayPriceLabel,
   ]);
   const submitActionTextFit = useActionTextFit(submitButtonRef, [
     showStripePaymentButton,
+    showSolanaMintButton,
     submitBusy,
     useDiscountMint,
     totalPriceLabel,
     totalDiscountPriceLabel,
   ]);
-  const pairedActionTextFit = showStripePaymentButton
+  const pairedActionTextFit = showStripePaymentButton && showSolanaMintButton
     ? tighterActionTextFit(stripeActionTextFit, submitActionTextFit)
-    : submitActionTextFit;
+    : showStripePaymentButton
+      ? stripeActionTextFit
+      : submitActionTextFit;
   const stripeActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const submitActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const mintTitle = title || 'Little Swag Boxes';
@@ -1001,6 +1012,7 @@ export function MintPanel({
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
+    if (!showSolanaMintButton) return;
     if (controlsBusy) return;
     if (showSizeSelector && !selectedSize) {
       setSizeBlinkToken((prev) => prev + 1);
@@ -1327,36 +1339,38 @@ export function MintPanel({
                   )}
                 </button>
               ) : null}
-              <button
-                ref={submitButtonRef}
-                type="submit"
-                form={formId}
-                className={submitClassName}
-                style={submitActionTextFitStyle}
-                disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
-                aria-label={submitAriaLabel}
-              >
-                {submitBusy ? (
-                  <span className="mint-panel__submit-text" data-mint-action-fit="label">Minting…</span>
-                ) : (
-                  <>
-                    <span className="mint-panel__submit-text" data-mint-action-fit="label">Mint</span>
-                    {useDiscountMint ? (
-                      <span
-                        className="mint-panel__submit-price mint-panel__submit-price--discounted"
-                        data-mint-action-fit="price"
-                        aria-hidden="true"
-                      >
-                        <span className="mint-panel__submit-price-old">{totalPriceLabel}</span>
-                        <span className="mint-panel__submit-price-new">{totalDiscountPriceLabel}</span>
-                        <span className="mint-panel__submit-price-currency">SOL</span>
-                      </span>
-                    ) : (
-                      <span className="mint-panel__submit-price" data-mint-action-fit="price">{totalPriceLabel} SOL</span>
-                    )}
-                  </>
-                )}
-              </button>
+              {showSolanaMintButton ? (
+                <button
+                  ref={submitButtonRef}
+                  type="submit"
+                  form={formId}
+                  className={submitClassName}
+                  style={submitActionTextFitStyle}
+                  disabled={controlsBusy || quantity < 1 || quantity > maxSelectable}
+                  aria-label={submitAriaLabel}
+                >
+                  {submitBusy ? (
+                    <span className="mint-panel__submit-text" data-mint-action-fit="label">Minting…</span>
+                  ) : (
+                    <>
+                      <span className="mint-panel__submit-text" data-mint-action-fit="label">Mint</span>
+                      {useDiscountMint ? (
+                        <span
+                          className="mint-panel__submit-price mint-panel__submit-price--discounted"
+                          data-mint-action-fit="price"
+                          aria-hidden="true"
+                        >
+                          <span className="mint-panel__submit-price-old">{totalPriceLabel}</span>
+                          <span className="mint-panel__submit-price-new">{totalDiscountPriceLabel}</span>
+                          <span className="mint-panel__submit-price-currency">SOL</span>
+                        </span>
+                      ) : (
+                        <span className="mint-panel__submit-price" data-mint-action-fit="price">{totalPriceLabel} SOL</span>
+                      )}
+                    </>
+                  )}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>

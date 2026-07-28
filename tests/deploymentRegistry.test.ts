@@ -26,6 +26,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   acquireDeploymentRegistryMutationLock,
+  assertReceiptPoolDropRelations,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
   DeploymentRegistryPostCommitVerificationError,
@@ -40,9 +41,11 @@ import {
   readFunctionsDropRegistry,
   renderDeploymentRegistryFile,
   renderDeploymentRegistryFileFromSource,
+  renderReceiptPoolDeploymentsFileFromSource,
   resolveDropAssetUrl,
   writeDeploymentRegistryFile,
   type DeploymentDropConfigSerialized,
+  type ReceiptPoolDeployment,
 } from '../scripts/shared/deploymentRegistry.ts';
 import { defineNewDropConfig } from '../scripts/shared/newDropConfig.ts';
 import { resolveDeploymentConfig } from '../scripts/startMint.ts';
@@ -199,6 +202,7 @@ const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
     overrides: { 4: 3 },
   },
   forceSoldOut: true,
+  displayName: 'All Optional Fields',
   mintSelection: {
     kind: 'size',
     options: [
@@ -211,8 +215,16 @@ const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
   stripeLiveUnitAmountCents: 12_345,
   stripeProductTaxCode: 'txcd_custom_optional_field_test',
   boxMinterConfigPda: 'Config11111111111111111111111111111111111',
+  receiptsTreeMaxDepth: 14,
+  receiptsTreeCanopyDepth: 8,
 } satisfies Required<
-  Pick<DeploymentRegistryDrop, OptionalDeploymentRegistryDropField>
+  Pick<
+    DeploymentRegistryDrop,
+    Exclude<
+      OptionalDeploymentRegistryDropField,
+      'salesMode' | 'receiptPoolId'
+    >
+  >
 >;
 
 async function withTempCanonical(
@@ -377,11 +389,11 @@ test('one nonempty canonical registry owns both public projections', async () =>
       'boxMinterProgramId',
       'boxMinterConfigPda',
       'collectionMint',
+      'receiptsMerkleTree',
     ] as const) {
       assert.deepEqual(frontend[field], functionsDrop[field], `${dropId}.${field}`);
       assert.deepEqual(frontend[field], canonical[field], `${dropId}.${field}`);
     }
-    assert.equal('receiptsMerkleTree' in frontend, false);
     assert.equal('deliveryLookupTable' in frontend, false);
     assert.equal('stripeProductTaxCode' in frontend, false);
     assert.equal('figureMedia' in functionsDrop, false);
@@ -782,6 +794,132 @@ test('canonical renderer round-trips every optional deployment field', async () 
       existingContent: registry.sourceContent,
       drops: registry.drops,
     }), source);
+  });
+});
+
+test('receipt pool relations bind pooled drops to one cluster-scoped identity', () => {
+  const pool: ReceiptPoolDeployment = {
+    solanaCluster: 'devnet',
+    receiptPoolId: 'mons_shop_receipts',
+    collectionMint: 'Collection22222222222222222222222222222222',
+    receiptsMerkleTree: 'Tree222222222222222222222222222222222222',
+    authority: 'Authority222222222222222222222222222222222',
+    collectionMetadataUri: 'https://assets.example.com/receipts/collection.json',
+    collectionName: 'mons shop receipts',
+    collectionSymbol: 'receipts',
+    royaltiesBasisPoints: 500,
+    royaltiesRecipient: 'Treasury22222222222222222222222222222222',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeMaxBufferSize: 64,
+    receiptsTreeCanopyDepth: 8,
+  };
+  const drop = registryDrop('pooled_receipt_drop', {
+    solanaCluster: 'devnet',
+    collectionName: pool.collectionName,
+    displayName: 'Pooled Receipt Drop',
+    salesMode: 'stripe_receipt_only',
+    receiptPoolId: pool.receiptPoolId,
+    stripeCheckoutEnabled: true,
+    itemsPerBox: 0,
+    maxPerTx: 1,
+    collectionMint: pool.collectionMint,
+    receiptsMerkleTree: pool.receiptsMerkleTree,
+    receiptsTreeMaxDepth: pool.receiptsTreeMaxDepth,
+    receiptsTreeCanopyDepth: pool.receiptsTreeCanopyDepth,
+    symbol: pool.collectionSymbol,
+  });
+  assert.doesNotThrow(() =>
+    assertReceiptPoolDropRelations({
+      drops: { [drop.dropId]: drop },
+      receiptPools: { 'devnet:mons_shop_receipts': pool },
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolDropRelations({
+        drops: { [drop.dropId]: drop },
+        receiptPools: {
+          'devnet:mons_shop_receipts': pool,
+          'devnet:duplicate_pool': {
+            ...pool,
+            receiptPoolId: 'duplicate_pool',
+          },
+        },
+      }),
+    /use the same collection and tree/,
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolDropRelations({
+        drops: {
+          [drop.dropId]: drop,
+          pooled_receipt_drop_2: {
+            ...drop,
+            dropId: 'pooled_receipt_drop_2',
+          },
+        },
+        receiptPools: { 'devnet:mons_shop_receipts': pool },
+      }),
+    /duplicate metadataBase/,
+  );
+  for (const [field, value] of [
+    ['collectionName', 'other receipt collection'],
+    ['symbol', 'other'],
+  ] as const) {
+    assert.throws(
+      () =>
+        assertReceiptPoolDropRelations({
+          drops: {
+            [drop.dropId]: {
+              ...drop,
+              [field]: value,
+            },
+          },
+          receiptPools: { 'devnet:mons_shop_receipts': pool },
+        }),
+      new RegExp(`does not match receipt pool .*${field}`),
+    );
+  }
+});
+
+test('canonical receipt pool renderer round-trips cluster-scoped rows', async () => {
+  const pool: ReceiptPoolDeployment = {
+    solanaCluster: 'devnet',
+    receiptPoolId: 'mons_shop_receipts',
+    collectionMint: 'Collection33333333333333333333333333333333',
+    receiptsMerkleTree: 'Tree333333333333333333333333333333333333',
+    authority: 'Authority333333333333333333333333333333333',
+    collectionMetadataUri:
+      'https://assets.example.com/receipts/collection.json',
+    collectionName: 'mons shop receipts',
+    collectionSymbol: 'receipts',
+    royaltiesBasisPoints: 500,
+    royaltiesRecipient:
+      'Treasury33333333333333333333333333333333',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeMaxBufferSize: 64,
+    receiptsTreeCanopyDepth: 8,
+  };
+  const baseSource = renderDeploymentRegistryFile({ drops: {} });
+  const source = renderReceiptPoolDeploymentsFileFromSource({
+    filePath: fileURLToPath(CANONICAL_SOURCE_URL),
+    existingContent: baseSource,
+    receiptPools: { 'devnet:mons_shop_receipts': pool },
+  });
+  await withTempCanonical(source, async (filePath) => {
+    const registry = await readDeploymentDropRegistry(filePath);
+    assert.deepEqual(
+      registry.receiptPools['devnet:mons_shop_receipts'],
+      pool,
+    );
+    assert.equal(
+      renderReceiptPoolDeploymentsFileFromSource({
+        filePath,
+        existingContent: registry.sourceContent,
+        receiptPools: registry.receiptPools,
+      }),
+      source,
+    );
   });
 });
 
@@ -1267,8 +1405,8 @@ test('legacy projection readers preserve defaults while canonical reads remain t
     boxMedia,
     forceSoldOut: true,
   });
+  const receiptsMerkleTree = common.receiptsMerkleTree;
   const {
-    receiptsMerkleTree,
     deliveryLookupTable,
     stripeProductTaxCode: _stripeProductTaxCode,
     ...frontend
@@ -1321,6 +1459,10 @@ test('legacy projection readers preserve defaults while canonical reads remain t
     );
     assert.equal(frontendRegistry.drops.legacy_card.secondaryMarketHref, customMarket);
     assert.equal(frontendRegistry.drops.legacy_card.forceSoldOut, true);
+    assert.equal(
+      frontendRegistry.drops.legacy_card.receiptsMerkleTree,
+      receiptsMerkleTree,
+    );
     assert.equal(
       Object.prototype.hasOwnProperty.call(
         frontendRegistry.drops.default_market,

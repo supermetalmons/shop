@@ -3,6 +3,9 @@ import { INTERACTIVE_CARD_PACK_REVEAL_TIMING } from '../lib/interactiveCardPackR
 import {
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
+  CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL,
   LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
@@ -185,6 +188,19 @@ const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     boxInventoryMedia: CARD_NFT_2_PACK_RECEIPT_MEDIA,
   },
 };
+const CARD_NFT_BINDER_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  box: {
+    previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+    aspectRatio: CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  },
+  mintPanel: {
+    previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+    aspectRatio: CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  },
+  certificates: {
+    inventoryImageUrl: CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
+  },
+};
 
 export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
 };
@@ -259,6 +275,7 @@ function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraC
   if (isDropFamily(normalizedDropId, 'little_swag_boxes')) return LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'card_nft_2')) return CARD_NFT_2_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'card_nft_binder')) return CARD_NFT_BINDER_FAMILY_EXTRA_CONTENT;
   return undefined;
 }
 

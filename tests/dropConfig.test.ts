@@ -16,15 +16,16 @@ import {
   requireDropFamily,
 } from '../scripts/shared/deploymentRegistry.ts';
 import {
+  LEGACY_DROP_ROUTE_ALIASES,
   listUpcomingDropRoutes,
   resolveUpcomingDropRouteByPath,
   resolveUpcomingRouteDrop,
 } from '../src/lib/dropConfig.ts';
 
-const DRIFELLA_UPCOMING_ROUTES = [
+const UPCOMING_ROUTES = [
   {
-    path: '/drifella_binder',
-    dropFamily: 'drifella_binder',
+    path: '/card_nft_binder',
+    dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
@@ -44,34 +45,48 @@ const DRIFELLA_UPCOMING_ROUTES = [
   },
 ] as const;
 
-test('Drifella upcoming routes expose their exact preview configuration', () => {
+test('upcoming routes expose their exact preview configuration', () => {
   const routesByPath = new Map(listUpcomingDropRoutes().map((route) => [route.path, route]));
 
-  for (const expected of DRIFELLA_UPCOMING_ROUTES) {
+  for (const expected of UPCOMING_ROUTES) {
     assert.deepEqual(routesByPath.get(expected.path), expected);
   }
 });
 
-test('Drifella upcoming routes resolve with trailing slashes and reflect deployment state', () => {
-  for (const expected of DRIFELLA_UPCOMING_ROUTES) {
+test('legacy binder route redirects to the canonical family route', () => {
+  assert.deepEqual(LEGACY_DROP_ROUTE_ALIASES['/drifella_binder'], {
+    targetPath: '/card_nft_binder',
+    replaceUrl: true,
+  });
+  assert.equal(resolveUpcomingDropRouteByPath('/drifella_binder'), null);
+});
+
+test('upcoming routes resolve with trailing slashes and reflect deployment state', () => {
+  for (const expected of UPCOMING_ROUTES) {
     const route = resolveUpcomingDropRouteByPath(`${expected.path}/`);
 
     assert.deepEqual(route, expected);
     assert.equal(resolveUpcomingRouteDrop(route, []), null);
   }
 
-  assert.equal(FRONTEND_DROPS.drifella_binder, undefined);
-  assert.equal(FUNCTIONS_DROPS.drifella_binder, undefined);
+  assert.equal(
+    FRONTEND_DROPS.card_nft_binder?.dropId,
+    FUNCTIONS_DROPS.card_nft_binder?.dropId,
+  );
   assert.equal(FRONTEND_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
   assert.equal(FUNCTIONS_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
+  assert.equal(
+    resolveUpcomingRouteDrop(resolveUpcomingDropRouteByPath('/card_nft_binder/'))?.dropId,
+    FRONTEND_DROPS.card_nft_binder?.dropId,
+  );
   assert.equal(
     resolveUpcomingRouteDrop(resolveUpcomingDropRouteByPath('/drifella_shirt/'))?.dropId,
     'drifella_shirt',
   );
 });
 
-test('Drifella family names normalize and default from IDs across registry contracts', () => {
-  for (const family of ['drifella_binder', 'drifella_shirt'] as const) {
+test('drop family names normalize and default from IDs across registry contracts', () => {
+  for (const family of ['card_nft_binder', 'drifella_shirt'] as const) {
     assert.equal(defaultFrontendDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(undefined, ` ${family.toUpperCase()} `), family);

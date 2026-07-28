@@ -1868,7 +1868,7 @@ header.top--shop.top--spacer {
   }
 
   .drops-panel__tile--drifella_shirt .drops-panel__title,
-  .drops-panel__tile--drifella_binder .drops-panel__title {
+  .drops-panel__tile--card_nft_binder .drops-panel__title {
     font-size: clamp(14px, 4.6cqw, 22px);
     white-space: nowrap;
   }
@@ -1900,7 +1900,7 @@ header.top--shop.top--spacer {
   }
 
   .drops-panel__tile--drifella_shirt .drops-panel__image-stage,
-  .drops-panel__tile--drifella_binder .drops-panel__image-stage {
+  .drops-panel__tile--card_nft_binder .drops-panel__image-stage {
     min-height: 0;
   }
 

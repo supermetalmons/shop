@@ -3,24 +3,51 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { PublicKey } from '@solana/web3.js';
+import {
+  PublicKey,
+  type Commitment,
+  type Connection,
+} from '@solana/web3.js';
 import {
   assertMplCoreCollectionHasUpdateDelegates,
+  assertExistingConfigMatchesResume,
+  assertReceiptPoolCollectionUpdateDelegatePolicy,
+  assertReceiptPoolCapacity,
+  assertReceiptMetadataRange,
   commitDeploymentRegistry,
   decodeBoxMinterConfigForDeployPreflight,
+  decodeReceiptTreeState,
   decodeMplCoreCollectionUpdateDelegates,
   finalizeDiscountMerkleAndDeploymentRegistry,
   formatFreshProgramKeypairNotice,
   prepareStripeCheckoutConfig,
   registerDeploymentCleanup,
   revalidateReusableProgramResolution,
+  validateReceiptPoolDeploymentOnchain,
   validateDiscountMerkleDatasetForDeploy,
 } from '../scripts/deploy-all-onchain.ts';
-import { BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS } from '../functions/src/shared/boxMinterConfigCodec.ts';
+import {
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
+  BOX_MINTER_CONFIG_DISCRIMINATOR,
+} from '../functions/src/shared/boxMinterConfigCodec.ts';
 import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
 import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
 import { NEW_DROP as LITTLE_SWAG_HOODIES_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies.ts';
 import { NEW_DROP as LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies_devnet.ts';
+import { NEW_DROP as CARD_NFT_BINDER_NEW_DROP } from '../scripts/newDrops/card_nft_binder.ts';
+import { NEW_DROP as CARD_NFT_BINDER_DEVNET_NEW_DROP } from '../scripts/newDrops/card_nft_binder_devnet.ts';
+import {
+  MONS_SHOP_RECEIPTS_POOL_ID,
+  requireReceiptPoolSpec,
+} from '../scripts/shared/receiptPoolConfig.ts';
+import {
+  assertReceiptPoolRpcGenesisHash,
+  classifyReceiptPoolJournalRetry,
+  completeReceiptPoolJournal,
+  RECEIPT_POOL_CLUSTER_GENESIS_HASHES,
+  RECEIPT_POOL_FINALIZED_COMMITMENT,
+} from '../scripts/deploy-receipt-pool.ts';
 import {
   DeploymentRegistryPostCommitVerificationError,
   isDeploymentRegistryPostCommitVerificationError,
@@ -53,6 +80,81 @@ function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
 }
 
+function encodeExactResumeConfig(args: {
+  admin: PublicKey;
+  treasury: PublicKey;
+  coreCollection: PublicKey;
+  discountMerkleRoot: Buffer;
+  dropSeed: Buffer;
+  started?: boolean;
+  minted?: number;
+}): Buffer {
+  const payload = Buffer.concat([
+    Buffer.from(BOX_MINTER_CONFIG_DISCRIMINATOR),
+    args.admin.toBuffer(),
+    args.treasury.toBuffer(),
+    args.coreCollection.toBuffer(),
+    u64LE(100),
+    u64LE(90),
+    args.discountMerkleRoot,
+    u32LE(15),
+    u8(1),
+    u8(0),
+    u32LE(args.minted ?? 0),
+    borshString('binder'),
+    borshString('receipts'),
+    borshString('https://cdn.lil.org/nft/card_nft_binder/json'),
+    u8(args.started ? 1 : 0),
+    u8(255),
+    u8(1),
+    borshString('binder'),
+    u8(0),
+    ...Array.from({ length: 9 }, () => u32LE(0)),
+    args.dropSeed,
+  ]);
+  const data = Buffer.alloc(BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED);
+  assert.ok(payload.length <= data.length);
+  payload.copy(data);
+  return data;
+}
+
+function exactResumeArgs(overrides: {
+  data?: Buffer;
+  symbol?: string;
+} = {}) {
+  const admin = pubkey(1);
+  const treasury = pubkey(2);
+  const coreCollection = pubkey(3);
+  const discountMerkleRoot = Buffer.alloc(32, 7);
+  const dropSeed = Buffer.alloc(32, 9);
+  return {
+    data:
+      overrides.data ??
+      encodeExactResumeConfig({
+        admin,
+        treasury,
+        coreCollection,
+        discountMerkleRoot,
+        dropSeed,
+      }),
+    admin,
+    treasury,
+    coreCollection,
+    priceLamports: 100n,
+    discountPriceLamports: 90n,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot,
+    maxSupply: 15,
+    itemsPerBox: 0,
+    maxPerTx: 1,
+    namePrefix: 'binder',
+    figureNamePrefix: 'binder',
+    symbol: overrides.symbol ?? 'receipts',
+    metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
+    dropSeed,
+  };
+}
+
 test('deploy config decoding preserves its size error and ownership-gated discriminator policy', () => {
   assert.throws(
     () =>
@@ -69,6 +171,120 @@ test('deploy config decoding preserves its size error and ownership-gated discri
   );
   assert.equal(decoded.itemsPerBox, 0);
   assert.equal(decoded.admin.toBase58(), PublicKey.default.toBase58());
+});
+
+test('exact resume accepts only an identical unstarted zero-mint config', () => {
+  const expected = exactResumeArgs();
+  assert.doesNotThrow(() => assertExistingConfigMatchesResume(expected));
+  assert.throws(
+    () =>
+      assertExistingConfigMatchesResume({
+        ...expected,
+        symbol: 'different',
+      }),
+    /symbol differ/,
+  );
+  assert.throws(
+    () =>
+      assertExistingConfigMatchesResume(
+        exactResumeArgs({
+          data: encodeExactResumeConfig({
+            admin: expected.admin,
+            treasury: expected.treasury,
+            coreCollection: expected.coreCollection,
+            discountMerkleRoot: expected.discountMerkleRoot,
+            dropSeed: expected.dropSeed,
+            started: true,
+          }),
+        }),
+      ),
+    /started differ/,
+  );
+  assert.throws(
+    () =>
+      assertExistingConfigMatchesResume(
+        exactResumeArgs({
+          data: encodeExactResumeConfig({
+            admin: expected.admin,
+            treasury: expected.treasury,
+            coreCollection: expected.coreCollection,
+            discountMerkleRoot: expected.discountMerkleRoot,
+            dropSeed: expected.dropSeed,
+            minted: 1,
+          }),
+        }),
+      ),
+    /minted differ/,
+  );
+});
+
+test('receipt pool tree decoder reads Bubblegum V2 capacity and mint state', () => {
+  const creator = pubkey(44);
+  const authority = pubkey(45);
+  const merkleTreeData = Buffer.alloc(56);
+  merkleTreeData[0] = 1;
+  merkleTreeData[1] = 0;
+  merkleTreeData.writeUInt32LE(64, 2);
+  merkleTreeData.writeUInt32LE(14, 6);
+  authority.toBuffer().copy(merkleTreeData, 10);
+  const treeConfigData = Buffer.alloc(96);
+  Buffer.from([122, 245, 175, 248, 171, 34, 0, 207]).copy(
+    treeConfigData,
+  );
+  creator.toBuffer().copy(treeConfigData, 8);
+  creator.toBuffer().copy(treeConfigData, 40);
+  treeConfigData.writeBigUInt64LE(16_384n, 72);
+  treeConfigData.writeBigUInt64LE(15n, 80);
+  treeConfigData[88] = 0;
+  treeConfigData[90] = 1;
+
+  const decoded = decodeReceiptTreeState({
+    merkleTreeData,
+    treeConfigData,
+  });
+  assert.equal(decoded.maxDepth, 14);
+  assert.equal(decoded.maxBufferSize, 64);
+  assert.equal(decoded.authority.toBase58(), authority.toBase58());
+  assert.equal(decoded.creator.toBase58(), creator.toBase58());
+  assert.equal(decoded.delegate.toBase58(), creator.toBase58());
+  assert.equal(decoded.totalCapacity, 16_384);
+  assert.equal(decoded.numMinted, 15);
+  assert.equal(decoded.isPublic, false);
+  assert.equal(decoded.version, 1);
+});
+
+test('receipt pool on-chain validation uses its explicit commitment', async () => {
+  let observedCommitment: Commitment | undefined;
+  const connection = {
+    getMultipleAccountsInfo: async (
+      _addresses: PublicKey[],
+      config?: { commitment?: Commitment },
+    ) => {
+      observedCommitment = config?.commitment;
+      return [null, null, null];
+    },
+  } as unknown as Connection;
+
+  await assert.rejects(
+    () =>
+      validateReceiptPoolDeploymentOnchain({
+        connection,
+        collectionMint: pubkey(50),
+        receiptsMerkleTree: pubkey(51),
+        authority: pubkey(52),
+        collectionMetadataUri:
+          'https://assets.example.com/receipt-pool/collection.json',
+        collectionName: 'receipt pool',
+        royaltiesBasisPoints: 500,
+        royaltiesRecipient: pubkey(53),
+        receiptsTreeMaxDepth: 14,
+        receiptsTreeMaxBufferSize: 64,
+        receiptsTreeCanopyDepth: 8,
+        commitment: RECEIPT_POOL_FINALIZED_COMMITMENT,
+      }),
+    /Missing receipt pool collection/,
+  );
+  assert.equal(observedCommitment, 'finalized');
 });
 
 function makeDiscountMerkleFinalizationFixture() {
@@ -809,6 +1025,29 @@ test('assertMplCoreCollectionHasUpdateDelegates rejects externally controlled Up
   );
 });
 
+test('shared receipt pool collection forbids config PDA delegates', () => {
+  const authority = pubkey(30);
+  const configPda = pubkey(10);
+  assert.doesNotThrow(() =>
+    assertReceiptPoolCollectionUpdateDelegatePolicy({
+      data: encodeCollectionWithUpdateDelegates({
+        delegates: [authority],
+      }),
+      authority,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolCollectionUpdateDelegatePolicy({
+        data: encodeCollectionWithUpdateDelegates({
+          delegates: [authority, configPda],
+        }),
+        authority,
+      }),
+    /delegate only to its fixed authority/,
+  );
+});
+
 test('formatFreshProgramKeypairNotice warns to back up non-git fresh shared program keypair', () => {
   const notice = formatFreshProgramKeypairNotice({
     programId: 'Program1111111111111111111111111111111111111',
@@ -834,6 +1073,262 @@ test('little_swag_hoodies new drop configs use CDN collection image', () => {
     assert.equal(drop.onchain.collectionMetadata.image, LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL);
     assert.match(drop.onchain.collectionMetadata.image || '', /^https:\/\/cdn\.lil\.org\//);
   }
+});
+
+test('card_nft_binder configs use the shared Stripe-only receipt pool', () => {
+  const spec = requireReceiptPoolSpec(MONS_SHOP_RECEIPTS_POOL_ID);
+  assert.equal(spec.collectionMetadataUri, 'https://cdn.lil.org/nft/mons_shop_receipts/collection.json');
+  assert.equal(spec.receiptsTree.maxDepth, 14);
+  assert.equal(spec.receiptsTree.maxBufferSize, 64);
+  assert.equal(spec.receiptsTree.canopyDepth, 8);
+
+  for (const drop of [
+    CARD_NFT_BINDER_NEW_DROP,
+    CARD_NFT_BINDER_DEVNET_NEW_DROP,
+  ]) {
+    assert.equal(drop.onchain.dropFamily, 'card_nft_binder');
+    assert.equal(drop.onchain.displayName, 'Card NFT Binder');
+    assert.equal(drop.onchain.salesMode, 'stripe_receipt_only');
+    assert.equal(drop.onchain.receiptPoolId, MONS_SHOP_RECEIPTS_POOL_ID);
+    assert.equal(drop.onchain.metadataBase, 'https://cdn.lil.org/nft/card_nft_binder/json');
+    assert.equal(drop.onchain.collectionMetadata, undefined);
+    assert.equal(drop.onchain.receiptsTree, undefined);
+    assert.equal(drop.onchain.coreCollectionRoyaltiesBps, undefined);
+    assert.equal(drop.onchain.symbol, undefined);
+    assert.equal(drop.onchain.priceSol, 1_000_000);
+    assert.equal(drop.onchain.discountPriceSol, 1_000_000);
+    assert.equal(drop.onchain.stripeCheckoutEnabled, true);
+    assert.equal(drop.onchain.itemsPerBox, 0);
+    assert.equal(drop.onchain.maxPerTx, 1);
+    assert.equal(drop.onchain.maxSupply, 15);
+  }
+
+  assert.equal(
+    CARD_NFT_BINDER_NEW_DROP.deploy.reuseProgramIdFromDropId,
+    'little_swag_hoodies',
+  );
+  assert.equal(
+    CARD_NFT_BINDER_DEVNET_NEW_DROP.deploy.reuseProgramIdFromDropId,
+    'little_swag_hoodies_devnet',
+  );
+  assert.equal(
+    CARD_NFT_BINDER_NEW_DROP.onchain.stripeLiveUnitAmountCents,
+    10_000,
+  );
+  assert.equal(
+    CARD_NFT_BINDER_DEVNET_NEW_DROP.onchain.stripeLiveUnitAmountCents,
+    undefined,
+  );
+});
+
+test('shared receipt pool capacity is aggregate and rejects untracked mints', () => {
+  const existing = deploymentRegistryTestDrop({
+    dropId: 'existing_receipt_drop',
+    programId: pubkey(70).toBase58(),
+  });
+  existing.solanaCluster = 'devnet';
+  existing.salesMode = 'stripe_receipt_only';
+  existing.receiptPoolId = MONS_SHOP_RECEIPTS_POOL_ID;
+  existing.metadataBase = 'https://assets.example.com/receipt-a';
+  existing.maxSupply = 10;
+  existing.itemsPerBox = 0;
+  existing.maxPerTx = 1;
+
+  assert.deepEqual(
+    assertReceiptPoolCapacity({
+      solanaCluster: 'devnet',
+      receiptPoolId: MONS_SHOP_RECEIPTS_POOL_ID,
+      metadataBase: 'https://assets.example.com/receipt-b',
+      maxSupply: 15,
+      treeMaxDepth: 14,
+      existingDrops: { existing_receipt_drop: existing },
+      onchainNumMinted: 10,
+    }),
+    { reservedLeaves: 25, capacity: 16_384 },
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolCapacity({
+        solanaCluster: 'devnet',
+        receiptPoolId: MONS_SHOP_RECEIPTS_POOL_ID,
+        metadataBase: 'https://assets.example.com/receipt-b',
+        maxSupply: 15,
+        treeMaxDepth: 14,
+        existingDrops: { existing_receipt_drop: existing },
+        onchainNumMinted: 11,
+      }),
+    /minted leaves but only 10 registered leaves/,
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolCapacity({
+        solanaCluster: 'devnet',
+        receiptPoolId: MONS_SHOP_RECEIPTS_POOL_ID,
+        metadataBase: existing.metadataBase,
+        maxSupply: 1,
+        treeMaxDepth: 14,
+        existingDrops: { existing_receipt_drop: existing },
+      }),
+    /already has a drop using metadataBase/,
+  );
+});
+
+test('receipt metadata preflight uses pool capacity above 10,000', async () => {
+  let fetched = 0;
+  await assertReceiptMetadataRange({
+    metadataBase: 'https://assets.example.com/large-receipt-drop',
+    maxSupply: 10_001,
+    treeCapacity: 16_384,
+    fetchImpl: async (input) => {
+      fetched += 1;
+      const match = /\/rb(\d+)\.json$/.exec(String(input));
+      assert.ok(match);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: Number(match[1]),
+          name: `Receipt ${match[1]}`,
+          image: 'https://assets.example.com/receipt.webp',
+        }),
+      } as Response;
+    },
+  });
+  assert.equal(fetched, 10_001);
+
+  await assert.rejects(
+    () =>
+      assertReceiptMetadataRange({
+        metadataBase: 'https://assets.example.com/oversized-receipt-drop',
+        maxSupply: 16_385,
+        treeCapacity: 16_384,
+        fetchImpl: async () => {
+          throw new Error('fetch must not run');
+        },
+      }),
+    /expected an integer in 1\.\.16384/,
+  );
+});
+
+test('receipt metadata preflight limits request concurrency to 16', async () => {
+  let active = 0;
+  let maxActive = 0;
+  await assertReceiptMetadataRange({
+    metadataBase: 'https://assets.example.com/concurrent-receipt-drop',
+    maxSupply: 40,
+    treeCapacity: 16_384,
+    fetchImpl: async (input) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active -= 1;
+      const match = /\/rb(\d+)\.json$/.exec(String(input));
+      assert.ok(match);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: Number(match[1]),
+          name: `Receipt ${match[1]}`,
+          image: 'https://assets.example.com/receipt.webp',
+        }),
+      } as Response;
+    },
+  });
+  assert.equal(maxActive, 16);
+});
+
+test('receipt pool journal retries recover atomically and regenerate only after expiry', () => {
+  assert.equal(
+    classifyReceiptPoolJournalRetry({
+      collectionExists: true,
+      treeExists: true,
+      currentBlockHeight: 10,
+      lastValidBlockHeight: 20,
+    }),
+    'recover',
+  );
+  assert.equal(
+    classifyReceiptPoolJournalRetry({
+      collectionExists: true,
+      treeExists: false,
+      currentBlockHeight: 10,
+      lastValidBlockHeight: 20,
+    }),
+    'partial',
+  );
+  assert.equal(
+    classifyReceiptPoolJournalRetry({
+      collectionExists: false,
+      treeExists: false,
+      currentBlockHeight: 20,
+      lastValidBlockHeight: 20,
+    }),
+    'wait_for_expiry',
+  );
+  assert.equal(
+    classifyReceiptPoolJournalRetry({
+      collectionExists: false,
+      treeExists: false,
+      currentBlockHeight: 21,
+      lastValidBlockHeight: 20,
+    }),
+    'regenerate',
+  );
+});
+
+test('receipt pool deployment validates cluster identity and finalization before commit', async () => {
+  assert.doesNotThrow(() =>
+    assertReceiptPoolRpcGenesisHash({
+      solanaCluster: 'devnet',
+      genesisHash: RECEIPT_POOL_CLUSTER_GENESIS_HASHES.devnet,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertReceiptPoolRpcGenesisHash({
+      solanaCluster: 'mainnet-beta',
+      genesisHash:
+        RECEIPT_POOL_CLUSTER_GENESIS_HASHES['mainnet-beta'],
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolRpcGenesisHash({
+        solanaCluster: 'devnet',
+        genesisHash:
+          RECEIPT_POOL_CLUSTER_GENESIS_HASHES['mainnet-beta'],
+      }),
+    /genesis hash mismatch/,
+  );
+  assert.throws(
+    () =>
+      assertReceiptPoolRpcGenesisHash({
+        solanaCluster: 'mainnet-beta',
+        genesisHash: 'unknown-genesis-hash',
+      }),
+    /genesis hash mismatch/,
+  );
+  assert.equal(RECEIPT_POOL_FINALIZED_COMMITMENT, 'finalized');
+
+  const events: string[] = [];
+  await assert.rejects(
+    () =>
+      completeReceiptPoolJournal({
+        journalPath: '/unused/receipt-pool-journal.json',
+        finalize: async () => {
+          events.push('finalize');
+          throw new Error('finalization failed');
+        },
+        commit: async () => {
+          events.push('commit');
+        },
+        removeJournal: () => {
+          events.push('remove');
+        },
+      }),
+    /finalization failed/,
+  );
+  assert.deepEqual(events, ['finalize']);
 });
 
 test('prepareStripeCheckoutConfig fails preflight for Stripe-enabled mainnet drops without live pricing', () => {

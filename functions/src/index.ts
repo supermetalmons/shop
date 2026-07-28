@@ -27,7 +27,6 @@ import { fileURLToPath } from 'url';
 import { FUNCTIONS_DROPS, normalizeDropBase, type FunctionsDropConfig } from './config/deployment.js';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
-  assetGroupingAllowsTreeVerifiedCollectionMatch,
   assetGroupingCollectionMints,
   uniqueAssetGroupingCollectionMint,
 } from './dasAssetCollections.js';
@@ -105,7 +104,14 @@ import {
   type DirectCardReceiptClaimSubmission,
   type DirectCardReceiptClaimTransferEvidence,
 } from './adminIrlCardReceipt.js';
-import { assetProofMatchesTree, assetProofTreePublicKey } from './receiptProof.js';
+import {
+  assetMatchesReceiptDropIdentity,
+  assetMatchesReceiptMetadataIdentity,
+  assetProofTreePublicKey,
+  normalizedAssetProofAccounts,
+  receiptMetadataReference,
+  type ReceiptMetadataReference,
+} from './receiptProof.js';
 import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from './bubblegum.js';
 import {
   RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
@@ -213,6 +219,7 @@ import {
 } from './shared/dasAsset.js';
 import {
   normalizeBoxMinterMetadataBaseForComparison,
+  normalizeDropSalesMode,
   normalizeDropId as normalizeDropIdShared,
 } from './shared/deploymentCore.js';
 import {
@@ -385,6 +392,8 @@ type DropRuntime = {
   collectionMintStr: string;
   receiptsMerkleTree: PublicKey;
   receiptsMerkleTreeStr: string;
+  receiptsTreeMaxDepth?: number;
+  receiptsTreeCanopyDepth: number;
   deliveryLookupTable: PublicKey;
   deliveryLookupTableStr: string;
   itemsPerBox: number;
@@ -466,6 +475,23 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   const collectionMint = requireConfiguredPubkey('COLLECTION_MINT', config.collectionMint);
   const receiptsMerkleTree = requireConfiguredPubkey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree);
   const deliveryLookupTable = requireConfiguredPubkey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable);
+  const receiptsTreeMaxDepthRaw = Number((config as FunctionsDropConfig & {
+    receiptsTreeMaxDepth?: number;
+  }).receiptsTreeMaxDepth);
+  const receiptsTreeCanopyDepthRaw = Number((config as FunctionsDropConfig & {
+    receiptsTreeCanopyDepth?: number;
+  }).receiptsTreeCanopyDepth ?? 0);
+  const receiptsTreeMaxDepth = Number.isInteger(receiptsTreeMaxDepthRaw) && receiptsTreeMaxDepthRaw > 0
+    ? receiptsTreeMaxDepthRaw
+    : undefined;
+  const receiptsTreeCanopyDepth = Number.isInteger(receiptsTreeCanopyDepthRaw) && receiptsTreeCanopyDepthRaw >= 0
+    ? receiptsTreeCanopyDepthRaw
+    : 0;
+  if (receiptsTreeMaxDepth != null && receiptsTreeCanopyDepth >= receiptsTreeMaxDepth) {
+    throw new Error(
+      `Receipt tree canopy depth is invalid in functions/src/config/deployment.ts for drop ${dropId}`,
+    );
+  }
   const heliusRpcBase = heliusRpcBaseForCluster(cluster);
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   const connectionRpcUrl = apiKey ? `${heliusRpcBase}/?api-key=${apiKey}` : '';
@@ -481,6 +507,8 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     collectionMintStr: collectionMint.equals(PublicKey.default) ? '' : collectionMint.toBase58(),
     receiptsMerkleTree,
     receiptsMerkleTreeStr: receiptsMerkleTree.equals(PublicKey.default) ? '' : receiptsMerkleTree.toBase58(),
+    ...(receiptsTreeMaxDepth != null ? { receiptsTreeMaxDepth } : {}),
+    receiptsTreeCanopyDepth,
     deliveryLookupTable,
     deliveryLookupTableStr: deliveryLookupTable.equals(PublicKey.default) ? '' : deliveryLookupTable.toBase58(),
     itemsPerBox,
@@ -1653,7 +1681,7 @@ function heliusSearchAssetsParams(owner: string, page: number, grouping?: readon
 async function findOwnedAssetByPredicate(params: {
   owner: string;
   dropRuntime: DropRuntime;
-  matches: (asset: any) => boolean;
+  matches: (asset: any) => boolean | Promise<boolean>;
   grouping?: readonly [string, string];
   label: string;
 }): Promise<{ asset: any | null; sawItems: boolean }> {
@@ -1663,8 +1691,8 @@ async function findOwnedAssetByPredicate(params: {
     dropRuntime: params.dropRuntime,
     grouping: params.grouping,
     label: params.label,
-    visit: (candidate) => {
-      if (!params.matches(candidate)) return false;
+    visit: async (candidate) => {
+      if (!(await params.matches(candidate))) return false;
       asset = candidate;
       return true;
     },
@@ -1841,6 +1869,63 @@ function assetMatchesDropCollection(
 
 function assetMatchesRequestedDrop(asset: any, dropRuntime: DropRuntime): boolean {
   return assetMatchesDropCollection(asset, dropRuntime) && !clusterSharesCollectionMint(dropRuntime);
+}
+
+function receiptDropIdentity(dropRuntime: DropRuntime) {
+  return {
+    collectionMintStr: dropRuntime.collectionMintStr,
+    metadataBase: dropRuntime.config.metadataBase,
+    receiptsMerkleTree: dropRuntime.receiptsMerkleTree,
+    receiptPoolId: dropRuntime.config.receiptPoolId,
+    maxSupply: dropRuntime.maxSupply,
+  };
+}
+
+function dropSalesMode(dropRuntime: DropRuntime) {
+  return normalizeDropSalesMode(
+    (dropRuntime.config as FunctionsDropConfig & { salesMode?: unknown }).salesMode,
+  );
+}
+
+function receiptIdentityExpectationForAsset(
+  asset: any,
+  dropRuntime: DropRuntime,
+): Partial<ReceiptMetadataReference> | undefined {
+  const reference = receiptMetadataReference(asset);
+  if (!reference) return undefined;
+  if (
+    (reference.kind === 'box' && reference.id > dropRuntime.maxSupply) ||
+    (reference.kind === 'figure' && reference.id > dropRuntime.maxDudeId)
+  ) {
+    return undefined;
+  }
+  if (dropSalesMode(dropRuntime) === 'stripe_receipt_only') {
+    return reference.kind === 'box' ? reference : undefined;
+  }
+  return reference;
+}
+
+async function receiptAssetProofMatchesDropIdentity(
+  asset: any,
+  dropRuntime: DropRuntime,
+  expected?: Partial<ReceiptMetadataReference>,
+): Promise<boolean> {
+  const assetId = String(asset?.id || '');
+  if (!assetId || !dropRuntime.receiptsMerkleTreeStr) return false;
+
+  let proof: any;
+  try {
+    proof = await fetchAssetProof(assetId, dropRuntime);
+  } catch (err) {
+    if ((err as any)?.code !== 'not-found') throw err;
+    return false;
+  }
+  return assetMatchesReceiptDropIdentity(
+    asset,
+    proof,
+    receiptDropIdentity(dropRuntime),
+    expected,
+  );
 }
 
 async function fetchAssetRetry(assetId: string, dropRuntime: DropRuntime) {
@@ -2246,7 +2331,20 @@ function requireStripeCheckoutAvailable(params: {
     throw new HttpsError('failed-precondition', `Stripe checkout quantity cannot exceed ${cfg.maxPerTx}.`);
   }
 
+  if (checkoutKind === 'receipt_only') {
+    if (dropSalesMode(dropRuntime) !== 'stripe_receipt_only') {
+      throw new HttpsError('failed-precondition', 'Stripe receipt checkout requires receipt-only sales mode.');
+    }
+    if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox) || cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
+      throw new HttpsError('failed-precondition', 'Stripe receipt checkout requires a non-variant receipt-only drop.');
+    }
+    return;
+  }
+
   if (checkoutKind === 'standard_pack') {
+    if (dropSalesMode(dropRuntime) === 'stripe_receipt_only') {
+      throw new HttpsError('failed-precondition', 'Stripe receipt-only drops cannot use pack checkout.');
+    }
     if (isDirectDeliveryItemsPerBox(cfg.itemsPerBox) || cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
       throw new HttpsError('failed-precondition', 'Stripe pack checkout requires a non-variant pack drop.');
     }
@@ -3873,14 +3971,14 @@ async function waitForAdminIrlCardReceipt(params: {
       recordLookupError(err);
     }
     if (asset && lastOwner === params.adminWallet) {
-      if (getAssetKind(asset) !== 'certificate') {
-        throw new HttpsError('failed-precondition', 'Admin IRL redeem selected asset is not a receipt');
-      }
-      if (!assetMatchesRequestedDrop(asset, params.dropRuntime)) {
+      if (
+        !assetMatchesReceiptMetadataIdentity(
+          asset,
+          receiptDropIdentity(params.dropRuntime),
+          { kind: 'figure', id: params.figureId },
+        )
+      ) {
         throw new HttpsError('failed-precondition', 'Admin IRL redeem receipt does not belong to the requested drop');
-      }
-      if (Number(getDudeIdFromAsset(asset)) !== params.figureId) {
-        throw new HttpsError('failed-precondition', 'Admin IRL redeem card receipt figure id changed');
       }
       let proof: any = null;
       try {
@@ -3890,6 +3988,16 @@ async function waitForAdminIrlCardReceipt(params: {
         recordLookupError(err);
       }
       if (adminIrlCardReceiptProofHasIdentity(proof)) {
+        if (
+          !assetMatchesReceiptDropIdentity(
+            asset,
+            proof,
+            receiptDropIdentity(params.dropRuntime),
+            { kind: 'figure', id: params.figureId },
+          )
+        ) {
+          throw new HttpsError('failed-precondition', 'Admin IRL redeem receipt proof belongs to a different drop');
+        }
         parseCompressedReceiptProof({
           asset,
           proof,
@@ -4820,7 +4928,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
     try {
       dropId = requireDropId(event.params.dropId);
       const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.collectionName || dropId;
+      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
     } catch (err) {
       logger.warn('notifyShippersOnDeliveryReadyToShip:invalidDrop', {
         dropId: event.params.dropId,
@@ -4918,7 +5026,7 @@ export const notifyBuyerOnDeliveryShipped = onDocumentUpdated(
     try {
       dropId = requireDropId(event.params.dropId);
       const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.collectionName || dropId;
+      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
     } catch (err) {
       logger.warn('notifyBuyerOnDeliveryShipped:invalidDrop', {
         dropId: event.params.dropId,
@@ -4990,7 +5098,7 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
       dropId = requireDropId(event.params.dropId);
       sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
       const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.collectionName || dropId;
+      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
     } catch (err) {
       logger.warn('notifyStripeCheckoutManualReview:invalidParams', {
         dropId: event.params.dropId,
@@ -6690,20 +6798,30 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
     const orderItems: AdminIrlRedeemRequestItem[] = assets.map((asset, index) => {
       const assetId = uniqueItemIds[index];
       const kind = assetKinds[index];
-      if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
-        throw new HttpsError('failed-precondition', 'Item does not belong to the requested drop');
-      }
       const assetOwner = asset?.ownership?.owner;
       if (assetOwner !== ownerWallet) {
         throw new HttpsError('failed-precondition', 'Item not owned by wallet');
       }
 
       if (kind === 'certificate') {
-        const refId = Number(getDudeIdFromAsset(asset));
-        if (!Number.isInteger(refId) || refId <= 0 || refId > dropRuntime.maxDudeId) {
+        const reference = receiptMetadataReference(asset);
+        const refId = reference?.kind === 'figure' ? reference.id : 0;
+        if (
+          !assetMatchesReceiptMetadataIdentity(
+            asset,
+            receiptDropIdentity(dropRuntime),
+            { kind: 'figure', id: refId },
+          ) ||
+          !Number.isInteger(refId) ||
+          refId <= 0 ||
+          refId > dropRuntime.maxDudeId
+        ) {
           throw new HttpsError('failed-precondition', 'Admin IRL redeem receipt must be a card receipt with a valid figure id');
         }
         return { assetId, kind: 'card_receipt', refId: Math.floor(refId) };
+      }
+      if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
+        throw new HttpsError('failed-precondition', 'Item does not belong to the requested drop');
       }
       if (kind !== 'box') {
         throw new HttpsError('failed-precondition', 'Admin IRL redeem is only available for packs or card receipts');
@@ -6931,19 +7049,32 @@ export const prepareReceiptTransferTx = onCallAuthed(
       throw new HttpsError('failed-precondition', 'Receipt is not owned by the requesting wallet');
     }
 
-    const collectionMatchesRequestedDrop = clusterSharesCollectionMint(dropRuntime)
-      ? assetGroupingAllowsTreeVerifiedDropMatch(asset, dropRuntime)
-      : assetMatchesRequestedDrop(asset, dropRuntime);
-    if (!collectionMatchesRequestedDrop) {
+    const expectedReceipt = receiptIdentityExpectationForAsset(asset, dropRuntime);
+    if (
+      !expectedReceipt ||
+      !assetMatchesReceiptMetadataIdentity(
+        asset,
+        receiptDropIdentity(dropRuntime),
+        expectedReceipt,
+      )
+    ) {
       throw new HttpsError('failed-precondition', 'Receipt does not belong to the requested drop', {
         dropId,
         expectedCollectionMint: dropRuntime.collectionMintStr,
+        expectedMetadataBase: dropRuntime.config.metadataBase,
         assetGroupingCollectionMints: assetGroupingCollectionMints(asset),
       });
     }
 
     const proof = await fetchAssetProof(receiptAssetId, dropRuntime);
-    if (!assetProofMatchesTree(proof, dropRuntime.receiptsMerkleTree)) {
+    if (
+      !assetMatchesReceiptDropIdentity(
+        asset,
+        proof,
+        receiptDropIdentity(dropRuntime),
+        expectedReceipt,
+      )
+    ) {
       throw new HttpsError('failed-precondition', 'Receipt does not belong to the configured receipts tree', {
         dropId,
         receiptAssetId,
@@ -9421,15 +9552,30 @@ async function finalizeStripeReceiptClaim(params: {
 function stripeReceiptAssetMatches(asset: any, dropRuntime: DropRuntime, boxId: number, ownerWallet: string): boolean {
   if (looksBurntOrClosedInHelius(asset)) return false;
   if (asset?.ownership?.owner !== ownerWallet) return false;
-  if (getAssetKind(asset) !== 'certificate') return false;
-  if (!assetMatchesRequestedDrop(asset, dropRuntime)) return false;
-  return String(getBoxIdFromAsset(asset) || '') === String(boxId);
+  return assetMatchesReceiptMetadataIdentity(
+    asset,
+    receiptDropIdentity(dropRuntime),
+    { kind: 'box', id: boxId },
+  );
 }
 
 async function findStripeReceiptAssetOwnedBy(ownerWallet: string, dropRuntime: DropRuntime, boxId: number): Promise<any | null> {
-  if (clusterSharesCollectionMint(dropRuntime)) return null;
-
-  const matches = (asset: any) => stripeReceiptAssetMatches(asset, dropRuntime, boxId, ownerWallet);
+  const proofMatches = new Map<string, Promise<boolean>>();
+  const matches = async (asset: any) => {
+    if (!stripeReceiptAssetMatches(asset, dropRuntime, boxId, ownerWallet)) return false;
+    const assetId = String(asset?.id || '');
+    if (!assetId) return false;
+    let pending = proofMatches.get(assetId);
+    if (!pending) {
+      pending = receiptAssetProofMatchesDropIdentity(
+        asset,
+        dropRuntime,
+        { kind: 'box', id: boxId },
+      );
+      proofMatches.set(assetId, pending);
+    }
+    return pending;
+  };
   if (dropRuntime.collectionMintStr) {
     const grouping = ['collection', dropRuntime.collectionMintStr] as const;
     const grouped = await findOwnedAssetByPredicate({
@@ -9440,12 +9586,11 @@ async function findStripeReceiptAssetOwnedBy(ownerWallet: string, dropRuntime: D
       label: 'Helius receipt assets error',
     });
     if (grouped.asset) return grouped.asset;
-    if (grouped.sawItems) return null;
-
-    logger.warn('Helius searchAssets returned 0 items for receipt collection grouping; falling back to ungrouped search', {
+    logger.warn('Helius grouped search did not find a receipt with the requested drop identity; falling back to ungrouped search', {
       owner: ownerWallet,
       collection: dropRuntime.collectionMintStr,
       dropId: dropRuntime.dropId,
+      sawGroupedItems: grouped.sawItems,
     });
   }
 
@@ -9473,22 +9618,23 @@ async function findStripeReceiptAssetByIdOwnedBy(
   }
   if (!asset || looksBurntOrClosedInHelius(asset)) return null;
   if (asset?.ownership?.owner !== ownerWallet) return null;
-  if (getAssetKind(asset) !== 'certificate') {
-    throw new HttpsError('failed-precondition', 'Receipt claim is not ready yet; assigned pack receipt is not a receipt');
-  }
-  if (clusterSharesCollectionMint(dropRuntime)) {
-    if (!assetGroupingAllowsTreeVerifiedDropMatch(asset, dropRuntime)) {
-      throw new HttpsError('failed-precondition', 'Receipt claim is not ready yet; assigned pack receipt belongs to a different drop');
-    }
-  } else if (!assetMatchesDropCollection(asset, dropRuntime, ['certificate'])) {
+  if (
+    !assetMatchesReceiptMetadataIdentity(
+      asset,
+      receiptDropIdentity(dropRuntime),
+      { kind: 'box', id: boxId },
+    )
+  ) {
     throw new HttpsError('failed-precondition', 'Receipt claim is not ready yet; assigned pack receipt belongs to a different drop');
   }
-  if (String(getBoxIdFromAsset(asset) || '') !== String(boxId)) {
-    throw new HttpsError('failed-precondition', 'Receipt claim is not ready yet; assigned pack receipt does not match claim box', {
-      dropId: dropRuntime.dropId,
-      boxId,
-      assignedBoxAssetId: assetId,
-    });
+  if (
+    !(await receiptAssetProofMatchesDropIdentity(
+      asset,
+      dropRuntime,
+      { kind: 'box', id: boxId },
+    ))
+  ) {
+    throw new HttpsError('failed-precondition', 'Receipt claim is not ready yet; assigned pack receipt proof belongs to a different drop');
   }
   return asset;
 }
@@ -9508,16 +9654,26 @@ async function findDirectFigureReceiptAssetByIdOwnedBy(
   }
   if (!asset || looksBurntOrClosedInHelius(asset)) return null;
   if (asset?.ownership?.owner !== ownerWallet) return null;
-  if (getAssetKind(asset) !== 'certificate') {
-    throw new HttpsError('failed-precondition', 'Direct card receipt claim target is not a receipt');
-  }
-  if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
+  if (
+    !assetMatchesReceiptMetadataIdentity(
+      asset,
+      receiptDropIdentity(dropRuntime),
+      { kind: 'figure', id: figureId },
+    )
+  ) {
     throw new HttpsError('failed-precondition', 'Direct card receipt claim target belongs to a different drop');
   }
-  if (Number(getDudeIdFromAsset(asset)) !== figureId) {
-    throw new HttpsError('failed-precondition', 'Direct card receipt claim figure id mismatch');
-  }
   const proof = await fetchAssetProof(assetId, dropRuntime);
+  if (
+    !assetMatchesReceiptDropIdentity(
+      asset,
+      proof,
+      receiptDropIdentity(dropRuntime),
+      { kind: 'figure', id: figureId },
+    )
+  ) {
+    throw new HttpsError('failed-precondition', 'Direct card receipt claim proof belongs to a different drop');
+  }
   parseCompressedReceiptProof({ asset, proof, dropRuntime, expectedOwner: ownerWallet });
   return asset;
 }
@@ -9668,23 +9824,8 @@ function requireStripeOpenableClaimAssignment(order: any, dropRuntime: DropRunti
 function stripeFigureReceiptDudeIdCandidateOwnedBy(asset: any, ownerWallet: string): number | null {
   if (looksBurntOrClosedInHelius(asset)) return null;
   if (asset?.ownership?.owner !== ownerWallet) return null;
-  if (getAssetKind(asset) !== 'certificate') return null;
-  const dudeId = Number(getDudeIdFromAsset(asset));
-  return Number.isFinite(dudeId) ? dudeId : null;
-}
-
-function stripeFigureReceiptDudeIdOwnedBy(asset: any, dropRuntime: DropRuntime, ownerWallet: string): number | null {
-  const dudeId = stripeFigureReceiptDudeIdCandidateOwnedBy(asset, ownerWallet);
-  if (dudeId == null) return null;
-  if (!assetMatchesRequestedDrop(asset, dropRuntime)) return null;
-  return dudeId;
-}
-
-function assetGroupingAllowsTreeVerifiedDropMatch(asset: any, dropRuntime: DropRuntime): boolean {
-  // In shared-collection recovery, the receipt tree is the drop discriminator.
-  // Treat missing or multi-valued grouping as inconclusive, but skip assets that
-  // explicitly group only to another collection.
-  return assetGroupingAllowsTreeVerifiedCollectionMatch(asset, dropRuntime.collectionMintStr);
+  const reference = receiptMetadataReference(asset);
+  return reference?.kind === 'figure' ? reference.id : null;
 }
 
 const STRIPE_FIGURE_RECEIPT_TREE_PROOF_CONCURRENCY = 4;
@@ -9693,21 +9834,6 @@ type StripeFigureReceiptTreeCandidate = {
   asset: any;
   dudeId: number;
 };
-
-async function receiptAssetProofMatchesDropTree(asset: any, dropRuntime: DropRuntime): Promise<boolean> {
-  const assetId = String(asset?.id || '');
-  if (!assetId || !dropRuntime.receiptsMerkleTreeStr) return false;
-
-  let proof: any;
-  try {
-    proof = await fetchAssetProof(assetId, dropRuntime);
-  } catch (err) {
-    if ((err as any)?.code !== 'not-found') throw err;
-    return false;
-  }
-
-  return assetProofMatchesTree(proof, dropRuntime.receiptsMerkleTree);
-}
 
 async function findOwnedStripeFigureReceiptDudeIdsByTree(
   ownerWallet: string,
@@ -9723,7 +9849,13 @@ async function findOwnedStripeFigureReceiptDudeIdsByTree(
     for (const asset of items) {
       const dudeId = stripeFigureReceiptDudeIdCandidateOwnedBy(asset, ownerWallet);
       if (dudeId == null || !expected.has(dudeId) || found.has(dudeId)) continue;
-      if (!assetGroupingAllowsTreeVerifiedDropMatch(asset, dropRuntime)) continue;
+      if (
+        !assetMatchesReceiptMetadataIdentity(
+          asset,
+          receiptDropIdentity(dropRuntime),
+          { kind: 'figure', id: dudeId },
+        )
+      ) continue;
 
       const assetId = String(asset?.id || '');
       if (!assetId || checkedAssetIds.has(assetId)) continue;
@@ -9746,7 +9878,11 @@ async function findOwnedStripeFigureReceiptDudeIdsByTree(
           try {
             return {
               candidate,
-              matchesDropTree: await receiptAssetProofMatchesDropTree(candidate.asset, dropRuntime),
+              matchesDropTree: await receiptAssetProofMatchesDropIdentity(
+                candidate.asset,
+                dropRuntime,
+                { kind: 'figure', id: candidate.dudeId },
+              ),
             };
           } catch (err) {
             return { candidate, err };
@@ -9801,54 +9937,7 @@ async function findOwnedStripeFigureReceiptDudeIds(
   dropRuntime: DropRuntime,
   dudeIds: number[],
 ): Promise<Set<number>> {
-  if (clusterSharesCollectionMint(dropRuntime)) {
-    return findOwnedStripeFigureReceiptDudeIdsByTree(ownerWallet, dropRuntime, dudeIds);
-  }
-
-  const expected = new Set(dudeIds.map((dudeId) => Number(dudeId)));
-  const found = new Set<number>();
-
-  const visit = (asset: any) => {
-    const dudeId = stripeFigureReceiptDudeIdOwnedBy(asset, dropRuntime, ownerWallet);
-    if (dudeId != null && expected.has(dudeId)) found.add(dudeId);
-    return found.size === expected.size;
-  };
-
-  if (dropRuntime.collectionMintStr) {
-    const grouping = ['collection', dropRuntime.collectionMintStr] as const;
-    const grouped = await scanOwnedAssets({
-      owner: ownerWallet,
-      dropRuntime,
-      visit,
-      grouping,
-      label: 'Helius figure receipt assets error',
-    });
-    if (grouped.stopped) return found;
-    if (grouped.sawItems) {
-      if (found.size >= expected.size) return found;
-      logger.warn('Helius collection-grouped search did not find every expected Stripe figure receipt; falling back to ungrouped search', {
-        owner: ownerWallet,
-        dropId: dropRuntime.dropId,
-        collection: dropRuntime.collectionMintStr,
-        expectedDudeIds: Array.from(expected),
-        foundDudeIds: Array.from(found),
-      });
-    } else {
-      logger.warn('Helius searchAssets returned 0 items for figure receipt collection grouping; falling back to ungrouped search', {
-        owner: ownerWallet,
-        dropId: dropRuntime.dropId,
-        collection: dropRuntime.collectionMintStr,
-      });
-    }
-  }
-
-  await scanOwnedAssets({
-    owner: ownerWallet,
-    dropRuntime,
-    visit,
-    label: 'Helius figure receipt assets error',
-  });
-  return found;
+  return findOwnedStripeFigureReceiptDudeIdsByTree(ownerWallet, dropRuntime, dudeIds);
 }
 
 async function ownsAllStripeFigureReceipts(ownerWallet: string, dropRuntime: DropRuntime, dudeIds: number[]): Promise<boolean> {
@@ -9898,7 +9987,6 @@ function parseCompressedReceiptProof(params: {
   leafIndexMessage?: string;
 }) {
   const compression = params.asset?.compression || {};
-  const proofPath: string[] = Array.isArray(params.proof?.proof) ? params.proof.proof : [];
   const merkleTree = assetProofTreePublicKey(params.proof);
   const rootStr = String(params.proof?.root || '');
   if (!merkleTree || !rootStr) {
@@ -9921,6 +10009,24 @@ function parseCompressedReceiptProof(params: {
     throw new HttpsError('failed-precondition', params.leafIndexMessage || 'Receipt leaf index out of range');
   }
 
+  let proofAccounts: PublicKey[];
+  try {
+    proofAccounts = normalizedAssetProofAccounts(params.proof, {
+      maxDepth: params.dropRuntime.receiptsTreeMaxDepth,
+      canopyDepth: params.dropRuntime.receiptsTreeCanopyDepth,
+    });
+  } catch (err) {
+    throw new HttpsError(
+      'failed-precondition',
+      err instanceof Error ? err.message : 'Unable to parse receipt proof path',
+      { dropId: params.dropRuntime.dropId },
+    );
+  }
+  const indexedOwner = String(params.asset?.ownership?.owner || '');
+  if (!indexedOwner || indexedOwner !== params.expectedOwner) {
+    throw new HttpsError('failed-precondition', 'Receipt proof owner does not match the expected wallet');
+  }
+
   return {
     merkleTree,
     root: bs58Bytes32(rootStr, 'assetProof.root'),
@@ -9933,9 +10039,9 @@ function parseCompressedReceiptProof(params: {
     flags: compression?.flags == null ? null : Number(compression.flags),
     nonce,
     index,
-    proofAccounts: proofPath.map((p) => new PublicKey(p)),
-    leafOwner: new PublicKey(String(params.asset?.ownership?.owner || params.expectedOwner)),
-    leafDelegate: new PublicKey(String(params.asset?.ownership?.delegate || params.asset?.ownership?.owner || params.expectedOwner)),
+    proofAccounts,
+    leafOwner: new PublicKey(indexedOwner),
+    leafDelegate: new PublicKey(String(params.asset?.ownership?.delegate || indexedOwner)),
   };
 }
 

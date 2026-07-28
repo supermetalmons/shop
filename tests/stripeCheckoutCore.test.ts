@@ -4,6 +4,7 @@ import {
   STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
+  assertStripeCheckoutQuantityForKind,
   classifyStripeCheckoutKind,
   normalizeStripeUnitAmountCents,
   resolveStripeCheckoutUnitAmountCents,
@@ -25,7 +26,7 @@ test('Stripe checkout mode preserves enablement and supported-cluster nullabilit
   assert.equal(stripeCheckoutModeForDrop({ stripeCheckoutEnabled: 'yes', solanaCluster: 'devnet' }), 'test');
 });
 
-test('Stripe checkout kind accepts direct-delivery sizes and standard packs only', () => {
+test('Stripe checkout kind requires an explicit receipt-only sales mode', () => {
   assert.equal(
     classifyStripeCheckoutKind({ itemsPerBox: 0, mintSelection: { kind: 'size' } }),
     'size_variant',
@@ -36,12 +37,47 @@ test('Stripe checkout kind accepts direct-delivery sizes and standard packs only
   );
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: 1 }), 'standard_pack');
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: '5.9' }), 'standard_pack');
+  assert.equal(
+    classifyStripeCheckoutKind({
+      itemsPerBox: 0,
+      salesMode: 'stripe_receipt_only',
+    }),
+    'receipt_only',
+  );
 
   assert.equal(classifyStripeCheckoutKind(null), null);
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: 0 }), null);
+  assert.equal(
+    classifyStripeCheckoutKind({
+      itemsPerBox: 0,
+      salesMode: 'stripe_receipt_only',
+      mintSelection: { kind: 'size' },
+    }),
+    null,
+  );
+  assert.equal(
+    classifyStripeCheckoutKind({
+      itemsPerBox: 1,
+      salesMode: 'stripe_receipt_only',
+    }),
+    null,
+  );
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: 5, mintSelection: { kind: 'size' } }), null);
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: 5, mintSelection: { kind: 'other' } }), null);
   assert.equal(classifyStripeCheckoutKind({ itemsPerBox: 'not-a-number' }), null);
+});
+
+test('receipt-only Stripe checkout enforces quantity one', () => {
+  assert.doesNotThrow(() =>
+    assertStripeCheckoutQuantityForKind('receipt_only', 1),
+  );
+  assert.throws(
+    () => assertStripeCheckoutQuantityForKind('receipt_only', 2),
+    /must be exactly 1/,
+  );
+  assert.doesNotThrow(() =>
+    assertStripeCheckoutQuantityForKind('standard_pack', 2),
+  );
 });
 
 test('Stripe unit amount normalization floors finite values within exact bounds', () => {

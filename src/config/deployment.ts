@@ -22,12 +22,14 @@ import {
   normalizeDropBase as normalizeSharedDropBase,
   normalizeDropFamily as normalizeSharedDropFamily,
   normalizeDropId as normalizeSharedDropId,
+  normalizeDropSalesMode,
   normalizeMetadataPathFormat,
   normalizeMintSelectionConfig,
 } from '../../functions/src/shared/deploymentCore.js';
 import type {
   DropFamily as SharedDropFamily,
   DropPaths,
+  DropSalesMode,
   MetadataPathFormat,
   MintSelectionConfig as SharedMintSelectionConfig,
   SolanaCluster as SharedSolanaCluster,
@@ -50,6 +52,9 @@ export type FrontendDropConfig = {
   dropId: string;
   dropFamily: DropFamily;
   collectionName: string;
+  displayName?: string;
+  salesMode?: DropSalesMode;
+  receiptPoolId?: string;
   metadataBase: string;
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
@@ -73,6 +78,7 @@ export type FrontendDropConfig = {
   boxMinterProgramId: string;
   boxMinterConfigPda?: string;
   collectionMint: string;
+  receiptsMerkleTree: string;
   paths: DropPaths;
 };
 
@@ -189,6 +195,15 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
     dropId: normalizedDropId,
     dropFamily,
     collectionName: config.collectionName,
+    ...(normalizeOptionalString(config.displayName)
+      ? { displayName: normalizeOptionalString(config.displayName) }
+      : {}),
+    ...(normalizeDropSalesMode(config.salesMode) !== 'standard'
+      ? { salesMode: normalizeDropSalesMode(config.salesMode) }
+      : {}),
+    ...(normalizeOptionalString(config.receiptPoolId)
+      ? { receiptPoolId: normalizeOptionalString(config.receiptPoolId) }
+      : {}),
     metadataBase,
     metadataPathFormat,
     treasury: config.treasury,
@@ -210,6 +225,7 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
     boxMinterProgramId: config.boxMinterProgramId,
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     collectionMint: config.collectionMint,
+    receiptsMerkleTree: config.receiptsMerkleTree,
     secondaryMarketHref,
     ...(figureMedia ? { figureMedia } : {}),
     ...(boxMedia ? { boxMedia } : {}),

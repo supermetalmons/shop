@@ -49,6 +49,7 @@ const METADATA_RUNTIME_EXPORTS = [
   'dudeIdFromMetadataUri',
   'metadataBaseFromMetadataUri',
   'metadataKindFromUri',
+  'pooledReceiptBoxIdFromMetadataUri',
   'selectMetadataUri',
 ] as const;
 const CARD_NFT_2_ASSET_CORE_RUNTIME_EXPORTS = [

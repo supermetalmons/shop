@@ -16,11 +16,13 @@ import {
   normalizeDropBase as normalizeSharedDropBase,
   normalizeDropFamily as normalizeSharedDropFamily,
   normalizeDropId as normalizeSharedDropId,
+  normalizeDropSalesMode,
   normalizeMetadataPathFormat,
   normalizeMintSelectionConfig,
 } from '../shared/deploymentCore.js';
 import type {
   DropFamily as SharedDropFamily,
+  DropSalesMode,
   MintSelectionConfig as SharedMintSelectionConfig,
   SolanaCluster as SharedSolanaCluster,
 } from '../shared/deploymentCore.js';
@@ -39,6 +41,9 @@ export type FunctionsDropConfig = {
   dropId: string;
   dropFamily: DropFamily;
   collectionName: string;
+  displayName?: string;
+  salesMode?: DropSalesMode;
+  receiptPoolId?: string;
   metadataBase: string;
   metadataPathFormat: 'legacy' | 'compact';
   mintSelection?: MintSelectionConfig;
@@ -60,6 +65,8 @@ export type FunctionsDropConfig = {
   boxMinterConfigPda?: string;
   collectionMint: string;
   receiptsMerkleTree: string;
+  receiptsTreeMaxDepth?: number;
+  receiptsTreeCanopyDepth?: number;
   deliveryLookupTable: string;
 };
 
@@ -105,6 +112,15 @@ function projectFunctionsDrop(
     dropId,
     dropFamily,
     collectionName: config.collectionName,
+    ...(String(config.displayName || '').trim()
+      ? { displayName: String(config.displayName).trim() }
+      : {}),
+    ...(normalizeDropSalesMode(config.salesMode) !== 'standard'
+      ? { salesMode: normalizeDropSalesMode(config.salesMode) }
+      : {}),
+    ...(String(config.receiptPoolId || '').trim()
+      ? { receiptPoolId: String(config.receiptPoolId).trim() }
+      : {}),
     metadataBase: normalizeDropBase(config.metadataBase),
     metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
@@ -128,6 +144,12 @@ function projectFunctionsDrop(
     ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
     collectionMint: config.collectionMint,
     receiptsMerkleTree: config.receiptsMerkleTree,
+    ...(config.receiptsTreeMaxDepth != null
+      ? { receiptsTreeMaxDepth: config.receiptsTreeMaxDepth }
+      : {}),
+    ...(config.receiptsTreeCanopyDepth != null
+      ? { receiptsTreeCanopyDepth: config.receiptsTreeCanopyDepth }
+      : {}),
     deliveryLookupTable: config.deliveryLookupTable,
     ...(stripeCheckout.enabled
       ? { stripeCheckoutEnabled: true }

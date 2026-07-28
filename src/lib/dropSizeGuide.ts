@@ -1,6 +1,6 @@
 import { isDropFamily } from '../config/deployment';
 
-export type DropSizeGuideRow = {
+type DropSizeGuideRow = {
   size: string;
   bodyLength: string;
   chestWidth: string;

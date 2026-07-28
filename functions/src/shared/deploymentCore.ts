@@ -10,9 +10,12 @@ export type DropFamily =
   | 'little_swag_boxes'
   | 'poncho_drifella'
   | 'drifella_binder'
+  | 'card_nft_binder'
   | 'drifella_shirt'
   | 'little_swag_hoodies'
   | 'card_nft_2';
+
+export type DropSalesMode = 'standard' | 'stripe_receipt_only';
 
 export type MetadataPathFormat = 'legacy' | 'compact';
 
@@ -124,6 +127,10 @@ export function normalizeMetadataPathFormat(
   return value === 'compact' || value === 'legacy' ? value : fallback;
 }
 
+export function normalizeDropSalesMode(value: unknown): DropSalesMode {
+  return value === 'stripe_receipt_only' ? 'stripe_receipt_only' : 'standard';
+}
+
 export function normalizeMintSelectionConfig(
   raw: MintSelectionConfig | undefined,
 ): MintSelectionConfig | undefined {
@@ -219,6 +226,8 @@ export function normalizeDropId(dropId: string): string {
 
 const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   card_nft_2: 'card_nft_2',
+  card_nft_binder: 'card_nft_binder',
+  card_nft_binder_devnet: 'card_nft_binder',
   drifella_binder: 'drifella_binder',
   drifella_shirt: 'drifella_shirt',
   little_swag_boxes: 'little_swag_boxes',
@@ -243,6 +252,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
     normalized === 'drifella_binder' ||
+    normalized === 'card_nft_binder' ||
     normalized === 'drifella_shirt' ||
     normalized === 'card_nft_2' ||
     normalized === 'default'

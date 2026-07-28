@@ -233,7 +233,7 @@ export function DropsPanel() {
   const littleSwagHoodies = resolveUpcomingTileSource('little_swag_hoodies', 'Little Swag Hoodies');
   const cardNft2 = resolveUpcomingTileSource('card_nft_2', 'Card NFT 2');
   const drifellaShirt = resolveUpcomingTileSource('drifella_shirt', 'Drifella Shirt');
-  const drifellaBinder = resolveUpcomingTileSource('drifella_binder', 'Card NFT Binder');
+  const cardNftBinder = resolveUpcomingTileSource('card_nft_binder', 'Card NFT Binder');
 
   const items: DropPanelItem[] = [
     {
@@ -273,13 +273,13 @@ export function DropsPanel() {
       compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
     {
-      key: 'drifella_binder',
+      key: 'card_nft_binder',
       size: 'half',
-      image: drifellaBinder.image,
-      imageDimensions: drifellaBinder.imageDimensions,
-      alt: drifellaBinder.alt,
-      title: drifellaBinder.title,
-      path: drifellaBinder.path,
+      image: cardNftBinder.image,
+      imageDimensions: cardNftBinder.imageDimensions,
+      alt: cardNftBinder.alt,
+      title: cardNftBinder.title,
+      path: cardNftBinder.path,
       imageMaxWidth: '78%',
       compactImageMaxWidth: '58%',
       imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
