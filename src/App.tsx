@@ -28,6 +28,7 @@ import { useInventory } from './hooks/useInventory';
 import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
+import { useHomePageScrollRestoration } from './hooks/useHomePageScrollRestoration';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
   claimStripeReceipt,
@@ -1269,6 +1270,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     () => (currentPath ? currentPath : getNormalizedPathname()),
     [currentPath],
   );
+  const restoreHomeOnNextNavigation = useHomePageScrollRestoration(normalizedCurrentPath);
   const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
   const upcomingDropRoute = useMemo(
     () => (routeDrop ? null : resolveUpcomingDropRouteByPath(normalizedCurrentPath)),
@@ -6802,7 +6804,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         </div>
       ) : null}
       <div className={primaryFrameClassName}>
-        <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
+        <ShopHeader
+          onNavigateHome={restoreHomeOnNextNavigation}
+          scrollHomeToTop={dropsPanelFrameActive}
+          renderRight={renderHeaderRight}
+        />
 
         {!routeDrop && upcomingDropRoute ? (
           <MintPanel

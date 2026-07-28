@@ -2,15 +2,18 @@ import type React from 'react';
 import { navigate } from '../navigation';
 
 type ShopHeaderProps = {
+  onNavigateHome?: () => void;
   renderRight?: (options: { interactive: boolean }) => React.ReactNode;
   scrollHomeToTop?: boolean;
 };
 
 function ShopHeaderBrand({
   interactive,
+  onNavigateHome,
   scrollHomeToTop,
 }: {
   interactive: boolean;
+  onNavigateHome?: () => void;
   scrollHomeToTop: boolean;
 }) {
   const handleHomeClick = (evt: React.MouseEvent<HTMLAnchorElement>) => {
@@ -22,6 +25,8 @@ function ShopHeaderBrand({
     evt.preventDefault();
     if (scrollHomeToTop) {
       window.scrollTo({ top: 0, left: 0 });
+    } else {
+      onNavigateHome?.();
     }
     navigate('/');
   };
@@ -48,14 +53,18 @@ function ShopHeaderBrand({
   );
 }
 
-export function ShopHeader({ renderRight, scrollHomeToTop = false }: ShopHeaderProps) {
+export function ShopHeader({ onNavigateHome, renderRight, scrollHomeToTop = false }: ShopHeaderProps) {
   const right = renderRight?.({ interactive: true });
   const spacerRight = renderRight?.({ interactive: false });
 
   return (
     <>
       <header className="top top--fixed top--shop">
-        <ShopHeaderBrand interactive scrollHomeToTop={scrollHomeToTop} />
+        <ShopHeaderBrand
+          interactive
+          onNavigateHome={onNavigateHome}
+          scrollHomeToTop={scrollHomeToTop}
+        />
         {right ? <div className="top__right">{right}</div> : null}
       </header>
       <header className="top top--spacer top--shop" aria-hidden="true">

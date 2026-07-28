@@ -156,7 +156,6 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
     }
 
     evt.preventDefault();
-    window.scrollTo({ top: 0, left: 0 });
     navigate(item.path);
   };
 
@@ -354,10 +353,7 @@ export function DropsPanel() {
         className="drops-panel__grid drops-panel__grid--with-drifella-items"
       >
         {items.map((item) => (
-          <DropPanelTile
-            key={item.key}
-            item={item}
-          />
+          <DropPanelTile key={item.key} item={item} />
         ))}
       </div>
     </section>
