@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletCanViewSensitiveFulfillmentAddress,
@@ -21,6 +22,7 @@ const ALL_DROP_IDS = [
   'drifella_shirt',
   'little_swag_hoodies',
   'card_nft_2',
+  ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
 ];
 const LIMITED_SHIPPER_WALLET = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
@@ -28,6 +30,7 @@ const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 test('fulfillment access inventory is frozen and preserves configured wallet and drop ordering', () => {
   assert.equal(Object.isFrozen(FULFILLMENT_ADMIN_WALLET_ADDRESSES), true);
   assert.equal(Object.isFrozen(ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES), true);
+  assert.equal(Object.isFrozen(CARD_NFT_BINDER_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(SHIPPER_FULFILLMENT_ACCESS), true);
   SHIPPER_FULFILLMENT_ACCESS.forEach((entry) => {
     assert.equal(Object.isFrozen(entry), true);
@@ -43,7 +46,15 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
     SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
     [
       ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ALL_DROP_IDS],
-      [LIMITED_SHIPPER_WALLET, ['poncho_drifella', 'drifella_shirt', 'card_nft_2']],
+      [
+        LIMITED_SHIPPER_WALLET,
+        [
+          'poncho_drifella',
+          'drifella_shirt',
+          'card_nft_2',
+          ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+        ],
+      ],
       [FULFILLMENT_ONLY_WALLET, ALL_DROP_IDS],
     ],
   );
@@ -71,7 +82,12 @@ test('frontend allowed-drop lists retain caller and configured array references'
   const firstShipperResult = listAllowedFulfillmentDropIds(LIMITED_SHIPPER_WALLET, [...ALL_DROP_IDS]);
   const secondShipperResult = listAllowedFulfillmentDropIds(LIMITED_SHIPPER_WALLET, []);
   assert.equal(firstShipperResult, secondShipperResult);
-  assert.deepEqual(firstShipperResult, ['poncho_drifella', 'drifella_shirt', 'card_nft_2']);
+  assert.deepEqual(firstShipperResult, [
+    'poncho_drifella',
+    'drifella_shirt',
+    'card_nft_2',
+    ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+  ]);
 
   assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), ALL_DROP_IDS);
   assert.deepEqual(listAllowedFulfillmentDropIds('11111111111111111111111111111111', ALL_DROP_IDS), []);
@@ -90,6 +106,17 @@ test('sensitive fulfillment addresses remain visible only to an authorized non-a
     walletCanViewSensitiveFulfillmentAddress(LIMITED_SHIPPER_WALLET, 'card_nft_2', admins, shipperGrants),
     true,
   );
+  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.forEach((dropId) => {
+    assert.equal(
+      walletCanViewSensitiveFulfillmentAddress(
+        LIMITED_SHIPPER_WALLET,
+        dropId,
+        admins,
+        shipperGrants,
+      ),
+      true,
+    );
+  });
   assert.equal(
     walletCanViewSensitiveFulfillmentAddress(
       LIMITED_SHIPPER_WALLET,

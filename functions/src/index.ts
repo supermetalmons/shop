@@ -255,6 +255,7 @@ import {
 } from './shared/shipping.js';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletCanViewSensitiveFulfillmentAddress,
@@ -639,7 +640,14 @@ type ShipperReadyToShipNotificationConfig = {
 
 const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
   {
-    dropIds: ['little_swag_boxes', 'poncho_drifella', 'drifella_shirt', 'little_swag_hoodies', 'card_nft_2'],
+    dropIds: [
+      'little_swag_boxes',
+      'poncho_drifella',
+      'drifella_shirt',
+      'little_swag_hoodies',
+      'card_nft_2',
+      ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+    ],
     emails: ['supermetalxbosch@gmail.com'],
   },
 ];

@@ -27,7 +27,10 @@ import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from '../functions/src/orderEmailItems.ts';
-import { DRIFELLA_SHIRT_CLEAN_IMAGE_URL } from '../functions/src/shared/dropMediaDefaults.ts';
+import {
+  CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
+} from '../functions/src/shared/dropMediaDefaults.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
 
 function escapeRegExp(value: string): string {
@@ -464,6 +467,24 @@ test('drifella shirt order email items use size labels and the clean thumbnail f
   assert.deepEqual(
     buyerItems.map((item) => item.thumbnailUrl),
     [DRIFELLA_SHIRT_CLEAN_IMAGE_URL, DRIFELLA_SHIRT_CLEAN_IMAGE_URL],
+  );
+  assert.deepEqual(shipperItems, buyerItems);
+});
+
+test('card nft binder order email items use the clean thumbnail for every audience', async () => {
+  const order = {
+    items: [{ kind: 'box', refId: 3 }],
+  };
+  const selectedOrder = { dropId: 'card_nft_binder_devnet' };
+
+  const [buyerItems, shipperItems] = await Promise.all([
+    buildBuyerVisibleOrderEmailItems(order, selectedOrder),
+    buildShipperVisibleOrderEmailItems(order, selectedOrder),
+  ]);
+
+  assert.deepEqual(
+    buyerItems.map((item) => item.thumbnailUrl),
+    [CARD_NFT_BINDER_CLEAN_IMAGE_URL],
   );
   assert.deepEqual(shipperItems, buyerItems);
 });

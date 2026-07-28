@@ -16,6 +16,10 @@ export const CARD_NFT_2_PACK_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 export const CARD_NFT_2_PACK_RECEIPT_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 export const CARD_NFT_2_BOX_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 
+export const CARD_NFT_BINDER_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_binder';
+export const CARD_NFT_BINDER_CLEAN_IMAGE_URL = `${CARD_NFT_BINDER_CDN_BASE_URL}/clean.webp`;
+export const CARD_NFT_BINDER_RECEIPT_IMAGE_URL = `${CARD_NFT_BINDER_CDN_BASE_URL}/receipt.webp`;
+
 export const DRIFELLA_SHIRT_CDN_BASE_URL = 'https://cdn.lil.org/nft/drifella_shirt';
 export const DRIFELLA_SHIRT_IMAGE_BASE_URL = `${DRIFELLA_SHIRT_CDN_BASE_URL}/images`;
 export const DRIFELLA_SHIRT_CLEAN_IMAGE_URL = `${DRIFELLA_SHIRT_IMAGE_BASE_URL}/clean.webp`;

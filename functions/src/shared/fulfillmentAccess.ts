@@ -1,3 +1,5 @@
+import { DEPLOYMENT_DROPS } from './deploymentRegistry.js';
+
 export type ShipperFulfillmentAccessConfig = Readonly<{
   wallet: string;
   dropIds: readonly string[];
@@ -14,6 +16,13 @@ export const ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES: readonly string[] = O
   'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
 ]);
 
+export const CARD_NFT_BINDER_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
+  Object.values(DEPLOYMENT_DROPS)
+    .filter((drop) => drop.dropFamily === 'card_nft_binder')
+    .map((drop) => drop.dropId)
+    .sort(),
+);
+
 export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig[] = Object.freeze([
   Object.freeze({
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
@@ -23,11 +32,17 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
       'drifella_shirt',
       'little_swag_hoodies',
       'card_nft_2',
+      ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
     ]),
   }),
   Object.freeze({
     wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    dropIds: Object.freeze(['poncho_drifella', 'drifella_shirt', 'card_nft_2']),
+    dropIds: Object.freeze([
+      'poncho_drifella',
+      'drifella_shirt',
+      'card_nft_2',
+      ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+    ]),
   }),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
@@ -37,6 +52,7 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
       'drifella_shirt',
       'little_swag_hoodies',
       'card_nft_2',
+      ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
     ]),
   }),
 ]);
