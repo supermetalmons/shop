@@ -186,6 +186,37 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     receiptsMerkleTree: '81NyUNWDpEPrzBZdxcqw1oY3fbrT6W5vW816u9nkiv25',
     deliveryLookupTable: 'Cz9S4vMFx3ZgF9NW8v1D8hZnQNWMKTyh18wUcygQrSYS',
   },
+  card_nft_binder_devnet: {
+    solanaCluster: 'devnet',
+    dropId: 'card_nft_binder_devnet',
+    dropFamily: 'card_nft_binder',
+    collectionName: 'mons shop receipts',
+    displayName: 'Card NFT Binder',
+    salesMode: 'stripe_receipt_only',
+    receiptPoolId: 'mons_shop_receipts',
+    metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
+    metadataPathFormat: 'compact',
+    treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+    priceSol: 1000000,
+    discountPriceSol: 1000000,
+    stripeCheckoutEnabled: true,
+    stripeProductTaxCode: 'txcd_99999999',
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925',
+    maxSupply: 15,
+    itemsPerBox: 0,
+    maxPerTx: 1,
+    namePrefix: 'binder',
+    figureNamePrefix: 'binder',
+    symbol: 'receipts',
+    boxMinterProgramId: '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6',
+    boxMinterConfigPda: 'CziiZZkPYnZuEzPap8SKj3N8KvL1zrdbGPuR9kNd92NT',
+    collectionMint: 'CGHkcyW17zzC99rdjcv7sMv1ehH3uKEihgvxXDAmFm9Z',
+    receiptsMerkleTree: '5PvWhuvqrtKxYY1LWgKRLTWMmTPGJAuVFKarVwsikcku',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeCanopyDepth: 8,
+    deliveryLookupTable: '7wmwxQfiChg822oE4RiUzmRdJyEhbdsMQu4UTaNK62tp',
+  },
   drifella_shirt: {
     solanaCluster: 'mainnet-beta',
     dropId: 'drifella_shirt',
@@ -417,7 +448,23 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
   },
 };
 
-export const RECEIPT_POOL_DEPLOYMENTS: ReceiptPoolDeploymentsMap = {};
+export const RECEIPT_POOL_DEPLOYMENTS: ReceiptPoolDeploymentsMap = {
+  'devnet:mons_shop_receipts': {
+    solanaCluster: 'devnet',
+    receiptPoolId: 'mons_shop_receipts',
+    collectionMint: 'CGHkcyW17zzC99rdjcv7sMv1ehH3uKEihgvxXDAmFm9Z',
+    receiptsMerkleTree: '5PvWhuvqrtKxYY1LWgKRLTWMmTPGJAuVFKarVwsikcku',
+    authority: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+    collectionMetadataUri: 'https://cdn.lil.org/nft/mons_shop_receipts/collection.json',
+    collectionName: 'mons shop receipts',
+    collectionSymbol: 'receipts',
+    royaltiesBasisPoints: 500,
+    royaltiesRecipient: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeMaxBufferSize: 64,
+    receiptsTreeCanopyDepth: 8,
+  },
+};
 
 export function receiptPoolDeploymentKey(
   solanaCluster: SolanaCluster,
