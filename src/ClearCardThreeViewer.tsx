@@ -14,6 +14,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
+const CAMERA_FIT_MARGIN = 1.06;
 const MAX_TILT_X = THREE.MathUtils.degToRad(25);
 const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
 const SPRING_STIFFNESS = 60;
@@ -27,16 +28,12 @@ const PUNCH_SPRING_DAMPING = 14;
 const PUNCH_SCALE_IMPULSE = 0.9;
 const HIT_TILT_JOLT = 0.9;
 
-const CARD_REVEAL_START_SCALE = 0.72;
-const CARD_SPRING_STIFFNESS = 90;
-const CARD_SPRING_DAMPING = 11;
-const CARD_SPRING_DELAY_S = 0.1;
+const CARD_EMBED_FACTOR = 0.9;
 
-const BREAK_SHARD_FADE_START_S = 0.25;
-const BREAK_SHARD_FADE_END_S = 0.65;
-const BREAK_SHARDS_HIDE_S = 0.7;
-const BREAK_REVEAL_INTERACTIVE_S = 0.8;
-const BREAK_CAMERA_EASE_S = 0.6;
+const BREAK_SHARD_FADE_START_S = 0.4;
+const BREAK_SHARD_FADE_END_S = 0.9;
+const BREAK_SHARDS_HIDE_S = 0.95;
+const BREAK_REVEAL_INTERACTIVE_S = 1;
 const SHARD_GRAVITY_FACTOR = 9;
 
 const MAX_SPARKLES = 64;
@@ -160,10 +157,6 @@ function isSpringValueSettled(spring: SpringValue) {
 function snapSpringValue(spring: SpringValue) {
   spring.current = spring.target;
   spring.velocity = 0;
-}
-
-function easeInOutCubic(t: number) {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 function partitionGeometryIntoQuadrants(geometry: THREE.BufferGeometry): THREE.BufferGeometry[] {
@@ -351,9 +344,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let handleContextRestored: (() => void) | null = null;
       let resize: (() => void) | null = null;
 
-      let packMesh: THREE.Mesh | null = null;
       const packMeshes: THREE.Mesh[] = [];
       let packUsesTransmission = false;
+      let cardUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
       let hitCount = 0;
       let breakElapsed = 0;
@@ -364,7 +357,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const cardSize = new THREE.Vector3();
       const fitSize = new THREE.Vector3();
       const punchSpring: SpringValue = { current: 1, target: 1, velocity: 0 };
-      const cardSpring: SpringValue = { current: 1, target: 1, velocity: 0 };
       let sparkleWorldScale = 1;
       const sparkles: Sparkle[] = [];
       const tmpVector = new THREE.Vector3();
@@ -442,6 +434,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const setStage = (nextStage: UnboxStage) => {
         stageRef.current = nextStage;
+        directionalLight.visible = nextStage === 'pack' || !cardUsesTransmission;
         const usePackBackdrop = nextStage === 'pack' && packUsesTransmission;
         transmissionBackdropMaterial.uniforms.backdropColor.value.setHex(
           usePackBackdrop
@@ -461,7 +454,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const fitWidthDistance =
           fitSize.x / (2 * Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.01));
         const distance =
-          Math.max(fitHeightDistance, fitWidthDistance) * 1.14 * CANVAS_OVERSCAN + fitSize.z / 2;
+          Math.max(fitHeightDistance, fitWidthDistance) * CAMERA_FIT_MARGIN * CANVAS_OVERSCAN +
+          fitSize.z / 2;
         camera.position.set(0, 0, Math.max(distance, 0.1));
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
@@ -474,28 +468,31 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         new THREE.Box3().setFromObject(root).getSize(sizeTarget);
       };
 
-      const buildPackShards = (mesh: THREE.Mesh) => {
-        const parent = mesh.parent;
+      const buildPackShards = (meshes: THREE.Mesh[], largestMesh: THREE.Mesh) => {
+        const parent = largestMesh.parent;
         if (!parent) return;
-        const sourceMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+        const sourceMaterial = Array.isArray(largestMesh.material)
+          ? largestMesh.material[0]
+          : largestMesh.material;
         if (!sourceMaterial) return;
-        const fragments = partitionGeometryIntoQuadrants(mesh.geometry);
+        const fragments = partitionGeometryIntoQuadrants(largestMesh.geometry);
         if (fragments.length < 2) {
           fragments.forEach((fragment) => fragment.dispose());
           return;
         }
-        const geometryBounds = mesh.geometry.boundingBox;
+        const geometryBounds = largestMesh.geometry.boundingBox;
         if (geometryBounds) {
           geometryBounds.getCenter(packLocalCenter);
           const localSize = geometryBounds.getSize(new THREE.Vector3());
           shardLocalScale = Math.max(localSize.x, localSize.y, localSize.z);
         }
-        fragmentsGroup = new THREE.Group();
-        fragmentsGroup.position.copy(mesh.position);
-        fragmentsGroup.quaternion.copy(mesh.quaternion);
-        fragmentsGroup.scale.copy(mesh.scale);
-        fragmentsGroup.visible = false;
-        parent.add(fragmentsGroup);
+        const group = new THREE.Group();
+        group.position.copy(largestMesh.position);
+        group.quaternion.copy(largestMesh.quaternion);
+        group.scale.copy(largestMesh.scale);
+        group.visible = false;
+        parent.add(group);
+        fragmentsGroup = group;
         fragments.forEach((fragment) => {
           const fragmentCenter = fragment.boundingBox
             ? fragment.boundingBox.getCenter(new THREE.Vector3())
@@ -507,12 +504,46 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const holder = new THREE.Group();
           holder.position.copy(fragmentCenter);
           holder.add(shardMesh);
-          fragmentsGroup?.add(holder);
+          group.add(holder);
           shards.push({
             holder,
             material,
             baseOpacity: material.opacity,
             home: fragmentCenter.clone(),
+            velocity: new THREE.Vector3(),
+            angularVelocity: new THREE.Vector3(),
+          });
+        });
+        group.updateWorldMatrix(true, false);
+        const groupWorldInverse = new THREE.Matrix4().copy(group.matrixWorld).invert();
+        meshes.forEach((mesh) => {
+          if (mesh === largestMesh) return;
+          const pieceSourceMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          if (!pieceSourceMaterial) return;
+          mesh.updateWorldMatrix(true, false);
+          const relativeMatrix = new THREE.Matrix4().multiplyMatrices(
+            groupWorldInverse,
+            mesh.matrixWorld,
+          );
+          mesh.geometry.computeBoundingBox();
+          const pieceCenter = (mesh.geometry.boundingBox
+            ? mesh.geometry.boundingBox.getCenter(new THREE.Vector3())
+            : new THREE.Vector3()
+          ).applyMatrix4(relativeMatrix);
+          const material = pieceSourceMaterial.clone();
+          material.transparent = true;
+          const pieceMesh = new THREE.Mesh(mesh.geometry, material);
+          relativeMatrix.decompose(pieceMesh.position, pieceMesh.quaternion, pieceMesh.scale);
+          pieceMesh.position.sub(pieceCenter);
+          const holder = new THREE.Group();
+          holder.position.copy(pieceCenter);
+          holder.add(pieceMesh);
+          group.add(holder);
+          shards.push({
+            holder,
+            material,
+            baseOpacity: material.opacity,
+            home: pieceCenter.clone(),
             velocity: new THREE.Vector3(),
             angularVelocity: new THREE.Vector3(),
           });
@@ -537,12 +568,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tmpVector.normalize();
           shard.velocity
             .copy(tmpVector)
-            .multiplyScalar(shardLocalScale * (0.5 + Math.random() * 0.35));
-          shard.velocity.addScaledVector(down, -shardLocalScale * 0.35);
+            .multiplyScalar(shardLocalScale * (0.25 + Math.random() * 0.2));
+          shard.velocity.addScaledVector(down, -shardLocalScale * 0.15);
           shard.angularVelocity.set(
-            (Math.random() - 0.5) * 5,
-            (Math.random() - 0.5) * 5,
-            (Math.random() - 0.5) * 5,
+            (Math.random() - 0.5) * 3.5,
+            (Math.random() - 0.5) * 3.5,
+            (Math.random() - 0.5) * 3.5,
           );
         });
       };
@@ -659,17 +690,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (fragmentsGroup) fragmentsGroup.visible = false;
         cardGroup.visible = true;
         cardGroup.scale.setScalar(1);
-        cardSpring.current = 1;
-        cardSpring.target = 1;
-        cardSpring.velocity = 0;
-        fitSize.copy(cardSize);
+        fitSize.copy(packSize);
         fitCamera();
         setStage('revealed');
       };
 
       const startBreak = (point: THREE.Vector3) => {
         onPackBreakRef.current?.();
-        if (reducedMotionRef.current || shards.length === 0 || !packMesh || !fragmentsGroup) {
+        if (reducedMotionRef.current || shards.length === 0 || !fragmentsGroup) {
           finishBreakInstant();
           requestRender();
           return;
@@ -684,10 +712,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         });
         fragmentsGroup.visible = true;
         cardGroup.visible = true;
-        cardSpring.current = CARD_REVEAL_START_SCALE;
-        cardSpring.target = CARD_REVEAL_START_SCALE;
-        cardSpring.velocity = 0;
-        cardGroup.scale.setScalar(CARD_REVEAL_START_SCALE);
+        cardGroup.scale.setScalar(1);
         spawnSparkles(point, BREAK_SPARKLE_COUNT);
         requestRender();
       };
@@ -734,7 +759,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         });
         cardGroup.visible = false;
         cardGroup.scale.setScalar(1);
-        snapSpringValue(cardSpring);
         punchSpring.current = 1;
         punchSpring.target = 1;
         punchSpring.velocity = 0;
@@ -795,10 +819,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
         if (stageRef.current === 'breaking') {
           breakElapsed += deltaSeconds;
-          const fitProgress = Math.min(breakElapsed / BREAK_CAMERA_EASE_S, 1);
-          fitSize.lerpVectors(packSize, cardSize, easeInOutCubic(fitProgress));
-          fitCamera();
-          if (breakElapsed >= CARD_SPRING_DELAY_S) cardSpring.target = 1;
           const down = computeLocalDown();
           const gravity = shardLocalScale * SHARD_GRAVITY_FACTOR;
           const fadeRange = BREAK_SHARD_FADE_END_S - BREAK_SHARD_FADE_START_S;
@@ -819,15 +839,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             fragmentsGroup.visible = false;
           }
           if (breakElapsed >= BREAK_REVEAL_INTERACTIVE_S) {
-            fitSize.copy(cardSize);
-            fitCamera();
             setStage('revealed');
           }
-        }
-
-        if (cardGroup.visible && !isSpringValueSettled(cardSpring)) {
-          stepSpringValue(cardSpring, deltaSeconds, CARD_SPRING_STIFFNESS, CARD_SPRING_DAMPING);
-          cardGroup.scale.setScalar(cardSpring.current);
         }
 
         updateSparkles(deltaSeconds);
@@ -844,8 +857,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const effectsActive =
           sparkles.length > 0 ||
           stageRef.current === 'breaking' ||
-          !isSpringValueSettled(punchSpring) ||
-          (cardGroup.visible && !isSpringValueSettled(cardSpring));
+          !isSpringValueSettled(punchSpring);
         if (tiltUnsettled || effectsActive) {
           frameId = window.requestAnimationFrame(renderFrame);
         } else {
@@ -854,7 +866,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tilt.velocityX = 0;
           tilt.velocityY = 0;
           snapSpringValue(punchSpring);
-          snapSpringValue(cardSpring);
           lastFrameTime = 0;
         }
       };
@@ -1024,18 +1035,38 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               );
             }
             let largestMeshSizeSq = -1;
+            let largestPackMesh: THREE.Mesh | null = null;
             packMeshes.forEach((mesh) => {
               const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
               const meshSizeSq = meshSize.lengthSq();
               if (meshSizeSq <= largestMeshSizeSq) return;
               largestMeshSizeSq = meshSizeSq;
-              packMesh = mesh;
+              largestPackMesh = mesh;
             });
-            if (packMesh) buildPackShards(packMesh);
+            if (largestPackMesh) buildPackShards(packMeshes, largestPackMesh);
 
             const cardRoot = cardGltf.scene;
+            const rawCardSize = new THREE.Box3().setFromObject(cardRoot).getSize(new THREE.Vector3());
+            const embedScale =
+              rawCardSize.x > 0 && rawCardSize.y > 0
+                ? Math.min(packSize.x / rawCardSize.x, packSize.y / rawCardSize.y) *
+                  CARD_EMBED_FACTOR
+                : 1;
+            cardRoot.scale.setScalar(embedScale);
             centerObject(cardRoot, cardSize);
             cardGroup.add(cardRoot);
+            cardRoot.traverse((object) => {
+              if (!(object instanceof THREE.Mesh)) return;
+              const materials = Array.isArray(object.material) ? object.material : [object.material];
+              if (
+                materials.some(
+                  (material) =>
+                    material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
+                )
+              ) {
+                cardUsesTransmission = true;
+              }
+            });
 
             sparkleWorldScale = Math.max(packSize.x, packSize.y, packSize.z) || 1;
             sparkleMaterial.size = sparkleWorldScale * 0.05;

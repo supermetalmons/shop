@@ -42,7 +42,7 @@
 
 .clear-card-wip__viewport {
   position: relative;
-  width: min(76vw, 500px, 55.7svh);
+  width: min(82vw, 545px, 60.5svh);
   aspect-ratio: var(--interactive-card-aspect);
   min-width: 1px;
   min-height: 1px;
