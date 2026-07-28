@@ -1637,8 +1637,6 @@ header.top--shop.top--spacer {
   }
 }
 
-/* -- DropsPanel (home page navigation) -- */
-
 .drops-panel {
   width: 100%;
   padding: 0;
@@ -5062,7 +5060,6 @@ footer {
   font-size: 13px;
 }
 
-/* Wallet button override for cleaner look */
 .wallet-adapter-button {
   background: var(--fg) !important;
   border-radius: 980px !important;
@@ -5088,7 +5085,6 @@ footer {
   opacity: 1;
 }
 
-/* Wallet modal overrides to match app styling */
 .wallet-adapter-modal {
   background: transparent;
 }

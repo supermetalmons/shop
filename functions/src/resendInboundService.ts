@@ -216,8 +216,7 @@ export async function processResendInboundForward(params: {
       if (preparation === 'superseded') {
         return { kind: 'failed_retryable', reason: 'attempt_superseded', attempts: reservation.attempts };
       }
-      // The explicit invalid-attachment response resolves any earlier uncertainty
-      // for the full-payload key. The fallback starts its own provider window.
+
       unresolvedProviderAttempt = false;
       try {
         sent = await params.provider.sendEmail(prepared.payload, prepared.idempotencyKey);

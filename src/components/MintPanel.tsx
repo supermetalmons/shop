@@ -78,17 +78,12 @@ interface MintPanelProps {
   packStatusDisplayLabels?: PackStatusDisplayLabels;
 }
 
-/**
- * DEV: Override the "remaining" value for MintPanel UI testing.
- * Set to a number (e.g. 42) to force that remaining count.
- * Leave as `null` to use real backend/on-chain stats.
- */
 const REMAINING_OVERRIDE: number | null = null;
 
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
 type BoxPreviewBounds = { width: number; height: number; viewportWidth: number; centerX: number };
 
-const BOX_ASPECT_RATIO = 1440 / 1030; // width / height (tight.webp)
+const BOX_ASPECT_RATIO = 1440 / 1030;
 const BOX_MAX_RELATIVE_HEIGHT = 0.777;
 const BOX_MEDIA_SCALE_MAX = 1.5;
 const LAMPORTS_PER_SOL_UI = 1_000_000_000;
@@ -325,8 +320,6 @@ function showFirstAvailableFallbackAfter(element: HTMLElement) {
       return;
     }
 
-    // Keep the next fallback eligible while a preferred fallback image is still
-    // loading, so failed media can settle to the blank slot without a flash.
     fallback.hidden = mediaFallbackReady(selectedFallback) || fallback instanceof HTMLImageElement;
   });
 }
@@ -376,9 +369,7 @@ function autoplayVideoNeedsReload(video: HTMLVideoElement): boolean {
 function resetAutoplayVideoTime(video: HTMLVideoElement) {
   try {
     video.currentTime = 0;
-  } catch {
-    // Some browsers reject seeking before metadata is available.
-  }
+  } catch {}
 }
 
 function stopAutoplayVideo(video: HTMLVideoElement) {
@@ -475,7 +466,6 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
   const gapScaleX = safeCount > 1 ? 1.8 : 1;
   const gapScaleY = safeCount > 1 ? 2 : 1;
 
-  // Reasonable fallback before we know measured dimensions.
   if (!safeWidth || !safeHeight) {
     const fallbackHeight = 120;
     return {
@@ -487,15 +477,12 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
     };
   }
 
-  // Let the preview container height dictate the maximum box size so the image can
-  // actually fill the available space (especially for low quantities).
   const maxHeight = Math.max(1, Math.floor(safeHeight * BOX_MAX_RELATIVE_HEIGHT));
   let best: BoxPreviewLayout = { height: 1, width: Math.max(1, Math.floor(BOX_ASPECT_RATIO)), gapX: 8, gapY: 8, cols: 1 };
 
   for (let cols = 1; cols <= safeCount; cols += 1) {
     const rows = Math.ceil(safeCount / cols);
 
-    // Start with a conservative gap, then refine once based on the resulting size.
     let gapX = 12 * gapScaleX;
     let gapY = 12 * gapScaleY;
     let boxHeight = Math.min(
@@ -512,7 +499,6 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
     );
     boxHeight = Math.min(boxHeight, maxHeight);
 
-    // Safety margin to avoid sub-pixel rounding clipping at some breakpoints.
     boxHeight = Math.floor(boxHeight) - 1;
     gapX = Math.max(0, Math.floor(gapX));
     gapY = Math.max(0, Math.floor(gapY));
@@ -526,7 +512,6 @@ function calcBoxPreviewLayout(count: number, width: number, height: number, boxA
       continue;
     }
 
-    // Tie-breaker: prefer fewer rows (i.e. more columns) when size is the same.
     if (boxHeight === best.height) {
       const bestRows = Math.ceil(safeCount / best.cols);
       if (rows < bestRows) {
@@ -696,12 +681,9 @@ export function MintPanel({
   const showFormControls = showQuantitySlider || showSizeSelector;
   const showPackStatusControl = Boolean(showPackStatusInfo || packStatusBreakdown);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
-  // Bumping this token forces the size buttons to re-mount so the blink
-  // animation restarts even when the user clicks Mint repeatedly.
+
   const [sizeBlinkToken, setSizeBlinkToken] = useState(0);
-  // The blink class must only be applied for the duration of the animation —
-  // otherwise selecting a different size later flips the previously selected
-  // button back into the blink selector and re-triggers the animation.
+
   const [isBlinking, setIsBlinking] = useState(false);
   const [discountSubmitPending, setDiscountSubmitPending] = useState(false);
   const [stripePaymentSubmitPending, setStripePaymentSubmitPending] = useState(false);
@@ -841,14 +823,11 @@ export function MintPanel({
   useEffect(() => {
     if (sizeBlinkToken === 0) return;
     setIsBlinking(true);
-    // Matches the CSS animation duration (2 iterations × 0.18s) with a small buffer
-    // so the class is removed only after the final pulse settles.
+
     const handle = window.setTimeout(() => setIsBlinking(false), 460);
     return () => window.clearTimeout(handle);
   }, [sizeBlinkToken]);
 
-  // Picking a size should immediately silence the attention blink — otherwise the
-  // remaining unselected pill keeps pulsing for the rest of the animation window.
   useEffect(() => {
     if (selectedSize) setIsBlinking(false);
   }, [selectedSize]);
@@ -861,8 +840,7 @@ export function MintPanel({
 
   useEffect(() => {
     if (successfulMintToken === 0) return;
-    // Success is signaled explicitly from the parent so local controls can
-    // reset without depending on how long the post-mint refresh takes.
+
     setSelectedSize(null);
     setQuantity(1);
   }, [successfulMintToken]);
@@ -888,8 +866,7 @@ export function MintPanel({
     if (!el || typeof ResizeObserver === 'undefined') return;
 
     const update = () => {
-      // Measure the stable preview slot, not the grid whose item size we write back.
-      // This avoids a ResizeObserver feedback loop where the preview shrinks itself.
+
       const style = window.getComputedStyle(el);
       const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
       const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);

@@ -103,7 +103,6 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
 
 export type DeploymentDropsMap = Record<string, DeploymentRegistryDrop>;
 
-// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY
 export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
   card_nft_2: {
     solanaCluster: 'mainnet-beta',
@@ -385,8 +384,6 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     deliveryLookupTable: 'F5tFuFeb2iQ4i42grSNjyokS2T9HxZDwMLjKRSERPgcL',
   },
 };
-// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY
-
 function assertRegistryKeysMatchDropIds(drops: DeploymentDropsMap): void {
   Object.entries(drops).forEach(([registryKey, drop]) => {
     if (registryKey !== drop.dropId) {

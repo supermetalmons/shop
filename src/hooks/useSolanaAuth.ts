@@ -86,19 +86,15 @@ export function useSolanaAuth() {
     lastConnectedWalletRef.current = wallet;
     if (!prevWallet || prevWallet === wallet) return;
 
-    // Wallet account changed while remaining connected. Clear local auth state and
-    // force a fresh Firebase anonymous session to avoid carrying over prior wallet mapping.
     authAttemptEpochRef.current += 1;
     clearLocalAuthState();
     if (auth) {
       void firebaseSignOut(auth).catch(() => {
-        // Ignore sign-out races; next auth call will recover.
+
       });
     }
   }, [clearLocalAuthState, connected, publicKey]);
 
-  // On reload, restore the saved profile if this device already has a wallet session
-  // (set by a previous `solanaAuth` call). This avoids requiring another wallet signature.
   useEffect(() => {
     if (!auth || !connected || !publicKey) return;
     const wallet = publicKey.toBase58();
@@ -116,9 +112,7 @@ export function useSolanaAuth() {
         const session = await loadCurrentSessionProfile(wallet);
         if (!session?.token) return;
         if (!cancelled) setState({ profile: session.profile, token: session.token, loading: false });
-      } catch {
-        // No session (or expired) is totally normal on first visit; don't surface as an error.
-      } finally {
+      } catch {} finally {
         if (!cancelled) {
           setState((prev) => ({ ...prev, loading: false }));
           setSessionWalletChecked(wallet);
@@ -157,8 +151,6 @@ export function useSolanaAuth() {
       const uid = await ensureAuthenticated();
       ensureAttemptCurrent();
 
-      // If the user just tried signing in and the network flaked out, reuse the last signature
-      // to avoid re-prompting the wallet.
       const reuseWindowMs = 2 * 60 * 1000;
       const cached = lastSignedRef.current;
       const now = Date.now();
@@ -174,7 +166,6 @@ export function useSolanaAuth() {
         lastSignedRef.current = { wallet, uid, message, signature, createdAt: now };
       }
 
-      // Retry only the callable (idempotent) step with exponential backoff.
       const { profile } = await retryWithBackoff(
         async () => {
           const session = await solanaAuth(wallet, message, signature, options);
@@ -201,7 +192,7 @@ export function useSolanaAuth() {
       return { profile, token };
     } catch (err) {
       console.error(err);
-      // If we cached a bad signature payload, clear it so the next attempt forces a fresh wallet signature.
+
       if (isInvalidSignatureError(err)) lastSignedRef.current = null;
       if ((err as { code?: string } | null)?.code === 'wallet-changed') {
         setState((prev) => ({ ...prev, loading: false }));

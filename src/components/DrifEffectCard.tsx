@@ -672,7 +672,7 @@ export default function DrifEffectCard({
         isHoverChainTarget(hoverWrapper, hoveredElements);
 
       if (hovered) {
-        // If the card unlocked under a resting pointer before this component mounted, we may not know the cursor position.
+
         setPointerFromPercent(50, 50);
         return;
       }
@@ -682,7 +682,6 @@ export default function DrifEffectCard({
       }
     };
 
-    // If interactivity unlocks under a resting pointer, no enter event fires to wake the holo springs.
     frameId = window.requestAnimationFrame(tryWake);
 
     return () => {

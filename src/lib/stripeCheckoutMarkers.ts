@@ -112,9 +112,7 @@ function persistStripeCheckoutMarkers(
     } else {
       storage.removeItem(STRIPE_CHECKOUT_MARKERS_STORAGE_KEY);
     }
-  } catch {
-    // Ignore local storage failures; the marker is an optimization gate only.
-  }
+  } catch {}
   return compacted;
 }
 

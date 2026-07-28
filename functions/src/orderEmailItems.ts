@@ -30,7 +30,6 @@ import {
 } from './shared/mediaMap.js';
 import { isDirectDeliveryItemsPerBox } from './shared/shipping.js';
 
-// Keep these email previews limited to what the buyer could already see at order time.
 type DeliveryOrderItem = {
   kind: 'box' | 'dude';
   refId: number;

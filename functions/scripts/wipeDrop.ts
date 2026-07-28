@@ -309,7 +309,7 @@ function escapeRegExp(value: string): string {
 
 function buildDropIdTokenRegex(dropId: string): RegExp {
   const escapedDropId = escapeRegExp(dropId);
-  // A drop id token must not be surrounded by drop-id characters, so `abc` does not match `abc_devnet`.
+
   return new RegExp(`(^|[^A-Za-z0-9_-])${escapedDropId}($|[^A-Za-z0-9_-])`);
 }
 
@@ -1355,8 +1355,7 @@ export async function buildRepoPlan(args: {
       canonicalRelPath,
       legacyDropRelPath,
     );
-    // Without a registry or journal root, family Merkle ownership cannot be
-    // proven. The exact drop-id legacy path remains exclusively drop-owned.
+
     if (
       legacyDropRelPath !== canonicalRelPath &&
       ((trackedFiles.includes(legacyDropRelPath) &&
@@ -2291,8 +2290,7 @@ function snapshotCanonicalDeleteTarget(
       snapshot.kind === 'symlink' &&
       currentSha256 !== target.expectedSha256
     ) {
-      // Compatibility for callers that prepared a symlink fingerprint from
-      // its referent before stable symlink-target fingerprints were added.
+
       currentSha256 = createHash('sha256')
         .update(readFileSync(target.absolutePath))
         .digest('hex');
@@ -2529,8 +2527,6 @@ function assertPreparedStagingDirectorySafe(args: {
     );
   }
 
-  // Existing quarantines are retired through a fresh child directory. Verify
-  // that operation can be prepared before the irreversible Firestore phase.
   if (args.quarantineSnapshot.exists) {
     probeStagingParentWritable(stagingDirectory);
   }
@@ -2576,9 +2572,7 @@ export function prepareRepoWipe(
     ...ioOverrides,
     durabilityRoot,
   };
-  // The caller holds the deployment-registry mutation lock. Opening the
-  // registry with an expected-content no-op verifies both its bytes and
-  // writability before Firestore can be touched.
+
   assertRepoWipeRegistryWritable(plan);
 
   const canonicalDeleteTargets = plan.canonicalDeleteTargets.map((target) => {
@@ -2644,9 +2638,6 @@ export function prepareRepoWipe(
   );
   stagingParents.forEach(probeStagingParentWritable);
 
-  // Snapshotting can take long enough for an editor or another process to
-  // replace an earlier path. Recheck the registry and every target after all
-  // snapshots have been collected.
   assertPreparedRepoWipeStillMatches({
     plan,
     canonicalDeleteTargets,
@@ -2866,9 +2857,7 @@ function removeRecoveryManifest(
         handle.filePath,
         handle.snapshot,
       );
-    } catch {
-      // Persist the prepared bytes below without touching an unreadable path.
-    }
+    } catch {}
     if (!liveManifestMatches) {
       const recovery = persistSnapshotForRecovery({
         preferredPath: handle.filePath,
@@ -2919,9 +2908,7 @@ function removeRecoveryManifest(
             retiredSnapshot,
             io,
           );
-        } catch {
-          // A concurrent live replacement is preserved below.
-        }
+        } catch {}
       }
       const preparedRecoveryPath = `${retirementPath}.prepared`;
       try {
@@ -3280,8 +3267,7 @@ function restoreUnexpectedStagedEntry(args: {
   const unexpectedSnapshot = snapshotLocalFile(args.stagedPath);
   if (!unexpectedSnapshot.exists) return;
   if (!localPathEntryExists(args.absolutePath)) {
-    // Exclusive creation preserves a concurrent recreation and leaves the
-    // exact moved inode in quarantine until the operator resolves the error.
+
     ensureDirectoryChainDurable(
       path.dirname(args.absolutePath),
       args.io,
@@ -3367,7 +3353,7 @@ function persistSnapshotForRecovery(args: {
       if (error instanceof DirectoryChainDurabilityCleanupError) {
         break;
       }
-      // Preserve any concurrent entry and try the exclusive recovery sibling.
+
     }
   }
   const survivingPaths = candidatePaths.filter((candidatePath) => {
@@ -3504,11 +3490,7 @@ function retirePreparedQuarantine(args: {
     args.io.syncDirectory(retirementDirectory);
   } catch (error) {
     const recovery = persistPreparedSnapshot();
-    // A fault-injecting adapter may fail before unlinking. Once an exclusive
-    // copy is safely back at the deterministic quarantine, retire the now
-    // redundant private copy directly when it is still the prepared inode.
-    // The private directory prevents a pathname-swap race with normal
-    // concurrent editors.
+
     try {
       if (
         recovery.durableRecoveryPaths.includes(
@@ -3536,9 +3518,7 @@ function retirePreparedQuarantine(args: {
           retirementPath = undefined;
         }
       }
-    } catch {
-      // Both copies remain discoverable below.
-    }
+    } catch {}
     if (retirementPath) {
       addUniquePath(args.recoveryPaths, retirementPath);
     }
@@ -3643,8 +3623,7 @@ function linkOwnedStagedFileForRollback(args: {
         args.target.snapshot,
       )
     ) {
-      // The link syscall completed before an injected adapter reported an
-      // error. Its exact inode proves this invocation restored the source.
+
       return 'linked-original';
     }
     if (
@@ -4028,9 +4007,7 @@ function reconcileRecoveryRestoreTargetsAfterFirestore(args: {
           target.quarantinePath,
           target.quarantineSnapshot,
         );
-      } catch {
-        // Preserve the immutable snapshot at a no-clobber recovery path below.
-      }
+      } catch {}
       let durableQuarantinePaths: readonly string[] = quarantineMatches
         ? [target.quarantinePath]
         : [];
@@ -4083,9 +4060,7 @@ function reconcileRecoveryRestoreTargetsAfterFirestore(args: {
             target.absolutePath,
             target.canonicalSnapshot,
           );
-        } catch {
-          // Treat unreadable state as a concurrent change.
-        }
+        } catch {}
         if (canonicalMatches) {
           return {
             ...target,
@@ -4117,7 +4092,7 @@ function reconcileRecoveryRestoreTargetsAfterFirestore(args: {
             ) {
               throw error;
             }
-            // A concurrent canonical entry is preserved by exclusive creation.
+
           }
           if (restoredSnapshot) {
             makeSnapshotDurable(
@@ -4319,8 +4294,7 @@ function reconcileStageFileError(args: {
     canonicalSnapshot = snapshotLocalFile(args.target.absolutePath);
     stagedSnapshot = snapshotLocalFile(args.target.stagedPath);
   } catch {
-    // The owned record stays in place so rollback cannot mistake an
-    // unreadable quarantine for a target this invocation never moved.
+
     addUniquePath(args.recoveryPaths, args.target.stagedPath);
     return 'throw';
   }
@@ -4332,8 +4306,7 @@ function reconcileStageFileError(args: {
       args.target.snapshot,
     );
   if (stagedMatches) {
-    // rename(2) completed before the adapter raised. Keep the ownership
-    // record so the ordinary rollback path restores only these exact bytes.
+
     return 'throw';
   }
 
@@ -4343,8 +4316,7 @@ function reconcileStageFileError(args: {
   }
 
   if (!canonicalSnapshot.exists && !stagedSnapshot.exists) {
-    // The source vanished independently and nothing reached our quarantine.
-    // Treat that as the same idempotent outcome as an already-missing target.
+
     try {
       removeEmptyStagingDirectory(
         args.target.stagedDirectory,
@@ -4386,9 +4358,7 @@ function reconcileStageFileError(args: {
         args.target.absolutePath,
         args.target.snapshot,
       );
-    } catch {
-      // Treat an unreadable or replaced source as a concurrent residual.
-    }
+    } catch {}
   }
   if (!canonicalMatches) {
     addUniquePath(args.residualPaths, args.target.relativePath);
@@ -4476,9 +4446,7 @@ export function applyPreparedRepoWipe(
             target.quarantinePath,
             target.quarantineSnapshot,
           );
-        } catch {
-          // Preserve and report an unreadable quarantine.
-        }
+        } catch {}
         if (quarantineMatches) {
           stagedTargets.push({
             relativePath: target.relativePath,
@@ -4612,9 +4580,7 @@ export function applyPreparedRepoWipe(
             stagedPath: staging.stagedPath,
             io,
           });
-        } catch {
-          // The raced-in entry remains at its deterministic recovery path.
-        }
+        } catch {}
       }
 
       try {

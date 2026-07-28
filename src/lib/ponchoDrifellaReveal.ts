@@ -344,7 +344,6 @@ async function preloadPonchoDrifellaImage(
     return;
   }
 
-  // Warm preloads only need one successful fetch per cache generation.
   if (mode === 'warm' && imageCache.fetched.has(normalizedImageSrc)) {
     return;
   }
@@ -443,7 +442,7 @@ function preloadPonchoDrifellaImageSources(
 ) {
   imageSources.forEach((imageSrc) => {
     void preloadPonchoDrifellaImage(imageSrc, imageCache, options).catch(() => {
-      // Allow readiness loops to retry failed images.
+
     });
   });
 }
@@ -694,7 +693,7 @@ function preloadPonchoDrifellaPunchAssets(
   packSequence = PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
 ) {
   preloadPonchoDrifellaImage(packSequence.initialFrameUrl, imageCache, options).catch(() => {
-    // Allow later retries.
+
   });
   preloadPonchoDrifellaImageSources(packSequence.punchFrameUrls, imageCache, options);
 }
@@ -910,7 +909,7 @@ function getPonchoDrifellaAdvanceDecision({
   }
   if (!cardReady) return 'start-punch';
   if (stage === 'idle') {
-    // The extracted player advances autoplay on a fixed timer, so only leave idle once the full entry path is ready.
+
     return openingFramesReady && autoplayEntryReady ? 'start-segment-1-1' : 'start-punch';
   }
   if (stage === 'segment_1_1_hold') {

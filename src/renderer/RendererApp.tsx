@@ -75,7 +75,7 @@ const BLACK_BACKGROUND_VARIANT = {
 } as const satisfies RenderVariant;
 const ON_CANVAS_LAYOUT = {
   background: '/card_nft_2/canvas_h.jpeg',
-  // Keep the horizontal canvas MP4-friendly for browser H.264 encoders.
+
   outputSize: {
     width: 1872,
     height: 1408,
@@ -560,9 +560,7 @@ export default function RendererApp() {
           return fileHandle.createWritable();
         },
       });
-    } catch {
-      // renderIds stores the user-facing error.
-    }
+    } catch {}
   }, [outputDirectory, renderIds, renderSelection]);
 
   const stopRendering = useCallback(() => {

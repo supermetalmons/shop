@@ -170,9 +170,7 @@ function makeDeploymentRegistryFixture(
     writeFileSync(
       registryPath,
       [
-        '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
         `export const DEPLOYMENT_DROPS = ${serialized};`,
-        '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
         '',
       ].join('\n'),
       'utf8',

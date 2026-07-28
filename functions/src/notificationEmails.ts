@@ -47,10 +47,6 @@ export type NotificationEmailItem = {
 declare const buyerVisibleOrderEmailItemBrand: unique symbol;
 declare const shipperVisibleOrderEmailItemBrand: unique symbol;
 
-// Order-backed notification emails must only use items produced by the
-// audience-specific resolvers in orderEmailItems.ts. These brands catch typed
-// call sites that try to pass fulfillment-only previews directly into buyer or
-// shipper notification emails.
 export type BuyerVisibleOrderEmailItem = NotificationEmailItem & {
   readonly [buyerVisibleOrderEmailItemBrand]: true;
 };

@@ -1,6 +1,3 @@
-/// <reference types="dom-webcodecs" />
-/// <reference types="wicg-file-system-access" />
-
 import {
   ArrayBufferTarget as Mp4ArrayBufferTarget,
   FileSystemWritableFileStreamTarget as Mp4FileSystemWritableFileStreamTarget,
@@ -144,9 +141,7 @@ function getCanvasColorSpace(): PredefinedColorSpace {
     canvas.width = canvas.height = 1;
     const ctx = canvas.getContext('2d', { colorSpace: 'display-p3' });
     if (ctx?.getContextAttributes().colorSpace === 'display-p3') return 'display-p3';
-  } catch {
-    // Fall back to sRGB below.
-  }
+  } catch {}
   return 'srgb';
 }
 
@@ -206,9 +201,7 @@ async function getSupportedMp4Encoder(outputSize: OutputSize): Promise<EncoderSu
                 muxerCodec: candidate.muxerCodec,
               };
             }
-          } catch {
-            // Try the next codec.
-          }
+          } catch {}
         }
 
         return null;
@@ -256,9 +249,7 @@ async function getSupportedWebmEncoder(outputSize: OutputSize): Promise<EncoderS
                 muxerCodec: candidate.muxerCodec,
               };
             }
-          } catch {
-            // Try the next codec.
-          }
+          } catch {}
         }
 
         return null;
@@ -400,15 +391,11 @@ async function createOutputTarget(
           try {
             await writable.abort(reason);
             return;
-          } catch {
-            // Fall through to a normal close.
-          }
+          } catch {}
         }
         try {
           await writable.close();
-        } catch {
-          // Best effort cleanup.
-        }
+        } catch {}
       },
     };
   }

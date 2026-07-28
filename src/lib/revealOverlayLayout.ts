@@ -77,8 +77,6 @@ const PONCHO_DRIFELLA_ROW_MAX_WIDTH_RATIOS = Object.freeze({
   trio: 0.21,
 });
 
-// Seeded from the previous desktop-only layout at a 738px square reveal target,
-// then reduced by 10% while keeping the card centered for pack-relative tuning.
 const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
   left: 460,
   top: 372,

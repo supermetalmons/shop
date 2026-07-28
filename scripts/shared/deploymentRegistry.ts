@@ -111,10 +111,6 @@ export type DeploymentDropRegistry = {
   sourceContent: string;
 };
 
-const DEPLOYMENT_REGISTRY_START =
-  '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
-const DEPLOYMENT_REGISTRY_END =
-  '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
 const SAFE_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const DROP_METADATA_IPFS_GATEWAY =
   'https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/';
@@ -176,9 +172,7 @@ export function acquireDeploymentRegistryMutationLock(args: {
         `operation=${String(existing.operation ?? 'unknown')}, ` +
         `pid=${String(existing.pid ?? 'unknown')}, ` +
         `startedAt=${String(existing.startedAt ?? 'unknown')}`;
-    } catch {
-      // Keep the conservative owner description above.
-    }
+    } catch {}
     throw new Error(
       `Another deployment-registry operation may still be running (${owner}).\n` +
         `Lock: ${lockPath}\n` +
@@ -204,9 +198,7 @@ export function acquireDeploymentRegistryMutationLock(args: {
           console.warn(
             `⚠️  Preserved deployment-registry lock because its owner changed: ${lockPath}`,
           );
-        } catch {
-          // Cleanup warnings must not disrupt the caller.
-        }
+        } catch {}
         return true;
       }
       unlinkSync(lockPath);
@@ -219,9 +211,7 @@ export function acquireDeploymentRegistryMutationLock(args: {
             err instanceof Error ? err.message : String(err)
           }`,
         );
-      } catch {
-        // Cleanup warnings must not disrupt the caller.
-      }
+      } catch {}
       return false;
     }
   };
@@ -709,7 +699,7 @@ export async function readDeploymentDropRegistry(
     throw new Error(`Missing canonical deployment registry: ${filePath}`);
   }
   const sourceBeforeImport = readFileSync(filePath, 'utf8');
-  const markerBounds = validateDeploymentRegistryMarkerLines({
+  findUniqueDeploymentDropsExport({
     filePath,
     content: sourceBeforeImport,
   });
@@ -732,10 +722,9 @@ export async function readDeploymentDropRegistry(
       `Canonical deployment registry must export DEPLOYMENT_DROPS as an object: ${filePath}`,
     );
   }
-  assertDeploymentDropsExportInsideMarkers({
+  findUniqueDeploymentDropsExport({
     filePath,
     content: sourceContent,
-    markerBounds,
   });
   const candidate = mod.DEPLOYMENT_DROPS;
   for (const [registryKey, value] of Object.entries(
@@ -774,9 +763,10 @@ export async function readDeploymentDropRegistry(
       writable: true,
     });
   }
+
   // Validate the mutation boundary while the source is still unchanged. This
-  // rejects missing/malformed markers before deploy or wipe can mutate remote
-  // state, without requiring the rendered formatting to equal hand-written
+  // rejects a missing or malformed declaration before deploy or wipe can mutate
+  // remote state without requiring rendered formatting to equal hand-written
   // source byte-for-byte.
   renderDeploymentRegistryFileFromSource({
     filePath,
@@ -1086,84 +1076,20 @@ function renderDeploymentRegistrySection(args: {
       return renderDeploymentDropEntry(drop);
     })
     .join('\n');
-  return `${DEPLOYMENT_REGISTRY_START}
-export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
+  return `export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
 ${entries}
-};
-${DEPLOYMENT_REGISTRY_END}`;
+};`;
 }
 
-type DeploymentRegistryMarkerBounds = {
-  startLineStart: number;
-  startLineEnd: number;
-  endLineStart: number;
-  endLineEnd: number;
+type DeploymentDropsExportBounds = {
+  start: number;
+  end: number;
 };
 
-function malformedDeploymentRegistryMarkers(filePath: string): never {
-  throw new Error(
-    `Malformed or missing canonical deployment registry markers in ${filePath}`,
-  );
-}
-
-function findUniqueDeploymentRegistryMarkerLine(args: {
+function findUniqueDeploymentDropsExport(args: {
   filePath: string;
   content: string;
-  marker: string;
-}): { lineStart: number; lineEnd: number } {
-  const markerStart = args.content.indexOf(args.marker);
-  if (
-    markerStart === -1 ||
-    markerStart !== args.content.lastIndexOf(args.marker) ||
-    (markerStart !== 0 && args.content[markerStart - 1] !== '\n')
-  ) {
-    return malformedDeploymentRegistryMarkers(args.filePath);
-  }
-
-  const afterMarker = markerStart + args.marker.length;
-  if (afterMarker === args.content.length) {
-    return { lineStart: markerStart, lineEnd: afterMarker };
-  }
-  if (args.content[afterMarker] === '\n') {
-    return { lineStart: markerStart, lineEnd: afterMarker + 1 };
-  }
-  if (
-    args.content[afterMarker] === '\r' &&
-    args.content[afterMarker + 1] === '\n'
-  ) {
-    return { lineStart: markerStart, lineEnd: afterMarker + 2 };
-  }
-  return malformedDeploymentRegistryMarkers(args.filePath);
-}
-
-function validateDeploymentRegistryMarkerLines(args: {
-  filePath: string;
-  content: string;
-}): DeploymentRegistryMarkerBounds {
-  const start = findUniqueDeploymentRegistryMarkerLine({
-    ...args,
-    marker: DEPLOYMENT_REGISTRY_START,
-  });
-  const end = findUniqueDeploymentRegistryMarkerLine({
-    ...args,
-    marker: DEPLOYMENT_REGISTRY_END,
-  });
-  if (end.lineStart < start.lineEnd) {
-    return malformedDeploymentRegistryMarkers(args.filePath);
-  }
-  return {
-    startLineStart: start.lineStart,
-    startLineEnd: start.lineEnd,
-    endLineStart: end.lineStart,
-    endLineEnd: end.lineEnd,
-  };
-}
-
-function assertDeploymentDropsExportInsideMarkers(args: {
-  filePath: string;
-  content: string;
-  markerBounds: DeploymentRegistryMarkerBounds;
-}): void {
+}): DeploymentDropsExportBounds {
   const sourceFile = ts.createSourceFile(
     args.filePath,
     args.content,
@@ -1175,6 +1101,7 @@ function assertDeploymentDropsExportInsideMarkers(args: {
     if (
       !ts.isVariableStatement(statement) ||
       !(statement.declarationList.flags & ts.NodeFlags.Const) ||
+      statement.declarationList.declarations.length !== 1 ||
       !statement.modifiers?.some(
         (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
       )
@@ -1190,38 +1117,30 @@ function assertDeploymentDropsExportInsideMarkers(args: {
       .map(() => statement);
   });
   const declaration = declarations[0];
-  if (
-    declarations.length !== 1 ||
-    declaration.getStart(sourceFile) < args.markerBounds.startLineEnd ||
-    declaration.end > args.markerBounds.endLineStart
-  ) {
+  if (declarations.length !== 1) {
     throw new Error(
-      `Canonical deployment registry must contain exactly one DEPLOYMENT_DROPS export inside its generated markers: ${args.filePath}`,
+      `Canonical deployment registry must contain exactly one top-level exported const DEPLOYMENT_DROPS declaration: ${args.filePath}`,
     );
   }
+  return {
+    start: declaration.getStart(sourceFile),
+    end: declaration.end,
+  };
 }
 
-function replaceMarkedSection(args: {
+function replaceDeploymentDropsExport(args: {
   filePath: string;
   existingContent: string;
-  nextSection: string;
+  nextDeclaration: string;
 }): string {
-  const markerBounds = validateDeploymentRegistryMarkerLines({
+  const bounds = findUniqueDeploymentDropsExport({
     filePath: args.filePath,
     content: args.existingContent,
   });
-  assertDeploymentDropsExportInsideMarkers({
-    filePath: args.filePath,
-    content: args.existingContent,
-    markerBounds,
-  });
-  const nextSection = args.nextSection.endsWith('\n')
-    ? args.nextSection
-    : `${args.nextSection}\n`;
   return `${
-    args.existingContent.slice(0, markerBounds.startLineStart)
-  }${nextSection}${
-    args.existingContent.slice(markerBounds.endLineEnd)
+    args.existingContent.slice(0, bounds.start)
+  }${args.nextDeclaration}${
+    args.existingContent.slice(bounds.end)
   }`;
 }
 
@@ -1250,10 +1169,10 @@ export function renderDeploymentRegistryFileFromSource(args: {
   existingContent: string;
   drops: Record<string, DeploymentDropConfigSerialized>;
 }): string {
-  const next = replaceMarkedSection({
+  const next = replaceDeploymentDropsExport({
     filePath: args.filePath,
     existingContent: args.existingContent,
-    nextSection: renderDeploymentRegistrySection({ drops: args.drops }),
+    nextDeclaration: renderDeploymentRegistrySection({ drops: args.drops }),
   });
   return next.endsWith('\n') ? next : `${next}\n`;
 }

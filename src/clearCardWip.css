@@ -55,8 +55,6 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Oversized so falling pack shards and sparkles are not clipped at the viewport edge;
-   the viewer compensates with a matching camera-distance factor. */
 .clear-card-wip__canvas {
   display: block;
   position: absolute;

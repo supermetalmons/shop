@@ -24,9 +24,7 @@ export async function promptMaskedInput(prompt: string): Promise<string> {
       stdin.removeListener('data', onData);
       try {
         stdin.setRawMode(Boolean(wasRaw));
-      } catch {
-        // ignore
-      }
+      } catch {}
       stdin.pause();
     }
 

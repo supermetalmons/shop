@@ -149,9 +149,7 @@ export function writeOptimisticTextFile(
   let mutationCommitted = false;
   let operationFailed = false;
   try {
-    // r+ deliberately requires an existing writable target and follows
-    // symlinks. Mutating the opened inode preserves hard links, ownership,
-    // permissions, ACLs, and extended attributes.
+
     fd = openSync(args.filePath, 'r+');
     assertFileDescriptorContent(
       fd,
@@ -187,9 +185,7 @@ export function writeOptimisticTextFile(
       }
       throw writeError;
     }
-    // Verification happens only after fsync has completed. A failure here
-    // reports pathname replacement or post-write interference, but must never
-    // restore older bytes over the durable commit.
+
     try {
       assertPathStillReferencesFileDescriptor(
         args.filePath,
@@ -217,10 +213,7 @@ export function writeOptimisticTextFile(
       try {
         io.close(fd);
       } catch (closeError) {
-        // fsync completed before mutationCommitted was set. At that point the
-        // new bytes are durable, so a later close error must not make callers
-        // treat the write as failed and roll back related files. Likewise,
-        // never replace an earlier preparation/write error.
+
         if (!mutationCommitted && !operationFailed) throw closeError;
       }
     }

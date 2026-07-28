@@ -363,9 +363,7 @@ function persistHiddenAssets(wallet: string, ids: Set<string>) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage?.setItem(hiddenInventoryKey(wallet), JSON.stringify(Array.from(ids)));
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 function pendingRevealKey(wallet?: string) {
@@ -401,9 +399,7 @@ function persistPendingReveals(wallet: string, entries: LocalPendingReveal[]) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage?.setItem(pendingRevealKey(wallet), JSON.stringify(entries));
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 function recentRevealKey(wallet?: string) {
@@ -427,9 +423,7 @@ function persistRecentReveals(wallet: string, ids: string[]) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage?.setItem(recentRevealKey(wallet), JSON.stringify(ids));
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
@@ -461,9 +455,7 @@ function cleanupDiscountUsedKeys(scopePrefix: string, wallet: string, keepKey: s
       if (key !== keepKey) keysToRemove.push(key);
     }
     keysToRemove.forEach((key) => window.localStorage?.removeItem(key));
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 function parseDiscountUsedCount(raw: string | null | undefined): number {
@@ -493,9 +485,7 @@ function persistDiscountUsedCount(scopePrefix: string, version: string, wallet: 
     } else {
       window.localStorage?.removeItem(key);
     }
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 function formatOrderStatus(status: string): string {
@@ -701,6 +691,7 @@ function FigureTileImage(props: {
 const MAX_SHIPMENT_ITEMS = 24;
 const EMPTY_INVENTORY: InventoryItem[] = [];
 const EMPTY_PENDING_OPEN: PendingOpenBox[] = [];
+
 // Keep locally-inserted pending reveals visible for a short grace window while on-chain indexing catches up.
 const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 const RECENT_REVEALS_LIMIT = 10;
@@ -1619,6 +1610,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
   const [stripePaymentLoading, setStripePaymentLoading] = useState(false);
+
   // A confirmed mint should reset MintPanel controls immediately even if the
   // stats/inventory refresh that follows takes longer or fails.
   const [successfulMintToken, setSuccessfulMintToken] = useState(0);
@@ -2189,7 +2181,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     if (hasWalletBoundToken) return true;
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
-    // Wait briefly for Firebase session restoration after reload (avoid unnecessary wallet prompts).
     if (typeof window !== 'undefined' && (!authReadyRef.current || authLoadingRef.current)) {
       const deadline = Date.now() + 1500;
       while (Date.now() < deadline) {
@@ -4401,6 +4392,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           autoMode: undefined,
         };
       });
+
       // Helius indexing can lag after transfers; hide immediately once the tx is confirmed.
       queueOverlayAction(() => markAssetsHidden([item.id]));
       queueOverlayAction(() => {
@@ -5025,6 +5017,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
       showToast(`Shipment submitted${idSuffix} · ${sig}`);
+
       // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
       markAssetsHidden(deliverableIds);
       setSelected(new Set());
@@ -5320,6 +5313,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     let broadcastAttemptRequestId = '';
     let transferConfirmed = false;
     let receiptOperation: ReceiptOperation | null = null;
+    const receiptOperationIsCurrent = () =>
+      !isReceiptTarget ||
+      Boolean(
+        receiptOperation &&
+          receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
+      );
     try {
       setAdminIrlRedeeming(true);
       const adminIrlDrop = requireKnownDropConfig(adminIrlDropId, 'Admin IRL redeem selection');
@@ -5365,12 +5364,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         receiptOperation = nextOperation;
         return applied;
       };
-      const receiptOperationIsCurrent = () =>
-        !isReceiptTarget ||
-        Boolean(
-          receiptOperation &&
-            receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
-        );
       const resetReceiptSubmissionForRetry = () => {
         if (!receiptOperation) return;
         const previousOperation = receiptOperation;
@@ -6826,9 +6819,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               statusText: 'Soon',
               buttonText: 'Notify Me',
               onClick: () => {
-                // The reveal/viewer layer sits above ordinary modals. Its
-                // underlying page can still receive a synthesized keyboard
-                // activation, so never open an inaccessible modal behind it.
+
                 if (revealOverlayOpen) return;
                 setNotifyOpen(true);
               },

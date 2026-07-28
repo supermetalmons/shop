@@ -103,9 +103,7 @@ function persistPendingAdminIrlRedeems(wallet: string, entries: PendingAdminIrlR
     const key = pendingAdminIrlRedeemFinalizeKey(wallet);
     if (!normalized.length) window.localStorage?.removeItem(key);
     else window.localStorage?.setItem(key, JSON.stringify(normalized));
-  } catch {
-    // ignore storage failures
-  }
+  } catch {}
 }
 
 export function rememberPendingAdminIrlRedeem(

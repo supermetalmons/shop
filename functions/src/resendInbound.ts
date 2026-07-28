@@ -12,8 +12,7 @@ import { isRetryableResendError, summarizeResendError, type ResendErrorSummary }
 export const RESEND_INBOUND_FORWARD_FROM = 'Mons Shop Forwarder <forwarder@support.mons.shop>';
 export const RESEND_INBOUND_FORWARD_FROM_ADDRESS = 'forwarder@support.mons.shop';
 const RESEND_INBOUND_PAYLOAD_VERSION = 'v1';
-// Three waves at the provider's 15-second per-download timeout leave enough of
-// the 120-second webhook budget for fetching, persistence, and the final send.
+
 export const RESEND_INBOUND_MAX_ATTACHMENTS = 9;
 export const RESEND_INBOUND_MAX_PAYLOAD_BYTES = 35_000_000;
 const RESEND_INBOUND_BODY_EXCERPT_BYTES = 256 * 1024;

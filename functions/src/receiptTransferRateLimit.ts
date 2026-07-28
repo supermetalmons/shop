@@ -195,9 +195,7 @@ async function enforceReceiptTransferRateLimit(params: {
         scope: params.bucket.scope,
         subjectHash: params.bucket.subjectHash,
       });
-    } catch {
-      // Logging must not replace the stable callable error below.
-    }
+    } catch {}
     throw new HttpsError(
       'unavailable',
       'Receipt transfers are temporarily unavailable. Please retry shortly.',

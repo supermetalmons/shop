@@ -245,20 +245,25 @@ async function withTempCanonical(
   }
 }
 
-const REGISTRY_START =
-  '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
-const REGISTRY_END =
-  '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY';
-
-function markedRegistrySource(declaration: string): string {
+function registrySource(declaration: string): string {
   return [
-    '// preserved header',
-    REGISTRY_START,
+    'const preservedHeader = true;',
     declaration,
-    REGISTRY_END,
-    '// preserved footer',
+    'void preservedHeader;',
     '',
   ].join('\n');
+}
+
+function deploymentDropsDeclarationSource(source: string): string {
+  const start = source.indexOf('export const DEPLOYMENT_DROPS');
+  const nextDeclaration = source.indexOf(
+    '\nfunction assertRegistryKeysMatchDropIds',
+    start,
+  );
+  return source.slice(
+    start,
+    nextDeclaration === -1 ? source.length : nextDeclaration,
+  );
 }
 
 test('deployment registry mutation lock excludes overlapping operations and releases idempotently', async (t) => {
@@ -553,9 +558,7 @@ test('checked-in projection modules contain no registry rows or generated core t
     assert.doesNotMatch(functionsSource, embeddedRow);
   }
   assert.equal(
-    canonicalSource.match(
-      /BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY/g,
-    )?.length,
+    canonicalSource.match(/export const DEPLOYMENT_DROPS/g)?.length,
     1,
   );
   const generatorSource = await readFile(
@@ -590,9 +593,8 @@ test('canonical registry reader requires an existing file', async (t) => {
 
 test('canonical registry reader requires its own object-valued DEPLOYMENT_DROPS export', async () => {
   const invalidSources = [
-    markedRegistrySource('export const SOMETHING_ELSE = {};'),
-    markedRegistrySource('export const DEPLOYMENT_DROPS = [];'),
-    markedRegistrySource('export const DEPLOYMENT_DROPS = null;'),
+    registrySource('export const DEPLOYMENT_DROPS = [];'),
+    registrySource('export const DEPLOYMENT_DROPS = null;'),
   ];
 
   for (const source of invalidSources) {
@@ -608,13 +610,13 @@ test('canonical registry reader requires its own object-valued DEPLOYMENT_DROPS 
 test('canonical registry reader rejects invalid rows and exact key/dropId mismatches', async () => {
   const invalidRows = [
     {
-      source: markedRegistrySource(
+      source: registrySource(
         'export const DEPLOYMENT_DROPS = { invalid: null };',
       ),
       message: /Invalid canonical deployment registry row invalid/,
     },
     {
-      source: markedRegistrySource(
+      source: registrySource(
         `export const DEPLOYMENT_DROPS = { alpha: ${JSON.stringify(
           registryDrop('alpha', { maxSupply: 0 }),
         )} };`,
@@ -622,7 +624,7 @@ test('canonical registry reader rejects invalid rows and exact key/dropId mismat
       message: /Invalid canonical deployment registry row alpha: maxSupply/,
     },
     {
-      source: markedRegistrySource(
+      source: registrySource(
         `export const DEPLOYMENT_DROPS = {
   alpha: { dropId: 'alpha' },
 };`,
@@ -630,7 +632,7 @@ test('canonical registry reader rejects invalid rows and exact key/dropId mismat
       message: /Invalid canonical deployment registry row alpha: solanaCluster/,
     },
     {
-      source: markedRegistrySource(
+      source: registrySource(
         `export const DEPLOYMENT_DROPS = { alpha: ${JSON.stringify(
           registryDrop('beta'),
         )} };`,
@@ -638,7 +640,7 @@ test('canonical registry reader rejects invalid rows and exact key/dropId mismat
       message: /key alpha does not match embedded dropId beta/,
     },
     {
-      source: markedRegistrySource(
+      source: registrySource(
         `export const DEPLOYMENT_DROPS = { alpha: ${JSON.stringify(
           registryDrop('alpha', { dropId: ' alpha ' }),
         )} };`,
@@ -654,210 +656,20 @@ test('canonical registry reader rejects invalid rows and exact key/dropId mismat
   }
 });
 
-test('canonical registry reader validates missing, reversed, and duplicate markers', async () => {
+test('canonical registry requires one top-level exported const DEPLOYMENT_DROPS declaration', async () => {
   const invalidSources = [
-    'export const DEPLOYMENT_DROPS = {};\n',
-    [
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      '',
-    ].join('\n'),
-    [
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_END,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_START,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_START,
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_START,
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      `prefix ${REGISTRY_START}`,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      ` ${REGISTRY_START}`,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      `${REGISTRY_START} trailing`,
-      'export const DEPLOYMENT_DROPS = {};',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      ` ${REGISTRY_END}`,
-      '',
-    ].join('\n'),
-    [
-      REGISTRY_START,
-      'export const DEPLOYMENT_DROPS = {};',
-      `${REGISTRY_END} trailing`,
-      '',
-    ].join('\n'),
+    'const DEPLOYMENT_DROPS = {};\n',
+    'export let DEPLOYMENT_DROPS = {};\n',
+    'const rows = {};\nexport { rows as DEPLOYMENT_DROPS };\n',
+    'export const DEPLOYMENT_DROPS = {}, other = {};\n',
+    'export const DEPLOYMENT_DROPS = {};\nexport const DEPLOYMENT_DROPS = {};\n',
   ];
 
   for (const source of invalidSources) {
     await withTempCanonical(source, async (filePath) => {
       await assert.rejects(
         readDeploymentDropRegistry(filePath),
-        /Malformed or missing canonical deployment registry markers/,
-      );
-    });
-  }
-});
-
-test('canonical registry requires its sole DEPLOYMENT_DROPS declaration inside the markers', async () => {
-  const outside = [
-    'export const DEPLOYMENT_DROPS = {};',
-    REGISTRY_START,
-    'const generatedSectionPlaceholder = true;',
-    REGISTRY_END,
-    '',
-  ].join('\n');
-  await withTempCanonical(outside, async (filePath) => {
-    await assert.rejects(
-      readDeploymentDropRegistry(filePath),
-      /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-    );
-  });
-
-  const duplicated = [
-    'export const DEPLOYMENT_DROPS = {};',
-    REGISTRY_START,
-    'export const DEPLOYMENT_DROPS = {};',
-    REGISTRY_END,
-    '',
-  ].join('\n');
-  await withTempCanonical(duplicated, async (filePath) => {
-    await assert.rejects(
-      readDeploymentDropRegistry(filePath),
-      /Failed to load existing deployment registry|exactly one DEPLOYMENT_DROPS export/,
-    );
-    assert.throws(
-      () =>
-        renderDeploymentRegistryFileFromSource({
-          filePath,
-          existingContent: duplicated,
-          drops: {},
-        }),
-      /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-    );
-  });
-
-  const commentInsideWithAliasedExportOutside = [
-    'const rows = {};',
-    'export { rows as DEPLOYMENT_DROPS };',
-    REGISTRY_START,
-    '// export const DEPLOYMENT_DROPS = {};',
-    REGISTRY_END,
-    '',
-  ].join('\n');
-  await withTempCanonical(
-    commentInsideWithAliasedExportOutside,
-    async (filePath) => {
-      await assert.rejects(
-        readDeploymentDropRegistry(filePath),
-        /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-      );
-      assert.throws(
-        () =>
-          renderDeploymentRegistryFileFromSource({
-            filePath,
-            existingContent: commentInsideWithAliasedExportOutside,
-            drops: {},
-          }),
-        /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-      );
-    },
-  );
-});
-
-test('canonical registry rejects markers that split the DEPLOYMENT_DROPS declaration', async () => {
-  const splitDeclaration = [
-    REGISTRY_START,
-    'export const DEPLOYMENT_DROPS = {',
-    REGISTRY_END,
-    '};',
-    '',
-  ].join('\n');
-
-  await withTempCanonical(splitDeclaration, async (filePath) => {
-    await assert.rejects(
-      readDeploymentDropRegistry(filePath),
-      /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-    );
-    assert.throws(
-      () =>
-        renderDeploymentRegistryFileFromSource({
-          filePath,
-          existingContent: splitDeclaration,
-          drops: {},
-        }),
-      /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
-    );
-  });
-});
-
-test('canonical registry ignores DEPLOYMENT_DROPS text in comments and templates', async () => {
-  const falsePositiveSources = [
-    [
-      'const DEPLOYMENT_DROPS = {};',
-      'export { DEPLOYMENT_DROPS };',
-      REGISTRY_START,
-      '/*',
-      'export const DEPLOYMENT_DROPS = {};',
-      '*/',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-    [
-      'const DEPLOYMENT_DROPS = {};',
-      'export { DEPLOYMENT_DROPS };',
-      REGISTRY_START,
-      'const example = `',
-      'export const DEPLOYMENT_DROPS = {};',
-      '`;',
-      REGISTRY_END,
-      '',
-    ].join('\n'),
-  ];
-
-  for (const source of falsePositiveSources) {
-    await withTempCanonical(source, async (filePath) => {
-      await assert.rejects(
-        readDeploymentDropRegistry(filePath),
-        /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
+        /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
       );
       assert.throws(
         () =>
@@ -866,7 +678,46 @@ test('canonical registry ignores DEPLOYMENT_DROPS text in comments and templates
             existingContent: source,
             drops: {},
           }),
-        /exactly one DEPLOYMENT_DROPS export inside its generated markers/,
+        /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
+      );
+    });
+  }
+});
+
+test('canonical registry ignores DEPLOYMENT_DROPS declaration text in comments and templates', async () => {
+  const falsePositiveSources = [
+    [
+      'const DEPLOYMENT_DROPS = {};',
+      'export { DEPLOYMENT_DROPS };',
+      '/*',
+      'export const DEPLOYMENT_DROPS = {};',
+      '*/',
+      '',
+    ].join('\n'),
+    [
+      'const DEPLOYMENT_DROPS = {};',
+      'export { DEPLOYMENT_DROPS };',
+      'const example = `',
+      'export const DEPLOYMENT_DROPS = {};',
+      '`;',
+      '',
+    ].join('\n'),
+  ];
+
+  for (const source of falsePositiveSources) {
+    await withTempCanonical(source, async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
+      );
+      assert.throws(
+        () =>
+          renderDeploymentRegistryFileFromSource({
+            filePath,
+            existingContent: source,
+            drops: {},
+          }),
+        /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
       );
     });
   }
@@ -876,10 +727,8 @@ test('canonical registry reader rejects source mutation during module import', a
   const source = [
     "import { appendFileSync } from 'node:fs';",
     "import { fileURLToPath } from 'node:url';",
-    REGISTRY_START,
     'export const DEPLOYMENT_DROPS = {};',
-    REGISTRY_END,
-    "appendFileSync(fileURLToPath(import.meta.url), '// import drift\\n');",
+    "appendFileSync(fileURLToPath(import.meta.url), '\\nvoid 0;\\n');",
     '',
   ].join('\n');
 
@@ -892,7 +741,7 @@ test('canonical registry reader rejects source mutation during module import', a
 });
 
 test('canonical registry reader returns the exact source bytes it validated', async () => {
-  const source = markedRegistrySource(
+  const source = registrySource(
     'export const DEPLOYMENT_DROPS = {};',
   );
   await withTempCanonical(source, async (filePath) => {
@@ -943,10 +792,7 @@ test('canonical reads and rendering do not infer sold-out state from a drop ID',
   const source = renderDeploymentRegistryFile({
     drops: { [drop.dropId]: drop },
   });
-  const registrySection = source.slice(
-    source.indexOf('// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY'),
-    source.indexOf('// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY'),
-  );
+  const registrySection = deploymentDropsDeclarationSource(source);
   assert.doesNotMatch(registrySection, /forceSoldOut/);
 
   await withTempCanonical(source, async (filePath) => {
@@ -979,10 +825,7 @@ test('canonical renderer and writer round-trip a superset row without duplicatin
       [customMediaDrop.dropId]: customMediaDrop,
     },
   });
-  const registrySection = source.slice(
-    source.indexOf('// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY'),
-    source.indexOf('// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY'),
-  );
+  const registrySection = deploymentDropsDeclarationSource(source);
   const defaultCardEntry = registrySection.slice(
     registrySection.indexOf('future_card_drop: {'),
   );
@@ -1048,10 +891,7 @@ test('canonical renderer round-trips default Stripe tax codes according to effec
       [enabled.dropId]: enabled,
     },
   });
-  const generatedSection = source.slice(
-    source.indexOf(REGISTRY_START),
-    source.indexOf(REGISTRY_END),
-  );
+  const generatedSection = deploymentDropsDeclarationSource(source);
   const disabledSection = generatedSection.slice(
     generatedSection.indexOf('disabled_card_checkout: {'),
     generatedSection.indexOf('enabled_card_checkout: {'),
@@ -1783,7 +1623,7 @@ async function writeStartMintCanonical(
   await mkdir(path.dirname(canonicalPath), { recursive: true });
   await writeFile(
     canonicalPath,
-    markedRegistrySource(
+    registrySource(
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(drops)};`,
     ),
     'utf8',
@@ -1833,7 +1673,7 @@ test('start-mint never downgrades when an existing canonical registry is malform
   await Promise.all([
     writeFile(
       canonicalPath,
-      'export const DEPLOYMENT_DROPS = {};\n',
+      'export const SOMETHING_ELSE = {};\n',
       'utf8',
     ),
     writeFile(
@@ -1848,7 +1688,7 @@ test('start-mint never downgrades when an existing canonical registry is malform
       root,
       requestedDropId: 'legacy_drop',
     }),
-    /Malformed or missing canonical deployment registry markers/,
+    /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
   );
 });
 

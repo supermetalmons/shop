@@ -2724,9 +2724,7 @@ test('untracked legacy Merkle cleanup requires exact journal provenance', async 
   writeFileSync(
     registryPath,
     [
-      '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
-      '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       '',
     ].join('\n'),
     'utf8',
@@ -2965,9 +2963,7 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
   writeFileSync(
     registryPath,
     [
-      '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
-      '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       '',
     ].join('\n'),
     'utf8',
@@ -3144,9 +3140,7 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
   writeFileSync(
     registryPath,
     [
-      '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
-      '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       '',
     ].join('\n'),
     'utf8',
@@ -3358,9 +3352,7 @@ test('row-absent recovery restores rather than deletes a family Merkle quarantin
     rows: Record<string, ReturnType<typeof completeRegistryDrop>>,
   ) =>
     [
-      '// BEGIN AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
-      '// END AUTO-GENERATED DEPLOYMENT DROP REGISTRY',
       '',
     ].join('\n');
 
