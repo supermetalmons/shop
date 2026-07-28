@@ -31,6 +31,8 @@ const CARD_MODEL_OPTIONS = [
 const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
   { label: 'Pack: Sample 1', url: '/clear_pack_sample_1.glb' },
+  { label: 'Pack: Sample 17', url: '/clear_pack_sample_17.glb' },
+  { label: 'Pack: Sample 18', url: '/clear_pack_sample_18.glb' },
 ] as const;
 
 function isWipShortcutTarget(target: EventTarget | null) {
@@ -80,6 +82,10 @@ export default function ClearCardWipApp() {
       if (nextModelUrl === packModelUrl) return;
       setStatus('loading');
       setPackModelUrl(nextModelUrl);
+      // Picking a pack means you want to see that pack, so go back to the unopened
+      // state — otherwise an already-revealed card would mount straight over it.
+      // Card changes deliberately keep the current stage.
+      setCardRevealed(false);
     },
     [packModelUrl],
   );
