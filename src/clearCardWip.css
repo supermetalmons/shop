@@ -93,6 +93,26 @@
   color: #b42318;
 }
 
+.clear-card-wip__model-picker {
+  position: fixed;
+  top: max(18px, env(safe-area-inset-top, 0px));
+  right: max(18px, env(safe-area-inset-right, 0px));
+  z-index: 1120;
+  min-height: 28px;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 68%, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.35;
+  cursor: pointer;
+  outline: none;
+  box-shadow: none;
+}
+
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .clear-card-wip__backdrop {
     background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -113,5 +133,12 @@
   .clear-card-wip__canvas {
     transform: none;
     transition-duration: 1ms;
+  }
+}
+
+@media (max-width: 720px) {
+  .clear-card-wip__model-picker {
+    top: max(12px, env(safe-area-inset-top, 0px));
+    right: max(12px, env(safe-area-inset-right, 0px));
   }
 }

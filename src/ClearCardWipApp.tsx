@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ChangeEvent,
 } from 'react';
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
@@ -21,6 +22,12 @@ const HIT_SOUND_URL = `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/sounds/click.mp3`;
 const BREAK_SOUND_URL = `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/sounds/unbox1p.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
+const CARD_MODEL_OPTIONS = [
+  { label: 'Sample', url: '/clear_card_sample.glb' },
+  { label: 'Sample 15', url: '/clear_card_sample_15.glb' },
+  { label: 'Sample 17', url: '/clear_card_sample_17.glb' },
+  { label: 'Sample 19', url: '/clear_card_sample_19.glb' },
+] as const;
 
 function isWipShortcutTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
@@ -37,6 +44,8 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
+  const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[1].url);
+  const [cardRevealed, setCardRevealed] = useState(false);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
@@ -48,8 +57,18 @@ export default function ClearCardWipApp() {
     navigate('/');
   }, []);
   const handleReset = useCallback(() => {
+    setCardRevealed(false);
     viewerRef.current?.reset();
   }, []);
+  const handleModelChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const nextModelUrl = event.currentTarget.value;
+      if (nextModelUrl === cardModelUrl) return;
+      setStatus('loading');
+      setCardModelUrl(nextModelUrl);
+    },
+    [cardModelUrl],
+  );
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -71,6 +90,7 @@ export default function ClearCardWipApp() {
   }, [ensureSoundReady]);
 
   const handlePackBreak = useCallback(() => {
+    setCardRevealed(true);
     const play = () => {
       void soundPlayer.playSound(BREAK_SOUND_URL, BREAK_SOUND_VOLUME);
     };
@@ -142,8 +162,11 @@ export default function ClearCardWipApp() {
         >
           <Suspense fallback={null}>
             <ClearCardThreeViewer
+              key={cardModelUrl}
               ref={viewerRef}
               ready={ready}
+              cardModelUrl={cardModelUrl}
+              initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
               onPackHit={handlePackHit}
               onPackBreak={handlePackBreak}
@@ -159,6 +182,18 @@ export default function ClearCardWipApp() {
           ) : null}
         </div>
       </div>
+      <select
+        className="clear-card-wip__model-picker"
+        aria-label="Card model"
+        value={cardModelUrl}
+        onChange={handleModelChange}
+      >
+        {CARD_MODEL_OPTIONS.map((option) => (
+          <option key={option.url} value={option.url}>
+            {option.label}
+          </option>
+        ))}
+      </select>
       <button
         type="button"
         className="wip-close-btn"
