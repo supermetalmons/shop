@@ -33,6 +33,82 @@ export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
 export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
+const STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES = [STRIPE_CHECKOUT_SHIPPING_COUNTRY] as const;
+export const STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES = [
+  'AE',
+  'AM',
+  'AR',
+  'AT',
+  'AU',
+  'BE',
+  'BG',
+  'BR',
+  'CA',
+  'CH',
+  'CL',
+  'CN',
+  'CO',
+  'CR',
+  'CY',
+  'CZ',
+  'DE',
+  'DK',
+  'DO',
+  'EE',
+  'EG',
+  'ES',
+  'FI',
+  'FR',
+  'GB',
+  'GR',
+  'HK',
+  'HR',
+  'HU',
+  'ID',
+  'IE',
+  'IL',
+  'IN',
+  'IS',
+  'IT',
+  'JP',
+  'KE',
+  'KR',
+  'LT',
+  'LU',
+  'LV',
+  'MA',
+  'MX',
+  'MY',
+  'NG',
+  'NL',
+  'NO',
+  'NZ',
+  'PE',
+  'PH',
+  'PK',
+  'PL',
+  'PT',
+  'RO',
+  'SA',
+  'SE',
+  'SG',
+  'SI',
+  'SK',
+  'TH',
+  'TR',
+  'TW',
+  'UA',
+  'US',
+  'VN',
+  'ZA',
+] as const;
+
+export function stripeCheckoutShippingCountriesForDropFamily(dropFamily: unknown) {
+  return dropFamily === 'card_nft_binder'
+    ? STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES
+    : STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES;
+}
+
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
 const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
@@ -549,6 +625,7 @@ export function buildStripeOffchainAddressSnapshot(args: {
   session: unknown;
   encryptAddress: (plaintext: string) => StripeAddressEncryptionResult | null;
   normalizeCountryCode?: (country?: string) => string;
+  dropFamily?: unknown;
 }): Record<string, unknown> {
   const parsed = stripeFulfillmentAddressFromSession(args.session);
   if (!parsed) throw new Error('Stripe checkout session is missing a shipping address');
@@ -556,8 +633,15 @@ export function buildStripeOffchainAddressSnapshot(args: {
   const normalize = args.normalizeCountryCode || normalizeCountryCode;
   const countryCode = normalize(parsed.countryCode || parsed.country);
   if (!countryCode) throw new Error('Stripe checkout shipping address country is invalid');
-  if (countryCode !== STRIPE_CHECKOUT_SHIPPING_COUNTRY) {
-    throw new Error('Stripe checkout shipping address must be in the US');
+  const allowedCountries = new Set<string>(
+    stripeCheckoutShippingCountriesForDropFamily(args.dropFamily),
+  );
+  if (!allowedCountries.has(countryCode)) {
+    throw new Error(
+      args.dropFamily === 'card_nft_binder'
+        ? 'Stripe checkout shipping address country is not supported'
+        : 'Stripe checkout shipping address must be in the US',
+    );
   }
 
   const encrypted = args.encryptAddress(parsed.formatted);

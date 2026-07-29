@@ -8,6 +8,7 @@ import {
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
+  STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
@@ -63,6 +64,7 @@ import {
 } from '../functions/src/stripeCheckout/service.ts';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
 import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from '../functions/src/bubblegum.ts';
+import { COUNTRIES } from '../src/lib/countries.ts';
 
 function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
@@ -584,10 +586,75 @@ test('buildStripeOffchainAddressSnapshot rejects non-US shipping addresses', () 
   );
 });
 
-test('stripeCheckoutShippingParams does not request phone numbers', () => {
+test('buildStripeOffchainAddressSnapshot accepts supported international binder addresses', () => {
+  const session = {
+    customer_details: { email: 'buyer@example.com' },
+    shipping_details: {
+      name: 'Buyer Name',
+      address: {
+        line1: '1 King St',
+        city: 'Toronto',
+        state: 'ON',
+        postal_code: 'M5H 1A1',
+        country: 'CA',
+      },
+    },
+  };
+
+  assert.deepEqual(
+    buildStripeOffchainAddressSnapshot({
+      session,
+      dropFamily: 'card_nft_binder',
+      encryptAddress: () => ({ encrypted: 'cipher', hint: 'B...CA' }),
+    }),
+    {
+      email: 'buyer@example.com',
+      country: 'CA',
+      countryCode: 'CA',
+      encrypted: 'cipher',
+      hint: 'B...CA',
+    },
+  );
+  assert.throws(
+    () =>
+      buildStripeOffchainAddressSnapshot({
+        session: {
+          ...session,
+          shipping_details: {
+            ...session.shipping_details,
+            address: {
+              ...session.shipping_details.address,
+              country: 'IR',
+            },
+          },
+        },
+        dropFamily: 'card_nft_binder',
+        encryptAddress: () => ({ encrypted: 'cipher', hint: 'B...IR' }),
+      }),
+    /country is not supported/,
+  );
+});
+
+test('stripeCheckoutShippingParams selects shipping countries by drop family without requesting phone numbers', () => {
   const params = stripeCheckoutShippingParams();
   assert.equal('phone_number_collection' in params, false);
   assert.deepEqual(params.shipping_address_collection?.allowed_countries, [STRIPE_CHECKOUT_SHIPPING_COUNTRY]);
+
+  const binderParams = stripeCheckoutShippingParams('card_nft_binder');
+  assert.deepEqual(
+    binderParams.shipping_address_collection?.allowed_countries,
+    STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
+  );
+  const binderCountries = new Set<string>(
+    binderParams.shipping_address_collection?.allowed_countries,
+  );
+  assert.deepEqual(
+    [...binderCountries].sort(),
+    COUNTRIES.filter(({ code }) => code !== 'INTL').map(({ code }) => code).sort(),
+  );
+  assert.equal(binderCountries.has('CA'), true);
+  assert.equal(binderCountries.has('TR'), true);
+  assert.equal(binderCountries.has('IR'), false);
 });
 
 test('isStripeOffchainFulfillmentSession only accepts the app fulfillment mode', () => {

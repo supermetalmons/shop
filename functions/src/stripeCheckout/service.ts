@@ -13,7 +13,7 @@ import {
 import type Stripe from 'stripe';
 import { z } from 'zod';
 import type { MintSelectionConfig, SolanaCluster } from '../config/deployment.js';
-import type { DropSalesMode } from '../shared/deploymentCore.js';
+import type { DropFamily, DropSalesMode } from '../shared/deploymentCore.js';
 import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
 import { countStripeIrlPackStatus, type PackStatusDropRuntime } from '../packStatus.js';
 import {
@@ -31,13 +31,13 @@ import {
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-  STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   requireStripeReceiptClaimCode,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
+  stripeCheckoutShippingCountriesForDropFamily,
   stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
@@ -187,6 +187,7 @@ export type StripeCheckoutDropRuntime = {
   config: {
     collectionName?: string;
     displayName?: string;
+    dropFamily: DropFamily;
     namePrefix?: string;
     mintSelection?: MintSelectionConfig;
     salesMode?: DropSalesMode;
@@ -520,17 +521,18 @@ export function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
   return sessionId;
 }
 
-type StripeAllowedCountry = NonNullable<Stripe.Checkout.Session['shipping_address_collection']>['allowed_countries'][number];
+type StripeAllowedCountry =
+  NonNullable<Stripe.Checkout.Session['shipping_address_collection']>['allowed_countries'][number];
 
-const STRIPE_SHIPPING_ALLOWED_COUNTRIES = [STRIPE_CHECKOUT_SHIPPING_COUNTRY] satisfies readonly StripeAllowedCountry[];
-
-export function stripeCheckoutShippingParams(): Pick<
+export function stripeCheckoutShippingParams(dropFamily?: unknown): Pick<
   Stripe.Checkout.SessionCreateParams,
   'shipping_address_collection'
 > {
+  const allowedCountries =
+    stripeCheckoutShippingCountriesForDropFamily(dropFamily) satisfies readonly StripeAllowedCountry[];
   return {
     shipping_address_collection: {
-      allowed_countries: [...STRIPE_SHIPPING_ALLOWED_COUNTRIES],
+      allowed_countries: [...allowedCountries],
     },
   };
 }
@@ -732,6 +734,7 @@ function requireStripeOffchainAddressSnapshot(params: {
   session: Stripe.Checkout.Session;
   encryptAddress: (plaintext: string) => StripeAddressEncryptionResult | null;
   normalizeCountryCode: (country?: string) => string;
+  dropFamily: DropFamily;
 }): Record<string, unknown> {
   try {
     return buildStripeOffchainAddressSnapshot(params);
@@ -1380,6 +1383,7 @@ async function fulfillStripeCheckoutSession<
     session,
     encryptAddress: deps.encryptAddress,
     normalizeCountryCode: deps.normalizeCountryCode,
+    dropFamily: dropRuntime.config.dropFamily,
   });
   const conn = deps.connection(dropRuntime);
 
@@ -1899,7 +1903,7 @@ export async function createStripeCheckoutSessionForRequest<
         },
       ],
       metadata: buildStripeCheckoutSessionMetadata({ dropId, uid: params.uid, variantKey, quantity }),
-      ...stripeCheckoutShippingParams(),
+      ...stripeCheckoutShippingParams(dropRuntime.config.dropFamily),
     },
     params.apiKeys,
     mode,
