@@ -34,7 +34,6 @@ const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
 const CARD_MODEL_OPTIONS = [
-  { label: 'Card: Sample', url: '/clear_card_sample.glb' },
   { label: 'Card: Sample 15', url: '/clear_card_sample_15.glb' },
 ] as const;
 const PACK_MODEL_OPTIONS = [
@@ -58,7 +57,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
-  const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[1].url);
+  const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
   const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[0].url);
   const [cardRevealed, setCardRevealed] = useState(false);
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
