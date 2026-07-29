@@ -10,7 +10,6 @@ import {
 } from 'react';
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
-import { LITTLE_SWAG_BOXES_CDN_BASE_URL } from './config/dropMediaDefaults';
 import type { ClearCardThreeViewerHandle } from './ClearCardThreeViewer';
 import './clearCardWip.css';
 
@@ -18,8 +17,13 @@ const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
 
-const HIT_SOUND_URL = `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/sounds/click.mp3`;
-const BREAK_SOUND_URL = `${LITTLE_SWAG_BOXES_CDN_BASE_URL}/sounds/unbox1p.mp3`;
+const CLEAR_CARDS_SOUND_BASE_URL = 'https://cdn.lil.org/nft/clear_cards/sounds';
+const HIT_SOUND_URLS = [
+  `${CLEAR_CARDS_SOUND_BASE_URL}/hit1.mp3`,
+  `${CLEAR_CARDS_SOUND_BASE_URL}/hit2.mp3`,
+  `${CLEAR_CARDS_SOUND_BASE_URL}/hit3.mp3`,
+] as const;
+const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
 const CARD_MODEL_OPTIONS = [
@@ -105,7 +109,8 @@ export default function ClearCardWipApp() {
 
   const handlePackHit = useCallback(() => {
     void ensureSoundReady().then(() => {
-      void soundPlayer.playSound(HIT_SOUND_URL, HIT_SOUND_VOLUME);
+      const soundUrl = HIT_SOUND_URLS[Math.floor(Math.random() * HIT_SOUND_URLS.length)] || HIT_SOUND_URLS[0];
+      void soundPlayer.playSound(soundUrl, HIT_SOUND_VOLUME);
     });
   }, [ensureSoundReady]);
 
@@ -128,7 +133,9 @@ export default function ClearCardWipApp() {
 
   useEffect(() => {
     if (status !== 'ready') return;
-    void soundPlayer.preloadSound(HIT_SOUND_URL).catch(() => undefined);
+    HIT_SOUND_URLS.forEach((soundUrl) => {
+      void soundPlayer.preloadSound(soundUrl).catch(() => undefined);
+    });
     void soundPlayer.preloadSound(BREAK_SOUND_URL).catch(() => undefined);
   }, [status]);
 
