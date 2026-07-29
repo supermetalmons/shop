@@ -7,8 +7,15 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type {
+  ClearCardLightingConfig,
+  LightStage,
+  SkyEnvironmentConfig,
+  ToneMappingMode,
+} from './clearCardLighting';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -38,63 +45,75 @@ const SHARD_GRAVITY_FACTOR = 9;
 const MAX_SPARKLES = 64;
 const HIT_SPARKLE_COUNT = 12;
 const BREAK_SPARKLE_COUNT = 28;
-const CARD_TRANSMISSION_BACKDROP_COLOR = 0x191919;
-const CARD_TRANSMISSION_BACKDROP_ALPHA = 0.72;
-const PACK_TRANSMISSION_BACKDROP_COLOR = 0x777777;
-const PACK_TRANSMISSION_BACKDROP_ALPHA = 0.62;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 
-// Keep the spherical key centered and moderate while using the gradient as fill.
-// Concentrated HDR peaks alias into clipped flashes on the clear card's relief.
-const SKY_TEXTURE_WIDTH = 512;
-const SKY_TEXTURE_HEIGHT = 256;
-const SKY_GROUND: readonly [number, number, number] = [0.08, 0.09, 0.1];
-const SKY_HORIZON: readonly [number, number, number] = [0.6, 0.64, 0.7];
-const SKY_ZENITH: readonly [number, number, number] = [1.1, 1.16, 1.24];
-const SKY_KEY_LATITUDE = 0;
-const SKY_KEY_LONGITUDE = 0;
-const SKY_KEY_RADIUS = THREE.MathUtils.degToRad(45);
-const SKY_KEY_FALLOFF = 1;
-const SKY_KEY_INTENSITY = 32;
+let rectAreaLightSupportPromise: Promise<void> | null = null;
 
-function createSkyEnvironmentTexture(): THREE.DataTexture {
-  const data = new Float32Array(SKY_TEXTURE_WIDTH * SKY_TEXTURE_HEIGHT * 4);
-  const keyX = Math.cos(SKY_KEY_LATITUDE) * Math.sin(SKY_KEY_LONGITUDE);
-  const keyY = Math.sin(SKY_KEY_LATITUDE);
-  const keyZ = Math.cos(SKY_KEY_LATITUDE) * Math.cos(SKY_KEY_LONGITUDE);
-  const cosRadius = Math.cos(SKY_KEY_RADIUS);
+function loadRectAreaLightSupport() {
+  if (!rectAreaLightSupportPromise) {
+    rectAreaLightSupportPromise = import(
+      'three/addons/lights/RectAreaLightUniformsLib.js'
+    )
+      .then(({ RectAreaLightUniformsLib }) => {
+        RectAreaLightUniformsLib.init();
+      })
+      .catch((error) => {
+        rectAreaLightSupportPromise = null;
+        throw error;
+      });
+  }
+  return rectAreaLightSupportPromise;
+}
 
-  for (let y = 0; y < SKY_TEXTURE_HEIGHT; y += 1) {
-    const latitude = (0.5 - (y + 0.5) / SKY_TEXTURE_HEIGHT) * Math.PI;
+function createSkyEnvironmentTexture(config: SkyEnvironmentConfig): THREE.DataTexture {
+  const width = config.resolution;
+  const height = width / 2;
+  const data = new Float32Array(width * height * 4);
+  const ground = new THREE.Color(config.groundColor).multiplyScalar(config.groundIntensity);
+  const horizon = new THREE.Color(config.horizonColor).multiplyScalar(config.horizonIntensity);
+  const zenith = new THREE.Color(config.zenithColor).multiplyScalar(config.zenithIntensity);
+  const keyColor = new THREE.Color(config.keyColor);
+  const keyLatitude = THREE.MathUtils.degToRad(config.keyLatitude);
+  const keyLongitude = THREE.MathUtils.degToRad(config.keyLongitude);
+  const keyRadius = THREE.MathUtils.degToRad(config.keyRadius);
+  const keyX = Math.cos(keyLatitude) * Math.sin(keyLongitude);
+  const keyY = Math.sin(keyLatitude);
+  const keyZ = Math.cos(keyLatitude) * Math.cos(keyLongitude);
+  const cosRadius = Math.cos(keyRadius);
+
+  for (let y = 0; y < height; y += 1) {
+    const latitude = (0.5 - (y + 0.5) / height) * Math.PI;
     const sinLat = Math.sin(latitude);
     const cosLat = Math.cos(latitude);
     const blend = Math.abs(sinLat);
-    const target = sinLat >= 0 ? SKY_ZENITH : SKY_GROUND;
-    const baseR = SKY_HORIZON[0] + (target[0] - SKY_HORIZON[0]) * blend;
-    const baseG = SKY_HORIZON[1] + (target[1] - SKY_HORIZON[1]) * blend;
-    const baseB = SKY_HORIZON[2] + (target[2] - SKY_HORIZON[2]) * blend;
+    const target = sinLat >= 0 ? zenith : ground;
+    const baseR = horizon.r + (target.r - horizon.r) * blend;
+    const baseG = horizon.g + (target.g - horizon.g) * blend;
+    const baseB = horizon.b + (target.b - horizon.b) * blend;
 
-    for (let x = 0; x < SKY_TEXTURE_WIDTH; x += 1) {
-      const longitude = ((x + 0.5) / SKY_TEXTURE_WIDTH) * Math.PI * 2 - Math.PI;
+    for (let x = 0; x < width; x += 1) {
+      const longitude = ((x + 0.5) / width) * Math.PI * 2 - Math.PI;
       const dot =
         cosLat * Math.sin(longitude) * keyX + sinLat * keyY + cosLat * Math.cos(longitude) * keyZ;
       let key = 0;
       if (dot > cosRadius) {
-        key = SKY_KEY_INTENSITY * Math.pow((dot - cosRadius) / (1 - cosRadius), SKY_KEY_FALLOFF);
+        key =
+          config.keyIntensity *
+          Math.pow((dot - cosRadius) / (1 - cosRadius), config.keyFalloff);
       }
-      const offset = (y * SKY_TEXTURE_WIDTH + x) * 4;
-      data[offset] = baseR + key;
-      data[offset + 1] = baseG + key;
-      data[offset + 2] = baseB + key;
+      const offset = (y * width + x) * 4;
+      data[offset] = baseR + keyColor.r * key;
+      data[offset + 1] = baseG + keyColor.g * key;
+      data[offset + 2] = baseB + keyColor.b * key;
       data[offset + 3] = 1;
     }
   }
 
   const texture = new THREE.DataTexture(
     data,
-    SKY_TEXTURE_WIDTH,
-    SKY_TEXTURE_HEIGHT,
+    width,
+    height,
     THREE.RGBAFormat,
     THREE.FloatType,
   );
@@ -105,6 +124,31 @@ function createSkyEnvironmentTexture(): THREE.DataTexture {
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
   return texture;
+}
+
+function resolveToneMapping(mode: ToneMappingMode): THREE.ToneMapping {
+  switch (mode) {
+    case 'none':
+      return THREE.NoToneMapping;
+    case 'reinhard':
+      return THREE.ReinhardToneMapping;
+    case 'cineon':
+      return THREE.CineonToneMapping;
+    case 'aces':
+      return THREE.ACESFilmicToneMapping;
+    case 'agx':
+      return THREE.AgXToneMapping;
+    case 'neutral':
+      return THREE.NeutralToneMapping;
+    case 'linear':
+    default:
+      return THREE.LinearToneMapping;
+  }
+}
+
+function lightMatchesStage(scope: LightStage, stage: UnboxStage) {
+  if (scope === 'all') return true;
+  return scope === 'pack' ? stage === 'pack' : stage !== 'pack';
 }
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
@@ -120,6 +164,7 @@ type ClearCardThreeViewerProps = {
   ready: boolean;
   cardModelUrl: string;
   packModelUrl: string;
+  lightingConfig: ClearCardLightingConfig;
   initiallyRevealed: boolean;
   onStatusChange: (status: ViewerStatus) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -296,6 +341,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       ready,
       cardModelUrl,
       packModelUrl,
+      lightingConfig,
       initiallyRevealed,
       onStatusChange,
       onPackHit,
@@ -305,6 +351,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const requestRenderRef = useRef<(() => void) | null>(null);
+    const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
+    const lightingConfigRef = useRef(lightingConfig);
     const reducedMotionRef = useRef(false);
     const viewerReadyRef = useRef(false);
     const stageRef = useRef<UnboxStage>('pack');
@@ -326,6 +374,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       onPackHitRef.current = onPackHit;
       onPackBreakRef.current = onPackBreak;
     });
+
+    useEffect(() => {
+      lightingConfigRef.current = lightingConfig;
+      applyLightingRef.current?.(lightingConfig);
+    }, [lightingConfig]);
 
     useImperativeHandle(
       ref,
@@ -396,6 +449,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let renderer: THREE.WebGLRenderer | null = null;
       let dracoLoader: DRACOLoader | null = null;
       let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
+      let environmentUpdateTimer: number | null = null;
+      let environmentSignature = '';
+      let pendingEnvironmentConfig: ClearCardLightingConfig | null = null;
+      let lastToneMapping: THREE.ToneMapping | null = null;
+      let rectAreaLightReady = false;
+      let rectAreaLightLoadPending = false;
       let loadingManager: THREE.LoadingManager | null = null;
       let resizeObserver: ResizeObserver | null = null;
       let motionQuery: MediaQueryList | null = null;
@@ -407,7 +466,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const packMeshes: THREE.Mesh[] = [];
       let packUsesTransmission = false;
-      let cardUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
       let hitCount = 0;
       let breakElapsed = 0;
@@ -432,14 +490,25 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const cardGroup = new THREE.Group();
       cardGroup.visible = false;
       const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.45 * Math.PI);
-      directionalLight.position.set(0.5, 0, 0.866);
-      camera.add(ambientLight, directionalLight);
+      const ambientLight = new THREE.AmbientLight();
+      const hemisphereLight = new THREE.HemisphereLight();
+      const directionalLight = new THREE.DirectionalLight();
+      const directionalTarget = new THREE.Object3D();
+      const rimLight = new THREE.DirectionalLight();
+      const rimTarget = new THREE.Object3D();
+      const areaLight = new THREE.RectAreaLight();
+      const pointLight = new THREE.PointLight();
+      const spotLight = new THREE.SpotLight();
+      const spotTarget = new THREE.Object3D();
+      directionalLight.target = directionalTarget;
+      rimLight.target = rimTarget;
+      spotLight.target = spotTarget;
       const transmissionBackdropMaterial = new THREE.ShaderMaterial({
         uniforms: {
-          backdropColor: { value: new THREE.Color(CARD_TRANSMISSION_BACKDROP_COLOR) },
-          backdropAlpha: { value: CARD_TRANSMISSION_BACKDROP_ALPHA },
+          backdropColor: {
+            value: new THREE.Color(lightingConfigRef.current.transmission.cardColor),
+          },
+          backdropAlpha: { value: lightingConfigRef.current.transmission.cardAlpha },
         },
         vertexShader: `
           void main() {
@@ -471,6 +540,18 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       scene.add(transmissionBackdrop);
       scene.add(pivot);
       scene.add(camera);
+      scene.add(
+        ambientLight,
+        hemisphereLight,
+        directionalLight,
+        directionalTarget,
+        rimLight,
+        rimTarget,
+        areaLight,
+        pointLight,
+        spotLight,
+        spotTarget,
+      );
 
       const sparklePositions = new Float32Array(MAX_SPARKLES * 3);
       const sparkleColors = new Float32Array(MAX_SPARKLES * 4);
@@ -493,18 +574,78 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       sparklePoints.visible = false;
       scene.add(sparklePoints);
 
-      const setStage = (nextStage: UnboxStage) => {
-        stageRef.current = nextStage;
-        directionalLight.visible = nextStage === 'pack' || !cardUsesTransmission;
-        const usePackBackdrop = nextStage === 'pack' && packUsesTransmission;
-        transmissionBackdropMaterial.uniforms.backdropColor.value.setHex(
+      const markSceneMaterialsForUpdate = () => {
+        scene.traverse((object) => {
+          if (!(object instanceof THREE.Mesh) && !(object instanceof THREE.Points)) return;
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach((material) => {
+            material.needsUpdate = true;
+          });
+        });
+      };
+
+      const syncLightVisibility = (
+        stage: UnboxStage,
+        config: ClearCardLightingConfig,
+      ) => {
+        ambientLight.visible =
+          config.ambient.enabled && lightMatchesStage(config.ambient.stage, stage);
+        hemisphereLight.visible =
+          config.hemisphere.enabled && lightMatchesStage(config.hemisphere.stage, stage);
+        directionalLight.visible =
+          config.directional.enabled && lightMatchesStage(config.directional.stage, stage);
+        rimLight.visible = config.rim.enabled && lightMatchesStage(config.rim.stage, stage);
+        const areaLightShouldBeVisible =
+          config.area.enabled && lightMatchesStage(config.area.stage, stage);
+        areaLight.visible = areaLightShouldBeVisible && rectAreaLightReady;
+        if (
+          areaLightShouldBeVisible &&
+          !rectAreaLightReady &&
+          !rectAreaLightLoadPending
+        ) {
+          rectAreaLightLoadPending = true;
+          void loadRectAreaLightSupport()
+            .then(() => {
+              rectAreaLightLoadPending = false;
+              if (disposed) return;
+              rectAreaLightReady = true;
+              markSceneMaterialsForUpdate();
+              syncLightVisibility(stageRef.current, lightingConfigRef.current);
+              requestRender();
+            })
+            .catch((error) => {
+              rectAreaLightLoadPending = false;
+              if (!disposed) {
+                console.error(
+                  '[mons] failed to initialize rectangular area lighting',
+                  error,
+                );
+              }
+            });
+        }
+        pointLight.visible = config.point.enabled && lightMatchesStage(config.point.stage, stage);
+        spotLight.visible = config.spot.enabled && lightMatchesStage(config.spot.stage, stage);
+      };
+
+      const syncTransmissionBackdrop = (
+        stage: UnboxStage,
+        config: ClearCardLightingConfig,
+      ) => {
+        const usePackBackdrop = stage === 'pack' && packUsesTransmission;
+        transmissionBackdropMaterial.uniforms.backdropColor.value.set(
           usePackBackdrop
-            ? PACK_TRANSMISSION_BACKDROP_COLOR
-            : CARD_TRANSMISSION_BACKDROP_COLOR,
+            ? config.transmission.packColor
+            : config.transmission.cardColor,
         );
         transmissionBackdropMaterial.uniforms.backdropAlpha.value = usePackBackdrop
-          ? PACK_TRANSMISSION_BACKDROP_ALPHA
-          : CARD_TRANSMISSION_BACKDROP_ALPHA;
+          ? config.transmission.packAlpha
+          : config.transmission.cardAlpha;
+      };
+
+      const setStage = (nextStage: UnboxStage) => {
+        stageRef.current = nextStage;
+        syncLightVisibility(nextStage, lightingConfigRef.current);
+        syncTransmissionBackdrop(nextStage, lightingConfigRef.current);
       };
       setStage('pack');
 
@@ -937,19 +1078,168 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         frameId = window.requestAnimationFrame(renderFrame);
       };
 
-      const rebuildEnvironment = () => {
+      const getEnvironmentSignature = (config: ClearCardLightingConfig) => {
+        return config.environment.mode === 'sky'
+          ? JSON.stringify([config.environment.mode, config.environment.sky])
+          : config.environment.mode;
+      };
+
+      const rebuildEnvironment = (config: ClearCardLightingConfig) => {
         if (!renderer) throw new Error('Clear-card renderer is unavailable');
-        const skyTexture = createSkyEnvironmentTexture();
+        const signature = getEnvironmentSignature(config);
+        if (config.environment.mode === 'none') {
+          environmentRenderTarget?.dispose();
+          environmentRenderTarget = null;
+          scene.environment = null;
+          environmentSignature = signature;
+          return;
+        }
+
         const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        let skyTexture: THREE.DataTexture | null = null;
+        let roomEnvironment: RoomEnvironment | null = null;
         try {
-          const nextEnvironmentRenderTarget = pmremGenerator.fromEquirectangular(skyTexture);
+          let nextEnvironmentRenderTarget: THREE.WebGLRenderTarget;
+          if (config.environment.mode === 'room') {
+            roomEnvironment = new RoomEnvironment();
+            nextEnvironmentRenderTarget = pmremGenerator.fromScene(roomEnvironment);
+          } else {
+            skyTexture = createSkyEnvironmentTexture(config.environment.sky);
+            nextEnvironmentRenderTarget = pmremGenerator.fromEquirectangular(skyTexture);
+          }
           environmentRenderTarget?.dispose();
           environmentRenderTarget = nextEnvironmentRenderTarget;
           scene.environment = nextEnvironmentRenderTarget.texture;
+          environmentSignature = signature;
         } finally {
-          skyTexture.dispose();
+          skyTexture?.dispose();
+          if (roomEnvironment) disposeObject3D(roomEnvironment);
           pmremGenerator.dispose();
         }
+      };
+
+      const scheduleEnvironmentRebuild = (config: ClearCardLightingConfig) => {
+        pendingEnvironmentConfig = config;
+        if (environmentUpdateTimer !== null) {
+          window.clearTimeout(environmentUpdateTimer);
+        }
+        environmentUpdateTimer = window.setTimeout(() => {
+          environmentUpdateTimer = null;
+          const nextConfig = pendingEnvironmentConfig;
+          pendingEnvironmentConfig = null;
+          if (!nextConfig || disposed || contextLost) return;
+          try {
+            rebuildEnvironment(nextConfig);
+            requestRender();
+          } catch (error) {
+            console.error('[mons] failed to update the clear-card environment', error);
+          }
+        }, 90);
+      };
+
+      const applyLightingConfiguration = (
+        config: ClearCardLightingConfig,
+        rebuildImmediately = false,
+      ) => {
+        if (!renderer) return;
+
+        const toneMapping = resolveToneMapping(config.renderer.toneMapping);
+        if (lastToneMapping !== toneMapping) {
+          renderer.toneMapping = toneMapping;
+          lastToneMapping = toneMapping;
+          markSceneMaterialsForUpdate();
+        }
+        renderer.toneMappingExposure = config.renderer.exposure;
+        scene.environmentIntensity = config.environment.intensity;
+        scene.environmentRotation.set(
+          0,
+          THREE.MathUtils.degToRad(config.environment.rotation),
+          0,
+        );
+
+        ambientLight.color.set(config.ambient.color);
+        ambientLight.intensity = config.ambient.intensity;
+        hemisphereLight.color.set(config.hemisphere.skyColor);
+        hemisphereLight.groundColor.set(config.hemisphere.groundColor);
+        hemisphereLight.intensity = config.hemisphere.intensity;
+
+        directionalLight.color.set(config.directional.color);
+        directionalLight.intensity = config.directional.intensity;
+        directionalLight.position.set(
+          config.directional.position.x,
+          config.directional.position.y,
+          config.directional.position.z,
+        );
+        directionalTarget.position.set(
+          config.directional.target.x,
+          config.directional.target.y,
+          config.directional.target.z,
+        );
+
+        rimLight.color.set(config.rim.color);
+        rimLight.intensity = config.rim.intensity;
+        rimLight.position.set(
+          config.rim.position.x,
+          config.rim.position.y,
+          config.rim.position.z,
+        );
+        rimTarget.position.set(config.rim.target.x, config.rim.target.y, config.rim.target.z);
+
+        areaLight.color.set(config.area.color);
+        areaLight.intensity = config.area.intensity;
+        areaLight.width = config.area.width;
+        areaLight.height = config.area.height;
+        areaLight.position.set(
+          config.area.position.x,
+          config.area.position.y,
+          config.area.position.z,
+        );
+        areaLight.lookAt(config.area.target.x, config.area.target.y, config.area.target.z);
+
+        pointLight.color.set(config.point.color);
+        pointLight.intensity = config.point.intensity;
+        pointLight.distance = config.point.distance;
+        pointLight.decay = config.point.decay;
+        pointLight.position.set(
+          config.point.position.x,
+          config.point.position.y,
+          config.point.position.z,
+        );
+
+        spotLight.color.set(config.spot.color);
+        spotLight.intensity = config.spot.intensity;
+        spotLight.distance = config.spot.distance;
+        spotLight.decay = config.spot.decay;
+        spotLight.angle = THREE.MathUtils.degToRad(config.spot.angle);
+        spotLight.penumbra = config.spot.penumbra;
+        spotLight.position.set(
+          config.spot.position.x,
+          config.spot.position.y,
+          config.spot.position.z,
+        );
+        spotTarget.position.set(config.spot.target.x, config.spot.target.y, config.spot.target.z);
+
+        syncLightVisibility(stageRef.current, config);
+        syncTransmissionBackdrop(stageRef.current, config);
+
+        const nextEnvironmentSignature = getEnvironmentSignature(config);
+        if (rebuildImmediately || nextEnvironmentSignature !== environmentSignature) {
+          if (rebuildImmediately) {
+            if (environmentUpdateTimer !== null) {
+              window.clearTimeout(environmentUpdateTimer);
+              environmentUpdateTimer = null;
+            }
+            pendingEnvironmentConfig = null;
+            rebuildEnvironment(config);
+          } else {
+            scheduleEnvironmentRebuild(config);
+          }
+        } else if (environmentUpdateTimer !== null) {
+          window.clearTimeout(environmentUpdateTimer);
+          environmentUpdateTimer = null;
+          pendingEnvironmentConfig = null;
+        }
+        requestRender();
       };
 
       const initializeViewer = () => {
@@ -988,9 +1278,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           });
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
-          renderer.toneMapping = THREE.LinearToneMapping;
-          renderer.toneMappingExposure = 1;
-          rebuildEnvironment();
+          applyLightingRef.current = (config) => applyLightingConfiguration(config);
+          applyLightingConfiguration(lightingConfigRef.current, true);
         } catch (error) {
           console.error('[mons] failed to initialize the clear-card viewer', error);
           requestRenderRef.current = null;
@@ -1009,7 +1298,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (disposed) return;
           contextLost = false;
           try {
-            rebuildEnvironment();
+            applyLightingConfiguration(lightingConfigRef.current, true);
           } catch (error) {
             console.error('[mons] failed to restore the clear-card environment', error);
             viewerReadyRef.current = false;
@@ -1116,18 +1405,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             cardRoot.scale.setScalar(embedScale);
             centerObject(cardRoot, cardSize);
             cardGroup.add(cardRoot);
-            cardRoot.traverse((object) => {
-              if (!(object instanceof THREE.Mesh)) return;
-              const materials = Array.isArray(object.material) ? object.material : [object.material];
-              if (
-                materials.some(
-                  (material) =>
-                    material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
-                )
-              ) {
-                cardUsesTransmission = true;
-              }
-            });
 
             sparkleWorldScale = Math.max(packSize.x, packSize.y, packSize.z) || 1;
             sparkleMaterial.size = sparkleWorldScale * 0.05;
@@ -1161,6 +1438,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         disposed = true;
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
+        applyLightingRef.current = null;
         triggerHitRef.current = null;
         performResetRef.current = null;
         loadingManager?.abort();
@@ -1182,6 +1460,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (resize) window.removeEventListener('resize', resize);
         resizeObserver?.disconnect();
         if (frameId !== null) window.cancelAnimationFrame(frameId);
+        if (environmentUpdateTimer !== null) {
+          window.clearTimeout(environmentUpdateTimer);
+          environmentUpdateTimer = null;
+        }
+        pendingEnvironmentConfig = null;
         dracoLoader?.dispose();
         dracoLoader = null;
         environmentRenderTarget?.dispose();

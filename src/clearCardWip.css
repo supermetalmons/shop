@@ -120,13 +120,435 @@
   box-shadow: none;
 }
 
+.lighting-lab {
+  --lighting-lab-panel-bg: rgba(248, 248, 250, 0.9);
+  --lighting-lab-panel-solid: #f8f8fa;
+  --lighting-lab-actions-bg: rgba(248, 248, 250, 0.97);
+  --lighting-lab-text: rgba(22, 24, 29, 0.94);
+  --lighting-lab-secondary: rgba(22, 24, 29, 0.76);
+  --lighting-lab-muted: rgba(22, 24, 29, 0.56);
+  --lighting-lab-faint: rgba(22, 24, 29, 0.4);
+  --lighting-lab-border: rgba(22, 24, 29, 0.12);
+  --lighting-lab-soft-border: rgba(22, 24, 29, 0.08);
+  --lighting-lab-control-bg: rgba(22, 24, 29, 0.055);
+  --lighting-lab-control-border: rgba(22, 24, 29, 0.12);
+  --lighting-lab-control-hover: rgba(22, 24, 29, 0.1);
+  --lighting-lab-subtle-bg: rgba(22, 24, 29, 0.035);
+  --lighting-lab-focus: #3976b8;
+  --lighting-lab-range: #667386;
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top, 0px));
+  left: max(14px, env(safe-area-inset-left, 0px));
+  z-index: 1130;
+  width: min(338px, calc(100vw - 28px));
+  overflow: hidden;
+  border: 1px solid var(--lighting-lab-border);
+  border-radius: 12px;
+  background: var(--lighting-lab-panel-bg);
+  color: var(--lighting-lab-text);
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.16),
+    inset 0 1px rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  color-scheme: light;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.lighting-lab__header {
+  width: 100%;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 13px 10px 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lighting-lab .lighting-lab__header:hover:not(:disabled),
+.lighting-lab .lighting-lab__header:active:not(:disabled) {
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-text);
+}
+
+.lighting-lab__header > span:first-child {
+  display: grid;
+  gap: 1px;
+}
+
+.lighting-lab__eyebrow {
+  color: var(--lighting-lab-faint);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.lighting-lab__title {
+  font-size: 14px;
+  font-weight: 520;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+
+.lighting-lab__header-meta {
+  overflow: hidden;
+  color: var(--lighting-lab-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lighting-lab__panel {
+  max-height: min(78dvh, 720px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  border-top: 1px solid var(--lighting-lab-border);
+  scrollbar-color: var(--lighting-lab-control-border) transparent;
+  scrollbar-width: thin;
+}
+
+.lighting-lab__preset-block {
+  padding: 11px 13px 12px;
+  border-bottom: 1px solid var(--lighting-lab-border);
+}
+
+.lighting-lab__preset-block p {
+  margin: 7px 0 0 88px;
+  color: var(--lighting-lab-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.lighting-lab__section {
+  border-bottom: 1px solid var(--lighting-lab-border);
+}
+
+.lighting-lab__section summary {
+  position: relative;
+  padding: 10px 29px 10px 13px;
+  color: var(--lighting-lab-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+
+.lighting-lab__section summary::-webkit-details-marker {
+  display: none;
+}
+
+.lighting-lab__section summary::after {
+  content: '+';
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  color: var(--lighting-lab-faint);
+  font-size: 15px;
+  font-weight: 300;
+  transform: translateY(-52%);
+}
+
+.lighting-lab__section[open] summary::after {
+  content: '−';
+}
+
+.lighting-lab__section-body {
+  display: grid;
+  gap: 8px;
+  padding: 1px 13px 13px;
+}
+
+.lighting-lab__simple-row,
+.lighting-lab__toggle-row,
+.lighting-lab__range-row {
+  min-height: 26px;
+  display: grid;
+  align-items: center;
+  gap: 8px;
+}
+
+.lighting-lab__simple-row,
+.lighting-lab__toggle-row {
+  grid-template-columns: 78px minmax(0, 1fr);
+}
+
+.lighting-lab__range-row {
+  grid-template-columns: 78px minmax(48px, 1fr) 68px;
+}
+
+.lighting-lab__control-label {
+  overflow: hidden;
+  color: var(--lighting-lab-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lighting-lab__select,
+.lighting-lab__number {
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--lighting-lab-control-border);
+  border-radius: 6px;
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  outline: none;
+}
+
+.lighting-lab__select {
+  width: 100%;
+  padding: 0 25px 0 8px;
+  cursor: pointer;
+}
+
+.lighting-lab__select option {
+  background: var(--lighting-lab-panel-solid);
+  color: var(--lighting-lab-text);
+}
+
+.lighting-lab__number-wrap {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--lighting-lab-faint);
+  font-size: 9px;
+}
+
+.lighting-lab__number {
+  width: 100%;
+  padding: 0 5px;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.lighting-lab__number::-webkit-inner-spin-button,
+.lighting-lab__number::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.lighting-lab .lighting-lab__range {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--lighting-lab-range);
+  box-shadow: none;
+  cursor: ew-resize;
+}
+
+.lighting-lab__color-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--lighting-lab-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+}
+
+.lighting-lab__color {
+  width: 28px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid var(--lighting-lab-control-border);
+  border-radius: 6px;
+  background: var(--lighting-lab-control-bg);
+  cursor: pointer;
+}
+
+.lighting-lab .lighting-lab__toggle {
+  width: 30px;
+  height: 17px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--lighting-lab-range);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.lighting-lab__subsection-title,
+.lighting-lab__vector-title {
+  color: var(--lighting-lab-faint);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.lighting-lab__subsection-title {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lighting-lab-soft-border);
+}
+
+.lighting-lab__vector {
+  display: grid;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 9px 9px 8px;
+  border-radius: 8px;
+  background: var(--lighting-lab-subtle-bg);
+}
+
+.lighting-lab__vector .lighting-lab__range-row {
+  grid-template-columns: 18px minmax(48px, 1fr) 68px;
+}
+
+.lighting-lab__actions {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  padding: 7px 13px 10px;
+  border-top: 1px solid var(--lighting-lab-border);
+  background: var(--lighting-lab-actions-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.lighting-lab__clipboard-feedback {
+  min-height: 13px;
+  color: var(--lighting-lab-muted);
+  font-size: 9px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.lighting-lab__clipboard-feedback--success {
+  color: #397348;
+}
+
+.lighting-lab__clipboard-feedback--error {
+  color: #a13b36;
+}
+
+.lighting-lab__action-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.lighting-lab__actions button {
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid var(--lighting-lab-control-border);
+  border-radius: 6px;
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-secondary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.lighting-lab .lighting-lab__actions button:hover:not(:disabled),
+.lighting-lab .lighting-lab__actions button:active:not(:disabled) {
+  background: var(--lighting-lab-control-hover);
+  color: var(--lighting-lab-text);
+}
+
+.lighting-lab .lighting-lab__actions button:disabled {
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-faint);
+  opacity: 1;
+}
+
+.lighting-lab .lighting-lab__select:focus,
+.lighting-lab .lighting-lab__number:focus,
+.lighting-lab .lighting-lab__color:focus {
+  background: var(--lighting-lab-control-bg);
+  box-shadow: none;
+}
+
+.lighting-lab .lighting-lab__range:focus,
+.lighting-lab .lighting-lab__toggle:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
+.lighting-lab button:focus-visible,
+.lighting-lab input:focus-visible,
+.lighting-lab select:focus-visible,
+.lighting-lab summary:focus-visible {
+  outline: 1px solid var(--lighting-lab-focus);
+  outline-offset: 1px;
+}
+
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .clear-card-wip__backdrop {
     background: color-mix(in srgb, var(--bg) 88%, transparent);
   }
+
+  .lighting-lab {
+    background: var(--lighting-lab-panel-solid);
+  }
 }
 
 @media (prefers-color-scheme: dark) {
+  .lighting-lab {
+    --lighting-lab-panel-bg: rgba(17, 19, 23, 0.88);
+    --lighting-lab-panel-solid: #111317;
+    --lighting-lab-actions-bg: rgba(17, 19, 23, 0.97);
+    --lighting-lab-text: rgba(255, 255, 255, 0.94);
+    --lighting-lab-secondary: rgba(255, 255, 255, 0.77);
+    --lighting-lab-muted: rgba(255, 255, 255, 0.55);
+    --lighting-lab-faint: rgba(255, 255, 255, 0.4);
+    --lighting-lab-border: rgba(255, 255, 255, 0.12);
+    --lighting-lab-soft-border: rgba(255, 255, 255, 0.075);
+    --lighting-lab-control-bg: rgba(255, 255, 255, 0.065);
+    --lighting-lab-control-border: rgba(255, 255, 255, 0.12);
+    --lighting-lab-control-hover: rgba(255, 255, 255, 0.12);
+    --lighting-lab-subtle-bg: rgba(255, 255, 255, 0.035);
+    --lighting-lab-focus: #8fb8e8;
+    --lighting-lab-range: #9ca8ba;
+    box-shadow:
+      0 18px 50px rgba(0, 0, 0, 0.24),
+      inset 0 1px rgba(255, 255, 255, 0.05);
+    color-scheme: dark;
+  }
+
+  .lighting-lab__clipboard-feedback--success {
+    color: #83c995;
+  }
+
+  .lighting-lab__clipboard-feedback--error {
+    color: #ff8b84;
+  }
+
   .clear-card-wip__canvas {
     filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.38));
   }
@@ -145,7 +567,18 @@
 
 @media (max-width: 720px) {
   .clear-card-wip__model-pickers {
-    top: max(12px, env(safe-area-inset-top, 0px));
+    top: auto;
     right: max(12px, env(safe-area-inset-right, 0px));
+    bottom: max(50px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .lighting-lab {
+    top: max(10px, env(safe-area-inset-top, 0px));
+    left: max(10px, env(safe-area-inset-left, 0px));
+    width: min(338px, calc(100vw - 20px));
+  }
+
+  .lighting-lab__panel {
+    max-height: min(72dvh, 640px);
   }
 }

@@ -10,6 +10,13 @@ import {
 } from 'react';
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
+import ClearCardLightingPanel from './components/ClearCardLightingPanel';
+import {
+  DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
+  createClearCardLightingPreset,
+  type ClearCardLightingConfig,
+  type ClearCardLightingPresetId,
+} from './clearCardLighting';
 import type { ClearCardThreeViewerHandle } from './ClearCardThreeViewer';
 import './clearCardWip.css';
 
@@ -44,6 +51,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
     tagName === 'TEXTAREA' ||
     tagName === 'SELECT' ||
     tagName === 'BUTTON' ||
+    tagName === 'SUMMARY' ||
     tagName === 'A'
   );
 }
@@ -53,6 +61,10 @@ export default function ClearCardWipApp() {
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[1].url);
   const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[0].url);
   const [cardRevealed, setCardRevealed] = useState(false);
+  const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
+  const [lightingPresetId, setLightingPresetId] = useState<
+    ClearCardLightingPresetId | 'custom'
+  >(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
@@ -66,6 +78,14 @@ export default function ClearCardWipApp() {
   const handleReset = useCallback(() => {
     setCardRevealed(false);
     viewerRef.current?.reset();
+  }, []);
+  const handleLightingChange = useCallback((nextConfig: ClearCardLightingConfig) => {
+    setLightingPresetId('custom');
+    setLightingConfig(nextConfig);
+  }, []);
+  const handleLightingPresetChange = useCallback((presetId: ClearCardLightingPresetId) => {
+    setLightingPresetId(presetId);
+    setLightingConfig(createClearCardLightingPreset(presetId));
   }, []);
   const handleModelChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
@@ -190,6 +210,7 @@ export default function ClearCardWipApp() {
               ready={ready}
               cardModelUrl={cardModelUrl}
               packModelUrl={packModelUrl}
+              lightingConfig={lightingConfig}
               initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
               onPackHit={handlePackHit}
@@ -232,6 +253,12 @@ export default function ClearCardWipApp() {
           ))}
         </select>
       </div>
+      <ClearCardLightingPanel
+        config={lightingConfig}
+        presetId={lightingPresetId}
+        onChange={handleLightingChange}
+        onPresetChange={handleLightingPresetChange}
+      />
       <button
         type="button"
         className="wip-close-btn"
