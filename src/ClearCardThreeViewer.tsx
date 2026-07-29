@@ -45,32 +45,18 @@ const PACK_TRANSMISSION_BACKDROP_ALPHA = 0.62;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 
-// Spherical environment: an HDR equirectangular sky, in place of three's cubic
-// RoomEnvironment. The room's lighting came from six flat emissive boxes, and the one
-// facing the camera was the sole cause of the white-out — tilting swept its reflection
-// across the card and the artwork vanished into white.
-//
-// A sphere has no flat panel to mirror, and the key light here is centred on the VIEW
-// AXIS, which is the property that actually fixes the flare: the resting card already
-// reflects the brightest point, so tilting can only walk down the falloff. Getting
-// brighter by rotating is not merely tuned out, it is geometrically impossible.
-//
-// Radiance is linear and unbounded (float texture), so the key can stay hot enough to
-// keep the blown highlight the card reads as gloss.
+// Keep the spherical key centered and moderate while using the gradient as fill.
+// Concentrated HDR peaks alias into clipped flashes on the clear card's relief.
 const SKY_TEXTURE_WIDTH = 512;
 const SKY_TEXTURE_HEIGHT = 256;
-// Vertical gradient, in linear RGB.
-const SKY_GROUND: readonly [number, number, number] = [0.04, 0.045, 0.05];
-const SKY_HORIZON: readonly [number, number, number] = [0.3, 0.32, 0.35];
-const SKY_ZENITH: readonly [number, number, number] = [0.55, 0.58, 0.62];
-// Key light. Latitude is lifted slightly so the highlight sits high on the card, but
-// staying near the view axis is what keeps it flare-free — past ~18 degrees off axis
-// the reflection starts swinging into view on tilt and the blow-out returns.
-const SKY_KEY_LATITUDE = THREE.MathUtils.degToRad(12);
+const SKY_GROUND: readonly [number, number, number] = [0.08, 0.09, 0.1];
+const SKY_HORIZON: readonly [number, number, number] = [0.6, 0.64, 0.7];
+const SKY_ZENITH: readonly [number, number, number] = [1.1, 1.16, 1.24];
+const SKY_KEY_LATITUDE = 0;
 const SKY_KEY_LONGITUDE = 0;
 const SKY_KEY_RADIUS = THREE.MathUtils.degToRad(45);
 const SKY_KEY_FALLOFF = 1;
-const SKY_KEY_INTENSITY = 521;
+const SKY_KEY_INTENSITY = 32;
 
 function createSkyEnvironmentTexture(): THREE.DataTexture {
   const data = new Float32Array(SKY_TEXTURE_WIDTH * SKY_TEXTURE_HEIGHT * 4);
