@@ -5954,7 +5954,8 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();
     deliveryOrders.forEach((order) => {
-      const dropConfig = requireKnownDropConfig(order.dropId, `shipment order ${order.deliveryId}`);
+      const dropConfig = getFrontendDrop(order.dropId);
+      if (!dropConfig) return;
       const dropContent = getDropContent(order.dropId);
       const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
@@ -5972,7 +5973,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       });
     });
     return Array.from(targetsByKey.values());
-  }, [deliveryOrders, figureMetadataByKey, getDropContent, requireKnownDropConfig]);
+  }, [deliveryOrders, figureMetadataByKey, getDropContent]);
   const shipmentsEmptyContent = (() => {
     if (viewedProfile) return 'No shipments yet.';
     if (anonymousStripeHistoryVisible) {
@@ -6046,7 +6047,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const renderShipmentItems = useCallback(
     (order: DeliveryOrderSummary) => {
-      const dropConfig = requireKnownDropConfig(order.dropId, `shipment render ${order.deliveryId}`);
+      const dropConfig = getFrontendDrop(order.dropId);
       const dropContent = getDropContent(order.dropId);
       const figureMediaBase = dropContent.figures.fulfillmentMediaBaseUrl;
       const useMediaFolderPreview = dropContent.figures.fulfillmentPreviewMode === 'media_map_folder';
@@ -6114,7 +6115,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             const cacheKey = figureMetadataCacheKey(order.dropId, item.refId);
             const metadata = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(order.dropId, item.refId);
             const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
-            const mediaId = useMediaFolderPreview ? getMediaIdForFigureId(item.refId, dropConfig.figureMedia) : undefined;
+            const mediaId = useMediaFolderPreview
+              ? getMediaIdForFigureId(item.refId, dropConfig?.figureMedia)
+              : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
             const canViewInteractiveCard =
               usesInteractiveCardPackRevealForDropId(order.dropId) &&
@@ -6201,7 +6204,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       mergeLoadedFigureMetadata,
       openImageViewer,
       openInteractiveCardViewer,
-      requireKnownDropConfig,
       usesInteractiveCardPackRevealForDropId,
     ],
   );

@@ -29,6 +29,7 @@ export type UpcomingDropRouteConfig = {
   path: string;
   dropFamily: DropFamily;
   solanaCluster: SolanaCluster;
+  notifyOnly?: boolean;
   label: string;
   title: string;
   previewDropId?: string;
@@ -68,6 +69,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     path: '/card_nft_binder',
     dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
+    notifyOnly: true,
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
     previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
@@ -127,11 +129,13 @@ export function resolveFrontendDropByPath(
   const normalizedPath = normalizePathname(pathname);
   if (normalizedPath === '/') return null;
 
+  const upcomingRoute = resolveUpcomingDropRouteByPath(normalizedPath);
+  if (upcomingRoute?.notifyOnly) return null;
+
   const candidate = normalizedPath.slice(1);
   const exactDrop = resolveFrontendDropById(candidate, options?.drops);
   if (exactDrop) return exactDrop;
 
-  const upcomingRoute = resolveUpcomingDropRouteByPath(normalizedPath);
   return resolveUpcomingRouteDrop(upcomingRoute, options?.drops);
 }
 

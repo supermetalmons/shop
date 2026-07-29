@@ -18,6 +18,7 @@ import {
 import {
   LEGACY_DROP_ROUTE_ALIASES,
   listUpcomingDropRoutes,
+  resolveFrontendDropByPath,
   resolveUpcomingDropRouteByPath,
   resolveUpcomingRouteDrop,
 } from '../src/lib/dropConfig.ts';
@@ -27,6 +28,7 @@ const UPCOMING_ROUTES = [
     path: '/card_nft_binder',
     dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
+    notifyOnly: true,
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
     previewImageUrl: 'https://cdn.lil.org/nft/card_nft_binder/clean.webp',
@@ -83,6 +85,17 @@ test('upcoming routes resolve with trailing slashes and reflect deployment state
     resolveUpcomingRouteDrop(resolveUpcomingDropRouteByPath('/drifella_shirt/'))?.dropId,
     'drifella_shirt',
   );
+});
+
+test('card NFT binder stays in notify-only mode without hiding deployment configs', () => {
+  assert.equal(resolveFrontendDropByPath('/card_nft_binder'), null);
+  assert.equal(resolveFrontendDropByPath('/card_nft_binder/'), null);
+  assert.equal(
+    resolveFrontendDropByPath('/card_nft_binder_devnet')?.dropId,
+    'card_nft_binder_devnet',
+  );
+  assert.equal(FRONTEND_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
+  assert.equal(FUNCTIONS_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
 });
 
 test('drop family names normalize and default from IDs across registry contracts', () => {
