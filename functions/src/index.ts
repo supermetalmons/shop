@@ -144,16 +144,6 @@ import {
   type ShipperVisibleOrderEmailItem,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
-import {
-  planResendInboundForward,
-  resendWebhookHeaders,
-  resendWebhookRawBody,
-  type ResendReceivedEventCompat,
-} from './resendInbound.js';
-import { createResendInboundProvider } from './resendInboundProvider.js';
-import { resendInboundHttpResponse } from './resendInboundHttp.js';
-import { processResendInboundForward } from './resendInboundService.js';
-import { FirestoreResendInboundStore } from './resendInboundStore.js';
 import { isRetryableResendError, summarizeResendError, type ResendErrorSummary } from './resendErrors.js';
 import {
   createResendSubscribersProvider,
@@ -298,8 +288,7 @@ const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
-const RESEND_INBOUND_API_KEY = defineSecret('RESEND_INBOUND_API_KEY');
-const RESEND_WEBHOOK_SECRET = defineSecret('RESEND_WEBHOOK_SECRET');
+const RESEND_CONTACTS_API_KEY = defineSecret('RESEND_CONTACTS_API_KEY');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
@@ -4449,16 +4438,9 @@ function createResendClient(apiKey: () => string): () => Promise<ResendClient | 
 }
 
 const resendClient = createResendClient(() => envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY));
-const resendInboundClient = createResendClient(() =>
-  envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY),
-);
 const resendContactsClient = createResendClient(() =>
-  envOrSecretValue('RESEND_INBOUND_API_KEY', RESEND_INBOUND_API_KEY),
+  envOrSecretValue('RESEND_CONTACTS_API_KEY', RESEND_CONTACTS_API_KEY),
 );
-
-function resendWebhookSecret(): string {
-  return envOrSecretValue('RESEND_WEBHOOK_SECRET', RESEND_WEBHOOK_SECRET);
-}
 
 async function sendBuyerOrderReceivedEmail(
   message: BuyerOrderReceivedEmailMessage,
@@ -6115,114 +6097,7 @@ export const subscribeToNotifications = onCallAuthed(
       throw new HttpsError('internal', 'Unable to subscribe.');
     }
   },
-  { secrets: [RESEND_INBOUND_API_KEY] },
-);
-
-export const resendInboundWebhook = onRequest(
-  {
-    secrets: [RESEND_INBOUND_API_KEY, RESEND_WEBHOOK_SECRET],
-    memory: '1GiB',
-    cpu: 1,
-    concurrency: 1,
-    maxInstances: 2,
-    timeoutSeconds: 120,
-  },
-  async (req, res) => {
-    res.set('Cache-Control', 'no-store');
-    if (req.method !== 'POST') {
-      res.status(405).send('Method not allowed');
-      return;
-    }
-
-    const resend = await resendInboundClient();
-    const webhookSecret = resendWebhookSecret();
-    if (!resend || !webhookSecret) {
-      logger.error('resendInboundWebhook', { outcome: 'failed_retryable', reason: 'not_configured' });
-      res.status(500).send('Resend inbound webhook is not configured');
-      return;
-    }
-
-    let event: ReturnType<typeof resend.webhooks.verify>;
-    let webhookId: string;
-    try {
-      const headers = resendWebhookHeaders(req);
-      webhookId = headers.id;
-      event = resend.webhooks.verify({
-        payload: resendWebhookRawBody(req),
-        headers,
-        webhookSecret,
-      });
-    } catch (err) {
-      logger.warn('resendInboundWebhook', { outcome: 'rejected', reason: 'invalid_signature' });
-      res.status(400).send('Invalid Resend webhook signature');
-      return;
-    }
-
-    if (event.type !== 'email.received') {
-      res.json({ received: true, ignored: true, reason: 'unsupported_event_type' });
-      return;
-    }
-
-    let route;
-    try {
-      route = planResendInboundForward(event as ResendReceivedEventCompat);
-    } catch (err) {
-      logger.error('resendInboundWebhook', {
-        webhookId,
-        outcome: 'rejected',
-        reason: 'invalid_event',
-      });
-      res.status(400).send('Invalid Resend email.received event');
-      return;
-    }
-
-    if (route.kind === 'ignored') {
-      logger.info('resendInboundWebhook', {
-        webhookId,
-        emailId: event.data.email_id,
-        outcome: 'ignored',
-        reason: route.reason,
-      });
-      res.json({ received: true, ignored: true, reason: route.reason });
-      return;
-    }
-
-    let outcome;
-    try {
-      outcome = await processResendInboundForward({
-        plan: route.plan,
-        webhookId,
-        provider: createResendInboundProvider(resend),
-        store: new FirestoreResendInboundStore(db),
-      });
-    } catch (err) {
-      logger.error('resendInboundWebhook', {
-        webhookId,
-        emailId: route.plan.emailId,
-        outcome: 'failed_retryable',
-        reason: 'storage_or_processing_failure',
-      });
-      res.status(500).send('Unable to process Resend inbound email');
-      return;
-    }
-
-    logger.info('resendInboundWebhook', {
-      webhookId,
-      emailId: route.plan.emailId,
-      outcome: outcome.kind,
-      ...('reason' in outcome ? { reason: outcome.reason } : {}),
-      ...('attempts' in outcome ? { attempts: outcome.attempts } : {}),
-      ...('providerStatus' in outcome ? { providerStatus: outcome.providerStatus } : {}),
-    });
-
-    const httpResponse = resendInboundHttpResponse(outcome);
-    if (httpResponse.retryAfter) res.set('Retry-After', httpResponse.retryAfter);
-    if (typeof httpResponse.body === 'string') {
-      res.status(httpResponse.status).send(httpResponse.body);
-    } else {
-      res.status(httpResponse.status).json(httpResponse.body);
-    }
-  },
+  { secrets: [RESEND_CONTACTS_API_KEY] },
 );
 
 export const stripeWebhook = onRequest(

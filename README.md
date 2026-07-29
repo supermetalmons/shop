@@ -87,16 +87,11 @@ subsequent application rollbacks must use an explicit Worker version.
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
 - `RESEND_API_KEY` (Firebase Functions secret used only for outbound notifications; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Set: `firebase functions:secrets:set RESEND_API_KEY`
-- `RESEND_INBOUND_API_KEY` (Firebase Functions secret used by `resendInboundWebhook` and `subscribeToNotifications`; requires Resend Full Access so it can read inbound messages and attachments and manage Contacts)
-  - Set: `firebase functions:secrets:set RESEND_INBOUND_API_KEY`
+- `RESEND_CONTACTS_API_KEY` (Firebase Functions secret used only by `subscribeToNotifications`; requires Resend Full Access to manage Contacts)
+  - Set: `firebase functions:secrets:set RESEND_CONTACTS_API_KEY`
   - A notification signup directly adds the normalized address to global Resend Contacts without sending a confirmation email. Existing contacts return success without changing their current unsubscribe state.
-  - There is deliberately no fallback between the outbound key and the shared inbound/Contacts key.
-- `RESEND_WEBHOOK_SECRET` (Firebase Functions secret used to verify Resend inbound webhook signatures)
-  - In Resend, add an `email.received` webhook for `https://us-central1-mons-shop.cloudfunctions.net/resendInboundWebhook` and copy its signing secret.
-  - Set: `firebase functions:secrets:set RESEND_WEBHOOK_SECRET`
-  - The handler only forwards mail addressed to `notifications@support.mons.shop`; routing destinations are configured in `functions/src/resendInbound.ts`.
-  - Forwarding sends from `forwarder@support.mons.shop`, preserves safe Reply-To addresses, and stores deduplication state in the `resendInboundEmails` collection group for 90 days.
-  - Messages with more than nine attachments are forwarded without attachments and include a visible warning so processing stays within the webhook execution budget.
+  - There is deliberately no fallback between the outbound and Contacts keys.
+  - Inbound mail for `support.mons.shop` is delivered directly by iCloud and is not handled by Firebase.
 - `STRIPE_RETURN_URL_ALLOWED_ORIGINS` (optional comma/space-separated http(s) origins for Stripe success/cancel return URLs beyond `https://mons.shop`, `https://*.mons.shop`, and localhost; useful for preview hosts)
 - `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.

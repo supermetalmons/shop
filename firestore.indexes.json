@@ -44,12 +44,6 @@
       "indexes": [
         { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
-    },
-    {
-      "collectionGroup": "resendInboundEmails",
-      "fieldPath": "expiresAt",
-      "ttl": true,
-      "indexes": []
     }
   ]
 }
