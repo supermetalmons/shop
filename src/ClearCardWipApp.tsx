@@ -29,13 +29,9 @@ const BREAK_SOUND_VOLUME = 0.42;
 const CARD_MODEL_OPTIONS = [
   { label: 'Card: Sample', url: '/clear_card_sample.glb' },
   { label: 'Card: Sample 15', url: '/clear_card_sample_15.glb' },
-  { label: 'Card: Sample 17', url: '/clear_card_sample_17.glb' },
-  { label: 'Card: Sample 19', url: '/clear_card_sample_19.glb' },
 ] as const;
 const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
-  { label: 'Pack: Sample 1', url: '/clear_pack_sample_1.glb' },
-  { label: 'Pack: Sample 17', url: '/clear_pack_sample_17.glb' },
   { label: 'Pack: Sample 18', url: '/clear_pack_sample_18.glb' },
 ] as const;
 
