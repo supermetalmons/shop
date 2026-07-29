@@ -3,13 +3,17 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { fetchInventory, type DropFetchOptions } from '../lib/api';
 import { InventoryItem } from '../types';
 
+export function inventoryQueryKeyPrefix(owner?: string) {
+  return ['inventory', owner] as const;
+}
+
 export function useInventory(ownerOverride?: string, options?: DropFetchOptions) {
   const { publicKey } = useWallet();
   const owner = ownerOverride || publicKey?.toBase58();
   const includeDevnet = options?.includeDevnet === true;
 
   return useQuery<InventoryItem[]>({
-    queryKey: ['inventory', owner, includeDevnet],
+    queryKey: [...inventoryQueryKeyPrefix(owner), includeDevnet],
     enabled: Boolean(owner),
     queryFn: () => fetchInventory(owner!, { includeDevnet }),
     refetchInterval: 45_000,

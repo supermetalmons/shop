@@ -24,8 +24,8 @@ import { ClaimForm } from './components/ClaimForm';
 import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
 import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
-import { useInventory } from './hooks/useInventory';
-import { usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
+import { inventoryQueryKeyPrefix, useInventory } from './hooks/useInventory';
+import { pendingOpenBoxesQueryKeyPrefix, usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
 import { useHomePageScrollRestoration } from './hooks/useHomePageScrollRestoration';
@@ -66,6 +66,13 @@ import {
   loadStripeCheckoutMarkers,
   rememberStripeCheckoutStarted,
 } from './lib/stripeCheckoutMarkers';
+import {
+  mergeStripeCheckoutRecoverySessionIds,
+  pendingStripeCheckoutRecoverySessionIds,
+  resolveStripeCheckoutDataOwner,
+  shouldContinueStripeCheckoutRecovery,
+  shouldUseAnonymousStripeHistory,
+} from './lib/stripeCheckoutRecovery';
 import {
   buildMintBoxesTxWithAccounts,
   buildMintDiscountedBoxTxWithAccounts,
@@ -274,6 +281,15 @@ type StripeCheckoutReturn =
       status: 'cancel' | 'unverified_success';
       sessionId?: undefined;
     };
+type StripeCheckoutProfileRecovery = {
+  key: string;
+  phase: 'pending' | 'recovered' | 'fallback';
+};
+type StripeCheckoutInventoryRecovery = {
+  owner: string;
+  phase: 'pending' | 'complete';
+  baselineUpdatedAt: number;
+};
 type CardNft2PackVideoSources = readonly PreviewVideoSource[];
 
 const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
@@ -1483,27 +1499,45 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     signIn,
     updateProfile,
     refreshProfile,
+    restoreProfileFromSession,
   } = useSolanaAuth();
   const queryClient = useQueryClient();
   const connectedWallet = publicKey?.toBase58();
+  const [stripeRecoveryOwner, setStripeRecoveryOwner] = useState<string | null>(null);
+  const [stripeCheckoutRecoveredProfileWallet, setStripeCheckoutRecoveredProfileWallet] =
+    useState<string | null>(null);
+  const [stripeCheckoutProfileRecovery, setStripeCheckoutProfileRecovery] =
+    useState<StripeCheckoutProfileRecovery | null>(null);
+  const [stripeCheckoutInventoryRecovery, setStripeCheckoutInventoryRecovery] =
+    useState<StripeCheckoutInventoryRecovery | null>(null);
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
   const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
   const isSignedInWallet = Boolean(token && connectedWallet && profile?.wallet === connectedWallet);
   const canUseAdminMenu = Boolean(isSignedInWallet && hasFulfillmentAppAccess(connectedWallet));
   const canUseAdminViewer = isAdminWallet && isSignedInWallet;
-  const owner = canUseAdminViewer && adminViewedOwner ? adminViewedOwner : connectedWallet;
+  const owner =
+    canUseAdminViewer && adminViewedOwner
+      ? adminViewedOwner
+      : resolveStripeCheckoutDataOwner(connectedWallet, stripeRecoveryOwner);
+  const includeDevnetInventory = isAdminWallet || Boolean(owner && ADMIN_WALLETS.has(owner));
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
-  const { data: inventoryData, refetch: refetchInventory, isFetched: inventoryFetched } = useInventory(owner, {
-    includeDevnet: isAdminWallet,
+  const {
+    data: inventoryData,
+    refetch: refetchInventory,
+    isFetched: inventoryFetched,
+    isFetching: inventoryFetching,
+    dataUpdatedAt: inventoryDataUpdatedAt,
+  } = useInventory(owner, {
+    includeDevnet: includeDevnetInventory,
   });
   const {
     data: pendingOpenBoxesData,
     refetch: refetchPendingOpenBoxes,
     isSuccess: pendingOpenBoxesSuccess,
-  } = usePendingOpenBoxes(owner, { includeDevnet: isAdminWallet });
+  } = usePendingOpenBoxes(owner, { includeDevnet: includeDevnetInventory });
 
   const {
     data: deliveryOrderOwnersData,
@@ -1646,17 +1680,46 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [pendingClaimSignIn, setPendingClaimSignIn] = useState(false);
   const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
   const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
+  const [stripeCheckoutReturnSessionId, setStripeCheckoutReturnSessionId] = useState<string | null>(null);
   const [stripeCheckoutHistoryNow, setStripeCheckoutHistoryNow] = useState(() => Date.now());
   const anonymousStripeHistoryCompletion = useMemo(
     () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
     [firebaseUid, stripeCheckoutMarkers],
   );
   const anonymousStripeHistoryMarkerKey = anonymousStripeHistoryCompletion.markerKey;
+  const completedStripeCheckoutSessionIds = anonymousStripeHistoryCompletion.sessionIds;
+  const stripeCheckoutRecoverySessionIds = useMemo(
+    () =>
+      mergeStripeCheckoutRecoverySessionIds(
+        completedStripeCheckoutSessionIds,
+        stripeCheckoutReturnSessionId,
+      ),
+    [anonymousStripeHistoryMarkerKey, stripeCheckoutReturnSessionId],
+  );
+  const stripeCheckoutRecoveryKey =
+    firebaseUid && stripeCheckoutRecoverySessionIds.length
+      ? `${firebaseUid}:${stripeCheckoutRecoverySessionIds.join('|')}`
+      : '';
+  const stripeCheckoutProfileRecoveryPending = Boolean(
+    stripeCheckoutRecoveryKey &&
+      (stripeCheckoutProfileRecovery?.key !== stripeCheckoutRecoveryKey ||
+        stripeCheckoutProfileRecovery.phase === 'pending'),
+  );
+  const stripeCheckoutAnonymousFallbackReady = Boolean(
+    stripeCheckoutRecoveryKey &&
+      stripeCheckoutProfileRecovery?.key === stripeCheckoutRecoveryKey &&
+      stripeCheckoutProfileRecovery.phase === 'fallback',
+  );
   const hasLocalCompletedStripeCheckout = Boolean(anonymousStripeHistoryMarkerKey);
   const anonymousStripeHistoryPollUntil = anonymousStripeHistoryCompletion.latestCompletedAt
     ? anonymousStripeHistoryCompletion.latestCompletedAt + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS
     : 0;
-  const anonymousStripeHistoryEnabled = !connectedWallet && hasLocalCompletedStripeCheckout;
+  const anonymousStripeHistoryEnabled = shouldUseAnonymousStripeHistory({
+    connectedWallet,
+    recoveredWallet: stripeRecoveryOwner,
+    hasCompletedCheckout: hasLocalCompletedStripeCheckout,
+    recoveryFallbackReady: stripeCheckoutAnonymousFallbackReady,
+  });
   const anonymousStripeHistoryPollActive =
     anonymousStripeHistoryEnabled &&
     Boolean(anonymousStripeHistoryPollUntil && stripeCheckoutHistoryNow < anonymousStripeHistoryPollUntil);
@@ -1764,8 +1827,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
   const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
   const stripeCheckoutCompletionHandledRef = useRef(false);
-  const stripeCheckoutWalletRefreshStartedRef = useRef(false);
-  const stripeCheckoutReturnWalletRefreshSessionRef = useRef<string | null>(null);
+  const stripeCheckoutReturnPollUntilRef = useRef(0);
+  const stripeCheckoutRecoveredProfileKeysRef = useRef<Set<string>>(new Set());
+  const stripeCheckoutInventoryRecoveryPromiseRef = useRef<{
+    owner: string;
+    inventoryPromise: Promise<void>;
+  } | null>(null);
   const receiptTransferInFlightRef = useRef(false);
 
   const updateReceiptOperations = useCallback(
@@ -1955,6 +2022,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     const checkoutReturn = stripeCheckoutReturnRef.current;
     if (!checkoutReturn) return;
     if (checkoutReturn.status === 'success') {
+      stripeCheckoutReturnPollUntilRef.current = Math.max(
+        stripeCheckoutReturnPollUntilRef.current,
+        Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS,
+      );
+      setStripeCheckoutReturnSessionId(checkoutReturn.sessionId);
       showToast('Stripe checkout completed.');
       return;
     }
@@ -1980,65 +2052,95 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, [firebaseUid]);
 
   useEffect(() => {
-    stripeCheckoutWalletRefreshStartedRef.current = false;
-  }, [anonymousStripeHistoryMarkerKey, connectedWallet]);
+    if (connectedWallet) setStripeRecoveryOwner(null);
+  }, [connectedWallet]);
 
   useEffect(() => {
-    if (stripeCheckoutWalletRefreshStartedRef.current || !connectedWallet || !isSignedInWallet) return;
-    const checkoutReturn = stripeCheckoutReturnRef.current;
-    const checkoutReturnSessionId = checkoutReturn?.status === 'success' ? checkoutReturn.sessionId : '';
-    const hasCheckoutReturn =
-      Boolean(checkoutReturnSessionId) &&
-      stripeCheckoutReturnWalletRefreshSessionRef.current !== checkoutReturnSessionId;
-    if (!hasCheckoutReturn && !hasLocalCompletedStripeCheckout) return;
-
-    connectedWalletRef.current = connectedWallet;
-    stripeCheckoutWalletRefreshStartedRef.current = true;
+    if (!firebaseUid || !stripeCheckoutRecoveryKey || !stripeCheckoutRecoverySessionIds.length) return;
     let cancelled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const completedMarkerKey = anonymousStripeHistoryMarkerKey;
     const completedMarkerFirebaseUid = firebaseUid;
-    const stopAt = hasCheckoutReturn
-      ? Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS
-      : anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil
-        ? anonymousStripeHistoryPollUntil
-        : Date.now();
+    const recoveryKey = stripeCheckoutRecoveryKey;
+    const stopAt = Math.max(
+      Date.now(),
+      anonymousStripeHistoryPollUntil,
+      stripeCheckoutReturnPollUntilRef.current,
+    );
+    let pendingSessionIds = stripeCheckoutRecoverySessionIds;
+    let profileRecovered = stripeCheckoutRecoveredProfileKeysRef.current.has(recoveryKey);
+    setStripeCheckoutProfileRecovery((current) => {
+      if (current?.key === recoveryKey && current.phase === 'recovered') return current;
+      return { key: recoveryKey, phase: 'pending' };
+    });
 
-    const refreshUntilSettled = () => {
-      if (cancelled || connectedWalletRef.current !== connectedWallet) return;
-      void refreshProfile({ mergeStripeDeliveryOrders: true })
+    const recoverUntilSettled = () => {
+      if (cancelled) return;
+      let retryable = true;
+      void restoreProfileFromSession({ mergeStripeDeliveryOrders: true })
         .then((refreshedProfile) => {
-          if (!refreshedProfile || !completedMarkerFirebaseUid) return;
+          if (cancelled || !refreshedProfile) {
+            retryable = false;
+            return;
+          }
+          profileRecovered = true;
+          stripeCheckoutRecoveredProfileKeysRef.current.add(recoveryKey);
+          setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'recovered' });
+          setStripeCheckoutRecoveredProfileWallet(refreshedProfile.wallet);
+          if (!connectedWallet) {
+            setStripeRecoveryOwner(refreshedProfile.wallet);
+          }
           const walletStripeSessionIds = (refreshedProfile.orders || [])
             .map((order) => order.stripeCheckoutSessionId || '')
             .filter(Boolean);
+          pendingSessionIds = pendingStripeCheckoutRecoverySessionIds(
+            stripeCheckoutRecoverySessionIds,
+            walletStripeSessionIds,
+          );
           const result = forgetCompletedStripeCheckoutMarkersForFirebaseUid({
             firebaseUid: completedMarkerFirebaseUid,
             sessionIds: walletStripeSessionIds,
           });
-          if (!result.removed) return;
-          setStripeCheckoutMarkers(result.markers);
-          if (completedMarkerKey) {
-            queryClient.removeQueries({
-              queryKey: anonymousStripeDeliveryHistoryQueryKey(completedMarkerFirebaseUid, completedMarkerKey),
-              exact: true,
-            });
+          if (result.removed) {
+            setStripeCheckoutMarkers(result.markers);
+            if (completedMarkerKey) {
+              queryClient.removeQueries({
+                queryKey: anonymousStripeDeliveryHistoryQueryKey(completedMarkerFirebaseUid, completedMarkerKey),
+                exact: true,
+              });
+            }
+          }
+          if (
+            stripeCheckoutReturnSessionId &&
+            !pendingSessionIds.includes(stripeCheckoutReturnSessionId)
+          ) {
+            setStripeCheckoutReturnSessionId(null);
           }
         })
         .catch((err) => {
-          console.warn('[mons] failed to refresh profile after Stripe checkout', err);
+          retryable = isRetryableCallableError(err);
+          console.warn('[mons] failed to restore profile after Stripe checkout', err);
         })
         .finally(() => {
-          if (cancelled || connectedWalletRef.current !== connectedWallet) return;
-          if (hasCheckoutReturn) {
-            stripeCheckoutReturnWalletRefreshSessionRef.current = checkoutReturnSessionId;
+          if (cancelled) return;
+          const nextAttemptAt = Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS;
+          const shouldContinue = shouldContinueStripeCheckoutRecovery({
+            pendingSessionIds,
+            retryable,
+            nextAttemptAt,
+            stopAt,
+          });
+          if (!shouldContinue) {
+            if (!profileRecovered) {
+              setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'fallback' });
+            }
+            return;
           }
-          if (Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS > stopAt) return;
-          timeout = setTimeout(refreshUntilSettled, STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS);
+          timeout = setTimeout(recoverUntilSettled, STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS);
         });
     };
 
-    refreshUntilSettled();
+    recoverUntilSettled();
     return () => {
       cancelled = true;
       if (timeout) clearTimeout(timeout);
@@ -2048,10 +2150,87 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     anonymousStripeHistoryPollUntil,
     connectedWallet,
     firebaseUid,
-    hasLocalCompletedStripeCheckout,
-    isSignedInWallet,
     queryClient,
-    refreshProfile,
+    restoreProfileFromSession,
+    stripeCheckoutRecoveryKey,
+    stripeCheckoutRecoverySessionIds,
+    stripeCheckoutReturnSessionId,
+  ]);
+
+  useEffect(() => {
+    const recoveredOwner = stripeCheckoutRecoveredProfileWallet;
+    if (!recoveredOwner) return;
+
+    let cancelled = false;
+    setStripeCheckoutInventoryRecovery((current) => {
+      if (current?.owner === recoveredOwner && current.phase === 'complete') return current;
+      return {
+        owner: recoveredOwner,
+        phase: 'pending',
+        baselineUpdatedAt: inventoryDataUpdatedAt,
+      };
+    });
+
+    let recovery = stripeCheckoutInventoryRecoveryPromiseRef.current;
+    if (!recovery || recovery.owner !== recoveredOwner) {
+      const inventoryPromise = queryClient.invalidateQueries(
+        { queryKey: inventoryQueryKeyPrefix(recoveredOwner) },
+        { throwOnError: true },
+      );
+      const pendingOpenBoxesPromise = queryClient.invalidateQueries(
+        { queryKey: pendingOpenBoxesQueryKeyPrefix(recoveredOwner) },
+        { throwOnError: true },
+      );
+      const nextRecovery = { owner: recoveredOwner, inventoryPromise };
+      recovery = nextRecovery;
+      stripeCheckoutInventoryRecoveryPromiseRef.current = nextRecovery;
+      void Promise.allSettled([inventoryPromise, pendingOpenBoxesPromise]).then(() => {
+        if (stripeCheckoutInventoryRecoveryPromiseRef.current === nextRecovery) {
+          stripeCheckoutInventoryRecoveryPromiseRef.current = null;
+        }
+      });
+    }
+
+    void recovery.inventoryPromise
+      .then(() => {
+        if (cancelled) return;
+        setStripeCheckoutInventoryRecovery((current) =>
+          current?.owner === recoveredOwner
+            ? { ...current, phase: 'complete' }
+            : current,
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[mons] failed to refresh inventory after Stripe checkout', err);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [queryClient, stripeCheckoutRecoveredProfileWallet]);
+
+  useEffect(() => {
+    if (
+      !owner ||
+      stripeCheckoutInventoryRecovery?.owner !== owner ||
+      stripeCheckoutInventoryRecovery.phase !== 'pending' ||
+      inventoryFetching ||
+      !inventoryFetched ||
+      inventoryDataUpdatedAt <= stripeCheckoutInventoryRecovery.baselineUpdatedAt
+    ) {
+      return;
+    }
+    setStripeCheckoutInventoryRecovery((current) =>
+      current?.owner === owner ? { ...current, phase: 'complete' } : current,
+    );
+  }, [
+    inventoryDataUpdatedAt,
+    inventoryFetched,
+    inventoryFetching,
+    owner,
+    stripeCheckoutInventoryRecovery,
   ]);
 
   const blockViewerModeAction = () => {
@@ -3731,14 +3910,23 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     () => moveLittleSwagBoxesFamilyToEnd(visibleInventory.filter((item) => item.kind === 'certificate')),
     [visibleInventory],
   );
-  const inventoryEmptyStateVisibility = connectedWallet
-    ? inventoryFetched
+  const stripeCheckoutInventoryRefreshPending = Boolean(
+    owner &&
+      stripeCheckoutRecoveredProfileWallet === owner &&
+      (stripeCheckoutInventoryRecovery?.owner !== owner ||
+        stripeCheckoutInventoryRecovery.phase === 'pending'),
+  );
+  const inventoryEmptyStateVisibility = owner
+    ? inventoryFetched && !stripeCheckoutInventoryRefreshPending
       ? 'visible'
       : 'hidden'
-    : walletIdleReady
+    : walletIdleReady && !stripeCheckoutProfileRecoveryPending
       ? 'visible'
       : 'hidden';
-  const inventoryReadyForShipments = inventoryItems.length > 0 || inventoryEmptyStateVisibility === 'visible';
+  const inventoryReadyForShipments =
+    stripeCheckoutRecoveredProfileWallet === viewedProfile?.wallet ||
+    inventoryItems.length > 0 ||
+    inventoryEmptyStateVisibility === 'visible';
 
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
@@ -5942,8 +6130,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const anonymousStripeHistoryHasOrders = anonymousStripeDeliveryOrders.length > 0;
   const anonymousStripeHistoryInitialLoading =
     anonymousStripeHistoryPollActive && anonymousStripeHistoryLoading && !anonymousStripeHistoryData;
-  const anonymousStripeHistoryVisible =
-    !connectedWallet && (anonymousStripeHistoryPollActive || anonymousStripeHistoryHasOrders);
+  const anonymousStripeHistoryVisible = shouldUseAnonymousStripeHistory({
+    connectedWallet,
+    recoveredWallet: stripeRecoveryOwner,
+    hasCompletedCheckout: anonymousStripeHistoryPollActive || anonymousStripeHistoryHasOrders,
+    recoveryFallbackReady: stripeCheckoutAnonymousFallbackReady,
+  });
   const anonymousStripeHistoryWaitingForFulfillment =
     anonymousStripeHistoryPollActive &&
     !anonymousStripeHistoryHasOrders &&
@@ -5997,13 +6189,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       </span>
     );
   })();
-  const shipmentsEmptyStateVisibility = connectedWallet
-    ? authReady
-      ? 'visible'
-      : 'hidden'
-    : walletIdleReady
-      ? 'visible'
-      : 'hidden';
+  const shipmentsOwnerDataReady = connectedWallet ? authReady : Boolean(viewedProfile);
+  const shipmentsEmptyStateReady = owner
+    ? shipmentsOwnerDataReady
+    : walletIdleReady && !stripeCheckoutProfileRecoveryPending;
+  const shipmentsEmptyStateVisibility = shipmentsEmptyStateReady ? 'visible' : 'hidden';
   const shipmentsLookupPendingForReceipts =
     (!viewedProfile && profileLoadingForView) ||
     (anonymousStripeHistoryVisible &&

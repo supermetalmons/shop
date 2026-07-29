@@ -122,6 +122,7 @@ test('completeStripeCheckoutMarker only completes a matching local checkout mark
   assert.equal(completedStripeCheckoutMarkerKeyForFirebaseUid('anon_uid_123', completed.markers), 'cs_test_123');
   assert.deepEqual(completedStripeCheckoutMarkerSummaryForFirebaseUid('anon_uid_123', completed.markers), {
     markerKey: 'cs_test_123',
+    sessionIds: ['cs_test_123'],
     latestCompletedAt: 300,
   });
 });

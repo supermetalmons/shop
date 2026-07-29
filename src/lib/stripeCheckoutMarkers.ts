@@ -219,9 +219,9 @@ export function completedStripeCheckoutMarkerKeyForFirebaseUid(
 export function completedStripeCheckoutMarkerSummaryForFirebaseUid(
   firebaseUid: string | null | undefined,
   markers: readonly StripeCheckoutMarker[],
-): { markerKey: string; latestCompletedAt: number } {
+): { markerKey: string; sessionIds: string[]; latestCompletedAt: number } {
   const uid = normalizedString(firebaseUid);
-  if (!uid) return { markerKey: '', latestCompletedAt: 0 };
+  if (!uid) return { markerKey: '', sessionIds: [], latestCompletedAt: 0 };
 
   const sessionIds: string[] = [];
   let latestCompletedAt = 0;
@@ -231,8 +231,10 @@ export function completedStripeCheckoutMarkerSummaryForFirebaseUid(
     latestCompletedAt = Math.max(latestCompletedAt, marker.completedAt || marker.createdAt || 0);
   });
 
+  sessionIds.sort();
   return {
-    markerKey: sessionIds.sort().join('|'),
+    markerKey: sessionIds.join('|'),
+    sessionIds,
     latestCompletedAt,
   };
 }
