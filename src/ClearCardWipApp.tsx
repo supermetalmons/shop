@@ -58,7 +58,7 @@ function isWipShortcutTarget(target: EventTarget | null) {
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
-  const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[0].url);
+  const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[1].url);
   const [cardRevealed, setCardRevealed] = useState(false);
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
