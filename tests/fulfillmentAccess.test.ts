@@ -24,6 +24,11 @@ const ALL_DROP_IDS = [
   'card_nft_2',
   ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
 ];
+const ADMIN_ONLY_DROP_ID = 'card_nft_binder_devnet';
+const SHIPPER_BINDER_DROP_IDS = CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.filter(
+  (dropId) => dropId !== ADMIN_ONLY_DROP_ID,
+);
+const ALL_SHIPPER_DROP_IDS = ALL_DROP_IDS.filter((dropId) => dropId !== ADMIN_ONLY_DROP_ID);
 const LIMITED_SHIPPER_WALLET = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
@@ -45,17 +50,17 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
   assert.deepEqual(
     SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
     [
-      ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ALL_DROP_IDS],
+      ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ALL_SHIPPER_DROP_IDS],
       [
         LIMITED_SHIPPER_WALLET,
         [
           'poncho_drifella',
           'drifella_shirt',
           'card_nft_2',
-          ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+          ...SHIPPER_BINDER_DROP_IDS,
         ],
       ],
-      [FULFILLMENT_ONLY_WALLET, ALL_DROP_IDS],
+      [FULFILLMENT_ONLY_WALLET, ALL_SHIPPER_DROP_IDS],
     ],
   );
 });
@@ -86,10 +91,10 @@ test('frontend allowed-drop lists retain caller and configured array references'
     'poncho_drifella',
     'drifella_shirt',
     'card_nft_2',
-    ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+    ...SHIPPER_BINDER_DROP_IDS,
   ]);
 
-  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), ALL_DROP_IDS);
+  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), ALL_SHIPPER_DROP_IDS);
   assert.deepEqual(listAllowedFulfillmentDropIds('11111111111111111111111111111111', ALL_DROP_IDS), []);
   assert.deepEqual(listAllowedFulfillmentDropIds(undefined, ALL_DROP_IDS), []);
 });
@@ -100,13 +105,17 @@ test('sensitive fulfillment addresses remain visible only to an authorized non-a
     SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, new Set(dropIds)]),
   );
 
+  assert.equal(walletHasFulfillmentDropAccess(ADMIN_WALLET, ADMIN_ONLY_DROP_ID, admins, shipperGrants), true);
+  SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet }) => {
+    assert.equal(walletHasFulfillmentDropAccess(wallet, ADMIN_ONLY_DROP_ID, admins, shipperGrants), false);
+  });
   assert.equal(walletHasFulfillmentDropAccess(ADMIN_WALLET, 'card_nft_2', admins, shipperGrants), true);
   assert.equal(walletCanViewSensitiveFulfillmentAddress(ADMIN_WALLET, 'card_nft_2', admins, shipperGrants), false);
   assert.equal(
     walletCanViewSensitiveFulfillmentAddress(LIMITED_SHIPPER_WALLET, 'card_nft_2', admins, shipperGrants),
     true,
   );
-  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.forEach((dropId) => {
+  SHIPPER_BINDER_DROP_IDS.forEach((dropId) => {
     assert.equal(
       walletCanViewSensitiveFulfillmentAddress(
         LIMITED_SHIPPER_WALLET,
