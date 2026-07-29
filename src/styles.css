@@ -2316,6 +2316,12 @@ button.no-focus-style:focus-visible {
   outline-offset: 2px;
 }
 
+.inventory--receipts .inventory__item:focus,
+.inventory--receipts .inventory__item:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .inventory__item--revealable {
   cursor: pointer;
 }
@@ -4079,10 +4085,10 @@ button.fulfillment-export-menu__item:focus-visible {
   cursor: pointer;
 }
 
+.shipment-item-tile--interactive:focus,
 .shipment-item-tile--interactive:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: none;
 }
 
 .shipment-item-tile .figure-image {
