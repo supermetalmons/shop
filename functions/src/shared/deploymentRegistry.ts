@@ -196,6 +196,7 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     receiptPoolId: 'mons_shop_receipts',
     metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
     metadataPathFormat: 'compact',
+    forceSoldOut: true,
     treasury: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
     priceSol: 1000000,
     discountPriceSol: 1000000,

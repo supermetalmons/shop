@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NEW_DROP as DEVNET_BINDER } from '../scripts/newDrops/card_nft_binder_devnet.ts';
 import { NEW_DROP as MAINNET_BINDER } from '../scripts/newDrops/card_nft_binder.ts';
+import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   MONS_SHOP_RECEIPTS_POOL_ID,
   requireReceiptPoolSpec,
@@ -46,6 +47,8 @@ test('card NFT binder configs are Stripe-only members of the shared receipt pool
 
   assert.equal(MAINNET_BINDER.onchain.dropId, 'card_nft_binder');
   assert.equal(MAINNET_BINDER.deploy.solanaCluster, 'mainnet-beta');
+  assert.equal(FRONTEND_DROPS.card_nft_binder.forceSoldOut, true);
+  assert.equal(FRONTEND_DROPS.card_nft_binder_devnet.forceSoldOut, undefined);
   assert.equal(
     MAINNET_BINDER.deploy.reuseProgramIdFromDropId,
     'little_swag_hoodies',

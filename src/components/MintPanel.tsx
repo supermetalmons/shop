@@ -58,6 +58,7 @@ interface MintPanelProps {
   boxMedia?: MintPanelBoxMedia;
   boxNamePrefix?: string;
   dropId?: string;
+  receiptPoolId?: string;
   priceSol: number;
   discountPriceSol: number;
   maxSupply: number;
@@ -74,12 +75,14 @@ interface MintPanelProps {
   mintSelection?: MintSelectionConfig;
   successfulMintToken?: number;
   terminalAction?: MintPanelTerminalAction;
+  onNotifyNextDrops?: () => void;
   showPackStatusInfo?: boolean;
   packStatusBreakdown?: PackStatusBreakdown;
   packStatusDisplayLabels?: PackStatusDisplayLabels;
 }
 
 const REMAINING_OVERRIDE: number | null = null;
+const MONS_SHOP_RECEIPTS_POOL_ID = 'mons_shop_receipts';
 
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
 type BoxPreviewBounds = { width: number; height: number; viewportWidth: number; centerX: number };
@@ -643,6 +646,7 @@ export function MintPanel({
   boxMedia,
   boxNamePrefix,
   dropId,
+  receiptPoolId,
   priceSol,
   discountPriceSol,
   maxSupply,
@@ -659,6 +663,7 @@ export function MintPanel({
   mintSelection,
   successfulMintToken = 0,
   terminalAction,
+  onNotifyNextDrops,
   showPackStatusInfo,
   packStatusBreakdown,
   packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
@@ -981,14 +986,21 @@ export function MintPanel({
       href: link.href,
     }));
   }, [dropId]);
-  const isDefaultSoldOutState = soldOut && !terminalAction;
+  const isSharedReceiptPoolSoldOut = soldOut && receiptPoolId === MONS_SHOP_RECEIPTS_POOL_ID;
+  const isDefaultSoldOutState = soldOut && !terminalAction && !isSharedReceiptPoolSoldOut;
   const terminalState =
     terminalAction ||
     (soldOut
-      ? {
-          statusText: 'Minted out',
-          buttons: soldOutButtons,
-        }
+      ? isSharedReceiptPoolSoldOut
+        ? {
+            statusText: 'Sold Out',
+            buttonText: 'Notify me',
+            onClick: onNotifyNextDrops,
+          }
+        : {
+            statusText: 'Minted out',
+            buttons: soldOutButtons,
+          }
       : null);
   const terminalButtons = (
     terminalState

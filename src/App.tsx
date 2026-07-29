@@ -1785,6 +1785,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const revealOverlayOpen = Boolean(revealOverlay);
+  const handleOpenNotify = useCallback(() => {
+    if (revealOverlayOpen) return;
+    setNotifyOpen(true);
+  }, [revealOverlayOpen]);
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
@@ -7129,11 +7133,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             terminalAction={{
               statusText: 'Soon',
               buttonText: 'Notify Me',
-              onClick: () => {
-
-                if (revealOverlayOpen) return;
-                setNotifyOpen(true);
-              },
+              onClick: handleOpenNotify,
             }}
           />
         ) : !routeDrop ? (
@@ -7149,6 +7149,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             boxMedia={mintPreviewMedia}
             boxNamePrefix={routeDrop.namePrefix}
             dropId={routeDrop.dropId}
+            receiptPoolId={routeDrop.receiptPoolId}
             priceSol={routeDrop.priceSol}
             discountPriceSol={routeDrop.discountPriceSol}
             maxSupply={routeDrop.maxSupply}
@@ -7164,6 +7165,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             stripePaymentUnitAmountCents={routeStripePaymentUnitAmountCents ?? undefined}
             mintSelection={routeDrop.mintSelection}
             successfulMintToken={successfulMintToken}
+            onNotifyNextDrops={handleOpenNotify}
             showPackStatusInfo={Boolean(packStatusDropId)}
             packStatusBreakdown={packStatusBreakdown ?? undefined}
             packStatusDisplayLabels={packStatusDisplayLabels ?? undefined}

@@ -83,3 +83,35 @@ test('Stripe checkout is hidden when mint progress reports zero remaining', () =
   assert.match(markup, />Minted out</);
   assert.doesNotMatch(markup, />Checkout</);
 });
+
+test('sold-out shared receipt-pool drops replace marketplaces with the next-drop notification action', () => {
+  const markup = renderToStaticMarkup(
+    createElement(MintPanel, {
+      stats: {
+        minted: 15,
+        total: 15,
+        remaining: 0,
+        maxPerTx: 1,
+      },
+      onMint: () => undefined,
+      solanaMintVisible: false,
+      busy: false,
+      title: 'Card NFT Binder',
+      boxNamePrefix: 'binder',
+      dropId: 'card_nft_binder',
+      receiptPoolId: 'mons_shop_receipts',
+      priceSol: 1_000_000,
+      discountPriceSol: 1_000_000,
+      maxSupply: 15,
+      maxPerTx: 1,
+      onStripePaymentClick: () => undefined,
+      stripePaymentVisible: true,
+      stripePaymentUnitAmountCents: 10_000,
+      onNotifyNextDrops: () => undefined,
+    }),
+  );
+
+  assert.match(markup, />Sold Out</);
+  assert.match(markup, />Notify me</);
+  assert.doesNotMatch(markup, /Minted out|Magic Eden|Tensor|>Checkout</);
+});

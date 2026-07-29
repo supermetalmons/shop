@@ -443,6 +443,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
   );
   const soldOutDropIds = [
     'card_nft_2',
+    'card_nft_binder',
     'drifella_shirt',
     'little_swag_boxes',
     'poncho_drifella',
