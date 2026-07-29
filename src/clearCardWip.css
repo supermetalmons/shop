@@ -71,6 +71,14 @@
   outline: none;
 }
 
+.clear-card-wip__canvas--unrestricted {
+  cursor: grab;
+}
+
+.clear-card-wip__canvas--unrestricted:active {
+  cursor: grabbing;
+}
+
 .clear-card-wip__viewport--ready .clear-card-wip__canvas {
   opacity: 1;
   transform: translate3d(0, 0, 0) scale(1);
@@ -194,13 +202,6 @@
   text-transform: uppercase;
 }
 
-.lighting-lab__title {
-  font-size: 14px;
-  font-weight: 520;
-  line-height: 1.25;
-  letter-spacing: -0.015em;
-}
-
 .lighting-lab__header-meta {
   overflow: hidden;
   color: var(--lighting-lab-muted);
@@ -219,6 +220,19 @@
   border-top: 1px solid var(--lighting-lab-border);
   scrollbar-color: var(--lighting-lab-control-border) transparent;
   scrollbar-width: thin;
+}
+
+.lighting-lab__movement-block {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--lighting-lab-border);
+}
+
+.lighting-lab__movement-block .lighting-lab__toggle-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.lighting-lab__movement-block .lighting-lab__control-label {
+  color: var(--lighting-lab-secondary);
 }
 
 .lighting-lab__preset-block {

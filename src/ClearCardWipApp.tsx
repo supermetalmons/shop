@@ -61,6 +61,7 @@ export default function ClearCardWipApp() {
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[1].url);
   const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[0].url);
   const [cardRevealed, setCardRevealed] = useState(false);
+  const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
   const [lightingPresetId, setLightingPresetId] = useState<
     ClearCardLightingPresetId | 'custom'
@@ -211,6 +212,7 @@ export default function ClearCardWipApp() {
               cardModelUrl={cardModelUrl}
               packModelUrl={packModelUrl}
               lightingConfig={lightingConfig}
+              unrestrictedMovement={unrestrictedMovement}
               initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
               onPackHit={handlePackHit}
@@ -256,8 +258,10 @@ export default function ClearCardWipApp() {
       <ClearCardLightingPanel
         config={lightingConfig}
         presetId={lightingPresetId}
+        unrestrictedMovement={unrestrictedMovement}
         onChange={handleLightingChange}
         onPresetChange={handleLightingPresetChange}
+        onUnrestrictedMovementChange={setUnrestrictedMovement}
       />
       <button
         type="button"

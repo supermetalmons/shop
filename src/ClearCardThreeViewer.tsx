@@ -26,6 +26,8 @@ const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
 const SPRING_STIFFNESS = 60;
 const SPRING_DAMPING = 11;
 const SPRING_EPSILON = 0.0001;
+const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
+const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
 
 const HITS_TO_BREAK = 3;
 const HIT_INTENSITIES = [1, 1.3, 1.7] as const;
@@ -165,6 +167,7 @@ type ClearCardThreeViewerProps = {
   cardModelUrl: string;
   packModelUrl: string;
   lightingConfig: ClearCardLightingConfig;
+  unrestrictedMovement: boolean;
   initiallyRevealed: boolean;
   onStatusChange: (status: ViewerStatus) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -178,6 +181,18 @@ type TiltState = {
   targetY: number;
   velocityX: number;
   velocityY: number;
+};
+
+type UnrestrictedRotationState = {
+  quaternion: THREE.Quaternion;
+  deltaQuaternion: THREE.Quaternion;
+  deltaEuler: THREE.Euler;
+  pointerId: number | null;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  dragged: boolean;
 };
 
 type SpringValue = {
@@ -342,6 +357,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       cardModelUrl,
       packModelUrl,
       lightingConfig,
+      unrestrictedMovement,
       initiallyRevealed,
       onStatusChange,
       onPackHit,
@@ -354,6 +370,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
     const lightingConfigRef = useRef(lightingConfig);
     const reducedMotionRef = useRef(false);
+    const unrestrictedMovementRef = useRef(unrestrictedMovement);
     const viewerReadyRef = useRef(false);
     const stageRef = useRef<UnboxStage>('pack');
     const initiallyRevealedRef = useRef(initiallyRevealed);
@@ -368,6 +385,17 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       targetY: 0,
       velocityX: 0,
       velocityY: 0,
+    });
+    const unrestrictedRotationRef = useRef<UnrestrictedRotationState>({
+      quaternion: new THREE.Quaternion(),
+      deltaQuaternion: new THREE.Quaternion(),
+      deltaEuler: new THREE.Euler(),
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      lastX: 0,
+      lastY: 0,
+      dragged: false,
     });
 
     useEffect(() => {
@@ -395,7 +423,37 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       requestRenderRef.current?.();
     }, []);
 
+    const cancelUnrestrictedDrag = useCallback(() => {
+      const rotation = unrestrictedRotationRef.current;
+      const pointerId = rotation.pointerId;
+      rotation.pointerId = null;
+      rotation.dragged = false;
+      const canvas = canvasRef.current;
+      if (pointerId !== null && canvas?.hasPointerCapture(pointerId)) {
+        canvas.releasePointerCapture(pointerId);
+      }
+    }, []);
+
+    const resetViewOrientation = useCallback(() => {
+      cancelUnrestrictedDrag();
+      unrestrictedRotationRef.current.quaternion.identity();
+      const tilt = tiltRef.current;
+      tilt.currentX = 0;
+      tilt.currentY = 0;
+      tilt.targetX = 0;
+      tilt.targetY = 0;
+      tilt.velocityX = 0;
+      tilt.velocityY = 0;
+      requestRenderRef.current?.();
+    }, [cancelUnrestrictedDrag]);
+
+    useEffect(() => {
+      unrestrictedMovementRef.current = unrestrictedMovement;
+      resetViewOrientation();
+    }, [resetViewOrientation, unrestrictedMovement]);
+
     const updateTilt = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (unrestrictedMovementRef.current) return;
       if (!viewerReadyRef.current || reducedMotionRef.current) return;
       if (stageRef.current === 'breaking') return;
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -407,11 +465,56 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       requestRenderRef.current?.();
     }, []);
 
-    const handlePointerEnter = updateTilt;
-    const handlePointerMove = updateTilt;
+    const handlePointerMove = useCallback(
+      (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (!unrestrictedMovementRef.current) {
+          updateTilt(event);
+          return;
+        }
+        const rotation = unrestrictedRotationRef.current;
+        if (rotation.pointerId !== event.pointerId) return;
+        const deltaX = event.clientX - rotation.lastX;
+        const deltaY = event.clientY - rotation.lastY;
+        rotation.lastX = event.clientX;
+        rotation.lastY = event.clientY;
+        const totalX = event.clientX - rotation.startX;
+        const totalY = event.clientY - rotation.startY;
+        if (!rotation.dragged) {
+          if (totalX * totalX + totalY * totalY <= UNRESTRICTED_DRAG_THRESHOLD_SQ) return;
+          rotation.dragged = true;
+        }
+        if (!deltaX && !deltaY) return;
+        rotation.deltaEuler.set(
+          deltaY * UNRESTRICTED_ROTATION_SPEED,
+          deltaX * UNRESTRICTED_ROTATION_SPEED,
+          0,
+        );
+        rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
+        rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
+        requestRenderRef.current?.();
+      },
+      [updateTilt],
+    );
+
+    const handlePointerEnter = handlePointerMove;
 
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (unrestrictedMovementRef.current) {
+          if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
+          if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+          const rotation = unrestrictedRotationRef.current;
+          if (rotation.pointerId !== null) return;
+          rotation.pointerId = event.pointerId;
+          rotation.startX = event.clientX;
+          rotation.startY = event.clientY;
+          rotation.lastX = event.clientX;
+          rotation.lastY = event.clientY;
+          rotation.dragged = false;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          return;
+        }
         if (stageRef.current === 'pack') {
           triggerHitRef.current?.(event.clientX, event.clientY);
         }
@@ -422,16 +525,61 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerUp = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (unrestrictedMovementRef.current) {
+          const rotation = unrestrictedRotationRef.current;
+          if (rotation.pointerId !== event.pointerId) return;
+          const totalX = event.clientX - rotation.startX;
+          const totalY = event.clientY - rotation.startY;
+          const dragged =
+            rotation.dragged ||
+            totalX * totalX + totalY * totalY > UNRESTRICTED_DRAG_THRESHOLD_SQ;
+          rotation.pointerId = null;
+          rotation.dragged = false;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          if (!dragged && stageRef.current === 'pack') {
+            triggerHitRef.current?.(event.clientX, event.clientY);
+          }
+          return;
+        }
         if (event.pointerType === 'mouse') return;
         resetTilt();
       },
       [resetTilt],
     );
 
-    useEffect(() => {
-      window.addEventListener('blur', resetTilt);
-      return () => window.removeEventListener('blur', resetTilt);
+    const handlePointerLeave = useCallback(() => {
+      if (!unrestrictedMovementRef.current) {
+        resetTilt();
+      }
     }, [resetTilt]);
+
+    const handlePointerCancel = useCallback(() => {
+      if (unrestrictedMovementRef.current) {
+        cancelUnrestrictedDrag();
+      } else {
+        resetTilt();
+      }
+    }, [cancelUnrestrictedDrag, resetTilt]);
+
+    const handleLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
+      if (unrestrictedRotationRef.current.pointerId === event.pointerId) {
+        unrestrictedRotationRef.current.pointerId = null;
+        unrestrictedRotationRef.current.dragged = false;
+      }
+    }, []);
+
+    useEffect(() => {
+      const handleWindowBlur = () => {
+        cancelUnrestrictedDrag();
+        if (!unrestrictedMovementRef.current) {
+          resetTilt();
+        }
+      };
+      window.addEventListener('blur', handleWindowBlur);
+      return () => window.removeEventListener('blur', handleWindowBlur);
+    }, [cancelUnrestrictedDrag, resetTilt]);
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -898,6 +1046,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const startBreak = (point: THREE.Vector3) => {
+        cancelUnrestrictedDrag();
         onPackBreakRef.current?.();
         if (reducedMotionRef.current || shards.length === 0 || !fragmentsGroup) {
           finishBreakInstant();
@@ -965,7 +1114,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         punchSpring.target = 1;
         punchSpring.velocity = 0;
         clearSparkles();
-        resetTilt();
+        if (unrestrictedMovementRef.current) {
+          resetViewOrientation();
+        } else {
+          resetTilt();
+        }
         fitSize.copy(packSize);
         fitCamera();
         requestRender();
@@ -981,6 +1134,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         lastFrameTime = now;
         const tilt = tiltRef.current;
 
+        const unrestrictedMovementActive = unrestrictedMovementRef.current;
         if (reducedMotionRef.current) {
           tilt.currentX = 0;
           tilt.currentY = 0;
@@ -991,7 +1145,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           snapSpringValue(punchSpring);
           clearSparkles();
           if (stageRef.current === 'breaking') finishBreakInstant();
-        } else {
+        } else if (!unrestrictedMovementActive) {
           const nextX = stepSpringAxis(
             tilt.currentX,
             tilt.targetX,
@@ -1012,6 +1166,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tilt.currentY = nextY.current;
           tilt.velocityX = nextX.velocity;
           tilt.velocityY = nextY.velocity;
+        } else {
+          tilt.currentX = 0;
+          tilt.currentY = 0;
+          tilt.targetX = 0;
+          tilt.targetY = 0;
+          tilt.velocityX = 0;
+          tilt.velocityY = 0;
         }
 
         if (!isSpringValueSettled(punchSpring)) {
@@ -1047,15 +1208,19 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
         updateSparkles(deltaSeconds);
 
-        pivot.rotation.x = tilt.currentX;
-        pivot.rotation.y = tilt.currentY;
+        if (unrestrictedMovementActive) {
+          pivot.quaternion.copy(unrestrictedRotationRef.current.quaternion);
+        } else {
+          pivot.rotation.set(tilt.currentX, tilt.currentY, 0);
+        }
         renderer.render(scene, camera);
 
         const tiltUnsettled =
-          Math.abs(tilt.targetX - tilt.currentX) > SPRING_EPSILON ||
-          Math.abs(tilt.targetY - tilt.currentY) > SPRING_EPSILON ||
-          Math.abs(tilt.velocityX) > SPRING_EPSILON ||
-          Math.abs(tilt.velocityY) > SPRING_EPSILON;
+          !unrestrictedMovementActive &&
+          (Math.abs(tilt.targetX - tilt.currentX) > SPRING_EPSILON ||
+            Math.abs(tilt.targetY - tilt.currentY) > SPRING_EPSILON ||
+            Math.abs(tilt.velocityX) > SPRING_EPSILON ||
+            Math.abs(tilt.velocityY) > SPRING_EPSILON);
         const effectsActive =
           sparkles.length > 0 ||
           stageRef.current === 'breaking' ||
@@ -1290,6 +1455,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         handleContextLost = (event) => {
           event.preventDefault();
           if (disposed) return;
+          cancelUnrestrictedDrag();
           contextLost = true;
           viewerReadyRef.current = false;
           onStatusChange('error');
@@ -1318,6 +1484,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (!motionQuery) return;
           reducedMotionRef.current = motionQuery.matches;
           if (motionQuery.matches) {
+            cancelUnrestrictedDrag();
             const tilt = tiltRef.current;
             tilt.currentX = 0;
             tilt.currentY = 0;
@@ -1435,6 +1602,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       initializationFrameId = window.requestAnimationFrame(initializeViewer);
 
       return () => {
+        cancelUnrestrictedDrag();
         disposed = true;
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
@@ -1474,21 +1642,35 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         renderer?.dispose();
         renderer?.forceContextLoss();
       };
-    }, [cardModelUrl, onStatusChange, packModelUrl]);
+    }, [
+      cancelUnrestrictedDrag,
+      cardModelUrl,
+      onStatusChange,
+      packModelUrl,
+      resetTilt,
+      resetViewOrientation,
+    ]);
 
     return (
       <canvas
         ref={canvasRef}
-        className="clear-card-wip__canvas"
+        className={`clear-card-wip__canvas${
+          unrestrictedMovement ? ' clear-card-wip__canvas--unrestricted' : ''
+        }`}
         role="img"
-        aria-label="Interactive 3D clear card unboxing"
+        aria-label={
+          unrestrictedMovement
+            ? 'Interactive 3D clear card; drag to rotate'
+            : 'Interactive 3D clear card unboxing'
+        }
         aria-hidden={!ready}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
-        onPointerLeave={resetTilt}
-        onPointerCancel={resetTilt}
+        onPointerLeave={handlePointerLeave}
+        onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handleLostPointerCapture}
       />
     );
   },

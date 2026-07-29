@@ -12,8 +12,10 @@ import {
 type ClearCardLightingPanelProps = {
   config: ClearCardLightingConfig;
   presetId: ClearCardLightingPresetId | 'custom';
+  unrestrictedMovement: boolean;
   onChange: (config: ClearCardLightingConfig) => void;
   onPresetChange: (presetId: ClearCardLightingPresetId) => void;
+  onUnrestrictedMovementChange: (enabled: boolean) => void;
 };
 
 type SelectOption = {
@@ -283,8 +285,10 @@ function VectorControls({
 export default function ClearCardLightingPanel({
   config,
   presetId,
+  unrestrictedMovement,
   onChange,
   onPresetChange,
+  onUnrestrictedMovementChange,
 }: ClearCardLightingPanelProps) {
   const [open, setOpen] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -402,8 +406,7 @@ export default function ClearCardLightingPanel({
         aria-expanded={open}
       >
         <span>
-          <span className="lighting-lab__eyebrow">3D controls</span>
-          <span className="lighting-lab__title">Lighting lab</span>
+          <span className="lighting-lab__eyebrow">Lights</span>
         </span>
         <span className="lighting-lab__header-meta">
           {open ? 'Hide' : presetId === 'custom' ? 'Custom' : activePreset?.label}
@@ -412,6 +415,13 @@ export default function ClearCardLightingPanel({
 
       {open ? (
         <div className="lighting-lab__panel">
+          <div className="lighting-lab__movement-block">
+            <ToggleControl
+              label="Unrestricted movement"
+              checked={unrestrictedMovement}
+              onChange={onUnrestrictedMovementChange}
+            />
+          </div>
           <div className="lighting-lab__preset-block">
             <SelectControl
               label="Setup"
