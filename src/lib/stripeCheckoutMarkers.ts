@@ -1,12 +1,26 @@
+import type { MintStats } from '../types';
+
 type StripeCheckoutMarkerStatus = 'started' | 'completed';
 
-type StripeCheckoutMarker = {
+export type StripeCheckoutMintProgress = {
+  dropId: string;
+  quantity: number;
+  remainingBeforeCheckout?: number;
+  variantKey?: string;
+  variantRemainingBeforeCheckout?: number;
+};
+
+export type StripeCheckoutMarker = {
   sessionId: string;
   dropId: string;
   firebaseUid: string;
   status: StripeCheckoutMarkerStatus;
   createdAt: number;
   completedAt?: number;
+  quantity?: number;
+  remainingBeforeCheckout?: number;
+  variantKey?: string;
+  variantRemainingBeforeCheckout?: number;
 };
 
 export type StripeCheckoutMarkerStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -33,6 +47,18 @@ function normalizeTimestamp(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function normalizePositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function normalizeNonnegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
 function normalizeMarker(value: unknown): StripeCheckoutMarker | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -43,6 +69,10 @@ function normalizeMarker(value: unknown): StripeCheckoutMarker | null {
   if (!sessionId || !dropId || !firebaseUid || !status) return null;
   const createdAt = normalizeTimestamp(raw.createdAt, Date.now());
   const completedAt = status === 'completed' ? normalizeTimestamp(raw.completedAt, createdAt) : undefined;
+  const quantity = normalizePositiveInteger(raw.quantity);
+  const remainingBeforeCheckout = normalizeNonnegativeInteger(raw.remainingBeforeCheckout);
+  const variantKey = normalizedString(raw.variantKey) || undefined;
+  const variantRemainingBeforeCheckout = normalizeNonnegativeInteger(raw.variantRemainingBeforeCheckout);
   return {
     sessionId,
     dropId,
@@ -50,6 +80,12 @@ function normalizeMarker(value: unknown): StripeCheckoutMarker | null {
     status,
     createdAt,
     ...(completedAt ? { completedAt } : {}),
+    ...(quantity ? { quantity } : {}),
+    ...(remainingBeforeCheckout != null ? { remainingBeforeCheckout } : {}),
+    ...(variantKey ? { variantKey } : {}),
+    ...(variantRemainingBeforeCheckout != null
+      ? { variantRemainingBeforeCheckout }
+      : {}),
   };
 }
 
@@ -130,7 +166,13 @@ export function loadStripeCheckoutMarkers(
 }
 
 export function rememberStripeCheckoutStarted(
-  marker: Pick<StripeCheckoutMarker, 'sessionId' | 'dropId' | 'firebaseUid'> & { createdAt?: number },
+  marker: Pick<StripeCheckoutMarker, 'sessionId' | 'dropId' | 'firebaseUid'> & {
+    createdAt?: number;
+    quantity?: number;
+    remainingBeforeCheckout?: number;
+    variantKey?: string;
+    variantRemainingBeforeCheckout?: number;
+  },
   storage: StripeCheckoutMarkerStorage | null = defaultStorage(),
 ): StripeCheckoutMarker[] {
   const sessionId = normalizedString(marker.sessionId);
@@ -141,6 +183,13 @@ export function rememberStripeCheckoutStarted(
   }
   const markers = loadStripeCheckoutMarkers(storage);
   const existing = markers.find((entry) => isMarkerForSession(entry, sessionId, firebaseUid));
+  const quantity = normalizePositiveInteger(marker.quantity) || existing?.quantity;
+  const remainingBeforeCheckout =
+    normalizeNonnegativeInteger(marker.remainingBeforeCheckout) ?? existing?.remainingBeforeCheckout;
+  const variantKey = normalizedString(marker.variantKey) || existing?.variantKey;
+  const variantRemainingBeforeCheckout =
+    normalizeNonnegativeInteger(marker.variantRemainingBeforeCheckout) ??
+    existing?.variantRemainingBeforeCheckout;
   const nextMarker: StripeCheckoutMarker = {
     sessionId,
     dropId,
@@ -148,6 +197,12 @@ export function rememberStripeCheckoutStarted(
     status: existing?.status === 'completed' ? 'completed' : 'started',
     createdAt: normalizeTimestamp(marker.createdAt, Date.now()),
     ...(existing?.completedAt ? { completedAt: existing.completedAt } : {}),
+    ...(quantity ? { quantity } : {}),
+    ...(remainingBeforeCheckout != null ? { remainingBeforeCheckout } : {}),
+    ...(variantKey ? { variantKey } : {}),
+    ...(variantRemainingBeforeCheckout != null
+      ? { variantRemainingBeforeCheckout }
+      : {}),
   };
   return persistStripeCheckoutMarkers(
     [nextMarker, ...markers.filter((entry) => !isMarkerForSession(entry, sessionId, firebaseUid))],
@@ -207,6 +262,124 @@ export function forgetCompletedStripeCheckoutMarkersForFirebaseUid(
     removed: true,
     removedSessionIds,
   };
+}
+
+export function stripeCheckoutMintProgressForSession(
+  firebaseUid: string | null | undefined,
+  sessionId: string | null | undefined,
+  markers: readonly StripeCheckoutMarker[],
+): StripeCheckoutMintProgress | null {
+  const normalizedFirebaseUid = normalizedString(firebaseUid);
+  const normalizedSessionId = normalizedString(sessionId);
+  if (!normalizedFirebaseUid || !normalizedSessionId) return null;
+  const marker = markers.find(
+    (entry) =>
+      entry.firebaseUid === normalizedFirebaseUid &&
+      entry.sessionId === normalizedSessionId,
+  );
+  if (!marker) return null;
+  return {
+    dropId: marker.dropId,
+    quantity: marker.quantity || 1,
+    ...(marker.remainingBeforeCheckout != null
+      ? { remainingBeforeCheckout: marker.remainingBeforeCheckout }
+      : {}),
+    ...(marker.variantKey ? { variantKey: marker.variantKey } : {}),
+    ...(marker.variantRemainingBeforeCheckout != null
+      ? { variantRemainingBeforeCheckout: marker.variantRemainingBeforeCheckout }
+      : {}),
+  };
+}
+
+function optimisticRemaining(baseline: number, quantity: number): number {
+  return Math.max(0, baseline - quantity);
+}
+
+export function applyOptimisticStripeCheckoutMintProgress(
+  stats: MintStats | undefined,
+  progress: StripeCheckoutMintProgress | null | undefined,
+): MintStats | undefined {
+  if (!stats || !progress) return stats;
+  const totalRemaining =
+    progress.remainingBeforeCheckout == null
+      ? stats.remaining
+      : Math.min(
+          stats.remaining,
+          optimisticRemaining(
+            progress.remainingBeforeCheckout,
+            progress.quantity,
+          ),
+        );
+  const variantRemaining =
+    progress.variantKey && progress.variantRemainingBeforeCheckout != null
+      ? stats.mintSelectionAvailability?.[progress.variantKey]
+      : undefined;
+  const optimisticVariantTarget =
+    progress.variantRemainingBeforeCheckout == null
+      ? undefined
+      : optimisticRemaining(
+          progress.variantRemainingBeforeCheckout,
+          progress.quantity,
+        );
+  const optimisticVariantRemaining =
+    variantRemaining == null || optimisticVariantTarget == null
+      ? undefined
+      : Math.min(variantRemaining, optimisticVariantTarget);
+  const totalChanged = totalRemaining !== stats.remaining;
+  const variantChanged =
+    optimisticVariantRemaining != null &&
+    optimisticVariantRemaining !== variantRemaining;
+  if (!totalChanged && !variantChanged) return stats;
+  return {
+    ...stats,
+    ...(totalChanged
+      ? {
+          minted: Math.max(stats.minted, stats.total - totalRemaining),
+          remaining: totalRemaining,
+        }
+      : {}),
+    ...(variantChanged && progress.variantKey
+      ? {
+          mintSelectionAvailability: {
+            ...stats.mintSelectionAvailability,
+            [progress.variantKey]: optimisticVariantRemaining,
+          },
+        }
+      : {}),
+  };
+}
+
+export function isStripeCheckoutMintProgressSettled(
+  stats: MintStats | undefined,
+  progress: StripeCheckoutMintProgress | null | undefined,
+): boolean {
+  if (!stats || !progress) return false;
+  let tracksProgress = false;
+  if (progress.remainingBeforeCheckout != null) {
+    tracksProgress = true;
+    if (
+      stats.remaining >
+      optimisticRemaining(progress.remainingBeforeCheckout, progress.quantity)
+    ) {
+      return false;
+    }
+  }
+  if (progress.variantKey && progress.variantRemainingBeforeCheckout != null) {
+    tracksProgress = true;
+    const variantRemaining =
+      stats.mintSelectionAvailability?.[progress.variantKey];
+    if (
+      variantRemaining == null ||
+      variantRemaining >
+        optimisticRemaining(
+          progress.variantRemainingBeforeCheckout,
+          progress.quantity,
+        )
+    ) {
+      return false;
+    }
+  }
+  return tracksProgress;
 }
 
 export function completedStripeCheckoutMarkerKeyForFirebaseUid(

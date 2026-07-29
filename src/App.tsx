@@ -60,11 +60,15 @@ import {
 import { auth } from './lib/firebase';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
 import {
+  applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
   completedStripeCheckoutMarkerSummaryForFirebaseUid,
   forgetCompletedStripeCheckoutMarkersForFirebaseUid,
+  isStripeCheckoutMintProgressSettled,
   loadStripeCheckoutMarkers,
   rememberStripeCheckoutStarted,
+  stripeCheckoutMintProgressForSession,
+  type StripeCheckoutMintProgress,
 } from './lib/stripeCheckoutMarkers';
 import {
   mergeStripeCheckoutRecoverySessionIds,
@@ -245,7 +249,7 @@ const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hid
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
-const NOTIFY_SUCCESS_HUD_VISIBLE_MS = 1_100;
+const NOTIFY_SUCCESS_HUD_VISIBLE_MS = 2_300;
 const NOTIFY_SUCCESS_HUD_FADE_MS = 260;
 const SELECTION_PANEL_ACTION = {
   cancel: 'cancel',
@@ -289,6 +293,9 @@ type StripeCheckoutInventoryRecovery = {
   owner: string;
   phase: 'pending' | 'complete';
   baselineUpdatedAt: number;
+};
+type StripeCheckoutOptimisticMintProgress = StripeCheckoutMintProgress & {
+  expiresAt: number;
 };
 type CardNft2PackVideoSources = readonly PreviewVideoSource[];
 
@@ -1481,6 +1488,8 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   );
   const shouldFetchMintStats = shouldFetchMintProgress(routeDrop);
   const { data: mintStats, refetch: refetchStats } = useMintProgress(routeConnection, routeDrop, shouldFetchMintStats);
+  const [stripeCheckoutOptimisticMintProgress, setStripeCheckoutOptimisticMintProgress] =
+    useState<StripeCheckoutOptimisticMintProgress | null>(null);
   const packStatusDropId = routeDrop?.dropId && supportsFrontendPackStatus(routeDrop.dropId) ? routeDrop.dropId : null;
   const packStatusDisplayLabels = packStatusDisplayLabelsForDropId(packStatusDropId || undefined);
   const { data: packStatusBreakdown } = useQuery({
@@ -1636,11 +1645,18 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     },
     [routeDrop, fallbackMintSelectionAvailability],
   );
-  const effectiveMintStats = routeDrop
+  const baseEffectiveMintStats = routeDrop
     ? routeDrop.forceSoldOut
       ? forcedSoldOutStats
       : mintStats || activeMintStatsFallback
     : undefined;
+  const effectiveMintStats =
+    routeDrop?.dropId === stripeCheckoutOptimisticMintProgress?.dropId
+      ? applyOptimisticStripeCheckoutMintProgress(
+          baseEffectiveMintStats,
+          stripeCheckoutOptimisticMintProgress,
+        )
+      : baseEffectiveMintStats;
   const activeDiscountAllowance = routeDrop ? mintStats?.discountMintsPerWallet ?? routeDrop.discountMintsPerWallet : 0;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1826,6 +1842,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const revealOverlayClosingRef = useRef(false);
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
   const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
+  const stripeCheckoutOptimisticMintSessionRef = useRef<string | null>(null);
   const stripeCheckoutCompletionHandledRef = useRef(false);
   const stripeCheckoutReturnPollUntilRef = useRef(0);
   const stripeCheckoutRecoveredProfileKeysRef = useRef<Set<string>>(new Set());
@@ -1971,8 +1988,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   }, []);
 
-  const handleNotifySuccess = useCallback(() => {
-    setNotifyOpen(false);
+  const showSuccessHud = useCallback((announcement: string) => {
     if (notifySuccessHudFadeTimeoutRef.current) {
       clearTimeout(notifySuccessHudFadeTimeoutRef.current);
     }
@@ -1985,7 +2001,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     setNotifySuccessHudPhase('visible');
     setNotifySuccessAnnouncement('');
     notifySuccessAnnouncementTimeoutRef.current = setTimeout(() => {
-      setNotifySuccessAnnouncement('You’re on the list.');
+      setNotifySuccessAnnouncement(announcement);
     }, 0);
     notifySuccessHudFadeTimeoutRef.current = setTimeout(() => {
       setNotifySuccessHudPhase('fading');
@@ -1994,6 +2010,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }, NOTIFY_SUCCESS_HUD_FADE_MS);
     }, NOTIFY_SUCCESS_HUD_VISIBLE_MS);
   }, []);
+
+  const handleNotifySuccess = useCallback(() => {
+    setNotifyOpen(false);
+    showSuccessHud('You’re on the list.');
+  }, [showSuccessHud]);
 
   useEffect(() => {
     if (!auth) return;
@@ -2027,14 +2048,14 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS,
       );
       setStripeCheckoutReturnSessionId(checkoutReturn.sessionId);
-      showToast('Stripe checkout completed.');
+      showSuccessHud('Stripe checkout completed.');
       return;
     }
     if (checkoutReturn.status === 'unverified_success') {
-      showToast('Stripe checkout completed.');
+      showSuccessHud('Stripe checkout completed.');
       return;
     }
-  }, [showToast]);
+  }, [showSuccessHud]);
 
   useEffect(() => {
     if (stripeCheckoutCompletionHandledRef.current || !firebaseUid) return;
@@ -2050,6 +2071,81 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       setStripeCheckoutMarkers(result.markers);
     }
   }, [firebaseUid]);
+
+  useEffect(() => {
+    const sessionId = stripeCheckoutReturnSessionId;
+    if (
+      !firebaseUid ||
+      !sessionId ||
+      stripeCheckoutOptimisticMintSessionRef.current === sessionId
+    ) {
+      return;
+    }
+    const markerProgress = stripeCheckoutMintProgressForSession(
+      firebaseUid,
+      sessionId,
+      stripeCheckoutMarkers,
+    );
+    if (!markerProgress) return;
+
+    stripeCheckoutOptimisticMintSessionRef.current = sessionId;
+    if (
+      routeDrop?.dropId === markerProgress.dropId &&
+      shouldFetchMintStats
+    ) {
+      void refetchStats().catch(() => undefined);
+    }
+    if (
+      markerProgress.remainingBeforeCheckout == null &&
+      markerProgress.variantRemainingBeforeCheckout == null
+    ) {
+      return;
+    }
+    setStripeCheckoutOptimisticMintProgress({
+      ...markerProgress,
+      expiresAt: Math.max(
+        stripeCheckoutReturnPollUntilRef.current,
+        Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS,
+      ),
+    });
+  }, [
+    firebaseUid,
+    refetchStats,
+    routeDrop?.dropId,
+    shouldFetchMintStats,
+    stripeCheckoutMarkers,
+    stripeCheckoutReturnSessionId,
+  ]);
+
+  useEffect(() => {
+    const progress = stripeCheckoutOptimisticMintProgress;
+    if (!progress) return;
+    if (
+      routeDrop?.dropId === progress.dropId &&
+      isStripeCheckoutMintProgressSettled(mintStats, progress)
+    ) {
+      setStripeCheckoutOptimisticMintProgress((current) =>
+        current === progress ? null : current,
+      );
+      return;
+    }
+
+    const remainingMs = progress.expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      setStripeCheckoutOptimisticMintProgress((current) =>
+        current === progress ? null : current,
+      );
+      return;
+    }
+    const timeout = setTimeout(() => {
+      setStripeCheckoutOptimisticMintProgress((current) =>
+        current === progress ? null : current,
+      );
+    }, remainingMs);
+    return () => {
+      clearTimeout(timeout);
+    };
+  }, [mintStats, routeDrop?.dropId, stripeCheckoutOptimisticMintProgress]);
 
   useEffect(() => {
     if (connectedWallet) setStripeRecoveryOwner(null);
@@ -4525,9 +4621,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     setStripePaymentLoading(true);
     try {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
+      const checkoutQuantity = stripeCheckoutKind === 'size_variant' ? 1 : quantity;
       const { id, url } = await createStripeCheckoutSession({
         dropId: mintDrop.dropId,
-        quantity: stripeCheckoutKind === 'size_variant' ? 1 : quantity,
+        quantity: checkoutQuantity,
         variantKey,
         returnUrl,
       });
@@ -4539,6 +4636,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             dropId: mintDrop.dropId,
             firebaseUid: checkoutFirebaseUid,
             createdAt: Date.now(),
+            quantity: checkoutQuantity,
+            remainingBeforeCheckout: effectiveMintStats?.remaining,
+            variantKey,
+            variantRemainingBeforeCheckout: variantKey
+              ? effectiveMintStats?.mintSelectionAvailability?.[variantKey]
+              : undefined,
           }),
         );
       }

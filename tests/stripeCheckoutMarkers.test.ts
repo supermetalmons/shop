@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
   completedStripeCheckoutMarkerKeyForFirebaseUid,
   completedStripeCheckoutMarkerSummaryForFirebaseUid,
   forgetCompletedStripeCheckoutMarkersForFirebaseUid,
+  isStripeCheckoutMintProgressSettled,
   loadStripeCheckoutMarkers,
   parseStripeCheckoutMarkers,
   rememberStripeCheckoutStarted,
+  stripeCheckoutMintProgressForSession,
   type StripeCheckoutMarkerStorage,
 } from '../src/lib/stripeCheckoutMarkers.ts';
 
@@ -103,6 +106,10 @@ test('completeStripeCheckoutMarker only completes a matching local checkout mark
       dropId: 'little_swag_hoodies_devnet',
       firebaseUid: 'anon_uid_123',
       createdAt: 100,
+      quantity: 3,
+      remainingBeforeCheckout: 12,
+      variantKey: 'large',
+      variantRemainingBeforeCheckout: 4,
     },
     storage,
   );
@@ -120,11 +127,61 @@ test('completeStripeCheckoutMarker only completes a matching local checkout mark
   );
   assert.equal(completed.completed, true);
   assert.equal(completedStripeCheckoutMarkerKeyForFirebaseUid('anon_uid_123', completed.markers), 'cs_test_123');
+  assert.deepEqual(stripeCheckoutMintProgressForSession('anon_uid_123', 'cs_test_123', completed.markers), {
+    dropId: 'little_swag_hoodies_devnet',
+    quantity: 3,
+    remainingBeforeCheckout: 12,
+    variantKey: 'large',
+    variantRemainingBeforeCheckout: 4,
+  });
+  assert.equal(
+    stripeCheckoutMintProgressForSession('other_uid', 'cs_test_123', completed.markers),
+    null,
+  );
   assert.deepEqual(completedStripeCheckoutMarkerSummaryForFirebaseUid('anon_uid_123', completed.markers), {
     markerKey: 'cs_test_123',
     sessionIds: ['cs_test_123'],
     latestCompletedAt: 300,
   });
+});
+
+test('optimistic Stripe mint progress caps stale stats without double decrementing updated stats', () => {
+  const progress = {
+    dropId: 'little_swag_hoodies_devnet',
+    quantity: 1,
+    remainingBeforeCheckout: 10,
+    variantKey: 'large',
+    variantRemainingBeforeCheckout: 2,
+  };
+  const staleStats = {
+    minted: 5,
+    total: 15,
+    remaining: 10,
+    maxPerTx: 1,
+    mintSelectionAvailability: {
+      medium: 3,
+      large: 2,
+    },
+  };
+  const updatedStats = {
+    ...staleStats,
+    minted: 6,
+    remaining: 9,
+    mintSelectionAvailability: {
+      medium: 3,
+      large: 1,
+    },
+  };
+  const totalOnlyUpdatedStats = {
+    ...updatedStats,
+    mintSelectionAvailability: staleStats.mintSelectionAvailability,
+  };
+
+  assert.deepEqual(applyOptimisticStripeCheckoutMintProgress(staleStats, progress), updatedStats);
+  assert.equal(applyOptimisticStripeCheckoutMintProgress(updatedStats, progress), updatedStats);
+  assert.equal(isStripeCheckoutMintProgressSettled(staleStats, progress), false);
+  assert.equal(isStripeCheckoutMintProgressSettled(totalOnlyUpdatedStats, progress), false);
+  assert.equal(isStripeCheckoutMintProgressSettled(updatedStats, progress), true);
 });
 
 test('completed Stripe checkout gate is scoped to the current Firebase uid', () => {
