@@ -11,6 +11,10 @@ export const FULFILLMENT_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.free
   'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
 ]);
 
+export const FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
+  'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+]);
+
 export const ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES: readonly string[] = Object.freeze([
   '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
   'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
@@ -73,6 +77,13 @@ export function walletHasAdminIrlRedeemAccess(
   adminIrlRedeemWallets: ReadonlySet<string>,
 ): boolean {
   return Boolean(wallet && adminIrlRedeemWallets.has(wallet));
+}
+
+export function walletHasFulfillmentAddressAdminAccess(
+  wallet: string | null | undefined,
+  addressAdminWallets: ReadonlySet<string>,
+): boolean {
+  return Boolean(wallet && addressAdminWallets.has(wallet));
 }
 
 export function walletHasFulfillmentAppAccess(

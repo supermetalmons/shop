@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+  FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletCanViewSensitiveFulfillmentAddress,
@@ -11,6 +12,7 @@ import {
 import {
   ADMIN_WALLETS,
   hasAdminIrlRedeemAccess,
+  hasFulfillmentAddressAdminAccess,
   hasFulfillmentAppAccess,
   listAllowedFulfillmentDropIds,
 } from '../src/lib/fulfillmentAccess.ts';
@@ -34,6 +36,7 @@ const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
 test('fulfillment access inventory is frozen and preserves configured wallet and drop ordering', () => {
   assert.equal(Object.isFrozen(FULFILLMENT_ADMIN_WALLET_ADDRESSES), true);
+  assert.equal(Object.isFrozen(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES), true);
   assert.equal(Object.isFrozen(ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES), true);
   assert.equal(Object.isFrozen(CARD_NFT_BINDER_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(SHIPPER_FULFILLMENT_ACCESS), true);
@@ -43,6 +46,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
   });
 
   assert.deepEqual(FULFILLMENT_ADMIN_WALLET_ADDRESSES, [ADMIN_WALLET]);
+  assert.deepEqual(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES, [FULFILLMENT_ONLY_WALLET]);
   assert.deepEqual(ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES, [
     '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
     LIMITED_SHIPPER_WALLET,
@@ -78,6 +82,9 @@ test('frontend fulfillment access keeps admin, shipper, and Admin IRL membership
     assert.equal(hasAdminIrlRedeemAccess(wallet), true);
   });
   assert.equal(hasAdminIrlRedeemAccess(FULFILLMENT_ONLY_WALLET), false);
+  assert.equal(hasFulfillmentAddressAdminAccess(FULFILLMENT_ONLY_WALLET), true);
+  assert.equal(hasFulfillmentAddressAdminAccess(ADMIN_WALLET), false);
+  assert.equal(hasFulfillmentAddressAdminAccess(LIMITED_SHIPPER_WALLET), false);
 });
 
 test('frontend allowed-drop lists retain caller and configured array references', () => {

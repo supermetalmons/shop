@@ -256,11 +256,13 @@ import {
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+  FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasAdminAccess,
   walletHasAdminIrlRedeemAccess,
+  walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentDropAccess,
 } from './shared/fulfillmentAccess.js';
 import {
@@ -731,6 +733,15 @@ ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES.forEach((raw) => {
   }
 });
 
+const FULFILLMENT_ADDRESS_ADMIN_WALLETS = new Set<string>();
+FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES.forEach((raw) => {
+  try {
+    FULFILLMENT_ADDRESS_ADMIN_WALLETS.add(new PublicKey(raw).toBase58());
+  } catch (err) {
+    console.error('[mons/functions] invalid fulfillment address admin wallet', raw, summarizeError(err));
+  }
+});
+
 function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
   return walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
@@ -745,6 +756,17 @@ async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: s
     throw new HttpsError('permission-denied', 'Fulfillment access denied.');
   }
   return { uid, wallet };
+}
+
+async function requireFulfillmentAddressAdminAccess(
+  request: CallableReq<any>,
+  dropId: string,
+): Promise<{ uid: string; wallet: string }> {
+  const session = await requireFulfillmentDropAccess(request, dropId);
+  if (!walletHasFulfillmentAddressAdminAccess(session.wallet, FULFILLMENT_ADDRESS_ADMIN_WALLETS)) {
+    throw new HttpsError('permission-denied', 'Fulfillment address admin access denied.');
+  }
+  return session;
 }
 
 async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
@@ -6507,6 +6529,58 @@ export const listFulfillmentManualReviewCheckouts = onCallLogged(
     return { checkouts };
   },
   { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY, STRIPE_RESTRICTED_KEY_LIVE, STRIPE_SECRET_KEY_LIVE] },
+);
+
+export const updateFulfillmentAddress = onCallLogged(
+  'updateFulfillmentAddress',
+  async (request) => {
+    const schema = z.object({
+      dropId: z.string().min(1).max(64),
+      deliveryId: z.number().int().positive(),
+      full: z.string().trim().min(1).max(2048),
+    });
+    const { dropId: requestDropId, deliveryId, full } = parseRequest(schema, request.data);
+    const dropId = requireDropId(requestDropId);
+    const { wallet } = await requireFulfillmentAddressAdminAccess(request, dropId);
+    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
+    const snap = await orderRef.get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Delivery order not found');
+    }
+
+    const order = snap.data() as any;
+    if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
+      throw new HttpsError('failed-precondition', 'In-person redemption orders do not have a delivery address');
+    }
+
+    const encryptedAddress = encryptAddressPayloadForFulfillment(full);
+    if (!encryptedAddress) {
+      throw new HttpsError('invalid-argument', 'Delivery address is required');
+    }
+
+    await orderRef.update({
+      'addressSnapshot.encrypted': encryptedAddress.encrypted,
+      'addressSnapshot.hint': encryptedAddress.hint,
+      fulfillmentAddressUpdatedAt: FieldValue.serverTimestamp(),
+      fulfillmentAddressUpdatedBy: wallet,
+    });
+
+    const addressSnapshot = order?.addressSnapshot || {};
+    return {
+      deliveryId,
+      address: {
+        full,
+        encrypted: encryptedAddress.encrypted,
+        hint: encryptedAddress.hint,
+        ...(typeof addressSnapshot.label === 'string' ? { label: addressSnapshot.label } : {}),
+        ...(typeof addressSnapshot.email === 'string' ? { email: addressSnapshot.email } : {}),
+        ...(typeof addressSnapshot.phone === 'string' ? { phone: addressSnapshot.phone } : {}),
+        ...(typeof addressSnapshot.country === 'string' ? { country: addressSnapshot.country } : {}),
+        ...(typeof addressSnapshot.countryCode === 'string' ? { countryCode: addressSnapshot.countryCode } : {}),
+      },
+    };
+  },
+  { secrets: [ADDRESS_DECRYPTION_SECRET] },
 );
 
 export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {

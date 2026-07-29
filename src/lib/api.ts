@@ -1088,6 +1088,17 @@ export async function updateFulfillmentStatus(
   >('updateFulfillmentStatus', { deliveryId, status, dropId, ...(trackingCode != null ? { trackingCode } : {}) });
 }
 
+export async function updateFulfillmentAddress(
+  deliveryId: number,
+  full: string,
+  dropId: string,
+): Promise<{ deliveryId: number; address: FulfillmentOrder['address'] }> {
+  return callFunction<
+    { deliveryId: number; full: string; dropId: string },
+    { deliveryId: number; address: FulfillmentOrder['address'] }
+  >('updateFulfillmentAddress', { deliveryId, full, dropId });
+}
+
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,

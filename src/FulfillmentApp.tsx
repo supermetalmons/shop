@@ -12,7 +12,12 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
-import { listFulfillmentManualReviewCheckouts, listFulfillmentOrders, updateFulfillmentStatus } from './lib/api';
+import {
+  listFulfillmentManualReviewCheckouts,
+  listFulfillmentOrders,
+  updateFulfillmentAddress,
+  updateFulfillmentStatus,
+} from './lib/api';
 import {
   FulfillmentManualReviewCheckout,
   FulfillmentOrder,
@@ -66,6 +71,7 @@ import {
   DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
   FULFILLMENT_ORDER_VISIBILITY_OPTIONS,
   filterFulfillmentOrdersByVisibility,
+  isRedeemedForIrlFulfillmentOrder,
   type FulfillmentOrderVisibilityFilter,
 } from './lib/fulfillmentOrderVisibility';
 import {
@@ -81,7 +87,7 @@ import {
   type FigureMediaConfig,
   type FrontendDeploymentConfig,
 } from './config/deployment';
-import { listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
+import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
@@ -941,6 +947,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const signedIn = Boolean(profile && profile.wallet === walletAddress);
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
+  const canAdminEditFulfillmentAddress = signedIn && hasFulfillmentAddressAdminAccess(walletAddress);
   const walletBusy = walletAdapter.connecting || walletAdapter.disconnecting;
   const walletReadyState = walletAdapter.wallet?.readyState;
   const autoConnectPossible =
@@ -970,6 +977,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
+  const [activeAddressOrderKey, setActiveAddressOrderKey] = useState<string | null>(null);
+  const [addressEditText, setAddressEditText] = useState('');
+  const [addressSaving, setAddressSaving] = useState(false);
+  const [addressError, setAddressError] = useState<string | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authLoadingSeenRef = useRef(false);
@@ -1071,6 +1082,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setTrackingCodeEdits({});
       setStatusSaving({});
       setActiveUpdateOrderKey(null);
+      setActiveAddressOrderKey(null);
+      setAddressEditText('');
+      setAddressSaving(false);
+      setAddressError(null);
       return;
     }
     const requestEpoch = orderRequestEpochRef.current + 1;
@@ -1088,6 +1103,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setTrackingCodeEdits({});
     setStatusSaving({});
     setActiveUpdateOrderKey(null);
+    setActiveAddressOrderKey(null);
+    setAddressEditText('');
+    setAddressSaving(false);
+    setAddressError(null);
     try {
       const responses = await Promise.all(
         selectedDropIds.map(async (dropId) => {
@@ -1492,6 +1511,84 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     if (ok) setActiveUpdateOrderKey(null);
   }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus]);
 
+  const activeAddressOrder = useMemo(
+    () => orders.find((order) => fulfillmentOrderKey(order) === activeAddressOrderKey) ?? null,
+    [activeAddressOrderKey, orders],
+  );
+  const activeAddressText =
+    typeof activeAddressOrder?.address.full === 'string' && activeAddressOrder.address.full !== '***'
+      ? activeAddressOrder.address.full.trim()
+      : '';
+  const addressEditDirty = Boolean(activeAddressOrder && addressEditText.trim() !== activeAddressText);
+
+  const handleOpenAddressModal = useCallback(
+    (order: FulfillmentOrder) => {
+      if (!canAdminEditFulfillmentAddress || isRedeemedForIrlFulfillmentOrder(order)) return;
+      const full = typeof order.address.full === 'string' && order.address.full !== '***' ? order.address.full : '';
+      setAddressEditText(full);
+      setAddressError(null);
+      setActiveAddressOrderKey(fulfillmentOrderKey(order));
+    },
+    [canAdminEditFulfillmentAddress],
+  );
+
+  const handleCloseAddressModal = useCallback(() => {
+    if (addressSaving) return;
+    setActiveAddressOrderKey(null);
+    setAddressEditText('');
+    setAddressError(null);
+  }, [addressSaving]);
+
+  const handleSaveAddress = useCallback(async () => {
+    if (!activeAddressOrder || !canAdminEditFulfillmentAddress || addressSaving) return;
+    const full = addressEditText.trim();
+    if (!full) {
+      setAddressError('Enter a delivery address.');
+      return;
+    }
+    if (!addressEditDirty) {
+      handleCloseAddressModal();
+      return;
+    }
+
+    const requestEpoch = orderRequestEpochRef.current;
+    const orderKey = fulfillmentOrderKey(activeAddressOrder);
+    setAddressSaving(true);
+    setAddressError(null);
+    try {
+      const response = await updateFulfillmentAddress(
+        activeAddressOrder.deliveryId,
+        full,
+        activeAddressOrder.dropId,
+      );
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      setOrders((current) =>
+        current.map((order) =>
+          fulfillmentOrderKey(order) === orderKey
+            ? { ...order, address: { ...order.address, ...response.address } }
+            : order,
+        ),
+      );
+      setActiveAddressOrderKey(null);
+      setAddressEditText('');
+    } catch (err) {
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      console.error(err);
+      setAddressError(err instanceof Error ? err.message : 'Failed to update delivery address');
+    } finally {
+      if (orderRequestEpochRef.current === requestEpoch) {
+        setAddressSaving(false);
+      }
+    }
+  }, [
+    activeAddressOrder,
+    addressEditDirty,
+    addressEditText,
+    addressSaving,
+    canAdminEditFulfillmentAddress,
+    handleCloseAddressModal,
+  ]);
+
   const handleSolanaSignIn = useCallback(() => {
     if (authLoading) return;
     if (!publicKey) {
@@ -1806,6 +1903,15 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
                 </>
               )}
+              {canAdminEditFulfillmentAddress && !isRedeemedForIrlFulfillmentOrder(order) ? (
+                <button
+                  type="button"
+                  className="link fulfillment-order-address-action small no-focus-style"
+                  onClick={() => handleOpenAddressModal(order)}
+                >
+                  Edit address
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -2128,6 +2234,49 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           </div>
         </div>
       ) : null}
+
+      <Modal
+        open={activeAddressOrderKey !== null}
+        title={activeAddressOrder ? `Edit address · Order ${activeAddressOrder.deliveryId}` : 'Edit address'}
+        onClose={handleCloseAddressModal}
+        showCloseButton={false}
+        closeOnEscape={!addressSaving}
+      >
+        <form
+          className="modal-form fulfillment-address-form"
+          onSubmit={(evt) => {
+            evt.preventDefault();
+            void handleSaveAddress();
+          }}
+        >
+          <label>
+            <span className="muted">Delivery address</span>
+            <textarea
+              value={addressEditText}
+              onChange={(evt) => setAddressEditText(evt.target.value)}
+              rows={8}
+              maxLength={2048}
+              required
+              disabled={addressSaving}
+              autoComplete="street-address"
+              aria-label="Delivery address"
+            />
+          </label>
+          <div className="muted small">This changes the address for this order only.</div>
+          {addressError ? <div className="error">{addressError}</div> : null}
+          <div className="row row--end">
+            <button type="button" className="ghost" onClick={handleCloseAddressModal} disabled={addressSaving}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!activeAddressOrder || addressSaving || !addressEditDirty || !addressEditText.trim()}
+            >
+              {addressSaving ? 'Saving…' : 'Save address'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         open={activeUpdateOrderKey !== null}

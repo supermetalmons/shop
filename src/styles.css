@@ -4352,6 +4352,16 @@ button.fulfillment-secret-code-download svg {
   word-break: break-word;
 }
 
+.fulfillment-order-address-action {
+  margin-top: 2px;
+}
+
+.fulfillment-address-form textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+}
+
 .figure-tile .small {
   font-size: 12px;
 }

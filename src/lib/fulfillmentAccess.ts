@@ -1,9 +1,11 @@
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   allowedFulfillmentDropIdsForWallet,
   walletHasAdminIrlRedeemAccess,
+  walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentAppAccess,
 } from '../../functions/src/shared/fulfillmentAccess';
 
@@ -13,6 +15,8 @@ const ADMIN_IRL_REDEEM_WALLETS = new Set<string>([
   ...ADMIN_WALLETS,
   ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
 ]);
+
+const FULFILLMENT_ADDRESS_ADMIN_WALLETS = new Set<string>(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES);
 
 const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>(
   SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
@@ -24,6 +28,10 @@ export function hasFulfillmentAppAccess(wallet: string | null | undefined): bool
 
 export function hasAdminIrlRedeemAccess(wallet: string | null | undefined): boolean {
   return walletHasAdminIrlRedeemAccess(wallet, ADMIN_IRL_REDEEM_WALLETS);
+}
+
+export function hasFulfillmentAddressAdminAccess(wallet: string | null | undefined): boolean {
+  return walletHasFulfillmentAddressAdminAccess(wallet, FULFILLMENT_ADDRESS_ADMIN_WALLETS);
 }
 
 export function listAllowedFulfillmentDropIds(wallet: string | null | undefined, dropIds: string[]): string[] {
