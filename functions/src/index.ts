@@ -400,6 +400,7 @@ type DropRuntime = {
   itemsPerBox: number;
   discountMintsPerWallet: number;
   maxSupply: number;
+  receiptMaxId: number;
   maxDudeId: number;
 };
 
@@ -454,6 +455,16 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
   const maxSupply = Number(config.maxSupply);
   if (!Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff) {
     throw new Error(`maxSupply is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.maxSupply}`);
+  }
+  const receiptMaxId = Number(config.receiptMaxId ?? maxSupply);
+  if (
+    !Number.isInteger(receiptMaxId) ||
+    receiptMaxId < maxSupply ||
+    receiptMaxId > 0xffff_ffff
+  ) {
+    throw new Error(
+      `receiptMaxId is invalid in functions/src/config/deployment.ts for drop ${dropId}: ${config.receiptMaxId}`,
+    );
   }
   const discountMintsPerWalletRaw = Number(config.discountMintsPerWallet);
   if (!isBoxMinterDiscountMintsPerWallet(discountMintsPerWalletRaw)) {
@@ -515,6 +526,7 @@ function buildDropRuntime(config: FunctionsDropConfig): DropRuntime {
     itemsPerBox,
     discountMintsPerWallet,
     maxSupply,
+    receiptMaxId,
     maxDudeId,
   };
 }
@@ -1885,7 +1897,7 @@ function receiptDropIdentity(dropRuntime: DropRuntime) {
     metadataBase: dropRuntime.config.metadataBase,
     receiptsMerkleTree: dropRuntime.receiptsMerkleTree,
     receiptPoolId: dropRuntime.config.receiptPoolId,
-    maxSupply: dropRuntime.maxSupply,
+    receiptMaxId: dropRuntime.receiptMaxId,
   };
 }
 
@@ -1902,7 +1914,7 @@ function receiptIdentityExpectationForAsset(
   const reference = receiptMetadataReference(asset);
   if (!reference) return undefined;
   if (
-    (reference.kind === 'box' && reference.id > dropRuntime.maxSupply) ||
+    (reference.kind === 'box' && reference.id > dropRuntime.receiptMaxId) ||
     (reference.kind === 'figure' && reference.id > dropRuntime.maxDudeId)
   ) {
     return undefined;

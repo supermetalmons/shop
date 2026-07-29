@@ -28,6 +28,8 @@ export type FirestoreRestDocument = {
   path: string;
   id: string;
   data: Record<string, unknown>;
+  createTime?: string;
+  updateTime?: string;
 };
 
 type FirestoreRestRequest = {
@@ -113,6 +115,50 @@ function decodeFirestoreRestValue(value: unknown): unknown {
   return undefined;
 }
 
+function encodeFirestoreRestValue(value: unknown): Record<string, unknown> {
+  if (value === null) return { nullValue: null };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error('Firestore REST values must be finite numbers');
+    }
+    return Number.isInteger(value)
+      ? { integerValue: String(value) }
+      : { doubleValue: value };
+  }
+  if (value instanceof Date) {
+    return { timestampValue: value.toISOString() };
+  }
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map((entry) => encodeFirestoreRestValue(entry)),
+      },
+    };
+  }
+  const record = asRecord(value);
+  if (record) {
+    return {
+      mapValue: {
+        fields: encodeFirestoreRestFields(record),
+      },
+    };
+  }
+  throw new Error(`Unsupported Firestore REST value type: ${typeof value}`);
+}
+
+export function encodeFirestoreRestFields(
+  fields: Record<string, unknown>,
+): Record<string, Record<string, unknown>> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [
+      key,
+      encodeFirestoreRestValue(value),
+    ]),
+  );
+}
+
 export function decodeFirestoreRestDocument(
   document: unknown,
 ): FirestoreRestDocument | undefined {
@@ -130,6 +176,12 @@ export function decodeFirestoreRestDocument(
         decodeFirestoreRestValue(value),
       ]),
     ),
+    ...(typeof encoded?.createTime === 'string'
+      ? { createTime: encoded.createTime }
+      : {}),
+    ...(typeof encoded?.updateTime === 'string'
+      ? { updateTime: encoded.updateTime }
+      : {}),
   };
 }
 

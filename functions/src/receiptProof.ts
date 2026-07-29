@@ -20,7 +20,7 @@ export type ReceiptDropIdentity = {
   metadataBase: string;
   receiptsMerkleTree: PublicKey;
   receiptPoolId?: string;
-  maxSupply: number;
+  receiptMaxId: number;
 };
 
 export type ReceiptProofTreeDimensions = {
@@ -73,7 +73,7 @@ export function assetMatchesReceiptMetadataIdentity(
   asset: DasAsset | null | undefined,
   drop: Pick<
     ReceiptDropIdentity,
-    'collectionMintStr' | 'metadataBase' | 'receiptPoolId' | 'maxSupply'
+    'collectionMintStr' | 'metadataBase' | 'receiptPoolId' | 'receiptMaxId'
   >,
   expected?: Partial<ReceiptMetadataReference>,
 ): boolean {
@@ -87,7 +87,7 @@ export function assetMatchesReceiptMetadataIdentity(
       drop.metadataBase,
     );
     reference =
-      id == null || id > drop.maxSupply ? null : { kind: 'box', id };
+      id == null || id > drop.receiptMaxId ? null : { kind: 'box', id };
   } else {
     const assetMetadataBase = metadataBaseFromMetadataUri(metadataUri);
     if (

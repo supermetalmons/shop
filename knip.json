@@ -20,7 +20,7 @@
     "functions": {
       "entry": ["src/index.ts", "scripts/*.ts", "../tests/*.test.ts"],
       "project": ["src/**/*.{ts,js}", "scripts/**/*.ts", "../tests/**/*.ts"],
-      "ignoreBinaries": ["firebase"]
+      "ignoreBinaries": ["firebase", "gcloud"]
     }
   }
 }

@@ -21,6 +21,7 @@
     "check": "npm run typecheck && npm --prefix functions run check && npm run typecheck:tools && npm run check:dead-code && npm test && npm run test:onchain && npm run build && npm --prefix functions run build",
     "check-irl-claims": "tsx functions/scripts/checkIrlClaims.ts",
     "assign-stripe-order-cards": "tsx functions/scripts/assignStripeOrderCards.ts",
+    "recover-card-nft-binder-oversell": "tsx functions/scripts/recoverCardNftBinderOversell.ts",
     "unstuck-processing-orders": "tsx functions/scripts/unstuckProcessingOrders.ts",
     "rebuild-pack-status": "tsx functions/scripts/rebuildPackStatus.ts",
     "test-resend-notification-email": "tsx functions/scripts/sendTestResendNotificationEmail.ts",

@@ -44,6 +44,7 @@ export type DeploymentRegistryDrop = {
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  receiptMaxId?: number;
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
@@ -98,6 +99,7 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
   discountMintsPerWallet: { required: true },
   discountMerkleRoot: { required: true },
   maxSupply: { required: true },
+  receiptMaxId: { required: false },
   itemsPerBox: { required: true },
   maxPerTx: { required: true },
   namePrefix: { required: true },
@@ -206,6 +208,7 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     discountMintsPerWallet: 1,
     discountMerkleRoot: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925',
     maxSupply: 15,
+    receiptMaxId: 20,
     itemsPerBox: 0,
     maxPerTx: 1,
     namePrefix: 'binder',

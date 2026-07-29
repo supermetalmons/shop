@@ -45,7 +45,7 @@ test('receipt metadata identity requires the canonical base and exact rb id', ()
     collectionMintStr: COLLECTION.toBase58(),
     metadataBase: `${METADATA_BASE}/`,
     receiptPoolId: 'mons_shop_receipts',
-    maxSupply: 15,
+    receiptMaxId: 20,
   };
   assert.deepEqual(receiptMetadataReference(receiptAsset()), { kind: 'box', id: 7 });
   assert.equal(assetMatchesReceiptMetadataIdentity(receiptAsset(), drop, { kind: 'box', id: 7 }), true);
@@ -63,7 +63,7 @@ test('receipt metadata identity requires the canonical base and exact rb id', ()
     `${METADATA_BASE}/rb7.json?version=1`,
     `${METADATA_BASE}/rb7.json#receipt`,
     `${METADATA_BASE}/json/receipts/boxes/7.json`,
-    `${METADATA_BASE}/rb16.json`,
+    `${METADATA_BASE}/rb21.json`,
     `${METADATA_BASE}/rb9007199254740992.json`,
   ]) {
     assert.equal(
@@ -72,6 +72,22 @@ test('receipt metadata identity requires the canonical base and exact rb id', ()
       uri,
     );
   }
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${METADATA_BASE}/rb16.json`),
+      drop,
+      { kind: 'box', id: 16 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${METADATA_BASE}/rb20.json`),
+      drop,
+      { kind: 'box', id: 20 },
+    ),
+    true,
+  );
   assert.equal(
     assetMatchesReceiptMetadataIdentity(
       { ...receiptAsset(), content: {} },
@@ -106,7 +122,7 @@ test('non-pooled receipt metadata identity retains legacy URI compatibility', ()
   const drop = {
     collectionMintStr: COLLECTION.toBase58(),
     metadataBase: METADATA_BASE,
-    maxSupply: 15,
+    receiptMaxId: 15,
   };
   assert.equal(
     assetMatchesReceiptMetadataIdentity(
@@ -132,7 +148,7 @@ test('receipt drop identity additionally requires the configured tree', () => {
     metadataBase: METADATA_BASE,
     receiptsMerkleTree: TREE,
     receiptPoolId: 'mons_shop_receipts',
-    maxSupply: 15,
+    receiptMaxId: 20,
   };
   assert.equal(
     assetMatchesReceiptDropIdentity(receiptAsset(), { tree_id: TREE.toBase58() }, drop, { kind: 'box', id: 7 }),

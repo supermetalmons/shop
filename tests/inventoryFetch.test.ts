@@ -133,6 +133,7 @@ test('shared receipt collections resolve drops by metadata base and share one qu
       metadataBase: 'https://cdn.lil.org/nft/card_nft_binder/json',
       receiptPoolId: 'mons_shop_receipts',
       maxSupply: 15,
+      receiptMaxId: 20,
     },
     {
       dropId: 'future_receipts_drop',
@@ -188,7 +189,14 @@ test('shared receipt collections resolve drops by metadata base and share one qu
     ...binderAsset,
     id: 'binder-receipt-out-of-range',
     content: {
-      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb16.json',
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb21.json',
+    },
+  };
+  const recoveredAsset = {
+    ...binderAsset,
+    id: 'binder-receipt-recovered',
+    content: {
+      json_uri: 'https://cdn.lil.org/nft/card_nft_binder/json/rb20.json',
     },
   };
   const nonCanonicalIdAsset = {
@@ -239,6 +247,10 @@ test('shared receipt collections resolve drops by metadata base and share one qu
 
   assert.equal(
     resolveInventoryAssetDropId(binderAsset, candidates, 'mainnet-beta'),
+    'card_nft_binder',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(recoveredAsset, candidates, 'mainnet-beta'),
     'card_nft_binder',
   );
   assert.equal(

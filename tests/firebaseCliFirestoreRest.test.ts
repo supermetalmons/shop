@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createFirebaseCliFirestoreRestClient,
   decodeFirestoreRestDocument,
+  encodeFirestoreRestFields,
 } from '../scripts/shared/firebaseCliFirestoreRest.ts';
 
 type ClientOptions = Parameters<
@@ -41,6 +42,8 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
 test('Firestore REST decoder supports the complete value union used by admin tools', () => {
   const document = decodeFirestoreRestDocument({
     name: 'projects/mons-shop/databases/(default)/documents/claimCodes/123',
+    createTime: '2026-07-19T10:11:12Z',
+    updateTime: '2026-07-19T10:12:13Z',
     fields: {
       nil: { nullValue: null },
       enabled: { booleanValue: false },
@@ -77,6 +80,8 @@ test('Firestore REST decoder supports the complete value union used by admin too
   assert.deepEqual(document, {
     path: 'claimCodes/123',
     id: '123',
+    createTime: '2026-07-19T10:11:12Z',
+    updateTime: '2026-07-19T10:12:13Z',
     data: {
       nil: null,
       enabled: false,
@@ -96,6 +101,50 @@ test('Firestore REST decoder supports the complete value union used by admin too
     },
   });
   assert.equal(decodeFirestoreRestDocument({ name: 'missing-prefix' }), undefined);
+});
+
+test('Firestore REST encoder preserves nested order documents', () => {
+  assert.deepEqual(
+    encodeFirestoreRestFields({
+      enabled: true,
+      count: 20,
+      ratio: 1.5,
+      label: 'binder',
+      nil: null,
+      values: [16, 17],
+      nested: { status: 'unclaimed' },
+    }),
+    {
+      enabled: { booleanValue: true },
+      count: { integerValue: '20' },
+      ratio: { doubleValue: 1.5 },
+      label: { stringValue: 'binder' },
+      nil: { nullValue: null },
+      values: {
+        arrayValue: {
+          values: [
+            { integerValue: '16' },
+            { integerValue: '17' },
+          ],
+        },
+      },
+      nested: {
+        mapValue: {
+          fields: {
+            status: { stringValue: 'unclaimed' },
+          },
+        },
+      },
+    },
+  );
+  assert.throws(
+    () => encodeFirestoreRestFields({ value: Number.NaN }),
+    /finite numbers/,
+  );
+  assert.throws(
+    () => encodeFirestoreRestFields({ value: undefined }),
+    /Unsupported Firestore REST value type/,
+  );
 });
 
 test('Firebase CLI Firestore client is lazy, encodes raw path segments once, and caches its token', async () => {

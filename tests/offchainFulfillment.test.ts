@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
 import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
@@ -63,7 +63,13 @@ import {
   stripeTestApiKey,
 } from '../functions/src/stripeCheckout/service.ts';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
-import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from '../functions/src/bubblegum.ts';
+import {
+  IX_BUBBLEGUM_MINT_V2,
+  IX_BUBBLEGUM_TRANSFER_V2,
+  bubblegumMintV2Ix,
+  bubblegumTransferV2Ix,
+  encodeBubblegumMintV2Args,
+} from '../functions/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
 
 function pubkey(seed: number): PublicKey {
@@ -256,6 +262,76 @@ test('Bubblegum transferV2 helper uses expected discriminator and account order'
   assert.equal(ix.keys[7].pubkey.toBase58(), coreCollection.toBase58());
   assert.equal(ix.keys.at(-2)?.pubkey.toBase58(), proof[0].toBase58());
   assert.equal(ix.keys.at(-1)?.pubkey.toBase58(), proof[1].toBase58());
+});
+
+test('Bubblegum mintV2 helper matches the receipt metadata encoding and account order', () => {
+  const payer = pubkey(1);
+  const merkleTree = pubkey(2);
+  const coreCollection = pubkey(3);
+  const treeConfig = pubkey(4);
+  const mplCoreCpiSigner = pubkey(5);
+  const name = 'receipt · binder 16';
+  const uri = 'https://cdn.lil.org/nft/card_nft_binder/json/rb16.json';
+  const data = encodeBubblegumMintV2Args({
+    name,
+    uri,
+    coreCollection,
+  });
+  const expected = Buffer.concat([
+    IX_BUBBLEGUM_MINT_V2,
+    u32LE(Buffer.byteLength(name)),
+    Buffer.from(name),
+    u32LE(0),
+    u32LE(Buffer.byteLength(uri)),
+    Buffer.from(uri),
+    Buffer.from([0, 0, 0, 1, 1, 0]),
+    u32LE(0),
+    Buffer.from([1]),
+    coreCollection.toBuffer(),
+    Buffer.from([0, 0]),
+  ]);
+  assert.deepEqual(data, expected);
+
+  const ix = bubblegumMintV2Ix({
+    bubblegumProgramId: pubkey(20),
+    mplNoopProgramId: pubkey(21),
+    mplAccountCompressionProgramId: pubkey(22),
+    mplCoreProgramId: pubkey(23),
+    mplCoreCpiSigner,
+    treeConfig,
+    payer,
+    treeCreatorOrDelegate: payer,
+    collectionAuthority: payer,
+    leafOwner: payer,
+    leafDelegate: payer,
+    merkleTree,
+    coreCollection,
+    name,
+    uri,
+  });
+
+  assert.deepEqual(
+    ix.keys.map((key) => [
+      key.pubkey.toBase58(),
+      key.isSigner,
+      key.isWritable,
+    ]),
+    [
+      [treeConfig.toBase58(), false, true],
+      [payer.toBase58(), true, true],
+      [payer.toBase58(), true, false],
+      [payer.toBase58(), true, false],
+      [payer.toBase58(), false, false],
+      [payer.toBase58(), false, false],
+      [merkleTree.toBase58(), false, true],
+      [coreCollection.toBase58(), false, true],
+      [mplCoreCpiSigner.toBase58(), false, false],
+      [pubkey(21).toBase58(), false, false],
+      [pubkey(22).toBase58(), false, false],
+      [pubkey(23).toBase58(), false, false],
+      [SystemProgram.programId.toBase58(), false, false],
+    ],
+  );
 });
 
 test('admin order PDA and instruction args use the on-chain seed and discriminator', () => {

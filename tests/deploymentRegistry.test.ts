@@ -222,7 +222,7 @@ const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
     DeploymentRegistryDrop,
     Exclude<
       OptionalDeploymentRegistryDropField,
-      'salesMode' | 'receiptPoolId'
+      'salesMode' | 'receiptPoolId' | 'receiptMaxId'
     >
   >
 >;
@@ -667,6 +667,50 @@ test('canonical registry reader rejects invalid rows and exact key/dropId mismat
       await assert.rejects(readDeploymentDropRegistry(filePath), message);
     });
   }
+});
+
+test('receiptMaxId is pooled-only and cannot be lower than maxSupply', async () => {
+  const invalidRows = [
+    registryDrop('alpha', { receiptMaxId: 20 }),
+    registryDrop('alpha', {
+      receiptPoolId: 'mons_shop_receipts',
+      receiptMaxId: 9,
+    }),
+  ];
+
+  for (const row of invalidRows) {
+    await withTempCanonical(
+      registrySource(
+        `export const DEPLOYMENT_DROPS = { alpha: ${JSON.stringify(row)} };`,
+      ),
+      async (filePath) => {
+        await assert.rejects(
+          readDeploymentDropRegistry(filePath),
+          /receiptMaxId/,
+        );
+      },
+    );
+  }
+});
+
+test('canonical renderer round-trips a pooled receiptMaxId override', async () => {
+  const drop: DeploymentDropConfigSerialized = {
+    ...DEPLOYMENT_DROPS.card_nft_binder,
+    dropId: 'receipt_override',
+    displayName: 'Receipt Override',
+    maxSupply: 15,
+    receiptMaxId: 20,
+  };
+  const source = renderDeploymentRegistryFile({
+    drops: { [drop.dropId]: drop },
+  });
+
+  assert.match(source, /maxSupply: 15,\n    receiptMaxId: 20,/);
+  await withTempCanonical(source, async (filePath) => {
+    const registry = await readDeploymentDropRegistry(filePath);
+    assert.equal(registry.drops[drop.dropId].receiptMaxId, 20);
+    assert.equal(renderDeploymentRegistryFile(registry), source);
+  });
 });
 
 test('canonical registry requires one top-level exported const DEPLOYMENT_DROPS declaration', async () => {

@@ -195,6 +195,7 @@ type FrontendDropRuntime = Pick<
   | 'metadataBase'
   | 'receiptPoolId'
   | 'maxSupply'
+  | 'receiptMaxId'
   | 'boxMinterProgramId'
   | 'boxMinterConfigPda'
   | 'itemsPerBox'
@@ -209,6 +210,7 @@ export type InventoryDropResolutionCandidate = Pick<
   | 'metadataBase'
   | 'receiptPoolId'
   | 'maxSupply'
+  | 'receiptMaxId'
 >;
 
 type PendingOpenProgramScope = Pick<FrontendDropRuntime, 'solanaCluster' | 'boxMinterProgramId'> & {
@@ -241,6 +243,7 @@ const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS
       metadataBase: drop.metadataBase,
       receiptPoolId: drop.receiptPoolId,
       maxSupply: drop.maxSupply,
+      receiptMaxId: drop.receiptMaxId,
       boxMinterProgramId: drop.boxMinterProgramId,
       boxMinterConfigPda: typeof drop.boxMinterConfigPda === 'string' ? drop.boxMinterConfigPda.trim() || undefined : undefined,
       itemsPerBox: drop.itemsPerBox,
@@ -597,7 +600,10 @@ export function resolveInventoryAssetDropId(
         metadataUri,
         drop.metadataBase,
       );
-      return receiptId != null && receiptId <= drop.maxSupply;
+      return (
+        receiptId != null &&
+        receiptId <= (drop.receiptMaxId ?? drop.maxSupply)
+      );
     }
     return (
       Boolean(canonicalAssetMetadataBase) &&

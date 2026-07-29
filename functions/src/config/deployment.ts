@@ -56,6 +56,7 @@ export type FunctionsDropConfig = {
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  receiptMaxId?: number;
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
@@ -135,6 +136,9 @@ function projectFunctionsDrop(
     ),
     discountMerkleRoot: config.discountMerkleRoot,
     maxSupply: config.maxSupply,
+    ...(config.receiptMaxId != null
+      ? { receiptMaxId: config.receiptMaxId }
+      : {}),
     itemsPerBox: config.itemsPerBox,
     maxPerTx: config.maxPerTx,
     namePrefix: config.namePrefix,

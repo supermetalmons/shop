@@ -70,6 +70,7 @@ export type FrontendDropConfig = {
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  receiptMaxId?: number;
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
@@ -217,6 +218,9 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
     ),
     discountMerkleRoot: config.discountMerkleRoot,
     maxSupply: config.maxSupply,
+    ...(config.receiptMaxId != null
+      ? { receiptMaxId: config.receiptMaxId }
+      : {}),
     itemsPerBox: config.itemsPerBox,
     maxPerTx: config.maxPerTx,
     namePrefix: config.namePrefix,

@@ -427,6 +427,13 @@ function normalizeDeploymentDropForRegistry(
     ),
     discountMerkleRoot: asTrimmedString(object.discountMerkleRoot),
     maxSupply: Math.floor(asFiniteNumber(object.maxSupply)),
+    ...(Number.isInteger(object.receiptMaxId)
+      ? {
+          receiptMaxId: Math.floor(
+            asFiniteNumber(object.receiptMaxId),
+          ),
+        }
+      : {}),
     itemsPerBox: Math.floor(asFiniteNumber(object.itemsPerBox)),
     maxPerTx: Math.floor(asFiniteNumber(object.maxPerTx)),
     namePrefix: asTrimmedString(object.namePrefix),
@@ -909,6 +916,19 @@ function assertValidCanonicalRegistryRow(args: {
     min: 1,
     max: 0xffff_ffff,
   });
+  if (Object.prototype.hasOwnProperty.call(row, 'receiptMaxId')) {
+    const receiptMaxId = requireNumber('receiptMaxId', {
+      integer: true,
+      min: 1,
+      max: 0xffff_ffff,
+    });
+    if (receiptMaxId < maxSupply) {
+      invalid('receiptMaxId must be greater than or equal to maxSupply');
+    }
+    if (!Object.prototype.hasOwnProperty.call(row, 'receiptPoolId')) {
+      invalid('receiptMaxId requires receiptPoolId');
+    }
+  }
   const itemsPerBox = requireNumber('itemsPerBox', {
     integer: true,
     min: BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
@@ -1405,6 +1425,11 @@ function renderDeploymentDropEntry(
     `    discountMintsPerWallet: ${Math.floor(drop.discountMintsPerWallet)},`,
     `    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},`,
     `    maxSupply: ${Math.floor(drop.maxSupply)},`,
+  );
+  if (drop.receiptMaxId != null) {
+    lines.push(`    receiptMaxId: ${Math.floor(drop.receiptMaxId)},`);
+  }
+  lines.push(
     `    itemsPerBox: ${Math.floor(drop.itemsPerBox)},`,
     `    maxPerTx: ${Math.floor(drop.maxPerTx)},`,
     `    namePrefix: ${tsStringLiteral(drop.namePrefix)},`,
