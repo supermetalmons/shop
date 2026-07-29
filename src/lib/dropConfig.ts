@@ -69,7 +69,6 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     path: '/card_nft_binder',
     dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
-    notifyOnly: true,
     label: 'Card NFT Binder',
     title: 'Card NFT Binder',
     previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
