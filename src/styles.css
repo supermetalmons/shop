@@ -459,6 +459,24 @@ header.top--spacer {
 .top__submenu-nav {
   align-self: center;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.top__submenu-nav-icon {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+button.link.top__submenu-section:hover:not(:disabled),
+button.link.top__submenu-section:focus,
+button.link.top__submenu-section:focus-visible {
+  text-decoration: none;
 }
 
 .top__build-info {

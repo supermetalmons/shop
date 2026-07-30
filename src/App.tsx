@@ -242,6 +242,10 @@ import {
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
+const ADMIN_MENU_WIP_PATHS: { path: string; dropId?: string }[] = [
+  { path: '/card_nft_2/wip', dropId: 'card_nft_2' },
+  { path: '/clear_cards/wip' },
+];
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const RECEIPT_SIGNED_SEND_TIMEOUT_MS = 10_000;
 const RECEIPT_STATUS_CHECK_TIMEOUT_MS = 12_000;
@@ -1301,8 +1305,8 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     [normalizedCurrentPath, routeDrop],
   );
   const allDrops = useMemo(() => listFrontendDrops(), []);
-  const adminMenuDrops = useMemo(
-    () => allDrops.filter((drop) => !['little_swag_boxes', 'poncho_drifella'].includes(drop.dropId)),
+  const adminMenuDevnetDrops = useMemo(
+    () => allDrops.filter((drop) => drop.solanaCluster === 'devnet'),
     [allDrops],
   );
   const dropById = useMemo(() => new Map(allDrops.map((drop) => [drop.dropId, drop])), [allDrops]);
@@ -1371,6 +1375,27 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     [getDropConfig],
   );
   const adminMenuLabel = (value: string) => value.replace(/^\/+/, '');
+  const adminMenuSectionLabel = (value: string, expanded: boolean) => `${value} ${expanded ? '▾' : '▸'}`;
+  const adminMenuIcon = (dropId?: string) => {
+    const src = !dropId
+      ? undefined
+      : isDropFamily(dropId, 'card_nft_2')
+        ? CARD_NFT_2_PACK_VIDEO_POSTER_URL
+        : mintPanelPreviewImage(dropId);
+    if (!src) return null;
+    return (
+      <img
+        className="top__submenu-nav-icon"
+        src={src}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        onError={(evt) => {
+          evt.currentTarget.hidden = true;
+        }}
+      />
+    );
+  };
   const openActionLabelForDropId = useCallback((dropId?: string) => dropOpenActionLabel(getDropConfig(dropId)), [getDropConfig]);
   const openActionProgressForDropId = useCallback(
     (dropId?: string) => dropOpenActionProgress(getDropConfig(dropId)),
@@ -1532,6 +1557,8 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
+  const [devnetDropsPickerOpened, setDevnetDropsPickerOpened] = useState(false);
+  const [wipPickerOpened, setWipPickerOpened] = useState(false);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const {
     data: inventoryData,
@@ -2360,6 +2387,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     if (adminViewedOwner) setAdminViewedOwner(null);
     if (ownerPickerOpened) setOwnerPickerOpened(false);
   }, [adminViewedOwner, canUseAdminViewer, ownerPickerOpened]);
+
+  useEffect(() => {
+    if (settingsOpen) return;
+    setDevnetDropsPickerOpened(false);
+    setWipPickerOpened(false);
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -7025,34 +7058,56 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             </button>
             <button
               type="button"
-              className="link small top__submenu-nav"
+              className="link small top__submenu-nav top__submenu-section"
+              aria-expanded={wipPickerOpened}
               onClick={() => {
-                navigate('/card_nft_2/wip');
+                setWipPickerOpened((prev) => !prev);
               }}
             >
-              {adminMenuLabel('/card_nft_2/wip')}
+              {adminMenuSectionLabel('wip', wipPickerOpened)}
             </button>
-            <button
-              type="button"
-              className="link small top__submenu-nav"
-              onClick={() => {
-                navigate('/clear_cards/wip');
-              }}
-            >
-              {adminMenuLabel('/clear_cards/wip')}
-            </button>
-            {adminMenuDrops.map((drop) => (
+            {wipPickerOpened
+              ? ADMIN_MENU_WIP_PATHS.map((entry) => (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    className="link small top__submenu-nav"
+                    onClick={() => {
+                      navigate(entry.path);
+                    }}
+                  >
+                    {adminMenuIcon(entry.dropId)}
+                    {adminMenuLabel(entry.path)}
+                  </button>
+                ))
+              : null}
+            {adminMenuDevnetDrops.length ? (
               <button
-                key={drop.dropId}
                 type="button"
-                className="link small top__submenu-nav"
+                className="link small top__submenu-nav top__submenu-section"
+                aria-expanded={devnetDropsPickerOpened}
                 onClick={() => {
-                  navigate(dropPath(drop.dropId));
+                  setDevnetDropsPickerOpened((prev) => !prev);
                 }}
               >
-                {adminMenuLabel(dropPath(drop.dropId))}
+                {adminMenuSectionLabel('devnet drops', devnetDropsPickerOpened)}
               </button>
-            ))}
+            ) : null}
+            {devnetDropsPickerOpened
+              ? adminMenuDevnetDrops.map((drop) => (
+                  <button
+                    key={drop.dropId}
+                    type="button"
+                    className="link small top__submenu-nav"
+                    onClick={() => {
+                      navigate(dropPath(drop.dropId));
+                    }}
+                  >
+                    {adminMenuIcon(drop.dropId)}
+                    {adminMenuLabel(dropPath(drop.dropId))}
+                  </button>
+                ))
+              : null}
             {canUseAdminViewer && canLoadMoreOwners ? (
               <button
                 type="button"
