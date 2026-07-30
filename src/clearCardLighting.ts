@@ -423,7 +423,7 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'balanced';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'soft-studio';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(
@@ -431,6 +431,9 @@ export function createClearCardLightingPreset(
 ): ClearCardLightingConfig {
   const preset =
     CLEAR_CARD_LIGHTING_PRESETS.find((candidate) => candidate.id === presetId) ??
+    CLEAR_CARD_LIGHTING_PRESETS.find(
+      (candidate) => candidate.id === DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
+    ) ??
     CLEAR_CARD_LIGHTING_PRESETS[0];
   return cloneConfig(preset.config);
 }
