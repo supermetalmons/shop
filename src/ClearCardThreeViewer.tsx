@@ -29,8 +29,12 @@ const SPRING_EPSILON = 0.0001;
 const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
 const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
 
-const HITS_TO_BREAK = 3;
+const HITS_TO_BREAK_MIN = 5;
+const HITS_TO_BREAK_MAX = 7;
 const HIT_INTENSITIES = [1, 1.3, 1.7] as const;
+
+const pickHitsToBreak = () =>
+  HITS_TO_BREAK_MIN + Math.floor(Math.random() * (HITS_TO_BREAK_MAX - HITS_TO_BREAK_MIN + 1));
 const PUNCH_SPRING_STIFFNESS = 190;
 const PUNCH_SPRING_DAMPING = 14;
 const PUNCH_SCALE_IMPULSE = 0.9;
@@ -616,6 +620,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let packUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
       let hitCount = 0;
+      let hitsToBreak = pickHitsToBreak();
       let breakElapsed = 0;
       let shardLocalScale = 1;
       const shards: PackShard[] = [];
@@ -1074,13 +1079,19 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         hitCount += 1;
         const hitIndex = hitCount;
         const point = computeHitPoint(clientX, clientY);
-        if (hitIndex >= HITS_TO_BREAK) {
+        if (hitIndex >= hitsToBreak) {
           startBreak(point);
           return;
         }
         onPackHitRef.current?.(hitIndex);
         if (!reducedMotionRef.current) {
-          const intensity = HIT_INTENSITIES[Math.min(hitIndex - 1, HIT_INTENSITIES.length - 1)];
+          // Spread the escalating intensities over however many hits this pack takes,
+          // so a 7-hit pack ramps up as smoothly as a 5-hit one.
+          const rampIndex = Math.min(
+            Math.floor(((hitIndex - 1) * HIT_INTENSITIES.length) / Math.max(hitsToBreak - 1, 1)),
+            HIT_INTENSITIES.length - 1,
+          );
+          const intensity = HIT_INTENSITIES[rampIndex] ?? HIT_INTENSITIES[0];
           punchSpring.velocity -= PUNCH_SCALE_IMPULSE * intensity;
           const tilt = tiltRef.current;
           tilt.velocityX += (Math.random() - 0.35) * HIT_TILT_JOLT * intensity;
@@ -1094,6 +1105,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (disposed || !modelsReady) return;
         setStage('pack');
         hitCount = 0;
+        hitsToBreak = pickHitsToBreak();
         breakElapsed = 0;
         packGroup.visible = true;
         packGroup.scale.setScalar(1);
