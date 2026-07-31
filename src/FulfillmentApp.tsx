@@ -2355,29 +2355,27 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               autoComplete="off"
             />
           ) : null}
-          {activeUpdateOrder &&
-          normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus) !== 'Shipped' &&
-          !isRedeemedForIrlFulfillmentOrder(activeUpdateOrder) ? (
+          {activeUpdateOrder && !isRedeemedForIrlFulfillmentOrder(activeUpdateOrder) ? (
             <div className="fulfillment-shipstation">
               {activeUpdateOrder.shipstationShipmentId ? (
-                <>
-                  <button type="button" className="ghost" disabled>
-                    Added to ShipStation ✓
-                  </button>
-                  <a
-                    className="link small"
-                    href={SHIPSTATION_AWAITING_SHIPMENT_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open Awaiting Shipment
-                  </a>
-                </>
-              ) : (
-                <button type="button" onClick={() => void handleAddToShipStation()} disabled={shipstationSaving}>
+                <a
+                  className="link small no-focus-style"
+                  href={SHIPSTATION_AWAITING_SHIPMENT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View on ShipStation
+                </a>
+              ) : normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus) !== 'Shipped' ? (
+                <button
+                  type="button"
+                  className="link small no-focus-style"
+                  onClick={() => void handleAddToShipStation()}
+                  disabled={shipstationSaving}
+                >
                   {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
                 </button>
-              )}
+              ) : null}
             </div>
           ) : null}
           {shipstationError ? <div className="error">{shipstationError}</div> : null}
