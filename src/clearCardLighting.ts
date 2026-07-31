@@ -235,6 +235,40 @@ function createConfig(overrides: LightingOverrides = {}): ClearCardLightingConfi
 
 export const CLEAR_CARD_LIGHTING_PRESETS = [
   {
+    id: 'ivan-wip',
+    label: 'Ivan WIP',
+    description: 'Soft studio with an aces curve and a gentler key.',
+    config: createConfig({
+      renderer: { toneMapping: 'aces', exposure: 1.1 },
+      environment: {
+        intensity: 1.2,
+        sky: {
+          groundColor: '#d8deea',
+          groundIntensity: 0.35,
+          horizonColor: '#ffffff',
+          horizonIntensity: 1.5,
+          zenithColor: '#dce8ff',
+          zenithIntensity: 1.45,
+          keyColor: '#fff6e8',
+          keyIntensity: 4,
+          keyLatitude: 24,
+          keyLongitude: -28,
+          keyRadius: 72,
+          keyFalloff: 2,
+        },
+      },
+      ambient: { intensity: 0.18 },
+      hemisphere: { enabled: true, intensity: 0.25 },
+      directional: {
+        enabled: true,
+        stage: 'all',
+        intensity: 0.7,
+        position: { x: 2, y: 3, z: 4 },
+      },
+      rim: { enabled: true, intensity: 0.45 },
+    }),
+  },
+  {
     id: 'balanced',
     label: 'Balanced sky',
     description: 'Current flare-safe spherical setup.',
@@ -423,7 +457,7 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'soft-studio';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'ivan-wip';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(
