@@ -42,18 +42,9 @@ const HIT_TILT_JOLT = 0.9;
 
 const CARD_EMBED_FACTOR = 0.9;
 
-// Shards must be hidden no later than the reveal: they render with the pack
-// backdrop only while the stage is 'breaking', so a shard still visible in the
-// 'revealed' stage would flip to the dark card backdrop and go near-black.
 const BREAK_SHARDS_HIDE_S = 0.95;
 const BREAK_REVEAL_INTERACTIVE_S = 1;
 const SHARD_GRAVITY_FACTOR = 9;
-// The canvas is only CANVAS_OVERSCAN wider than the pack fit, so shards that
-// drift or tumble too far sideways get visibly cropped at its side edges.
-// Sideways velocity decays (halves roughly every 0.12s) so the burst reads but
-// the shards straighten into a vertical fall, and after the burst window a
-// gentle pull toward the pack's vertical axis reels the spread back in so
-// spinning corners stay inside the bounds to the end of the fall.
 const SHARD_SIDE_DRIFT_DAMPING = 6;
 const SHARD_SIDE_CENTERING = 3;
 const SHARD_SIDE_CENTERING_RAMP_S = 0.4;
@@ -63,8 +54,9 @@ const HIT_SPARKLE_COUNT = 12;
 const BREAK_SPARKLE_COUNT = 28;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
-// Shards (and sparkles) live on their own layer so 'breaking' frames can render
-// them in a second pass over the card, each pass with its own transmission backdrop.
+const TRANSMISSION_RESOLUTION_SCALE_DEFAULT = 1;
+const TRANSMISSION_RESOLUTION_SCALE_SHARDS = 0.5;
+
 const SHARD_LAYER = 1;
 
 let rectAreaLightSupportPromise: Promise<void> | null = null;
@@ -630,6 +622,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const packMeshes: THREE.Mesh[] = [];
       let packUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
+      let shardTransmissionWarmed = false;
       let hitCount = 0;
       let hitsToBreak = pickHitsToBreak();
       let breakElapsed = 0;
@@ -655,6 +648,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const cardGroup = new THREE.Group();
       cardGroup.visible = false;
       const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
+      const shardCamera = new THREE.PerspectiveCamera();
+      shardCamera.layers.set(SHARD_LAYER);
+      shardCamera.matrixAutoUpdate = false;
+      shardCamera.matrixWorldAutoUpdate = false;
+      const syncShardCamera = () => {
+        shardCamera.matrixWorld.copy(camera.matrixWorld);
+        shardCamera.matrixWorldInverse.copy(camera.matrixWorldInverse);
+        shardCamera.projectionMatrix.copy(camera.projectionMatrix);
+        shardCamera.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+      };
       const ambientLight = new THREE.AmbientLight();
       const hemisphereLight = new THREE.HemisphereLight();
       const directionalLight = new THREE.DirectionalLight();
@@ -804,10 +807,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         spotLight.visible = config.spot.enabled && lightMatchesStage(config.spot.stage, stage);
       };
 
-      // The shards must refract the pack backdrop for their whole flight while
-      // the card refracts its own darker backdrop; there is only one shared
-      // backdrop per render, so 'breaking' frames render in two layer passes,
-      // one per backdrop (see renderFrame).
       const applyTransmissionBackdrop = (
         config: ClearCardLightingConfig,
         usePackBackdrop: boolean,
@@ -886,10 +885,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const fragmentCenter = fragment.boundingBox
             ? fragment.boundingBox.getCenter(new THREE.Vector3())
             : new THREE.Vector3();
-          // Shards reuse the pack's own materials untouched: they must look
-          // exactly like the pack for their whole flight. They leave by falling
-          // out of frame (no opacity fade, which would need alpha blending and
-          // lose the opaque glass compositing) before being hidden.
           const shardMesh = new THREE.Mesh(fragment, sourceMaterial);
           shardMesh.position.copy(fragmentCenter).negate();
           const holder = new THREE.Group();
@@ -1118,8 +1113,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
         onPackHitRef.current?.(hitIndex);
         if (!reducedMotionRef.current) {
-          // Spread the escalating intensities over however many hits this pack takes,
-          // so a 7-hit pack ramps up as smoothly as a 5-hit one.
           const rampIndex = Math.min(
             Math.floor(((hitIndex - 1) * HIT_INTENSITIES.length) / Math.max(hitsToBreak - 1, 1)),
             HIT_INTENSITIES.length - 1,
@@ -1261,6 +1254,29 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         } else {
           pivot.rotation.set(tilt.currentX, tilt.currentY, 0);
         }
+        if (
+          !shardTransmissionWarmed &&
+          packUsesTransmission &&
+          fragmentsGroup !== null &&
+          !fragmentsGroup.visible &&
+          packGroup.visible &&
+          stageRef.current !== 'breaking'
+        ) {
+          // Allocate the shard pass's transmission target here rather than on the
+          // frame the break starts; the cleared render below overwrites this pass.
+          shardTransmissionWarmed = true;
+          fragmentsGroup.visible = true;
+          applyTransmissionBackdrop(lightingConfigRef.current, true);
+          camera.updateMatrixWorld();
+          syncShardCamera();
+          renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_SHARDS;
+          try {
+            renderer.render(scene, shardCamera);
+          } finally {
+            renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+            fragmentsGroup.visible = false;
+          }
+        }
         const splitBackdropPasses =
           stageRef.current === 'breaking' &&
           packUsesTransmission &&
@@ -1272,15 +1288,18 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           camera.layers.set(0);
           renderer.render(scene, camera);
           applyTransmissionBackdrop(config, true);
-          camera.layers.set(SHARD_LAYER);
+          syncShardCamera();
+          renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_SHARDS;
           renderer.autoClear = false;
-          renderer.render(scene, camera);
-          renderer.autoClear = true;
+          try {
+            renderer.render(scene, shardCamera);
+          } finally {
+            renderer.autoClear = true;
+            renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+          }
           camera.layers.set(0);
           camera.layers.enable(SHARD_LAYER);
         } else {
-          // The shard pass leaves the pack backdrop in the uniforms; re-sync so
-          // the first shard-free frame doesn't render the card over-bright.
           syncTransmissionBackdrop(stageRef.current, lightingConfigRef.current);
           renderer.render(scene, camera);
         }
@@ -1513,6 +1532,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           });
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
+          renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
           applyLightingRef.current = (config) => applyLightingConfiguration(config);
           applyLightingConfiguration(lightingConfigRef.current, true);
         } catch (error) {
@@ -1533,6 +1553,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         handleContextRestored = () => {
           if (disposed) return;
           contextLost = false;
+          shardTransmissionWarmed = false;
           try {
             applyLightingConfiguration(lightingConfigRef.current, true);
           } catch (error) {
