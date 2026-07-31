@@ -7387,6 +7387,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           boxNamePrefix={routeDrop?.namePrefix}
           figureNamePrefix={routeDrop?.figureNamePrefix}
           initialCode={claimInitialCode}
+          defaultRecipient={connectedWallet || ''}
         />
       </Modal>
 

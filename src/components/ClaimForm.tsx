@@ -19,6 +19,7 @@ interface ClaimFormProps {
   boxNamePrefix?: string;
   figureNamePrefix?: string;
   initialCode?: string;
+  defaultRecipient?: string;
 }
 
 function resolveReceiptWord(value: string | undefined, fallback: string): string {
@@ -45,10 +46,12 @@ export function ClaimForm({
   boxNamePrefix,
   figureNamePrefix,
   initialCode = '',
+  defaultRecipient = '',
 }: ClaimFormProps) {
   const mountedRef = useRef(false);
   const codeInputRef = useRef<HTMLInputElement | null>(null);
   const recipientInputRef = useRef<HTMLInputElement | null>(null);
+  const recipientTouchedRef = useRef(false);
   const onLoadingChangeRef = useRef(onLoadingChange);
   onLoadingChangeRef.current = onLoadingChange;
   const shouldAutoFocusCodeInput = shouldAutoFocusFormControl();
@@ -63,11 +66,17 @@ export function ClaimForm({
   const isStripeCode = isStripeReceiptClaimCode(code);
 
   useEffect(() => {
+    recipientTouchedRef.current = false;
     setCode(initialCode);
     setRecipient('');
     setError(null);
     setSuccess(null);
   }, [initialCode]);
+
+  useEffect(() => {
+    if (!isStripeCode || recipientTouchedRef.current || !defaultRecipient) return;
+    setRecipient((current) => (current ? current : defaultRecipient));
+  }, [defaultRecipient, isStripeCode]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -147,7 +156,10 @@ export function ClaimForm({
           <input
             ref={recipientInputRef}
             value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
+            onChange={(e) => {
+              recipientTouchedRef.current = true;
+              setRecipient(e.target.value);
+            }}
             placeholder="Receiver Solana address"
             aria-label="Receiver Solana address"
             required
