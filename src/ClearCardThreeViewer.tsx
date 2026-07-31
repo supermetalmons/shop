@@ -29,12 +29,21 @@ const SPRING_EPSILON = 0.0001;
 const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
 const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
 
-const HITS_TO_BREAK_MIN = 5;
-const HITS_TO_BREAK_MAX = 7;
+const HITS_TO_BREAK = 9;
+const HEALABLE_HITS = 5;
 const HIT_INTENSITIES = [1, 1.3, 1.7] as const;
 
-const pickHitsToBreak = () =>
-  HITS_TO_BREAK_MIN + Math.floor(Math.random() * (HITS_TO_BREAK_MAX - HITS_TO_BREAK_MIN + 1));
+const CRACK_APPEAR_S = 0.1;
+const CRACK_HOLD_S = 0.45;
+const CRACK_HEAL_S = 0.6;
+const CRACK_MAX_OPACITY = 1;
+const CRACK_PERMANENT_OPACITY = 0.92;
+const CRACK_HEALABLE_RADIUS_FACTOR = 0.12;
+const CRACK_PERMANENT_RADIUS_FACTOR = 0.15;
+const CRACK_SURFACE_OFFSET_FACTOR = 0.004;
+const SHARD_CRACK_IMPULSE = 0.22;
+const SHARD_IMPACT_IMPULSE = 0.3;
+const SHARD_IMPULSE_FALLOFF_RADIUS = 0.45;
 const PUNCH_SPRING_STIFFNESS = 190;
 const PUNCH_SPRING_DAMPING = 14;
 const PUNCH_SCALE_IMPULSE = 0.9;
@@ -217,6 +226,20 @@ type PackShard = {
   angularVelocity: THREE.Vector3;
 };
 
+type PackCrack = {
+  mesh: THREE.Mesh;
+  material: THREE.MeshBasicMaterial;
+  center: THREE.Vector3;
+  healable: boolean;
+  age: number;
+  settled: boolean;
+};
+
+type HitSample = {
+  point: THREE.Vector3;
+  normal: THREE.Vector3;
+};
+
 type Sparkle = {
   position: THREE.Vector3;
   velocity: THREE.Vector3;
@@ -337,6 +360,110 @@ function partitionGeometryIntoQuadrants(geometry: THREE.BufferGeometry): THREE.B
       fragment.boundingBox = fragmentBounds;
       return fragment;
     });
+}
+
+function createCrackGeometry(radius: number): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const colors: number[] = [];
+
+  const addRibbon = (
+    points: Array<{ x: number; y: number; z: number }>,
+    widths: number[],
+    widthScale: number,
+    alpha: number,
+  ) => {
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const a = points[i];
+      const b = points[i + 1];
+      const deltaX = b.x - a.x;
+      const deltaY = b.y - a.y;
+      const length = Math.hypot(deltaX, deltaY);
+      if (length < 1e-6) continue;
+      const normalX = -deltaY / length;
+      const normalY = deltaX / length;
+      const widthA = widths[i] * widthScale;
+      const widthB = widths[i + 1] * widthScale;
+      positions.push(
+        a.x + normalX * widthA, a.y + normalY * widthA, a.z,
+        a.x - normalX * widthA, a.y - normalY * widthA, a.z,
+        b.x + normalX * widthB, b.y + normalY * widthB, b.z,
+        a.x - normalX * widthA, a.y - normalY * widthA, a.z,
+        b.x - normalX * widthB, b.y - normalY * widthB, b.z,
+        b.x + normalX * widthB, b.y + normalY * widthB, b.z,
+      );
+      for (let vertex = 0; vertex < 6; vertex += 1) colors.push(1, 1, 1, alpha);
+    }
+  };
+
+  const buildSpoke = (
+    originX: number,
+    originY: number,
+    angle: number,
+    length: number,
+    width: number,
+    depth: number,
+  ) => {
+    const segments = depth === 0 ? 4 : 2;
+    const points = [{ x: originX, y: originY, z: radius * 0.02 }];
+    const widths = [width];
+    let x = originX;
+    let y = originY;
+    let heading = angle;
+    for (let segment = 1; segment <= segments; segment += 1) {
+      heading += (Math.random() - 0.5) * 0.7;
+      const segmentLength = (length / segments) * (0.7 + Math.random() * 0.6);
+      x += Math.cos(heading) * segmentLength;
+      y += Math.sin(heading) * segmentLength;
+      points.push({ x, y, z: radius * (0.01 + Math.random() * 0.03) });
+      widths.push(Math.max(width * (1 - segment / segments), width * 0.15));
+      if (depth === 0 && segment === 2 && Math.random() < 0.75) {
+        buildSpoke(
+          x,
+          y,
+          heading + (Math.random() < 0.5 ? 1 : -1) * (0.45 + Math.random() * 0.55),
+          length * 0.45,
+          width * 0.6,
+          1,
+        );
+      }
+    }
+    addRibbon(points, widths, 2.6, 0.22);
+    addRibbon(points, widths, 1, 0.9);
+  };
+
+  const spokeCount = 5 + Math.floor(Math.random() * 3);
+  const baseAngle = Math.random() * Math.PI * 2;
+  for (let spoke = 0; spoke < spokeCount; spoke += 1) {
+    buildSpoke(
+      0,
+      0,
+      baseAngle + (spoke / spokeCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.6,
+      radius * (0.55 + Math.random() * 0.45),
+      radius * (0.028 + Math.random() * 0.018),
+      0,
+    );
+  }
+
+  const chipRadius = radius * 0.055;
+  const chipZ = radius * 0.025;
+  const chipSides = 6;
+  let previousX = chipRadius;
+  let previousY = 0;
+  for (let side = 1; side <= chipSides; side += 1) {
+    const chipAngle = (side / chipSides) * Math.PI * 2;
+    const cornerRadius = chipRadius * (0.7 + Math.random() * 0.6);
+    const cornerX = Math.cos(chipAngle) * cornerRadius;
+    const cornerY = Math.sin(chipAngle) * cornerRadius;
+    positions.push(0, 0, chipZ, previousX, previousY, chipZ, cornerX, cornerY, chipZ);
+    for (let vertex = 0; vertex < 3; vertex += 1) colors.push(1, 1, 1, 0.85);
+    previousX = cornerX;
+    previousY = cornerY;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4));
+  return geometry;
 }
 
 function createSparkleTexture(): THREE.CanvasTexture | null {
@@ -622,12 +749,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const packMeshes: THREE.Mesh[] = [];
       let packUsesTransmission = false;
       let fragmentsGroup: THREE.Group | null = null;
+      let crackGroup: THREE.Group | null = null;
       let shardTransmissionWarmed = false;
       let hitCount = 0;
-      let hitsToBreak = pickHitsToBreak();
       let breakElapsed = 0;
       let shardLocalScale = 1;
       const shards: PackShard[] = [];
+      const cracks: PackCrack[] = [];
       const packLocalCenter = new THREE.Vector3();
       const packSize = new THREE.Vector3();
       const cardSize = new THREE.Vector3();
@@ -881,6 +1009,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         group.visible = false;
         parent.add(group);
         fragmentsGroup = group;
+        const crackHost = new THREE.Group();
+        crackHost.position.copy(largestMesh.position);
+        crackHost.quaternion.copy(largestMesh.quaternion);
+        crackHost.scale.copy(largestMesh.scale);
+        parent.add(crackHost);
+        crackGroup = crackHost;
         fragments.forEach((fragment) => {
           const fragmentCenter = fragment.boundingBox
             ? fragment.boundingBox.getCenter(new THREE.Vector3())
@@ -941,8 +1075,158 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           .transformDirection(tmpMatrix.copy(fragmentsGroup.matrixWorld).invert());
       };
 
-      const armShards = () => {
+      const removeCrack = (crack: PackCrack) => {
+        crack.mesh.parent?.remove(crack.mesh);
+        crack.mesh.geometry.dispose();
+        crack.material.dispose();
+      };
+
+      const clearCracks = () => {
+        cracks.forEach(removeCrack);
+        cracks.length = 0;
+      };
+
+      const settleCrack = (crack: PackCrack) => {
+        crack.mesh.scale.setScalar(1);
+        crack.material.opacity = crack.healable
+          ? CRACK_MAX_OPACITY
+          : CRACK_PERMANENT_OPACITY;
+        crack.settled = true;
+      };
+
+      const settleCracksInstantly = () => {
+        let write = 0;
+        for (const crack of cracks) {
+          if (crack.healable) {
+            removeCrack(crack);
+            continue;
+          }
+          if (!crack.settled) settleCrack(crack);
+          cracks[write] = crack;
+          write += 1;
+        }
+        cracks.length = write;
+      };
+
+      const updateCracks = (deltaSeconds: number) => {
+        if (cracks.length === 0) return;
+        let write = 0;
+        for (const crack of cracks) {
+          if (crack.settled) {
+            cracks[write] = crack;
+            write += 1;
+            continue;
+          }
+          crack.age += deltaSeconds;
+          const age = crack.age;
+          if (age <= CRACK_APPEAR_S) {
+            const t = age / CRACK_APPEAR_S;
+            const eased = 1 - (1 - t) * (1 - t);
+            crack.mesh.scale.setScalar(0.35 + 0.65 * eased);
+            crack.material.opacity = CRACK_MAX_OPACITY * eased;
+          } else if (!crack.healable) {
+            settleCrack(crack);
+          } else if (age <= CRACK_APPEAR_S + CRACK_HOLD_S) {
+            crack.mesh.scale.setScalar(1);
+            crack.material.opacity = CRACK_MAX_OPACITY;
+          } else {
+            const t = (age - CRACK_APPEAR_S - CRACK_HOLD_S) / CRACK_HEAL_S;
+            if (t >= 1) {
+              removeCrack(crack);
+              continue;
+            }
+            const eased = t * t * (3 - 2 * t);
+            crack.mesh.scale.setScalar(1 - 0.85 * eased);
+            crack.material.opacity = CRACK_MAX_OPACITY * (1 - eased);
+          }
+          cracks[write] = crack;
+          write += 1;
+        }
+        cracks.length = write;
+      };
+
+      const spawnCrack = (hit: HitSample, healable: boolean, instant = false) => {
+        if (!crackGroup) return;
+        crackGroup.updateWorldMatrix(true, false);
+        tmpMatrix.copy(crackGroup.matrixWorld).invert();
+        const center = hit.point.clone().applyMatrix4(tmpMatrix);
+        const normal = hit.normal.clone().transformDirection(tmpMatrix);
+        if (normal.lengthSq() < 1e-8) normal.set(0, 0, 1);
+        normal.normalize();
+        const radiusFactor = healable
+          ? CRACK_HEALABLE_RADIUS_FACTOR
+          : CRACK_PERMANENT_RADIUS_FACTOR;
+        const radius = shardLocalScale * radiusFactor * (0.85 + Math.random() * 0.35);
+        const material = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0,
+          vertexColors: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        material.toneMapped = false;
+        const mesh = new THREE.Mesh(createCrackGeometry(radius), material);
+        mesh.position
+          .copy(center)
+          .addScaledVector(normal, shardLocalScale * CRACK_SURFACE_OFFSET_FACTOR);
+        mesh.quaternion.setFromUnitVectors(tmpVector.set(0, 0, 1), normal);
+        mesh.scale.setScalar(0.35);
+        mesh.renderOrder = 5;
+        crackGroup.add(mesh);
+        const crack: PackCrack = { mesh, material, center, healable, age: 0, settled: false };
+        if (instant || reducedMotionRef.current) settleCrack(crack);
+        cracks.push(crack);
+      };
+
+      const attachCracksToShards = () => {
+        let write = 0;
+        for (const crack of cracks) {
+          if (crack.healable) {
+            removeCrack(crack);
+            continue;
+          }
+          if (shards.length > 0) {
+            let nearest = shards[0];
+            let nearestDistanceSq = Infinity;
+            shards.forEach((shard) => {
+              const distanceSq = crack.center.distanceToSquared(shard.home);
+              if (distanceSq >= nearestDistanceSq) return;
+              nearestDistanceSq = distanceSq;
+              nearest = shard;
+            });
+            crack.mesh.position.sub(nearest.home);
+            nearest.holder.add(crack.mesh);
+            crack.mesh.layers.set(SHARD_LAYER);
+          }
+          cracks[write] = crack;
+          write += 1;
+        }
+        cracks.length = write;
+      };
+
+      const armShards = (worldImpactPoint: THREE.Vector3 | null) => {
         const down = computeLocalDown();
+        const impactLocal =
+          worldImpactPoint && fragmentsGroup
+            ? worldImpactPoint
+                .clone()
+                .applyMatrix4(tmpMatrix.copy(fragmentsGroup.matrixWorld).invert())
+            : null;
+        const falloffRadius = shardLocalScale * SHARD_IMPULSE_FALLOFF_RADIUS;
+        const applyImpulse = (shard: PackShard, source: THREE.Vector3, strength: number) => {
+          tmpVector2.copy(shard.home).sub(source);
+          const distance = tmpVector2.length();
+          if (distance < 1e-6) {
+            tmpVector2
+              .set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
+              .normalize();
+          } else {
+            tmpVector2.divideScalar(distance);
+          }
+          const falloff = 1 / (1 + (distance / falloffRadius) * (distance / falloffRadius));
+          shard.velocity.addScaledVector(tmpVector2, shardLocalScale * strength * falloff);
+        };
         shards.forEach((shard) => {
           tmpVector.copy(shard.home).sub(packLocalCenter);
           if (tmpVector.lengthSq() < 1e-8) {
@@ -953,6 +1237,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             .copy(tmpVector)
             .multiplyScalar(shardLocalScale * (0.25 + Math.random() * 0.2));
           shard.velocity.addScaledVector(down, -shardLocalScale * 0.15);
+          cracks.forEach((crack) => {
+            if (!crack.healable) applyImpulse(shard, crack.center, SHARD_CRACK_IMPULSE);
+          });
+          if (impactLocal) applyImpulse(shard, impactLocal, SHARD_IMPACT_IMPULSE);
           shard.angularVelocity.set(
             (Math.random() - 0.5) * 3.5,
             (Math.random() - 0.5) * 3.5,
@@ -1038,8 +1326,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         sparklePoints.visible = false;
       };
 
-      const computeHitPoint = (clientX: number, clientY: number) => {
-        const targetPoint = new THREE.Vector3(0, 0, packSize.z / 2);
+      const computeHitPoint = (clientX: number, clientY: number): HitSample => {
+        const point = new THREE.Vector3(0, 0, packSize.z / 2);
+        const normal = new THREE.Vector3(0, 0, 1);
         const rect = canvas.getBoundingClientRect();
         if (rect.width && rect.height) {
           pointerNdc.set(
@@ -1052,20 +1341,27 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         raycaster.setFromCamera(pointerNdc, camera);
         if (packMeshes.length > 0) {
           const intersections = raycaster.intersectObjects(packMeshes, false);
-          if (intersections.length > 0) {
-            return targetPoint.copy(intersections[0].point);
+          const nearest = intersections[0];
+          if (nearest) {
+            point.copy(nearest.point);
+            if (nearest.face) {
+              normal.copy(nearest.face.normal).transformDirection(nearest.object.matrixWorld);
+            }
+            return { point, normal };
           }
         }
         const frontPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -(packSize.z / 2));
-        if (raycaster.ray.intersectPlane(frontPlane, targetPoint)) {
-          targetPoint.x = THREE.MathUtils.clamp(targetPoint.x, -packSize.x * 0.45, packSize.x * 0.45);
-          targetPoint.y = THREE.MathUtils.clamp(targetPoint.y, -packSize.y * 0.45, packSize.y * 0.45);
-          return targetPoint;
+        if (raycaster.ray.intersectPlane(frontPlane, point)) {
+          point.x = THREE.MathUtils.clamp(point.x, -packSize.x * 0.45, packSize.x * 0.45);
+          point.y = THREE.MathUtils.clamp(point.y, -packSize.y * 0.45, packSize.y * 0.45);
+          return { point, normal };
         }
-        return targetPoint.set(0, 0, packSize.z / 2);
+        point.set(0, 0, packSize.z / 2);
+        return { point, normal };
       };
 
       const finishBreakInstant = () => {
+        clearCracks();
         packGroup.visible = false;
         packMeshes.forEach((mesh) => {
           mesh.visible = false;
@@ -1078,7 +1374,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         setStage('revealed');
       };
 
-      const startBreak = (point: THREE.Vector3) => {
+      const startBreak = (hit: HitSample) => {
         cancelUnrestrictedDrag();
         onPackBreakRef.current?.();
         if (reducedMotionRef.current || shards.length === 0 || !fragmentsGroup) {
@@ -1090,14 +1386,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         breakElapsed = 0;
         resetTilt();
         punchSpring.target = 1;
-        armShards();
+        spawnCrack(hit, false, true);
+        attachCracksToShards();
+        armShards(hit.point);
         packMeshes.forEach((mesh) => {
           mesh.visible = false;
         });
         fragmentsGroup.visible = true;
         cardGroup.visible = true;
         cardGroup.scale.setScalar(1);
-        spawnSparkles(point, BREAK_SPARKLE_COUNT);
+        spawnSparkles(hit.point, BREAK_SPARKLE_COUNT);
         requestRender();
       };
 
@@ -1106,15 +1404,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (stageRef.current !== 'pack' || !modelsReady) return;
         hitCount += 1;
         const hitIndex = hitCount;
-        const point = computeHitPoint(clientX, clientY);
-        if (hitIndex >= hitsToBreak) {
-          startBreak(point);
+        const hit = computeHitPoint(clientX, clientY);
+        if (hitIndex >= HITS_TO_BREAK) {
+          startBreak(hit);
           return;
         }
         onPackHitRef.current?.(hitIndex);
+        const healable = hitIndex <= HEALABLE_HITS;
         if (!reducedMotionRef.current) {
           const rampIndex = Math.min(
-            Math.floor(((hitIndex - 1) * HIT_INTENSITIES.length) / Math.max(hitsToBreak - 1, 1)),
+            Math.floor(((hitIndex - 1) * HIT_INTENSITIES.length) / (HITS_TO_BREAK - 1)),
             HIT_INTENSITIES.length - 1,
           );
           const intensity = HIT_INTENSITIES[rampIndex] ?? HIT_INTENSITIES[0];
@@ -1122,7 +1421,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const tilt = tiltRef.current;
           tilt.velocityX += (Math.random() - 0.35) * HIT_TILT_JOLT * intensity;
           tilt.velocityY += (Math.random() - 0.5) * HIT_TILT_JOLT * 1.2 * intensity;
-          spawnSparkles(point, HIT_SPARKLE_COUNT);
+          spawnSparkles(hit.point, healable ? HIT_SPARKLE_COUNT : HIT_SPARKLE_COUNT + 6);
+          spawnCrack(hit, healable);
+        } else if (!healable) {
+          spawnCrack(hit, false, true);
         }
         requestRender();
       };
@@ -1131,8 +1433,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (disposed || !modelsReady) return;
         setStage('pack');
         hitCount = 0;
-        hitsToBreak = pickHitsToBreak();
         breakElapsed = 0;
+        clearCracks();
         packGroup.visible = true;
         packGroup.scale.setScalar(1);
         packMeshes.forEach((mesh) => {
@@ -1181,6 +1483,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tilt.velocityY = 0;
           snapSpringValue(punchSpring);
           clearSparkles();
+          settleCracksInstantly();
           if (stageRef.current === 'breaking') finishBreakInstant();
         } else if (!unrestrictedMovementActive) {
           const nextX = stepSpringAxis(
@@ -1247,6 +1550,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           }
         }
 
+        if (!reducedMotionRef.current) updateCracks(deltaSeconds);
         updateSparkles(deltaSeconds);
 
         if (unrestrictedMovementActive) {
@@ -1312,6 +1616,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             Math.abs(tilt.velocityY) > SPRING_EPSILON);
         const effectsActive =
           sparkles.length > 0 ||
+          cracks.some((crack) => !crack.settled) ||
           stageRef.current === 'breaking' ||
           !isSpringValueSettled(punchSpring);
         if (tiltUnsettled || effectsActive) {
