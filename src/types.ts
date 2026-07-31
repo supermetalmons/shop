@@ -1,5 +1,7 @@
 export type { FulfillmentStatus } from './lib/fulfillmentStatus';
 export type {
+  AddFulfillmentOrderToShipStationRequest,
+  AddFulfillmentOrderToShipStationResponse,
   AdminIrlRedeemFinalizeResult,
   AdminIrlRedeemPreparedTxResponse,
   DeliveryOrderSummary,

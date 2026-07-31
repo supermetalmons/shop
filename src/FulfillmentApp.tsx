@@ -13,6 +13,7 @@ import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import {
+  addFulfillmentOrderToShipStation,
   listFulfillmentManualReviewCheckouts,
   listFulfillmentOrders,
   updateFulfillmentAddress,
@@ -90,6 +91,7 @@ import {
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
+const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
@@ -981,6 +983,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [addressEditText, setAddressEditText] = useState('');
   const [addressSaving, setAddressSaving] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
+  const [shipstationSaving, setShipstationSaving] = useState(false);
+  const [shipstationError, setShipstationError] = useState<string | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authLoadingSeenRef = useRef(false);
@@ -1481,10 +1485,43 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
 
   const handleOpenUpdateModal = useCallback((orderKey: string) => {
+    setShipstationError(null);
     setActiveUpdateOrderKey(orderKey);
   }, []);
 
+  const handleAddToShipStation = useCallback(async () => {
+    if (!activeUpdateOrder || !hasFulfillmentAccess || !signedIn || shipstationSaving) return;
+    const requestEpoch = orderRequestEpochRef.current;
+    const key = fulfillmentOrderKey(activeUpdateOrder);
+    setShipstationSaving(true);
+    setShipstationError(null);
+    try {
+      const response = await addFulfillmentOrderToShipStation(activeUpdateOrder.deliveryId, activeUpdateOrder.dropId);
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      setOrders((prev) =>
+        prev.map((order) =>
+          fulfillmentOrderKey(order) === key
+            ? {
+                ...order,
+                shipstationShipmentId: response.shipmentId,
+                shipstationAddedAt: response.shipstationAddedAt ?? order.shipstationAddedAt ?? Date.now(),
+              }
+            : order,
+        ),
+      );
+    } catch (err) {
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      console.error(err);
+      setShipstationError(err instanceof Error ? err.message : 'Failed to add the order to ShipStation');
+    } finally {
+      // Not epoch-guarded: this flag is modal-scoped, not per-order, so leaving it set
+      // after a reload would disable the button for every order.
+      setShipstationSaving(false);
+    }
+  }, [activeUpdateOrder, hasFulfillmentAccess, shipstationSaving, signedIn]);
+
   const handleCancelUpdate = useCallback(() => {
+    setShipstationError(null);
     if (!activeUpdateOrder) {
       setActiveUpdateOrderKey(null);
       return;
@@ -2318,6 +2355,32 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               autoComplete="off"
             />
           ) : null}
+          {activeUpdateOrder &&
+          normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus) !== 'Shipped' &&
+          !isRedeemedForIrlFulfillmentOrder(activeUpdateOrder) ? (
+            <div className="fulfillment-shipstation">
+              {activeUpdateOrder.shipstationShipmentId ? (
+                <>
+                  <button type="button" className="ghost" disabled>
+                    Added to ShipStation ✓
+                  </button>
+                  <a
+                    className="link small"
+                    href={SHIPSTATION_AWAITING_SHIPMENT_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open Awaiting Shipment
+                  </a>
+                </>
+              ) : (
+                <button type="button" onClick={() => void handleAddToShipStation()} disabled={shipstationSaving}>
+                  {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
+                </button>
+              )}
+            </div>
+          ) : null}
+          {shipstationError ? <div className="error">{shipstationError}</div> : null}
           <div className="row row--end">
             <button type="button" className="ghost" onClick={handleCancelUpdate}>
               Cancel

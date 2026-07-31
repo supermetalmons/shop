@@ -184,6 +184,8 @@ export type FulfillmentOrder = {
   fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
   fulfillmentInternalStatus?: string;
+  shipstationShipmentId?: string;
+  shipstationAddedAt?: number;
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
@@ -222,6 +224,19 @@ export type StripeCheckoutManualReviewSummary = {
 
 export type FulfillmentManualReviewCheckout = Omit<StripeCheckoutManualReviewSummary, 'address'> & {
   address: FulfillmentOrderAddress;
+};
+
+export type AddFulfillmentOrderToShipStationRequest = {
+  dropId: string;
+  deliveryId: number;
+};
+
+export type AddFulfillmentOrderToShipStationResponse = {
+  deliveryId: number;
+  shipmentId: string;
+  /** True when the order was already in ShipStation and no new shipment was created. */
+  alreadyAdded: boolean;
+  shipstationAddedAt?: number;
 };
 
 export type FulfillmentOrdersCursor = {

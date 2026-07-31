@@ -4622,6 +4622,13 @@ button.fulfillment-secret-code-download svg {
   gap: 16px;
 }
 
+.fulfillment-shipstation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .modal-overlay.notify-modal-overlay {
   background: transparent;
   backdrop-filter: blur(18px);

@@ -5,6 +5,8 @@ import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp, firestore } from './firebase';
 import {
+  AddFulfillmentOrderToShipStationRequest,
+  AddFulfillmentOrderToShipStationResponse,
   AdminIrlRedeemFinalizeResult,
   AdminIrlRedeemPreparedTxResponse,
   DeliverySelection,
@@ -1097,6 +1099,16 @@ export async function updateFulfillmentAddress(
     { deliveryId: number; full: string; dropId: string },
     { deliveryId: number; address: FulfillmentOrder['address'] }
   >('updateFulfillmentAddress', { deliveryId, full, dropId });
+}
+
+export async function addFulfillmentOrderToShipStation(
+  deliveryId: number,
+  dropId: string,
+): Promise<AddFulfillmentOrderToShipStationResponse> {
+  return callFunction<AddFulfillmentOrderToShipStationRequest, AddFulfillmentOrderToShipStationResponse>(
+    'addFulfillmentOrderToShipStation',
+    { deliveryId, dropId },
+  );
 }
 
 export async function requestDeliveryTx(

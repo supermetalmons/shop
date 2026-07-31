@@ -96,6 +96,13 @@ subsequent application rollbacks must use an explicit Worker version.
 - `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
+- `SHIPSTATION_API_KEY` (Firebase Functions secret or local env; ShipStation API v2 key used by `addFulfillmentOrderToShipStation`)
+  - Set: `firebase functions:secrets:set SHIPSTATION_API_KEY`
+- `SHIPSTATION_SHIP_FROM` (Firebase Functions secret or local env; the origin address as one JSON object, so it can change without a code deploy)
+  - Set: `firebase functions:secrets:set SHIPSTATION_SHIP_FROM`
+  - Shape: `{"name":"mons.shop","company_name":"mons.shop","phone":"+1XXXXXXXXXX","address_line1":"1061 10th Street","city_locality":"West Pittsburg","state_province":"PA","postal_code":"16160","country_code":"US","address_residential_indicator":"no"}`
+  - The fulfillment page's "Add to ShipStation" button creates a pending shipment with `create_sales_order: true` and no carrier/service, so it lands in ShipStation's Awaiting Shipment tab for the shipper to rate and label. Parcels default to 4 oz per item at 9x12x2 in.
+  - Pushes are idempotent per order: the `shipstation.shipmentId` field on the delivery order short-circuits repeats, and `external_shipment_id` (`mons-{dropId}-{deliveryId}`) lets the function re-adopt a shipment created by a call that crashed before recording it.
 - `STRIPE_TEST_UNIT_AMOUNT_CENTS` (optional local/env override for devnet test Checkout pricing; defaults to `100`)
 - Stripe Checkout is enabled per drop with `stripeCheckoutEnabled`; `card_nft_2` drops default to enabled unless explicitly opted out. Enabled drops must also configure a Stripe product tax code (`stripeProductTaxCode`), and `card_nft_2` drops default to the tangible-goods tax code. Live enabled drops additionally require committed `stripeLiveUnitAmountCents`. `salesMode: 'stripe_receipt_only'` removes the SOL mint surface and requires a reusable receipt pool, `itemsPerBox: 0`, and no mint selection. Publishable Stripe keys are not needed by the current server-created Checkout redirect flow.
 
