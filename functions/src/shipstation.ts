@@ -2,13 +2,10 @@ import { HttpsError } from 'firebase-functions/v2/https';
 import { z } from 'zod';
 
 import { normalizeCountryCode } from './normalizers.js';
+import { defaultShipStationPackage, type ShipStationPackageInput } from './shared/shipstationPackage.js';
 
 const SHIPSTATION_API_BASE = 'https://api.shipstation.com/v2';
 const SHIPSTATION_TIMEOUT_MS = 15_000;
-
-/** Single-pack parcel defaults. Employees adjust anything unusual inside ShipStation. */
-const PACK_WEIGHT_OUNCES = 4;
-const PACKAGE_DIMENSIONS = { length: 12, width: 9, height: 2, unit: 'inch' as const };
 
 export type ShipStationAddress = {
   name: string;
@@ -200,12 +197,15 @@ export function parseShipStationShipTo(
   };
 }
 
-export function buildShipStationPackages(unitCount: number): ShipStationPackage[] {
-  const units = Math.max(1, Math.floor(Number(unitCount) || 0));
+export function buildShipStationPackages(
+  unitCount: number,
+  override?: ShipStationPackageInput | null,
+): ShipStationPackage[] {
+  const parcel = override ?? defaultShipStationPackage(unitCount);
   return [
     {
-      weight: { value: PACK_WEIGHT_OUNCES * units, unit: 'ounce' },
-      dimensions: { ...PACKAGE_DIMENSIONS },
+      weight: { value: parcel.weight, unit: 'ounce' },
+      dimensions: { length: parcel.length, width: parcel.width, height: parcel.height, unit: 'inch' },
     },
   ];
 }

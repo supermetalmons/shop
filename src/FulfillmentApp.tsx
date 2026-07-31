@@ -89,6 +89,11 @@ import {
   type FrontendDeploymentConfig,
 } from './config/deployment';
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
+import {
+  defaultShipStationPackage,
+  normalizeShipStationPackage,
+  SHIPSTATION_PACKAGE_RANGE_MESSAGE,
+} from '../functions/src/shared/shipstationPackage.js';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';
@@ -176,6 +181,29 @@ function dedupeManualReviewCheckouts(checkouts: FulfillmentManualReviewCheckout[
 
 function manualReviewIssueText(checkout: FulfillmentManualReviewCheckout): string {
   return checkout.errorMessage || checkout.manualRefundReviewReason || 'Manual review required';
+}
+
+type ShipStationPackageDraft = { length: string; width: string; height: string; weight: string };
+
+const SHIPSTATION_PACKAGE_FIELDS: { key: keyof ShipStationPackageDraft; label: string; ariaLabel: string }[] = [
+  { key: 'length', label: 'L in', ariaLabel: 'Package length in inches' },
+  { key: 'width', label: 'W in', ariaLabel: 'Package width in inches' },
+  { key: 'height', label: 'H in', ariaLabel: 'Package height in inches' },
+  { key: 'weight', label: 'oz', ariaLabel: 'Package weight in ounces' },
+];
+
+function defaultShipStationPackageDraft(order: FulfillmentOrder): ShipStationPackageDraft {
+  const parcel = defaultShipStationPackage(order.boxes.length + order.looseDudes.length);
+  return {
+    length: String(parcel.length),
+    width: String(parcel.width),
+    height: String(parcel.height),
+    weight: String(parcel.weight),
+  };
+}
+
+function parseShipStationMeasurement(value: string): number {
+  return Number(value.trim().replace(',', '.'));
 }
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
@@ -985,6 +1013,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [addressError, setAddressError] = useState<string | null>(null);
   const [shipstationSaving, setShipstationSaving] = useState(false);
   const [shipstationError, setShipstationError] = useState<string | null>(null);
+  const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authLoadingSeenRef = useRef(false);
@@ -1481,6 +1510,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) ??
       ''
     : '';
+  const activeUpdatePackageDraft = activeUpdateOrder
+    ? shipstationPackageEdits[activeUpdateOrderKeyResolved] ?? defaultShipStationPackageDraft(activeUpdateOrder)
+    : { length: '', width: '', height: '', weight: '' };
   const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
 
@@ -1493,10 +1525,25 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     if (!activeUpdateOrder || !hasFulfillmentAccess || !signedIn || shipstationSaving) return;
     const requestEpoch = orderRequestEpochRef.current;
     const key = fulfillmentOrderKey(activeUpdateOrder);
+    const draft = shipstationPackageEdits[key] ?? defaultShipStationPackageDraft(activeUpdateOrder);
+    const parcel = normalizeShipStationPackage({
+      length: parseShipStationMeasurement(draft.length),
+      width: parseShipStationMeasurement(draft.width),
+      height: parseShipStationMeasurement(draft.height),
+      weight: parseShipStationMeasurement(draft.weight),
+    });
+    if (!parcel) {
+      setShipstationError(SHIPSTATION_PACKAGE_RANGE_MESSAGE);
+      return;
+    }
     setShipstationSaving(true);
     setShipstationError(null);
     try {
-      const response = await addFulfillmentOrderToShipStation(activeUpdateOrder.deliveryId, activeUpdateOrder.dropId);
+      const response = await addFulfillmentOrderToShipStation(
+        activeUpdateOrder.deliveryId,
+        activeUpdateOrder.dropId,
+        parcel,
+      );
       if (orderRequestEpochRef.current !== requestEpoch) return;
       setOrders((prev) =>
         prev.map((order) =>
@@ -1509,6 +1556,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             : order,
         ),
       );
+      if (response.alreadyAdded) {
+        setShipstationError('This order was already in ShipStation, so these measurements were not applied.');
+      }
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -1518,7 +1568,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       // after a reload would disable the button for every order.
       setShipstationSaving(false);
     }
-  }, [activeUpdateOrder, hasFulfillmentAccess, shipstationSaving, signedIn]);
+  }, [activeUpdateOrder, hasFulfillmentAccess, shipstationPackageEdits, shipstationSaving, signedIn]);
 
   const handleCancelUpdate = useCallback(() => {
     setShipstationError(null);
@@ -2367,14 +2417,41 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   View on ShipStation
                 </a>
               ) : normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus) !== 'Shipped' ? (
-                <button
-                  type="button"
-                  className="link small no-focus-style"
-                  onClick={() => void handleAddToShipStation()}
-                  disabled={shipstationSaving}
-                >
-                  {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
-                </button>
+                <>
+                  <div className="shipstation-package">
+                    {SHIPSTATION_PACKAGE_FIELDS.map((field) => (
+                      <label key={field.key} className="shipstation-package-field">
+                        <span className="muted small">{field.label}</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={activeUpdatePackageDraft[field.key]}
+                          onChange={(evt) => {
+                            const value = evt.target.value;
+                            setShipstationPackageEdits((prev) => ({
+                              ...prev,
+                              [activeUpdateOrderKeyResolved]: {
+                                ...(prev[activeUpdateOrderKeyResolved] ?? activeUpdatePackageDraft),
+                                [field.key]: value,
+                              },
+                            }));
+                          }}
+                          disabled={shipstationSaving}
+                          aria-label={field.ariaLabel}
+                          autoComplete="off"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="link small no-focus-style"
+                    onClick={() => void handleAddToShipStation()}
+                    disabled={shipstationSaving}
+                  >
+                    {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
+                  </button>
+                </>
               ) : null}
             </div>
           ) : null}

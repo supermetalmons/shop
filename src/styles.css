@@ -4624,9 +4624,29 @@ button.fulfillment-secret-code-download svg {
 
 .fulfillment-shipstation {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 12px;
+}
+
+.shipstation-package {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.shipstation-package-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shipstation-package-field input {
+  width: 84px;
+  padding: 10px;
+  font-size: 15px;
+  text-align: center;
 }
 
 .modal-overlay.notify-modal-overlay {

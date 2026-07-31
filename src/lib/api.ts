@@ -26,6 +26,7 @@ import {
   ProfileAddress,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
+  ShipStationPackageInput,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
   StripeReceiptClaimResult,
@@ -1104,10 +1105,11 @@ export async function updateFulfillmentAddress(
 export async function addFulfillmentOrderToShipStation(
   deliveryId: number,
   dropId: string,
+  packageInput?: ShipStationPackageInput,
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
   return callFunction<AddFulfillmentOrderToShipStationRequest, AddFulfillmentOrderToShipStationResponse>(
     'addFulfillmentOrderToShipStation',
-    { deliveryId, dropId },
+    { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
   );
 }
 

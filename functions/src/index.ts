@@ -63,6 +63,7 @@ import {
   parseShipStationShipTo,
   shipStationExternalId,
 } from './shipstation.js';
+import { normalizeShipStationPackage, SHIPSTATION_PACKAGE_RANGE_MESSAGE } from './shared/shipstationPackage.js';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_CHECKOUT_STATUS,
@@ -6551,10 +6552,23 @@ export const addFulfillmentOrderToShipStation = onCallLogged(
     const schema = z.object({
       dropId: z.string().min(1).max(64),
       deliveryId: z.number().int().positive(),
+      package: z
+        .object({
+          length: z.number(),
+          width: z.number(),
+          height: z.number(),
+          weight: z.number(),
+        })
+        .optional(),
     });
-    const { dropId: requestDropId, deliveryId } = parseRequest(schema, request.data);
+    const { dropId: requestDropId, deliveryId, package: requestPackage } = parseRequest(schema, request.data);
     const dropId = requireDropId(requestDropId);
     const { wallet } = await requireFulfillmentDropAccess(request, dropId);
+
+    const packageOverride = requestPackage ? normalizeShipStationPackage(requestPackage) : null;
+    if (requestPackage && !packageOverride) {
+      throw new HttpsError('invalid-argument', SHIPSTATION_PACKAGE_RANGE_MESSAGE);
+    }
 
     const apiKey = envOrSecretValue('SHIPSTATION_API_KEY', SHIPSTATION_API_KEY);
     if (!apiKey) {
@@ -6637,7 +6651,12 @@ export const addFulfillmentOrderToShipStation = onCallLogged(
         }
 
         const itemsRaw = Array.isArray(order?.items) ? order.items : [];
-        const unitCount = itemsRaw.filter((item: any) => item && (item.kind === 'box' || item.kind === 'dude')).length;
+        // Same rule the order summary uses, so the fulfillment UI prefills this exact count.
+        const unitCount = itemsRaw.filter((item: any) => {
+          if (!item || (item.kind !== 'box' && item.kind !== 'dude')) return false;
+          const refId = Math.floor(Number(item.refId));
+          return Number.isFinite(refId) && refId > 0;
+        }).length;
 
         const email = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email.trim() : '';
         const phone = typeof addressSnapshot?.phone === 'string' ? addressSnapshot.phone.trim() : '';
@@ -6652,7 +6671,7 @@ export const addFulfillmentOrderToShipStation = onCallLogged(
             ...(phone ? { phone } : {}),
           },
           ship_from: shipFrom,
-          packages: buildShipStationPackages(unitCount),
+          packages: buildShipStationPackages(unitCount, packageOverride),
         });
       }
 

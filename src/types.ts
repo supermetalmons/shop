@@ -28,6 +28,7 @@ export type {
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,
 } from '../functions/src/shared/contracts';
+export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';
 
 type AssetKind = 'box' | 'dude' | 'certificate';
 

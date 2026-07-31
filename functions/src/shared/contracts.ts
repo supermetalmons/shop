@@ -1,4 +1,5 @@
 import type { FulfillmentStatus } from './fulfillmentStatus.js';
+import type { ShipStationPackageInput } from './shipstationPackage.js';
 
 export type PackStatusBreakdownItem = {
   key: 'redeemed' | 'unsealed' | 'total';
@@ -229,6 +230,8 @@ export type FulfillmentManualReviewCheckout = Omit<StripeCheckoutManualReviewSum
 export type AddFulfillmentOrderToShipStationRequest = {
   dropId: string;
   deliveryId: number;
+  /** Defaults are used when omitted. */
+  package?: ShipStationPackageInput;
 };
 
 export type AddFulfillmentOrderToShipStationResponse = {
