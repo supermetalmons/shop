@@ -89,6 +89,7 @@ export default function ClearCardWipApp() {
   const [cardRevealed, setCardRevealed] = useState(false);
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
+  const [axisLockedOrbit, setAxisLockedOrbit] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
   const [lightingPresetId, setLightingPresetId] = useState<
     ClearCardLightingPresetId | 'custom'
@@ -114,6 +115,14 @@ export default function ClearCardWipApp() {
   const handleLightingPresetChange = useCallback((presetId: ClearCardLightingPresetId) => {
     setLightingPresetId(presetId);
     setLightingConfig(createClearCardLightingPreset(presetId));
+  }, []);
+  const handleUnrestrictedMovementChange = useCallback((enabled: boolean) => {
+    setUnrestrictedMovement(enabled);
+    if (enabled) setAxisLockedOrbit(false);
+  }, []);
+  const handleAxisLockedOrbitChange = useCallback((enabled: boolean) => {
+    setAxisLockedOrbit(enabled);
+    if (enabled) setUnrestrictedMovement(false);
   }, []);
   const handleSnapshot = useCallback(async () => {
     const viewer = viewerRef.current;
@@ -247,6 +256,7 @@ export default function ClearCardWipApp() {
               packModelUrl={packModelUrl}
               lightingConfig={lightingConfig}
               unrestrictedMovement={unrestrictedMovement}
+              axisLockedOrbit={axisLockedOrbit}
               initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
               onStageChange={setDisplayStage}
@@ -294,10 +304,12 @@ export default function ClearCardWipApp() {
         config={lightingConfig}
         presetId={lightingPresetId}
         unrestrictedMovement={unrestrictedMovement}
+        axisLockedOrbit={axisLockedOrbit}
         snapshotDisabled={!ready || displayStage === 'breaking'}
         onChange={handleLightingChange}
         onPresetChange={handleLightingPresetChange}
-        onUnrestrictedMovementChange={setUnrestrictedMovement}
+        onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
+        onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
         onSnapshot={handleSnapshot}
       />
       <button

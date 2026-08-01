@@ -223,12 +223,17 @@
 }
 
 .lighting-lab__snapshot-block {
+  display: grid;
+  gap: 9px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--lighting-lab-border);
+}
+
+.lighting-lab__snapshot-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 10px 13px;
-  border-bottom: 1px solid var(--lighting-lab-border);
 }
 
 .lighting-lab__snapshot-copy {
@@ -282,6 +287,45 @@
   color: var(--lighting-lab-faint);
   cursor: default;
   opacity: 1;
+}
+
+.lighting-lab__orbit-lock {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  color: var(--lighting-lab-secondary);
+  cursor: pointer;
+}
+
+.lighting-lab__orbit-checkbox {
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--lighting-lab-range);
+  cursor: pointer;
+}
+
+.lighting-lab__orbit-lock > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.lighting-lab__orbit-title {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.lighting-lab__orbit-meta {
+  overflow: hidden;
+  color: var(--lighting-lab-muted);
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lighting-lab__movement-block {

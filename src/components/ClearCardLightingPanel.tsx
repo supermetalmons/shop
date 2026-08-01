@@ -13,10 +13,12 @@ type ClearCardLightingPanelProps = {
   config: ClearCardLightingConfig;
   presetId: ClearCardLightingPresetId | 'custom';
   unrestrictedMovement: boolean;
+  axisLockedOrbit: boolean;
   snapshotDisabled: boolean;
   onChange: (config: ClearCardLightingConfig) => void;
   onPresetChange: (presetId: ClearCardLightingPresetId) => void;
   onUnrestrictedMovementChange: (enabled: boolean) => void;
+  onAxisLockedOrbitChange: (enabled: boolean) => void;
   onSnapshot: () => Promise<void>;
 };
 
@@ -288,10 +290,12 @@ export default function ClearCardLightingPanel({
   config,
   presetId,
   unrestrictedMovement,
+  axisLockedOrbit,
   snapshotDisabled,
   onChange,
   onPresetChange,
   onUnrestrictedMovementChange,
+  onAxisLockedOrbitChange,
   onSnapshot,
 }: ClearCardLightingPanelProps) {
   const [open, setOpen] = useState(true);
@@ -437,25 +441,44 @@ export default function ClearCardLightingPanel({
       {open ? (
         <div className="lighting-lab__panel">
           <div className="lighting-lab__snapshot-block">
-            <span className="lighting-lab__snapshot-copy">
-              <span className="lighting-lab__snapshot-title">PNG snapshot</span>
-              <span
-                className={`lighting-lab__snapshot-meta${
-                  snapshotError ? ' lighting-lab__snapshot-meta--error' : ''
-                }`}
-                aria-live="polite"
-              >
-                {snapshotError ?? 'Transparent · 2048 px'}
+            <div className="lighting-lab__snapshot-row">
+              <span className="lighting-lab__snapshot-copy">
+                <span className="lighting-lab__snapshot-title">PNG snapshot</span>
+                <span
+                  className={`lighting-lab__snapshot-meta${
+                    snapshotError ? ' lighting-lab__snapshot-meta--error' : ''
+                  }`}
+                  aria-live="polite"
+                >
+                  {snapshotError ?? 'Transparent · 1400 px'}
+                </span>
               </span>
-            </span>
-            <button
-              type="button"
-              className="lighting-lab__snapshot-button"
-              onClick={() => void downloadSnapshot()}
-              disabled={snapshotDisabled || snapshotting}
+              <button
+                type="button"
+                className="lighting-lab__snapshot-button"
+                onClick={() => void downloadSnapshot()}
+                disabled={snapshotDisabled || snapshotting}
+              >
+                {snapshotting ? 'Rendering…' : 'Download PNG'}
+              </button>
+            </div>
+            <label
+              className="lighting-lab__orbit-lock"
+              title="Uses a natural perspective camera and locks each drag to one axis"
             >
-              {snapshotting ? 'Rendering…' : 'Download PNG'}
-            </button>
+              <input
+                className="lighting-lab__orbit-checkbox"
+                type="checkbox"
+                checked={axisLockedOrbit}
+                onChange={(event) => onAxisLockedOrbitChange(event.currentTarget.checked)}
+              />
+              <span>
+                <span className="lighting-lab__orbit-title">Axis-locked orbit</span>
+                <span className="lighting-lab__orbit-meta">
+                  Perspective camera · one axis per drag
+                </span>
+              </span>
+            </label>
           </div>
           <div className="lighting-lab__movement-block">
             <ToggleControl

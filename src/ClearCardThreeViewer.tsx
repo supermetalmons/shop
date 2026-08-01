@@ -33,6 +33,8 @@ const SPRING_DAMPING = 11;
 const SPRING_EPSILON = 0.0001;
 const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
 const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
+const MAX_VERTICAL_ORBIT = THREE.MathUtils.degToRad(45);
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const HITS_TO_BREAK = 9;
 const HEALABLE_HITS = 5;
@@ -71,7 +73,7 @@ const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 const TRANSMISSION_RESOLUTION_SCALE_DEFAULT = 1;
 const TRANSMISSION_RESOLUTION_SCALE_SHARDS = 0.5;
 const SNAPSHOT_ANALYSIS_LONGEST_EDGE = 1024;
-const SNAPSHOT_OUTPUT_LONGEST_EDGE = 2048;
+const SNAPSHOT_OUTPUT_LONGEST_EDGE = 1400;
 const SNAPSHOT_PADDING_RATIO = 0.02;
 
 const SHARD_LAYER = 1;
@@ -180,6 +182,7 @@ function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
 }
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
+type ClearCardViewMode = 'tilt' | 'free' | 'orbit';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
 
@@ -200,6 +203,7 @@ type ClearCardThreeViewerProps = {
   packModelUrl: string;
   lightingConfig: ClearCardLightingConfig;
   unrestrictedMovement: boolean;
+  axisLockedOrbit: boolean;
   initiallyRevealed: boolean;
   onStatusChange: (status: ViewerStatus) => void;
   onStageChange?: (stage: ClearCardDisplayStage) => void;
@@ -226,6 +230,7 @@ type UnrestrictedRotationState = {
   lastX: number;
   lastY: number;
   dragged: boolean;
+  lockedAxis: 'horizontal' | 'vertical' | null;
 };
 
 type SpringValue = {
@@ -264,6 +269,14 @@ type Sparkle = {
   green: number;
   blue: number;
 };
+
+function resolveViewMode(
+  unrestrictedMovement: boolean,
+  axisLockedOrbit: boolean,
+): ClearCardViewMode {
+  if (axisLockedOrbit) return 'orbit';
+  return unrestrictedMovement ? 'free' : 'tilt';
+}
 
 function disposeObject3D(root: THREE.Object3D) {
   const geometries = new Set<THREE.BufferGeometry>();
@@ -531,6 +544,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       packModelUrl,
       lightingConfig,
       unrestrictedMovement,
+      axisLockedOrbit,
       initiallyRevealed,
       onStatusChange,
       onStageChange,
@@ -544,13 +558,18 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
     const lightingConfigRef = useRef(lightingConfig);
     const reducedMotionRef = useRef(false);
-    const unrestrictedMovementRef = useRef(unrestrictedMovement);
+    const axisLockedOrbitRef = useRef(axisLockedOrbit);
+    const viewModeRef = useRef<ClearCardViewMode>(
+      resolveViewMode(unrestrictedMovement, axisLockedOrbit),
+    );
     const viewerReadyRef = useRef(false);
     const stageRef = useRef<ClearCardDisplayStage>('pack');
     const initiallyRevealedRef = useRef(initiallyRevealed);
     const triggerHitRef = useRef<((clientX?: number, clientY?: number) => void) | null>(null);
     const performResetRef = useRef<(() => void) | null>(null);
     const captureSnapshotRef = useRef<(() => Promise<ClearCardSnapshot>) | null>(null);
+    const applyAxisLockedOrbitRef = useRef<(() => void) | null>(null);
+    const updateCameraViewRef = useRef<(() => void) | null>(null);
     const onStageChangeRef = useRef(onStageChange);
     const onPackHitRef = useRef(onPackHit);
     const onPackBreakRef = useRef(onPackBreak);
@@ -572,7 +591,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       lastX: 0,
       lastY: 0,
       dragged: false,
+      lockedAxis: null,
     });
+    const orbitYawRef = useRef(0);
+    const orbitElevationRef = useRef(0);
 
     useEffect(() => {
       onPackHitRef.current = onPackHit;
@@ -612,6 +634,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const pointerId = rotation.pointerId;
       rotation.pointerId = null;
       rotation.dragged = false;
+      rotation.lockedAxis = null;
       const canvas = canvasRef.current;
       if (pointerId !== null && canvas?.hasPointerCapture(pointerId)) {
         canvas.releasePointerCapture(pointerId);
@@ -621,6 +644,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const resetViewOrientation = useCallback(() => {
       cancelUnrestrictedDrag();
       unrestrictedRotationRef.current.quaternion.identity();
+      orbitYawRef.current = 0;
+      orbitElevationRef.current = 0;
       const tilt = tiltRef.current;
       tilt.currentX = 0;
       tilt.currentY = 0;
@@ -628,16 +653,52 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       tilt.targetY = 0;
       tilt.velocityX = 0;
       tilt.velocityY = 0;
+      updateCameraViewRef.current?.();
       requestRenderRef.current?.();
     }, [cancelUnrestrictedDrag]);
 
     useEffect(() => {
-      unrestrictedMovementRef.current = unrestrictedMovement;
-      resetViewOrientation();
-    }, [resetViewOrientation, unrestrictedMovement]);
+      const previousMode = viewModeRef.current;
+      axisLockedOrbitRef.current = axisLockedOrbit;
+      const nextMode = resolveViewMode(unrestrictedMovement, axisLockedOrbit);
+      applyAxisLockedOrbitRef.current?.();
+      if (previousMode === nextMode) return;
+
+      cancelUnrestrictedDrag();
+      const rotation = unrestrictedRotationRef.current;
+      const tilt = tiltRef.current;
+      if (nextMode === 'orbit') {
+        if (previousMode === 'free') {
+          const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation.quaternion);
+          orbitYawRef.current = Math.atan2(forward.x, forward.z);
+        } else if (previousMode === 'tilt') {
+          orbitYawRef.current = tilt.currentY;
+        }
+        rotation.quaternion.setFromAxisAngle(WORLD_UP, orbitYawRef.current);
+      } else if (nextMode === 'free' && previousMode === 'tilt') {
+        rotation.deltaEuler.set(tilt.currentX, tilt.currentY, 0);
+        rotation.quaternion.setFromEuler(rotation.deltaEuler);
+      } else if (nextMode === 'tilt') {
+        rotation.quaternion.identity();
+        orbitYawRef.current = 0;
+      }
+      if (nextMode !== 'orbit') {
+        orbitElevationRef.current = 0;
+      }
+
+      tilt.currentX = 0;
+      tilt.currentY = 0;
+      tilt.targetX = 0;
+      tilt.targetY = 0;
+      tilt.velocityX = 0;
+      tilt.velocityY = 0;
+      viewModeRef.current = nextMode;
+      updateCameraViewRef.current?.();
+      requestRenderRef.current?.();
+    }, [axisLockedOrbit, cancelUnrestrictedDrag, unrestrictedMovement]);
 
     const updateTilt = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (unrestrictedMovementRef.current) return;
+      if (viewModeRef.current !== 'tilt') return;
       if (!viewerReadyRef.current || reducedMotionRef.current) return;
       if (stageRef.current === 'breaking') return;
       const bounds = event.currentTarget.getBoundingClientRect();
@@ -651,7 +712,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerMove = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
-        if (!unrestrictedMovementRef.current) {
+        if (viewModeRef.current === 'tilt') {
           updateTilt(event);
           return;
         }
@@ -666,15 +727,33 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (!rotation.dragged) {
           if (totalX * totalX + totalY * totalY <= UNRESTRICTED_DRAG_THRESHOLD_SQ) return;
           rotation.dragged = true;
+          if (viewModeRef.current === 'orbit') {
+            rotation.lockedAxis =
+              Math.abs(totalX) >= Math.abs(totalY) ? 'horizontal' : 'vertical';
+          }
         }
         if (!deltaX && !deltaY) return;
-        rotation.deltaEuler.set(
-          deltaY * UNRESTRICTED_ROTATION_SPEED,
-          deltaX * UNRESTRICTED_ROTATION_SPEED,
-          0,
-        );
-        rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
-        rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
+        if (viewModeRef.current === 'orbit') {
+          if (rotation.lockedAxis === 'horizontal') {
+            orbitYawRef.current += deltaX * UNRESTRICTED_ROTATION_SPEED;
+            rotation.quaternion.setFromAxisAngle(WORLD_UP, orbitYawRef.current);
+          } else if (rotation.lockedAxis === 'vertical') {
+            orbitElevationRef.current = THREE.MathUtils.clamp(
+              orbitElevationRef.current + deltaY * UNRESTRICTED_ROTATION_SPEED,
+              -MAX_VERTICAL_ORBIT,
+              MAX_VERTICAL_ORBIT,
+            );
+          }
+          updateCameraViewRef.current?.();
+        } else {
+          rotation.deltaEuler.set(
+            deltaY * UNRESTRICTED_ROTATION_SPEED,
+            deltaX * UNRESTRICTED_ROTATION_SPEED,
+            0,
+          );
+          rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
+          rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
+        }
         requestRenderRef.current?.();
       },
       [updateTilt],
@@ -684,7 +763,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
-        if (unrestrictedMovementRef.current) {
+        if (viewModeRef.current !== 'tilt') {
           if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
           if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
           const rotation = unrestrictedRotationRef.current;
@@ -695,6 +774,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           rotation.lastX = event.clientX;
           rotation.lastY = event.clientY;
           rotation.dragged = false;
+          rotation.lockedAxis = null;
           event.currentTarget.setPointerCapture(event.pointerId);
           event.preventDefault();
           return;
@@ -709,7 +789,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerUp = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
-        if (unrestrictedMovementRef.current) {
+        if (viewModeRef.current !== 'tilt') {
           const rotation = unrestrictedRotationRef.current;
           if (rotation.pointerId !== event.pointerId) return;
           const totalX = event.clientX - rotation.startX;
@@ -719,6 +799,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             totalX * totalX + totalY * totalY > UNRESTRICTED_DRAG_THRESHOLD_SQ;
           rotation.pointerId = null;
           rotation.dragged = false;
+          rotation.lockedAxis = null;
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
@@ -734,13 +815,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     );
 
     const handlePointerLeave = useCallback(() => {
-      if (!unrestrictedMovementRef.current) {
+      if (viewModeRef.current === 'tilt') {
         resetTilt();
       }
     }, [resetTilt]);
 
     const handlePointerCancel = useCallback(() => {
-      if (unrestrictedMovementRef.current) {
+      if (viewModeRef.current !== 'tilt') {
         cancelUnrestrictedDrag();
       } else {
         resetTilt();
@@ -751,13 +832,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       if (unrestrictedRotationRef.current.pointerId === event.pointerId) {
         unrestrictedRotationRef.current.pointerId = null;
         unrestrictedRotationRef.current.dragged = false;
+        unrestrictedRotationRef.current.lockedAxis = null;
       }
     }, []);
 
     useEffect(() => {
       const handleWindowBlur = () => {
         cancelUnrestrictedDrag();
-        if (!unrestrictedMovementRef.current) {
+        if (viewModeRef.current === 'tilt') {
           resetTilt();
         }
       };
@@ -828,6 +910,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const cardGroup = new THREE.Group();
       cardGroup.visible = false;
       const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
+      let cameraAspect = 1;
       const shardCamera = new THREE.PerspectiveCamera();
       shardCamera.layers.set(SHARD_LAYER);
       shardCamera.matrixAutoUpdate = false;
@@ -1020,16 +1103,66 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const fitCamera = () => {
         if (!modelsReady) return;
+        let projectedWidth = fitSize.x;
+        let projectedDepth = fitSize.z;
+        let projectedHeight = fitSize.y;
+        let viewDepth = fitSize.z;
+        const elevation = axisLockedOrbitRef.current ? orbitElevationRef.current : 0;
+        if (axisLockedOrbitRef.current) {
+          const baseYaw =
+            stageRef.current === 'pack' && packUsesTransmission
+              ? TRANSMISSIVE_PACK_ROTATION_Y
+              : 0;
+          const yaw = orbitYawRef.current + baseYaw;
+          const absCosYaw = Math.abs(Math.cos(yaw));
+          const absSinYaw = Math.abs(Math.sin(yaw));
+          projectedWidth = fitSize.x * absCosYaw + fitSize.z * absSinYaw;
+          projectedDepth = fitSize.x * absSinYaw + fitSize.z * absCosYaw;
+          const absCosElevation = Math.abs(Math.cos(elevation));
+          const absSinElevation = Math.abs(Math.sin(elevation));
+          projectedHeight =
+            fitSize.y * absCosElevation + projectedDepth * absSinElevation;
+          viewDepth = fitSize.y * absSinElevation + projectedDepth * absCosElevation;
+        }
+
+        camera.aspect = cameraAspect;
         const verticalFov = THREE.MathUtils.degToRad(camera.fov);
-        const fitHeightDistance = fitSize.y / (2 * Math.tan(verticalFov / 2));
+        const fitHeightDistance = projectedHeight / (2 * Math.tan(verticalFov / 2));
         const fitWidthDistance =
-          fitSize.x / (2 * Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.01));
+          projectedWidth / (2 * Math.tan(verticalFov / 2) * Math.max(cameraAspect, 0.01));
         const distance =
           Math.max(fitHeightDistance, fitWidthDistance) * CAMERA_FIT_MARGIN * CANVAS_OVERSCAN +
-          fitSize.z / 2;
-        camera.position.set(0, 0, Math.max(distance, 0.1));
+          viewDepth / 2;
+        camera.near = 0.01;
+        camera.far = Math.max(100, distance + viewDepth * 2 + 1);
+        camera.position.set(
+          0,
+          Math.sin(elevation) * distance,
+          Math.max(Math.cos(elevation) * distance, 0.1),
+        );
+        camera.up.copy(WORLD_UP);
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
+      };
+
+      updateCameraViewRef.current = fitCamera;
+
+      const syncPackDisplayRotation = () => {
+        if (!packUsesTransmission) {
+          packGroup.rotation.set(0, 0, 0);
+          return;
+        }
+        packGroup.rotation.set(
+          axisLockedOrbitRef.current ? 0 : TRANSMISSIVE_PACK_ROTATION_X,
+          TRANSMISSIVE_PACK_ROTATION_Y,
+          0,
+        );
+      };
+
+      applyAxisLockedOrbitRef.current = () => {
+        syncPackDisplayRotation();
+        fitCamera();
+        requestRender();
       };
 
       const centerObject = (root: THREE.Object3D, sizeTarget: THREE.Vector3) => {
@@ -1508,7 +1641,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         punchSpring.target = 1;
         punchSpring.velocity = 0;
         clearSparkles();
-        if (unrestrictedMovementRef.current) {
+        if (viewModeRef.current !== 'tilt') {
           resetViewOrientation();
         } else {
           resetTilt();
@@ -1552,12 +1685,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           packGroup.scale.setScalar(1);
 
           const analysisWidth =
-            camera.aspect >= 1
+            cameraAspect >= 1
               ? SNAPSHOT_ANALYSIS_LONGEST_EDGE
-              : Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE * camera.aspect));
+              : Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE * cameraAspect));
           const analysisHeight =
-            camera.aspect >= 1
-              ? Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE / camera.aspect))
+            cameraAspect >= 1
+              ? Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE / cameraAspect))
               : SNAPSHOT_ANALYSIS_LONGEST_EDGE;
           analysisTarget = new THREE.WebGLRenderTarget(analysisWidth, analysisHeight, {
             depthBuffer: true,
@@ -1654,7 +1787,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         lastFrameTime = now;
         const tilt = tiltRef.current;
 
-        const unrestrictedMovementActive = unrestrictedMovementRef.current;
+        const rotationInteractionActive = viewModeRef.current !== 'tilt';
         if (reducedMotionRef.current) {
           tilt.currentX = 0;
           tilt.currentY = 0;
@@ -1666,7 +1799,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           clearSparkles();
           settleCracksInstantly();
           if (stageRef.current === 'breaking') finishBreakInstant();
-        } else if (!unrestrictedMovementActive) {
+        } else if (!rotationInteractionActive) {
           const nextX = stepSpringAxis(
             tilt.currentX,
             tilt.targetX,
@@ -1734,7 +1867,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (!reducedMotionRef.current) updateCracks(deltaSeconds);
         updateSparkles(deltaSeconds);
 
-        if (unrestrictedMovementActive) {
+        if (rotationInteractionActive) {
           pivot.quaternion.copy(unrestrictedRotationRef.current.quaternion);
         } else {
           pivot.rotation.set(tilt.currentX, tilt.currentY, 0);
@@ -1790,7 +1923,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
 
         const tiltUnsettled =
-          !unrestrictedMovementActive &&
+          !rotationInteractionActive &&
           (Math.abs(tilt.targetX - tilt.currentX) > SPRING_EPSILON ||
             Math.abs(tilt.targetY - tilt.currentY) > SPRING_EPSILON ||
             Math.abs(tilt.velocityX) > SPRING_EPSILON ||
@@ -2004,7 +2137,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const height = Math.max(1, canvas.clientHeight);
           renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
           renderer.setSize(width, height, false);
-          camera.aspect = width / height;
+          cameraAspect = width / height;
           fitCamera();
           requestRender();
         };
@@ -2122,13 +2255,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               }
             });
             setStage(stageRef.current);
-            if (packUsesTransmission) {
-              packGroup.rotation.set(
-                TRANSMISSIVE_PACK_ROTATION_X,
-                TRANSMISSIVE_PACK_ROTATION_Y,
-                0,
-              );
-            }
+            syncPackDisplayRotation();
             let largestMeshSizeSq = -1;
             let largestPackMesh: THREE.Mesh | null = null;
             packMeshes.forEach((mesh) => {
@@ -2185,6 +2312,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
         applyLightingRef.current = null;
+        applyAxisLockedOrbitRef.current = null;
+        updateCameraViewRef.current = null;
         triggerHitRef.current = null;
         performResetRef.current = null;
         captureSnapshotRef.current = null;
@@ -2234,12 +2363,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       <canvas
         ref={canvasRef}
         className={`clear-card-wip__canvas${
-          unrestrictedMovement ? ' clear-card-wip__canvas--unrestricted' : ''
+          unrestrictedMovement || axisLockedOrbit
+            ? ' clear-card-wip__canvas--unrestricted'
+            : ''
         }`}
         role="img"
         aria-label={
-          unrestrictedMovement
-            ? 'Interactive 3D clear card; drag to rotate'
+          axisLockedOrbit
+            ? 'Interactive 3D clear card; drag sideways or vertically with one-axis perspective orbit'
+            : unrestrictedMovement
+              ? 'Interactive 3D clear card; drag to rotate'
             : 'Interactive 3D clear card unboxing'
         }
         aria-hidden={!ready}
