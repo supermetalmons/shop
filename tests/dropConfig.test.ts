@@ -31,7 +31,7 @@ const UPCOMING_ROUTES = [
     label: 'Clear Cards',
     title: 'Clear Cards',
     previewImageUrl: '/clear_pack.webp',
-    previewAspectRatio: 1462 / 1400,
+    previewAspectRatio: 1362 / 1400,
     boxNamePrefix: 'card',
   },
   {
