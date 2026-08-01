@@ -4529,7 +4529,7 @@ button.fulfillment-secret-code-download svg {
   pointer-events: none;
 }
 
-.notify-success-hud {
+.success-hud {
   position: fixed;
   left: 50%;
   top: 50%;
@@ -4550,12 +4550,12 @@ button.fulfillment-secret-code-download svg {
   pointer-events: none;
 }
 
-.notify-success-hud svg {
+.success-hud svg {
   width: 28px;
   height: 28px;
 }
 
-.notify-success-announcer {
+.success-announcer {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -4567,7 +4567,7 @@ button.fulfillment-secret-code-download svg {
   border: 0;
 }
 
-.notify-success-hud--hidden {
+.success-hud--hidden {
   opacity: 0;
 }
 
@@ -4868,7 +4868,7 @@ button.fulfillment-secret-code-download svg {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .notify-success-hud {
+  .success-hud {
     transition: opacity 1ms linear;
   }
 

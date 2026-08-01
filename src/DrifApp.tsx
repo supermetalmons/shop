@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
+import { SuccessHud, useSuccessHud } from './components/SuccessHud';
 import DrifEffectCard from './components/DrifEffectCard';
 import { DRIF_SHOWCASE_CARDS } from './drifCards';
 
@@ -7,6 +9,8 @@ const DRIF_SHOWCASE_PRELOAD_WINDOW = 6;
 
 export default function DrifApp() {
   const [cardIndex, setCardIndex] = useState(() => Math.floor(Math.random() * DRIF_SHOWCASE_CARDS.length));
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  const { phase: successHudPhase, announcement: successAnnouncement, show: showSuccessHud } = useSuccessHud();
   const currentCard = DRIF_SHOWCASE_CARDS[cardIndex];
   const preloadCards = useMemo(
     () =>
@@ -31,6 +35,8 @@ export default function DrifApp() {
 
   return (
     <div className="drif-page">
+      <SuccessHud phase={successHudPhase} announcement={successAnnouncement} />
+      <NotifySubscription open={notifyOpen} onOpenChange={setNotifyOpen} onSubscribed={showSuccessHud} />
       <ShopHeader scrollHomeToTop />
       <main className="drif-main">
         <div className="drif-card-showcase">
@@ -44,6 +50,9 @@ export default function DrifApp() {
           />
         </div>
       </main>
+      <button type="button" className="drif-notify-btn" onClick={() => setNotifyOpen(true)}>
+        Notify me
+      </button>
     </div>
   );
 }

@@ -13,13 +13,14 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
 import { onAuthStateChanged } from 'firebase/auth';
-import { FaBoxOpen, FaCheck, FaPlane, FaReceipt, FaTableCellsLarge } from 'react-icons/fa6';
+import { FaBoxOpen, FaPlane, FaReceipt, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel, type MintPanelBoxMedia } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
 import { InventoryGrid } from './components/InventoryGrid';
 import { DeliveryForm } from './components/DeliveryForm';
 import { Modal } from './components/Modal';
-import { NotifyForm } from './components/NotifyForm';
+import { NotifySubscription } from './components/NotifySubscription';
+import { SuccessHud, useSuccessHud } from './components/SuccessHud';
 import { ClaimForm } from './components/ClaimForm';
 import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
@@ -253,8 +254,6 @@ const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hid
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
-const NOTIFY_SUCCESS_HUD_VISIBLE_MS = 2_300;
-const NOTIFY_SUCCESS_HUD_FADE_MS = 260;
 const SELECTION_PANEL_ACTION = {
   cancel: 'cancel',
   view: 'view',
@@ -1706,11 +1705,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [notifySuccessHudPhase, setNotifySuccessHudPhase] = useState<'visible' | 'fading' | null>(null);
-  const notifySuccessHudFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const notifySuccessHudClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [notifySuccessAnnouncement, setNotifySuccessAnnouncement] = useState('');
-  const notifySuccessAnnouncementTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { phase: successHudPhase, announcement: successAnnouncement, show: showSuccessHud } = useSuccessHud();
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
@@ -2018,34 +2013,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       setToast(null);
     }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   }, []);
-
-  const showSuccessHud = useCallback((announcement: string) => {
-    if (notifySuccessHudFadeTimeoutRef.current) {
-      clearTimeout(notifySuccessHudFadeTimeoutRef.current);
-    }
-    if (notifySuccessHudClearTimeoutRef.current) {
-      clearTimeout(notifySuccessHudClearTimeoutRef.current);
-    }
-    if (notifySuccessAnnouncementTimeoutRef.current) {
-      clearTimeout(notifySuccessAnnouncementTimeoutRef.current);
-    }
-    setNotifySuccessHudPhase('visible');
-    setNotifySuccessAnnouncement('');
-    notifySuccessAnnouncementTimeoutRef.current = setTimeout(() => {
-      setNotifySuccessAnnouncement(announcement);
-    }, 0);
-    notifySuccessHudFadeTimeoutRef.current = setTimeout(() => {
-      setNotifySuccessHudPhase('fading');
-      notifySuccessHudClearTimeoutRef.current = setTimeout(() => {
-        setNotifySuccessHudPhase(null);
-      }, NOTIFY_SUCCESS_HUD_FADE_MS);
-    }, NOTIFY_SUCCESS_HUD_VISIBLE_MS);
-  }, []);
-
-  const handleNotifySuccess = useCallback(() => {
-    setNotifyOpen(false);
-    showSuccessHud('You’re on the list.');
-  }, [showSuccessHud]);
 
   useEffect(() => {
     if (!auth) return;
@@ -3728,15 +3695,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       }
       if (toastClearTimeoutRef.current) {
         clearTimeout(toastClearTimeoutRef.current);
-      }
-      if (notifySuccessHudFadeTimeoutRef.current) {
-        clearTimeout(notifySuccessHudFadeTimeoutRef.current);
-      }
-      if (notifySuccessHudClearTimeoutRef.current) {
-        clearTimeout(notifySuccessHudClearTimeoutRef.current);
-      }
-      if (notifySuccessAnnouncementTimeoutRef.current) {
-        clearTimeout(notifySuccessAnnouncementTimeoutRef.current);
       }
       cancelRevealOverlayAnimationFrame();
       if (revealOverlayResizeRafRef.current) {
@@ -7145,6 +7103,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   return (
     <div className="page" ref={pageRef}>
+      <SuccessHud phase={successHudPhase} announcement={successAnnouncement} />
       {toast ? (
         <div
           className={`toast${toastVisible ? '' : ' toast--hidden'}${
@@ -7156,17 +7115,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
           {toast}
         </div>
       ) : null}
-      <div className="notify-success-announcer" role="status" aria-live="polite" aria-atomic="true">
-        {notifySuccessAnnouncement}
-      </div>
-      {notifySuccessHudPhase ? (
-        <div
-          className={`notify-success-hud${notifySuccessHudPhase === 'fading' ? ' notify-success-hud--hidden' : ''}`}
-          aria-hidden="true"
-        >
-          <FaCheck aria-hidden="true" focusable="false" />
-        </div>
-      ) : null}
+      <NotifySubscription
+        open={notifyOpen}
+        onOpenChange={setNotifyOpen}
+        onSubscribed={showSuccessHud}
+        suspended={notifyOpen && activeModalLayer !== 'notify'}
+      />
       <div className={primaryFrameClassName}>
         <ShopHeader
           onNavigateHome={restoreHomeOnNextNavigation}
@@ -7263,18 +7217,6 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
         />
         {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
-
-      <Modal
-        open={notifyOpen}
-        title="Notify me"
-        onClose={() => setNotifyOpen(false)}
-        className="compact-modal notify-modal"
-        overlayClassName="notify-modal-overlay"
-        showCloseButton={false}
-        suspended={notifyOpen && activeModalLayer !== 'notify'}
-      >
-        <NotifyForm onSuccess={handleNotifySuccess} onCancel={() => setNotifyOpen(false)} />
-      </Modal>
 
       <Modal
         open={Boolean(receiptTransferTarget)}

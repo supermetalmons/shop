@@ -20,9 +20,8 @@
 }
 
 .drif-page {
-  --bg: #000;
-  --fg: #fff;
-  --muted: rgba(255, 255, 255, 0.62);
+  --drif-notify-bottom-gap: clamp(24px, 4vh, 60px);
+  --drif-notify-clearance: calc(var(--drif-notify-bottom-gap) + 88px);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -53,7 +52,7 @@
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  padding: 0;
+  padding: 0 0 var(--drif-notify-clearance);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -89,10 +88,42 @@
   gap: 0;
 }
 
+.drif-notify-btn {
+  position: fixed;
+  bottom: calc(var(--drif-notify-bottom-gap) + 12px);
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 14px 36px;
+  background: #0b84ff;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drif-notify-btn:hover:not(:disabled) {
+  background: #0b84ff;
+  opacity: 0.92;
+}
+
+.drif-notify-btn:active {
+  opacity: 0.75;
+}
+
+.drif-page .success-hud {
+  --fg: #fff;
+}
+
 @media (max-width: 480px), (max-height: 760px) {
   .drif-card-showcase {
     width: min(100%, 340px);
     padding-inline: 4px;
+  }
+
+  .drif-notify-btn {
+    padding: 12px 28px;
+    font-size: 16px;
   }
 }
 
