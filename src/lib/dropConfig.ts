@@ -47,6 +47,16 @@ export const LEGACY_DROP_ROUTE_ALIASES = {
 
 const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
   {
+    path: '/clear_cards',
+    dropFamily: 'clear_cards',
+    solanaCluster: 'mainnet-beta',
+    label: 'Clear Cards',
+    title: 'Clear Cards',
+    previewImageUrl: '/clear_pack.webp',
+    previewAspectRatio: 1479 / 1400,
+    boxNamePrefix: 'card',
+  },
+  {
     path: '/card_nft_2',
     dropFamily: 'card_nft_2',
     solanaCluster: 'mainnet-beta',

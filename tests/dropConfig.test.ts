@@ -25,6 +25,16 @@ import {
 
 const UPCOMING_ROUTES = [
   {
+    path: '/clear_cards',
+    dropFamily: 'clear_cards',
+    solanaCluster: 'mainnet-beta',
+    label: 'Clear Cards',
+    title: 'Clear Cards',
+    previewImageUrl: '/clear_pack.webp',
+    previewAspectRatio: 1479 / 1400,
+    boxNamePrefix: 'card',
+  },
+  {
     path: '/card_nft_binder',
     dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
@@ -98,7 +108,7 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
 });
 
 test('drop family names normalize and default from IDs across registry contracts', () => {
-  for (const family of ['card_nft_binder', 'drifella_shirt'] as const) {
+  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards'] as const) {
     assert.equal(defaultFrontendDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(undefined, ` ${family.toUpperCase()} `), family);
