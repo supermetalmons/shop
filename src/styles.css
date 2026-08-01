@@ -1688,7 +1688,7 @@ header.top--shop.top--spacer {
 
 .drops-panel__grid--with-drifella-items {
   grid-template-rows:
-    minmax(var(--drops-panel-full-min-height), 1fr)
+    minmax(var(--drops-panel-full-min-height), auto)
     minmax(var(--drops-panel-full-min-height), 1fr)
     minmax(var(--drops-panel-half-min-height), 1fr)
     minmax(var(--drops-panel-half-min-height), 1fr)
@@ -1816,6 +1816,12 @@ header.top--shop.top--spacer {
   width: var(--drops-panel-active-image-max-width);
   max-height: var(--drops-panel-active-image-max-height);
   aspect-ratio: var(--drops-panel-image-aspect-ratio);
+}
+
+.drops-panel__tile--clear_cards .drops-panel__image-frame {
+  width: auto;
+  height: var(--drops-panel-active-image-max-height);
+  max-width: var(--drops-panel-active-image-max-width);
 }
 
 .drops-panel__image {
