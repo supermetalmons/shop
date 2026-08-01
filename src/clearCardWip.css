@@ -222,6 +222,68 @@
   scrollbar-width: thin;
 }
 
+.lighting-lab__snapshot-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--lighting-lab-border);
+}
+
+.lighting-lab__snapshot-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lighting-lab__snapshot-title {
+  color: var(--lighting-lab-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.lighting-lab__snapshot-meta {
+  overflow: hidden;
+  color: var(--lighting-lab-muted);
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lighting-lab__snapshot-meta--error {
+  color: #a13b36;
+}
+
+.lighting-lab .lighting-lab__snapshot-button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid var(--lighting-lab-control-border);
+  border-radius: 6px;
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-secondary);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.lighting-lab .lighting-lab__snapshot-button:hover:not(:disabled),
+.lighting-lab .lighting-lab__snapshot-button:active:not(:disabled) {
+  background: var(--lighting-lab-control-hover);
+  color: var(--lighting-lab-text);
+}
+
+.lighting-lab .lighting-lab__snapshot-button:disabled {
+  background: var(--lighting-lab-control-bg);
+  color: var(--lighting-lab-faint);
+  cursor: default;
+  opacity: 1;
+}
+
 .lighting-lab__movement-block {
   padding: 10px 13px;
   border-bottom: 1px solid var(--lighting-lab-border);
@@ -560,6 +622,10 @@
   }
 
   .lighting-lab__clipboard-feedback--error {
+    color: #ff8b84;
+  }
+
+  .lighting-lab__snapshot-meta--error {
     color: #ff8b84;
   }
 

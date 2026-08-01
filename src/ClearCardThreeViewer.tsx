@@ -16,6 +16,11 @@ import type {
   SkyEnvironmentConfig,
   ToneMappingMode,
 } from './clearCardLighting';
+import {
+  findOpaquePixelBounds,
+  padPixelBounds,
+  resolveSnapshotOutputSize,
+} from './lib/clearCardSnapshot';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -65,6 +70,9 @@ const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 const TRANSMISSION_RESOLUTION_SCALE_DEFAULT = 1;
 const TRANSMISSION_RESOLUTION_SCALE_SHARDS = 0.5;
+const SNAPSHOT_ANALYSIS_LONGEST_EDGE = 1024;
+const SNAPSHOT_OUTPUT_LONGEST_EDGE = 2048;
+const SNAPSHOT_PADDING_RATIO = 0.02;
 
 const SHARD_LAYER = 1;
 
@@ -166,18 +174,24 @@ function resolveToneMapping(mode: ToneMappingMode): THREE.ToneMapping {
   }
 }
 
-function lightMatchesStage(scope: LightStage, stage: UnboxStage) {
+function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
   if (scope === 'all') return true;
   return scope === 'pack' ? stage === 'pack' : stage !== 'pack';
 }
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
 
-type UnboxStage = 'pack' | 'breaking' | 'revealed';
+export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
+
+export type ClearCardSnapshot = {
+  blob: Blob;
+  objectKind: 'pack' | 'card';
+};
 
 export type ClearCardThreeViewerHandle = {
   reset: () => void;
   hit: () => void;
+  captureSnapshot: () => Promise<ClearCardSnapshot>;
 };
 
 type ClearCardThreeViewerProps = {
@@ -188,6 +202,7 @@ type ClearCardThreeViewerProps = {
   unrestrictedMovement: boolean;
   initiallyRevealed: boolean;
   onStatusChange: (status: ViewerStatus) => void;
+  onStageChange?: (stage: ClearCardDisplayStage) => void;
   onPackHit?: (hitIndex: number) => void;
   onPackBreak?: () => void;
 };
@@ -484,6 +499,30 @@ function createSparkleTexture(): THREE.CanvasTexture | null {
   return texture;
 }
 
+function canvasToPngBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error('The browser could not create the PNG snapshot.'));
+      }
+    }, 'image/png');
+  });
+}
+
+function copyCanvasToPngBlob(source: HTMLCanvasElement) {
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return Promise.reject(new Error('The browser could not prepare the PNG snapshot.'));
+  }
+  context.drawImage(source, 0, 0);
+  return canvasToPngBlob(canvas);
+}
+
 const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThreeViewerProps>(
   function ClearCardThreeViewer(
     {
@@ -494,6 +533,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       unrestrictedMovement,
       initiallyRevealed,
       onStatusChange,
+      onStageChange,
       onPackHit,
       onPackBreak,
     },
@@ -506,10 +546,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const reducedMotionRef = useRef(false);
     const unrestrictedMovementRef = useRef(unrestrictedMovement);
     const viewerReadyRef = useRef(false);
-    const stageRef = useRef<UnboxStage>('pack');
+    const stageRef = useRef<ClearCardDisplayStage>('pack');
     const initiallyRevealedRef = useRef(initiallyRevealed);
     const triggerHitRef = useRef<((clientX?: number, clientY?: number) => void) | null>(null);
     const performResetRef = useRef<(() => void) | null>(null);
+    const captureSnapshotRef = useRef<(() => Promise<ClearCardSnapshot>) | null>(null);
+    const onStageChangeRef = useRef(onStageChange);
     const onPackHitRef = useRef(onPackHit);
     const onPackBreakRef = useRef(onPackBreak);
     const tiltRef = useRef<TiltState>({
@@ -535,6 +577,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     useEffect(() => {
       onPackHitRef.current = onPackHit;
       onPackBreakRef.current = onPackBreak;
+      onStageChangeRef.current = onStageChange;
     });
 
     useEffect(() => {
@@ -547,6 +590,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       () => ({
         reset: () => performResetRef.current?.(),
         hit: () => triggerHitRef.current?.(),
+        captureSnapshot: () => {
+          const captureSnapshot = captureSnapshotRef.current;
+          if (!captureSnapshot) {
+            return Promise.reject(new Error('Snapshot rendering is unavailable.'));
+          }
+          return captureSnapshot();
+        },
       }),
       [],
     );
@@ -729,6 +779,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let frameId: number | null = null;
       let lastFrameTime = 0;
       let renderer: THREE.WebGLRenderer | null = null;
+      let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
+      let snapshotInFlight = false;
       let dracoLoader: DRACOLoader | null = null;
       let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
       let environmentUpdateTimer: number | null = null;
@@ -829,7 +881,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       transmissionBackdrop.position.z = -10;
       transmissionBackdrop.renderOrder = -1_000;
       transmissionBackdrop.onBeforeRender = (activeRenderer) => {
-        transmissionBackdropMaterial.colorWrite = activeRenderer.getRenderTarget() !== null;
+        const activeTarget = activeRenderer.getRenderTarget();
+        transmissionBackdropMaterial.colorWrite =
+          activeTarget !== null && activeTarget !== snapshotOutputTarget;
       };
       pivot.add(packGroup);
       pivot.add(cardGroup);
@@ -893,7 +947,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const syncLightVisibility = (
-        stage: UnboxStage,
+        stage: ClearCardDisplayStage,
         config: ClearCardLightingConfig,
       ) => {
         ambientLight.visible =
@@ -950,16 +1004,17 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const syncTransmissionBackdrop = (
-        stage: UnboxStage,
+        stage: ClearCardDisplayStage,
         config: ClearCardLightingConfig,
       ) => {
         applyTransmissionBackdrop(config, stage === 'pack' && packUsesTransmission);
       };
 
-      const setStage = (nextStage: UnboxStage) => {
+      const setStage = (nextStage: ClearCardDisplayStage) => {
         stageRef.current = nextStage;
         syncLightVisibility(nextStage, lightingConfigRef.current);
         syncTransmissionBackdrop(nextStage, lightingConfigRef.current);
+        onStageChangeRef.current?.(nextStage);
       };
       setStage('pack');
 
@@ -1463,6 +1518,132 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         requestRender();
       };
 
+      const captureSnapshot = async (): Promise<ClearCardSnapshot> => {
+        if (snapshotInFlight) {
+          throw new Error('A snapshot is already rendering.');
+        }
+        if (disposed || contextLost || !modelsReady || !renderer || !viewerReadyRef.current) {
+          throw new Error('Snapshot rendering is unavailable while the model is loading.');
+        }
+        const snapshotStage = stageRef.current;
+        if (snapshotStage === 'breaking') {
+          throw new Error('Snapshots are unavailable while the pack is breaking.');
+        }
+
+        snapshotInFlight = true;
+        const activeRenderer = renderer;
+        const previousRenderTarget = activeRenderer.getRenderTarget();
+        const previousPixelRatio = activeRenderer.getPixelRatio();
+        const previousRendererSize = activeRenderer.getSize(new THREE.Vector2());
+        const previousCameraView = camera.view ? { ...camera.view } : null;
+        const previousSparkleVisibility = sparklePoints.visible;
+        const activeCrackGroup = crackGroup;
+        const previousCrackVisibility = activeCrackGroup?.visible ?? false;
+        const activeFragmentsGroup = fragmentsGroup;
+        const previousFragmentsVisibility = activeFragmentsGroup?.visible ?? false;
+        const previousPackScale = packGroup.scale.clone();
+        let analysisTarget: THREE.WebGLRenderTarget | null = null;
+        let blobPromise: Promise<Blob> | null = null;
+
+        try {
+          sparklePoints.visible = false;
+          if (activeCrackGroup) activeCrackGroup.visible = false;
+          if (activeFragmentsGroup) activeFragmentsGroup.visible = false;
+          packGroup.scale.setScalar(1);
+
+          const analysisWidth =
+            camera.aspect >= 1
+              ? SNAPSHOT_ANALYSIS_LONGEST_EDGE
+              : Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE * camera.aspect));
+          const analysisHeight =
+            camera.aspect >= 1
+              ? Math.max(1, Math.round(SNAPSHOT_ANALYSIS_LONGEST_EDGE / camera.aspect))
+              : SNAPSHOT_ANALYSIS_LONGEST_EDGE;
+          analysisTarget = new THREE.WebGLRenderTarget(analysisWidth, analysisHeight, {
+            depthBuffer: true,
+            stencilBuffer: false,
+          });
+          snapshotOutputTarget = analysisTarget;
+          activeRenderer.setRenderTarget(analysisTarget);
+          activeRenderer.clear();
+          activeRenderer.render(scene, camera);
+
+          const pixels = new Uint8Array(analysisWidth * analysisHeight * 4);
+          activeRenderer.readRenderTargetPixels(
+            analysisTarget,
+            0,
+            0,
+            analysisWidth,
+            analysisHeight,
+            pixels,
+          );
+          const objectBounds = findOpaquePixelBounds(pixels, analysisWidth, analysisHeight);
+          if (!objectBounds) {
+            throw new Error('The displayed object did not produce any visible pixels.');
+          }
+          const cropBounds = padPixelBounds(
+            objectBounds,
+            analysisWidth,
+            analysisHeight,
+            SNAPSHOT_PADDING_RATIO,
+          );
+          const outputSize = resolveSnapshotOutputSize(
+            cropBounds,
+            SNAPSHOT_OUTPUT_LONGEST_EDGE,
+          );
+
+          snapshotOutputTarget = null;
+          activeRenderer.setRenderTarget(null);
+          camera.setViewOffset(
+            analysisWidth,
+            analysisHeight,
+            cropBounds.x,
+            cropBounds.y,
+            cropBounds.width,
+            cropBounds.height,
+          );
+          activeRenderer.setPixelRatio(1);
+          activeRenderer.setSize(outputSize.width, outputSize.height, false);
+          activeRenderer.render(scene, camera);
+          blobPromise = copyCanvasToPngBlob(canvas);
+        } finally {
+          snapshotInFlight = false;
+          snapshotOutputTarget = null;
+          sparklePoints.visible = previousSparkleVisibility;
+          if (activeCrackGroup) activeCrackGroup.visible = previousCrackVisibility;
+          if (activeFragmentsGroup) {
+            activeFragmentsGroup.visible = previousFragmentsVisibility;
+          }
+          packGroup.scale.copy(previousPackScale);
+          if (previousCameraView?.enabled) {
+            camera.setViewOffset(
+              previousCameraView.fullWidth,
+              previousCameraView.fullHeight,
+              previousCameraView.offsetX,
+              previousCameraView.offsetY,
+              previousCameraView.width,
+              previousCameraView.height,
+            );
+          } else {
+            camera.clearViewOffset();
+          }
+          activeRenderer.setRenderTarget(null);
+          activeRenderer.setPixelRatio(previousPixelRatio);
+          activeRenderer.setSize(previousRendererSize.x, previousRendererSize.y, false);
+          syncTransmissionBackdrop(stageRef.current, lightingConfigRef.current);
+          activeRenderer.render(scene, camera);
+          activeRenderer.setRenderTarget(previousRenderTarget);
+          analysisTarget?.dispose();
+          requestRender();
+        }
+
+        if (!blobPromise) throw new Error('The PNG snapshot could not be rendered.');
+        return {
+          blob: await blobPromise,
+          objectKind: snapshotStage === 'pack' ? 'pack' : 'card',
+        };
+      };
+
       const renderFrame = (now: number) => {
         frameId = null;
         if (disposed || !renderer || document.visibilityState !== 'visible') return;
@@ -1840,6 +2021,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
           applyLightingRef.current = (config) => applyLightingConfiguration(config);
           applyLightingConfiguration(lightingConfigRef.current, true);
+          captureSnapshotRef.current = captureSnapshot;
         } catch (error) {
           console.error('[mons] failed to initialize the clear-card viewer', error);
           requestRenderRef.current = null;
@@ -2005,6 +2187,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         applyLightingRef.current = null;
         triggerHitRef.current = null;
         performResetRef.current = null;
+        captureSnapshotRef.current = null;
         loadingManager?.abort();
         if (initializationFrameId !== null) {
           window.cancelAnimationFrame(initializationFrameId);

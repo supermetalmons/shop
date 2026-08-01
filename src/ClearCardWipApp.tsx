@@ -17,7 +17,10 @@ import {
   type ClearCardLightingConfig,
   type ClearCardLightingPresetId,
 } from './clearCardLighting';
-import type { ClearCardThreeViewerHandle } from './ClearCardThreeViewer';
+import type {
+  ClearCardDisplayStage,
+  ClearCardThreeViewerHandle,
+} from './ClearCardThreeViewer';
 import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
@@ -41,6 +44,30 @@ const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample 18', url: '/clear_pack_sample_18.glb' },
 ] as const;
 
+function getSnapshotFilename(modelUrl: string, objectKind: 'pack' | 'card') {
+  const fallback = objectKind === 'pack' ? 'clear-pack-snapshot' : 'clear-card-snapshot';
+  try {
+    const pathname = new URL(modelUrl, window.location.href).pathname;
+    const filename = decodeURIComponent(pathname.split('/').pop() ?? '');
+    const basename = filename.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '_');
+    return `${basename || fallback}.png`;
+  } catch {
+    return `${fallback}.png`;
+  }
+}
+
+function downloadSnapshotBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function isWipShortcutTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -60,6 +87,7 @@ export default function ClearCardWipApp() {
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
   const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[1].url);
   const [cardRevealed, setCardRevealed] = useState(false);
+  const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
   const [lightingPresetId, setLightingPresetId] = useState<
@@ -87,6 +115,13 @@ export default function ClearCardWipApp() {
     setLightingPresetId(presetId);
     setLightingConfig(createClearCardLightingPreset(presetId));
   }, []);
+  const handleSnapshot = useCallback(async () => {
+    const viewer = viewerRef.current;
+    if (!viewer) throw new Error('Snapshot rendering is unavailable.');
+    const snapshot = await viewer.captureSnapshot();
+    const modelUrl = snapshot.objectKind === 'pack' ? packModelUrl : cardModelUrl;
+    downloadSnapshotBlob(snapshot.blob, getSnapshotFilename(modelUrl, snapshot.objectKind));
+  }, [cardModelUrl, packModelUrl]);
   const handleModelChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
       const nextModelUrl = event.currentTarget.value;
@@ -214,6 +249,7 @@ export default function ClearCardWipApp() {
               unrestrictedMovement={unrestrictedMovement}
               initiallyRevealed={cardRevealed}
               onStatusChange={handleStatusChange}
+              onStageChange={setDisplayStage}
               onPackHit={handlePackHit}
               onPackBreak={handlePackBreak}
             />
@@ -258,9 +294,11 @@ export default function ClearCardWipApp() {
         config={lightingConfig}
         presetId={lightingPresetId}
         unrestrictedMovement={unrestrictedMovement}
+        snapshotDisabled={!ready || displayStage === 'breaking'}
         onChange={handleLightingChange}
         onPresetChange={handleLightingPresetChange}
         onUnrestrictedMovementChange={setUnrestrictedMovement}
+        onSnapshot={handleSnapshot}
       />
       <button
         type="button"

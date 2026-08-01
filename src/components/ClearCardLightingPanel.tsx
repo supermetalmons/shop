@@ -13,9 +13,11 @@ type ClearCardLightingPanelProps = {
   config: ClearCardLightingConfig;
   presetId: ClearCardLightingPresetId | 'custom';
   unrestrictedMovement: boolean;
+  snapshotDisabled: boolean;
   onChange: (config: ClearCardLightingConfig) => void;
   onPresetChange: (presetId: ClearCardLightingPresetId) => void;
   onUnrestrictedMovementChange: (enabled: boolean) => void;
+  onSnapshot: () => Promise<void>;
 };
 
 type SelectOption = {
@@ -286,13 +288,17 @@ export default function ClearCardLightingPanel({
   config,
   presetId,
   unrestrictedMovement,
+  snapshotDisabled,
   onChange,
   onPresetChange,
   onUnrestrictedMovementChange,
+  onSnapshot,
 }: ClearCardLightingPanelProps) {
   const [open, setOpen] = useState(true);
   const [copied, setCopied] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [clipboardFeedback, setClipboardFeedback] = useState<ClipboardFeedback | null>(null);
   const copiedTimeoutRef = useRef<number | null>(null);
   const feedbackTimeoutRef = useRef<number | null>(null);
@@ -393,6 +399,21 @@ export default function ClearCardLightingPanel({
     }
   };
 
+  const downloadSnapshot = async () => {
+    if (snapshotDisabled || snapshotting) return;
+    setSnapshotting(true);
+    setSnapshotError(null);
+    try {
+      await onSnapshot();
+    } catch (error) {
+      setSnapshotError(
+        error instanceof Error ? error.message : 'The PNG snapshot could not be downloaded.',
+      );
+    } finally {
+      setSnapshotting(false);
+    }
+  };
+
   const activePreset = CLEAR_CARD_LIGHTING_PRESETS.find(
     (preset) => preset.id === presetId,
   );
@@ -415,6 +436,27 @@ export default function ClearCardLightingPanel({
 
       {open ? (
         <div className="lighting-lab__panel">
+          <div className="lighting-lab__snapshot-block">
+            <span className="lighting-lab__snapshot-copy">
+              <span className="lighting-lab__snapshot-title">PNG snapshot</span>
+              <span
+                className={`lighting-lab__snapshot-meta${
+                  snapshotError ? ' lighting-lab__snapshot-meta--error' : ''
+                }`}
+                aria-live="polite"
+              >
+                {snapshotError ?? 'Transparent · 2048 px'}
+              </span>
+            </span>
+            <button
+              type="button"
+              className="lighting-lab__snapshot-button"
+              onClick={() => void downloadSnapshot()}
+              disabled={snapshotDisabled || snapshotting}
+            >
+              {snapshotting ? 'Rendering…' : 'Download PNG'}
+            </button>
+          </div>
           <div className="lighting-lab__movement-block">
             <ToggleControl
               label="Unrestricted movement"
