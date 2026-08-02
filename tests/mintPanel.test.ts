@@ -8,12 +8,12 @@ import { resolveDropXProfile } from '../src/lib/dropSocialLinks.ts';
 
 test('drop X profiles cover every current storefront family and inherit across environments', () => {
   const expectedProfiles = new Map([
-    ['little_swag_boxes', ['@supermetalx', 'https://x.com/supermetalx']],
-    ['little_swag_hoodies', ['@supermetalx', 'https://x.com/supermetalx']],
-    ['card_nft_2', ['@bis__cut', 'https://x.com/bis__cut']],
-    ['poncho_drifella', ['@bis__cut', 'https://x.com/bis__cut']],
-    ['drifella_shirt', ['@bis__cut', 'https://x.com/bis__cut']],
-    ['card_nft_binder', ['@bis__cut', 'https://x.com/bis__cut']],
+    ['little_swag_boxes', ['@supermetalx', 'https://x.com/supermetalx/status/2004991803301548393']],
+    ['little_swag_hoodies', ['@supermetalx', 'https://x.com/supermetalx/status/2046959410287669381']],
+    ['card_nft_2', ['@bis__cut', 'https://x.com/bis__cut/status/2065174935983595934']],
+    ['poncho_drifella', ['@bis__cut', 'https://x.com/bis__cut/status/2039338450969641143']],
+    ['drifella_shirt', ['@bis__cut', 'https://x.com/bis__cut/status/2080020123058876494']],
+    ['card_nft_binder', ['@bis__cut', 'https://x.com/bis__cut/status/2082471519683326394']],
     ['clear_cards', ['@gucci4mycat', 'https://x.com/gucci4mycat']],
   ]);
 
@@ -23,7 +23,7 @@ test('drop X profiles cover every current storefront family and inherit across e
 
   assert.deepEqual(resolveDropXProfile('little_swag_hoodies_devnet'), {
     handle: '@supermetalx',
-    href: 'https://x.com/supermetalx',
+    href: 'https://x.com/supermetalx/status/2046959410287669381',
   });
   assert.equal(resolveDropXProfile('future_unassigned_drop'), null);
 });
@@ -57,7 +57,7 @@ test('drop X profile is grouped with the drop name while availability stays sepa
   assert.ok(remainingPosition >= 0);
   assert.ok(titlePosition < profilePosition);
   assert.ok(profilePosition < remainingPosition);
-  assert.match(markup, /href="https:\/\/x\.com\/bis__cut"/);
+  assert.match(markup, /href="https:\/\/x\.com\/bis__cut\/status\/2082471519683326394"/);
   assert.match(markup, /<div class="mint-panel__price"><span class="mint-panel__drop-name">Card NFT Binder<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @bis__cut on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
   assert.doesNotMatch(markup, />@bis__cut<\/a>/);
   assert.doesNotMatch(markup, /mint-panel__social-separator|•/);
