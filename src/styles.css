@@ -757,11 +757,8 @@ header.top--shop.top--spacer {
   width: 150%;
   height: 150%;
   opacity: 0;
-  transform: translate3d(0, 8px, 0) scale(0.97);
   filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
-  transition:
-    opacity 360ms ease,
-    transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
   outline: none;
 }
 
@@ -778,7 +775,6 @@ header.top--shop.top--spacer {
 
 .clear-card-drop-preview--ready .clear-card-wip__canvas {
   opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .clear-card-drop-preview__status {
