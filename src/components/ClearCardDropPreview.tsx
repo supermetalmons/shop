@@ -38,7 +38,7 @@ export default function ClearCardDropPreview({ fallbackImageSrc }: { fallbackIma
         className={`clear-card-drop-preview${ready ? ' clear-card-drop-preview--ready' : ''}`}
         aria-busy={status === 'loading'}
       >
-        {status === 'error' && fallbackImageSrc ? (
+        {fallbackImageSrc ? (
           <img
             className="clear-card-drop-preview__fallback"
             src={fallbackImageSrc}
