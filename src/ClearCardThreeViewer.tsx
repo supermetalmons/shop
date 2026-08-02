@@ -21,6 +21,14 @@ import {
   padPixelBounds,
   resolveSnapshotOutputSize,
 } from './lib/clearCardSnapshot';
+import {
+  createSnapBackState,
+  releaseSnapBack,
+  resetSnapBackTracking,
+  settleSnapBackInstantly,
+  stepSnapBackSpring,
+  trackSnapBackVelocity,
+} from './lib/clearCardSnapBack';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -204,6 +212,7 @@ type ClearCardThreeViewerProps = {
   lightingConfig: ClearCardLightingConfig;
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
+  snapBackOnRelease?: boolean;
   initiallyRevealed: boolean;
   cameraZoom?: number;
   ariaLabel?: string;
@@ -547,6 +556,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       lightingConfig,
       unrestrictedMovement,
       axisLockedOrbit,
+      snapBackOnRelease = false,
       initiallyRevealed,
       cameraZoom = 1,
       ariaLabel,
@@ -564,6 +574,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const lightingConfigRef = useRef(lightingConfig);
     const reducedMotionRef = useRef(false);
     const axisLockedOrbitRef = useRef(axisLockedOrbit);
+    const snapBackOnReleaseRef = useRef(snapBackOnRelease);
     const viewModeRef = useRef<ClearCardViewMode>(
       resolveViewMode(unrestrictedMovement, axisLockedOrbit),
     );
@@ -598,6 +609,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       dragged: false,
       lockedAxis: null,
     });
+    const snapBackRef = useRef(createSnapBackState());
     const orbitYawRef = useRef(0);
     const orbitElevationRef = useRef(0);
 
@@ -605,6 +617,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       onPackHitRef.current = onPackHit;
       onPackBreakRef.current = onPackBreak;
       onStageChangeRef.current = onStageChange;
+      snapBackOnReleaseRef.current = snapBackOnRelease;
     });
 
     useEffect(() => {
@@ -646,8 +659,15 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       }
     }, []);
 
+    const startSnapBack = useCallback((timeStampMs: number) => {
+      if (!snapBackOnReleaseRef.current || viewModeRef.current !== 'free') return;
+      releaseSnapBack(snapBackRef.current, timeStampMs);
+      requestRenderRef.current?.();
+    }, []);
+
     const resetViewOrientation = useCallback(() => {
       cancelUnrestrictedDrag();
+      resetSnapBackTracking(snapBackRef.current, 0);
       unrestrictedRotationRef.current.quaternion.identity();
       orbitYawRef.current = 0;
       orbitElevationRef.current = 0;
@@ -670,6 +690,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       if (previousMode === nextMode) return;
 
       cancelUnrestrictedDrag();
+      resetSnapBackTracking(snapBackRef.current, 0);
       const rotation = unrestrictedRotationRef.current;
       const tilt = tiltRef.current;
       if (nextMode === 'orbit') {
@@ -758,6 +779,15 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           );
           rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
           rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
+          if (snapBackOnReleaseRef.current) {
+            trackSnapBackVelocity(
+              snapBackRef.current,
+              deltaX,
+              deltaY,
+              UNRESTRICTED_ROTATION_SPEED,
+              event.timeStamp,
+            );
+          }
         }
         requestRenderRef.current?.();
       },
@@ -780,6 +810,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           rotation.lastY = event.clientY;
           rotation.dragged = false;
           rotation.lockedAxis = null;
+          resetSnapBackTracking(snapBackRef.current, event.timeStamp);
           event.currentTarget.setPointerCapture(event.pointerId);
           event.preventDefault();
           return;
@@ -808,6 +839,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
+          startSnapBack(event.timeStamp);
           if (!dragged && stageRef.current === 'pack') {
             triggerHitRef.current?.(event.clientX, event.clientY);
           }
@@ -816,7 +848,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (event.pointerType === 'mouse') return;
         resetTilt();
       },
-      [resetTilt],
+      [resetTilt, startSnapBack],
     );
 
     const handlePointerLeave = useCallback(() => {
@@ -825,32 +857,43 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       }
     }, [resetTilt]);
 
-    const handlePointerCancel = useCallback(() => {
-      if (viewModeRef.current !== 'tilt') {
-        cancelUnrestrictedDrag();
-      } else {
-        resetTilt();
-      }
-    }, [cancelUnrestrictedDrag, resetTilt]);
+    const handlePointerCancel = useCallback(
+      (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (viewModeRef.current !== 'tilt') {
+          const hadActiveDrag = unrestrictedRotationRef.current.pointerId !== null;
+          cancelUnrestrictedDrag();
+          if (hadActiveDrag) startSnapBack(event.timeStamp);
+        } else {
+          resetTilt();
+        }
+      },
+      [cancelUnrestrictedDrag, resetTilt, startSnapBack],
+    );
 
-    const handleLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (unrestrictedRotationRef.current.pointerId === event.pointerId) {
-        unrestrictedRotationRef.current.pointerId = null;
-        unrestrictedRotationRef.current.dragged = false;
-        unrestrictedRotationRef.current.lockedAxis = null;
-      }
-    }, []);
+    const handleLostPointerCapture = useCallback(
+      (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (unrestrictedRotationRef.current.pointerId === event.pointerId) {
+          unrestrictedRotationRef.current.pointerId = null;
+          unrestrictedRotationRef.current.dragged = false;
+          unrestrictedRotationRef.current.lockedAxis = null;
+          startSnapBack(event.timeStamp);
+        }
+      },
+      [startSnapBack],
+    );
 
     useEffect(() => {
       const handleWindowBlur = () => {
+        const hadActiveDrag = unrestrictedRotationRef.current.pointerId !== null;
         cancelUnrestrictedDrag();
+        if (hadActiveDrag) startSnapBack(performance.now());
         if (viewModeRef.current === 'tilt') {
           resetTilt();
         }
       };
       window.addEventListener('blur', handleWindowBlur);
       return () => window.removeEventListener('blur', handleWindowBlur);
-    }, [cancelUnrestrictedDrag, resetTilt]);
+    }, [cancelUnrestrictedDrag, resetTilt, startSnapBack]);
 
     useEffect(() => {
       const canvas = canvasRef.current;
@@ -1840,6 +1883,18 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tilt.velocityY = 0;
         }
 
+        const snapBack = snapBackRef.current;
+        if (snapBack.active) {
+          const rotationState = unrestrictedRotationRef.current;
+          if (rotationState.pointerId !== null) {
+            snapBack.active = false;
+          } else if (reducedMotionRef.current) {
+            settleSnapBackInstantly(rotationState.quaternion, snapBack);
+          } else {
+            stepSnapBackSpring(rotationState.quaternion, snapBack, deltaSeconds);
+          }
+        }
+
         if (!isSpringValueSettled(punchSpring)) {
           stepSpringValue(punchSpring, deltaSeconds, PUNCH_SPRING_STIFFNESS, PUNCH_SPRING_DAMPING);
         }
@@ -1944,7 +1999,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           cracks.some((crack) => !crack.settled) ||
           stageRef.current === 'breaking' ||
           !isSpringValueSettled(punchSpring);
-        if (tiltUnsettled || effectsActive) {
+        if (tiltUnsettled || effectsActive || snapBackRef.current.active) {
           frameId = window.requestAnimationFrame(renderFrame);
         } else {
           tilt.currentX = tilt.targetX;

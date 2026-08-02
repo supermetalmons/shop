@@ -786,7 +786,7 @@ header.top--shop.top--spacer {
   aspect-ratio: var(--interactive-card-aspect);
   min-width: 1px;
   min-height: 1px;
-  touch-action: pan-y;
+  touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -804,6 +804,14 @@ header.top--shop.top--spacer {
   filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
   transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
   outline: none;
+}
+
+.clear-card-drop-preview .clear-card-wip__canvas--unrestricted {
+  cursor: grab;
+}
+
+.clear-card-drop-preview .clear-card-wip__canvas--unrestricted:active {
+  cursor: grabbing;
 }
 
 .clear-card-drop-preview__fallback {

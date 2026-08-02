@@ -52,10 +52,11 @@ export default function ClearCardDropPreview({ fallbackImageSrc }: { fallbackIma
               ready={ready}
               cardModelUrl={DEFAULT_CLEAR_CARD_MODEL_URL}
               lightingConfig={lightingConfig}
-              unrestrictedMovement={false}
+              unrestrictedMovement
               axisLockedOrbit={false}
+              snapBackOnRelease
               initiallyRevealed
-              ariaLabel="Interactive 3D clear card"
+              ariaLabel="Interactive 3D clear card; drag to rotate"
               onStatusChange={setStatus}
             />
           </Suspense>
