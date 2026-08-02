@@ -118,6 +118,17 @@ const ACTION_TEXT_FIT_STYLE_PROPS = [
   '--mint-panel-action-fit-letter-spacing',
 ] as const;
 
+function XProfileLogo() {
+  return (
+    <svg viewBox="26.8 48 460.2 416" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M389.2 48h70.6L305.6 224.2 487 464H345L233.7 318.6 106.5 464H35.8L200.7 275.5 26.8 48H172.4L272.9 180.9 389.2 48zM364.4 421.8h39.1L151.1 88h-42L364.4 421.8z"
+      />
+    </svg>
+  );
+}
+
 type ActionTextFit = typeof ACTION_TEXT_FIT_DEFAULT;
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -994,9 +1005,15 @@ export function MintPanel({
       rel="noreferrer"
       aria-label={`Open ${dropXProfile.handle} on X`}
     >
-      {dropXProfile.handle}
+      <XProfileLogo />
     </a>
   ) : null;
+  const dropTitle = (
+    <div className="mint-panel__price">
+      <span className="mint-panel__drop-name">{mintTitle}</span>
+      {dropXProfileLink}
+    </div>
+  );
   const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
     return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
       key: link.key,
@@ -1016,7 +1033,7 @@ export function MintPanel({
             onClick: onNotifyNextDrops,
           }
         : {
-            statusText: 'Minted out',
+            statusText: 'Minted Out',
             buttons: soldOutButtons,
           }
       : null);
@@ -1165,8 +1182,7 @@ export function MintPanel({
       {terminalState ? (
         <div className={terminalFooterClassName}>
           <div className="mint-panel__info">
-            {dropXProfileLink}
-            <div className="mint-panel__price">{mintTitle}</div>
+            {dropTitle}
             <div className="mint-panel__remaining mint-panel__remaining--with-info">
               <span>{terminalState.statusText}</span>
               {showPackStatusControl ? (
@@ -1220,13 +1236,12 @@ export function MintPanel({
       ) : (
         <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
-            {dropXProfileLink}
-            <div className="mint-panel__price">{mintTitle}</div>
+            {dropTitle}
             <div
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
               aria-hidden={!remainingReady}
             >
-              {remaining} / {total} left
+              <span>{remaining} / {total} left</span>
             </div>
           </div>
           <form

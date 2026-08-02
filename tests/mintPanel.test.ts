@@ -28,7 +28,7 @@ test('drop X profiles cover every current storefront family and inherit across e
   assert.equal(resolveDropXProfile('future_unassigned_drop'), null);
 });
 
-test('drop X profile renders as a link immediately before the drop name', () => {
+test('drop X profile is grouped with the drop name while availability stays separate', () => {
   const markup = renderToStaticMarkup(
     createElement(MintPanel, {
       stats: {
@@ -50,11 +50,40 @@ test('drop X profile renders as a link immediately before the drop name', () => 
 
   const profilePosition = markup.indexOf('class="mint-panel__social-link"');
   const titlePosition = markup.indexOf('class="mint-panel__price"');
+  const remainingPosition = markup.indexOf('class="mint-panel__remaining"');
 
   assert.ok(profilePosition >= 0);
-  assert.ok(profilePosition < titlePosition);
+  assert.ok(titlePosition >= 0);
+  assert.ok(remainingPosition >= 0);
+  assert.ok(titlePosition < profilePosition);
+  assert.ok(profilePosition < remainingPosition);
   assert.match(markup, /href="https:\/\/x\.com\/bis__cut"/);
-  assert.match(markup, />@bis__cut<\/a>/);
+  assert.match(markup, /<div class="mint-panel__price"><span class="mint-panel__drop-name">Card NFT Binder<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @bis__cut on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
+  assert.doesNotMatch(markup, />@bis__cut<\/a>/);
+  assert.doesNotMatch(markup, /mint-panel__social-separator|•/);
+});
+
+test('upcoming drop X profile stays with the drop name instead of the Soon label', () => {
+  const markup = renderToStaticMarkup(
+    createElement(MintPanel, {
+      onMint: () => undefined,
+      busy: false,
+      title: 'Clear Cards',
+      dropId: 'clear_cards',
+      priceSol: 0,
+      discountPriceSol: 0,
+      maxSupply: 1,
+      maxPerTx: 1,
+      terminalAction: {
+        statusText: 'Soon',
+        buttonText: 'Notify Me',
+        onClick: () => undefined,
+      },
+    }),
+  );
+
+  assert.match(markup, /<span class="mint-panel__drop-name">Clear Cards<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @gucci4mycat on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
+  assert.match(markup, /<div class="mint-panel__remaining mint-panel__remaining--with-info"><span>Soon<\/span>/);
 });
 
 test('Stripe-only single-item mint panels render checkout without a SOL mint action', () => {
@@ -132,7 +161,8 @@ test('Stripe checkout is hidden when mint progress reports zero remaining', () =
     }),
   );
 
-  assert.match(markup, />Minted out</);
+  assert.match(markup, /<span class="mint-panel__drop-name">Card NFT Binder<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @bis__cut on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
+  assert.match(markup, /<div class="mint-panel__remaining mint-panel__remaining--with-info"><span>Minted Out<\/span>/);
   assert.doesNotMatch(markup, />Checkout</);
 });
 
@@ -165,5 +195,5 @@ test('sold-out shared receipt-pool drops replace marketplaces with the next-drop
 
   assert.match(markup, />Sold Out</);
   assert.match(markup, />Notify me</);
-  assert.doesNotMatch(markup, /Minted out|Magic Eden|Tensor|>Checkout</);
+  assert.doesNotMatch(markup, /Minted Out|Magic Eden|Tensor|>Checkout</);
 });

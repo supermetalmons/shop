@@ -688,27 +688,44 @@ header.top--shop.top--spacer {
 }
 
 .mint-panel__price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.3px;
   color: var(--fg);
+  white-space: nowrap;
+}
+
+.mint-panel__drop-name {
+  color: var(--fg);
 }
 
 .mint-panel__social-link {
+  position: relative;
+  flex: 0 0 auto;
+  display: block;
+  align-self: baseline;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+
+.mint-panel__social-link > svg {
   position: absolute;
   left: 0;
-  bottom: calc(100% + 3px);
-  z-index: 1;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.2;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: color 150ms ease;
+  bottom: 0;
+  display: block;
+  width: 1.106em;
+  height: 1em;
 }
 
 .mint-panel__social-link:hover {
@@ -1580,6 +1597,10 @@ header.top--shop.top--spacer {
     white-space: nowrap;
     font-size: 15px;
     font-weight: 400;
+  }
+
+  .mint-panel__social-link {
+    font-size: 11px;
   }
 
   .mint-panel__remaining--with-info {
