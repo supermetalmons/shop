@@ -16,6 +16,7 @@ import { LuInfo } from 'react-icons/lu';
 import { MintStats, type PackStatusBreakdown, type PackStatusDisplayLabels, type PreviewVideoSource } from '../types';
 import { dropAssetCount } from '../lib/dropLabels';
 import { resolveDropSizeGuide } from '../lib/dropSizeGuide';
+import { resolveDropXProfile } from '../lib/dropSocialLinks';
 import { isDropFamily, secondaryMarketplaceLinksForDropId, type MintSelectionConfig } from '../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../lib/boxMinter';
 import {
@@ -984,6 +985,18 @@ export function MintPanel({
   const stripeActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const submitActionTextFitStyle = actionTextFitStyle(pairedActionTextFit);
   const mintTitle = title || 'Little Swag Boxes';
+  const dropXProfile = resolveDropXProfile(dropId);
+  const dropXProfileLink = dropXProfile ? (
+    <a
+      className="mint-panel__social-link"
+      href={dropXProfile.href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Open ${dropXProfile.handle} on X`}
+    >
+      {dropXProfile.handle}
+    </a>
+  ) : null;
   const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
     return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
       key: link.key,
@@ -1152,6 +1165,7 @@ export function MintPanel({
       {terminalState ? (
         <div className={terminalFooterClassName}>
           <div className="mint-panel__info">
+            {dropXProfileLink}
             <div className="mint-panel__price">{mintTitle}</div>
             <div className="mint-panel__remaining mint-panel__remaining--with-info">
               <span>{terminalState.statusText}</span>
@@ -1206,6 +1220,7 @@ export function MintPanel({
       ) : (
         <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
+            {dropXProfileLink}
             <div className="mint-panel__price">{mintTitle}</div>
             <div
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}

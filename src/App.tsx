@@ -7141,6 +7141,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
               ) : undefined
             }
             boxNamePrefix={upcomingDropRoute.boxNamePrefix}
+            dropId={upcomingDropRoute.dropFamily}
             priceSol={0}
             discountPriceSol={0}
             maxSupply={1}

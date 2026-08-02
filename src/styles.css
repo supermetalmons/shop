@@ -694,6 +694,33 @@ header.top--shop.top--spacer {
   color: var(--fg);
 }
 
+.mint-panel__social-link {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 3px);
+  z-index: 1;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 150ms ease;
+}
+
+.mint-panel__social-link:hover {
+  color: var(--fg);
+}
+
+.mint-panel__social-link:focus-visible {
+  color: var(--fg);
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
 .mint-panel__remaining {
   font-size: 16px;
   color: var(--muted);
