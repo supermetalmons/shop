@@ -181,7 +181,7 @@ function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
   return scope === 'pack' ? stage === 'pack' : stage !== 'pack';
 }
 
-type ViewerStatus = 'loading' | 'ready' | 'error';
+export type ViewerStatus = 'loading' | 'ready' | 'error';
 type ClearCardViewMode = 'tilt' | 'free' | 'orbit';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
@@ -200,11 +200,13 @@ export type ClearCardThreeViewerHandle = {
 type ClearCardThreeViewerProps = {
   ready: boolean;
   cardModelUrl: string;
-  packModelUrl: string;
+  packModelUrl?: string;
   lightingConfig: ClearCardLightingConfig;
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   initiallyRevealed: boolean;
+  cameraZoom?: number;
+  ariaLabel?: string;
   onStatusChange: (status: ViewerStatus) => void;
   onStageChange?: (stage: ClearCardDisplayStage) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -546,6 +548,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       unrestrictedMovement,
       axisLockedOrbit,
       initiallyRevealed,
+      cameraZoom = 1,
+      ariaLabel,
       onStatusChange,
       onStageChange,
       onPackHit,
@@ -554,6 +558,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const cardOnly = !packModelUrl;
     const requestRenderRef = useRef<(() => void) | null>(null);
     const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
     const lightingConfigRef = useRef(lightingConfig);
@@ -1126,6 +1131,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
 
         camera.aspect = cameraAspect;
+        camera.zoom = Math.max(0.1, cameraZoom);
         const verticalFov = THREE.MathUtils.degToRad(camera.fov);
         const fitHeightDistance = projectedHeight / (2 * Math.tan(verticalFov / 2));
         const fitWidthDistance =
@@ -1557,7 +1563,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (fragmentsGroup) fragmentsGroup.visible = false;
         cardGroup.visible = true;
         cardGroup.scale.setScalar(1);
-        fitSize.copy(packSize);
+        fitSize.copy(cardOnly ? cardSize : packSize);
         fitCamera();
         setStage('revealed');
       };
@@ -1619,6 +1625,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const performReset = () => {
         if (disposed || !modelsReady) return;
+        if (cardOnly) {
+          finishBreakInstant();
+          requestRender();
+          return;
+        }
         setStage('pack');
         hitCount = 0;
         breakElapsed = 0;
@@ -2227,50 +2238,53 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const modelLoader = new GLTFLoader(loadingManager);
         modelLoader.setDRACOLoader(dracoLoader);
 
-        void Promise.all([
-          modelLoader.loadAsync(packModelUrl),
-          modelLoader.loadAsync(cardModelUrl),
-        ])
+        const packModelPromise = packModelUrl
+          ? modelLoader.loadAsync(packModelUrl)
+          : Promise.resolve(null);
+
+        void Promise.all([packModelPromise, modelLoader.loadAsync(cardModelUrl)])
           .then(([packGltf, cardGltf]) => {
             if (disposed) {
-              disposeObject3D(packGltf.scene);
+              if (packGltf) disposeObject3D(packGltf.scene);
               disposeObject3D(cardGltf.scene);
               return;
             }
 
-            const packRoot = packGltf.scene;
-            centerObject(packRoot, packSize);
-            packGroup.add(packRoot);
-            packRoot.traverse((object) => {
-              if (!(object instanceof THREE.Mesh)) return;
-              packMeshes.push(object);
-              const materials = Array.isArray(object.material) ? object.material : [object.material];
-              if (
-                materials.some(
-                  (material) =>
-                    material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
-                )
-              ) {
-                packUsesTransmission = true;
-              }
-            });
-            setStage(stageRef.current);
-            syncPackDisplayRotation();
-            let largestMeshSizeSq = -1;
-            let largestPackMesh: THREE.Mesh | null = null;
-            packMeshes.forEach((mesh) => {
-              const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
-              const meshSizeSq = meshSize.lengthSq();
-              if (meshSizeSq <= largestMeshSizeSq) return;
-              largestMeshSizeSq = meshSizeSq;
-              largestPackMesh = mesh;
-            });
-            if (largestPackMesh) buildPackShards(packMeshes, largestPackMesh);
+            if (packGltf) {
+              const packRoot = packGltf.scene;
+              centerObject(packRoot, packSize);
+              packGroup.add(packRoot);
+              packRoot.traverse((object) => {
+                if (!(object instanceof THREE.Mesh)) return;
+                packMeshes.push(object);
+                const materials = Array.isArray(object.material) ? object.material : [object.material];
+                if (
+                  materials.some(
+                    (material) =>
+                      material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
+                  )
+                ) {
+                  packUsesTransmission = true;
+                }
+              });
+              setStage(stageRef.current);
+              syncPackDisplayRotation();
+              let largestMeshSizeSq = -1;
+              let largestPackMesh: THREE.Mesh | null = null;
+              packMeshes.forEach((mesh) => {
+                const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+                const meshSizeSq = meshSize.lengthSq();
+                if (meshSizeSq <= largestMeshSizeSq) return;
+                largestMeshSizeSq = meshSizeSq;
+                largestPackMesh = mesh;
+              });
+              if (largestPackMesh) buildPackShards(packMeshes, largestPackMesh);
+            }
 
             const cardRoot = cardGltf.scene;
             const rawCardSize = new THREE.Box3().setFromObject(cardRoot).getSize(new THREE.Vector3());
             const embedScale =
-              rawCardSize.x > 0 && rawCardSize.y > 0
+              packGltf && rawCardSize.x > 0 && rawCardSize.y > 0
                 ? Math.min(packSize.x / rawCardSize.x, packSize.y / rawCardSize.y) *
                   CARD_EMBED_FACTOR
                 : 1;
@@ -2278,11 +2292,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             centerObject(cardRoot, cardSize);
             cardGroup.add(cardRoot);
 
-            sparkleWorldScale = Math.max(packSize.x, packSize.y, packSize.z) || 1;
+            const effectSize = packGltf ? packSize : cardSize;
+            sparkleWorldScale = Math.max(effectSize.x, effectSize.y, effectSize.z) || 1;
             sparkleMaterial.size = sparkleWorldScale * 0.05;
 
             modelsReady = true;
-            if (initiallyRevealedRef.current) {
+            if (cardOnly || initiallyRevealedRef.current) {
               finishBreakInstant();
             } else {
               fitSize.copy(packSize);
@@ -2352,6 +2367,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
     }, [
       cancelUnrestrictedDrag,
+      cameraZoom,
       cardModelUrl,
       onStatusChange,
       packModelUrl,
@@ -2369,11 +2385,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }`}
         role="img"
         aria-label={
-          axisLockedOrbit
+          ariaLabel || (axisLockedOrbit
             ? 'Interactive 3D clear card; drag sideways or vertically with one-axis perspective orbit'
             : unrestrictedMovement
               ? 'Interactive 3D clear card; drag to rotate'
-            : 'Interactive 3D clear card unboxing'
+              : 'Interactive 3D clear card unboxing')
         }
         aria-hidden={!ready}
         onPointerEnter={handlePointerEnter}

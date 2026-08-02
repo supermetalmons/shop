@@ -24,6 +24,7 @@ import { SuccessHud, useSuccessHud } from './components/SuccessHud';
 import { ClaimForm } from './components/ClaimForm';
 import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
+import ClearCardDropPreview from './components/ClearCardDropPreview';
 import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
 import { inventoryQueryKeyPrefix, useInventory } from './hooks/useInventory';
 import { pendingOpenBoxesQueryKeyPrefix, usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
@@ -7134,6 +7135,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             busy={false}
             title={upcomingDropRoute.title}
             boxMedia={upcomingMintPreviewMedia}
+            previewContent={
+              upcomingDropRoute.dropFamily === 'clear_cards' ? (
+                <ClearCardDropPreview fallbackImageSrc={upcomingMintPreviewMedia.imageSrc} />
+              ) : undefined
+            }
             boxNamePrefix={upcomingDropRoute.boxNamePrefix}
             priceSol={0}
             discountPriceSol={0}

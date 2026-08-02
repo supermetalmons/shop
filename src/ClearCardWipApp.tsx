@@ -10,6 +10,10 @@ import {
 } from 'react';
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
+import {
+  DEFAULT_CLEAR_CARD_MODEL_URL,
+  DEFAULT_CLEAR_PACK_MODEL_URL,
+} from './lib/clearCardModels';
 import ClearCardLightingPanel from './components/ClearCardLightingPanel';
 import {
   DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
@@ -20,12 +24,11 @@ import {
 import type {
   ClearCardDisplayStage,
   ClearCardThreeViewerHandle,
+  ViewerStatus,
 } from './ClearCardThreeViewer';
 import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
-
-type ViewerStatus = 'loading' | 'ready' | 'error';
 
 const CLEAR_CARDS_SOUND_BASE_URL = 'https://cdn.lil.org/nft/clear_cards/sounds';
 const HIT_SOUND_URLS = [
@@ -37,11 +40,11 @@ const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
 const CARD_MODEL_OPTIONS = [
-  { label: 'Card: Sample 15', url: '/clear_card_sample_15.glb' },
+  { label: 'Card: Sample 15', url: DEFAULT_CLEAR_CARD_MODEL_URL },
 ] as const;
 const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
-  { label: 'Pack: Sample 18', url: '/clear_pack_sample_18.glb' },
+  { label: 'Pack: Sample 18', url: DEFAULT_CLEAR_PACK_MODEL_URL },
 ] as const;
 
 function getSnapshotFilename(modelUrl: string, objectKind: 'pack' | 'card') {
@@ -84,8 +87,8 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
-  const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
-  const [packModelUrl, setPackModelUrl] = useState<string>(PACK_MODEL_OPTIONS[1].url);
+  const [cardModelUrl, setCardModelUrl] = useState<string>(DEFAULT_CLEAR_CARD_MODEL_URL);
+  const [packModelUrl, setPackModelUrl] = useState<string>(DEFAULT_CLEAR_PACK_MODEL_URL);
   const [cardRevealed, setCardRevealed] = useState(false);
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
