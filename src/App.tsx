@@ -1812,6 +1812,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     if (revealOverlayOpen) return;
     setNotifyOpen(true);
   }, [revealOverlayOpen]);
+  const handleNotifyOpenChange = useCallback((open: boolean) => {
+    setNotifyOpen(open);
+    if (open || !upcomingDropRoute) return;
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0 }));
+  }, [upcomingDropRoute]);
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
@@ -7118,7 +7123,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       ) : null}
       <NotifySubscription
         open={notifyOpen}
-        onOpenChange={setNotifyOpen}
+        onOpenChange={handleNotifyOpenChange}
         onSubscribed={showSuccessHud}
         suspended={notifyOpen && activeModalLayer !== 'notify'}
       />
