@@ -11,12 +11,12 @@ import {
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
 import {
+  CLEAR_CARD_PREVIEW_MODEL_URL,
   DEFAULT_CLEAR_CARD_MODEL_URL,
   DEFAULT_CLEAR_PACK_MODEL_URL,
 } from './lib/clearCardModels';
 import ClearCardLightingPanel from './components/ClearCardLightingPanel';
 import {
-  DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
   createClearCardLightingPreset,
   type ClearCardLightingConfig,
   type ClearCardLightingPresetId,
@@ -39,8 +39,10 @@ const HIT_SOUND_URLS = [
 const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
+const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'dgpm-light-test-1';
 const CARD_MODEL_OPTIONS = [
   { label: 'Card: Sample 15', url: DEFAULT_CLEAR_CARD_MODEL_URL },
+  { label: 'Card: Preview', url: CLEAR_CARD_PREVIEW_MODEL_URL },
 ] as const;
 const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
@@ -93,10 +95,12 @@ export default function ClearCardWipApp() {
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [axisLockedOrbit, setAxisLockedOrbit] = useState(false);
-  const [lightingConfig, setLightingConfig] = useState(() => createClearCardLightingPreset());
+  const [lightingConfig, setLightingConfig] = useState(() =>
+    createClearCardLightingPreset(CLEAR_CARD_WIP_LIGHTING_PRESET_ID),
+  );
   const [lightingPresetId, setLightingPresetId] = useState<
     ClearCardLightingPresetId | 'custom'
-  >(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID);
+  >(CLEAR_CARD_WIP_LIGHTING_PRESET_ID);
   const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
