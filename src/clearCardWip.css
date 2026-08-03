@@ -40,6 +40,25 @@
   pointer-events: none;
 }
 
+.clear-card-wip__preview-frame {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  container-type: size;
+  pointer-events: none;
+}
+
+.clear-card-wip__stage--upcoming-drop .clear-card-wip__preview-frame {
+  height: max(
+    1px,
+    calc(
+      100svh - clamp(8px, 1.4svh, 14px) - 59px - 26px - 75px -
+        clamp(8px, 1.5vw, 14px) - clamp(28px, 4svh, 48px)
+    )
+  );
+}
+
 .clear-card-wip__viewport {
   position: relative;
   width: min(82vw, 545px, 60.5svh);
@@ -53,6 +72,10 @@
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+.clear-card-wip__stage--upcoming-drop .clear-card-wip__viewport {
+  width: min(82vw, 545px, 71cqh);
 }
 
 .clear-card-wip__canvas {
@@ -289,7 +312,7 @@
   opacity: 1;
 }
 
-.lighting-lab__orbit-lock {
+.lighting-lab__detail-toggle {
   display: grid;
   grid-template-columns: 17px minmax(0, 1fr);
   align-items: start;
@@ -298,7 +321,7 @@
   cursor: pointer;
 }
 
-.lighting-lab__orbit-checkbox {
+.lighting-lab__detail-toggle-checkbox {
   width: 14px;
   height: 14px;
   margin: 1px 0 0;
@@ -306,19 +329,28 @@
   cursor: pointer;
 }
 
-.lighting-lab__orbit-lock > span {
+.lighting-lab__detail-toggle:has(.lighting-lab__detail-toggle-checkbox:disabled) {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.lighting-lab__detail-toggle-checkbox:disabled {
+  cursor: default;
+}
+
+.lighting-lab__detail-toggle > span {
   min-width: 0;
   display: grid;
   gap: 1px;
 }
 
-.lighting-lab__orbit-title {
+.lighting-lab__detail-toggle-title {
   font-size: 10px;
   font-weight: 500;
   line-height: 1.25;
 }
 
-.lighting-lab__orbit-meta {
+.lighting-lab__detail-toggle-meta {
   overflow: hidden;
   color: var(--lighting-lab-muted);
   font-size: 9px;
@@ -329,6 +361,8 @@
 }
 
 .lighting-lab__movement-block {
+  display: grid;
+  gap: 9px;
   padding: 10px 13px;
   border-bottom: 1px solid var(--lighting-lab-border);
 }
@@ -339,6 +373,18 @@
 
 .lighting-lab__movement-block .lighting-lab__control-label {
   color: var(--lighting-lab-secondary);
+}
+
+@media (max-width: 860px) {
+  .clear-card-wip__stage--upcoming-drop .clear-card-wip__preview-frame {
+    height: max(
+      1px,
+      calc(
+        100svh - 24px - clamp(52px, calc(9vw + 16px), 59px) - 26px - 98px -
+          clamp(10px, 2vw, 16px) - clamp(28px, 4svh, 48px)
+      )
+    );
+  }
 }
 
 .lighting-lab__preset-block {
@@ -518,6 +564,11 @@
   accent-color: var(--lighting-lab-range);
   box-shadow: none;
   cursor: pointer;
+}
+
+.lighting-lab .lighting-lab__toggle:disabled {
+  cursor: default;
+  opacity: 0.52;
 }
 
 .lighting-lab__subsection-title,

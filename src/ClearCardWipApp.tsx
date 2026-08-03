@@ -89,12 +89,13 @@ function isWipShortcutTarget(target: EventTarget | null) {
 
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
-  const [cardModelUrl, setCardModelUrl] = useState<string>(DEFAULT_CLEAR_CARD_MODEL_URL);
+  const [cardModelUrl, setCardModelUrl] = useState<string>(CLEAR_CARD_PREVIEW_MODEL_URL);
   const [packModelUrl, setPackModelUrl] = useState<string>(DEFAULT_CLEAR_PACK_MODEL_URL);
   const [cardRevealed, setCardRevealed] = useState(false);
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [axisLockedOrbit, setAxisLockedOrbit] = useState(false);
+  const [upcomingDropPreview, setUpcomingDropPreview] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() =>
     createClearCardLightingPreset(CLEAR_CARD_WIP_LIGHTING_PRESET_ID),
   );
@@ -104,6 +105,7 @@ export default function ClearCardWipApp() {
   const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
+  const previewViewModeRef = useRef({ unrestrictedMovement: false, axisLockedOrbit: false });
 
   const handleStatusChange = useCallback((nextStatus: ViewerStatus) => {
     setStatus(nextStatus);
@@ -131,6 +133,21 @@ export default function ClearCardWipApp() {
     setAxisLockedOrbit(enabled);
     if (enabled) setUnrestrictedMovement(false);
   }, []);
+  const handleUpcomingDropPreviewChange = useCallback(
+    (enabled: boolean) => {
+      setStatus('loading');
+      setUpcomingDropPreview(enabled);
+      if (enabled) {
+        previewViewModeRef.current = { unrestrictedMovement, axisLockedOrbit };
+        setUnrestrictedMovement(true);
+        setAxisLockedOrbit(false);
+      } else {
+        setUnrestrictedMovement(previewViewModeRef.current.unrestrictedMovement);
+        setAxisLockedOrbit(previewViewModeRef.current.axisLockedOrbit);
+      }
+    },
+    [axisLockedOrbit, unrestrictedMovement],
+  );
   const handleSnapshot = useCallback(async () => {
     const viewer = viewerRef.current;
     if (!viewer) throw new Error('Snapshot rendering is unavailable.');
@@ -249,36 +266,43 @@ export default function ClearCardWipApp() {
       tabIndex={-1}
     >
       <div className="clear-card-wip__backdrop" aria-hidden="true" />
-      <div className="clear-card-wip__stage">
-        <div
-          className={`clear-card-wip__viewport${ready ? ' clear-card-wip__viewport--ready' : ''}`}
-          aria-busy={status === 'loading'}
-        >
-          <Suspense fallback={null}>
-            <ClearCardThreeViewer
-              key={`${cardModelUrl}:${packModelUrl}`}
-              ref={viewerRef}
-              ready={ready}
-              cardModelUrl={cardModelUrl}
-              packModelUrl={packModelUrl}
-              lightingConfig={lightingConfig}
-              unrestrictedMovement={unrestrictedMovement}
-              axisLockedOrbit={axisLockedOrbit}
-              initiallyRevealed={cardRevealed}
-              onStatusChange={handleStatusChange}
-              onStageChange={setDisplayStage}
-              onPackHit={handlePackHit}
-              onPackBreak={handlePackBreak}
-            />
-          </Suspense>
-          {status === 'error' ? (
-            <div
-              className="clear-card-wip__status clear-card-wip__status--error"
-              role="alert"
-            >
-              Unable to display 3D card.
-            </div>
-          ) : null}
+      <div
+        className={`clear-card-wip__stage${
+          upcomingDropPreview ? ' clear-card-wip__stage--upcoming-drop' : ''
+        }`}
+      >
+        <div className="clear-card-wip__preview-frame">
+          <div
+            className={`clear-card-wip__viewport${ready ? ' clear-card-wip__viewport--ready' : ''}`}
+            aria-busy={status === 'loading'}
+          >
+            <Suspense fallback={null}>
+              <ClearCardThreeViewer
+                key={`${cardModelUrl}:${upcomingDropPreview ? 'upcoming-drop' : packModelUrl}`}
+                ref={viewerRef}
+                ready={ready}
+                cardModelUrl={cardModelUrl}
+                packModelUrl={upcomingDropPreview ? undefined : packModelUrl}
+                lightingConfig={lightingConfig}
+                unrestrictedMovement={unrestrictedMovement}
+                axisLockedOrbit={axisLockedOrbit}
+                snapBackOnRelease={upcomingDropPreview}
+                initiallyRevealed={upcomingDropPreview || cardRevealed}
+                onStatusChange={handleStatusChange}
+                onStageChange={setDisplayStage}
+                onPackHit={handlePackHit}
+                onPackBreak={handlePackBreak}
+              />
+            </Suspense>
+            {status === 'error' ? (
+              <div
+                className="clear-card-wip__status clear-card-wip__status--error"
+                role="alert"
+              >
+                Unable to display 3D card.
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
       <div className="clear-card-wip__model-pickers">
@@ -312,11 +336,13 @@ export default function ClearCardWipApp() {
         presetId={lightingPresetId}
         unrestrictedMovement={unrestrictedMovement}
         axisLockedOrbit={axisLockedOrbit}
+        upcomingDropPreview={upcomingDropPreview}
         snapshotDisabled={!ready || displayStage === 'breaking'}
         onChange={handleLightingChange}
         onPresetChange={handleLightingPresetChange}
         onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
         onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
+        onUpcomingDropPreviewChange={handleUpcomingDropPreviewChange}
         onSnapshot={handleSnapshot}
       />
       <button

@@ -14,11 +14,13 @@ type ClearCardLightingPanelProps = {
   presetId: ClearCardLightingPresetId | 'custom';
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
+  upcomingDropPreview: boolean;
   snapshotDisabled: boolean;
   onChange: (config: ClearCardLightingConfig) => void;
   onPresetChange: (presetId: ClearCardLightingPresetId) => void;
   onUnrestrictedMovementChange: (enabled: boolean) => void;
   onAxisLockedOrbitChange: (enabled: boolean) => void;
+  onUpcomingDropPreviewChange: (enabled: boolean) => void;
   onSnapshot: () => Promise<void>;
 };
 
@@ -224,10 +226,12 @@ function ToggleControl({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <label className="lighting-lab__toggle-row">
@@ -236,6 +240,7 @@ function ToggleControl({
         className="lighting-lab__toggle"
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.checked)}
       />
     </label>
@@ -291,11 +296,13 @@ export default function ClearCardLightingPanel({
   presetId,
   unrestrictedMovement,
   axisLockedOrbit,
+  upcomingDropPreview,
   snapshotDisabled,
   onChange,
   onPresetChange,
   onUnrestrictedMovementChange,
   onAxisLockedOrbitChange,
+  onUpcomingDropPreviewChange,
   onSnapshot,
 }: ClearCardLightingPanelProps) {
   const [open, setOpen] = useState(true);
@@ -463,27 +470,46 @@ export default function ClearCardLightingPanel({
               </button>
             </div>
             <label
-              className="lighting-lab__orbit-lock"
+              className="lighting-lab__detail-toggle"
               title="Uses a natural perspective camera and locks each drag to one axis"
             >
               <input
-                className="lighting-lab__orbit-checkbox"
+                className="lighting-lab__detail-toggle-checkbox"
                 type="checkbox"
                 checked={axisLockedOrbit}
+                disabled={upcomingDropPreview}
                 onChange={(event) => onAxisLockedOrbitChange(event.currentTarget.checked)}
               />
               <span>
-                <span className="lighting-lab__orbit-title">Axis-locked orbit</span>
-                <span className="lighting-lab__orbit-meta">
+                <span className="lighting-lab__detail-toggle-title">Axis-locked orbit</span>
+                <span className="lighting-lab__detail-toggle-meta">
                   Perspective camera · one axis per drag
                 </span>
               </span>
             </label>
           </div>
           <div className="lighting-lab__movement-block">
+            <label
+              className="lighting-lab__detail-toggle"
+              title="Matches the responsive size and card-only camera used on the upcoming Clear Cards page"
+            >
+              <input
+                className="lighting-lab__detail-toggle-checkbox"
+                type="checkbox"
+                checked={upcomingDropPreview}
+                onChange={(event) => onUpcomingDropPreviewChange(event.currentTarget.checked)}
+              />
+              <span>
+                <span className="lighting-lab__detail-toggle-title">Upcoming drop framing</span>
+                <span className="lighting-lab__detail-toggle-meta">
+                  Live size · card-only camera
+                </span>
+              </span>
+            </label>
             <ToggleControl
               label="Unrestricted movement"
               checked={unrestrictedMovement}
+              disabled={upcomingDropPreview}
               onChange={onUnrestrictedMovementChange}
             />
           </div>
