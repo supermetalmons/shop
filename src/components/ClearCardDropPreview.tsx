@@ -1,7 +1,7 @@
 import { Component, lazy, Suspense, useState, type ReactNode } from 'react';
 import { createClearCardLightingPreset } from '../clearCardLighting';
 import type { ViewerStatus } from '../ClearCardThreeViewer';
-import { DEFAULT_CLEAR_CARD_MODEL_URL } from '../lib/clearCardModels';
+import { CLEAR_CARD_PREVIEW_MODEL_URL } from '../lib/clearCardModels';
 
 const ClearCardThreeViewer = lazy(() => import('../ClearCardThreeViewer'));
 
@@ -50,7 +50,7 @@ export default function ClearCardDropPreview({ fallbackImageSrc }: { fallbackIma
           <Suspense fallback={null}>
             <ClearCardThreeViewer
               ready={ready}
-              cardModelUrl={DEFAULT_CLEAR_CARD_MODEL_URL}
+              cardModelUrl={CLEAR_CARD_PREVIEW_MODEL_URL}
               lightingConfig={lightingConfig}
               unrestrictedMovement
               axisLockedOrbit={false}

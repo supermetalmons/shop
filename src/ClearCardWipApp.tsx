@@ -39,7 +39,7 @@ const HIT_SOUND_URLS = [
 const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
-const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'dgpm-light-test-1';
+const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
 const CARD_MODEL_OPTIONS = [
   { label: 'Card: Sample 15', url: DEFAULT_CLEAR_CARD_MODEL_URL },
   { label: 'Card: Preview', url: CLEAR_CARD_PREVIEW_MODEL_URL },
