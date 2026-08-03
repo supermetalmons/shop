@@ -811,6 +811,12 @@ header.top--shop.top--spacer {
   outline: none;
 }
 
+@media (prefers-color-scheme: dark) {
+  .clear-card-drop-preview .clear-card-wip__canvas {
+    filter: none;
+  }
+}
+
 .clear-card-drop-preview .clear-card-wip__canvas--unrestricted {
   cursor: grab;
 }

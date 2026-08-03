@@ -33,6 +33,7 @@ import {
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
+const INTERACTION_FRAME_INTERVAL_MS = 1_000 / 30;
 const CAMERA_FIT_MARGIN = 1.06;
 const MAX_TILT_X = THREE.MathUtils.degToRad(25);
 const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
@@ -213,6 +214,7 @@ type ClearCardThreeViewerProps = {
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   snapBackOnRelease?: boolean;
+  throttleInteractionFrameRate?: boolean;
   initiallyRevealed: boolean;
   cameraZoom?: number;
   ariaLabel?: string;
@@ -557,6 +559,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       unrestrictedMovement,
       axisLockedOrbit,
       snapBackOnRelease = false,
+      throttleInteractionFrameRate = false,
       initiallyRevealed,
       cameraZoom = 1,
       ariaLabel,
@@ -586,6 +589,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const captureSnapshotRef = useRef<(() => Promise<ClearCardSnapshot>) | null>(null);
     const applyAxisLockedOrbitRef = useRef<(() => void) | null>(null);
     const updateCameraViewRef = useRef<(() => void) | null>(null);
+    const beginInteractionThrottleRef = useRef<(() => void) | null>(null);
+    const releaseInteractionThrottleRef = useRef<(() => void) | null>(null);
     const onStageChangeRef = useRef(onStageChange);
     const onPackHitRef = useRef(onPackHit);
     const onPackBreakRef = useRef(onPackBreak);
@@ -668,6 +673,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const resetViewOrientation = useCallback(() => {
       cancelUnrestrictedDrag();
       resetSnapBackTracking(snapBackRef.current, 0);
+      releaseInteractionThrottleRef.current?.();
       unrestrictedRotationRef.current.quaternion.identity();
       orbitYawRef.current = 0;
       orbitElevationRef.current = 0;
@@ -691,6 +697,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       cancelUnrestrictedDrag();
       resetSnapBackTracking(snapBackRef.current, 0);
+      releaseInteractionThrottleRef.current?.();
       const rotation = unrestrictedRotationRef.current;
       const tilt = tiltRef.current;
       if (nextMode === 'orbit') {
@@ -753,6 +760,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (!rotation.dragged) {
           if (totalX * totalX + totalY * totalY <= UNRESTRICTED_DRAG_THRESHOLD_SQ) return;
           rotation.dragged = true;
+          beginInteractionThrottleRef.current?.();
           if (viewModeRef.current === 'orbit') {
             rotation.lockedAxis =
               Math.abs(totalX) >= Math.abs(totalY) ? 'horizontal' : 'vertical';
@@ -840,6 +848,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             event.currentTarget.releasePointerCapture(event.pointerId);
           }
           startSnapBack(event.timeStamp);
+          releaseInteractionThrottleRef.current?.();
           if (!dragged && stageRef.current === 'pack') {
             triggerHitRef.current?.(event.clientX, event.clientY);
           }
@@ -863,6 +872,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const hadActiveDrag = unrestrictedRotationRef.current.pointerId !== null;
           cancelUnrestrictedDrag();
           if (hadActiveDrag) startSnapBack(event.timeStamp);
+          releaseInteractionThrottleRef.current?.();
         } else {
           resetTilt();
         }
@@ -877,6 +887,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           unrestrictedRotationRef.current.dragged = false;
           unrestrictedRotationRef.current.lockedAxis = null;
           startSnapBack(event.timeStamp);
+          releaseInteractionThrottleRef.current?.();
         }
       },
       [startSnapBack],
@@ -887,6 +898,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const hadActiveDrag = unrestrictedRotationRef.current.pointerId !== null;
         cancelUnrestrictedDrag();
         if (hadActiveDrag) startSnapBack(performance.now());
+        releaseInteractionThrottleRef.current?.();
         if (viewModeRef.current === 'tilt') {
           resetTilt();
         }
@@ -908,6 +920,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let initializationFrameId: number | null = null;
       let frameId: number | null = null;
       let lastFrameTime = 0;
+      let lastInteractionFrameTime = 0;
+      let interactionThrottleActive = false;
+      let interactionThrottleStartPending = false;
+      let interactionThrottleReleasePending = false;
       let renderer: THREE.WebGLRenderer | null = null;
       let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
       let snapshotInFlight = false;
@@ -926,6 +942,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let handleVisibilityChange: (() => void) | null = null;
       let handleContextLost: ((event: Event) => void) | null = null;
       let handleContextRestored: (() => void) | null = null;
+      let syncRendererSize: (() => void) | null = null;
       let resize: (() => void) | null = null;
 
       const packMeshes: THREE.Mesh[] = [];
@@ -1834,6 +1851,23 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const renderFrame = (now: number) => {
         frameId = null;
         if (disposed || !renderer || document.visibilityState !== 'visible') return;
+        if (interactionThrottleReleasePending && !snapBackRef.current.active) {
+          interactionThrottleReleasePending = false;
+          interactionThrottleStartPending = false;
+          setInteractionThrottle(false);
+        } else if (interactionThrottleStartPending) {
+          interactionThrottleStartPending = false;
+          setInteractionThrottle(true);
+        }
+        if (
+          interactionThrottleActive &&
+          lastInteractionFrameTime > 0 &&
+          now - lastInteractionFrameTime < INTERACTION_FRAME_INTERVAL_MS
+        ) {
+          frameId = window.requestAnimationFrame(renderFrame);
+          return;
+        }
+        if (interactionThrottleActive) lastInteractionFrameTime = now;
 
         const deltaSeconds = lastFrameTime
           ? Math.min((now - lastFrameTime) / 1_000, 1 / 30)
@@ -1999,8 +2033,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           cracks.some((crack) => !crack.settled) ||
           stageRef.current === 'breaking' ||
           !isSpringValueSettled(punchSpring);
-        if (tiltUnsettled || effectsActive || snapBackRef.current.active) {
-          frameId = window.requestAnimationFrame(renderFrame);
+        if (
+          tiltUnsettled ||
+          effectsActive ||
+          snapBackRef.current.active ||
+          interactionThrottleReleasePending
+        ) {
+          if (frameId === null) frameId = window.requestAnimationFrame(renderFrame);
         } else {
           tilt.currentX = tilt.targetX;
           tilt.currentY = tilt.targetY;
@@ -2015,6 +2054,25 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (disposed || frameId !== null) return;
         lastFrameTime = 0;
         frameId = window.requestAnimationFrame(renderFrame);
+      };
+
+      const setInteractionThrottle = (active: boolean) => {
+        if (!throttleInteractionFrameRate || interactionThrottleActive === active) return;
+        interactionThrottleActive = active;
+        lastInteractionFrameTime = 0;
+      };
+
+      const beginInteractionThrottle = () => {
+        if (!throttleInteractionFrameRate) return;
+        interactionThrottleReleasePending = false;
+        interactionThrottleStartPending = true;
+        requestRender();
+      };
+
+      const releaseInteractionThrottle = () => {
+        if (!interactionThrottleActive && !interactionThrottleStartPending) return;
+        interactionThrottleReleasePending = true;
+        requestRender();
       };
 
       const getEnvironmentSignature = (config: ClearCardLightingConfig) => {
@@ -2185,6 +2243,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         initializationFrameId = null;
         if (disposed) return;
         requestRenderRef.current = requestRender;
+        beginInteractionThrottleRef.current = beginInteractionThrottle;
+        releaseInteractionThrottleRef.current = releaseInteractionThrottle;
         triggerHitRef.current = (clientX, clientY) => {
           let x = clientX;
           let y = clientY;
@@ -2197,7 +2257,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         };
         performResetRef.current = performReset;
 
-        resize = () => {
+        syncRendererSize = () => {
           if (disposed || !renderer) return;
           const width = Math.max(1, canvas.clientWidth);
           const height = Math.max(1, canvas.clientHeight);
@@ -2205,6 +2265,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           renderer.setSize(width, height, false);
           cameraAspect = width / height;
           fitCamera();
+        };
+        resize = () => {
+          syncRendererSize?.();
           requestRender();
         };
 
@@ -2384,6 +2447,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         applyLightingRef.current = null;
         applyAxisLockedOrbitRef.current = null;
         updateCameraViewRef.current = null;
+        beginInteractionThrottleRef.current = null;
+        releaseInteractionThrottleRef.current = null;
         triggerHitRef.current = null;
         performResetRef.current = null;
         captureSnapshotRef.current = null;
@@ -2405,6 +2470,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
         if (resize) window.removeEventListener('resize', resize);
         resizeObserver?.disconnect();
+        syncRendererSize = null;
         if (frameId !== null) window.cancelAnimationFrame(frameId);
         if (environmentUpdateTimer !== null) {
           window.clearTimeout(environmentUpdateTimer);
@@ -2421,6 +2487,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         renderer?.forceContextLoss();
       };
     }, [
+      throttleInteractionFrameRate,
       cancelUnrestrictedDrag,
       cameraZoom,
       cardModelUrl,
