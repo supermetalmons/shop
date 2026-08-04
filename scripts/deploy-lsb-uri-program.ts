@@ -205,6 +205,22 @@ async function verifyBuffer(
   return address.toBase58();
 }
 
+async function verifyBufferHash(
+  connection: Connection,
+  bufferAddress: string,
+  releaseBytes: number,
+): Promise<string> {
+  const account = await connection.getAccountInfo(new PublicKey(bufferAddress), 'finalized');
+  if (!account || account.data.length !== 37 + releaseBytes) {
+    throw new Error('Finalized buffer is missing or has the wrong size');
+  }
+  const hash = sha256(Buffer.from(account.data.subarray(37)));
+  if (hash !== RELEASE_SHA256) {
+    throw new Error(`Finalized buffer hash is ${hash}, expected ${RELEASE_SHA256}`);
+  }
+  return hash;
+}
+
 function verifyRelease(binaryPath: string): Buffer {
   if (!existsSync(binaryPath)) throw new Error(`Release ELF not found: ${binaryPath}`);
   const binary = readFileSync(binaryPath);
@@ -300,33 +316,89 @@ async function main() {
 
   try {
     tempKeypairPath = writeTempKeypair(authority);
-    const deployArgs = [
-      '--keypair',
-      tempKeypairPath,
-      'program',
-      'deploy',
-      options.binaryPath,
-      '--program-id',
-      PROGRAM_ID.toBase58(),
-      '--upgrade-authority',
-      tempKeypairPath,
-      '--fee-payer',
-      tempKeypairPath,
-      '--url',
-      options.rpcUrl,
-      '--commitment',
-      'finalized',
-      '--use-rpc',
-      '--output',
-      'json',
-    ];
-    if (bufferAddress) deployArgs.push('--buffer', bufferAddress);
-    const result = spawnSync(
-      'solana',
-      deployArgs,
-      { stdio: 'inherit', env: { ...process.env, NO_DNA: '1' } },
-    );
-    if (result.status !== 0) throw new Error(`solana program deploy exited with status ${result.status}`);
+    const runSolana = (args: string[], label: string) => {
+      const result = spawnSync('solana', args, {
+        stdio: 'inherit',
+        env: { ...process.env, NO_DNA: '1' },
+      });
+      if (result.status !== 0) throw new Error(`${label} exited with status ${result.status}`);
+    };
+
+    if (bufferAddress) {
+      runSolana(
+        [
+          '--keypair',
+          tempKeypairPath,
+          'program',
+          'write-buffer',
+          options.binaryPath,
+          '--buffer',
+          bufferAddress,
+          '--buffer-authority',
+          tempKeypairPath,
+          '--fee-payer',
+          tempKeypairPath,
+          '--url',
+          options.rpcUrl,
+          '--commitment',
+          'finalized',
+          '--use-rpc',
+          '--output',
+          'json',
+        ],
+        'solana program write-buffer',
+      );
+      const bufferHash = await verifyBufferHash(connection, bufferAddress, binary.length);
+      console.log('Finalized buffer hash verified:', bufferHash);
+      runSolana(
+        [
+          '--keypair',
+          tempKeypairPath,
+          'program',
+          'deploy',
+          '--program-id',
+          PROGRAM_ID.toBase58(),
+          '--buffer',
+          bufferAddress,
+          '--upgrade-authority',
+          tempKeypairPath,
+          '--fee-payer',
+          tempKeypairPath,
+          '--url',
+          options.rpcUrl,
+          '--commitment',
+          'finalized',
+          '--use-rpc',
+          '--output',
+          'json',
+        ],
+        'solana program deploy',
+      );
+    } else {
+      runSolana(
+        [
+          '--keypair',
+          tempKeypairPath,
+          'program',
+          'deploy',
+          options.binaryPath,
+          '--program-id',
+          PROGRAM_ID.toBase58(),
+          '--upgrade-authority',
+          tempKeypairPath,
+          '--fee-payer',
+          tempKeypairPath,
+          '--url',
+          options.rpcUrl,
+          '--commitment',
+          'finalized',
+          '--use-rpc',
+          '--output',
+          'json',
+        ],
+        'solana program deploy',
+      );
+    }
   } finally {
     cleanup();
   }
