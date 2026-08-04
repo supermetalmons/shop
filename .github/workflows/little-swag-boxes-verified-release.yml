@@ -1,0 +1,138 @@
+name: Little Swag Boxes verified release
+
+on:
+  push:
+    branches:
+      - codex/lsb-uri-upgrade
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_IMAGE: solanafoundation/solana-verifiable-build@sha256:695f890e620db8c39afe5112e048599f8ee395a0cab5a2e572f30a72c6366cb4
+  SOLANA_VERIFY_VERSION: 0.5.1
+  RUST_TOOLCHAIN: 1.89.0
+  HISTORICAL_COMMIT: 02075c7723544cf5619257b27b97a3297b05b0b4
+
+jobs:
+  verified-build:
+    name: Verified build ${{ matrix.builder }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [a, b]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned Rust and solana-verify
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+
+      - name: Build deterministic ELF in pinned Docker image
+        working-directory: onchain
+        run: solana-verify build --library-name box_minter --base-image "$BASE_IMAGE"
+
+      - name: Run Rust tests
+        working-directory: onchain
+        run: cargo test --workspace --locked
+
+      - name: Generate and compare Anchor IDLs
+        if: matrix.builder == 'a'
+        run: |
+          cargo install anchor-cli --version 0.32.1 --locked
+          mkdir -p onchain/target/idl onchain/target/types "$RUNNER_TEMP/lsb-baseline"
+          (cd onchain && anchor idl build -o target/idl/box_minter.json -t target/types/box_minter.ts)
+          git archive "$HISTORICAL_COMMIT" | tar -x -C "$RUNNER_TEMP/lsb-baseline"
+          perl -0pi -e 's/anchor-debug = \[\]/anchor-debug = []\nidl-build = ["anchor-lang\/idl-build"]/' "$RUNNER_TEMP/lsb-baseline/onchain/programs/box_minter/Cargo.toml"
+          mkdir -p "$RUNNER_TEMP/lsb-baseline/onchain/target/idl"
+          (cd "$RUNNER_TEMP/lsb-baseline/onchain" && anchor idl build -o target/idl/box_minter.json)
+          node scripts/check-anchor-idl-compat.mjs \
+            "$RUNNER_TEMP/lsb-baseline/onchain/target/idl/box_minter.json" \
+            onchain/target/idl/box_minter.json \
+            onchain/target/idl/compatibility-manifest.json
+
+      - name: Assemble build artifact
+        env:
+          BUILDER: ${{ matrix.builder }}
+        run: |
+          mkdir -p "release-$BUILDER"
+          cp onchain/target/deploy/box_minter.so "release-$BUILDER/box_minter.so"
+          ELF_SHA256="$(sha256sum "release-$BUILDER/box_minter.so" | cut -d' ' -f1)"
+          EXECUTABLE_HASH="$(solana-verify get-executable-hash "release-$BUILDER/box_minter.so")"
+          IMAGE_REPO_DIGEST="$(docker image inspect "$BASE_IMAGE" --format '{{index .RepoDigests 0}}')"
+          CONTAINER_TOOLS="$(docker run --rm "$BASE_IMAGE" bash -lc 'solana --version; cargo build-sbf --version' | tr '\n' ';')"
+          jq -n \
+            --arg builder "$BUILDER" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg baseImage "$BASE_IMAGE" \
+            --arg imageRepoDigest "$IMAGE_REPO_DIGEST" \
+            --arg solanaVerifyVersion "$(solana-verify --version)" \
+            --arg rustVersion "$(rustc --version)" \
+            --arg containerTools "$CONTAINER_TOOLS" \
+            --arg elfSha256 "$ELF_SHA256" \
+            --arg executableHash "$EXECUTABLE_HASH" \
+            '{builder,sourceCommit,baseImage,imageRepoDigest,solanaVerifyVersion,rustVersion,containerTools,elfSha256,executableHash}' \
+            > "release-$BUILDER/build-manifest.json"
+          if [ "$BUILDER" = a ]; then
+            cp onchain/target/idl/box_minter.json "release-$BUILDER/box_minter.idl.json"
+            cp onchain/target/types/box_minter.ts "release-$BUILDER/box_minter.idl.ts"
+            cp onchain/target/idl/compatibility-manifest.json "release-$BUILDER/idl-compatibility-manifest.json"
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verified-build-${{ matrix.builder }}
+          path: release-${{ matrix.builder }}
+          if-no-files-found: error
+          retention-days: 90
+
+  compare:
+    name: Require identical verified builds
+    needs: verified-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verified-build-a
+          path: build-a
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: verified-build-b
+          path: build-b
+
+      - name: Compare ELF bytes and assemble release
+        run: |
+          cmp build-a/box_minter.so build-b/box_minter.so
+          HASH_A="$(sha256sum build-a/box_minter.so | cut -d' ' -f1)"
+          HASH_B="$(sha256sum build-b/box_minter.so | cut -d' ' -f1)"
+          test "$HASH_A" = "$HASH_B"
+          mkdir -p little-swag-boxes-release
+          cp build-a/box_minter.so little-swag-boxes-release/box_minter.so
+          cp build-a/box_minter.idl.json little-swag-boxes-release/box_minter.idl.json
+          cp build-a/box_minter.idl.ts little-swag-boxes-release/box_minter.idl.ts
+          cp build-a/idl-compatibility-manifest.json little-swag-boxes-release/idl-compatibility-manifest.json
+          cp build-a/build-manifest.json little-swag-boxes-release/build-a-manifest.json
+          cp build-b/build-manifest.json little-swag-boxes-release/build-b-manifest.json
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg programId "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep" \
+            --arg elfSha256 "$HASH_A" \
+            --arg baseImage "$BASE_IMAGE" \
+            --slurpfile buildA build-a/build-manifest.json \
+            --slurpfile buildB build-b/build-manifest.json \
+            '{sourceCommit,programId,elfSha256,baseImage,identicalIndependentBuilds:true,builds:[$buildA[0],$buildB[0]]}' \
+            > little-swag-boxes-release/hash-manifest.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: little-swag-boxes-release-${{ github.sha }}
+          path: little-swag-boxes-release
+          if-no-files-found: error
+          retention-days: 90

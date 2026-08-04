@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep",
+  "configPda": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+  "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "configAccountBytes": 289,
+  "instruction": {
+    "name": "set_uri_base",
+    "discriminator": [160, 250, 204, 89, 122, 8, 207, 34],
+    "accounts": [
+      {
+        "name": "config",
+        "address": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+        "writable": true,
+        "signer": false
+      },
+      {
+        "name": "admin",
+        "address": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+        "writable": false,
+        "signer": true
+      }
+    ]
+  },
+  "targetUriBase": "https://cdn.lil.org/nft/little_swag_boxes",
+  "rollbackUriBase": "https://assets.mons.link/drops/lsb",
+  "defaultMode": "simulate",
+  "privateKeyPolicy": "This manifest and its client never read, request, store, or retain private keys."
+}

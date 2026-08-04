@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "mons.shop – physically redeemable nft drops",
   "scripts": {
+    "archive:poncho-mainnet": "node scripts/archive-poncho-mainnet.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -14,7 +15,9 @@
     "deploy:firebase": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
-    "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts"
+    "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts",
+    "prepare:poncho-uri-base": "node --experimental-strip-types scripts/prepare-poncho-uri-base.ts",
+    "test:poncho-uri-surfpool": "node --experimental-strip-types scripts/test-poncho-uri-base-surfpool.ts"
   },
   "repository": {
     "type": "git",
