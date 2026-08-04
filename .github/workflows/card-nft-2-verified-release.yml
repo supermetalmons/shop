@@ -58,7 +58,7 @@ jobs:
 
       - name: Build deterministic mainnet ELF
         working-directory: onchain
-        run: NO_DNA=1 solana-verify build --library-name box_minter --base-image "$BASE_IMAGE" -- --locked --features mainnet-program-id,no-idl,no-log-ix-name
+        run: NO_DNA=1 solana-verify build --library-name box_minter --base-image "$BASE_IMAGE" -- --features mainnet-program-id,no-idl,no-log-ix-name
 
       - name: Assemble build artifact
         env:
