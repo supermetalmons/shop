@@ -34,10 +34,6 @@ jobs:
           rustup default "$RUST_TOOLCHAIN"
           cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
 
-      - name: Build deterministic ELF in pinned Docker image
-        working-directory: onchain
-        run: solana-verify build --library-name box_minter --base-image "$BASE_IMAGE"
-
       - name: Run Rust tests
         working-directory: onchain
         run: cargo test --workspace --locked
@@ -55,6 +51,10 @@ jobs:
             "$RUNNER_TEMP/lsb-baseline/onchain/target/idl/box_minter.json" \
             onchain/target/idl/box_minter.json \
             onchain/target/idl/compatibility-manifest.json
+
+      - name: Build deterministic ELF in pinned Docker image
+        working-directory: onchain
+        run: solana-verify build --library-name box_minter --base-image "$BASE_IMAGE"
 
       - name: Assemble build artifact
         env:
