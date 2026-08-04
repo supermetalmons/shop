@@ -15,7 +15,10 @@
     "df": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "prepare:lsb-uri-base": "node --experimental-strip-types scripts/prepare-lsb-uri-base.ts",
+    "prepare:lsb-existing-uri-migration": "node --experimental-strip-types scripts/prepare-lsb-existing-uri-migration.ts",
+    "migrate:lsb-existing-uris": "node --experimental-strip-types scripts/migrate-lsb-existing-uris.ts",
     "test:lsb-uri-surfpool": "node --experimental-strip-types scripts/test-lsb-uri-base-surfpool.ts",
+    "test:lsb-existing-uri-surfpool": "node --experimental-strip-types scripts/load-lsb-migration-surfpool.ts && LSB_SIMULATION_RPC_URL=${SURFPOOL_RPC_URL:-http://127.0.0.1:8899} node --experimental-strip-types scripts/prepare-lsb-existing-uri-migration.ts --simulate --test-unauthorized --out .cache/lsb-existing-uri-migration/surfpool-full.json",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts"
   },
   "repository": {

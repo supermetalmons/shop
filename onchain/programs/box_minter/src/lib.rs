@@ -77,6 +77,12 @@ const URI_SUFFIX_FIGURES: &str = "/json/figures/";
 const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
 const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
 const LEGACY_LITTLE_SWAG_BOXES_URI_BASE: &str = "https://assets.mons.link/drops/lsb";
+const CURRENT_LITTLE_SWAG_BOXES_URI_BASE: &str = "https://cdn.lil.org/nft/little_swag_boxes";
+const LITTLE_SWAG_RECEIPTS_TREE: Pubkey = pubkey!("Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV");
+const IX_BUBBLEGUM_UPDATE_METADATA_V2: [u8; 8] = [43, 103, 89, 42, 121, 242, 62, 72];
+const RECEIPT_KIND_BOX: u8 = 0;
+const RECEIPT_KIND_FIGURE: u8 = 1;
+const MAX_RECEIPT_PROOF_ACCOUNTS: usize = 14;
 
 fn hash_leaf(data: &[u8]) -> [u8; 32] {
     hashv(&[data]).to_bytes()
@@ -468,6 +474,286 @@ pub mod box_minter {
             ctx.accounts.admin.key(),
             &uri_base,
         )
+    }
+
+    pub fn migrate_collection_uri(ctx: Context<MigrateCollectionUri>) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+        let source_base = migration_source_base(&cfg.uri_base)?;
+        let target_uri = format!("{}/collection.json", cfg.uri_base);
+        let source_uri = format!("{source_base}/collection.json");
+        {
+            let data = ctx.accounts.core_collection.try_borrow_data()?;
+            let collection = parse_mpl_core_base_collection_v1(&data)?;
+            require_keys_eq!(
+                collection.update_authority,
+                ctx.accounts.config.key(),
+                BoxMinterError::InvalidAssetCollection
+            );
+            if collection.uri == target_uri.as_bytes() {
+                return Ok(());
+            }
+            require!(
+                collection.uri == source_uri.as_bytes(),
+                BoxMinterError::InvalidAssetMetadata
+            );
+        }
+
+        let mut data = Vec::with_capacity(8 + target_uri.len());
+        data.push(16u8);
+        data.push(0u8);
+        data.push(1u8);
+        borsh_push_string(&mut data, &target_uri)?;
+        let config = ctx.accounts.config.to_account_info();
+        let core_program = ctx.accounts.mpl_core_program.to_account_info();
+        let instruction = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.core_collection.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.admin.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    config.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    MPL_CORE_PROGRAM_ID,
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.log_wrapper.key(),
+                    false,
+                ),
+            ],
+            data,
+        };
+        let signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        invoke_signed(
+            &instruction,
+            &[
+                ctx.accounts.core_collection.to_account_info(),
+                ctx.accounts.admin.to_account_info(),
+                config,
+                core_program.clone(),
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.log_wrapper.to_account_info(),
+                core_program,
+            ],
+            &[signer_seeds],
+        )?;
+        Ok(())
+    }
+
+    pub fn migrate_core_asset_uri(ctx: Context<MigrateCoreAssetUri>) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+        migration_source_base(&cfg.uri_base)?;
+        let target_uri = {
+            let data = ctx.accounts.asset.try_borrow_data()?;
+            let asset = parse_mpl_core_base_asset_v1(&data)?;
+            require!(
+                asset.update_authority_kind == 2 && asset.update_authority == cfg.core_collection,
+                BoxMinterError::InvalidAssetCollection
+            );
+            if core_asset_uri_matches_base(asset.uri, cfg.max_supply, &cfg.uri_base) {
+                return Ok(());
+            }
+            migrated_core_asset_uri(asset.uri, cfg.max_supply, &cfg.uri_base)?
+        };
+
+        let mut data = Vec::with_capacity(8 + target_uri.len());
+        data.push(15u8);
+        data.push(0u8);
+        data.push(1u8);
+        borsh_push_string(&mut data, &target_uri)?;
+        data.push(0u8);
+        let config = ctx.accounts.config.to_account_info();
+        let instruction = anchor_lang::solana_program::instruction::Instruction {
+            program_id: MPL_CORE_PROGRAM_ID,
+            accounts: vec![
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.asset.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.core_collection.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new(
+                    ctx.accounts.admin.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    config.key(),
+                    true,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.system_program.key(),
+                    false,
+                ),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    ctx.accounts.log_wrapper.key(),
+                    false,
+                ),
+            ],
+            data,
+        };
+        let signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        invoke_signed(
+            &instruction,
+            &[
+                ctx.accounts.asset.to_account_info(),
+                ctx.accounts.core_collection.to_account_info(),
+                ctx.accounts.admin.to_account_info(),
+                config,
+                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.log_wrapper.to_account_info(),
+                ctx.accounts.mpl_core_program.to_account_info(),
+            ],
+            &[signer_seeds],
+        )?;
+        Ok(())
+    }
+
+    pub fn migrate_receipt_uri<'a, 'b, 'c, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, MigrateReceiptUri<'info>>,
+        args: MigrateReceiptUriArgs,
+    ) -> Result<()> {
+        let cfg = &ctx.accounts.config;
+        migration_source_base(&cfg.uri_base)?;
+        require!(
+            ctx.remaining_accounts.len() <= MAX_RECEIPT_PROOF_ACCOUNTS,
+            BoxMinterError::InvalidRemainingAccounts
+        );
+        let (expected_tree_config, _) = Pubkey::find_program_address(
+            &[ctx.accounts.merkle_tree.key().as_ref()],
+            &BUBBLEGUM_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            ctx.accounts.tree_config.key(),
+            expected_tree_config,
+            BoxMinterError::InvalidReceiptsTreeConfig
+        );
+        require!(args.flags == 0, BoxMinterError::InvalidAssetMetadata);
+        require!(
+            args.nonce <= u32::MAX as u64 && args.index == args.nonce as u32,
+            BoxMinterError::InvalidAssetMetadata
+        );
+        require_keys_eq!(
+            ctx.accounts.leaf_owner.key(),
+            ctx.accounts.leaf_delegate.key(),
+            BoxMinterError::InvalidAssetOwner
+        );
+
+        let (name, current_uri, target_uri) = receipt_migration_metadata(
+            args.receipt_kind,
+            args.receipt_id,
+            cfg.max_supply,
+            &cfg.uri_base,
+        )?;
+        let mut data = Vec::with_capacity(320);
+        data.extend_from_slice(&IX_BUBBLEGUM_UPDATE_METADATA_V2);
+        data.extend_from_slice(&args.root);
+        data.push(1u8);
+        data.extend_from_slice(&args.asset_data_hash);
+        data.push(1u8);
+        data.push(args.flags);
+        data.extend_from_slice(&args.nonce.to_le_bytes());
+        data.extend_from_slice(&args.index.to_le_bytes());
+        borsh_push_string(&mut data, &name)?;
+        borsh_push_string(&mut data, "")?;
+        borsh_push_string(&mut data, &current_uri)?;
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.push(0u8);
+        data.push(1u8);
+        data.push(1u8);
+        data.push(0u8);
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.push(1u8);
+        data.extend_from_slice(cfg.core_collection.as_ref());
+        data.push(0u8);
+        data.push(0u8);
+        data.push(1u8);
+        borsh_push_string(&mut data, &target_uri)?;
+        data.push(0u8);
+        data.push(0u8);
+        data.push(0u8);
+        data.push(0u8);
+
+        let config = ctx.accounts.config.to_account_info();
+        let mut metas = Vec::with_capacity(10 + ctx.remaining_accounts.len());
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            ctx.accounts.tree_config.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            ctx.accounts.admin.key(),
+            true,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            config.key(),
+            true,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.leaf_owner.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.leaf_delegate.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new(
+            ctx.accounts.merkle_tree.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.core_collection.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.log_wrapper.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.compression_program.key(),
+            false,
+        ));
+        metas.push(anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+            ctx.accounts.system_program.key(),
+            false,
+        ));
+        metas.extend(ctx.remaining_accounts.iter().map(|account| {
+            anchor_lang::solana_program::instruction::AccountMeta::new_readonly(account.key(), false)
+        }));
+
+        let instruction = anchor_lang::solana_program::instruction::Instruction {
+            program_id: BUBBLEGUM_PROGRAM_ID,
+            accounts: metas,
+            data,
+        };
+        let mut infos = Vec::with_capacity(11 + ctx.remaining_accounts.len());
+        infos.push(ctx.accounts.tree_config.to_account_info());
+        infos.push(ctx.accounts.admin.to_account_info());
+        infos.push(config);
+        infos.push(ctx.accounts.leaf_owner.to_account_info());
+        infos.push(ctx.accounts.leaf_delegate.to_account_info());
+        infos.push(ctx.accounts.merkle_tree.to_account_info());
+        infos.push(ctx.accounts.core_collection.to_account_info());
+        infos.push(ctx.accounts.log_wrapper.to_account_info());
+        infos.push(ctx.accounts.compression_program.to_account_info());
+        infos.push(ctx.accounts.system_program.to_account_info());
+        infos.extend(ctx.remaining_accounts.iter().cloned());
+        infos.push(ctx.accounts.bubblegum_program.to_account_info());
+        let signer_seeds: &[&[u8]] = &[BoxMinterConfig::SEED, &[cfg.bump]];
+        invoke_signed(&instruction, &infos, &[signer_seeds])?;
+        Ok(())
     }
 
     pub fn start_mint(ctx: Context<StartMint>) -> Result<()> {
@@ -1541,6 +1827,17 @@ pub struct MintReceiptsArgs {
     pub dude_ids: Vec<u16>,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct MigrateReceiptUriArgs {
+    pub root: [u8; 32],
+    pub asset_data_hash: [u8; 32],
+    pub flags: u8,
+    pub nonce: u64,
+    pub index: u32,
+    pub receipt_kind: u8,
+    pub receipt_id: u16,
+}
+
 #[account]
 pub struct BoxMinterConfig {
     pub admin: Pubkey,
@@ -1671,6 +1968,80 @@ pub struct SetUriBase<'info> {
     #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
     pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateCollectionUri<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: Address and owner are constrained to the configured MPL Core collection.
+    #[account(mut, address = config.core_collection, owner = MPL_CORE_PROGRAM_ID)]
+    pub core_collection: UncheckedAccount<'info>,
+    /// CHECK: Address is constrained to the MPL Core program.
+    #[account(address = MPL_CORE_PROGRAM_ID)]
+    pub mpl_core_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+    /// CHECK: Address is constrained to the SPL Noop program.
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateCoreAssetUri<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: Owner is constrained to MPL Core and metadata is parsed by the handler.
+    #[account(mut, owner = MPL_CORE_PROGRAM_ID)]
+    pub asset: UncheckedAccount<'info>,
+    /// CHECK: Address and owner are constrained to the configured MPL Core collection.
+    #[account(address = config.core_collection, owner = MPL_CORE_PROGRAM_ID)]
+    pub core_collection: UncheckedAccount<'info>,
+    /// CHECK: Address is constrained to the MPL Core program.
+    #[account(address = MPL_CORE_PROGRAM_ID)]
+    pub mpl_core_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+    /// CHECK: Address is constrained to the SPL Noop program.
+    #[account(address = SPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateReceiptUri<'info> {
+    #[account(seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: Bubblegum verifies the owner against the compressed leaf.
+    pub leaf_owner: UncheckedAccount<'info>,
+    /// CHECK: Equality to leaf_owner is enforced by the handler.
+    pub leaf_delegate: UncheckedAccount<'info>,
+    /// CHECK: Address and compression-program ownership are constrained.
+    #[account(
+        mut,
+        address = LITTLE_SWAG_RECEIPTS_TREE,
+        owner = MPL_ACCOUNT_COMPRESSION_PROGRAM_ID
+    )]
+    pub merkle_tree: UncheckedAccount<'info>,
+    /// CHECK: Bubblegum ownership is constrained and PDA derivation is checked by the handler.
+    #[account(mut, owner = BUBBLEGUM_PROGRAM_ID)]
+    pub tree_config: UncheckedAccount<'info>,
+    /// CHECK: Address and owner are constrained to the configured MPL Core collection.
+    #[account(address = config.core_collection, owner = MPL_CORE_PROGRAM_ID)]
+    pub core_collection: UncheckedAccount<'info>,
+    /// CHECK: Address is constrained to the Bubblegum program.
+    #[account(address = BUBBLEGUM_PROGRAM_ID)]
+    pub bubblegum_program: UncheckedAccount<'info>,
+    /// CHECK: Address is constrained to the MPL Noop program.
+    #[account(address = MPL_NOOP_PROGRAM_ID)]
+    pub log_wrapper: UncheckedAccount<'info>,
+    /// CHECK: Address is constrained to the account-compression program.
+    #[account(address = MPL_ACCOUNT_COMPRESSION_PROGRAM_ID)]
+    pub compression_program: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -1929,6 +2300,11 @@ struct ParsedMplCoreBaseAssetV1<'a> {
     uri: &'a [u8],
 }
 
+struct ParsedMplCoreBaseCollectionV1<'a> {
+    update_authority: Pubkey,
+    uri: &'a [u8],
+}
+
 fn read_u32_le(data: &[u8], offset: usize) -> Result<u32> {
     let end = offset.checked_add(4).ok_or(error!(BoxMinterError::InvalidAsset))?;
     let slice = data.get(offset..end).ok_or(error!(BoxMinterError::InvalidAsset))?;
@@ -1998,6 +2374,133 @@ fn parse_mpl_core_base_asset_v1(data: &[u8]) -> Result<ParsedMplCoreBaseAssetV1<
         update_authority: update_pk,
         uri,
     })
+}
+
+fn parse_mpl_core_base_collection_v1(
+    data: &[u8],
+) -> Result<ParsedMplCoreBaseCollectionV1<'_>> {
+    if data.len() < 1 + 32 + 4 + 4 + 4 + 4 || data[0] != 5 {
+        return Err(error!(BoxMinterError::InvalidAsset));
+    }
+    let update_authority = Pubkey::new_from_array(
+        data[1..33]
+            .try_into()
+            .map_err(|_| error!(BoxMinterError::InvalidAsset))?,
+    );
+    let mut offset = 33usize;
+    let name_len = read_u32_le(data, offset)? as usize;
+    require!(
+        name_len <= MAX_MPL_CORE_NAME_BYTES,
+        BoxMinterError::InvalidAsset
+    );
+    offset = offset
+        .checked_add(4)
+        .and_then(|value| value.checked_add(name_len))
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    if offset > data.len() {
+        return Err(error!(BoxMinterError::InvalidAsset));
+    }
+    let uri_len = read_u32_le(data, offset)? as usize;
+    require!(
+        uri_len <= MAX_MPL_CORE_URI_BYTES,
+        BoxMinterError::InvalidAsset
+    );
+    offset = offset
+        .checked_add(4)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let uri_end = offset
+        .checked_add(uri_len)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let uri = data
+        .get(offset..uri_end)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    let trailing = uri_end
+        .checked_add(8)
+        .ok_or(error!(BoxMinterError::InvalidAsset))?;
+    if trailing > data.len() {
+        return Err(error!(BoxMinterError::InvalidAsset));
+    }
+    Ok(ParsedMplCoreBaseCollectionV1 {
+        update_authority,
+        uri,
+    })
+}
+
+fn core_asset_uri_matches_base(uri: &[u8], max_supply: u32, drop_base: &str) -> bool {
+    parse_ref_id_from_uri_bytes(uri, drop_base, URI_SUFFIX_BOXES)
+        .is_some_and(|id| id <= max_supply)
+        || parse_ref_id_from_uri_bytes(uri, drop_base, URI_SUFFIX_FIGURES)
+            .is_some_and(|id| id <= MAX_DUDE_ID as u32)
+}
+
+fn migration_source_base(target_base: &str) -> Result<&'static str> {
+    match target_base {
+        CURRENT_LITTLE_SWAG_BOXES_URI_BASE => Ok(LEGACY_LITTLE_SWAG_BOXES_URI_BASE),
+        LEGACY_LITTLE_SWAG_BOXES_URI_BASE => Ok(CURRENT_LITTLE_SWAG_BOXES_URI_BASE),
+        _ => Err(error!(BoxMinterError::InvalidMigrationTarget)),
+    }
+}
+
+fn migrated_core_asset_uri(
+    uri: &[u8],
+    max_supply: u32,
+    target_base: &str,
+) -> Result<String> {
+    let source_base = migration_source_base(target_base)?;
+    if let Some(id) = parse_ref_id_from_uri_bytes(
+        uri,
+        source_base,
+        URI_SUFFIX_BOXES,
+    ) {
+        require!(id <= max_supply, BoxMinterError::InvalidAssetMetadata);
+        return Ok(format!("{target_base}{URI_SUFFIX_BOXES}{id}.json"));
+    }
+    if let Some(id) = parse_ref_id_from_uri_bytes(
+        uri,
+        source_base,
+        URI_SUFFIX_FIGURES,
+    ) {
+        require!(
+            id <= MAX_DUDE_ID as u32,
+            BoxMinterError::InvalidAssetMetadata
+        );
+        return Ok(format!("{target_base}{URI_SUFFIX_FIGURES}{id}.json"));
+    }
+    Err(error!(BoxMinterError::InvalidAssetMetadata))
+}
+
+fn receipt_migration_metadata(
+    receipt_kind: u8,
+    receipt_id: u16,
+    max_supply: u32,
+    target_base: &str,
+) -> Result<(String, String, String)> {
+    let source_base = migration_source_base(target_base)?;
+    let (name, suffix) = match receipt_kind {
+        RECEIPT_KIND_BOX => {
+            require!(
+                receipt_id > 0 && receipt_id as u32 <= max_supply,
+                BoxMinterError::InvalidAssetMetadata
+            );
+            (format!("receipt · box {receipt_id}"), URI_SUFFIX_RECEIPTS_BOXES)
+        }
+        RECEIPT_KIND_FIGURE => {
+            require!(
+                receipt_id > 0 && receipt_id <= MAX_DUDE_ID,
+                BoxMinterError::InvalidAssetMetadata
+            );
+            (
+                format!("receipt · figure {receipt_id}"),
+                URI_SUFFIX_RECEIPTS_FIGURES,
+            )
+        }
+        _ => return Err(error!(BoxMinterError::InvalidAssetMetadata)),
+    };
+    Ok((
+        name,
+        format!("{source_base}{suffix}{receipt_id}.json"),
+        format!("{target_base}{suffix}{receipt_id}.json"),
+    ))
 }
 
 fn parse_ref_id_from_uri_bytes(uri: &[u8], drop_base: &str, uri_suffix: &str) -> Option<u32> {
@@ -2220,6 +2723,8 @@ pub enum BoxMinterError {
     UnauthorizedInitializer,
     #[msg("Minting has not started yet")]
     MintNotStarted,
+    #[msg("URI migration requires a recognized Little Swag Boxes base")]
+    InvalidMigrationTarget,
 }
 
 #[cfg(test)]
@@ -2371,6 +2876,156 @@ mod tests {
                 URI_SUFFIX_BOXES,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn collection_parser_reads_authority_and_uri() {
+        let authority = Pubkey::new_unique();
+        let name = "Little Swag Boxes";
+        let uri = format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}/collection.json");
+        let mut data = vec![5u8];
+        data.extend_from_slice(authority.as_ref());
+        data.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        data.extend_from_slice(name.as_bytes());
+        data.extend_from_slice(&(uri.len() as u32).to_le_bytes());
+        data.extend_from_slice(uri.as_bytes());
+        data.extend_from_slice(&333u32.to_le_bytes());
+        data.extend_from_slice(&532u32.to_le_bytes());
+        let parsed = parse_mpl_core_base_collection_v1(&data).unwrap();
+        assert_eq!(parsed.update_authority, authority);
+        assert_eq!(parsed.uri, uri.as_bytes());
+        data[0] = 1;
+        assert!(parse_mpl_core_base_collection_v1(&data).is_err());
+    }
+
+    #[test]
+    fn core_uri_migration_is_exact_and_bounded() {
+        assert_eq!(
+            migrated_core_asset_uri(
+                format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}333.json")
+                    .as_bytes(),
+                333,
+                CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap(),
+            format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}333.json")
+        );
+        assert_eq!(
+            migrated_core_asset_uri(
+                format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_FIGURES}999.json")
+                    .as_bytes(),
+                333,
+                CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap(),
+            format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_FIGURES}999.json")
+        );
+        for invalid in [
+            format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}334.json"),
+            format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_FIGURES}1000.json"),
+            format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}1.json"),
+            "https://cdn.lil.org/nft/unrelated/json/boxes/1.json".to_string(),
+        ] {
+            assert!(migrated_core_asset_uri(
+                invalid.as_bytes(),
+                333,
+                CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .is_err());
+        }
+        assert_eq!(
+            migrated_core_asset_uri(
+                format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}1.json")
+                    .as_bytes(),
+                333,
+                LEGACY_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap(),
+            format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}1.json")
+        );
+        assert!(core_asset_uri_matches_base(
+            format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}1.json").as_bytes(),
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        ));
+        assert!(!core_asset_uri_matches_base(
+            format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}/json/unrelated/1.json").as_bytes(),
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        ));
+        assert!(!core_asset_uri_matches_base(
+            b"https://cdn.lil.org/nft/little_swag_boxes_evil/json/boxes/1.json",
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        ));
+    }
+
+    #[test]
+    fn receipt_uri_migration_reconstructs_exact_metadata() {
+        assert_eq!(
+            receipt_migration_metadata(
+                RECEIPT_KIND_BOX,
+                9,
+                333,
+                CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap(),
+            (
+                "receipt · box 9".to_string(),
+                format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_RECEIPTS_BOXES}9.json"),
+                format!("{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_RECEIPTS_BOXES}9.json"),
+            )
+        );
+        assert_eq!(
+            receipt_migration_metadata(
+                RECEIPT_KIND_FIGURE,
+                999,
+                333,
+                CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap(),
+            (
+                "receipt · figure 999".to_string(),
+                format!(
+                    "{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_RECEIPTS_FIGURES}999.json"
+                ),
+                format!(
+                    "{CURRENT_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_RECEIPTS_FIGURES}999.json"
+                ),
+            )
+        );
+        assert!(receipt_migration_metadata(
+            RECEIPT_KIND_BOX,
+            334,
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        )
+        .is_err());
+        assert!(receipt_migration_metadata(
+            RECEIPT_KIND_FIGURE,
+            1000,
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        )
+        .is_err());
+        assert!(receipt_migration_metadata(
+            2,
+            1,
+            333,
+            CURRENT_LITTLE_SWAG_BOXES_URI_BASE,
+        )
+        .is_err());
+        assert_eq!(
+            receipt_migration_metadata(
+                RECEIPT_KIND_BOX,
+                9,
+                333,
+                LEGACY_LITTLE_SWAG_BOXES_URI_BASE,
+            )
+            .unwrap()
+            .2,
+            format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_RECEIPTS_BOXES}9.json")
         );
     }
 }
