@@ -228,3 +228,24 @@ test('assertBoxMinterConfigMatchesDropConfig rejects stale collection or metadat
     /metadata base/i,
   );
 });
+
+test('Poncho on-chain config accepts the legacy alias during rollout', () => {
+  const drop = {
+    collectionMint: pubkey(72).toBase58(),
+    metadataBase: 'https://cdn.lil.org/nft/poncho_drifella',
+    metadataBaseAliases: ['https://assets.mons.link/drops/poncho'],
+  } as any;
+
+  assert.doesNotThrow(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(72),
+    uriBase: 'https://assets.mons.link/drops/poncho',
+  }, drop));
+  assert.doesNotThrow(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(72),
+    uriBase: 'https://cdn.lil.org/nft/poncho_drifella',
+  }, drop));
+  assert.throws(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(72),
+    uriBase: 'https://cdn.lil.org/nft/poncho_drifella-copy',
+  }, drop), /metadata base/i);
+});

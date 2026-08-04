@@ -10,6 +10,7 @@ import {
 
 const CARD_NFT_2_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
 const LITTLE_SWAG_BOXES_COLLECTION = '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr';
+const PONCHO_DRIFELLA_COLLECTION = 'JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH';
 const SHARED_RECEIPTS_COLLECTION = 'SharedReceiptCollection11111111111111111111111';
 const SHARED_RECEIPTS_TREE = 'SharedReceiptTree111111111111111111111111111111';
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
@@ -329,6 +330,60 @@ test('inventory resolution accepts a configured legacy metadata base alias only'
         ...asset,
         content: { json_uri: 'https://assets.example.com/drops/lsb/json/boxes/7.json' },
       },
+      candidates,
+      'mainnet-beta',
+    ),
+    null,
+  );
+});
+
+test('Poncho inventory resolves canonical and legacy roots while unrelated roots stay strict', () => {
+  const canonicalBase = 'https://cdn.lil.org/nft/poncho_drifella';
+  const legacyBase = 'https://assets.mons.link/drops/poncho';
+  const candidates: InventoryDropResolutionCandidate[] = [
+    {
+      dropId: 'poncho_drifella',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: PONCHO_DRIFELLA_COLLECTION,
+      receiptsMerkleTree: '5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow',
+      metadataBase: canonicalBase,
+      metadataBaseAliases: [legacyBase],
+      maxSupply: 207,
+    },
+    {
+      dropId: 'unrelated_drop',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: PONCHO_DRIFELLA_COLLECTION,
+      receiptsMerkleTree: null,
+      metadataBase: 'https://cdn.lil.org/nft/unrelated_drop',
+      maxSupply: 207,
+    },
+  ];
+  const asset = (uri: string) => ({
+    id: uri,
+    grouping: [{ group_key: 'collection', group_value: PONCHO_DRIFELLA_COLLECTION }],
+    content: { json_uri: uri },
+  });
+
+  assert.equal(
+    resolveInventoryAssetDropId(
+      asset(`${legacyBase}/json/boxes/7.json`),
+      candidates,
+      'mainnet-beta',
+    ),
+    'poncho_drifella',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(
+      asset(`${canonicalBase}/json/figures/207.json`),
+      candidates,
+      'mainnet-beta',
+    ),
+    'poncho_drifella',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(
+      asset('https://cdn.lil.org/nft/poncho_drifella_evil/json/boxes/7.json'),
       candidates,
       'mainnet-beta',
     ),

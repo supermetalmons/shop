@@ -450,6 +450,30 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     FUNCTIONS_DROPS.little_swag_boxes.metadataBaseAliases,
     DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
   );
+  assert.equal(
+    DEPLOYMENT_DROPS.poncho_drifella.metadataBase,
+    'https://cdn.lil.org/nft/poncho_drifella',
+  );
+  assert.deepEqual(
+    DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
+    ['https://assets.mons.link/drops/poncho'],
+  );
+  assert.deepEqual(
+    FRONTEND_DROPS.poncho_drifella.metadataBaseAliases,
+    DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
+  );
+  assert.deepEqual(
+    FUNCTIONS_DROPS.poncho_drifella.metadataBaseAliases,
+    DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
+  );
+  assert.equal(
+    DEPLOYMENT_DROPS.poncho_drifella_devnet_x10.metadataBase,
+    'https://assets.mons.link/drops/poncho',
+  );
+  assert.equal(
+    DEPLOYMENT_DROPS.poncho_drifella_devnet_x10.metadataBaseAliases,
+    undefined,
+  );
   assert.deepEqual(
     FRONTEND_DROPS.little_swag_boxes.figureMedia,
     LITTLE_SWAG_BOXES_FIGURE_MEDIA,

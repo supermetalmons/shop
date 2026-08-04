@@ -169,6 +169,42 @@ test('non-pooled receipt metadata identity accepts configured base aliases only'
   );
 });
 
+test('Poncho receipt identity accepts canonical and legacy roots only', () => {
+  const legacyBase = 'https://assets.mons.link/drops/poncho';
+  const canonicalBase = 'https://cdn.lil.org/nft/poncho_drifella';
+  const drop = {
+    collectionMintStr: COLLECTION.toBase58(),
+    metadataBase: canonicalBase,
+    metadataBaseAliases: [legacyBase],
+    receiptMaxId: 207,
+  };
+
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${legacyBase}/json/receipts/figures/207.json`),
+      drop,
+      { kind: 'figure', id: 207 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${canonicalBase}/json/receipts/boxes/7.json`),
+      drop,
+      { kind: 'box', id: 7 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset('https://assets.mons.link/drops/poncho-copy/json/receipts/boxes/7.json'),
+      drop,
+      { kind: 'box', id: 7 },
+    ),
+    false,
+  );
+});
+
 test('receipt drop identity additionally requires the configured tree', () => {
   const drop = {
     collectionMintStr: COLLECTION.toBase58(),
