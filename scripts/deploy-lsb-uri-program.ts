@@ -22,7 +22,7 @@ const MIN_RESUME_BALANCE_LAMPORTS = 10_000_000;
 
 type Options = {
   binaryPath: string;
-  bufferPath?: string;
+  buffer?: string;
   rpcUrl: string;
   dryRun: boolean;
 };
@@ -63,7 +63,7 @@ function localHeliusRpcUrl(): string | undefined {
 
 function parseArgs(argv: string[]): Options {
   let binaryPath = defaultBinaryPath();
-  let bufferPath: string | undefined;
+  let buffer: string | undefined;
   let rpcUrl =
     process.env.MAINNET_RPC_URL?.trim()
     || localHeliusRpcUrl()
@@ -80,8 +80,8 @@ function parseArgs(argv: string[]): Options {
     }
     if (arg === '--buffer') {
       const value = String(argv[++index] || '').trim();
-      if (!value) throw new Error('--buffer requires a keypair path');
-      bufferPath = path.resolve(value);
+      if (!value) throw new Error('--buffer requires an address or keypair path');
+      buffer = value;
       continue;
     }
     if (arg === '--rpc-url') {
@@ -96,7 +96,7 @@ function parseArgs(argv: string[]): Options {
     throw new Error(`Unknown option: ${arg}`);
   }
 
-  return { binaryPath, bufferPath, rpcUrl, dryRun };
+  return { binaryPath, buffer, rpcUrl, dryRun };
 }
 
 function sanitizedRpcUrl(rpcUrl: string): string {
@@ -177,14 +177,20 @@ function readKeypairFile(filePath: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(value));
 }
 
-async function verifyBuffer(
-  connection: Connection,
-  bufferPath: string,
-  releaseBytes: number,
-): Promise<string> {
-  const keypair = readKeypairFile(bufferPath);
+function resolveBufferAddress(value: string): PublicKey {
+  if (!existsSync(value)) return new PublicKey(value);
+  const keypair = readKeypairFile(value);
   const address = keypair.publicKey;
   keypair.secretKey.fill(0);
+  return address;
+}
+
+async function verifyBuffer(
+  connection: Connection,
+  buffer: string,
+  releaseBytes: number,
+): Promise<string> {
+  const address = resolveBufferAddress(buffer);
   const account = await connection.getAccountInfo(address, 'finalized');
   if (!account) throw new Error(`Buffer account is missing: ${address.toBase58()}`);
   if (!account.owner.equals(UPGRADEABLE_LOADER)) throw new Error('Buffer owner mismatch');
@@ -222,8 +228,8 @@ async function main() {
   const binary = verifyRelease(options.binaryPath);
   const connection = new Connection(options.rpcUrl, 'finalized');
   const before = await readMainnetSnapshot(connection);
-  const bufferAddress = options.bufferPath
-    ? await verifyBuffer(connection, options.bufferPath, binary.length)
+  const bufferAddress = options.buffer
+    ? await verifyBuffer(connection, options.buffer, binary.length)
     : undefined;
 
   if (before.uriBase !== CURRENT_URI_BASE) {
@@ -314,7 +320,7 @@ async function main() {
       '--output',
       'json',
     ];
-    if (options.bufferPath) deployArgs.push('--buffer', options.bufferPath);
+    if (bufferAddress) deployArgs.push('--buffer', bufferAddress);
     const result = spawnSync(
       'solana',
       deployArgs,
