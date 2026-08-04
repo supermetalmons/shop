@@ -19,11 +19,13 @@ const RELEASE_BYTES = 493_728;
 const CONFIG_BYTES = 289;
 const MIN_BALANCE_LAMPORTS = 3_870_000_000;
 const MIN_RESUME_BALANCE_LAMPORTS = 10_000_000;
+const WRITE_MAX_SIGN_ATTEMPTS = 10;
 
 type Options = {
   binaryPath: string;
   buffer?: string;
   rpcUrl: string;
+  rpcSource: string;
   dryRun: boolean;
 };
 
@@ -52,22 +54,43 @@ function defaultBinaryPath(): string {
   );
 }
 
-function localHeliusRpcUrl(): string | undefined {
+function configuredHeliusRpc(): { rpcUrl: string; rpcSource: string } | undefined {
+  for (const name of ['HELIUS_API_KEY', 'VITE_HELIUS_API_KEY']) {
+    const raw = process.env[name]?.trim();
+    if (raw) {
+      return {
+        rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(raw)}`,
+        rpcSource: `${name} (process environment)`,
+      };
+    }
+  }
+
   const envPath = path.join(repositoryRoot(), '.env.local');
   if (!existsSync(envPath)) return undefined;
-  const match = readFileSync(envPath, 'utf8').match(/^VITE_HELIUS_API_KEY\s*=\s*(.+?)\s*$/m);
-  const raw = match?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2');
-  if (!raw) return undefined;
-  return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(raw)}`;
+  const contents = readFileSync(envPath, 'utf8');
+  for (const name of ['HELIUS_API_KEY', 'VITE_HELIUS_API_KEY']) {
+    const match = contents.match(new RegExp(`^${name}\\s*=\\s*(.+?)\\s*$`, 'm'));
+    const raw = match?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (raw) {
+      return {
+        rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(raw)}`,
+        rpcSource: `${name} (.env.local)`,
+      };
+    }
+  }
+  return undefined;
 }
 
 function parseArgs(argv: string[]): Options {
   let binaryPath = defaultBinaryPath();
   let buffer: string | undefined;
-  let rpcUrl =
-    process.env.MAINNET_RPC_URL?.trim()
-    || localHeliusRpcUrl()
+  const configuredHelius = configuredHeliusRpc();
+  let rpcUrl = process.env.MAINNET_RPC_URL?.trim()
+    || configuredHelius?.rpcUrl
     || 'https://api.mainnet-beta.solana.com';
+  let rpcSource = process.env.MAINNET_RPC_URL?.trim()
+    ? 'MAINNET_RPC_URL (process environment)'
+    : configuredHelius?.rpcSource || 'Solana public mainnet RPC';
   let dryRun = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -87,6 +110,7 @@ function parseArgs(argv: string[]): Options {
     if (arg === '--rpc-url') {
       rpcUrl = String(argv[++index] || '').trim();
       if (!rpcUrl) throw new Error('--rpc-url requires a URL');
+      rpcSource = '--rpc-url';
       continue;
     }
     if (arg === '--dry-run') {
@@ -96,7 +120,7 @@ function parseArgs(argv: string[]): Options {
     throw new Error(`Unknown option: ${arg}`);
   }
 
-  return { binaryPath, buffer, rpcUrl, dryRun };
+  return { binaryPath, buffer, rpcUrl, rpcSource, dryRun };
 }
 
 function sanitizedRpcUrl(rpcUrl: string): string {
@@ -259,6 +283,7 @@ async function main() {
   console.log('Little Swag Boxes program-upgrade preflight passed.');
   console.log('cluster         : mainnet-beta');
   console.log('rpc             :', sanitizedRpcUrl(options.rpcUrl));
+  console.log('rpc credential  :', options.rpcSource);
   console.log('program         :', PROGRAM_ID.toBase58());
   console.log('program data    :', PROGRAM_DATA.toBase58());
   console.log('current slot    :', before.slot);
@@ -269,7 +294,10 @@ async function main() {
   console.log('release bytes   :', binary.length);
   console.log('release SHA-256 :', RELEASE_SHA256);
   console.log('balance lamports:', before.balanceLamports);
-  if (bufferAddress) console.log('resume buffer   :', bufferAddress);
+  if (bufferAddress) {
+    console.log('resume buffer   :', bufferAddress);
+    console.log('write attempts  :', WRITE_MAX_SIGN_ATTEMPTS);
+  }
 
   if (options.dryRun) {
     console.log('Dry run complete; no private key was requested and nothing was deployed.');
@@ -343,6 +371,8 @@ async function main() {
           '--commitment',
           'finalized',
           '--use-rpc',
+          '--max-sign-attempts',
+          String(WRITE_MAX_SIGN_ATTEMPTS),
           '--output',
           'json',
         ],
