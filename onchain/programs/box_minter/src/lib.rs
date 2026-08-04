@@ -1189,7 +1189,7 @@ pub mod box_minter {
             BoxMinterError::InvalidDropSeed
         );
         // Canonical config: `uri_base` is the DROP BASE (not a legacy `/json/...` prefix and not a `.json` file).
-        // Example: `https://assets.mons.link/drops/lsb` or `ipfs://bafy...`
+        // Example: `https://cdn.lil.org/nft/little_swag_boxes` or `ipfs://bafy...`
         let drop_base = normalized_metadata_base(&args.uri_base)?;
         if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
             require!(
