@@ -435,6 +435,30 @@ test('canonical field descriptor owns allowed fields and requiredness', () => {
 
 test('frontend and Functions projections retain media, sold-out, Stripe, and server defaults', () => {
   assert.equal(
+    DEPLOYMENT_DROPS.card_nft_2.metadataBase,
+    'https://cdn.lil.org/nft/card_nft_2/json',
+  );
+  assert.deepEqual(
+    DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
+    ['https://assets.mons.link/drops/cardnft2/json'],
+  );
+  assert.deepEqual(
+    FRONTEND_DROPS.card_nft_2.metadataBaseAliases,
+    DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
+  );
+  assert.deepEqual(
+    FUNCTIONS_DROPS.card_nft_2.metadataBaseAliases,
+    DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
+  );
+  assert.equal(
+    DEPLOYMENT_DROPS.card_nft_2_devnet_final.metadataBase,
+    'https://assets.mons.link/drops/cardnft2/json',
+  );
+  assert.equal(
+    DEPLOYMENT_DROPS.card_nft_2_devnet_final.metadataBaseAliases,
+    undefined,
+  );
+  assert.equal(
     DEPLOYMENT_DROPS.little_swag_boxes.metadataBase,
     'https://cdn.lil.org/nft/little_swag_boxes',
   );

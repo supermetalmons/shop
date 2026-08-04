@@ -5,6 +5,71 @@ use anchor_lang::solana_program::program::invoke_signed;
 use core::fmt::Write;
 use solana_sha256_hasher::hashv;
 
+#[cfg(feature = "mainnet-program-id")]
+declare_id!("7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU");
+#[cfg(all(not(feature = "mainnet-program-id"), feature = "localnet-program-id"))]
+declare_id!("FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    feature = "testnet-program-id"
+))]
+declare_id!("22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    feature = "card-nft-2-devnet-final-program-id"
+))]
+declare_id!("7h4JRc5vELpaahm11AeshFEQHe1jePauRnMFWaPSRNpV");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    not(feature = "card-nft-2-devnet-final-program-id"),
+    feature = "shared-devnet-program-id"
+))]
+declare_id!("8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    not(feature = "card-nft-2-devnet-final-program-id"),
+    not(feature = "shared-devnet-program-id"),
+    feature = "little-swag-boxes-devnet-program-id"
+))]
+declare_id!("CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    not(feature = "card-nft-2-devnet-final-program-id"),
+    not(feature = "shared-devnet-program-id"),
+    not(feature = "little-swag-boxes-devnet-program-id"),
+    feature = "poncho-mainnet-program-id"
+))]
+declare_id!("C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    not(feature = "card-nft-2-devnet-final-program-id"),
+    not(feature = "shared-devnet-program-id"),
+    not(feature = "little-swag-boxes-devnet-program-id"),
+    not(feature = "poncho-mainnet-program-id"),
+    feature = "poncho-devnet-program-id"
+))]
+declare_id!("J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W");
+#[cfg(all(
+    not(feature = "mainnet-program-id"),
+    not(feature = "localnet-program-id"),
+    not(feature = "testnet-program-id"),
+    not(feature = "card-nft-2-devnet-final-program-id"),
+    not(feature = "shared-devnet-program-id"),
+    not(feature = "little-swag-boxes-devnet-program-id"),
+    not(feature = "poncho-mainnet-program-id"),
+    not(feature = "poncho-devnet-program-id")
+))]
 declare_id!("Hr39xMTdeQFPkLb9D6yYxxzTTkfW6QgVyyUETT7jyfZw");
 
 /// The only signer allowed to run `initialize()`.
@@ -84,6 +149,11 @@ const URI_PREFIX_FIGURES: &str = "/f";
 const URI_PREFIX_RECEIPTS_FIGURES: &str = "/rf";
 const URI_PREFIX_RECEIPTS_BOXES: &str = "/rb";
 const RECEIPT_NAME_PREFIX: &str = "receipt · ";
+const CARD_NFT_2_DROP_SEED: [u8; 32] = [
+    0xa7, 0x9d, 0x76, 0xec, 0x11, 0x37, 0xba, 0xff, 0x9c, 0xbc, 0x2f, 0xa2, 0xd0, 0x57, 0xf0, 0xfd,
+    0xab, 0x0a, 0x7b, 0x43, 0x92, 0x9b, 0x99, 0x34, 0x80, 0x08, 0x13, 0xc5, 0x03, 0xea, 0x17, 0x89,
+];
+const CARD_NFT_2_LEGACY_URI_BASE: &str = "https://assets.mons.link/drops/cardnft2/json";
 
 fn hash_leaf(data: &[u8]) -> [u8; 32] {
     hashv(&[data]).to_bytes()
@@ -113,6 +183,10 @@ fn verify_merkle_proof(leaf: &[u8], proof: &[[u8; 32]], root: [u8; 32]) -> bool 
 fn validate_metadata_base(drop_base: &str) -> Result<()> {
     require!(!drop_base.is_empty(), BoxMinterError::InvalidMetadataBase);
     require!(
+        !drop_base.chars().any(char::is_whitespace),
+        BoxMinterError::InvalidMetadataBase
+    );
+    require!(
         drop_base.starts_with("https://")
             || drop_base.starts_with("http://")
             || drop_base.starts_with("ipfs://"),
@@ -128,7 +202,39 @@ fn validate_metadata_base(drop_base: &str) -> Result<()> {
             && !drop_base.contains('#'),
         BoxMinterError::InvalidMetadataBase
     );
+    let final_segment = drop_base.rsplit('/').next().unwrap_or_default();
+    let compact_asset_path = ["rb", "rf", "b", "f"].iter().any(|prefix| {
+        final_segment.strip_prefix(prefix).is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    });
+    require!(
+        final_segment != "collection" && !compact_asset_path,
+        BoxMinterError::InvalidMetadataBase
+    );
     Ok(())
+}
+
+fn normalized_metadata_base(uri_base: &str) -> Result<&str> {
+    let normalized = uri_base.trim_end_matches('/');
+    require!(
+        normalized.len() <= BoxMinterConfig::MAX_URI_BASE,
+        BoxMinterError::UriTooLong
+    );
+    validate_metadata_base(normalized)?;
+    Ok(normalized)
+}
+
+fn legacy_box_uri_base(cfg: &BoxMinterConfig) -> Option<&'static str> {
+    (cfg.drop_seed == CARD_NFT_2_DROP_SEED).then_some(CARD_NFT_2_LEGACY_URI_BASE)
+}
+
+#[cfg(test)]
+fn parse_box_ref_id_for_config(cfg: &BoxMinterConfig, uri: &[u8]) -> Option<u32> {
+    parse_ref_id_from_uri_bytes(uri, &cfg.uri_base, URI_PREFIX_BOXES).or_else(|| {
+        legacy_box_uri_base(cfg)
+            .and_then(|legacy| parse_ref_id_from_uri_bytes(uri, legacy, URI_PREFIX_BOXES))
+    })
 }
 
 fn validate_mint_prices(price_lamports: u64, discount_price_lamports: u64) -> Result<()> {
@@ -1084,8 +1190,7 @@ pub mod box_minter {
         );
         // Canonical config: `uri_base` is the DROP BASE (not a legacy `/json/...` prefix and not a `.json` file).
         // Example: `https://assets.mons.link/drops/lsb` or `ipfs://bafy...`
-        let drop_base = args.uri_base.trim_end_matches('/');
-        validate_metadata_base(drop_base)?;
+        let drop_base = normalized_metadata_base(&args.uri_base)?;
         if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
             require!(
                 args.items_per_box == 0,
@@ -1185,6 +1290,12 @@ pub mod box_minter {
         let cfg = &mut ctx.accounts.config;
         cfg.price_lamports = price_lamports;
         cfg.discount_price_lamports = discount_price_lamports;
+        Ok(())
+    }
+
+    pub fn set_uri_base(ctx: Context<SetUriBase>, uri_base: String) -> Result<()> {
+        let normalized = normalized_metadata_base(&uri_base)?;
+        ctx.accounts.config.uri_base = normalized.to_string();
         Ok(())
     }
 
@@ -1424,6 +1535,7 @@ pub mod box_minter {
             ctx.accounts.payer.key(),
             cfg.core_collection,
             drop_base,
+            legacy_box_uri_base(cfg),
             URI_PREFIX_BOXES,
             None,
         )?;
@@ -1699,6 +1811,7 @@ pub mod box_minter {
             cfg.admin,
             cfg.core_collection,
             drop_base,
+            legacy_box_uri_base(cfg),
             URI_PREFIX_BOXES,
             None,
         )?;
@@ -2597,6 +2710,13 @@ pub struct SetMintPrices<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetUriBase<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct StartMint<'info> {
     #[account(mut, seeds = [BoxMinterConfig::SEED, config.drop_seed.as_ref()], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
@@ -3061,6 +3181,7 @@ fn verify_core_asset_owned_by_uri(
     owner: Pubkey,
     core_collection: Pubkey,
     expected_drop_base: &str,
+    legacy_drop_base: Option<&str>,
     expected_uri_suffix: &str,
     expected_ref_id: Option<u32>,
 ) -> Result<()> {
@@ -3079,6 +3200,11 @@ fn verify_core_asset_owned_by_uri(
 
     // Ensure the asset corresponds to the expected kind by validating its URI prefix and (optionally) id.
     let parsed = parse_ref_id_from_uri_bytes(base.uri, expected_drop_base, expected_uri_suffix)
+        .or_else(|| {
+            legacy_drop_base.and_then(|legacy| {
+                parse_ref_id_from_uri_bytes(base.uri, legacy, expected_uri_suffix)
+            })
+        })
         .ok_or(error!(BoxMinterError::InvalidAssetMetadata))?;
     if let Some(expected) = expected_ref_id {
         require!(parsed == expected, BoxMinterError::InvalidAssetMetadata);
@@ -3592,6 +3718,62 @@ mod tests {
         assert!(validate_metadata_base("https://assets.example.com/drops/lsb").is_ok());
         assert!(validate_metadata_base("http://localhost:3000/drops/lsb").is_ok());
         assert!(validate_metadata_base("ipfs://bafycompactdrop").is_ok());
+        assert!(validate_metadata_base("https://cdn.lil.org/nft/card_nft_2/json").is_ok());
+    }
+
+    #[test]
+    fn metadata_base_normalization_trims_slashes_before_enforcing_the_limit() {
+        assert_eq!(
+            normalized_metadata_base("https://cdn.lil.org/nft/card_nft_2/json///").unwrap(),
+            "https://cdn.lil.org/nft/card_nft_2/json"
+        );
+        assert!(
+            normalized_metadata_base(&format!("https://example.com/{}", "a".repeat(100))).is_err()
+        );
+        assert!(normalized_metadata_base("////").is_err());
+        assert!(normalized_metadata_base("https://example.com/json/b1").is_err());
+        assert!(normalized_metadata_base("https://example.com/json/rf11133").is_err());
+        assert!(normalized_metadata_base("https://example.com/json/collection").is_err());
+        assert!(normalized_metadata_base("https://example.com/json bad").is_err());
+    }
+
+    #[test]
+    fn card_nft_2_box_validation_accepts_only_its_current_and_legacy_roots() {
+        let mut card = test_standard_cfg();
+        card.drop_seed = CARD_NFT_2_DROP_SEED;
+        card.uri_base = "https://cdn.lil.org/nft/card_nft_2/json".to_string();
+        assert_eq!(
+            parse_box_ref_id_for_config(
+                &card,
+                b"https://cdn.lil.org/nft/card_nft_2/json/b3711.json"
+            ),
+            Some(3711)
+        );
+        assert_eq!(
+            parse_box_ref_id_for_config(
+                &card,
+                b"https://assets.mons.link/drops/cardnft2/json/b3711.json"
+            ),
+            Some(3711)
+        );
+
+        let mut sibling = test_standard_cfg();
+        sibling.drop_seed = [8u8; 32];
+        sibling.uri_base = "https://cdn.lil.org/nft/card_nft_binder/json".to_string();
+        assert_eq!(
+            parse_box_ref_id_for_config(
+                &sibling,
+                b"https://assets.mons.link/drops/cardnft2/json/b3711.json"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_box_ref_id_for_config(
+                &card,
+                b"https://assets.mons.link/drops/cardnft2/json/f3711.json"
+            ),
+            None
+        );
     }
 
     #[test]

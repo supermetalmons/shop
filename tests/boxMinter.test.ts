@@ -249,3 +249,24 @@ test('Poncho on-chain config accepts the legacy alias during rollout', () => {
     uriBase: 'https://cdn.lil.org/nft/poncho_drifella-copy',
   }, drop), /metadata base/i);
 });
+
+test('Card NFT 2 on-chain config accepts only its exact mainnet alias', () => {
+  const drop = {
+    collectionMint: pubkey(73).toBase58(),
+    metadataBase: 'https://cdn.lil.org/nft/card_nft_2/json',
+    metadataBaseAliases: ['https://assets.mons.link/drops/cardnft2/json'],
+  } as any;
+
+  assert.doesNotThrow(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(73),
+    uriBase: 'https://assets.mons.link/drops/cardnft2/json',
+  }, drop));
+  assert.doesNotThrow(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(73),
+    uriBase: 'https://cdn.lil.org/nft/card_nft_2/json',
+  }, drop));
+  assert.throws(() => assertBoxMinterConfigMatchesDropConfig({
+    coreCollection: pubkey(73),
+    uriBase: 'https://assets.mons.link/drops/cardnft2',
+  }, drop), /metadata base/i);
+});

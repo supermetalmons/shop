@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -42,7 +42,6 @@ type ProgramShowInfo = {
 };
 
 const BPF_LOADER_UPGRADEABLE = 'BPFLoaderUpgradeab1e11111111111111111111111';
-const DECLARE_ID_RE = /declare_id!\("([1-9A-HJ-NP-Za-km-z]{32,44})"\)/;
 
 function usage(): string {
   return [
@@ -197,14 +196,6 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function canRunSolanaCargo(env: ToolEnv): boolean {
-  const res = spawnSync('cargo', ['+solana', '--version'], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    env: commandEnv(env),
-  });
-  return res.status === 0;
-}
-
 function readSolanaActiveReleaseBinDir(): string | undefined {
   const home = process.env.HOME;
   if (!home) return undefined;
@@ -226,114 +217,26 @@ function removeStaleAnchorGeneratedArtifacts(onchainDir: string) {
   }
 }
 
-function readCargoLockVersion(lockPath: string): number | undefined {
-  if (!existsSync(lockPath)) return undefined;
-  const head = readFileSync(lockPath, 'utf8').slice(0, 4096);
-  const match = head.match(/^\s*version\s*=\s*(\d+)\s*$/m);
-  const version = match?.[1] ? Number(match[1]) : undefined;
-  return version && !Number.isNaN(version) ? version : undefined;
-}
-
-function cargoLockHasPackage(onchainDir: string, name: string, version: string): boolean {
-  const lockPath = path.join(onchainDir, 'Cargo.lock');
-  if (!existsSync(lockPath)) return false;
-  const content = readFileSync(lockPath, 'utf8');
-  const re = new RegExp(`\\[\\[package\\]\\]\\s*\\nname = "${name}"\\s*\\nversion = "${version}"`, 'm');
-  return re.test(content);
-}
-
-function prepareAnchorCompatibleCargoLock(onchainDir: string, env: ToolEnv): () => void {
-  const lockPath = path.join(onchainDir, 'Cargo.lock');
-  const originalLock = existsSync(lockPath) ? readFileSync(lockPath, 'utf8') : undefined;
-  const originalVersion = readCargoLockVersion(lockPath);
-  const hasSolanaCargo = canRunSolanaCargo(env);
-  let backupPath: string | undefined;
-  let shouldRestore = false;
-
-  const restore = () => {
-    if (!shouldRestore) return;
-    shouldRestore = false;
-    if (typeof originalLock === 'string') {
-      writeFileSync(lockPath, originalLock, 'utf8');
-      if (backupPath) removeFileIfExists(backupPath);
-      console.log('Restored original on-chain Cargo.lock.');
-      return;
-    }
-    if (existsSync(lockPath)) {
-      unlinkSync(lockPath);
-      console.log('Removed temporary on-chain Cargo.lock.');
-    }
-  };
-
-  try {
-    if (hasSolanaCargo) {
-      console.log('solana cargo toolchain:', 'cargo +solana');
-    } else {
-      console.warn('Warning: missing rustup `solana` toolchain (`cargo +solana`). Anchor may fail if Cargo.lock is too new.');
-    }
-
-    const lockIsTooNew = typeof originalVersion === 'number' && originalVersion >= 4;
-    const shouldGenerateLock = !originalLock || lockIsTooNew;
-
-    if (lockIsTooNew) {
-      backupPath = path.join(onchainDir, `Cargo.lock.v${originalVersion}.upgrade-${process.pid}-${Date.now()}.bak`);
-      console.warn(
-        `Detected on-chain Cargo.lock version ${originalVersion} (incompatible with the Solana/Anchor toolchain cargo).\n` +
-          `Temporarily moving it to ${backupPath} for the Anchor build...`,
-      );
-      renameSync(lockPath, backupPath);
-      shouldRestore = true;
-    } else if (!originalLock) {
-      shouldRestore = true;
-    }
-
-    if (hasSolanaCargo && shouldGenerateLock) {
-      run('cargo', ['+solana', 'generate-lockfile'], { cwd: onchainDir, env });
-
-      // Cargo can pick newer crates that exceed Solana's pinned Rust toolchain MSRV.
-      // In particular, borsh 1.6.x requires rustc >= 1.77; pin borsh to 1.5.5 if needed.
-      if (cargoLockHasPackage(onchainDir, 'borsh', '1.6.0')) {
-        run('cargo', ['+solana', 'update', '-p', 'borsh@1.6.0', '--precise', '1.5.5'], { cwd: onchainDir, env });
-      }
-    }
-
-    return restore;
-  } catch (err) {
-    restore();
-    throw err;
-  }
-}
-
 function sha256File(filePath: string): string {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-function readProgramIdFromSource(libPath: string): string {
-  const content = readFileSync(libPath, 'utf8');
-  const match = content.match(DECLARE_ID_RE);
-  if (!match?.[1]) throw new Error(`Could not find declare_id!("...") in ${libPath}`);
-  return match[1];
-}
-
-function setTemporaryDeclareId(libPath: string, programId: string): () => void {
-  const original = readFileSync(libPath, 'utf8');
-  const updated = original.replace(DECLARE_ID_RE, `declare_id!("${programId}")`);
-  if (updated === original && readProgramIdFromSource(libPath) !== programId) {
-    throw new Error(`Could not update declare_id!("...") in ${libPath}`);
-  }
-  if (updated !== original) {
-    writeFileSync(libPath, updated, 'utf8');
-    console.log(`Temporarily set declare_id! to ${programId} for this build.`);
-  }
-  let restored = false;
-  return () => {
-    if (restored) return;
-    restored = true;
-    if (readFileSync(libPath, 'utf8') !== original) {
-      writeFileSync(libPath, original, 'utf8');
-      console.log('Restored original on-chain source declare_id!.');
-    }
+function programIdFeature(programId: string): string | undefined {
+  const features: Record<string, string | undefined> = {
+    '7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU': 'mainnet-program-id',
+    'FPAzYdh8rdSRSXYQBneqwniqWGn3out5eQg2n1qyotxd': 'localnet-program-id',
+    '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep': 'testnet-program-id',
+    '7h4JRc5vELpaahm11AeshFEQHe1jePauRnMFWaPSRNpV': 'card-nft-2-devnet-final-program-id',
+    '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6': 'shared-devnet-program-id',
+    'Hr39xMTdeQFPkLb9D6yYxxzTTkfW6QgVyyUETT7jyfZw': undefined,
+    'CTrBmaCdgNRE9iHtrfQJnxH2puKxfi2V3gBMTxMLrrUA': 'little-swag-boxes-devnet-program-id',
+    'C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A': 'poncho-mainnet-program-id',
+    'J9ffqCnnV1kg2gZ7Wg4ebVW5KLFH557UDdz9Y6F8fK2W': 'poncho-devnet-program-id',
   };
+  if (!Object.hasOwn(features, programId)) {
+    throw new Error(`Program ${programId} has no committed build feature`);
+  }
+  return features[programId];
 }
 
 function writeTempKeypairFile(kp: Keypair, prefix: string): string {
@@ -404,7 +307,6 @@ async function main() {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const root = path.resolve(__dirname, '..');
   const onchainDir = path.join(root, 'onchain');
-  const libPath = path.join(onchainDir, 'programs', 'box_minter', 'src', 'lib.rs');
   const programBinary = path.join(onchainDir, 'target', 'deploy', 'box_minter.so');
   const drop = resolveDropTarget(opts.dropId, opts.cluster);
   const programId = drop.boxMinterProgramId;
@@ -416,11 +318,7 @@ async function main() {
 
   const readOnlyKeypairPath = writeTempKeypairFile(Keypair.generate(), 'mons-shop-upgrade-readonly');
   let authorityKeypairPath: string | undefined;
-  let restoreSource: (() => void) | undefined;
-  let restoreCargoLock: (() => void) | undefined;
   const cleanup = () => {
-    if (restoreSource) restoreSource();
-    if (restoreCargoLock) restoreCargoLock();
     for (const filePath of [readOnlyKeypairPath, authorityKeypairPath]) {
       if (!filePath) continue;
       removeFileIfExists(filePath);
@@ -467,25 +365,27 @@ async function main() {
     run('npm', ['run', 'typecheck'], { cwd: root, env: toolEnv });
   }
 
-  restoreSource = setTemporaryDeclareId(libPath, programId);
-  try {
-    if (!opts.skipTests) {
-      run('cargo', ['test', '--lib'], { cwd: onchainDir, env: toolEnv });
-    }
-    restoreCargoLock = prepareAnchorCompatibleCargoLock(onchainDir, toolEnv);
-    removeStaleAnchorGeneratedArtifacts(onchainDir);
-    run('anchor', ['build', '--no-idl', '--arch', 'sbf', '--', '--features', 'no-idl,no-log-ix-name'], {
-      cwd: onchainDir,
-      env: toolEnv,
-    });
-  } finally {
-    restoreSource();
-    restoreSource = undefined;
-    if (restoreCargoLock) {
-      restoreCargoLock();
-      restoreCargoLock = undefined;
-    }
+  if (!opts.skipTests) {
+    run('cargo', ['test', '--lib', '--locked'], { cwd: onchainDir, env: toolEnv });
   }
+  removeStaleAnchorGeneratedArtifacts(onchainDir);
+  const buildFeatures = ['no-idl', 'no-log-ix-name', programIdFeature(programId)]
+    .filter((value): value is string => Boolean(value))
+    .join(',');
+  run('anchor', [
+    'build',
+    '--no-idl',
+    '--arch',
+    'sbf',
+    '--',
+    '--features',
+    buildFeatures,
+    '--',
+    '--locked',
+  ], {
+    cwd: onchainDir,
+    env: toolEnv,
+  });
 
   if (!existsSync(programBinary)) {
     throw new Error(`Missing program binary after build: ${programBinary}`);

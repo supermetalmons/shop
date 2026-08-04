@@ -16,7 +16,7 @@ export const NEW_DROP = defineNewDropConfig({
   onchain: {
     dropId: 'card_nft_2',
     dropFamily: 'card_nft_2',
-    metadataBase: 'https://assets.mons.link/drops/cardnft2/json',
+    metadataBase: 'https://cdn.lil.org/nft/card_nft_2/json',
     collectionMetadata: {
       name: 'Card NFT 2',
       description: 'card nft 2 · physical on mons dot shop',

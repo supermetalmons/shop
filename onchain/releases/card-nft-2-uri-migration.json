@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+  "programData": "EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK",
+  "configPda": "5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm",
+  "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "coreCollection": "EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu",
+  "receiptsTree": "EsGrHZjZzHmxzCSrqjyzuBBC4oAq3yS87ZNF1JdvDBh",
+  "receiptsTreeConfig": "HQxfJuE57mGh96UJ6eBAusRVLjX4sSZwQxfn6moW5N9i",
+  "configAccountBytes": 376,
+  "dropSeedHex": "a79d76ec1137baff9cbc2fa2d057f0fdab0a7b43929b9934800813c503ea1789",
+  "legacyUriBase": "https://assets.mons.link/drops/cardnft2/json",
+  "canonicalUriBase": "https://cdn.lil.org/nft/card_nft_2/json",
+  "setUriBase": {
+    "discriminator": [160, 250, 204, 89, 122, 8, 207, 34],
+    "accounts": [
+      { "name": "config", "address": "5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm", "writable": true, "signer": false },
+      { "name": "admin", "address": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx", "writable": false, "signer": true }
+    ]
+  },
+  "liveBaseline": {
+    "historicalSourceCommit": "4ef953e66a21d64feb3b2e3964a0c3ca2477f832",
+    "deploymentSlot": 420486764,
+    "programDataPayloadBytes": 482520,
+    "programDataPayloadSha256": "dfad30f7a415bedd7083afe1641b717503a7512395ba7d63ab275ece470afdb5",
+    "reproducible": false,
+    "riskAccepted": true
+  },
+  "planningSnapshot": {
+    "capturedAtSlot": 437224202,
+    "enforced": false,
+    "liveCoreAssets": 7601,
+    "liveCompressedReceipts": 984,
+    "burnedCoreRecords": 3185,
+    "burnedCompressedRecords": 26,
+    "maximumTransactions": 1746,
+    "supersededMaximumTransactions": 1461,
+    "batchCorrection": "Direct MPL Core URI updates require one URI string per instruction. With the existing Card address lookup table, 10 updates serialize to 1198 bytes while 11 serialize to 1296 bytes, over Solana's 1232-byte packet limit."
+  },
+  "deliveryLookupTable": "27S1HddzYtfhYpwq4QHxnnXAkRt6JFx9Kad9KMnRUpcd",
+  "coreBatchSize": 10,
+  "defaultMode": "plan",
+  "privateKeyPolicy": "Read-only clients never request keys. Approved send clients accept a hidden key transiently, never log it, and erase temporary 0600 files and in-memory bytes after use."
+}

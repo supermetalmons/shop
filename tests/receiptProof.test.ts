@@ -205,6 +205,42 @@ test('Poncho receipt identity accepts canonical and legacy roots only', () => {
   );
 });
 
+test('Card NFT 2 compact receipt identity accepts canonical and legacy roots only', () => {
+  const legacyBase = 'https://assets.mons.link/drops/cardnft2/json';
+  const canonicalBase = 'https://cdn.lil.org/nft/card_nft_2/json';
+  const drop = {
+    collectionMintStr: COLLECTION.toBase58(),
+    metadataBase: canonicalBase,
+    metadataBaseAliases: [legacyBase],
+    receiptMaxId: 11_133,
+  };
+
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${legacyBase}/rf11133.json`),
+      drop,
+      { kind: 'figure', id: 11_133 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${canonicalBase}/rb3711.json`),
+      drop,
+      { kind: 'box', id: 3_711 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset('https://cdn.lil.org/nft/card_nft_2/rb3711.json'),
+      drop,
+      { kind: 'box', id: 3_711 },
+    ),
+    false,
+  );
+});
+
 test('receipt drop identity additionally requires the configured tree', () => {
   const drop = {
     collectionMintStr: COLLECTION.toBase58(),
