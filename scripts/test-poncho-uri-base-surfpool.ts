@@ -14,26 +14,28 @@ import {
 
 const SURFPOOL_RPC = process.env.SURFPOOL_RPC_URL || 'http://127.0.0.1:8899';
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
-const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
-const ELF_PATH = process.env.LSB_PROGRAM_ELF || 'onchain/target/deploy/box_minter.so';
-const PROGRAM_ID = new PublicKey('22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep');
-const CONFIG_PDA = new PublicKey('iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc');
+const HELIUS_RPC = process.env.HELIUS_RPC_URL
+  || `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(HELIUS_API_KEY)}`;
+const ELF_PATH = process.env.PONCHO_PROGRAM_ELF || 'onchain/target/deploy/box_minter.so';
+const PROGRAM_ID = new PublicKey('C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A');
+const CONFIG_PDA = new PublicKey('2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq');
 const ADMIN = new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx');
-const TREASURY = new PublicKey('8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM');
-const COLLECTION = new PublicKey('7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr');
-const RECEIPTS_TREE = new PublicKey('Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV');
+const TREASURY = new PublicKey('AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq');
+const COLLECTION = new PublicKey('JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH');
+const RECEIPTS_TREE = new PublicKey('5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow');
 const MPL_CORE = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 const SPL_NOOP = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 const MPL_NOOP = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
 const ACCOUNT_COMPRESSION = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
 const BUBBLEGUM = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 const MPL_CORE_CPI_SIGNER = new PublicKey('CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk');
-const OLD_BASE = 'https://assets.mons.link/drops/lsb';
-const NEW_BASE = 'https://cdn.lil.org/nft/little_swag_boxes';
+const OLD_BASE = 'https://assets.mons.link/drops/poncho';
+const NEW_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
 const SET_URI_BASE = Buffer.from([160, 250, 204, 89, 122, 8, 207, 34]);
 const START_OPEN_BOX = Buffer.from('c6646bb41bf3288f', 'hex');
 const FINALIZE_OPEN_BOX = Buffer.from('cf5e6dfd1544ed16', 'hex');
 const MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
+const SETUP_MIGRATION_ONLY = process.argv.includes('--setup-migration-only');
 
 type DecodedConfig = {
   admin: string;
@@ -44,12 +46,15 @@ type DecodedConfig = {
   discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
+  itemsPerBox: number;
   minted: number;
   namePrefix: string;
   symbol: string;
   uriBase: string;
   started: boolean;
   bump: number;
+  discountMintsPerWallet: number;
+  figureNamePrefix: string;
 };
 
 type TransactionResult = NonNullable<Awaited<ReturnType<Connection['getTransaction']>>>;
@@ -77,7 +82,7 @@ function readString(data: Buffer, offset: number) {
 }
 
 function decodeConfig(data: Buffer): DecodedConfig {
-  assert.equal(data.length, 289);
+  assert.equal(data.length, 307);
   let offset = 8;
   const readPubkey = () => {
     const value = new PublicKey(data.subarray(offset, offset + 32)).toBase58();
@@ -97,6 +102,8 @@ function decodeConfig(data: Buffer): DecodedConfig {
   offset += 4;
   const maxPerTx = data[offset];
   offset += 1;
+  const itemsPerBox = data[offset];
+  offset += 1;
   const minted = data.readUInt32LE(offset);
   offset += 4;
   const namePrefix = readString(data, offset);
@@ -108,6 +115,10 @@ function decodeConfig(data: Buffer): DecodedConfig {
   const started = data[offset] === 1;
   offset += 1;
   const bump = data[offset];
+  offset += 1;
+  const discountMintsPerWallet = data[offset];
+  offset += 1;
+  const figureNamePrefix = readString(data, offset);
   return {
     admin,
     treasury,
@@ -117,12 +128,15 @@ function decodeConfig(data: Buffer): DecodedConfig {
     discountMerkleRoot,
     maxSupply,
     maxPerTx,
+    itemsPerBox,
     minted,
     namePrefix: namePrefix.value,
     symbol: symbol.value,
     uriBase: uriBase.value,
     started,
     bump,
+    discountMintsPerWallet,
+    figureNamePrefix: figureNamePrefix.value,
   };
 }
 
@@ -255,41 +269,81 @@ async function liveFixtures() {
   });
   const boxes = assets.items.filter((asset) =>
     String(asset?.content?.json_uri || '').startsWith(`${OLD_BASE}/json/boxes/`)
+    && !asset?.burnt
     && asset?.ownership?.owner
     && asset.ownership.owner !== ADMIN.toBase58());
-  let unopened: { asset: PublicKey; owner: PublicKey; uri: string } | null = null;
+  const unopened: Array<{ asset: PublicKey; owner: PublicKey; uri: string }> = [];
   for (const box of boxes) {
     const asset = new PublicKey(box.id);
+    const owner = new PublicKey(box.ownership.owner);
+    const ownerInfo = await rpc<{ value?: { owner?: string; executable?: boolean; data?: [string, string] } }>(
+      HELIUS_RPC,
+      'getAccountInfo',
+      [owner.toBase58(), { encoding: 'base64', commitment: 'finalized' }],
+    );
+    if (
+      ownerInfo.value?.owner !== SystemProgram.programId.toBase58()
+      || ownerInfo.value.executable
+      || ownerInfo.value.data?.[0]
+    ) {
+      continue;
+    }
     const [pending] = PublicKey.findProgramAddressSync([Buffer.from('open'), asset.toBuffer()], PROGRAM_ID);
     const pendingInfo = await rpc<{ value: unknown }>(HELIUS_RPC, 'getAccountInfo', [
       pending.toBase58(),
       { encoding: 'base64', commitment: 'finalized' },
     ]);
     if (!pendingInfo.value) {
-      unopened = { asset, owner: new PublicKey(box.ownership.owner), uri: box.content.json_uri };
-      break;
+      unopened.push({ asset, owner, uri: box.content.json_uri });
+      if (unopened.length === 2) break;
     }
   }
-  assert(unopened, 'No unopened old-base box fixture found');
+  assert.equal(unopened.length, 2, 'Two unopened old-base box fixtures are required');
+  return { beforeSetter: unopened[0], afterSetter: unopened[1] };
+}
 
-  const pendingAccounts = await rpc<Array<{ pubkey: string; account: { data: [string, string] } }>>(
-    HELIUS_RPC,
-    'getProgramAccounts',
-    [PROGRAM_ID.toBase58(), { encoding: 'base64', filters: [{ dataSize: 177 }] }],
+async function startOpenBox(
+  fixture: { asset: PublicKey; owner: PublicKey; uri: string },
+  itemsPerBox: number,
+) {
+  const assetInfo = await connection.getAccountInfo(fixture.asset);
+  assert(assetInfo);
+  const asset = parseCoreAsset(Buffer.from(assetInfo.data));
+  assert.equal(asset.owner.toBase58(), fixture.owner.toBase58());
+  assert.equal(asset.uri, fixture.uri);
+  const [pending] = PublicKey.findProgramAddressSync(
+    [Buffer.from('open'), fixture.asset.toBuffer()],
+    PROGRAM_ID,
   );
-  assert(pendingAccounts.length > 0, 'No live pending-open fixture found');
-  const pendingRow = pendingAccounts[0];
-  const data = Buffer.from(pendingRow.account.data[0], 'base64');
-  const pubkeyAt = (offset: number) => new PublicKey(data.subarray(offset, offset + 32));
-  const pending = {
-    pending: new PublicKey(pendingRow.pubkey),
-    owner: pubkeyAt(8),
-    boxAsset: pubkeyAt(40),
-    dudes: [pubkeyAt(72), pubkeyAt(104), pubkeyAt(136)],
-  };
-  const pendingAsset = await rpc<Record<string, any>>(HELIUS_RPC, 'getAsset', { id: pending.boxAsset.toBase58() });
-  assert.equal(pendingAsset?.content?.json_uri?.startsWith(`${OLD_BASE}/json/boxes/`), true);
-  return { unopened, pending };
+  const figures = Array.from({ length: itemsPerBox }, (_, index) => PublicKey.findProgramAddressSync(
+    [Buffer.from('pdude'), pending.toBuffer(), Buffer.from([index])],
+    PROGRAM_ID,
+  )[0]);
+  assert.equal(await connection.getAccountInfo(pending), null);
+  const instruction = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
+      { pubkey: fixture.owner, isSigner: true, isWritable: true },
+      { pubkey: fixture.asset, isSigner: false, isWritable: true },
+      { pubkey: ADMIN, isSigner: false, isWritable: false },
+      { pubkey: COLLECTION, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP, isSigner: false, isWritable: false },
+      { pubkey: pending, isSigner: false, isWritable: true },
+      ...figures.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    ],
+    data: START_OPEN_BOX,
+  });
+  const result = await sendInstructions(fixture.owner, [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    instruction,
+  ]);
+  assert.equal(result.transaction.meta?.err, null);
+  const pendingAccount = await connection.getAccountInfo(pending);
+  assert(pendingAccount);
+  return { ...fixture, pending, figures, signature: result.signature, bytes: pendingAccount.data.length };
 }
 
 function innerInstructionContains(transaction: TransactionResult, value: string) {
@@ -304,23 +358,59 @@ function innerInstructionContains(transaction: TransactionResult, value: string)
 
 const elf = await readFile(ELF_PATH);
 const elfSha256 = createHash('sha256').update(elf).digest('hex');
+if (SETUP_MIGRATION_ONLY) {
+  const programData = await deployPatchedProgram(elf);
+  await Promise.all([fund(ADMIN), fund(TREASURY)]);
+  const beforeAccount = await connection.getAccountInfo(CONFIG_PDA);
+  assert(beforeAccount);
+  const before = decodeConfig(Buffer.from(beforeAccount.data));
+  assert.equal(before.uriBase, OLD_BASE);
+  const setter = await setUriBase(ADMIN, NEW_BASE);
+  assert.equal(setter.transaction.meta?.err, null);
+  const afterAccount = await connection.getAccountInfo(CONFIG_PDA);
+  assert(afterAccount);
+  assertConfigFieldsEqual(before, decodeConfig(Buffer.from(afterAccount.data)), NEW_BASE);
+  process.stdout.write(`${JSON.stringify({
+    mode: 'migration-setup',
+    surfpoolRpc: SURFPOOL_RPC,
+    programId: PROGRAM_ID.toBase58(),
+    programData: programData.toBase58(),
+    elfSha256,
+    setter: setter.signature,
+    configBytes: afterAccount.data.length,
+    uriBase: NEW_BASE,
+  }, null, 2)}\n`);
+  process.exit(0);
+}
 const fixtures = await liveFixtures();
 const programData = await deployPatchedProgram(elf);
-await Promise.all([fund(ADMIN), fund(TREASURY), fund(fixtures.unopened.owner)]);
+await Promise.all([
+  fund(ADMIN),
+  fund(TREASURY),
+  fund(fixtures.beforeSetter.owner),
+  fund(fixtures.afterSetter.owner),
+]);
 
 const configAccount = await connection.getAccountInfo(CONFIG_PDA);
 assert(configAccount);
 assert.equal(configAccount.owner.toBase58(), PROGRAM_ID.toBase58());
-assert.equal(configAccount.data.length, 289);
+assert.equal(configAccount.data.length, 307);
 const originalConfig = decodeConfig(Buffer.from(configAccount.data));
 assert.equal(originalConfig.uriBase, OLD_BASE);
 assert.equal(originalConfig.admin, ADMIN.toBase58());
+assert.equal(originalConfig.treasury, TREASURY.toBase58());
+assert.equal(originalConfig.maxSupply, 207);
+assert.equal(originalConfig.itemsPerBox, 1);
+assert.equal(originalConfig.namePrefix, 'pack');
+assert.equal(originalConfig.figureNamePrefix, 'card');
+
+const pendingBeforeSetter = await startOpenBox(fixtures.beforeSetter, originalConfig.itemsPerBox);
 
 const authorized = await setUriBase(ADMIN, NEW_BASE);
 assert.equal(authorized.transaction.meta?.err, null);
 const newConfigAccount = await connection.getAccountInfo(CONFIG_PDA);
 assert(newConfigAccount);
-assert.equal(newConfigAccount.data.length, 289);
+assert.equal(newConfigAccount.data.length, 307);
 const newConfig = decodeConfig(Buffer.from(newConfigAccount.data));
 assertConfigFieldsEqual(originalConfig, newConfig, NEW_BASE);
 
@@ -342,77 +432,40 @@ assertConfigFieldsEqual(originalConfig, decodeConfig(Buffer.from(rolledBackAccou
 const restoreNew = await setUriBase(ADMIN, NEW_BASE);
 assert.equal(restoreNew.transaction.meta?.err, null);
 
-const unopenedAssetInfo = await connection.getAccountInfo(fixtures.unopened.asset);
-assert(unopenedAssetInfo);
-const unopenedAsset = parseCoreAsset(Buffer.from(unopenedAssetInfo.data));
-assert.equal(unopenedAsset.owner.toBase58(), fixtures.unopened.owner.toBase58());
-assert.equal(unopenedAsset.uri, fixtures.unopened.uri);
-const [newPending] = PublicKey.findProgramAddressSync(
-  [Buffer.from('open'), fixtures.unopened.asset.toBuffer()],
-  PROGRAM_ID,
-);
-const newDudes = [0, 1, 2].map((index) => PublicKey.findProgramAddressSync(
-  [Buffer.from('pdude'), newPending.toBuffer(), Buffer.from([index])],
-  PROGRAM_ID,
-)[0]);
-assert.equal(await connection.getAccountInfo(newPending), null);
-const startOpen = new TransactionInstruction({
-  programId: PROGRAM_ID,
-  keys: [
-    { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
-    { pubkey: fixtures.unopened.owner, isSigner: true, isWritable: true },
-    { pubkey: fixtures.unopened.asset, isSigner: false, isWritable: true },
-    { pubkey: ADMIN, isSigner: false, isWritable: false },
-    { pubkey: COLLECTION, isSigner: false, isWritable: false },
-    { pubkey: MPL_CORE, isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: SPL_NOOP, isSigner: false, isWritable: false },
-    { pubkey: newPending, isSigner: false, isWritable: true },
-    ...newDudes.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-  ],
-  data: START_OPEN_BOX,
-});
-const started = await sendInstructions(fixtures.unopened.owner, [
-  ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-  startOpen,
-]);
-assert.equal(started.transaction.meta?.err, null);
-const createdPending = await connection.getAccountInfo(newPending);
-assert.equal(createdPending?.data.length, 177);
-
-const pendingBoxInfo = await connection.getAccountInfo(fixtures.pending.boxAsset);
+const pendingAfterSetter = await startOpenBox(fixtures.afterSetter, originalConfig.itemsPerBox);
+const pendingBoxInfo = await connection.getAccountInfo(pendingBeforeSetter.asset);
 assert(pendingBoxInfo);
 const pendingBox = parseCoreAsset(Buffer.from(pendingBoxInfo.data));
 assert.equal(pendingBox.owner.toBase58(), ADMIN.toBase58());
 assert.equal(pendingBox.uri.startsWith(`${OLD_BASE}/json/boxes/`), true);
-const revealedIds = [997, 998, 999];
+const revealedIds = [originalConfig.maxSupply * originalConfig.itemsPerBox];
 const finalizeOpen = new TransactionInstruction({
   programId: PROGRAM_ID,
   keys: [
     { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
     { pubkey: ADMIN, isSigner: true, isWritable: true },
-    { pubkey: fixtures.pending.boxAsset, isSigner: false, isWritable: true },
+    { pubkey: pendingBeforeSetter.asset, isSigner: false, isWritable: true },
     { pubkey: COLLECTION, isSigner: false, isWritable: true },
     { pubkey: MPL_CORE, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: SPL_NOOP, isSigner: false, isWritable: false },
-    { pubkey: fixtures.pending.pending, isSigner: false, isWritable: true },
-    { pubkey: fixtures.pending.owner, isSigner: false, isWritable: false },
-    ...fixtures.pending.dudes.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    { pubkey: pendingBeforeSetter.pending, isSigner: false, isWritable: true },
+    { pubkey: pendingBeforeSetter.owner, isSigner: false, isWritable: false },
+    ...pendingBeforeSetter.figures.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
   ],
-  data: Buffer.concat([FINALIZE_OPEN_BOX, ...revealedIds.map(u16)]),
+  data: Buffer.concat([FINALIZE_OPEN_BOX, u32(revealedIds.length), ...revealedIds.map(u16)]),
 });
 const finalized = await sendInstructions(ADMIN, [
   ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
   finalizeOpen,
 ]);
 assert.equal(finalized.transaction.meta?.err, null);
-assert.equal(await connection.getAccountInfo(fixtures.pending.pending), null);
-for (let index = 0; index < fixtures.pending.dudes.length; index += 1) {
-  const info = await connection.getAccountInfo(fixtures.pending.dudes[index]);
+assert.equal(await connection.getAccountInfo(pendingBeforeSetter.pending), null);
+for (let index = 0; index < pendingBeforeSetter.figures.length; index += 1) {
+  const info = await connection.getAccountInfo(pendingBeforeSetter.figures[index]);
   assert(info);
   const asset = parseCoreAsset(Buffer.from(info.data));
-  assert.equal(asset.owner.toBase58(), fixtures.pending.owner.toBase58());
+  assert.equal(asset.owner.toBase58(), pendingBeforeSetter.owner.toBase58());
   assert.equal(asset.updateAuthorityKind, 2);
   assert.equal(asset.updateAuthority?.toBase58(), COLLECTION.toBase58());
   assert.equal(asset.uri, `${NEW_BASE}/json/figures/${revealedIds[index]}.json`);
@@ -424,7 +477,7 @@ const mintReceipts = new TransactionInstruction({
   keys: [
     { pubkey: CONFIG_PDA, isSigner: false, isWritable: false },
     { pubkey: ADMIN, isSigner: true, isWritable: true },
-    { pubkey: fixtures.pending.owner, isSigner: false, isWritable: false },
+    { pubkey: pendingBeforeSetter.owner, isSigner: false, isWritable: false },
     { pubkey: RECEIPTS_TREE, isSigner: false, isWritable: true },
     { pubkey: treeConfig, isSigner: false, isWritable: true },
     { pubkey: COLLECTION, isSigner: false, isWritable: true },
@@ -435,7 +488,7 @@ const mintReceipts = new TransactionInstruction({
     { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ],
-  data: Buffer.concat([MINT_RECEIPTS, u32(1), u32(333), u32(0)]),
+  data: Buffer.concat([MINT_RECEIPTS, u32(1), u32(originalConfig.maxSupply), u32(0)]),
 });
 const receipt = await sendInstructions(ADMIN, [
   ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -443,13 +496,16 @@ const receipt = await sendInstructions(ADMIN, [
 ]);
 assert.equal(receipt.transaction.meta?.err, null);
 assert.equal(
-  innerInstructionContains(receipt.transaction, `${NEW_BASE}/json/receipts/boxes/333.json`),
+  innerInstructionContains(
+    receipt.transaction,
+    `${NEW_BASE}/json/receipts/boxes/${originalConfig.maxSupply}.json`,
+  ),
   true,
 );
 
 const finalConfigAccount = await connection.getAccountInfo(CONFIG_PDA);
 assert(finalConfigAccount);
-assert.equal(finalConfigAccount.data.length, 289);
+assert.equal(finalConfigAccount.data.length, 307);
 assertConfigFieldsEqual(originalConfig, decodeConfig(Buffer.from(finalConfigAccount.data)), NEW_BASE);
 
 process.stdout.write(`${JSON.stringify({
@@ -464,9 +520,18 @@ process.stdout.write(`${JSON.stringify({
   unauthorizedSetter: unauthorized.signature,
   rollbackSetter: rollback.signature,
   restoredSetter: restoreNew.signature,
-  oldBoxStart: { asset: fixtures.unopened.asset.toBase58(), signature: started.signature },
-  oldPendingFinalize: { pending: fixtures.pending.pending.toBase58(), signature: finalized.signature },
+  oldPendingCreatedBeforeSetter: {
+    asset: pendingBeforeSetter.asset.toBase58(),
+    pending: pendingBeforeSetter.pending.toBase58(),
+    signature: pendingBeforeSetter.signature,
+  },
+  oldBoxStartedAfterSetter: {
+    asset: pendingAfterSetter.asset.toBase58(),
+    pending: pendingAfterSetter.pending.toBase58(),
+    signature: pendingAfterSetter.signature,
+  },
+  oldPendingFinalize: { pending: pendingBeforeSetter.pending.toBase58(), signature: finalized.signature },
   newFigureUris: revealedIds.map((id) => `${NEW_BASE}/json/figures/${id}.json`),
-  newReceiptUri: `${NEW_BASE}/json/receipts/boxes/333.json`,
+  newReceiptUri: `${NEW_BASE}/json/receipts/boxes/${originalConfig.maxSupply}.json`,
   receiptMint: receipt.signature,
 }, null, 2)}\n`);

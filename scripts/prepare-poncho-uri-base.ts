@@ -8,14 +8,17 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 
-const MAINNET_RPC = 'https://api.mainnet-beta.solana.com';
+const MAINNET_RPC = process.env.HELIUS_RPC_URL
+  || (process.env.HELIUS_API_KEY
+    ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(process.env.HELIUS_API_KEY)}`
+    : 'https://api.mainnet-beta.solana.com');
 const GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
-const PROGRAM_ID = new PublicKey('22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep');
-const CONFIG_PDA = new PublicKey('iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc');
+const PROGRAM_ID = new PublicKey('C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A');
+const CONFIG_PDA = new PublicKey('2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq');
 const ADMIN = new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx');
-const TARGET_URI_BASE = 'https://cdn.lil.org/nft/little_swag_boxes';
-const ROLLBACK_URI_BASE = 'https://assets.mons.link/drops/lsb';
-const CONFIG_BYTES = 289;
+const TARGET_URI_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
+const ROLLBACK_URI_BASE = 'https://assets.mons.link/drops/poncho';
+const CONFIG_BYTES = 307;
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
 const SET_URI_BASE_DISCRIMINATOR = Buffer.from([160, 250, 204, 89, 122, 8, 207, 34]);
 
@@ -28,12 +31,15 @@ type DecodedConfig = {
   discountMerkleRoot: string;
   maxSupply: number;
   maxPerTx: number;
+  itemsPerBox: number;
   minted: number;
   namePrefix: string;
   symbol: string;
   uriBase: string;
   started: boolean;
   bump: number;
+  discountMintsPerWallet: number;
+  figureNamePrefix: string;
 };
 
 function readU32(data: Buffer, offset: number) {
@@ -73,6 +79,8 @@ function decodeConfig(data: Buffer): DecodedConfig {
   offset += 4;
   const maxPerTx = data[offset];
   offset += 1;
+  const itemsPerBox = data[offset];
+  offset += 1;
   const minted = readU32(data, offset);
   offset += 4;
   const namePrefix = readString(data, offset);
@@ -84,6 +92,10 @@ function decodeConfig(data: Buffer): DecodedConfig {
   const started = data[offset] === 1;
   offset += 1;
   const bump = data[offset];
+  offset += 1;
+  const discountMintsPerWallet = data[offset];
+  offset += 1;
+  const figureNamePrefix = readString(data, offset);
 
   return {
     admin,
@@ -94,12 +106,15 @@ function decodeConfig(data: Buffer): DecodedConfig {
     discountMerkleRoot,
     maxSupply,
     maxPerTx,
+    itemsPerBox,
     minted,
     namePrefix: namePrefix.value,
     symbol: symbol.value,
     uriBase: uriBase.value,
     started,
     bump,
+    discountMintsPerWallet,
+    figureNamePrefix: figureNamePrefix.value,
   };
 }
 
@@ -133,13 +148,11 @@ if (args.some((arg) => /keypair|private|secret|signer/i.test(arg))) {
 }
 const rollback = args.includes('--rollback');
 const printOnly = args.includes('--print-only');
-const rpcFlag = args.indexOf('--rpc-url');
-const rpcUrl = rpcFlag >= 0 ? args[rpcFlag + 1] : MAINNET_RPC;
-if (!rpcUrl) throw new Error('--rpc-url requires a value');
+const rpcUrl = MAINNET_RPC;
 const uriBase = rollback ? ROLLBACK_URI_BASE : TARGET_URI_BASE;
 
 const manifest = JSON.parse(
-  await readFile(new URL('../onchain/releases/little-swag-boxes-uri-base.json', import.meta.url), 'utf8'),
+  await readFile(new URL('../onchain/releases/poncho-drifella-uri-base.json', import.meta.url), 'utf8'),
 );
 if (
   manifest.programId !== PROGRAM_ID.toBase58()

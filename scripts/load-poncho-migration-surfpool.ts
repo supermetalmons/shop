@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { PublicKey } from '@solana/web3.js';
 
-const PROGRAM_ID = '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep';
+const PROGRAM_ID = 'C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A';
 const ADMIN = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const surfpoolRpc = process.env.SURFPOOL_RPC_URL || 'http://127.0.0.1:8899';
-const elfPath = process.env.LSB_PROGRAM_ELF || 'onchain/target/deploy/box_minter.so';
+const elfPath = process.env.PONCHO_PROGRAM_ELF || 'onchain/target/deploy/box_minter.so';
 let rpcId = 0;
 
 async function rpc<T>(method: string, params: unknown): Promise<T> {

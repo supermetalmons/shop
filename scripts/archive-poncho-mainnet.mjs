@@ -3,10 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PublicKey } from "@solana/web3.js";
 
-const PROGRAM_ID = "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep";
-const CONFIG_PDA = "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc";
+const PROGRAM_ID = "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A";
+const CONFIG_PDA = "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq";
 const ADMIN = "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx";
-const COLLECTION = "7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr";
+const COLLECTION = "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH";
 const GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
 const LOADER = "BPFLoaderUpgradeab1e11111111111111111111111";
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
@@ -43,8 +43,8 @@ function accountData(response, address) {
 }
 
 function decodeConfig(data) {
-  if (data.length !== 289)
-    throw new Error(`Config length is ${data.length}, expected 289`);
+  if (data.length !== 307)
+    throw new Error(`Config length is ${data.length}, expected 307`);
   if (!data.subarray(0, 8).equals(CONFIG_DISCRIMINATOR))
     throw new Error("Config discriminator mismatch");
   let offset = 8;
@@ -77,15 +77,26 @@ function decodeConfig(data) {
   Object.assign(decoded, {
     maxSupply: data.readUInt32LE(offset),
     maxPerTx: data[offset + 4],
-    minted: data.readUInt32LE(offset + 5),
+    itemsPerBox: data[offset + 5],
+    minted: data.readUInt32LE(offset + 6),
   });
-  offset += 9;
+  offset += 10;
+  const namePrefix = string();
+  const symbol = string();
+  const uriBase = string();
+  const started = data[offset] === 1;
+  const bump = data[offset + 1];
+  const discountMintsPerWallet = data[offset + 2];
+  offset += 3;
+  const figureNamePrefix = string();
   Object.assign(decoded, {
-    namePrefix: string(),
-    symbol: string(),
-    uriBase: string(),
-    started: data[offset] === 1,
-    bump: data[offset + 1],
+    namePrefix,
+    symbol,
+    uriBase,
+    started,
+    bump,
+    discountMintsPerWallet,
+    figureNamePrefix,
   });
   return decoded;
 }
@@ -187,7 +198,7 @@ const inventory = {
 const timestamp = new Date().toISOString();
 const outputDirectory = resolve(
   requestedOutput ||
-    `.cache/lsb-mainnet-archive/${deploymentSlot}-${timestamp.replaceAll(":", "-")}`,
+    `.cache/poncho-mainnet-archive/${deploymentSlot}-${timestamp.replaceAll(":", "-")}`,
 );
 await mkdir(outputDirectory, { recursive: true });
 const snapshot = {

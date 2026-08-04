@@ -15,20 +15,20 @@ import {
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
 
 const GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
-const PROGRAM_ID = new PublicKey('22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep');
-const CONFIG_PDA = new PublicKey('iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc');
+const PROGRAM_ID = new PublicKey('C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A');
+const CONFIG_PDA = new PublicKey('2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq');
 const ADMIN = new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx');
-const COLLECTION = new PublicKey('7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr');
-const RECEIPTS_TREE = new PublicKey('Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV');
-const RECEIPTS_TREE_CONFIG = new PublicKey('61nRmLFVKe7x63Frz9TM2AkGSTmuDyYAuppAwZUee5tX');
+const COLLECTION = new PublicKey('JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH');
+const RECEIPTS_TREE = new PublicKey('5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow');
+const RECEIPTS_TREE_CONFIG = new PublicKey('3ZDjwqjnahBUPhprv8WXt2jAyJahQo2TEEfPAwTnTRNp');
 const MPL_CORE = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 const SPL_NOOP = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 const MPL_NOOP = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
 const ACCOUNT_COMPRESSION = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
 const BUBBLEGUM = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
-const OLD_BASE = 'https://assets.mons.link/drops/lsb';
-const NEW_BASE = 'https://cdn.lil.org/nft/little_swag_boxes';
+const OLD_BASE = 'https://assets.mons.link/drops/poncho';
+const NEW_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
 const MIGRATE_COLLECTION_URI = Buffer.from([191, 243, 226, 185, 115, 83, 70, 48]);
 const MIGRATE_CORE_ASSET_URI = Buffer.from([50, 156, 65, 239, 42, 228, 129, 192]);
@@ -47,12 +47,14 @@ type Target = {
 type ReceiptTarget = Target & { owner: string; leafId: number };
 
 type Checkpoint = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   planSha256: string;
   targetBase: string;
   completedCollection: boolean;
   completedCore: string[];
   completedReceipts: string[];
+  skippedBurnedCore: string[];
+  skippedBurnedReceipts: string[];
   transactions: Array<{ signature: string; kind: string; targets: string[] }>;
   pending: null | { signature: string; kind: string; targets: string[] };
 };
@@ -71,11 +73,11 @@ if (argv.some((arg) => /keypair|private|secret|signer/i.test(arg))) {
 }
 const send = argv.includes('--send');
 const rollback = argv.includes('--rollback');
-const planPath = resolve(option('--plan') || '.cache/lsb-existing-uri-migration/plan.json');
-const statePath = resolve(option('--state') || '.cache/lsb-existing-uri-migration/state.json');
+const planPath = resolve(option('--plan') || '.cache/poncho-existing-uri-migration/plan.json');
+const statePath = resolve(option('--state') || '.cache/poncho-existing-uri-migration/state.json');
 const heliusApiKey = process.env.HELIUS_API_KEY;
 if (!heliusApiKey) throw new Error('HELIUS_API_KEY is required');
-const rpcUrl = option('--rpc-url') || process.env.HELIUS_RPC_URL
+const rpcUrl = process.env.HELIUS_RPC_URL
   || `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}`;
 const connection = new Connection(rpcUrl, 'confirmed');
 const sourceBase = rollback ? NEW_BASE : OLD_BASE;
@@ -114,7 +116,7 @@ function readString(data: Buffer, offset: number) {
 }
 
 function decodeConfig(data: Buffer) {
-  if (data.length !== 289 || !data.subarray(0, 8).equals(CONFIG_DISCRIMINATOR)) {
+  if (data.length !== 307 || !data.subarray(0, 8).equals(CONFIG_DISCRIMINATOR)) {
     throw new Error('Config layout mismatch');
   }
   let offset = 8;
@@ -124,13 +126,49 @@ function decodeConfig(data: Buffer) {
     return value;
   };
   const admin = pubkey();
-  pubkey();
+  const treasury = pubkey();
   const coreCollection = pubkey();
-  offset += 8 + 8 + 32 + 4 + 1 + 4;
-  offset = readString(data, offset).offset;
-  offset = readString(data, offset).offset;
-  const uriBase = readString(data, offset).value;
-  return { admin, coreCollection, uriBase };
+  offset += 8 + 8 + 32;
+  const maxSupply = data.readUInt32LE(offset);
+  offset += 4;
+  const maxPerTx = data[offset];
+  offset += 1;
+  const itemsPerBox = data[offset];
+  offset += 1;
+  const minted = data.readUInt32LE(offset);
+  offset += 4;
+  const name = readString(data, offset);
+  offset = name.offset;
+  const symbol = readString(data, offset);
+  offset = symbol.offset;
+  const uri = readString(data, offset);
+  offset = uri.offset;
+  const started = data[offset] === 1;
+  const bump = data[offset + 1];
+  const discountMintsPerWallet = data[offset + 2];
+  offset += 3;
+  const figureName = readString(data, offset);
+  const maxFigureId = maxSupply * itemsPerBox;
+  if (!Number.isSafeInteger(maxFigureId) || maxFigureId < 1 || maxFigureId > 0xffff) {
+    throw new Error(`Invalid maximum figure ID ${maxFigureId}`);
+  }
+  return {
+    admin,
+    treasury,
+    coreCollection,
+    maxSupply,
+    maxPerTx,
+    itemsPerBox,
+    minted,
+    namePrefix: name.value,
+    symbol: symbol.value,
+    uriBase: uri.value,
+    started,
+    bump,
+    discountMintsPerWallet,
+    figureNamePrefix: figureName.value,
+    maxFigureId,
+  };
 }
 
 function parseCoreUri(data: Buffer) {
@@ -193,16 +231,115 @@ function numberBuffer(bytes: number, value: number) {
   return data;
 }
 
-async function receiptInstruction(target: ReceiptTarget) {
+function inCollection(asset: any) {
+  return Array.isArray(asset.grouping) && asset.grouping.some(
+    (group: any) => group?.group_key === 'collection' && group?.group_value === COLLECTION.toBase58(),
+  );
+}
+
+function fullAuthority(asset: any, address: PublicKey) {
+  return Array.isArray(asset.authorities) && asset.authorities.some(
+    (authority: any) => authority?.address === address.toBase58()
+      && Array.isArray(authority.scopes)
+      && authority.scopes.includes('full'),
+  );
+}
+
+function referenceAt(uri: string, base: string, path: string, maximum: number) {
+  const prefix = `${base}${path}`;
+  if (!uri.startsWith(prefix) || !uri.endsWith('.json')) return null;
+  const stem = uri.slice(prefix.length, -5);
+  if (!/^[1-9]\d*$/.test(stem)) return null;
+  const value = Number(stem);
+  return Number.isSafeInteger(value) && value <= maximum ? value : null;
+}
+
+function classifyLiveUri(uri: string, config: ReturnType<typeof decodeConfig>, receipt: boolean) {
+  const paths = receipt
+    ? [['/json/receipts/boxes/', 'box', config.maxSupply], ['/json/receipts/figures/', 'figure', config.maxFigureId]] as const
+    : [['/json/boxes/', 'box', config.maxSupply], ['/json/figures/', 'figure', config.maxFigureId]] as const;
+  for (const [path, kind, maximum] of paths) {
+    const source = referenceAt(uri, sourceBase, path, maximum);
+    if (source !== null) return { status: 'source' as const, kind, referenceId: source };
+    const target = referenceAt(uri, targetBase, path, maximum);
+    if (target !== null) return { status: 'target' as const, kind, referenceId: target };
+  }
+  return null;
+}
+
+async function assertNoUnexpectedLiveLegacyTargets(
+  config: ReturnType<typeof decodeConfig>,
+  plannedCore: Set<string>,
+  plannedReceipts: Set<string>,
+) {
+  const liveSourceCore = new Set<string>();
+  const liveSourceReceipts = new Set<string>();
+  let total = 0;
+  for (let page = 1; ; page += 1) {
+    const result = await rpc<any>('searchAssets', {
+      grouping: ['collection', COLLECTION.toBase58()],
+      page,
+      limit: 1000,
+      options: { showUnverifiedCollections: true, showCollectionMetadata: true },
+    });
+    total += result.items.length;
+    for (const asset of result.items) {
+      if (!asset.id || !inCollection(asset)) throw new Error(`Invalid collection grouping for ${asset.id || 'unknown'}`);
+      const receipt = asset.interface === 'MplBubblegumV2';
+      if (asset.interface !== 'MplCoreAsset' && !receipt) {
+        throw new Error(`Unexpected live collection interface ${asset.id}: ${asset.interface}`);
+      }
+      const classification = classifyLiveUri(String(asset.content?.json_uri || ''), config, receipt);
+      if (!classification) throw new Error(`Unexpected live metadata URI ${asset.id}`);
+      if (asset.burnt) continue;
+      if (receipt) {
+        if (!asset.mutable || asset.compression?.tree !== RECEIPTS_TREE.toBase58()) {
+          throw new Error(`Live receipt authority or tree mismatch: ${asset.id}`);
+        }
+        if (classification.status === 'source') liveSourceReceipts.add(asset.id);
+      } else {
+        if (!asset.mutable || !fullAuthority(asset, CONFIG_PDA)) {
+          throw new Error(`Live Core authority mismatch: ${asset.id}`);
+        }
+        if (classification.status === 'source') liveSourceCore.add(asset.id);
+      }
+    }
+    if (total >= result.total || result.items.length === 0) break;
+  }
+  const unexpectedCore = [...liveSourceCore].filter((address) => !plannedCore.has(address));
+  const unexpectedReceipts = [...liveSourceReceipts].filter((address) => !plannedReceipts.has(address));
+  if (unexpectedCore.length || unexpectedReceipts.length) {
+    throw new Error(`Unexpected new legacy targets after planning: ${JSON.stringify({
+      core: unexpectedCore,
+      receipts: unexpectedReceipts,
+    })}`);
+  }
+  return { liveSourceCore, liveSourceReceipts };
+}
+
+async function receiptInstruction(
+  target: ReceiptTarget,
+  config: ReturnType<typeof decodeConfig>,
+): Promise<TransactionInstruction | 'target' | 'burned'> {
   const [asset, proof] = await Promise.all([
     rpc<any>('getAsset', { id: target.address }),
     rpc<any>('getAssetProof', { id: target.address }),
   ]);
   const uri = String(asset.content?.json_uri || '');
-  if (uri === target.targetUri) return null;
+  if (asset.interface !== 'MplBubblegumV2' || !inCollection(asset)) {
+    throw new Error(`Receipt collection or interface mismatch: ${target.address}`);
+  }
+  if (asset.burnt) {
+    if (uri !== target.sourceUri && uri !== target.targetUri) {
+      throw new Error(`Burned receipt URI mismatch ${target.address}: ${uri}`);
+    }
+    return 'burned';
+  }
+  if (uri === target.targetUri) return 'target';
   if (uri !== target.sourceUri) throw new Error(`Unexpected receipt URI ${target.address}: ${uri}`);
-  const expectedName = `receipt · ${target.kind} ${target.referenceId}`;
-  if (asset.interface !== 'MplBubblegumV2' || asset.burnt || !asset.mutable
+  const label = target.kind === 'box' ? config.namePrefix : config.figureNamePrefix;
+  const expectedName = `receipt · ${label}${label.endsWith(' ') ? '' : ' '}${target.referenceId}`;
+  if (!asset.mutable
     || asset.content?.metadata?.name !== expectedName
     || asset.content?.metadata?.symbol !== ''
     || asset.royalty?.basis_points !== 0
@@ -211,12 +348,12 @@ async function receiptInstruction(target: ReceiptTarget) {
     || asset.compression?.flags !== 0
     || asset.compression?.leaf_id !== target.leafId
     || proof.tree_id !== RECEIPTS_TREE.toBase58()
-    || !Array.isArray(proof.proof) || proof.proof.length > 14) {
+    || !Array.isArray(proof.proof) || proof.proof.length !== 14) {
     throw new Error(`Receipt metadata or proof mismatch: ${target.address}`);
   }
   const owner = String(asset.ownership?.owner || '');
   const delegate = asset.ownership?.delegated ? String(asset.ownership?.delegate || '') : owner;
-  if (!owner || !delegate || owner !== target.owner) throw new Error(`Receipt ownership changed: ${target.address}`);
+  if (!owner || !delegate) throw new Error(`Receipt ownership is unavailable: ${target.address}`);
   const root = Buffer.from(bs58.decode(proof.root));
   const assetDataHash = Buffer.from(bs58.decode(asset.compression.asset_data_hash));
   if (root.length !== 32 || assetDataHash.length !== 32) throw new Error('Receipt hash length mismatch');
@@ -261,7 +398,7 @@ async function saveCheckpoint(checkpoint: Checkpoint) {
 async function loadCheckpoint(planSha256: string): Promise<Checkpoint> {
   try {
     const checkpoint = JSON.parse(await readFile(statePath, 'utf8')) as Checkpoint;
-    if (checkpoint.schemaVersion !== 1 || checkpoint.planSha256 !== planSha256
+    if (checkpoint.schemaVersion !== 2 || checkpoint.planSha256 !== planSha256
       || checkpoint.targetBase !== targetBase) {
       throw new Error('Migration checkpoint does not match this plan and direction');
     }
@@ -269,12 +406,14 @@ async function loadCheckpoint(planSha256: string): Promise<Checkpoint> {
   } catch (error: any) {
     if (error?.code !== 'ENOENT') throw error;
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       planSha256,
       targetBase,
       completedCollection: false,
       completedCore: [],
       completedReceipts: [],
+      skippedBurnedCore: [],
+      skippedBurnedReceipts: [],
       transactions: [],
       pending: null,
     };
@@ -285,14 +424,6 @@ function markCompleted(checkpoint: Checkpoint, kind: string, targets: string[]) 
   if (kind === 'collection') checkpoint.completedCollection = true;
   if (kind === 'core') checkpoint.completedCore.push(...targets);
   if (kind === 'receipt') checkpoint.completedReceipts.push(...targets);
-}
-
-function coreTransactionCount(targetCount: number) {
-  let count = 0;
-  for (let offset = 0; offset < targetCount; offset += CORE_FETCH_SIZE) {
-    count += Math.ceil(Math.min(CORE_FETCH_SIZE, targetCount - offset) / CORE_BATCH_SIZE);
-  }
-  return count;
 }
 
 async function recoverPending(checkpoint: Checkpoint) {
@@ -315,7 +446,7 @@ async function sendInstructions(
   targets: string[],
   instructions: TransactionInstruction[],
 ) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
     const latest = await connection.getLatestBlockhash('confirmed');
     const transaction = new VersionedTransaction(new TransactionMessage({
       payerKey: ADMIN,
@@ -355,7 +486,7 @@ async function sendInstructions(
       if (status?.confirmationStatus !== 'confirmed' && status?.confirmationStatus !== 'finalized') {
         checkpoint.pending = null;
         await saveCheckpoint(checkpoint);
-        console.log(`Blockhash expired for ${kind}; retrying with a fresh signature (${attempt + 1}/5).`);
+        console.log(`Blockhash expired for ${kind}; retrying with a fresh signature (${attempt + 1}/10).`);
         continue;
       }
     }
@@ -380,26 +511,67 @@ async function waitForReceiptIndex(target: ReceiptTarget) {
 const planBytes = await readFile(planPath);
 const planSha256 = createHash('sha256').update(planBytes).digest('hex');
 const plan = JSON.parse(planBytes.toString('utf8')) as {
+  rollback: boolean;
   genesisHash: string;
   sourceBase: string;
   targetBase: string;
   observedSnapshot: Record<string, number>;
+  planScope: {
+    rollback: boolean;
+    sourceBase: string;
+    targetBase: string;
+    collection: string | null;
+    coreTargets: string[];
+    receiptTargets: string[];
+  };
+  planChecksum: string;
+  coreBatches: string[][];
+  transactionsRequired: number;
+  config: { sha256: string };
   coreTargets: Target[];
   receiptTargets: ReceiptTarget[];
 };
-if (plan.genesisHash !== GENESIS_HASH || plan.sourceBase !== sourceBase || plan.targetBase !== targetBase
-  || plan.observedSnapshot.collectionAssets !== 989
-  || plan.observedSnapshot.liveCoreAssets !== 532
-  || plan.observedSnapshot.burnedCoreRecords !== 314
-  || plan.observedSnapshot.liveCompressedReceipts !== 143) {
-  throw new Error('Migration plan scope or snapshot mismatch');
+const computedPlanChecksum = createHash('sha256')
+  .update(JSON.stringify(plan.planScope))
+  .digest('hex');
+const plannedCoreAddresses = plan.coreTargets.map((target) => target.address);
+const plannedReceiptAddresses = plan.receiptTargets.map((target) => target.address);
+const flattenedCoreBatches = plan.coreBatches.flat();
+if (plan.genesisHash !== GENESIS_HASH
+  || plan.rollback !== rollback
+  || plan.sourceBase !== sourceBase
+  || plan.targetBase !== targetBase
+  || plan.planScope.rollback !== rollback
+  || plan.planScope.sourceBase !== sourceBase
+  || plan.planScope.targetBase !== targetBase
+  || plan.planChecksum !== computedPlanChecksum
+  || JSON.stringify(plan.planScope.coreTargets) !== JSON.stringify(plannedCoreAddresses)
+  || JSON.stringify(plan.planScope.receiptTargets) !== JSON.stringify(plannedReceiptAddresses)
+  || JSON.stringify(flattenedCoreBatches) !== JSON.stringify(plannedCoreAddresses)
+  || plan.coreBatches.some((batch) => batch.length < 1 || batch.length > CORE_BATCH_SIZE)
+  || new Set([...plannedCoreAddresses, ...plannedReceiptAddresses]).size
+    !== plannedCoreAddresses.length + plannedReceiptAddresses.length
+  || plan.transactionsRequired !== Number(Boolean(plan.planScope.collection))
+    + plan.coreBatches.length + plan.receiptTargets.length) {
+  throw new Error('Migration plan scope, checksum, batches, or transaction count mismatch');
 }
 const manifest = JSON.parse(await readFile(
-  new URL('../onchain/releases/little-swag-boxes-existing-uri-migration.json', import.meta.url),
+  new URL('../onchain/releases/poncho-drifella-existing-uri-migration.json', import.meta.url),
   'utf8',
 ));
 const expectedElfSha256 = String(manifest.release?.elfSha256 || '');
 const expectedElfBytes = Number(manifest.release?.elfBytes || 0);
+if (manifest.genesisHash !== GENESIS_HASH
+  || manifest.programId !== PROGRAM_ID.toBase58()
+  || manifest.configPda !== CONFIG_PDA.toBase58()
+  || manifest.admin !== ADMIN.toBase58()
+  || manifest.coreCollection !== COLLECTION.toBase58()
+  || manifest.receiptsTree !== RECEIPTS_TREE.toBase58()
+  || manifest.receiptsTreeConfig !== RECEIPTS_TREE_CONFIG.toBase58()
+  || manifest.legacyUriBase !== OLD_BASE
+  || manifest.canonicalUriBase !== NEW_BASE) {
+  throw new Error('Migration manifest scope mismatch');
+}
 
 const genesisHash = await connection.getGenesisHash();
 if (genesisHash !== GENESIS_HASH) throw new Error(`Refusing non-mainnet genesis hash ${genesisHash}`);
@@ -414,6 +586,10 @@ if (!programAccount?.executable || !programAccount.owner.equals(LOADER)
 const programDataAddress = new PublicKey(programAccount.data.subarray(4, 36));
 const programData = await connection.getAccountInfo(programDataAddress, 'finalized');
 if (!programData || !programData.owner.equals(LOADER)) throw new Error('ProgramData account mismatch');
+if (programData.data[12] !== 1
+  || !new PublicKey(programData.data.subarray(13, 45)).equals(ADMIN)) {
+  throw new Error('Program upgrade authority mismatch');
+}
 const elf = Buffer.from(programData.data.subarray(45));
 const elfSha256 = createHash('sha256').update(elf).digest('hex');
 const config = decodeConfig(Buffer.from(configAccount.data));
@@ -422,6 +598,36 @@ if (config.admin !== ADMIN.toBase58() || config.coreCollection !== COLLECTION.to
   || config.uriBase !== targetBase) {
   throw new Error('Config scope or target URI mismatch');
 }
+if (configSha256 !== plan.config.sha256) {
+  throw new Error('Config changed after the finalized migration plan was created');
+}
+for (const [targets, receipt] of [[plan.coreTargets, false], [plan.receiptTargets, true]] as const) {
+  for (const target of targets) {
+  const maximum = target.kind === 'box' ? config.maxSupply : config.maxFigureId;
+  const path = target.kind === 'box'
+    ? (receipt ? '/json/receipts/boxes/' : '/json/boxes/')
+    : (receipt ? '/json/receipts/figures/' : '/json/figures/');
+  if (!Number.isInteger(target.referenceId) || target.referenceId < 1 || target.referenceId > maximum
+    || target.sourceUri !== `${sourceBase}${path}${target.referenceId}.json`
+    || target.targetUri !== `${targetBase}${path}${target.referenceId}.json`) {
+    throw new Error(`Invalid migration target metadata: ${target.address}`);
+  }
+  new PublicKey(target.address);
+  }
+}
+const collectionUriBefore = parseCollectionUri(Buffer.from(collectionAccount.data));
+if (collectionUriBefore === `${sourceBase}/collection.json`) {
+  if (plan.planScope.collection !== COLLECTION.toBase58()) {
+    throw new Error('Collection became a new legacy target after planning');
+  }
+} else if (collectionUriBefore !== `${targetBase}/collection.json`) {
+  throw new Error(`Unexpected collection URI ${collectionUriBefore}`);
+}
+await assertNoUnexpectedLiveLegacyTargets(
+  config,
+  new Set(plannedCoreAddresses),
+  new Set(plannedReceiptAddresses),
+);
 
 const summary = {
   mode: send ? 'send' : 'preflight',
@@ -436,13 +642,17 @@ const summary = {
   expectedElfSha256: expectedElfSha256 || null,
   plan: planPath,
   planSha256,
+  planChecksum: plan.planChecksum,
   targets: {
-    collection: 1,
+    collection: Number(Boolean(plan.planScope.collection)),
     core: plan.coreTargets.length,
     receipts: plan.receiptTargets.length,
-    burnedHistoricalRecordsExcluded: 314,
+    burnedHistoricalRecordsExcluded: {
+      core: plan.observedSnapshot.burnedCoreRecords,
+      compressed: plan.observedSnapshot.burnedCompressedRecords,
+    },
   },
-  maximumTransactions: 1 + coreTransactionCount(plan.coreTargets.length) + plan.receiptTargets.length,
+  maximumTransactions: plan.transactionsRequired,
 };
 process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 if (!send) {
@@ -466,53 +676,70 @@ if (!await promptYConfirmation('Send the approved MAINNET existing-URI migration
 
 const checkpoint = await loadCheckpoint(planSha256);
 await recoverPending(checkpoint);
-const completedCore = new Set(checkpoint.completedCore);
-const completedReceipts = new Set(checkpoint.completedReceipts);
+const completedCore = new Set([...checkpoint.completedCore, ...checkpoint.skippedBurnedCore]);
+const completedReceipts = new Set([...checkpoint.completedReceipts, ...checkpoint.skippedBurnedReceipts]);
 
-const currentCollectionUri = parseCollectionUri(Buffer.from(collectionAccount.data));
-if (currentCollectionUri === `${targetBase}/collection.json`) checkpoint.completedCollection = true;
-else if (currentCollectionUri !== `${sourceBase}/collection.json`) throw new Error(`Unexpected collection URI ${currentCollectionUri}`);
+if (collectionUriBefore === `${targetBase}/collection.json`) checkpoint.completedCollection = true;
 if (!checkpoint.completedCollection) {
   const result = await sendInstructions(signer, checkpoint, 'collection', [COLLECTION.toBase58()], [collectionInstruction()]);
   console.log(`Collection migrated: ${result.signature}`);
 }
 
+const pendingCoreTargets: Target[] = [];
 for (let offset = 0; offset < plan.coreTargets.length; offset += CORE_FETCH_SIZE) {
   const targets = plan.coreTargets.slice(offset, offset + CORE_FETCH_SIZE)
     .filter((target) => !completedCore.has(target.address));
+  if (!targets.length) continue;
   const accounts = await connection.getMultipleAccountsInfo(targets.map((target) => new PublicKey(target.address)), 'confirmed');
-  const pending: Target[] = [];
-  targets.forEach((target, index) => {
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index];
     const account = accounts[index];
-    if (!account?.owner.equals(MPL_CORE)) throw new Error(`Invalid Core account ${target.address}`);
+    if (!account) {
+      const asset = await rpc<any>('getAsset', { id: target.address });
+      const uri = String(asset.content?.json_uri || '');
+      if (asset.interface !== 'MplCoreAsset' || !asset.burnt || !inCollection(asset)
+        || (uri !== target.sourceUri && uri !== target.targetUri)) {
+        throw new Error(`Missing Core account is not a proven burn: ${target.address}`);
+      }
+      checkpoint.skippedBurnedCore.push(target.address);
+      completedCore.add(target.address);
+      continue;
+    }
+    if (!account.owner.equals(MPL_CORE)) throw new Error(`Invalid Core account ${target.address}`);
     const uri = parseCoreUri(Buffer.from(account.data));
     if (uri === target.targetUri) {
       completedCore.add(target.address);
       checkpoint.completedCore.push(target.address);
-    } else if (uri === target.sourceUri) pending.push(target);
+    } else if (uri === target.sourceUri) pendingCoreTargets.push(target);
     else throw new Error(`Unexpected Core URI ${target.address}: ${uri}`);
-  });
-  for (let index = 0; index < pending.length; index += CORE_BATCH_SIZE) {
-    const batch = pending.slice(index, index + CORE_BATCH_SIZE);
-    const result = await sendInstructions(
-      signer,
-      checkpoint,
-      'core',
-      batch.map((target) => target.address),
-      batch.map((target) => coreInstruction(target.address)),
-    );
-    batch.forEach((target) => completedCore.add(target.address));
-    console.log(`Core ${completedCore.size}/${plan.coreTargets.length}: ${result.signature}`);
   }
   await saveCheckpoint(checkpoint);
+}
+for (let index = 0; index < pendingCoreTargets.length; index += CORE_BATCH_SIZE) {
+  const batch = pendingCoreTargets.slice(index, index + CORE_BATCH_SIZE);
+  const result = await sendInstructions(
+    signer,
+    checkpoint,
+    'core',
+    batch.map((target) => target.address),
+    batch.map((target) => coreInstruction(target.address)),
+  );
+  batch.forEach((target) => completedCore.add(target.address));
+  console.log(`Core ${completedCore.size}/${plan.coreTargets.length}: ${result.signature}`);
 }
 
 for (const target of plan.receiptTargets) {
   if (completedReceipts.has(target.address)) continue;
-  const instruction = await receiptInstruction(target);
-  if (!instruction) {
+  const instruction = await receiptInstruction(target, config);
+  if (instruction === 'target') {
     completedReceipts.add(target.address);
     checkpoint.completedReceipts.push(target.address);
+    await saveCheckpoint(checkpoint);
+    continue;
+  }
+  if (instruction === 'burned') {
+    completedReceipts.add(target.address);
+    checkpoint.skippedBurnedReceipts.push(target.address);
     await saveCheckpoint(checkpoint);
     continue;
   }
@@ -542,7 +769,9 @@ for (;;) {
 }
 
 for (let offset = 0; offset < plan.coreTargets.length; offset += CORE_FETCH_SIZE) {
-  const targets = plan.coreTargets.slice(offset, offset + CORE_FETCH_SIZE);
+  const targets = plan.coreTargets.slice(offset, offset + CORE_FETCH_SIZE)
+    .filter((target) => !checkpoint.skippedBurnedCore.includes(target.address));
+  if (!targets.length) continue;
   const accounts = await connection.getMultipleAccountsInfo(
     targets.map((target) => new PublicKey(target.address)),
     'finalized',
@@ -555,7 +784,9 @@ for (let offset = 0; offset < plan.coreTargets.length; offset += CORE_FETCH_SIZE
   });
 }
 for (let offset = 0; offset < plan.receiptTargets.length; offset += 100) {
-  const targets = plan.receiptTargets.slice(offset, offset + 100);
+  const targets = plan.receiptTargets.slice(offset, offset + 100)
+    .filter((target) => !checkpoint.skippedBurnedReceipts.includes(target.address));
+  if (!targets.length) continue;
   const assets = await rpc<any[]>('getAssetBatch', { ids: targets.map((target) => target.address) });
   targets.forEach((target, index) => {
     if (assets[index]?.id !== target.address || assets[index]?.content?.json_uri !== target.targetUri) {
@@ -567,6 +798,23 @@ const configAfter = await connection.getAccountInfo(CONFIG_PDA, 'finalized');
 if (!configAfter || createHash('sha256').update(configAfter.data).digest('hex') !== configSha256) {
   throw new Error('Config changed during asset migration');
 }
+const remainingLegacy = await assertNoUnexpectedLiveLegacyTargets(
+  config,
+  new Set(plannedCoreAddresses),
+  new Set(plannedReceiptAddresses),
+);
+if (remainingLegacy.liveSourceCore.size || remainingLegacy.liveSourceReceipts.size) {
+  throw new Error(`Legacy live URIs remain after migration: ${JSON.stringify({
+    core: [...remainingLegacy.liveSourceCore],
+    receipts: [...remainingLegacy.liveSourceReceipts],
+  })}`);
+}
+const programDataAfter = await connection.getAccountInfo(programDataAddress, 'finalized');
+if (!programDataAfter || programDataAfter.data[12] !== 1
+  || !new PublicKey(programDataAfter.data.subarray(13, 45)).equals(ADMIN)
+  || createHash('sha256').update(programDataAfter.data.subarray(45)).digest('hex') !== elfSha256) {
+  throw new Error('Program executable or upgrade authority changed during migration');
+}
 const completion = {
   completedAt: new Date().toISOString(),
   targetBase,
@@ -576,7 +824,14 @@ const completion = {
   collection: COLLECTION.toBase58(),
   coreAssets: plan.coreTargets.length,
   compressedReceipts: plan.receiptTargets.length,
-  immutableBurnedCoreRecords: 314,
+  skippedBurnedAfterPlanning: {
+    core: checkpoint.skippedBurnedCore,
+    compressed: checkpoint.skippedBurnedReceipts,
+  },
+  immutableHistoricalRecords: {
+    core: plan.observedSnapshot.burnedCoreRecords,
+    compressed: plan.observedSnapshot.burnedCompressedRecords,
+  },
   transactions: checkpoint.transactions,
 };
 const completionPath = `${statePath}.complete.json`;

@@ -2,17 +2,18 @@
   "schemaVersion": 1,
   "cluster": "mainnet-beta",
   "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
-  "programId": "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep",
-  "configPda": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+  "programId": "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A",
+  "programData": "3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv",
+  "configPda": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq",
   "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
-  "configAccountBytes": 289,
+  "configAccountBytes": 307,
   "instruction": {
     "name": "set_uri_base",
     "discriminator": [160, 250, 204, 89, 122, 8, 207, 34],
     "accounts": [
       {
         "name": "config",
-        "address": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+        "address": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq",
         "writable": true,
         "signer": false
       },
@@ -24,8 +25,8 @@
       }
     ]
   },
-  "targetUriBase": "https://cdn.lil.org/nft/little_swag_boxes",
-  "rollbackUriBase": "https://assets.mons.link/drops/lsb",
+  "targetUriBase": "https://cdn.lil.org/nft/poncho_drifella",
+  "rollbackUriBase": "https://assets.mons.link/drops/poncho",
   "defaultMode": "simulate",
   "privateKeyPolicy": "This manifest and its client never read, request, store, or retain private keys."
 }

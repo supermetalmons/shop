@@ -12,20 +12,20 @@ import {
 } from '@solana/web3.js';
 
 const GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
-const PROGRAM_ID = new PublicKey('22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep');
-const CONFIG_PDA = new PublicKey('iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc');
+const PROGRAM_ID = new PublicKey('C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A');
+const CONFIG_PDA = new PublicKey('2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq');
 const ADMIN = new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx');
-const COLLECTION = new PublicKey('7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr');
-const RECEIPTS_TREE = new PublicKey('Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV');
-const RECEIPTS_TREE_CONFIG = new PublicKey('61nRmLFVKe7x63Frz9TM2AkGSTmuDyYAuppAwZUee5tX');
+const COLLECTION = new PublicKey('JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH');
+const RECEIPTS_TREE = new PublicKey('5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow');
+const RECEIPTS_TREE_CONFIG = new PublicKey('3ZDjwqjnahBUPhprv8WXt2jAyJahQo2TEEfPAwTnTRNp');
 const MPL_CORE = new PublicKey('CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d');
 const SPL_NOOP = new PublicKey('noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV');
 const MPL_NOOP = new PublicKey('mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3');
 const ACCOUNT_COMPRESSION = new PublicKey('mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW');
 const BUBBLEGUM = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
-const OLD_BASE = 'https://assets.mons.link/drops/lsb';
-const NEW_BASE = 'https://cdn.lil.org/nft/little_swag_boxes';
+const OLD_BASE = 'https://assets.mons.link/drops/poncho';
+const NEW_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
 const MIGRATE_COLLECTION_URI = Buffer.from([191, 243, 226, 185, 115, 83, 70, 48]);
 const MIGRATE_CORE_ASSET_URI = Buffer.from([50, 156, 65, 239, 42, 228, 129, 192]);
@@ -68,7 +68,7 @@ const rollback = args.includes('--rollback');
 const simulate = args.includes('--simulate');
 const testUnauthorized = args.includes('--test-unauthorized');
 if (testUnauthorized && !simulate) throw new Error('--test-unauthorized requires --simulate');
-const outputPath = resolve(flagValue('--out') || '.cache/lsb-existing-uri-migration/plan.json');
+const outputPath = resolve(flagValue('--out') || '.cache/poncho-existing-uri-migration/plan.json');
 const simulationLimitValue = flagValue('--simulation-limit');
 const simulationLimit = simulationLimitValue ? Number(simulationLimitValue) : Number.POSITIVE_INFINITY;
 if (!Number.isFinite(simulationLimit) && simulationLimitValue) {
@@ -82,15 +82,15 @@ const heliusApiKey = process.env.HELIUS_API_KEY;
 if (!heliusApiKey) throw new Error('HELIUS_API_KEY is required');
 const rpcUrl = process.env.HELIUS_RPC_URL
   || `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}`;
-const simulationRpcUrl = process.env.LSB_SIMULATION_RPC_URL || rpcUrl;
+const simulationRpcUrl = process.env.PONCHO_SIMULATION_RPC_URL || rpcUrl;
 const connection = new Connection(simulationRpcUrl, 'finalized');
 const sourceBase = rollback ? NEW_BASE : OLD_BASE;
 const targetBase = rollback ? OLD_BASE : NEW_BASE;
 let rpcId = 0;
 
-async function rpc<T>(method: string, params: unknown = []): Promise<T> {
+async function rpc<T>(method: string, params: unknown = [], endpoint = rpcUrl): Promise<T> {
   for (let attempt = 0; attempt < 7; attempt += 1) {
-    const response = await fetch(rpcUrl, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
@@ -115,7 +115,7 @@ async function rpc<T>(method: string, params: unknown = []): Promise<T> {
 }
 
 function decodeConfig(data: Buffer) {
-  if (data.length !== 289) throw new Error(`Config length is ${data.length}, expected 289`);
+  if (data.length !== 307) throw new Error(`Config length is ${data.length}, expected 307`);
   if (!data.subarray(0, 8).equals(CONFIG_DISCRIMINATOR)) throw new Error('Config discriminator mismatch');
   let offset = 8;
   const pubkey = () => {
@@ -128,7 +128,13 @@ function decodeConfig(data: Buffer) {
   const coreCollection = pubkey();
   offset += 8 + 8 + 32;
   const maxSupply = data.readUInt32LE(offset);
-  offset += 4 + 1 + 4;
+  offset += 4;
+  const maxPerTx = data[offset];
+  offset += 1;
+  const itemsPerBox = data[offset];
+  offset += 1;
+  const minted = data.readUInt32LE(offset);
+  offset += 4;
   const string = () => {
     const length = data.readUInt32LE(offset);
     offset += 4;
@@ -138,10 +144,35 @@ function decodeConfig(data: Buffer) {
     offset = end;
     return value;
   };
-  string();
-  string();
+  const namePrefix = string();
+  const symbol = string();
   const uriBase = string();
-  return { admin, treasury, coreCollection, maxSupply, uriBase };
+  const started = data[offset] === 1;
+  const bump = data[offset + 1];
+  const discountMintsPerWallet = data[offset + 2];
+  offset += 3;
+  const figureNamePrefix = string();
+  const maxFigureId = maxSupply * itemsPerBox;
+  if (!Number.isSafeInteger(maxFigureId) || maxFigureId < 1 || maxFigureId > 0xffff) {
+    throw new Error(`Invalid maximum figure ID ${maxFigureId}`);
+  }
+  return {
+    admin,
+    treasury,
+    coreCollection,
+    maxSupply,
+    maxPerTx,
+    itemsPerBox,
+    minted,
+    namePrefix,
+    symbol,
+    uriBase,
+    started,
+    bump,
+    discountMintsPerWallet,
+    figureNamePrefix,
+    maxFigureId,
+  };
 }
 
 function strictReference(uri: string, base: string, path: string, maximum: number) {
@@ -167,10 +198,10 @@ function inCollection(asset: Asset) {
   );
 }
 
-function classifyUri(uri: string, maxSupply: number, receipt: boolean) {
+function classifyUri(uri: string, maxSupply: number, maxFigureId: number, receipt: boolean) {
   const paths = receipt
-    ? [[RECEIPT_BOX_PATH, 'box', maxSupply], [RECEIPT_FIGURE_PATH, 'figure', 999]] as const
-    : [[CORE_BOX_PATH, 'box', maxSupply], [CORE_FIGURE_PATH, 'figure', 999]] as const;
+    ? [[RECEIPT_BOX_PATH, 'box', maxSupply], [RECEIPT_FIGURE_PATH, 'figure', maxFigureId]] as const
+    : [[CORE_BOX_PATH, 'box', maxSupply], [CORE_FIGURE_PATH, 'figure', maxFigureId]] as const;
   for (const [path, kind, maximum] of paths) {
     const sourceId = strictReference(uri, sourceBase, path, maximum);
     if (sourceId !== null) return { status: 'source' as const, path, kind, referenceId: sourceId };
@@ -239,12 +270,17 @@ function u16(value: number) {
   return data;
 }
 
-async function migrateReceiptInstruction(target: ReceiptTarget) {
+async function migrateReceiptInstruction(target: ReceiptTarget, maxSupply: number, maxFigureId: number) {
   const [asset, proof] = await Promise.all([
     rpc<Asset>('getAsset', { id: target.address }),
     rpc<any>('getAssetProof', { id: target.address }),
   ]);
-  const classification = classifyUri(String(asset.content?.json_uri || ''), 333, true);
+  const classification = classifyUri(
+    String(asset.content?.json_uri || ''),
+    maxSupply,
+    maxFigureId,
+    true,
+  );
   if (!classification || classification.status !== 'source'
     || classification.kind !== target.kind || classification.referenceId !== target.referenceId) {
     throw new Error(`Receipt changed since planning: ${target.address}`);
@@ -263,7 +299,7 @@ async function migrateReceiptInstruction(target: ReceiptTarget) {
     throw new Error(`Invalid receipt compression state: ${target.address}`);
   }
   if (proof.tree_id !== RECEIPTS_TREE.toBase58() || !Array.isArray(proof.proof)
-    || proof.proof.length > MAX_RECEIPT_PROOF_ACCOUNTS) {
+    || proof.proof.length !== MAX_RECEIPT_PROOF_ACCOUNTS) {
     throw new Error(`Invalid receipt proof: ${target.address}`);
   }
   const root = Buffer.from(bs58.decode(proof.root));
@@ -342,7 +378,7 @@ async function concurrentMap<T, R>(values: T[], concurrency: number, task: (valu
 }
 
 const manifest = JSON.parse(await readFile(
-  new URL('../onchain/releases/little-swag-boxes-existing-uri-migration.json', import.meta.url),
+  new URL('../onchain/releases/poncho-drifella-existing-uri-migration.json', import.meta.url),
   'utf8',
 ));
 const manifestMatches = manifest.genesisHash === GENESIS_HASH
@@ -362,8 +398,16 @@ if (!manifestMatches) throw new Error('Migration manifest does not match the fix
 const genesisHash = await rpc<string>('getGenesisHash');
 if (genesisHash !== GENESIS_HASH) throw new Error(`Refusing non-mainnet genesis hash ${genesisHash}`);
 const [programResponse, configResponse, collectionAsset] = await Promise.all([
-  rpc<any>('getAccountInfo', [PROGRAM_ID.toBase58(), { encoding: 'base64', commitment: 'finalized' }]),
-  rpc<any>('getAccountInfo', [CONFIG_PDA.toBase58(), { encoding: 'base64', commitment: 'finalized' }]),
+  rpc<any>(
+    'getAccountInfo',
+    [PROGRAM_ID.toBase58(), { encoding: 'base64', commitment: 'finalized' }],
+    simulationRpcUrl,
+  ),
+  rpc<any>(
+    'getAccountInfo',
+    [CONFIG_PDA.toBase58(), { encoding: 'base64', commitment: 'finalized' }],
+    simulationRpcUrl,
+  ),
   rpc<Asset>('getAsset', { id: COLLECTION.toBase58() }),
 ]);
 if (!programResponse.value?.executable || programResponse.value.owner !== LOADER.toBase58()) {
@@ -378,7 +422,7 @@ const programDataAddress = new PublicKey(programAccountData.subarray(4, 36));
 const programDataResponse = await rpc<any>('getAccountInfo', [
   programDataAddress.toBase58(),
   { encoding: 'base64', commitment: 'finalized' },
-]);
+], simulationRpcUrl);
 const programData = Buffer.from(programDataResponse.value.data[0], 'base64');
 if (programDataResponse.value.owner !== LOADER.toBase58() || programData.readUInt32LE(0) !== 3) {
   throw new Error('ProgramData account mismatch');
@@ -418,11 +462,12 @@ const coreTargets: CoreTarget[] = [];
 const receiptTargets: ReceiptTarget[] = [];
 const alreadyTarget = { core: 0, receipts: 0 };
 let burnedCoreRecords = 0;
+let burnedCompressedRecords = 0;
 for (const asset of assets) {
   if (!asset.id || !inCollection(asset)) throw new Error(`Invalid collection grouping for ${asset.id || 'unknown'}`);
   const uri = String(asset.content?.json_uri || '');
   if (asset.interface === 'MplCoreAsset') {
-    const classification = classifyUri(uri, config.maxSupply, false);
+    const classification = classifyUri(uri, config.maxSupply, config.maxFigureId, false);
     if (!classification) throw new Error(`Unexpected Core URI ${asset.id}: ${uri}`);
     if (asset.burnt) {
       burnedCoreRecords += 1;
@@ -436,12 +481,17 @@ for (const asset of assets) {
     continue;
   }
   if (asset.interface === 'MplBubblegumV2') {
-    if (asset.burnt || !asset.mutable || asset.compression?.tree !== RECEIPTS_TREE.toBase58()) {
+    const classification = classifyUri(uri, config.maxSupply, config.maxFigureId, true);
+    if (!classification) throw new Error(`Unexpected receipt URI ${asset.id}: ${uri}`);
+    if (asset.burnt) {
+      burnedCompressedRecords += 1;
+      continue;
+    }
+    if (!asset.mutable || asset.compression?.tree !== RECEIPTS_TREE.toBase58()) {
       throw new Error(`Compressed receipt state mismatch: ${asset.id}`);
     }
-    const classification = classifyUri(uri, config.maxSupply, true);
-    if (!classification) throw new Error(`Unexpected receipt URI ${asset.id}: ${uri}`);
-    const expectedName = `receipt · ${classification.kind} ${classification.referenceId}`;
+    const label = classification.kind === 'box' ? config.namePrefix : config.figureNamePrefix;
+    const expectedName = `receipt · ${label}${label.endsWith(' ') ? '' : ' '}${classification.referenceId}`;
     if (asset.content?.metadata?.name !== expectedName
       || asset.content?.metadata?.symbol !== ''
       || asset.royalty?.basis_points !== 0
@@ -470,18 +520,28 @@ const observedSnapshot = {
   liveCoreAssets: coreTargets.length + alreadyTarget.core,
   burnedCoreRecords,
   liveCompressedReceipts: receiptTargets.length + alreadyTarget.receipts,
+  burnedCompressedRecords,
 };
-for (const [key, expected] of Object.entries(manifest.expectedSnapshot)) {
-  if (observedSnapshot[key as keyof typeof observedSnapshot] !== expected) {
-    throw new Error(`Live inventory ${key} changed: expected ${expected}, found ${observedSnapshot[key as keyof typeof observedSnapshot]}`);
-  }
-}
+const collectionRequiresMigration = collectionUri === collectionSourceUri;
+const coreBatches = Array.from(
+  { length: Math.ceil(coreTargets.length / 16) },
+  (_, index) => coreTargets.slice(index * 16, index * 16 + 16).map((target) => target.address),
+);
+const planScope = {
+  rollback,
+  sourceBase,
+  targetBase,
+  collection: collectionRequiresMigration ? COLLECTION.toBase58() : null,
+  coreTargets: coreTargets.map((target) => target.address),
+  receiptTargets: receiptTargets.map((target) => target.address),
+};
+const planChecksum = createHash('sha256').update(JSON.stringify(planScope)).digest('hex');
 
 let simulations: any = null;
 if (simulate) {
   const coreSample = coreTargets.slice(0, simulationLimit);
   const receiptSample = receiptTargets.slice(0, simulationLimit);
-  const collection = collectionUri === collectionSourceUri
+  const collection = collectionRequiresMigration
     ? await simulateInstruction(migrateCollectionInstruction())
     : null;
   const core = await concurrentMap(coreSample, 4, async (target) => ({
@@ -498,7 +558,11 @@ if (simulate) {
   );
   const receipts = await concurrentMap(receiptSample, 1, async (target) => ({
     address: target.address,
-    ...await simulateInstruction(await migrateReceiptInstruction(target)),
+    ...await simulateInstruction(await migrateReceiptInstruction(
+      target,
+      config.maxSupply,
+      config.maxFigureId,
+    )),
   }));
   const unauthorized = testUnauthorized && coreTargets.length
     ? await simulateInstruction(
@@ -554,9 +618,15 @@ const plan = {
   },
   observedSnapshot,
   alreadyTarget,
-  immutableHistoricalRecords: burnedCoreRecords,
-  transactionsRequired: Number(collectionUri === collectionSourceUri)
-    + coreTargets.length + receiptTargets.length,
+  immutableHistoricalRecords: {
+    core: burnedCoreRecords,
+    compressed: burnedCompressedRecords,
+  },
+  planScope,
+  planChecksum,
+  transactionsRequired: Number(collectionRequiresMigration)
+    + coreBatches.length + receiptTargets.length,
+  coreBatches,
   coreTargets,
   receiptTargets,
   simulations,
@@ -573,7 +643,8 @@ process.stdout.write(`${JSON.stringify({
   program: plan.program,
   observedSnapshot,
   alreadyTarget,
-  immutableHistoricalRecords: burnedCoreRecords,
+  immutableHistoricalRecords: plan.immutableHistoricalRecords,
+  planChecksum,
   transactionsRequired: plan.transactionsRequired,
   simulations: simulations && {
     collection: Boolean(simulations.collection),

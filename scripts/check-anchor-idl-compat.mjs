@@ -32,6 +32,7 @@ function indexedByName(values) {
 
 const baselineInstructions = indexedByName(baseline.instructions);
 const currentInstructions = indexedByName(current.instructions);
+if (baselineInstructions.size !== 10) throw new Error(`Expected 10 historical instructions, found ${baselineInstructions.size}`);
 for (const [name, instruction] of baselineInstructions) {
   assertEqual(`instruction ${name}`, instruction, currentInstructions.get(name));
 }
@@ -39,8 +40,8 @@ for (const [name, instruction] of baselineInstructions) {
 const addedInstructions = [...currentInstructions.keys()].filter((name) => !baselineInstructions.has(name));
 assertEqual(
   'added instructions',
-  ['migrate_collection_uri', 'migrate_core_asset_uri', 'migrate_receipt_uri'],
-  addedInstructions,
+  ['migrate_collection_uri', 'migrate_core_asset_uri', 'migrate_receipt_uri', 'set_uri_base'],
+  [...addedInstructions].sort(),
 );
 
 for (const section of ['accounts', 'constants']) {
@@ -57,14 +58,15 @@ assertEqual('added types', ['MigrateReceiptUriArgs'], addedTypes);
 
 const baselineErrors = new Map((baseline.errors || []).map((value) => [value.code, value]));
 const currentErrors = new Map((current.errors || []).map((value) => [value.code, value]));
+if (baselineErrors.size !== 49) throw new Error(`Expected 49 historical errors, found ${baselineErrors.size}`);
 for (const [code, error] of baselineErrors) {
   assertEqual(`error ${code}`, error, currentErrors.get(code));
 }
 const addedErrors = [...currentErrors.values()].filter((error) => !baselineErrors.has(error.code));
 assertEqual('added errors', [{
-  code: 6044,
+  code: 6049,
   name: 'InvalidMigrationTarget',
-  msg: 'URI migration requires a recognized Little Swag Boxes base',
+  msg: 'URI migration requires a recognized Poncho Drifella base',
 }], addedErrors);
 
 const manifest = {

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A",
+  "programData": "3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv",
+  "configPda": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq",
+  "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "coreCollection": "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH",
+  "receiptsTree": "5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow",
+  "receiptsTreeConfig": "3ZDjwqjnahBUPhprv8WXt2jAyJahQo2TEEfPAwTnTRNp",
+  "legacyUriBase": "https://assets.mons.link/drops/poncho",
+  "canonicalUriBase": "https://cdn.lil.org/nft/poncho_drifella",
+  "instructions": {
+    "migrateCollectionUri": {
+      "discriminator": [191, 243, 226, 185, 115, 83, 70, 48]
+    },
+    "migrateCoreAssetUri": {
+      "discriminator": [50, 156, 65, 239, 42, 228, 129, 192]
+    },
+    "migrateReceiptUri": {
+      "discriminator": [6, 57, 254, 113, 22, 138, 253, 162],
+      "maximumProofAccounts": 14
+    }
+  },
+  "planningSnapshot": {
+    "capturedAt": "2026-08-04",
+    "enforced": false,
+    "collectionAssets": 466,
+    "liveCoreAssets": 119,
+    "burnedCoreRecords": 254,
+    "liveCompressedReceipts": 88,
+    "burnedCompressedRecords": 5,
+    "maximumMetadataMutations": 208,
+    "maximumTransactions": 97
+  },
+  "defaultMode": "plan",
+  "privateKeyPolicy": "The planner never reads, requests, stores, or retains private keys."
+}
