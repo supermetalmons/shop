@@ -34,6 +34,15 @@
     "maximumMetadataMutations": 208,
     "maximumTransactions": 97
   },
+  "release": {
+    "sourceCommit": "e16a8e63cdb97fc0a663e181b1e81cf86f3fd53f",
+    "workflowRun": 30929035420,
+    "elfBytes": 576496,
+    "elfSha256": "705a938ea341c07b2469bda68f6b229bc68976202c335a17fa697b46469292fc",
+    "executableHash": "cd9f7b11c2e5ec4429cd82a650816d3f1804949acdbdae3ccdd0ac5c09109560",
+    "baseImage": "solanafoundation/solana-verifiable-build@sha256:695f890e620db8c39afe5112e048599f8ee395a0cab5a2e572f30a72c6366cb4",
+    "identicalIndependentBuilds": true
+  },
   "defaultMode": "plan",
   "privateKeyPolicy": "The planner never reads, requests, stores, or retains private keys."
 }

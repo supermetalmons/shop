@@ -29,6 +29,8 @@ const BUBBLEGUM = new PublicKey('BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY');
 const LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 const OLD_BASE = 'https://assets.mons.link/drops/poncho';
 const NEW_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
+const RELEASE_SOURCE_COMMIT = 'e16a8e63cdb97fc0a663e181b1e81cf86f3fd53f';
+const RELEASE_IMAGE = 'solanafoundation/solana-verifiable-build@sha256:695f890e620db8c39afe5112e048599f8ee395a0cab5a2e572f30a72c6366cb4';
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
 const MIGRATE_COLLECTION_URI = Buffer.from([191, 243, 226, 185, 115, 83, 70, 48]);
 const MIGRATE_CORE_ASSET_URI = Buffer.from([50, 156, 65, 239, 42, 228, 129, 192]);
@@ -569,7 +571,12 @@ if (manifest.genesisHash !== GENESIS_HASH
   || manifest.receiptsTree !== RECEIPTS_TREE.toBase58()
   || manifest.receiptsTreeConfig !== RECEIPTS_TREE_CONFIG.toBase58()
   || manifest.legacyUriBase !== OLD_BASE
-  || manifest.canonicalUriBase !== NEW_BASE) {
+  || manifest.canonicalUriBase !== NEW_BASE
+  || manifest.release?.sourceCommit !== RELEASE_SOURCE_COMMIT
+  || manifest.release?.baseImage !== RELEASE_IMAGE
+  || manifest.release?.identicalIndependentBuilds !== true
+  || !expectedElfSha256
+  || !expectedElfBytes) {
   throw new Error('Migration manifest scope mismatch');
 }
 
@@ -659,7 +666,6 @@ if (!send) {
   console.log('Preflight only. No private key was requested and no transaction was sent.');
   process.exit(0);
 }
-if (!expectedElfSha256 || !expectedElfBytes) throw new Error('Release ELF is not finalized in the migration manifest');
 if (elfSha256 !== expectedElfSha256 || elf.length !== expectedElfBytes) {
   throw new Error('Deployed ELF does not match the approved migration release');
 }
