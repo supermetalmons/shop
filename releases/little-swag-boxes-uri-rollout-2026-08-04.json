@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "deployedSourceCommit": "d2bdc913202de6d0b8e068992401f49ff7be420d",
+  "firebase": {
+    "project": "mons-shop",
+    "region": "us-central1",
+    "functionsUpdated": 30,
+    "status": "success"
+  },
+  "cloudflare": {
+    "account": "lil org",
+    "worker": "mons-shop",
+    "candidateVersion": "ec84a6e1-e861-48ef-a1ef-671cc1267c66",
+    "previousProductionVersion": "68e9202f-7b2b-492b-a419-c7d99a5835f0",
+    "productionVersion": "3e2ba63b-e97b-474d-9dbc-a2f7c67fb805",
+    "productionDeployment": "f994c70f-99fe-4ee4-af8e-26b8947dbf55",
+    "deployedAt": "2026-08-04T10:47:42.854778Z"
+  },
+  "postDeploy": {
+    "productionRoute": "https://mons.shop/little_swag_boxes",
+    "productionStatus": 200,
+    "liveConfigBytes": 289,
+    "liveConfigUriBase": "https://assets.mons.link/drops/lsb",
+    "canonicalUriBase": "https://cdn.lil.org/nft/little_swag_boxes",
+    "legacyAliasAccepted": true
+  }
+}
