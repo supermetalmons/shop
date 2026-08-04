@@ -24,6 +24,7 @@ const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e111111111111111111
 const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 const SOURCE_COMMIT = 'e16a8e63cdb97fc0a663e181b1e81cf86f3fd53f';
 const LIVE_ELF_SHA256 = '7cc9b9458088abccff647bf80f6768fd831713700f430b8b2fc02b3a0c05e2d6';
+const LIVE_ELF_BYTES = 423_976;
 const OLD_URI_BASE = 'https://assets.mons.link/drops/poncho';
 const CONFIG_BYTES = 307;
 const BUFFER_HEADER_BYTES = 37;
@@ -204,6 +205,21 @@ function deployedElfHash(programData: Buffer, elfBytes?: number): string {
   return sha256(elfBytes == null ? payload : payload.subarray(0, elfBytes));
 }
 
+function identifyDeployedElf(programData: Buffer, release: Release): { bytes: number; sha256: string } {
+  const payload = programData.subarray(PROGRAM_DATA_HEADER_BYTES);
+  if (payload.length >= release.binary.length
+    && deployedElfHash(programData, release.binary.length) === release.sha256
+    && !payload.subarray(release.binary.length).some((byte) => byte !== 0)) {
+    return { bytes: release.binary.length, sha256: release.sha256 };
+  }
+  if (payload.length >= LIVE_ELF_BYTES
+    && deployedElfHash(programData, LIVE_ELF_BYTES) === LIVE_ELF_SHA256
+    && !payload.subarray(LIVE_ELF_BYTES).some((byte) => byte !== 0)) {
+    return { bytes: LIVE_ELF_BYTES, sha256: LIVE_ELF_SHA256 };
+  }
+  throw new Error('Deployed ProgramData does not match the archived live ELF or verified release');
+}
+
 async function inspectBuffer(connection: Connection, address: PublicKey, release: Release): Promise<string> {
   const account = await connection.getAccountInfo(address, 'finalized');
   if (!account?.owner.equals(UPGRADEABLE_LOADER)) throw new Error(`Finalized buffer is missing: ${address}`);
@@ -245,13 +261,10 @@ async function main() {
   const release = readRelease(options.releaseDir);
   const connection = new Connection(options.rpcUrl, 'finalized');
   const before = await readSnapshot(connection);
-  const currentHash = deployedElfHash(before.programData);
+  const currentElf = identifyDeployedElf(before.programData, release);
   if (before.uriBase !== OLD_URI_BASE) throw new Error(`Unexpected config URI before upgrade: ${before.uriBase}`);
-  if (currentHash !== LIVE_ELF_SHA256 && currentHash !== release.sha256) {
-    throw new Error(`Unexpected deployed ELF hash: ${currentHash}`);
-  }
   const bufferAddress = options.buffer ? new PublicKey(options.buffer) : undefined;
-  const resumeBufferHash = bufferAddress
+  const resumeBufferHash = bufferAddress && currentElf.sha256 !== release.sha256
     ? await inspectBuffer(connection, bufferAddress, release)
     : undefined;
   const bufferBytes = BUFFER_HEADER_BYTES + release.binary.length;
@@ -274,12 +287,15 @@ async function main() {
   console.log('authority             :', before.authority);
   console.log('config bytes          :', before.configData.length);
   console.log('config URI            :', before.uriBase);
-  console.log('live ELF bytes        :', before.programData.length - PROGRAM_DATA_HEADER_BYTES);
-  console.log('live ELF SHA-256      :', currentHash);
+  console.log('ProgramData capacity  :', before.programData.length - PROGRAM_DATA_HEADER_BYTES);
+  console.log('deployed ELF bytes    :', currentElf.bytes);
+  console.log('deployed ELF SHA-256  :', currentElf.sha256);
   console.log('release ELF           :', release.binaryPath);
   console.log('release bytes         :', release.binary.length);
   console.log('release SHA-256       :', release.sha256);
-  console.log('ELF byte delta        :', release.binary.length - (before.programData.length - PROGRAM_DATA_HEADER_BYTES));
+  console.log('ELF byte delta        :', release.binary.length - currentElf.bytes);
+  console.log('ProgramData extension :', Math.max(0, programDataBytes - before.programData.length));
+  console.log('final transactions    :', before.programData.length < programDataBytes ? 2 : 1);
   console.log('buffer bytes          :', bufferBytes);
   console.log('buffer rent           :', bufferRent);
   console.log('ProgramData rent      :', programDataRent);
@@ -289,10 +305,10 @@ async function main() {
   console.log('authority balance     :', before.balanceLamports);
   if (bufferAddress) {
     console.log('resume buffer         :', bufferAddress.toBase58());
-    console.log('resume buffer hash    :', resumeBufferHash);
-    console.log('resume write required :', resumeBufferHash !== release.sha256);
+    console.log('resume buffer hash    :', resumeBufferHash || 'not needed; release already deployed');
+    console.log('resume write required :', resumeBufferHash != null && resumeBufferHash !== release.sha256);
   }
-  if (currentHash === release.sha256) {
+  if (currentElf.sha256 === release.sha256) {
     console.log('The verified release is already deployed. Nothing to send.');
     return;
   }
@@ -319,7 +335,10 @@ async function main() {
       throw new Error(`Private key address is ${authority.publicKey.toBase58()}, expected ${AUTHORITY.toBase58()}`);
     }
     console.log('Private key address verified:', authority.publicKey.toBase58());
-    if (!(await promptYConfirmation('Proceed with approved MAINNET program upgrade? [y/N] '))) {
+    const action = before.programData.length < programDataBytes
+      ? 'ProgramData extension and program upgrade'
+      : 'program upgrade';
+    if (!(await promptYConfirmation(`Proceed with approved MAINNET ${action}? [y/N] `))) {
       console.log('Cancelled before deployment.');
       return;
     }
@@ -379,6 +398,28 @@ async function main() {
     const bufferHash = await inspectBuffer(connection, finalizedBuffer, release);
     if (bufferHash !== release.sha256) throw new Error(`Finalized buffer hash mismatch: ${bufferHash}`);
     console.log('Finalized buffer hash :', bufferHash);
+    const extensionBytes = Math.max(0, programDataBytes - before.programData.length);
+    if (extensionBytes > 0) {
+      try {
+        runSolana([
+          'program', 'extend', PROGRAM_ID.toBase58(), String(extensionBytes),
+          '--commitment', 'finalized',
+          '--output', 'json',
+        ], 'solana program extend');
+      } catch (error) {
+        const extensionCheck = await readSnapshot(connection);
+        if (extensionCheck.programData.length < programDataBytes) throw error;
+        console.log('ProgramData extension finalized despite the CLI confirmation error.');
+      }
+      const extended = await readSnapshot(connection);
+      if (extended.programData.length < programDataBytes) throw new Error('ProgramData extension did not allocate enough bytes');
+      if (extended.authority !== before.authority) throw new Error('Upgrade authority changed during ProgramData extension');
+      if (!extended.configData.equals(before.configData)) throw new Error('Config changed during ProgramData extension');
+      const extendedElf = identifyDeployedElf(extended.programData, release);
+      if (extendedElf.sha256 !== LIVE_ELF_SHA256) throw new Error('Executable changed during ProgramData extension');
+      console.log('ProgramData capacity  :', extended.programData.length - PROGRAM_DATA_HEADER_BYTES);
+      console.log('ProgramData extended  :', true);
+    }
     runSolana([
       'program', 'deploy',
       '--program-id', PROGRAM_ID.toBase58(),
