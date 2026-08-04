@@ -37,6 +37,7 @@
     "deploy:lsb-existing-uri-program": "node --experimental-strip-types scripts/deploy-lsb-uri-program.ts",
     "set:lsb-uri-base": "node --experimental-strip-types scripts/set-lsb-uri-base.ts",
     "deploy:poncho-uri-program": "node --experimental-strip-types scripts/deploy-poncho-uri-program.ts",
+    "simulate:poncho-old-box": "node --experimental-strip-types scripts/simulate-poncho-old-box.ts",
     "set:poncho-uri-base": "node --experimental-strip-types scripts/set-poncho-uri-base.ts",
     "deploy-receipt-pool": "node --experimental-strip-types scripts/deploy-receipt-pool.ts",
     "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",
