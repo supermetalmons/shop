@@ -34,6 +34,7 @@ const MIGRATE_COLLECTION_URI = Buffer.from([191, 243, 226, 185, 115, 83, 70, 48]
 const MIGRATE_CORE_ASSET_URI = Buffer.from([50, 156, 65, 239, 42, 228, 129, 192]);
 const MIGRATE_RECEIPT_URI = Buffer.from([6, 57, 254, 113, 22, 138, 253, 162]);
 const CORE_BATCH_SIZE = 16;
+const CORE_FETCH_SIZE = 100;
 
 type Target = {
   address: string;
@@ -286,6 +287,14 @@ function markCompleted(checkpoint: Checkpoint, kind: string, targets: string[]) 
   if (kind === 'receipt') checkpoint.completedReceipts.push(...targets);
 }
 
+function coreTransactionCount(targetCount: number) {
+  let count = 0;
+  for (let offset = 0; offset < targetCount; offset += CORE_FETCH_SIZE) {
+    count += Math.ceil(Math.min(CORE_FETCH_SIZE, targetCount - offset) / CORE_BATCH_SIZE);
+  }
+  return count;
+}
+
 async function recoverPending(checkpoint: Checkpoint) {
   if (!checkpoint.pending) return;
   const pending = checkpoint.pending;
@@ -433,7 +442,7 @@ const summary = {
     receipts: plan.receiptTargets.length,
     burnedHistoricalRecordsExcluded: 314,
   },
-  maximumTransactions: 1 + Math.ceil(plan.coreTargets.length / CORE_BATCH_SIZE) + plan.receiptTargets.length,
+  maximumTransactions: 1 + coreTransactionCount(plan.coreTargets.length) + plan.receiptTargets.length,
 };
 process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 if (!send) {
@@ -468,8 +477,9 @@ if (!checkpoint.completedCollection) {
   console.log(`Collection migrated: ${result.signature}`);
 }
 
-for (let offset = 0; offset < plan.coreTargets.length; offset += 100) {
-  const targets = plan.coreTargets.slice(offset, offset + 100).filter((target) => !completedCore.has(target.address));
+for (let offset = 0; offset < plan.coreTargets.length; offset += CORE_FETCH_SIZE) {
+  const targets = plan.coreTargets.slice(offset, offset + CORE_FETCH_SIZE)
+    .filter((target) => !completedCore.has(target.address));
   const accounts = await connection.getMultipleAccountsInfo(targets.map((target) => new PublicKey(target.address)), 'confirmed');
   const pending: Target[] = [];
   targets.forEach((target, index) => {
@@ -531,8 +541,8 @@ for (;;) {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
 }
 
-for (let offset = 0; offset < plan.coreTargets.length; offset += 100) {
-  const targets = plan.coreTargets.slice(offset, offset + 100);
+for (let offset = 0; offset < plan.coreTargets.length; offset += CORE_FETCH_SIZE) {
+  const targets = plan.coreTargets.slice(offset, offset + CORE_FETCH_SIZE);
   const accounts = await connection.getMultipleAccountsInfo(
     targets.map((target) => new PublicKey(target.address)),
     'finalized',
