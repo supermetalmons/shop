@@ -32,7 +32,9 @@ import {
   classifyCollectionAsset,
   configuredMainnetRpc,
   decodeConfig,
+  expectedReceiptDataHash,
   expectedName,
+  findBubblegumLeafEvent,
   parseRawCollection,
   parseRawCoreAsset,
   planChecksum,
@@ -53,6 +55,11 @@ type Simulation = {
   err: unknown;
   unitsConsumed: number | undefined;
   logs: string[] | null | undefined;
+  bubblegumLeafEvent?: {
+    assetId: string;
+    dataHash: string;
+    leafHash: string;
+  };
 };
 
 const args = process.argv.slice(2);
@@ -91,7 +98,11 @@ const lookupTable = (await connection.getAddressLookupTable(DELIVERY_LOOKUP_TABL
 })).value;
 if (!lookupTable) throw new Error(`Missing Card lookup table ${DELIVERY_LOOKUP_TABLE}`);
 
-async function simulateInstructions(label: string, instructions: TransactionInstruction[]): Promise<Simulation> {
+async function simulateInstructions(
+  label: string,
+  instructions: TransactionInstruction[],
+  expectedReceipt?: { assetId: string; dataHash: string },
+): Promise<Simulation> {
   const latest = await connection.getLatestBlockhash('confirmed');
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: ADMIN,
@@ -102,13 +113,30 @@ async function simulateInstructions(label: string, instructions: TransactionInst
     commitment: 'confirmed',
     replaceRecentBlockhash: true,
     sigVerify: false,
+    innerInstructions: true,
   });
-  return {
+  const simulation: Simulation = {
     label,
     err: result.value.err,
     unitsConsumed: result.value.unitsConsumed,
     logs: result.value.logs,
   };
+  if (!result.value.err && expectedReceipt) {
+    const accountKeys = transaction.message.getAccountKeys({ addressLookupTableAccounts: [lookupTable] });
+    const event = findBubblegumLeafEvent(
+      result.value.innerInstructions,
+      (index) => accountKeys.get(index)?.toBase58(),
+    );
+    if (event.assetId !== expectedReceipt.assetId || event.dataHash !== expectedReceipt.dataHash) {
+      throw new Error(`Receipt simulation emitted unexpected leaf state for ${expectedReceipt.assetId}: ${JSON.stringify(event)}`);
+    }
+    simulation.bubblegumLeafEvent = {
+      assetId: event.assetId,
+      dataHash: event.dataHash,
+      leafHash: event.leafHash,
+    };
+  }
+  return simulation;
 }
 
 async function concurrentMap<T, R>(items: T[], concurrency: number, callback: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -235,7 +263,10 @@ for (const target of classified.coreTargets) {
   if (parsed.uri !== target.sourceUri) throw new Error(`Core raw URI mismatch: ${target.address}`);
 }
 
-async function freshReceiptInstruction(target: ReceiptTarget): Promise<TransactionInstruction> {
+async function freshReceiptInstruction(target: ReceiptTarget): Promise<{
+  instruction: TransactionInstruction;
+  expectedDataHash: string;
+}> {
   const [asset, proof] = await Promise.all([
     rpc<Asset>(rpcUrl, 'getAsset', { id: target.address }),
     rpc<any>(rpcUrl, 'getAssetProof', { id: target.address }),
@@ -244,7 +275,14 @@ async function freshReceiptInstruction(target: ReceiptTarget): Promise<Transacti
   if (!current || current.address !== target.address || current.referenceId !== target.referenceId) {
     throw new Error(`Receipt changed during planning: ${target.address}`);
   }
-  return updateReceiptInstruction(asset, proof, target.targetUri);
+  const expectedDataHash = expectedReceiptDataHash(asset, target.targetUri);
+  if (expectedDataHash !== target.targetDataHash) {
+    throw new Error(`Receipt target hash changed during planning: ${target.address}`);
+  }
+  return {
+    instruction: updateReceiptInstruction(asset, proof, target.targetUri),
+    expectedDataHash,
+  };
 }
 
 const coreBatches = batches(classified.coreTargets);
@@ -262,10 +300,14 @@ if (simulate) {
     `core batch ${index + 1}`,
     batch.map((target) => updateCoreInstruction(new PublicKey(target.address), target.targetUri)),
   ));
-  const receipts = await concurrentMap(classified.receiptTargets.slice(0, simulationLimit), 2, async (target) => simulateInstructions(
-    `receipt ${target.address}`,
-    [await freshReceiptInstruction(target)],
-  ));
+  const receipts = await concurrentMap(classified.receiptTargets.slice(0, simulationLimit), 2, async (target) => {
+    const prepared = await freshReceiptInstruction(target);
+    return simulateInstructions(
+      `receipt ${target.address}`,
+      [prepared.instruction],
+      { assetId: target.address, dataHash: prepared.expectedDataHash },
+    );
+  });
   const all = [collection, ...core, ...receipts].filter((value): value is Simulation => value != null);
   const failures = all.filter((result) => result.err != null);
   simulations = {
@@ -362,4 +404,6 @@ console.log('burned Core          :', classified.burned.core);
 console.log('burned receipts      :', classified.burned.receipts);
 console.log('maximum transactions :', plan.transactionsRequired);
 console.log('plan checksum        :', checksum);
-if (simulations) console.log('simulations          :', `${1 + simulations.core.length + simulations.receipts.length} passed`);
+if (simulations) {
+  console.log('simulations          :', `${Number(Boolean(simulations.collection)) + simulations.core.length + simulations.receipts.length} passed`);
+}

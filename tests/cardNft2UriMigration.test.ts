@@ -5,20 +5,28 @@ import {
   ADMIN,
   COLLECTION,
   CONFIG_PDA,
+  KNOWN_RECEIPT_REPAIR,
   MAX_BOX_ID,
   MAX_CARD_ID,
   NEW_BASE,
   OLD_BASE,
   PROGRAM_ID,
+  RECEIPTS_TREE,
+  RECEIPTS_TREE_CONFIG,
   SET_URI_BASE_DISCRIMINATOR,
   assertReceiptTreeConfig,
   batches,
+  classifyCollectionAsset,
   classifyUri,
+  decodeBubblegumLeafEvent,
+  expectedReceiptDataHash,
   planChecksum,
+  receiptMetadataDataHash,
   searchAllCollectionAssets,
   setUriBaseInstruction,
   updateCollectionInstruction,
   updateCoreInstruction,
+  updateReceiptInstruction,
 } from '../scripts/shared/cardNft2UriMigration.ts';
 
 test('Card URI classification is exact, compact, and bounded', () => {
@@ -97,4 +105,70 @@ test('receipt TreeConfig requires the fixed creator and delegate', () => {
   });
   data[40] ^= 1;
   assert.throws(() => assertReceiptTreeConfig(data), /authority mismatch/);
+});
+
+test('Bubblegum V2 receipt updates serialize exact metadata and repair the incident royalty', () => {
+  const asset = {
+    id: KNOWN_RECEIPT_REPAIR.asset,
+    interface: 'MplBubblegumV2',
+    content: {
+      json_uri: KNOWN_RECEIPT_REPAIR.sourceUri,
+      metadata: { name: 'receipt · pack 341', symbol: '' },
+    },
+    royalty: { basis_points: 50, primary_sale_happened: false },
+    mutable: true,
+    creators: [],
+    ownership: { owner: ADMIN.toBase58(), delegate: ADMIN.toBase58() },
+    authorities: [{ address: RECEIPTS_TREE_CONFIG.toBase58(), scopes: ['full'] }],
+    grouping: [{ group_key: 'collection', group_value: COLLECTION.toBase58() }],
+    compression: {
+      tree: RECEIPTS_TREE.toBase58(),
+      leaf_id: 0,
+      leaf_index: 0,
+      data_hash: KNOWN_RECEIPT_REPAIR.dataHash,
+      asset_data_hash: 'EKDHSGbrGztomDfuiV4iqiZ6LschDJPsFiXjZ83f92Md',
+      asset_hash: KNOWN_RECEIPT_REPAIR.leafHash,
+      flags: 0,
+    },
+  };
+  const targetUri = `${NEW_BASE}/rb341.json`;
+  assert.equal(receiptMetadataDataHash(asset, KNOWN_RECEIPT_REPAIR.sourceUri, 50), KNOWN_RECEIPT_REPAIR.dataHash);
+  assert.equal(expectedReceiptDataHash(asset, targetUri), 'HLkLzups8Qt79Qj6qqDj5cJXTPDzkwaZA6Su64NrmjjX');
+  const proofAddress = PublicKey.default.toBase58();
+  const instruction = updateReceiptInstruction(asset, {
+    tree_id: RECEIPTS_TREE.toBase58(),
+    root: proofAddress,
+    proof: Array.from({ length: 14 }, () => proofAddress),
+  }, targetUri);
+  const updateArgs = Buffer.concat([
+    Buffer.from([0, 0, 1]),
+    Buffer.from([targetUri.length, 0, 0, 0]),
+    Buffer.from(targetUri),
+    Buffer.from([0, 1, 0, 0, 0, 0]),
+  ]);
+  assert.equal(instruction.data.subarray(-updateArgs.length).equals(updateArgs), true);
+  const metadataEnd = instruction.data.length - updateArgs.length;
+  assert.equal(instruction.data.subarray(metadataEnd - 33, metadataEnd).equals(
+    Buffer.concat([Buffer.from([1]), COLLECTION.toBuffer()]),
+  ), true);
+  const classified = classifyCollectionAsset([asset], OLD_BASE, NEW_BASE);
+  assert.deepEqual(classified.receiptTargets[0].royaltyRepair, {
+    sourceBasisPoints: 50,
+    targetBasisPoints: 0,
+    incidentSignature: KNOWN_RECEIPT_REPAIR.signature,
+  });
+  assert.throws(
+    () => classifyCollectionAsset([{ ...asset, id: PublicKey.unique().toBase58() }], OLD_BASE, NEW_BASE),
+    /Receipt metadata mismatch/,
+  );
+});
+
+test('the incident transaction emitted the unchanged Bubblegum leaf', () => {
+  const event = decodeBubblegumLeafEvent(Buffer.from(
+    'AQAMAQAAAQEBo/OAfHCEdcD0pUl4Wxbytb5IYXSzVszd/2XqXKYt03wLHSSkzAqvFrFrk6VKJwW8zPmElDRAfuNvlu2QCiATeQsdJKTMCq8WsWuTpUonBbzM+YSUNEB+42+W7ZAKIBN5AAAAAAAAAADeNsxptAgGWRYAzbX/rwisyXfIiZkdgO3/GScyDaFnGcXSRgGG9yM8kn59stzHA8DlALZTyoInO3v62ARdhaRwYj3gqc0zhxWMn40JcbFWY/zUeF0M18FM1/Ba8/M3tnTF0kYBhvcjPJJ+fbLcxwPA5QC2U8qCJzt7+tgEXYWkcACnhC7ijmmMwOmGxQq1mGjNj9/maL2K2YoFwyN+p9DEtg==',
+    'base64',
+  ));
+  assert.equal(event.assetId, KNOWN_RECEIPT_REPAIR.asset);
+  assert.equal(event.dataHash, KNOWN_RECEIPT_REPAIR.dataHash);
+  assert.equal(event.leafHash, KNOWN_RECEIPT_REPAIR.leafHash);
 });

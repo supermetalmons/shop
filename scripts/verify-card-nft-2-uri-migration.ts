@@ -24,6 +24,7 @@ import {
   configuredMainnetRpc,
   decodeConfig,
   expectedName,
+  expectedReceiptDataHash,
   parseRawCollection,
   parseRawCoreAsset,
   repositoryRoot,
@@ -110,6 +111,13 @@ if (classified.coreTargets.length || classified.receiptTargets.length) {
   })}`);
 }
 const liveCore = inventory.assets.filter((asset) => asset.interface === 'MplCoreAsset' && !asset.burnt);
+const liveReceipts = inventory.assets.filter((asset) => asset.interface === 'MplBubblegumV2' && !asset.burnt);
+for (const asset of liveReceipts) {
+  const uri = String(asset.content?.json_uri || '');
+  if (expectedReceiptDataHash(asset, uri) !== String(asset.compression?.data_hash || '')) {
+    throw new Error(`Receipt metadata hash verification failed: ${asset.id}`);
+  }
+}
 for (const group of batches(liveCore, 100)) {
   const result = await rpc<any>(rpcUrl, 'getMultipleAccounts', [
     group.map((asset) => asset.id),
@@ -141,7 +149,7 @@ console.log('program payload hash:', plan.program.payloadSha256);
 console.log('config URI          :', config.uriBase);
 console.log('collection URI      :', collection.uri);
 console.log('live Core           :', liveCore.length);
-console.log('live receipts       :', inventory.assets.filter((asset) => asset.interface === 'MplBubblegumV2' && !asset.burnt).length);
+console.log('live receipts       :', liveReceipts.length);
 console.log('burned Core         :', classified.burned.core);
 console.log('burned receipts     :', classified.burned.receipts);
 console.log('mutable legacy URIs : 0');

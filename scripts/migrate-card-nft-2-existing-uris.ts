@@ -38,7 +38,9 @@ import {
   classifyUri,
   configuredMainnetRpc,
   decodeConfig,
+  expectedReceiptDataHash,
   expectedName,
+  findBubblegumLeafEvent,
   parseRawCollection,
   parseRawCoreAsset,
   planChecksum,
@@ -124,6 +126,11 @@ type Checkpoint = {
   pending: null | { signature: string; kind: string; targets: string[] };
 };
 
+type PreparedInstructions = {
+  instructions: TransactionInstruction[];
+  receiptExpectation?: { assetId: string; dataHash: string };
+};
+
 const argv = process.argv.slice(2);
 if (argv.some((arg) => /keypair|private|secret|signer|rpc-url/i.test(arg))) {
   throw new Error('Signing material and RPC URLs cannot be provided as command-line arguments');
@@ -202,7 +209,7 @@ async function recoverPending(checkpoint: Checkpoint): Promise<void> {
   const status = (await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
   if (status?.err) throw new Error(`Pending transaction failed: ${pending.signature}`);
   if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-    markCompleted(checkpoint, pending.kind, pending.targets);
+    if (pending.kind !== 'receipt') markCompleted(checkpoint, pending.kind, pending.targets);
     checkpoint.transactions.push(pending);
   }
   checkpoint.pending = null;
@@ -214,10 +221,12 @@ async function sendInstructions(
   checkpoint: Checkpoint,
   kind: string,
   targets: string[],
-  makeInstructions: () => Promise<TransactionInstruction[]> | TransactionInstruction[],
+  makeInstructions: () => Promise<TransactionInstruction[] | PreparedInstructions> | TransactionInstruction[] | PreparedInstructions,
 ): Promise<string> {
   for (let attempt = 1; attempt <= 10; attempt += 1) {
-    const instructions = await makeInstructions();
+    const prepared = await makeInstructions();
+    const instructions = Array.isArray(prepared) ? prepared : prepared.instructions;
+    const receiptExpectation = Array.isArray(prepared) ? undefined : prepared.receiptExpectation;
     const latest = await connection.getLatestBlockhash('confirmed');
     const transaction = new VersionedTransaction(new TransactionMessage({
       payerKey: ADMIN,
@@ -228,9 +237,20 @@ async function sendInstructions(
     const simulation = await connection.simulateTransaction(transaction, {
       commitment: 'confirmed',
       sigVerify: true,
+      innerInstructions: Boolean(receiptExpectation),
     });
     if (simulation.value.err) {
       throw new Error(`Simulation failed for ${kind}: ${JSON.stringify(simulation.value.err)}\n${simulation.value.logs?.join('\n') || ''}`);
+    }
+    if (receiptExpectation) {
+      const accountKeys = transaction.message.getAccountKeys({ addressLookupTableAccounts: [lookupTable] });
+      const event = findBubblegumLeafEvent(
+        simulation.value.innerInstructions,
+        (index) => accountKeys.get(index)?.toBase58(),
+      );
+      if (event.assetId !== receiptExpectation.assetId || event.dataHash !== receiptExpectation.dataHash) {
+        throw new Error(`Receipt simulation emitted unexpected leaf state for ${receiptExpectation.assetId}: ${JSON.stringify(event)}`);
+      }
     }
     const signature = bs58.encode(transaction.signatures[0]);
     checkpoint.pending = { signature, kind, targets };
@@ -255,7 +275,7 @@ async function sendInstructions(
         continue;
       }
     }
-    markCompleted(checkpoint, kind, targets);
+    if (kind !== 'receipt') markCompleted(checkpoint, kind, targets);
     checkpoint.transactions.push({ signature, kind, targets });
     checkpoint.pending = null;
     await saveCheckpoint(checkpoint);
@@ -265,7 +285,7 @@ async function sendInstructions(
 }
 
 async function freshReceiptState(target: ReceiptTarget): Promise<
-  { status: 'source'; instruction: TransactionInstruction }
+  { status: 'source'; instruction: TransactionInstruction; expectedDataHash: string }
   | { status: 'target' | 'burned' }
 > {
   const [asset, proof] = await Promise.all([
@@ -281,17 +301,48 @@ async function freshReceiptState(target: ReceiptTarget): Promise<
     throw new Error(`Receipt metadata changed outside the plan: ${target.address}`);
   }
   if (asset.burnt) return { status: 'burned' };
-  if (classification.status === 'target') return { status: 'target' };
-  if (asset.content?.metadata?.name !== expectedName(target.kind, target.referenceId, true)) {
-    throw new Error(`Receipt name mismatch: ${target.address}`);
+  const classified = classifyCollectionAsset([asset], sourceBase, targetBase);
+  if (classification.status === 'target') {
+    if (classified.alreadyTarget.receipts !== 1
+      || expectedReceiptDataHash(asset, target.targetUri) !== target.targetDataHash
+      || target.targetDataHash !== String(asset.compression?.data_hash || '')) {
+      throw new Error(`Receipt target state mismatch: ${target.address}`);
+    }
+    return { status: 'target' };
   }
-  return { status: 'source', instruction: updateReceiptInstruction(asset, proof, target.targetUri) };
+  const current = classified.receiptTargets[0];
+  if (!current
+    || current.address !== target.address
+    || current.leafId !== target.leafId
+    || current.targetUri !== target.targetUri
+    || current.targetDataHash !== target.targetDataHash) {
+    throw new Error(`Receipt source state mismatch: ${target.address}`);
+  }
+  return {
+    status: 'source',
+    instruction: updateReceiptInstruction(asset, proof, target.targetUri),
+    expectedDataHash: target.targetDataHash,
+  };
 }
 
 async function waitForReceipt(target: ReceiptTarget): Promise<void> {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     const asset = await rpc<Asset>(rpcUrl, 'getAsset', { id: target.address });
-    if (asset.content?.json_uri === target.targetUri) return;
+    const classification = classifyUri(String(asset.content?.json_uri || ''), sourceBase, targetBase, true);
+    if (!classification
+      || classification.kind !== target.kind
+      || classification.referenceId !== target.referenceId) {
+      throw new Error(`Receipt metadata changed while waiting for DAS: ${target.address}`);
+    }
+    if (classification.status === 'target') {
+      const classified = classifyCollectionAsset([asset], sourceBase, targetBase);
+      if (classified.alreadyTarget.receipts !== 1
+        || expectedReceiptDataHash(asset, target.targetUri) !== target.targetDataHash
+        || target.targetDataHash !== String(asset.compression?.data_hash || '')) {
+        throw new Error(`Receipt target state mismatch after submission: ${target.address}`);
+      }
+      return;
+    }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
   }
   throw new Error(`DAS did not index the receipt migration: ${target.address}`);
@@ -363,6 +414,11 @@ if (plan.schemaVersion !== 1
   || plan.simulations?.failures !== 0
   || plan.simulations.core.length !== plan.coreBatches.length
   || plan.simulations.receipts.length !== receiptTargets.length
+  || plan.simulations.receipts.some((simulation: any, index) => {
+    const event = simulation?.bubblegumLeafEvent;
+    return event?.assetId !== receiptTargets[index]?.address
+      || event?.dataHash !== receiptTargets[index]?.targetDataHash;
+  })
   || Boolean(plan.simulations.collection) !== plan.collection.requiresMigration
   || JSON.stringify(flattenedBatches) !== JSON.stringify(coreTargets.map((target) => target.address))
   || plan.coreBatches.some((batch) => batch.length < 1 || batch.length > CORE_BATCH_SIZE)
@@ -380,6 +436,9 @@ for (const [targets, receipt] of [[coreTargets, false], [receiptTargets, true]] 
       || classified.referenceId !== target.referenceId
       || target.targetUri !== classified.targetUri) {
       throw new Error(`Invalid planned metadata target: ${target.address}`);
+    }
+    if (receipt && Buffer.from(bs58.decode((target as ReceiptTarget).targetDataHash)).length !== 32) {
+      throw new Error(`Invalid planned receipt data hash: ${target.address}`);
     }
     new PublicKey(target.address);
   }
@@ -467,7 +526,25 @@ try {
   const checkpoint = await loadCheckpoint(planFileSha256, plan.planChecksum);
   await recoverPending(checkpoint);
   const completedCore = new Set([...checkpoint.completedCore, ...checkpoint.skippedBurnedCore]);
-  const completedReceipts = new Set([...checkpoint.completedReceipts, ...checkpoint.skippedBurnedReceipts]);
+  const completedReceipts = new Set(checkpoint.skippedBurnedReceipts);
+  const receiptTargetsByAddress = new Map(receiptTargets.map((target) => [target.address, target]));
+  const verifiedCompletedReceipts: string[] = [];
+  for (const address of checkpoint.completedReceipts) {
+    const target = receiptTargetsByAddress.get(address);
+    if (!target) throw new Error(`Checkpoint contains an unknown completed receipt: ${address}`);
+    const current = await freshReceiptState(target);
+    if (current.status === 'target') {
+      verifiedCompletedReceipts.push(address);
+      completedReceipts.add(address);
+    } else if (current.status === 'burned') {
+      checkpoint.skippedBurnedReceipts.push(address);
+      completedReceipts.add(address);
+    } else {
+      console.log(`Receipt checkpoint was not reflected on chain and will be retried: ${address}`);
+    }
+  }
+  checkpoint.completedReceipts = verifiedCompletedReceipts;
+  await saveCheckpoint(checkpoint);
 
   const currentCollection = await connection.getAccountInfo(COLLECTION, 'confirmed');
   if (!currentCollection) throw new Error('Collection account disappeared');
@@ -556,11 +633,16 @@ try {
       async () => {
         const fresh = await freshReceiptState(target);
         if (fresh.status !== 'source') throw new Error(`Receipt changed while preparing transaction: ${target.address}`);
-        return [fresh.instruction];
+        return {
+          instructions: [fresh.instruction],
+          receiptExpectation: { assetId: target.address, dataHash: fresh.expectedDataHash },
+        };
       },
     );
     await waitForReceipt(target);
+    markCompleted(checkpoint, 'receipt', [target.address]);
     completedReceipts.add(target.address);
+    await saveCheckpoint(checkpoint);
     console.log(`Receipt ${completedReceipts.size}/${receiptTargets.length}: ${signature}`);
   }
 
@@ -594,7 +676,12 @@ try {
   for (const group of batches(receiptTargets.filter((target) => !checkpoint.skippedBurnedReceipts.includes(target.address)), 100)) {
     const assets = await rpc<Asset[]>(rpcUrl, 'getAssetBatch', { ids: group.map((target) => target.address) });
     group.forEach((target, index) => {
-      if (assets[index]?.id !== target.address || assets[index]?.content?.json_uri !== target.targetUri) {
+      const asset = assets[index];
+      if (asset?.id !== target.address
+        || asset.content?.json_uri !== target.targetUri
+        || classifyCollectionAsset([asset], sourceBase, targetBase).alreadyTarget.receipts !== 1
+        || expectedReceiptDataHash(asset, target.targetUri) !== target.targetDataHash
+        || target.targetDataHash !== String(asset.compression?.data_hash || '')) {
         throw new Error(`Final receipt URI verification failed: ${target.address}`);
       }
     });

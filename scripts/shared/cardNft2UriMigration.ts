@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { keccak_256 } from '@noble/hashes/sha3';
 import bs58 from 'bs58';
 import {
   PublicKey,
@@ -38,6 +39,14 @@ export const SET_URI_BASE_DISCRIMINATOR = Buffer.from([160, 250, 204, 89, 122, 8
 const CONFIG_DISCRIMINATOR = Buffer.from([62, 29, 116, 188, 219, 247, 48, 227]);
 const TREE_CONFIG_DISCRIMINATOR = Buffer.from([122, 245, 175, 248, 171, 34, 0, 207]);
 const UPDATE_METADATA_V2_DISCRIMINATOR = Buffer.from([43, 103, 89, 42, 121, 242, 62, 72]);
+export const KNOWN_RECEIPT_REPAIR = Object.freeze({
+  asset: 'C2zove8K7xdEFbuUdA1BcyQiRgceinPmmmFLyCcLcsAb',
+  sourceUri: `${OLD_BASE}/rb341.json`,
+  sellerFeeBasisPoints: 50,
+  dataHash: 'FxRyS3rUtSBRw1QeWKhwe5xmo1P5tN9pjj49Tv1wF86k',
+  leafHash: 'CGuzMtksDo7kfGgf2jUW1ZFKWF8bb4pLpLaPJVWibdAV',
+  signature: '4FNdVVYYKE1r7Zm8F7QUU6ytEgTqyZRGEKN9Q2Ngkf8TqinRQdcd9T26ZZ9LKSxWVdVcDVvyKnSc6TsC1pUEL69c',
+});
 
 export const SHARED_CONFIGS = Object.freeze({
   card_nft_2: CONFIG_PDA,
@@ -60,6 +69,25 @@ export type CoreTarget = {
 
 export type ReceiptTarget = CoreTarget & {
   leafId: number;
+  targetDataHash: string;
+  royaltyRepair?: {
+    sourceBasisPoints: number;
+    targetBasisPoints: 0;
+    incidentSignature: string;
+  };
+};
+
+export type BubblegumLeafEvent = {
+  assetId: string;
+  owner: string;
+  delegate: string;
+  nonce: string;
+  dataHash: string;
+  creatorHash: string;
+  collectionHash: string;
+  assetDataHash: string;
+  flags: number;
+  leafHash: string;
 };
 
 export type DecodedConfig = {
@@ -369,6 +397,74 @@ function bytes32(value: string, label: string): Buffer {
   return bytes;
 }
 
+export function decodeBubblegumLeafEvent(data: Uint8Array): BubblegumLeafEvent {
+  const bytes = Buffer.from(data);
+  if (bytes.length !== 274
+    || bytes[0] !== 1
+    || bytes[1] !== 0
+    || bytes.readUInt32LE(2) !== 268
+    || bytes[6] !== 1
+    || bytes[7] !== 1
+    || bytes[8] !== 1) {
+    throw new Error('Unexpected Bubblegum V2 leaf event encoding');
+  }
+  let offset = 9;
+  const publicKey = () => {
+    const value = new PublicKey(bytes.subarray(offset, offset + 32)).toBase58();
+    offset += 32;
+    return value;
+  };
+  const hash = () => {
+    const value = bs58.encode(bytes.subarray(offset, offset + 32));
+    offset += 32;
+    return value;
+  };
+  const assetId = publicKey();
+  const owner = publicKey();
+  const delegate = publicKey();
+  const nonce = bytes.readBigUInt64LE(offset).toString();
+  offset += 8;
+  const dataHash = hash();
+  const creatorHash = hash();
+  const collectionHash = hash();
+  const assetDataHash = hash();
+  const flags = bytes[offset++];
+  const leafHash = hash();
+  if (offset !== bytes.length) throw new Error('Bubblegum V2 leaf event has trailing data');
+  return {
+    assetId,
+    owner,
+    delegate,
+    nonce,
+    dataHash,
+    creatorHash,
+    collectionHash,
+    assetDataHash,
+    flags,
+    leafHash,
+  };
+}
+
+export function findBubblegumLeafEvent(
+  innerInstructions: any[] | null | undefined,
+  programIdAt: (index: number) => string | undefined,
+): BubblegumLeafEvent {
+  const events: BubblegumLeafEvent[] = [];
+  for (const group of innerInstructions || []) {
+    for (const instruction of group.instructions || []) {
+      const directProgramId = instruction.programId?.toBase58?.() || instruction.programId;
+      const programId = directProgramId
+        ? String(directProgramId)
+        : programIdAt(Number(instruction.programIdIndex));
+      if (programId !== MPL_NOOP.toBase58()) continue;
+      const data = Buffer.from(bs58.decode(String(instruction.data || '')));
+      if (data.length === 274) events.push(decodeBubblegumLeafEvent(data));
+    }
+  }
+  if (events.length !== 1) throw new Error(`Expected one Bubblegum V2 leaf event, found ${events.length}`);
+  return events[0];
+}
+
 export function setUriBaseInstruction(target: string, signer = ADMIN): TransactionInstruction {
   return new TransactionInstruction({
     programId: PROGRAM_ID,
@@ -444,6 +540,59 @@ export function parseRawCoreAsset(data: Buffer): {
   return { owner, updateAuthorityKind, updateAuthority, name: name.value, uri: uri.value };
 }
 
+function receiptMetadataV2(asset: Asset, uri: string, sellerFeeBasisPoints: number): Buffer {
+  if (!Number.isInteger(sellerFeeBasisPoints) || sellerFeeBasisPoints < 0 || sellerFeeBasisPoints > 10_000) {
+    throw new Error(`Invalid receipt seller fee: ${sellerFeeBasisPoints}`);
+  }
+  const metadata = asset.content?.metadata || {};
+  const fee = Buffer.alloc(2);
+  fee.writeUInt16LE(sellerFeeBasisPoints);
+  const creators = Array.isArray(asset.creators) ? asset.creators : [];
+  const creatorBytes = creators.map((creator: any) => {
+    const share = Number(creator.share);
+    if (!Number.isInteger(share) || share < 0 || share > 100) throw new Error('Invalid receipt creator share');
+    return Buffer.concat([
+      new PublicKey(String(creator.address)).toBuffer(),
+      Buffer.from([creator.verified ? 1 : 0, share]),
+    ]);
+  });
+  return Buffer.concat([
+    string(String(metadata.name || '')),
+    string(String(metadata.symbol || '')),
+    string(uri),
+    fee,
+    Buffer.from([asset.royalty?.primary_sale_happened ? 1 : 0, asset.mutable ? 1 : 0]),
+    Buffer.from([1, 0]),
+    u32(creatorBytes.length),
+    ...creatorBytes,
+    Buffer.from([1]),
+    COLLECTION.toBuffer(),
+  ]);
+}
+
+export function receiptMetadataDataHash(asset: Asset, uri: string, sellerFeeBasisPoints: number): string {
+  const fee = Buffer.alloc(2);
+  fee.writeUInt16LE(sellerFeeBasisPoints);
+  const metadataHash = keccak_256(receiptMetadataV2(asset, uri, sellerFeeBasisPoints));
+  return bs58.encode(keccak_256(Buffer.concat([Buffer.from(metadataHash), fee])));
+}
+
+export function expectedReceiptDataHash(asset: Asset, targetUri: string): string {
+  return receiptMetadataDataHash(asset, targetUri, 0);
+}
+
+function isKnownReceiptRepairState(asset: Asset, classification: ClassifiedUri): boolean {
+  return classification.status === 'source'
+    && classification.kind === 'box'
+    && classification.referenceId === 341
+    && asset.id === KNOWN_RECEIPT_REPAIR.asset
+    && asset.content?.json_uri === KNOWN_RECEIPT_REPAIR.sourceUri
+    && asset.royalty?.basis_points === KNOWN_RECEIPT_REPAIR.sellerFeeBasisPoints
+    && asset.compression?.leaf_id === 0
+    && asset.compression?.data_hash === KNOWN_RECEIPT_REPAIR.dataHash
+    && asset.compression?.asset_hash === KNOWN_RECEIPT_REPAIR.leafHash;
+}
+
 export function updateReceiptInstruction(asset: Asset, proof: any, targetUri: string): TransactionInstruction {
   const compression = asset?.compression || {};
   const tree = String(proof?.tree_id || proof?.treeId || compression?.tree || '');
@@ -464,35 +613,20 @@ export function updateReceiptInstruction(asset: Asset, proof: any, targetUri: st
   if (proofAccounts.length !== MAX_RECEIPT_PROOF_ACCOUNTS) {
     throw new Error(`Receipt proof has ${proofAccounts.length} accounts, expected ${MAX_RECEIPT_PROOF_ACCOUNTS}`);
   }
-  const metadata = asset.content?.metadata || {};
-  const name = String(metadata.name || '');
-  const symbol = String(metadata.symbol || '');
   const sellerFee = Number(asset.royalty?.basis_points);
-  const fee = Buffer.alloc(2);
-  fee.writeUInt16LE(sellerFee);
-  const tokenStandard = Buffer.from([1, 0]);
-  const creators = Array.isArray(asset.creators) ? asset.creators : [];
-  const creatorBytes = creators.map((creator: any) => Buffer.concat([
-    new PublicKey(String(creator.address)).toBuffer(),
-    Buffer.from([creator.verified ? 1 : 0, Number(creator.share)]),
-  ]));
-  const currentMetadata = Buffer.concat([
-    string(name),
-    string(symbol),
-    string(String(asset.content?.json_uri || '')),
-    fee,
-    Buffer.from([asset.royalty?.primary_sale_happened ? 1 : 0, asset.mutable ? 1 : 0]),
-    tokenStandard,
-    u32(creatorBytes.length),
-    ...creatorBytes,
-    Buffer.from([1]),
-    COLLECTION.toBuffer(),
-    Buffer.from([0, 0]),
-  ]);
+  const currentUri = String(asset.content?.json_uri || '');
+  const currentMetadata = receiptMetadataV2(asset, currentUri, sellerFee);
+  const currentDataHash = receiptMetadataDataHash(asset, currentUri, sellerFee);
+  if (currentDataHash !== String(compression.data_hash || compression.dataHash || '')) {
+    throw new Error(`Receipt metadata hash mismatch: ${asset.id || 'unknown'}`);
+  }
+  if (!classifyUri(targetUri, OLD_BASE, NEW_BASE, true)) {
+    throw new Error(`Invalid receipt target URI: ${targetUri}`);
+  }
   const updateArgs = Buffer.concat([
     Buffer.from([0, 0, 1]),
     string(targetUri),
-    Buffer.from([0, 0, 0, 0]),
+    Buffer.from([0, 1, 0, 0, 0, 0]),
   ]);
   return new TransactionInstruction({
     programId: BUBBLEGUM,
@@ -548,6 +682,21 @@ export function classifyCollectionAsset(asset: Asset, sourceBase: string, target
       throw new Error(`Asset authority or mutability mismatch: ${item.id}`);
     }
     assert.equal(item.content?.metadata?.name, expectedName(classification.kind, classification.referenceId, isReceipt));
+    let receiptLeafId: number | null = null;
+    let receiptRepair = false;
+    if (isReceipt) {
+      receiptLeafId = Number(item.compression?.leaf_id ?? item.compression?.leafId);
+      if (!Number.isSafeInteger(receiptLeafId) || receiptLeafId < 0) throw new Error(`Invalid receipt leaf ID: ${item.id}`);
+      if (item.compression?.tree !== RECEIPTS_TREE.toBase58()) throw new Error(`Receipt tree mismatch: ${item.id}`);
+      receiptRepair = isKnownReceiptRepairState(item, classification);
+      if (item.content?.metadata?.symbol !== ''
+        || (item.royalty?.basis_points !== 0 && !receiptRepair)
+        || item.royalty?.primary_sale_happened !== false
+        || !Array.isArray(item.creators)
+        || item.creators.length !== 0) {
+        throw new Error(`Receipt metadata mismatch: ${item.id}`);
+      }
+    }
     if (classification.status === 'target') {
       alreadyTarget[isReceipt ? 'receipts' : 'core'] += 1;
       continue;
@@ -560,17 +709,18 @@ export function classifyCollectionAsset(asset: Asset, sourceBase: string, target
       targetUri: classification.targetUri,
     };
     if (isReceipt) {
-      const leafId = Number(item.compression?.leaf_id ?? item.compression?.leafId);
-      if (!Number.isSafeInteger(leafId) || leafId < 0) throw new Error(`Invalid receipt leaf ID: ${item.id}`);
-      if (item.compression?.tree !== RECEIPTS_TREE.toBase58()) throw new Error(`Receipt tree mismatch: ${item.id}`);
-      if (item.content?.metadata?.symbol !== ''
-        || item.royalty?.basis_points !== 0
-        || item.royalty?.primary_sale_happened !== false
-        || !Array.isArray(item.creators)
-        || item.creators.length !== 0) {
-        throw new Error(`Receipt metadata mismatch: ${item.id}`);
-      }
-      receiptTargets.push({ ...target, leafId });
+      receiptTargets.push({
+        ...target,
+        leafId: receiptLeafId!,
+        targetDataHash: expectedReceiptDataHash(item, classification.targetUri),
+        ...(receiptRepair ? {
+          royaltyRepair: {
+            sourceBasisPoints: KNOWN_RECEIPT_REPAIR.sellerFeeBasisPoints,
+            targetBasisPoints: 0 as const,
+            incidentSignature: KNOWN_RECEIPT_REPAIR.signature,
+          },
+        } : {}),
+      });
     } else {
       coreTargets.push(target);
     }
