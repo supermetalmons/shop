@@ -7,6 +7,7 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  TransactionExpiredBlockheightExceededError,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
@@ -305,39 +306,57 @@ async function sendInstructions(
   targets: string[],
   instructions: TransactionInstruction[],
 ) {
-  const latest = await connection.getLatestBlockhash('confirmed');
-  const transaction = new VersionedTransaction(new TransactionMessage({
-    payerKey: ADMIN,
-    recentBlockhash: latest.blockhash,
-    instructions,
-  }).compileToV0Message());
-  transaction.sign([signer]);
-  const simulation = await connection.simulateTransaction(transaction, {
-    commitment: 'confirmed',
-    sigVerify: true,
-  });
-  if (simulation.value.err) {
-    throw new Error(`Simulation failed for ${kind}: ${JSON.stringify({
-      err: simulation.value.err,
-      logs: simulation.value.logs,
-    })}`);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const latest = await connection.getLatestBlockhash('confirmed');
+    const transaction = new VersionedTransaction(new TransactionMessage({
+      payerKey: ADMIN,
+      recentBlockhash: latest.blockhash,
+      instructions,
+    }).compileToV0Message());
+    transaction.sign([signer]);
+    const simulation = await connection.simulateTransaction(transaction, {
+      commitment: 'confirmed',
+      sigVerify: true,
+    });
+    if (simulation.value.err) {
+      throw new Error(`Simulation failed for ${kind}: ${JSON.stringify({
+        err: simulation.value.err,
+        logs: simulation.value.logs,
+      })}`);
+    }
+    const signature = bs58.encode(transaction.signatures[0]);
+    checkpoint.pending = { signature, kind, targets };
+    await saveCheckpoint(checkpoint);
+    try {
+      const submitted = await connection.sendRawTransaction(transaction.serialize(), {
+        skipPreflight: false,
+        maxRetries: 5,
+        preflightCommitment: 'confirmed',
+      });
+      if (submitted !== signature) throw new Error('RPC returned a different transaction signature');
+      const confirmation = await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
+      if (confirmation.value.err) throw new Error(`Transaction failed: ${signature}`);
+    } catch (error) {
+      if (!(error instanceof TransactionExpiredBlockheightExceededError)) throw error;
+      const status = (await connection.getSignatureStatuses(
+        [signature],
+        { searchTransactionHistory: true },
+      )).value[0];
+      if (status?.err) throw new Error(`Transaction failed: ${signature}`);
+      if (status?.confirmationStatus !== 'confirmed' && status?.confirmationStatus !== 'finalized') {
+        checkpoint.pending = null;
+        await saveCheckpoint(checkpoint);
+        console.log(`Blockhash expired for ${kind}; retrying with a fresh signature (${attempt + 1}/5).`);
+        continue;
+      }
+    }
+    markCompleted(checkpoint, kind, targets);
+    checkpoint.transactions.push({ signature, kind, targets });
+    checkpoint.pending = null;
+    await saveCheckpoint(checkpoint);
+    return { signature, unitsConsumed: simulation.value.unitsConsumed };
   }
-  const signature = bs58.encode(transaction.signatures[0]);
-  checkpoint.pending = { signature, kind, targets };
-  await saveCheckpoint(checkpoint);
-  const submitted = await connection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: false,
-    maxRetries: 5,
-    preflightCommitment: 'confirmed',
-  });
-  if (submitted !== signature) throw new Error('RPC returned a different transaction signature');
-  const confirmation = await connection.confirmTransaction({ signature, ...latest }, 'confirmed');
-  if (confirmation.value.err) throw new Error(`Transaction failed: ${signature}`);
-  markCompleted(checkpoint, kind, targets);
-  checkpoint.transactions.push({ signature, kind, targets });
-  checkpoint.pending = null;
-  await saveCheckpoint(checkpoint);
-  return { signature, unitsConsumed: simulation.value.unitsConsumed };
+  throw new Error(`Blockhash expired repeatedly for ${kind}`);
 }
 
 async function waitForReceiptIndex(target: ReceiptTarget) {
