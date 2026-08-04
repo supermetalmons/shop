@@ -18,6 +18,7 @@ import {
   normalizeDropId as normalizeSharedDropId,
   normalizeDropSalesMode,
   normalizeMetadataPathFormat,
+  normalizeMetadataBaseAliases,
   normalizeMintSelectionConfig,
 } from '../shared/deploymentCore.js';
 import type {
@@ -45,6 +46,7 @@ export type FunctionsDropConfig = {
   salesMode?: DropSalesMode;
   receiptPoolId?: string;
   metadataBase: string;
+  metadataBaseAliases?: string[];
   metadataPathFormat: 'legacy' | 'compact';
   mintSelection?: MintSelectionConfig;
   treasury: string;
@@ -87,6 +89,11 @@ function projectFunctionsDrop(
   const metadataPathFormat = normalizeMetadataPathFormat(
     config.metadataPathFormat,
   );
+  const metadataBase = normalizeDropBase(config.metadataBase);
+  const metadataBaseAliases = normalizeMetadataBaseAliases(
+    metadataBase,
+    config.metadataBaseAliases,
+  );
   const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
   const boxMinterConfigPda = String(config.boxMinterConfigPda || '').trim();
   const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(
@@ -122,7 +129,8 @@ function projectFunctionsDrop(
     ...(String(config.receiptPoolId || '').trim()
       ? { receiptPoolId: String(config.receiptPoolId).trim() }
       : {}),
-    metadataBase: normalizeDropBase(config.metadataBase),
+    metadataBase,
+    ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
     metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
     treasury: config.treasury,

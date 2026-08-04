@@ -202,6 +202,14 @@ test('assertBoxMinterConfigMatchesDropConfig rejects stale collection or metadat
     } as any),
   );
 
+  assert.doesNotThrow(() =>
+    assertBoxMinterConfigMatchesDropConfig(cfg, {
+      collectionMint: pubkey(70).toBase58(),
+      metadataBase: 'https://cdn.example.com/nft/shared',
+      metadataBaseAliases: ['https://assets.example.com/drops/shared'],
+    } as any),
+  );
+
   assert.throws(
     () =>
       assertBoxMinterConfigMatchesDropConfig(cfg, {

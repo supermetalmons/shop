@@ -291,6 +291,51 @@ test('shared receipt collections resolve drops by metadata base and share one qu
   );
 });
 
+test('inventory resolution accepts a configured legacy metadata base alias only', () => {
+  const canonicalBase = 'https://cdn.lil.org/nft/little_swag_boxes';
+  const legacyBase = 'https://assets.mons.link/drops/lsb';
+  const candidates: InventoryDropResolutionCandidate[] = [
+    {
+      dropId: 'little_swag_boxes',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: LITTLE_SWAG_BOXES_COLLECTION,
+      receiptsMerkleTree: null,
+      metadataBase: canonicalBase,
+      metadataBaseAliases: [legacyBase],
+      maxSupply: 333,
+    },
+    {
+      dropId: 'unrelated_drop',
+      solanaCluster: 'mainnet-beta',
+      collectionMint: LITTLE_SWAG_BOXES_COLLECTION,
+      receiptsMerkleTree: null,
+      metadataBase: 'https://cdn.lil.org/nft/unrelated_drop',
+      maxSupply: 333,
+    },
+  ];
+  const asset = {
+    id: 'legacy-lsb-box',
+    grouping: [{ group_key: 'collection', group_value: LITTLE_SWAG_BOXES_COLLECTION }],
+    content: { json_uri: `${legacyBase}/json/boxes/7.json` },
+  };
+
+  assert.equal(
+    resolveInventoryAssetDropId(asset, candidates, 'mainnet-beta'),
+    'little_swag_boxes',
+  );
+  assert.equal(
+    resolveInventoryAssetDropId(
+      {
+        ...asset,
+        content: { json_uri: 'https://assets.example.com/drops/lsb/json/boxes/7.json' },
+      },
+      candidates,
+      'mainnet-beta',
+    ),
+    null,
+  );
+});
+
 test('fetchInventory requests unburned Helius assets and includes paginated boxes', async () => {
   await withMockedFetch(async (body) => {
     if (body.method !== 'searchAssets') {

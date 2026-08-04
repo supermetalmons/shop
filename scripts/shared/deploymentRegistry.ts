@@ -46,12 +46,14 @@ import {
   canonicalizeDropAssetUrl,
   defaultDropFamilyForDropId,
   dropPathsFromBase,
+  metadataBasesForDrop,
   normalizeDiscountMintsPerWallet,
   normalizeDropBase,
   normalizeDropFamily,
   normalizeDropId,
   normalizeDropSalesMode,
   normalizeMetadataPathFormat,
+  normalizeMetadataBaseAliases,
   normalizeMintSelectionConfig,
   type DropFamily,
   type DropSalesMode,
@@ -71,10 +73,12 @@ export {
   canonicalizeDropAssetUrl,
   defaultDropFamilyForDropId,
   dropPathsFromBase,
+  metadataBasesForDrop,
   normalizeDropBase,
   normalizeDropFamily,
   normalizeDropId,
   normalizeDropSalesMode,
+  normalizeMetadataBaseAliases,
   resolveStripeCheckoutEnabledForDropFamily,
   resolveStripeProductTaxCodeForDropFamily,
 };
@@ -388,6 +392,18 @@ function normalizeDeploymentDropForRegistry(
   const forceSoldOut =
     object.forceSoldOut === true ||
     options.forceSoldOutFallback?.(dropId) === true;
+  const metadataBase = normalizeDropBase(
+    asTrimmedString(object.metadataBase) ||
+      asTrimmedString(
+        (object.paths as Record<string, unknown> | undefined)?.base,
+      ),
+  );
+  const metadataBaseAliases = normalizeMetadataBaseAliases(
+    metadataBase,
+    Array.isArray(object.metadataBaseAliases)
+      ? object.metadataBaseAliases.map(asTrimmedString)
+      : undefined,
+  );
 
   return {
     solanaCluster,
@@ -397,12 +413,8 @@ function normalizeDeploymentDropForRegistry(
     ...(displayName ? { displayName } : {}),
     ...(hasExplicitSalesMode ? { salesMode } : {}),
     ...(receiptPoolId ? { receiptPoolId } : {}),
-    metadataBase: normalizeDropBase(
-      asTrimmedString(object.metadataBase) ||
-        asTrimmedString(
-          (object.paths as Record<string, unknown> | undefined)?.base,
-        ),
-    ),
+    metadataBase,
+    ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
     metadataPathFormat: normalizeMetadataPathFormat(
       object.metadataPathFormat,
     ),
@@ -740,18 +752,22 @@ export function assertReceiptPoolDropRelations(args: {
         `Deployment registry drop ${drop.dropId} does not match receipt pool ${key}: ${mismatches.join(', ')}`,
       );
     }
-    const normalizedMetadataBase = normalizeDropBase(drop.metadataBase);
     const identity =
       `${pool.solanaCluster}:${pool.collectionMint}:${pool.receiptsMerkleTree}`;
     const seen =
       metadataByPool.get(identity) ?? new Map<string, string>();
-    const duplicateDropId = seen.get(normalizedMetadataBase);
-    if (duplicateDropId) {
-      throw new Error(
-        `Receipt pool ${key} has duplicate metadataBase for ${duplicateDropId} and ${drop.dropId}`,
-      );
+    for (const normalizedMetadataBase of metadataBasesForDrop(
+      drop.metadataBase,
+      drop.metadataBaseAliases,
+    )) {
+      const duplicateDropId = seen.get(normalizedMetadataBase);
+      if (duplicateDropId) {
+        throw new Error(
+          `Receipt pool ${key} has duplicate metadataBase for ${duplicateDropId} and ${drop.dropId}`,
+        );
+      }
+      seen.set(normalizedMetadataBase, drop.dropId);
     }
-    seen.set(normalizedMetadataBase, drop.dropId);
     metadataByPool.set(identity, seen);
   });
 }
@@ -891,6 +907,28 @@ function assertValidCanonicalRegistryRow(args: {
   const metadataBase = requireString('metadataBase');
   if (normalizeAndValidateMetadataBaseInput(metadataBase) !== metadataBase) {
     invalid('metadataBase must be canonical');
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'metadataBaseAliases')) {
+    const aliases = row['metadataBaseAliases'];
+    if (!Array.isArray(aliases) || aliases.length === 0) {
+      invalid('metadataBaseAliases must be a non-empty array');
+    }
+    const normalizedAliases = aliases.map((alias) => {
+      if (typeof alias !== 'string' || !alias || alias !== alias.trim()) {
+        invalid('metadataBaseAliases must contain non-empty trimmed strings');
+      }
+      try {
+        return normalizeAndValidateMetadataBaseInput(alias);
+      } catch {
+        invalid('metadataBaseAliases contains an invalid metadata base');
+      }
+    });
+    if (!isDeepStrictEqual(normalizedAliases, aliases)) {
+      invalid('metadataBaseAliases must be canonical');
+    }
+    if (normalizeMetadataBaseAliases(metadataBase, normalizedAliases).length !== aliases.length) {
+      invalid('metadataBaseAliases must exclude the canonical base and duplicates');
+    }
   }
   const metadataPathFormat = requireString('metadataPathFormat');
   if (
@@ -1353,6 +1391,13 @@ function renderDeploymentDropEntry(
   }
   lines.push(
     `    metadataBase: ${tsStringLiteral(drop.metadataBase)},`,
+  );
+  if (drop.metadataBaseAliases?.length) {
+    lines.push(
+      `    metadataBaseAliases: [${drop.metadataBaseAliases.map(tsStringLiteral).join(', ')}],`,
+    );
+  }
+  lines.push(
     `    metadataPathFormat: ${tsStringLiteral(drop.metadataPathFormat)},`,
   );
   const defaultMarket = defaultSecondaryMarketHref(drop.dropId);

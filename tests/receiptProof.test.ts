@@ -142,6 +142,33 @@ test('non-pooled receipt metadata identity retains legacy URI compatibility', ()
   );
 });
 
+test('non-pooled receipt metadata identity accepts configured base aliases only', () => {
+  const legacyBase = 'https://assets.mons.link/drops/lsb';
+  const drop = {
+    collectionMintStr: COLLECTION.toBase58(),
+    metadataBase: 'https://cdn.lil.org/nft/little_swag_boxes',
+    metadataBaseAliases: [legacyBase],
+    receiptMaxId: 333,
+  };
+
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset(`${legacyBase}/json/receipts/boxes/7.json`),
+      drop,
+      { kind: 'box', id: 7 },
+    ),
+    true,
+  );
+  assert.equal(
+    assetMatchesReceiptMetadataIdentity(
+      receiptAsset('https://assets.example.com/drops/lsb/json/receipts/boxes/7.json'),
+      drop,
+      { kind: 'box', id: 7 },
+    ),
+    false,
+  );
+});
+
 test('receipt drop identity additionally requires the configured tree', () => {
   const drop = {
     collectionMintStr: COLLECTION.toBase58(),

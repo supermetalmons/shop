@@ -3,9 +3,9 @@ import { uniqueAssetGroupingCollectionMint } from './shared/dasAssetCollections.
 import { dasAssetMetadataUri, type DasAsset } from './shared/dasAsset.js';
 import {
   boxIdFromMetadataUri,
-  canonicalMetadataBase,
   dudeIdFromMetadataUri,
   metadataBaseFromMetadataUri,
+  metadataBaseMatchesDrop,
   metadataKindFromUri,
   pooledReceiptBoxIdFromMetadataUri,
 } from './shared/dropMetadataUri.js';
@@ -18,6 +18,7 @@ export type ReceiptMetadataReference = {
 export type ReceiptDropIdentity = {
   collectionMintStr: string;
   metadataBase: string;
+  metadataBaseAliases?: string[];
   receiptsMerkleTree: PublicKey;
   receiptPoolId?: string;
   receiptMaxId: number;
@@ -73,7 +74,7 @@ export function assetMatchesReceiptMetadataIdentity(
   asset: DasAsset | null | undefined,
   drop: Pick<
     ReceiptDropIdentity,
-    'collectionMintStr' | 'metadataBase' | 'receiptPoolId' | 'receiptMaxId'
+    'collectionMintStr' | 'metadataBase' | 'metadataBaseAliases' | 'receiptPoolId' | 'receiptMaxId'
   >,
   expected?: Partial<ReceiptMetadataReference>,
 ): boolean {
@@ -92,7 +93,11 @@ export function assetMatchesReceiptMetadataIdentity(
     const assetMetadataBase = metadataBaseFromMetadataUri(metadataUri);
     if (
       !assetMetadataBase ||
-      assetMetadataBase !== canonicalMetadataBase(drop.metadataBase)
+      !metadataBaseMatchesDrop(
+        assetMetadataBase,
+        drop.metadataBase,
+        drop.metadataBaseAliases,
+      )
     ) {
       return false;
     }

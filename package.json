@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "repo-clean": "bash ./scripts/repo-clean.sh",
     "typecheck": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && tsc --noEmit",
+    "validate:lsb-cdn": "node --experimental-strip-types scripts/validate-lsb-cdn.ts",
     "typecheck:tools": "tsc -p tsconfig.tools.json",
     "check:dead-code": "knip",
     "test": "node --import tsx --test tests/*.test.ts",

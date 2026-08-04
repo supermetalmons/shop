@@ -3,6 +3,7 @@ export {
   canonicalMetadataBase,
   dudeIdFromMetadataUri,
   metadataBaseFromMetadataUri,
+  metadataBaseMatchesDrop,
   metadataKindFromUri,
   pooledReceiptBoxIdFromMetadataUri,
   selectMetadataUri,

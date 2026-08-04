@@ -24,7 +24,7 @@ import {
   isOpenableBoxMinterItemsPerBox,
   type BoxMinterMintVariantTuple,
 } from '../../functions/src/shared/boxMinterProtocol.ts';
-import { normalizeBoxMinterMetadataBaseForComparison } from '../../functions/src/shared/deploymentCore.ts';
+import { boxMinterMetadataBaseMatchesDrop } from '../../functions/src/shared/deploymentCore.ts';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
@@ -120,7 +120,10 @@ type BuiltStartOpenBoxInstructionPlan = {
 };
 
 type DropProgramScopeConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'boxMinterConfigPda'>;
-type DropProgramValidationConfig = Partial<Pick<FrontendDeploymentConfig, 'collectionMint' | 'metadataBase'>>;
+type DropProgramValidationConfig = Partial<Pick<
+  FrontendDeploymentConfig,
+  'collectionMint' | 'metadataBase' | 'metadataBaseAliases'
+>>;
 type DropProgramConfig = DropProgramScopeConfig &
   DropProgramValidationConfig &
   Pick<FrontendDeploymentConfig, 'maxPerTx' | 'mintSelection'>;
@@ -201,7 +204,14 @@ export function assertBoxMinterConfigMatchesDropConfig(
 
   const expectedMetadataBase =
     typeof dropConfig.metadataBase === 'string' ? normalizeDropBase(dropConfig.metadataBase) : '';
-  if (expectedMetadataBase && normalizeBoxMinterMetadataBaseForComparison(cfg.uriBase) !== expectedMetadataBase) {
+  if (
+    expectedMetadataBase &&
+    !boxMinterMetadataBaseMatchesDrop(
+      cfg.uriBase,
+      expectedMetadataBase,
+      dropConfig.metadataBaseAliases,
+    )
+  ) {
     throw new Error('Deployment config is out of sync with the on-chain metadata base');
   }
 }

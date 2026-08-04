@@ -166,6 +166,42 @@ export function normalizeDropBase(base: string): string {
   return normalizeIpfsProtocolUrl(trimmed);
 }
 
+export function normalizeMetadataBaseAliases(
+  metadataBase: string,
+  aliases: readonly string[] | undefined,
+): string[] {
+  const canonicalBase = normalizeDropBase(metadataBase);
+  const seen = new Set(canonicalBase ? [canonicalBase] : []);
+  const normalizedAliases: string[] = [];
+  for (const alias of aliases || []) {
+    const normalized = normalizeDropBase(alias);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    normalizedAliases.push(normalized);
+  }
+  return normalizedAliases;
+}
+
+export function metadataBasesForDrop(
+  metadataBase: string,
+  aliases?: readonly string[],
+): string[] {
+  const canonicalBase = normalizeDropBase(metadataBase);
+  return [
+    ...(canonicalBase ? [canonicalBase] : []),
+    ...normalizeMetadataBaseAliases(canonicalBase, aliases),
+  ];
+}
+
+export function boxMinterMetadataBaseMatchesDrop(
+  uriBase: string,
+  metadataBase: string,
+  aliases?: readonly string[],
+): boolean {
+  const normalizedUriBase = normalizeBoxMinterMetadataBaseForComparison(uriBase);
+  return Boolean(normalizedUriBase) && metadataBasesForDrop(metadataBase, aliases).includes(normalizedUriBase);
+}
+
 export function dropPathsFromBase(
   dropBase: string,
   metadataPathFormat: MetadataPathFormat = 'compact',

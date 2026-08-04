@@ -48,6 +48,7 @@ const METADATA_RUNTIME_EXPORTS = [
   'canonicalMetadataBase',
   'dudeIdFromMetadataUri',
   'metadataBaseFromMetadataUri',
+  'metadataBaseMatchesDrop',
   'metadataKindFromUri',
   'pooledReceiptBoxIdFromMetadataUri',
   'selectMetadataUri',

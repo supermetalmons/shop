@@ -190,6 +190,7 @@ type OptionalDeploymentRegistryDropField = {
 }[keyof DeploymentRegistryDrop];
 
 const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
+  metadataBaseAliases: ['https://legacy.example.com/all_optional_fields'],
   secondaryMarketHref: 'https://market.example.com/all_optional_fields',
   figureMedia: {
     strategy: 'cyclic',
@@ -433,6 +434,22 @@ test('canonical field descriptor owns allowed fields and requiredness', () => {
 });
 
 test('frontend and Functions projections retain media, sold-out, Stripe, and server defaults', () => {
+  assert.equal(
+    DEPLOYMENT_DROPS.little_swag_boxes.metadataBase,
+    'https://cdn.lil.org/nft/little_swag_boxes',
+  );
+  assert.deepEqual(
+    DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
+    ['https://assets.mons.link/drops/lsb'],
+  );
+  assert.deepEqual(
+    FRONTEND_DROPS.little_swag_boxes.metadataBaseAliases,
+    DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
+  );
+  assert.deepEqual(
+    FUNCTIONS_DROPS.little_swag_boxes.metadataBaseAliases,
+    DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
+  );
   assert.deepEqual(
     FRONTEND_DROPS.little_swag_boxes.figureMedia,
     LITTLE_SWAG_BOXES_FIGURE_MEDIA,

@@ -70,6 +70,7 @@ import {
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import {
   canonicalMetadataBase,
+  metadataBaseMatchesDrop,
   metadataBaseFromMetadataUri,
   pooledReceiptBoxIdFromMetadataUri,
 } from './dropMetadataUri';
@@ -196,6 +197,7 @@ type FrontendDropRuntime = Pick<
   | 'collectionMint'
   | 'receiptsMerkleTree'
   | 'metadataBase'
+  | 'metadataBaseAliases'
   | 'receiptPoolId'
   | 'maxSupply'
   | 'receiptMaxId'
@@ -211,6 +213,7 @@ export type InventoryDropResolutionCandidate = Pick<
   | 'collectionMint'
   | 'receiptsMerkleTree'
   | 'metadataBase'
+  | 'metadataBaseAliases'
   | 'receiptPoolId'
   | 'maxSupply'
   | 'receiptMaxId'
@@ -244,6 +247,7 @@ const FRONTEND_DROP_RUNTIMES: FrontendDropRuntime[] = Object.keys(FRONTEND_DROPS
       collectionMint: drop.collectionMint,
       receiptsMerkleTree: drop.receiptsMerkleTree,
       metadataBase: drop.metadataBase,
+      metadataBaseAliases: drop.metadataBaseAliases,
       receiptPoolId: drop.receiptPoolId,
       maxSupply: drop.maxSupply,
       receiptMaxId: drop.receiptMaxId,
@@ -610,7 +614,11 @@ export function resolveInventoryAssetDropId(
     }
     return (
       Boolean(canonicalAssetMetadataBase) &&
-      canonicalMetadataBase(drop.metadataBase) === canonicalAssetMetadataBase
+      metadataBaseMatchesDrop(
+        canonicalAssetMetadataBase,
+        drop.metadataBase,
+        drop.metadataBaseAliases,
+      )
     );
   });
   if (metadataMatches.length === 1) return metadataMatches[0].dropId;

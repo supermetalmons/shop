@@ -10,7 +10,10 @@ import {
   readDeploymentDropRegistry,
 } from './shared/deploymentRegistry.ts';
 import { decodeBoxMinterConfigData } from '../functions/src/shared/boxMinterConfigCodec.ts';
-import { normalizeBoxMinterMetadataBaseForComparison } from '../functions/src/shared/deploymentCore.ts';
+import {
+  boxMinterMetadataBaseMatchesDrop,
+  normalizeBoxMinterMetadataBaseForComparison,
+} from '../functions/src/shared/deploymentCore.ts';
 import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
@@ -235,7 +238,13 @@ async function main() {
   }
   if (metadataBase) {
     const onchainMetadataBase = decodeStartMintMetadataBase(info.data);
-    if (onchainMetadataBase !== metadataBase) {
+    if (!boxMinterMetadataBaseMatchesDrop(
+      onchainMetadataBase,
+      metadataBase,
+      Array.isArray(dropConfig.metadataBaseAliases)
+        ? dropConfig.metadataBaseAliases.filter((alias): alias is string => typeof alias === 'string')
+        : undefined,
+    )) {
       throw new Error(
         `Config PDA ${configPda.toBase58()} does not match drop ${activeDropId}.\n` +
           `- configured metadataBase : ${metadataBase}\n` +

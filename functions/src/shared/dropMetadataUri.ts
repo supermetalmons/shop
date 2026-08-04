@@ -1,5 +1,6 @@
 import {
   canonicalizeDropAssetUrl,
+  metadataBasesForDrop,
   normalizeDropBase,
 } from './deploymentCore.js';
 
@@ -57,6 +58,18 @@ function canonicalMetadataUri(uri: string): string {
 
 export function canonicalMetadataBase(baseRaw: string): string {
   return canonicalMetadataUri(normalizeDropBase(baseRaw));
+}
+
+export function metadataBaseMatchesDrop(
+  metadataBaseRaw: string,
+  dropMetadataBase: string,
+  dropMetadataBaseAliases?: readonly string[],
+): boolean {
+  const metadataBase = canonicalMetadataBase(metadataBaseRaw);
+  return Boolean(metadataBase) && metadataBasesForDrop(
+    dropMetadataBase,
+    dropMetadataBaseAliases,
+  ).some((base) => canonicalMetadataBase(base) === metadataBase);
 }
 
 export function pooledReceiptBoxIdFromMetadataUri(

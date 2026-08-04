@@ -28,6 +28,7 @@ export type DeploymentRegistryDrop = {
   receiptPoolId?: string;
 
   metadataBase: string;
+  metadataBaseAliases?: string[];
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
   figureMedia?: DeploymentMediaMapConfig;
@@ -84,6 +85,7 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
   salesMode: { required: false },
   receiptPoolId: { required: false },
   metadataBase: { required: true },
+  metadataBaseAliases: { required: false },
   metadataPathFormat: { required: true },
   secondaryMarketHref: { required: false },
   figureMedia: { required: false },
@@ -323,7 +325,8 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     dropId: 'little_swag_boxes',
     dropFamily: 'little_swag_boxes',
     collectionName: 'Little Swag Boxes',
-    metadataBase: 'https://assets.mons.link/drops/lsb',
+    metadataBase: 'https://cdn.lil.org/nft/little_swag_boxes',
+    metadataBaseAliases: ['https://assets.mons.link/drops/lsb'],
     metadataPathFormat: 'legacy',
     forceSoldOut: true,
     treasury: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',

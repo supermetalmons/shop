@@ -217,6 +217,7 @@ import {
   dasAssetLooksBurntOrClosed,
 } from './shared/dasAsset.js';
 import {
+  boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
   normalizeDropSalesMode,
   normalizeDropId as normalizeDropIdShared,
@@ -1592,7 +1593,11 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false):
       },
     );
   }
-  if (normalizeBoxMinterMetadataBaseForComparison(decoded.uriBase) !== normalizeDropBase(dropRuntime.config.metadataBase)) {
+  if (!boxMinterMetadataBaseMatchesDrop(
+    decoded.uriBase,
+    dropRuntime.config.metadataBase,
+    dropRuntime.config.metadataBaseAliases,
+  )) {
     throw new HttpsError(
       'failed-precondition',
       'functions/src/config/deployment.ts is out of sync with the on-chain metadata base for this drop.',
@@ -1918,6 +1923,7 @@ function receiptDropIdentity(dropRuntime: DropRuntime) {
   return {
     collectionMintStr: dropRuntime.collectionMintStr,
     metadataBase: dropRuntime.config.metadataBase,
+    metadataBaseAliases: dropRuntime.config.metadataBaseAliases,
     receiptsMerkleTree: dropRuntime.receiptsMerkleTree,
     receiptPoolId: dropRuntime.config.receiptPoolId,
     receiptMaxId: dropRuntime.receiptMaxId,

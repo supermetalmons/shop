@@ -25,6 +25,7 @@ import {
   normalizeDropSalesMode,
   normalizeMetadataPathFormat,
   normalizeMintSelectionConfig,
+  normalizeMetadataBaseAliases,
 } from '../../functions/src/shared/deploymentCore.js';
 import type {
   DropFamily as SharedDropFamily,
@@ -56,6 +57,7 @@ export type FrontendDropConfig = {
   salesMode?: DropSalesMode;
   receiptPoolId?: string;
   metadataBase: string;
+  metadataBaseAliases?: string[];
   metadataPathFormat: MetadataPathFormat;
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
@@ -166,6 +168,10 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
   const dropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
   const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
   const metadataBase = normalizeDropBase(config.metadataBase);
+  const metadataBaseAliases = normalizeMetadataBaseAliases(
+    metadataBase,
+    config.metadataBaseAliases,
+  );
   const figureMedia =
     normalizeMediaMapConfig(config.figureMedia) ||
     defaultFigureMediaConfigForDropFamily(dropFamily);
@@ -206,6 +212,7 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
       ? { receiptPoolId: normalizeOptionalString(config.receiptPoolId) }
       : {}),
     metadataBase,
+    ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
     metadataPathFormat,
     treasury: config.treasury,
     priceSol: config.priceSol,
