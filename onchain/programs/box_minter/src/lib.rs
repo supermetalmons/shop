@@ -76,6 +76,7 @@ const URI_SUFFIX_BOXES: &str = "/json/boxes/";
 const URI_SUFFIX_FIGURES: &str = "/json/figures/";
 const URI_SUFFIX_RECEIPTS_FIGURES: &str = "/json/receipts/figures/";
 const URI_SUFFIX_RECEIPTS_BOXES: &str = "/json/receipts/boxes/";
+const LEGACY_LITTLE_SWAG_BOXES_URI_BASE: &str = "https://assets.mons.link/drops/lsb";
 
 fn hash_leaf(data: &[u8]) -> [u8; 32] {
     hashv(&[data]).to_bytes()
@@ -461,6 +462,14 @@ pub mod box_minter {
         Ok(())
     }
 
+    pub fn set_uri_base(ctx: Context<SetUriBase>, uri_base: String) -> Result<()> {
+        apply_uri_base(
+            &mut ctx.accounts.config,
+            ctx.accounts.admin.key(),
+            &uri_base,
+        )
+    }
+
     pub fn start_mint(ctx: Context<StartMint>) -> Result<()> {
         let cfg = &mut ctx.accounts.config;
         cfg.started = true;
@@ -672,6 +681,7 @@ pub mod box_minter {
             ctx.accounts.payer.key(),
             cfg.core_collection,
             drop_base,
+            Some(LEGACY_LITTLE_SWAG_BOXES_URI_BASE),
             URI_SUFFIX_BOXES,
             None,
         )?;
@@ -911,6 +921,7 @@ pub mod box_minter {
             cfg.admin,
             cfg.core_collection,
             drop_base,
+            Some(LEGACY_LITTLE_SWAG_BOXES_URI_BASE),
             URI_SUFFIX_BOXES,
             None,
         )?;
@@ -1656,6 +1667,13 @@ pub struct SetTreasury<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetUriBase<'info> {
+    #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, BoxMinterConfig>,
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct StartMint<'info> {
     #[account(mut, seeds = [BoxMinterConfig::SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, BoxMinterConfig>,
@@ -2014,11 +2032,54 @@ fn parse_ref_id_from_uri_bytes(uri: &[u8], drop_base: &str, uri_suffix: &str) ->
     Some(out)
 }
 
+fn normalize_uri_base(uri_base: &str) -> Result<&str> {
+    let drop_base = uri_base.trim_end_matches('/');
+    require!(
+        drop_base.len() <= BoxMinterConfig::MAX_URI_BASE,
+        BoxMinterError::UriTooLong
+    );
+    require!(
+        is_valid_uri_base(drop_base),
+        BoxMinterError::InvalidMetadataBase
+    );
+    Ok(drop_base)
+}
+
+fn apply_uri_base(config: &mut BoxMinterConfig, admin: Pubkey, uri_base: &str) -> Result<()> {
+    require_keys_eq!(
+        config.admin,
+        admin,
+        BoxMinterError::UnauthorizedInitializer
+    );
+    config.uri_base = normalize_uri_base(uri_base)?.to_string();
+    Ok(())
+}
+
+fn is_valid_uri_base(drop_base: &str) -> bool {
+    if !drop_base.starts_with("https://")
+        || drop_base.contains('?')
+        || drop_base.contains('#')
+        || drop_base.ends_with(".json")
+        || drop_base.contains("/json/boxes")
+        || drop_base.contains("/json/figures")
+        || drop_base.contains("/json/receipts")
+        || drop_base.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return false;
+    }
+    let authority = drop_base["https://".len()..]
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    !authority.is_empty() && !authority.starts_with('.') && !authority.ends_with('.')
+}
+
 fn verify_core_asset_owned_by_uri(
     asset_ai: &AccountInfo,
     owner: Pubkey,
     core_collection: Pubkey,
     expected_drop_base: &str,
+    legacy_drop_base: Option<&str>,
     expected_uri_suffix: &str,
     expected_ref_id: Option<u32>,
 ) -> Result<()> {
@@ -2032,12 +2093,30 @@ fn verify_core_asset_owned_by_uri(
     );
 
     // Ensure the asset corresponds to the expected kind by validating its URI prefix and (optionally) id.
-    let parsed = parse_ref_id_from_uri_bytes(base.uri, expected_drop_base, expected_uri_suffix)
+    let parsed = parse_ref_id_from_uri_bytes_with_alias(
+        base.uri,
+        expected_drop_base,
+        legacy_drop_base,
+        expected_uri_suffix,
+    )
         .ok_or(error!(BoxMinterError::InvalidAssetMetadata))?;
     if let Some(expected) = expected_ref_id {
         require!(parsed == expected, BoxMinterError::InvalidAssetMetadata);
     }
     Ok(())
+}
+
+fn parse_ref_id_from_uri_bytes_with_alias(
+    uri: &[u8],
+    expected_drop_base: &str,
+    alias_drop_base: Option<&str>,
+    expected_uri_suffix: &str,
+) -> Option<u32> {
+    parse_ref_id_from_uri_bytes(uri, expected_drop_base, expected_uri_suffix).or_else(|| {
+        alias_drop_base.and_then(|drop_base| {
+            parse_ref_id_from_uri_bytes(uri, drop_base, expected_uri_suffix)
+        })
+    })
 }
 
 fn borsh_push_string(out: &mut Vec<u8>, value: &str) -> Result<()> {
@@ -2141,4 +2220,157 @@ pub enum BoxMinterError {
     UnauthorizedInitializer,
     #[msg("Minting has not started yet")]
     MintNotStarted,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct NonUriFields {
+        admin: Pubkey,
+        treasury: Pubkey,
+        core_collection: Pubkey,
+        price_lamports: u64,
+        discount_price_lamports: u64,
+        discount_merkle_root: [u8; 32],
+        max_supply: u32,
+        max_per_tx: u8,
+        minted: u32,
+        name_prefix: String,
+        symbol: String,
+        started: bool,
+        bump: u8,
+    }
+
+    fn config(uri_base: &str) -> BoxMinterConfig {
+        BoxMinterConfig {
+            admin: Pubkey::new_unique(),
+            treasury: Pubkey::new_unique(),
+            core_collection: Pubkey::new_unique(),
+            price_lamports: 1_000_000_000,
+            discount_price_lamports: 550_000_000,
+            discount_merkle_root: [7; 32],
+            max_supply: 333,
+            max_per_tx: 15,
+            minted: 333,
+            name_prefix: "box".to_string(),
+            symbol: "box".to_string(),
+            uri_base: uri_base.to_string(),
+            started: true,
+            bump: 252,
+        }
+    }
+
+    fn non_uri_fields(config: &BoxMinterConfig) -> NonUriFields {
+        NonUriFields {
+            admin: config.admin,
+            treasury: config.treasury,
+            core_collection: config.core_collection,
+            price_lamports: config.price_lamports,
+            discount_price_lamports: config.discount_price_lamports,
+            discount_merkle_root: config.discount_merkle_root,
+            max_supply: config.max_supply,
+            max_per_tx: config.max_per_tx,
+            minted: config.minted,
+            name_prefix: config.name_prefix.clone(),
+            symbol: config.symbol.clone(),
+            started: config.started,
+            bump: config.bump,
+        }
+    }
+
+    #[test]
+    fn config_layout_remains_289_bytes() {
+        assert_eq!(BoxMinterConfig::SPACE, 289);
+    }
+
+    #[test]
+    fn uri_base_normalization_accepts_new_and_rollback_roots() {
+        assert_eq!(
+            normalize_uri_base("https://cdn.lil.org/nft/little_swag_boxes///").unwrap(),
+            "https://cdn.lil.org/nft/little_swag_boxes"
+        );
+        assert_eq!(
+            normalize_uri_base(LEGACY_LITTLE_SWAG_BOXES_URI_BASE).unwrap(),
+            LEGACY_LITTLE_SWAG_BOXES_URI_BASE
+        );
+    }
+
+    #[test]
+    fn uri_base_validation_rejects_overlong_and_metadata_paths() {
+        let overlong = format!("https://cdn.lil.org/{}", "x".repeat(97));
+        assert!(normalize_uri_base(&overlong).is_err());
+        for invalid in [
+            "",
+            "http://cdn.lil.org/nft/little_swag_boxes",
+            "https://cdn.lil.org/nft/little swag boxes",
+            "https://cdn.lil.org/nft/little_swag_boxes?version=2",
+            "https://cdn.lil.org/nft/little_swag_boxes#metadata",
+            "https://cdn.lil.org/nft/little_swag_boxes.json",
+            "https://cdn.lil.org/nft/little_swag_boxes/json/boxes",
+            "https://cdn.lil.org/nft/little_swag_boxes/json/figures",
+            "https://cdn.lil.org/nft/little_swag_boxes/json/receipts",
+        ] {
+            assert!(normalize_uri_base(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn uri_base_setter_requires_admin_and_preserves_other_config_fields() {
+        let mut config = config(LEGACY_LITTLE_SWAG_BOXES_URI_BASE);
+        let before = non_uri_fields(&config);
+        let admin = config.admin;
+        assert!(apply_uri_base(
+            &mut config,
+            Pubkey::new_unique(),
+            "https://cdn.lil.org/nft/little_swag_boxes"
+        )
+        .is_err());
+        assert_eq!(config.uri_base, LEGACY_LITTLE_SWAG_BOXES_URI_BASE);
+        apply_uri_base(
+            &mut config,
+            admin,
+            "https://cdn.lil.org/nft/little_swag_boxes",
+        )
+        .unwrap();
+        assert_eq!(config.uri_base, "https://cdn.lil.org/nft/little_swag_boxes");
+        assert_eq!(non_uri_fields(&config), before);
+        apply_uri_base(&mut config, admin, LEGACY_LITTLE_SWAG_BOXES_URI_BASE).unwrap();
+        assert_eq!(config.uri_base, LEGACY_LITTLE_SWAG_BOXES_URI_BASE);
+        assert_eq!(non_uri_fields(&config), before);
+    }
+
+    #[test]
+    fn box_uri_parser_accepts_current_and_legacy_roots() {
+        let current = "https://cdn.lil.org/nft/little_swag_boxes";
+        let legacy_uri = format!("{LEGACY_LITTLE_SWAG_BOXES_URI_BASE}{URI_SUFFIX_BOXES}7.json");
+        let current_uri = format!("{current}{URI_SUFFIX_BOXES}8.json");
+        assert_eq!(
+            parse_ref_id_from_uri_bytes_with_alias(
+                legacy_uri.as_bytes(),
+                current,
+                Some(LEGACY_LITTLE_SWAG_BOXES_URI_BASE),
+                URI_SUFFIX_BOXES
+            ),
+            Some(7)
+        );
+        assert_eq!(
+            parse_ref_id_from_uri_bytes_with_alias(
+                current_uri.as_bytes(),
+                current,
+                Some(LEGACY_LITTLE_SWAG_BOXES_URI_BASE),
+                URI_SUFFIX_BOXES
+            ),
+            Some(8)
+        );
+        assert_eq!(
+            parse_ref_id_from_uri_bytes(
+                b"https://cdn.lil.org/nft/unrelated/json/boxes/7.json",
+                current,
+                URI_SUFFIX_BOXES,
+            ),
+            None
+        );
+    }
 }

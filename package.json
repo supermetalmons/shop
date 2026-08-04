@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "mons.shop – blind boxes drop with on-chain & Firebase helpers",
   "scripts": {
+    "archive:lsb-mainnet": "node scripts/archive-lsb-mainnet.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -13,6 +14,8 @@
     "deploy:functions": "firebase deploy --only functions",
     "df": "firebase deploy --only firestore:rules,firestore:indexes,functions",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
+    "prepare:lsb-uri-base": "node --experimental-strip-types scripts/prepare-lsb-uri-base.ts",
+    "test:lsb-uri-surfpool": "node --experimental-strip-types scripts/test-lsb-uri-base-surfpool.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts"
   },
   "repository": {
