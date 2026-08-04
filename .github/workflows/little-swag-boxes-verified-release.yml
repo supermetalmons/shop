@@ -80,6 +80,7 @@ jobs:
             --arg executableHash "$EXECUTABLE_HASH" \
             '{builder:$builder,sourceCommit:$sourceCommit,baseImage:$baseImage,imageRepoDigest:$imageRepoDigest,solanaVerifyVersion:$solanaVerifyVersion,rustVersion:$rustVersion,containerTools:$containerTools,elfSha256:$elfSha256,executableHash:$executableHash}' \
             > "release-$BUILDER/build-manifest.json"
+          jq -e 'all(.[]; . != null and . != "")' "release-$BUILDER/build-manifest.json"
           if [ "$BUILDER" = a ]; then
             cp onchain/target/idl/box_minter.json "release-$BUILDER/box_minter.idl.json"
             cp onchain/target/types/box_minter.ts "release-$BUILDER/box_minter.idl.ts"
