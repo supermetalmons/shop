@@ -41,6 +41,8 @@ jobs:
       - name: Generate and compare Anchor IDLs
         if: matrix.builder == 'a'
         run: |
+          sudo apt-get update
+          sudo apt-get install --yes libudev-dev
           cargo install anchor-cli --version 0.32.1 --locked
           mkdir -p onchain/target/idl onchain/target/types "$RUNNER_TEMP/lsb-baseline"
           (cd onchain && anchor idl build -o target/idl/box_minter.json -t target/types/box_minter.ts)
