@@ -28,6 +28,14 @@
     "burnedCoreRecords": 314,
     "liveCompressedReceipts": 143
   },
+  "release": {
+    "sourceCommit": "2a434de2a430a4aeb93b33c7547557cbcc3a3483",
+    "workflowRunId": 30916444193,
+    "elfBytes": 563376,
+    "elfSha256": "0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f",
+    "executableHash": "c7fce5e897ff21931bad27c28861a970d433b85c241fc93bbfb7a5262f45d005",
+    "identicalIndependentBuilds": true
+  },
   "defaultMode": "plan",
   "privateKeyPolicy": "The planner never reads, requests, stores, or retains private keys."
 }
