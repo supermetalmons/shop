@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "status": "completed",
+  "dropId": "poncho_drifella",
+  "completedAt": "2026-08-04T17:41:16.685Z",
+  "program": {
+    "address": "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A",
+    "programData": "3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "deploymentSlot": 437216909,
+    "elfSha256": "705a938ea341c07b2469bda68f6b229bc68976202c335a17fa697b46469292fc",
+    "upgradeSignature": "3dKajKrvf8JEoVT8Bgcoiw5pcByeWtMyTdjSN97wKCnoeK5yRP1RYHojmeX8be4pXcc4dDTnHhiwCmenGmNhG9sW"
+  },
+  "config": {
+    "address": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq",
+    "bytes": 307,
+    "sha256": "b94040fb4d1bf8d68b7cb17e93ebaad9cffb8bf315d729d2b7760d43ee60c068",
+    "canonicalBase": "https://cdn.lil.org/nft/poncho_drifella",
+    "legacyBase": "https://assets.mons.link/drops/poncho",
+    "setterSignature": "22KzwHyBKEq1gnvWYmcy6RoXuN6DMfK9aZhvLQJChf4x5SnPsro2PRtq2VdkBRiz6KGheLMAY7X5HdGZKhX6ChjT"
+  },
+  "collection": "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH",
+  "migration": {
+    "liveCoreAssets": 119,
+    "liveCompressedReceipts": 88,
+    "immutableBurnedCoreRecords": 254,
+    "immutableBurnedCompressedRecords": 5,
+    "successfulTransactions": 97,
+    "transactionKinds": { "collection": 1, "core": 8, "receipt": 88 },
+    "transactionsSha256": "4a809f0a9818ae17d8e78e093b616e62526306b67f5b98ea5ee7d11b8a62dafc",
+    "firstSignature": "4tA5ES4rR38kkvooXT4wvxPKowMZCWErRkZzffofemoVvappnZEvk3XzYDtmn9ztusqc1JchfQZpUx28YsGCSjKM",
+    "lastSignature": "3dU1ppUUAQ6oP9znpvHvRpbnW35pZhnPLNfDZf5v5TwrPkQ8Z7P6USRu634gFgQJCuHvG8GXYiw3WEQ4yKe1jFbh",
+    "transactionsPlanChecksum": "47abd38a9e154476a11cbdf516a2ab4a35b2a62d644132bd6be228be7edff0bb",
+    "postRunPlanChecksum": "ce2fb7c15f6af04fa0ea6d0d6ed0b5503c26fd09d78afb081a057ed2f46ce5a9",
+    "rawCompletionReport": {
+      "bundlePath": "poncho-drifella/migration/mainnet-state.json.complete.json",
+      "sha256": "1579c61b3a10558daf78e3091d42251aad812a1af4be95964153c9ae19d02122"
+    }
+  },
+  "application": {
+    "compatibilitySourceCommit": "16312aa1f7bee53db121897bab94af0c413e2601",
+    "firebaseFunctions": "deployed",
+    "cloudflareCandidateVersion": "8ffa7013-9a36-48b5-a8be-4567852ee681",
+    "cloudflarePreviousProductionVersion": "3e2ba63b-e97b-474d-9dbc-a2f7c67fb805",
+    "cloudflareProductionVersion": "fe521892-4d2d-41df-a841-16478508d3f1"
+  },
+  "rollbackArtifacts": {
+    "sourceTag": "archive/poncho-uri-migration-2026-08-04",
+    "preUpgradeSnapshot": "poncho-drifella/pre-upgrade",
+    "deployedMigrationRelease": "poncho-drifella/release"
+  }
+}

@@ -1,9 +1,6 @@
 name: Card NFT 2 shared-program URI release
 
 on:
-  push:
-    branches:
-      - codex/card-nft-2-uri-rollout
   workflow_dispatch:
 
 permissions:

@@ -59,7 +59,7 @@ For example, `rf12.json` should include every attribute from `f12.json` except t
 
 ```json
 {
-  "uri": "https://assets.mons.link/drops/<drop>/<asset>.webp",
+  "uri": "https://cdn.lil.org/nft/<drop>/<asset>.webp",
   "type": "image/webp"
 }
 ```

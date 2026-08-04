@@ -1,7 +1,7 @@
-# In case of migration: Little Swag Boxes base URI
+# Historical plan: Little Swag Boxes base URI migration
 
-> Status: WIP contingency note only. Snapshot: 2026-07-22. No migration is approved or running.
-> Re-check every on-chain value and asset count immediately before any future execution.
+> Status: completed and superseded on 2026-08-04. This document preserves the pre-migration contingency analysis and must not be used as a current runbook.
+> The finalized evidence is recorded by the `mainnet-uri-migrations-2026-08-05` release.
 
 ## Goal
 

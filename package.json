@@ -46,6 +46,7 @@
     "plan:card-nft-2-uri-migration": "node --experimental-strip-types scripts/prepare-card-nft-2-uri-migration.ts",
     "migrate:card-nft-2-existing-uris": "node --experimental-strip-types scripts/migrate-card-nft-2-existing-uris.ts",
     "verify:card-nft-2-uri-migration": "node --experimental-strip-types scripts/verify-card-nft-2-uri-migration.ts",
+    "verify:mainnet-uri-migrations": "node --experimental-strip-types scripts/verify-mainnet-uri-migrations.ts",
     "test:card-nft-2-surfpool": "node --experimental-strip-types scripts/test-card-nft-2-uri-surfpool.ts",
     "deploy-receipt-pool": "node --experimental-strip-types scripts/deploy-receipt-pool.ts",
     "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",

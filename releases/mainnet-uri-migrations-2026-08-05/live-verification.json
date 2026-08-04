@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-04T23:27:28.893Z",
+  "cluster": "mainnet-beta",
+  "commitment": "finalized",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "rpc": "https://mainnet.helius-rpc.com/",
+  "overallPass": true,
+  "mutableLegacyUris": 0,
+  "knownDeploymentBuffers": {
+    "checked": 5,
+    "open": []
+  },
+  "drops": [
+    {
+      "dropId": "little_swag_boxes",
+      "program": {
+        "address": "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep",
+        "programData": "2u35tdkjBJkT79tdT58XeNEw216B82BPVmMeD8WoEfa6",
+        "deploymentSlot": 437191823,
+        "elfSha256": "0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "config": {
+        "address": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+        "bytes": 289,
+        "sha256": "8654ebab1f6870156bc412e231a16ec9ff5f54be6cf3e7dfdc2379c3c6fee613",
+        "uriBase": "https://cdn.lil.org/nft/little_swag_boxes",
+        "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "collection": {
+        "address": "7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr",
+        "name": "little swag figures",
+        "uri": "https://cdn.lil.org/nft/little_swag_boxes/collection.json",
+        "updateAuthority": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc"
+      },
+      "receiptInfrastructure": {
+        "tree": "Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV",
+        "treeOwner": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+        "treeConfig": "61nRmLFVKe7x63Frz9TM2AkGSTmuDyYAuppAwZUee5tX",
+        "treeConfigOwner": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "inventory": {
+        "pages": 1,
+        "total": 989,
+        "liveCore": 532,
+        "liveReceipts": 143,
+        "burnedCore": 314,
+        "burnedReceipts": 0,
+        "canonicalLiveCore": 532,
+        "canonicalLiveReceipts": 143,
+        "canonicalBurnedCore": 0,
+        "canonicalBurnedReceipts": 0,
+        "legacyBurnedCore": 314,
+        "legacyBurnedReceipts": 0,
+        "mutableLegacy": []
+      }
+    },
+    {
+      "dropId": "poncho_drifella",
+      "program": {
+        "address": "C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A",
+        "programData": "3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv",
+        "deploymentSlot": 437216909,
+        "elfSha256": "705a938ea341c07b2469bda68f6b229bc68976202c335a17fa697b46469292fc",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "config": {
+        "address": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq",
+        "bytes": 307,
+        "sha256": "b94040fb4d1bf8d68b7cb17e93ebaad9cffb8bf315d729d2b7760d43ee60c068",
+        "uriBase": "https://cdn.lil.org/nft/poncho_drifella",
+        "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "collection": {
+        "address": "JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH",
+        "name": "Poncho Drifella",
+        "uri": "https://cdn.lil.org/nft/poncho_drifella/collection.json",
+        "updateAuthority": "2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq"
+      },
+      "receiptInfrastructure": {
+        "tree": "5wCjVex6yXCms518RccxmAaVMGoPvTEQcb4UR3MYtQow",
+        "treeOwner": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+        "treeConfig": "3ZDjwqjnahBUPhprv8WXt2jAyJahQo2TEEfPAwTnTRNp",
+        "treeConfigOwner": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "inventory": {
+        "pages": 1,
+        "total": 466,
+        "liveCore": 119,
+        "liveReceipts": 88,
+        "burnedCore": 254,
+        "burnedReceipts": 5,
+        "canonicalLiveCore": 119,
+        "canonicalLiveReceipts": 88,
+        "canonicalBurnedCore": 0,
+        "canonicalBurnedReceipts": 0,
+        "legacyBurnedCore": 254,
+        "legacyBurnedReceipts": 5,
+        "mutableLegacy": []
+      }
+    },
+    {
+      "dropId": "card_nft_2",
+      "program": {
+        "address": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+        "programData": "EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK",
+        "deploymentSlot": 437244047,
+        "elfSha256": "a11f08436c0c1f7da6d3254f5191ba297a7d73b243bd14f3f81622c61eb5cb66",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "config": {
+        "address": "5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm",
+        "bytes": 376,
+        "sha256": "8d2bb5abe151e5255d0bc5c97af90bef8b23d1a4b63858f4bf60a7dcdcbf3627",
+        "uriBase": "https://cdn.lil.org/nft/card_nft_2/json",
+        "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "collection": {
+        "address": "EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu",
+        "name": "Card NFT 2",
+        "uri": "https://cdn.lil.org/nft/card_nft_2/json/collection.json",
+        "updateAuthority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "receiptInfrastructure": {
+        "tree": "EsGrHZjZzHmxzCSrqjyzuBBC4oAq3yS87ZNF1JdvDBh",
+        "treeOwner": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+        "treeConfig": "HQxfJuE57mGh96UJ6eBAusRVLjX4sSZwQxfn6moW5N9i",
+        "treeConfigOwner": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+      },
+      "inventory": {
+        "pages": 12,
+        "total": 11799,
+        "liveCore": 7601,
+        "liveReceipts": 986,
+        "burnedCore": 3185,
+        "burnedReceipts": 27,
+        "canonicalLiveCore": 7601,
+        "canonicalLiveReceipts": 986,
+        "canonicalBurnedCore": 0,
+        "canonicalBurnedReceipts": 0,
+        "legacyBurnedCore": 3185,
+        "legacyBurnedReceipts": 27,
+        "mutableLegacy": []
+      }
+    }
+  ]
+}

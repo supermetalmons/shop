@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "status": "completed",
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "releaseTag": "mainnet-uri-migrations-2026-08-05",
+  "artifactBundle": "mainnet-uri-migrations-2026-08-05.tar.gz",
+  "artifactManifest": "artifact-manifest.json",
+  "sha256Sums": "SHA256SUMS",
+  "completionReports": [
+    "little-swag-boxes.json",
+    "poncho-drifella.json",
+    "card-nft-2.json"
+  ],
+  "liveVerification": "live-verification.json",
+  "compatibilityRetained": {
+    "metadataBaseAliases": true,
+    "legacyDisplayMediaRewrites": true,
+    "rollbackClients": true,
+    "littleSwagBoxesMigrationInstructions": true,
+    "ponchoDrifellaMigrationInstructions": true
+  },
+  "legacyHostPolicy": {
+    "requiredForImmutableBurnedRecords": true,
+    "requiredForDeferredDevnetDeployments": true,
+    "retireNow": false
+  },
+  "runtimeDeployRequired": false
+}

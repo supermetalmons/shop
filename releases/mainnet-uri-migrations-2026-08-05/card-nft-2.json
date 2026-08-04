@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "status": "completed",
+  "dropId": "card_nft_2",
+  "completedAt": "2026-08-04T22:59:08.044Z",
+  "program": {
+    "address": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+    "programData": "EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "deploymentSlot": 437244047,
+    "elfSha256": "a11f08436c0c1f7da6d3254f5191ba297a7d73b243bd14f3f81622c61eb5cb66",
+    "upgradeSignature": "3tFGzXHstY7FVSnXX2DTLLXJVkDHdzHRSuUQ5WZvwPACF13F95u3vYRvLg4hs9Ai5ypBgFPi5z9egdhqLawQ4Vaz"
+  },
+  "config": {
+    "address": "5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm",
+    "bytes": 376,
+    "sha256": "8d2bb5abe151e5255d0bc5c97af90bef8b23d1a4b63858f4bf60a7dcdcbf3627",
+    "canonicalBase": "https://cdn.lil.org/nft/card_nft_2/json",
+    "legacyBase": "https://assets.mons.link/drops/cardnft2/json",
+    "setterSignature": "35VekADw7gnsbomya2uur15dArt766JgswjvdESCnZXbumchJW8vanAYryZFXeQWyY8nPEaxcy9wQngioRW5tPRk"
+  },
+  "collection": "EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu",
+  "migration": {
+    "liveCoreAssets": 7601,
+    "liveCompressedReceipts": 986,
+    "immutableBurnedCoreRecords": 3185,
+    "immutableBurnedCompressedRecords": 27,
+    "successfulTransactions": 1749,
+    "logicalTransactions": 1748,
+    "duplicateReceiptUpdates": 1,
+    "transactionKinds": { "collection": 1, "core": 761, "receipt": 987 },
+    "initialTransactionsSha256": "f9699dbfa29a93d915b2cbf8197a797d50d91d190e64fcb67c0555d245099348",
+    "recoveryTransactionsSha256": "7d2f8612820c17c5e3b69edfae58b35626bf526b773792baffab4c8ee8b6fcf6",
+    "firstSignature": "5ncxojTNNy7co6nJz4oMQikA1q5aMXdmPoJhJ65Ce7ybePYFBbES71vjdP7y4eMoTJtPVPRfdVAc8KHJB7AwRMXe",
+    "lastSignature": "5NKhjP5PzKnHzUyJCzBmKAt3vchjzRLxY9CwRajBqx64LVHAguy1uMrZqTm9BHb4iHb9svhRnS4YijuMeU1W2N4u",
+    "initialPlanChecksum": "bf13152f30fb2b15c042644294ac2f0cc4082fd2efb1b3f8b4b3f60dfaf698c3",
+    "recoveryPlanChecksum": "a4e2841ce3536890d9ad80dfd8c8481dbd2b3da3fe35d869a6f80b69ea368e58",
+    "initialState": {
+      "bundlePath": "card-nft-2/migration/state.json",
+      "sha256": "610fc78a5feb03cdcc51592646fe074df572c6e6fd672be4084961526b116ebb"
+    },
+    "rawCompletionReport": {
+      "bundlePath": "card-nft-2/migration/receipt-recovery-state.json.complete.json",
+      "sha256": "c177bc5bf98984272ea4000999b9fb14c0cfc1fe50582af414181dc1f12dd4f1"
+    },
+    "initialPlan": {
+      "bundlePath": "card-nft-2/migration/plan.json",
+      "sha256": "6829736a6bd1254ab43d7bf95aa42dd88592a9f2ab4e3cabbde1544f55bd36b1"
+    },
+    "recoveryPlan": {
+      "bundlePath": "card-nft-2/migration/receipt-recovery-plan.json",
+      "sha256": "936cd6bc7824d30a949a14981e88ea4420d367489a690c1f820b10499c2fda5f"
+    }
+  },
+  "application": {
+    "compatibilitySourceCommit": "f6109e7f8e6ea2e78c3986421755af60a59da087",
+    "firebaseFunctions": "deployed",
+    "cloudflareCandidateVersion": "40612bb3-3907-40b7-a64e-b7f546d74350",
+    "cloudflarePreviousProductionVersion": "fe521892-4d2d-41df-a841-16478508d3f1",
+    "cloudflareProductionVersion": "03d09d2d-2b63-4441-8495-d0efcd15e9ed"
+  },
+  "rollbackArtifacts": {
+    "sourceTag": "mainnet-uri-migrations-2026-08-05",
+    "preUpgradeSnapshots": "card-nft-2/pre-upgrade",
+    "deployedMigrationRelease": "card-nft-2/release",
+    "workerRollbackRecord": "card-nft-2/migration/worker-rollback.json"
+  }
+}

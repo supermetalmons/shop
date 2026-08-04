@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "status": "completed",
+  "dropId": "little_swag_boxes",
+  "completedAt": "2026-08-04T14:51:01.757Z",
+  "program": {
+    "address": "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep",
+    "programData": "2u35tdkjBJkT79tdT58XeNEw216B82BPVmMeD8WoEfa6",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "deploymentSlot": 437191823,
+    "elfSha256": "0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f",
+    "upgrades": [
+      {
+        "slot": 437179964,
+        "elfSha256": "17462bfc39cd338f6ade0c3859e2afedcfeaf82aa7d8581850f0f787a8dc1ace",
+        "signature": "2whN4FqYruXT7KF7XxJWcjw72zqE9SeBZZNiNtruXT24sa3Nz7m6RnmADkUJTYtyG89EiPWg2AxnfGMHTJV1LL3m"
+      },
+      {
+        "slot": 437191823,
+        "elfSha256": "0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f",
+        "signature": "44x6htchVQ7US11rtPp1H5a2SJqhUr3xXPZSzCqAmkPJcXM8ckgiLxDdAMWMN1duNgu8bDTuKeTxXe7oLmve1uHe"
+      }
+    ]
+  },
+  "config": {
+    "address": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+    "bytes": 289,
+    "sha256": "8654ebab1f6870156bc412e231a16ec9ff5f54be6cf3e7dfdc2379c3c6fee613",
+    "canonicalBase": "https://cdn.lil.org/nft/little_swag_boxes",
+    "legacyBase": "https://assets.mons.link/drops/lsb",
+    "setterSignature": "3raarnuuPfmourRr9D9ZWTwYhc8jszCXmbDqDSxybKrJ4c5gpDdfuXoewx3AN5LTzm9H3TJ1pndZVhwKbmscRLd7"
+  },
+  "collection": "7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr",
+  "migration": {
+    "liveCoreAssets": 532,
+    "liveCompressedReceipts": 143,
+    "immutableBurnedCoreRecords": 314,
+    "immutableBurnedCompressedRecords": 0,
+    "successfulTransactions": 181,
+    "transactionKinds": { "collection": 1, "core": 37, "receipt": 143 },
+    "transactionsSha256": "5d301ddd91c947fb3c3b93f17945092eb934f9713cf0eede91cfa5522000c7c4",
+    "firstSignature": "5D2cZgmpZodkcXVfZqbcGQq7Z6yRQ38732F9c7rpkBTGehDN4z8cSXrivYS2CsYHcNc6DBNAFwBBTU3wBSWkGvmv",
+    "lastSignature": "MUCxMiwjq8WVdyH8NFhxG7F1U7GPtsrqA671KmG7jRPeWwGRmRBbi41YQGb7zVf3NWpF2BXza1hsz9HC6MpJrL6",
+    "rawCompletionReport": {
+      "bundlePath": "little-swag-boxes/migration/state.json.complete.json",
+      "sha256": "32576e77bf5ff3aef311a163c1061016fe06d595c61311da5934282afa74c74a"
+    },
+    "plan": {
+      "bundlePath": "little-swag-boxes/migration/plan.json",
+      "sha256": "15a220ddf9db1a68359ebfdb060dd450674da3512dec204a71e075eeeef50d8c"
+    }
+  },
+  "application": {
+    "compatibilitySourceCommit": "d2bdc913202de6d0b8e068992401f49ff7be420d",
+    "firebaseFunctions": "deployed",
+    "cloudflareCandidateVersion": "ec84a6e1-e861-48ef-a1ef-671cc1267c66",
+    "cloudflarePreviousProductionVersion": "68e9202f-7b2b-492b-a419-c7d99a5835f0",
+    "cloudflareProductionVersion": "3e2ba63b-e97b-474d-9dbc-a2f7c67fb805",
+    "cloudflareProductionDeployment": "f994c70f-99fe-4ee4-af8e-26b8947dbf55"
+  },
+  "rollbackArtifacts": {
+    "sourceTag": "archive/lsb-uri-migration-2026-08-04",
+    "preUpgradeSnapshot": "little-swag-boxes/pre-upgrade",
+    "compatibilityRelease": "little-swag-boxes/releases/compatibility",
+    "deployedMigrationRelease": "little-swag-boxes/releases/existing-uri-migration"
+  }
+}
