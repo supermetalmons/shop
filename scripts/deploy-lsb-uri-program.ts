@@ -236,6 +236,8 @@ async function main() {
     const result = spawnSync(
       'solana',
       [
+        '--keypair',
+        tempKeypairPath,
         'program',
         'deploy',
         options.binaryPath,
