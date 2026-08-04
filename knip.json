@@ -15,7 +15,7 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer", "wrangler"],
-      "ignoreBinaries": ["firebase", "solana"]
+      "ignoreBinaries": ["firebase", "mkfifo", "solana"]
     },
     "functions": {
       "entry": ["src/index.ts", "scripts/*.ts", "../tests/*.test.ts"],

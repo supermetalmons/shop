@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
+import { startSolanaSignerPipe } from './shared/solanaSignerPipe.ts';
 
 const PROGRAM_ID = new PublicKey('7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU');
 const PROGRAM_DATA = new PublicKey('EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK');
@@ -163,12 +164,18 @@ function readRelease(releaseDir: string): Release {
   if (builds.length !== 2 || builds.some((build) => build.elfSha256 !== digest)) {
     throw new Error('Independent build manifests do not match the release ELF');
   }
-  const gitHead = spawnSync('git', ['rev-parse', 'HEAD'], {
+  const releaseIsAncestor = spawnSync('git', ['merge-base', '--is-ancestor', String(manifest.sourceCommit), 'HEAD'], {
     cwd: repositoryRoot(),
     encoding: 'utf8',
   });
-  if (gitHead.status !== 0 || gitHead.stdout.trim() !== manifest.sourceCommit) {
-    throw new Error('Checked-out source commit does not match the verified release');
+  if (releaseIsAncestor.status !== 0) {
+    throw new Error('Verified release source commit is not an ancestor of the checked-out rollout branch');
+  }
+  const onchainDiff = spawnSync('git', ['diff', '--quiet', String(manifest.sourceCommit), '--', 'onchain'], {
+    cwd: repositoryRoot(),
+  });
+  if (onchainDiff.status !== 0) {
+    throw new Error('Checked-out on-chain source does not match the verified release source commit');
   }
   return { binaryPath, binary, sha256: digest, sourceCommit: String(manifest.sourceCommit) };
 }
@@ -286,6 +293,34 @@ function writePrivateFile(filePath: string, contents: string): void {
   writeFileSync(filePath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 }
 
+async function runSolana(
+  configPath: string,
+  args: string[],
+  label: string,
+  signerPipeServer: ReturnType<typeof spawn>,
+): Promise<void> {
+  const status = await new Promise<number | null>((resolve, reject) => {
+    const child = spawn('solana', ['--config', configPath, ...args], {
+      stdio: 'inherit',
+      env: { ...process.env, NO_DNA: '1' },
+    });
+    const signerExit = () => {
+      child.kill('SIGTERM');
+      reject(new Error('Private signer pipe exited before Solana CLI completed'));
+    };
+    signerPipeServer.once('exit', signerExit);
+    child.once('error', (error) => {
+      signerPipeServer.removeListener('exit', signerExit);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      signerPipeServer.removeListener('exit', signerExit);
+      resolve(code);
+    });
+  });
+  if (status !== 0) throw new Error(`${label} exited with status ${status}`);
+}
+
 function recordBuffer(address: PublicKey, release: Release): string {
   const outputDir = path.join(repositoryRoot(), '.cache', 'card-nft-2-uri-upgrade');
   mkdirSync(outputDir, { recursive: true, mode: 0o700 });
@@ -380,6 +415,8 @@ async function main() {
   let tempDir: string | undefined;
   let configPath: string | undefined;
   let bufferPath: string | undefined;
+  let signerPipePath: string | undefined;
+  let signerPipeServer: ReturnType<typeof spawn> | undefined;
   try {
     authority = parsePrivateKeyInput(keyInput);
     keyInput = '';
@@ -398,23 +435,16 @@ async function main() {
     tempDir = mkdtempSync(path.join(tmpdir(), 'mons-card-nft-2-upgrade-'));
     chmodSync(tempDir, 0o700);
     configPath = path.join(tempDir, 'solana-config.yml');
+    signerPipePath = path.join(tempDir, 'authority.pipe');
+    signerPipeServer = await startSolanaSignerPipe(signerPipePath, authority.secretKey);
     writePrivateFile(configPath, [
       `json_rpc_url: ${JSON.stringify(options.rpcUrl)}`,
       'websocket_url: ""',
-      'keypair_path: "-"',
+      `keypair_path: ${JSON.stringify(signerPipePath)}`,
       'address_labels:',
       'commitment: finalized',
       '',
     ].join('\n'));
-
-    const runSolana = (args: string[], label: string) => {
-      const result = spawnSync('solana', ['--config', configPath!, ...args], {
-        input: `${JSON.stringify(Array.from(authority!.secretKey))}\n`,
-        stdio: ['pipe', 'inherit', 'inherit'],
-        env: { ...process.env, NO_DNA: '1' },
-      });
-      if (result.status !== 0) throw new Error(`${label} exited with status ${result.status}`);
-    };
 
     let finalizedBuffer = bufferAddress;
     let writeBuffer = resumeBufferHash !== release.sha256;
@@ -424,21 +454,21 @@ async function main() {
       bufferPath = path.join(tempDir, 'buffer.json');
       writePrivateFile(bufferPath, JSON.stringify(Array.from(buffer.secretKey)));
       buffer.secretKey.fill(0);
-      console.log('Initialized buffer address:', finalizedBuffer.toBase58());
+      console.log('Generated buffer address:', finalizedBuffer.toBase58());
       const checkpointPath = recordBuffer(finalizedBuffer, release);
       console.log('Buffer checkpoint     :', checkpointPath);
       writeBuffer = true;
     }
     if (writeBuffer) {
       try {
-        runSolana([
+        await runSolana(configPath, [
           'program', 'write-buffer', release.binaryPath,
           '--buffer', bufferPath || finalizedBuffer.toBase58(),
           '--commitment', 'finalized',
           '--use-rpc',
           '--max-sign-attempts', String(WRITE_MAX_SIGN_ATTEMPTS),
           '--output', 'json',
-        ], 'solana program write-buffer');
+        ], 'solana program write-buffer', signerPipeServer);
       } finally {
         safeUnlink(bufferPath);
         bufferPath = undefined;
@@ -450,11 +480,11 @@ async function main() {
     const extensionBytes = Math.max(0, programDataBytes - before.programData.length);
     if (extensionBytes > 0) {
       try {
-        runSolana([
+        await runSolana(configPath, [
           'program', 'extend', PROGRAM_ID.toBase58(), String(extensionBytes),
           '--commitment', 'finalized',
           '--output', 'json',
-        ], 'solana program extend');
+        ], 'solana program extend', signerPipeServer);
       } catch (error) {
         const extensionCheck = await readSnapshot(connection);
         if (extensionCheck.programData.length < programDataBytes) throw error;
@@ -469,19 +499,21 @@ async function main() {
       console.log('ProgramData capacity  :', extended.programData.length - PROGRAM_DATA_HEADER_BYTES);
       console.log('ProgramData extended  :', true);
     }
-    runSolana([
+    await runSolana(configPath, [
       'program', 'deploy',
       '--program-id', PROGRAM_ID.toBase58(),
       '--buffer', finalizedBuffer.toBase58(),
       '--commitment', 'finalized',
       '--use-rpc',
       '--output', 'json',
-    ], 'solana program deploy');
+    ], 'solana program deploy', signerPipeServer);
   } finally {
     keyInput = '';
     authority?.secretKey.fill(0);
+    signerPipeServer?.kill('SIGTERM');
     safeUnlink(bufferPath);
     safeUnlink(configPath);
+    safeUnlink(signerPipePath);
     if (tempDir) {
       try {
         rmdirSync(tempDir);
