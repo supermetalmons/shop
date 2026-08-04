@@ -20,6 +20,7 @@ Thumbs.db
 # Node / Vite
 # --------------------
 node_modules/
+node_modules
 dist/
 .vite/
 .cache/
@@ -45,3 +46,4 @@ functions/.runtimeconfig.json
 onchain/target/
 onchain/.anchor/
 onchain/test-ledger/
+.surfpool/

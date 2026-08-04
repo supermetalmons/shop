@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programId": "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep",
+  "configPda": "iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc",
+  "admin": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "coreCollection": "7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr",
+  "receiptsTree": "Bep28XBM8LEjdCHgTzhuo5hFazpKrKgxDaEcnRg2VThV",
+  "receiptsTreeConfig": "61nRmLFVKe7x63Frz9TM2AkGSTmuDyYAuppAwZUee5tX",
+  "legacyUriBase": "https://assets.mons.link/drops/lsb",
+  "canonicalUriBase": "https://cdn.lil.org/nft/little_swag_boxes",
+  "instructions": {
+    "migrateCollectionUri": {
+      "discriminator": [191, 243, 226, 185, 115, 83, 70, 48]
+    },
+    "migrateCoreAssetUri": {
+      "discriminator": [50, 156, 65, 239, 42, 228, 129, 192]
+    },
+    "migrateReceiptUri": {
+      "discriminator": [6, 57, 254, 113, 22, 138, 253, 162],
+      "maximumProofAccounts": 14
+    }
+  },
+  "expectedSnapshot": {
+    "collectionAssets": 989,
+    "liveCoreAssets": 532,
+    "burnedCoreRecords": 314,
+    "liveCompressedReceipts": 143
+  },
+  "defaultMode": "plan",
+  "privateKeyPolicy": "The planner never reads, requests, stores, or retains private keys."
+}

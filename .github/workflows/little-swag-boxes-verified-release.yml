@@ -1,9 +1,9 @@
-name: Little Swag Boxes verified release
+name: Little Swag Boxes existing-URI migration release
 
 on:
   push:
     branches:
-      - codex/lsb-uri-upgrade
+      - codex/lsb-existing-uri-migration
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ env:
   BASE_IMAGE: solanafoundation/solana-verifiable-build@sha256:695f890e620db8c39afe5112e048599f8ee395a0cab5a2e572f30a72c6366cb4
   SOLANA_VERIFY_VERSION: 0.5.1
   RUST_TOOLCHAIN: 1.89.0
-  HISTORICAL_COMMIT: 02075c7723544cf5619257b27b97a3297b05b0b4
+  HISTORICAL_COMMIT: acd71311c367f822da2ec432c0a8d65f8aab7c87
 
 jobs:
   verified-build:
@@ -49,7 +49,6 @@ jobs:
           mkdir -p onchain/target/idl onchain/target/types "$RUNNER_TEMP/lsb-baseline"
           (cd onchain && anchor idl build -o target/idl/box_minter.json -t target/types/box_minter.ts)
           git archive "$HISTORICAL_COMMIT" | tar -x -C "$RUNNER_TEMP/lsb-baseline"
-          perl -0pi -e 's/anchor-debug = \[\]/anchor-debug = []\nidl-build = ["anchor-lang\/idl-build"]/' "$RUNNER_TEMP/lsb-baseline/onchain/programs/box_minter/Cargo.toml"
           mkdir -p "$RUNNER_TEMP/lsb-baseline/onchain/target/idl"
           (cd "$RUNNER_TEMP/lsb-baseline/onchain" && anchor idl build -o target/idl/box_minter.json)
           node scripts/check-anchor-idl-compat.mjs \
@@ -113,13 +112,13 @@ jobs:
           HASH_A="$(sha256sum build-a/box_minter.so | cut -d' ' -f1)"
           HASH_B="$(sha256sum build-b/box_minter.so | cut -d' ' -f1)"
           test "$HASH_A" = "$HASH_B"
-          mkdir -p little-swag-boxes-release
-          cp build-a/box_minter.so little-swag-boxes-release/box_minter.so
-          cp build-a/box_minter.idl.json little-swag-boxes-release/box_minter.idl.json
-          cp build-a/box_minter.idl.ts little-swag-boxes-release/box_minter.idl.ts
-          cp build-a/idl-compatibility-manifest.json little-swag-boxes-release/idl-compatibility-manifest.json
-          cp build-a/build-manifest.json little-swag-boxes-release/build-a-manifest.json
-          cp build-b/build-manifest.json little-swag-boxes-release/build-b-manifest.json
+          mkdir -p little-swag-boxes-migration-release
+          cp build-a/box_minter.so little-swag-boxes-migration-release/box_minter.so
+          cp build-a/box_minter.idl.json little-swag-boxes-migration-release/box_minter.idl.json
+          cp build-a/box_minter.idl.ts little-swag-boxes-migration-release/box_minter.idl.ts
+          cp build-a/idl-compatibility-manifest.json little-swag-boxes-migration-release/idl-compatibility-manifest.json
+          cp build-a/build-manifest.json little-swag-boxes-migration-release/build-a-manifest.json
+          cp build-b/build-manifest.json little-swag-boxes-migration-release/build-b-manifest.json
           jq -n \
             --arg sourceCommit "$GITHUB_SHA" \
             --arg programId "22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep" \
@@ -127,12 +126,13 @@ jobs:
             --arg baseImage "$BASE_IMAGE" \
             --slurpfile buildA build-a/build-manifest.json \
             --slurpfile buildB build-b/build-manifest.json \
-            '{sourceCommit,programId,elfSha256,baseImage,identicalIndependentBuilds:true,builds:[$buildA[0],$buildB[0]]}' \
-            > little-swag-boxes-release/hash-manifest.json
+            '{sourceCommit:$sourceCommit,programId:$programId,elfSha256:$elfSha256,baseImage:$baseImage,identicalIndependentBuilds:true,builds:[$buildA[0],$buildB[0]]}' \
+            > little-swag-boxes-migration-release/hash-manifest.json
+          jq -e '[.sourceCommit,.programId,.elfSha256,.baseImage] | all(. != null and . != "")' little-swag-boxes-migration-release/hash-manifest.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: little-swag-boxes-release-${{ github.sha }}
-          path: little-swag-boxes-release
+          name: little-swag-boxes-migration-release-${{ github.sha }}
+          path: little-swag-boxes-migration-release
           if-no-files-found: error
           retention-days: 90

@@ -17,7 +17,10 @@
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
     "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts",
     "prepare:poncho-uri-base": "node --experimental-strip-types scripts/prepare-poncho-uri-base.ts",
-    "test:poncho-uri-surfpool": "node --experimental-strip-types scripts/test-poncho-uri-base-surfpool.ts"
+    "prepare:poncho-existing-uri-migration": "node --experimental-strip-types scripts/prepare-poncho-existing-uri-migration.ts",
+    "migrate:poncho-existing-uris": "node --experimental-strip-types scripts/migrate-poncho-existing-uris.ts",
+    "test:poncho-uri-surfpool": "node --experimental-strip-types scripts/test-poncho-uri-base-surfpool.ts",
+    "test:poncho-existing-uri-surfpool": "node --experimental-strip-types scripts/load-poncho-migration-surfpool.ts && PONCHO_SIMULATION_RPC_URL=${SURFPOOL_RPC_URL:-http://127.0.0.1:8899} node --experimental-strip-types scripts/prepare-poncho-existing-uri-migration.ts --simulate --test-unauthorized --out .cache/poncho-existing-uri-migration/surfpool-full.json"
   },
   "repository": {
     "type": "git",

@@ -11,3 +11,13 @@ The release workflow publishes the patched ELF, source commit, build-image diges
 Mainnet deployment and setter execution are separate approval gates. The release ELF must be deployed using the exact program ID in the external secure signer environment only after the deployment transaction summary and preflight have been reviewed. After deployment verification and an old-box simulation, the setter transaction must be simulated and reviewed separately before external custody signs and sends it.
 
 Rollback order is: set the URI base back to `https://assets.mons.link/drops/lsb`, then redeploy the archived live ELF if executable rollback is also required. The legacy metadata host must remain available indefinitely.
+
+## Existing asset URI migration
+
+The existing-URI maintenance release starts from the exact source release that is deployed on mainnet, commit `acd71311c367f822da2ec432c0a8d65f8aab7c87`. It adds three admin-gated instructions for the fixed Little Swag Boxes collection: collection URI migration, MPL Core asset URI migration, and Bubblegum v2 receipt URI migration. Every earlier instruction, account type, discriminator, and error number remains unchanged.
+
+`npm run prepare:lsb-existing-uri-migration` is read-only. It requires `HELIUS_API_KEY`, verifies finalized mainnet state, enumerates the complete collection, rejects unknown metadata or authorities, and writes an exact target plan. `--simulate` simulates every required instruction; `LSB_SIMULATION_RPC_URL` can point those simulations at a cloned-mainnet Surfpool instance containing the candidate ELF. The planner never reads signing material.
+
+`npm run migrate:lsb-existing-uris` is also read-only by default. After the release ELF is deployed and separately approved, `--send` prompts for the admin private key using hidden terminal input. It simulates every transaction immediately before sending, batches at most 16 Core updates, refreshes every compressed receipt proof, waits for DAS indexing between receipt writes, and keeps an atomic resumable checkpoint. Final verification requires every submitted transaction to finalize, all target URIs to match, and the config bytes to remain identical.
+
+The migration targets one collection, 532 live Core NFTs, and 143 live compressed receipts. The 314 burned Core records have no writable accounts and remain immutable historical DAS entries at the legacy base. The instructions are reversible: the config URI selects the target root, and only an exact URI at the opposite recognized root can be changed.

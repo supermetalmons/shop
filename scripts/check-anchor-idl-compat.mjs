@@ -37,18 +37,46 @@ for (const [name, instruction] of baselineInstructions) {
 }
 
 const addedInstructions = [...currentInstructions.keys()].filter((name) => !baselineInstructions.has(name));
-assertEqual('added instructions', ['set_uri_base'], addedInstructions);
+assertEqual(
+  'added instructions',
+  ['migrate_collection_uri', 'migrate_core_asset_uri', 'migrate_receipt_uri'],
+  addedInstructions,
+);
 
-for (const section of ['accounts', 'types', 'errors', 'constants']) {
+for (const section of ['accounts', 'constants']) {
   assertEqual(section, baseline[section] || [], current[section] || []);
 }
+
+const baselineTypes = indexedByName(baseline.types);
+const currentTypes = indexedByName(current.types);
+for (const [name, type] of baselineTypes) {
+  assertEqual(`type ${name}`, type, currentTypes.get(name));
+}
+const addedTypes = [...currentTypes.keys()].filter((name) => !baselineTypes.has(name));
+assertEqual('added types', ['MigrateReceiptUriArgs'], addedTypes);
+
+const baselineErrors = new Map((baseline.errors || []).map((value) => [value.code, value]));
+const currentErrors = new Map((current.errors || []).map((value) => [value.code, value]));
+for (const [code, error] of baselineErrors) {
+  assertEqual(`error ${code}`, error, currentErrors.get(code));
+}
+const addedErrors = [...currentErrors.values()].filter((error) => !baselineErrors.has(error.code));
+assertEqual('added errors', [{
+  code: 6044,
+  name: 'InvalidMigrationTarget',
+  msg: 'URI migration requires a recognized Little Swag Boxes base',
+}], addedErrors);
 
 const manifest = {
   baselineSha256: createHash('sha256').update(baselineBytes).digest('hex'),
   currentSha256: createHash('sha256').update(currentBytes).digest('hex'),
   preservedInstructionCount: baselineInstructions.size,
   addedInstructions,
-  preservedSections: ['accounts', 'types', 'errors', 'constants'],
+  addedTypes,
+  addedErrors,
+  preservedSections: ['accounts', 'constants'],
+  preservedTypes: baselineTypes.size,
+  preservedErrors: baselineErrors.size,
 };
 
 if (manifestPath) {
