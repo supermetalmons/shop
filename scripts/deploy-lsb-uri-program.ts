@@ -13,11 +13,11 @@ const CONFIG_PDA = new PublicKey('iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc');
 const AUTHORITY = new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx');
 const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
-const CURRENT_URI_BASE = 'https://assets.mons.link/drops/lsb';
-const RELEASE_SHA256 = '17462bfc39cd338f6ade0c3859e2afedcfeaf82aa7d8581850f0f787a8dc1ace';
-const RELEASE_BYTES = 493_728;
+const CURRENT_URI_BASE = 'https://cdn.lil.org/nft/little_swag_boxes';
+const RELEASE_SHA256 = '0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f';
+const RELEASE_BYTES = 563_376;
 const CONFIG_BYTES = 289;
-const MIN_BALANCE_LAMPORTS = 3_870_000_000;
+const MIN_BALANCE_LAMPORTS = 4_412_000_000;
 const MIN_RESUME_BALANCE_LAMPORTS = 10_000_000;
 const WRITE_MAX_SIGN_ATTEMPTS = 10;
 
@@ -50,7 +50,7 @@ function defaultBinaryPath(): string {
   const root = repositoryRoot();
   return path.resolve(
     root,
-    '../shop-lsb-uri-upgrade/.cache/lsb-release-acd71311c367f822da2ec432c0a8d65f8aab7c87/box_minter.so',
+    '../shop-lsb-uri-upgrade/.cache/lsb-existing-uri-migration-release-2a434de2a430a4aeb93b33c7547557cbcc3a3483/box_minter.so',
   );
 }
 
@@ -280,7 +280,7 @@ async function main() {
     throw new Error(`Authority balance is ${before.balanceLamports} lamports, expected at least ${minimumBalance}`);
   }
 
-  console.log('Little Swag Boxes program-upgrade preflight passed.');
+  console.log('Little Swag Boxes existing-URI migration program-upgrade preflight passed.');
   console.log('cluster         : mainnet-beta');
   console.log('rpc             :', sanitizedRpcUrl(options.rpcUrl));
   console.log('rpc credential  :', options.rpcSource);
