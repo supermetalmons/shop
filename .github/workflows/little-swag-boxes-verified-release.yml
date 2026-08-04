@@ -79,7 +79,7 @@ jobs:
             --arg containerTools "$CONTAINER_TOOLS" \
             --arg elfSha256 "$ELF_SHA256" \
             --arg executableHash "$EXECUTABLE_HASH" \
-            '{builder,sourceCommit,baseImage,imageRepoDigest,solanaVerifyVersion,rustVersion,containerTools,elfSha256,executableHash}' \
+            '{builder:$builder,sourceCommit:$sourceCommit,baseImage:$baseImage,imageRepoDigest:$imageRepoDigest,solanaVerifyVersion:$solanaVerifyVersion,rustVersion:$rustVersion,containerTools:$containerTools,elfSha256:$elfSha256,executableHash:$executableHash}' \
             > "release-$BUILDER/build-manifest.json"
           if [ "$BUILDER" = a ]; then
             cp onchain/target/idl/box_minter.json "release-$BUILDER/box_minter.idl.json"
@@ -129,7 +129,7 @@ jobs:
             --arg baseImage "$BASE_IMAGE" \
             --slurpfile buildA build-a/build-manifest.json \
             --slurpfile buildB build-b/build-manifest.json \
-            '{sourceCommit,programId,elfSha256,baseImage,identicalIndependentBuilds:true,builds:[$buildA[0],$buildB[0]]}' \
+            '{sourceCommit:$sourceCommit,programId:$programId,elfSha256:$elfSha256,baseImage:$baseImage,identicalIndependentBuilds:true,builds:[$buildA[0],$buildB[0]]}' \
             > little-swag-boxes-release/hash-manifest.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
