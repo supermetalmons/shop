@@ -26,6 +26,7 @@ const SOURCE_COMMIT = 'e16a8e63cdb97fc0a663e181b1e81cf86f3fd53f';
 const LIVE_ELF_SHA256 = '7cc9b9458088abccff647bf80f6768fd831713700f430b8b2fc02b3a0c05e2d6';
 const LIVE_ELF_BYTES = 423_976;
 const OLD_URI_BASE = 'https://assets.mons.link/drops/poncho';
+const NEW_URI_BASE = 'https://cdn.lil.org/nft/poncho_drifella';
 const CONFIG_BYTES = 307;
 const BUFFER_HEADER_BYTES = 37;
 const PROGRAM_DATA_HEADER_BYTES = 45;
@@ -262,7 +263,14 @@ async function main() {
   const connection = new Connection(options.rpcUrl, 'finalized');
   const before = await readSnapshot(connection);
   const currentElf = identifyDeployedElf(before.programData, release);
-  if (before.uriBase !== OLD_URI_BASE) throw new Error(`Unexpected config URI before upgrade: ${before.uriBase}`);
+  if (currentElf.sha256 === LIVE_ELF_SHA256 && before.uriBase !== OLD_URI_BASE) {
+    throw new Error(`Unexpected config URI before upgrade: ${before.uriBase}`);
+  }
+  if (currentElf.sha256 === release.sha256
+    && before.uriBase !== OLD_URI_BASE
+    && before.uriBase !== NEW_URI_BASE) {
+    throw new Error(`Unexpected config URI after upgrade: ${before.uriBase}`);
+  }
   const bufferAddress = options.buffer ? new PublicKey(options.buffer) : undefined;
   const resumeBufferHash = bufferAddress && currentElf.sha256 !== release.sha256
     ? await inspectBuffer(connection, bufferAddress, release)
@@ -274,7 +282,10 @@ async function main() {
     connection.getMinimumBalanceForRentExemption(programDataBytes, 'finalized'),
   ]);
   const resizeFunding = Math.max(0, programDataRent - before.programDataLamports);
-  const requiredLamports = (bufferAddress ? 0 : bufferRent) + resizeFunding + SAFETY_MARGIN_LAMPORTS;
+  const alreadyDeployed = currentElf.sha256 === release.sha256;
+  const requiredLamports = alreadyDeployed
+    ? 0
+    : (bufferAddress ? 0 : bufferRent) + resizeFunding + SAFETY_MARGIN_LAMPORTS;
 
   console.log('Poncho Drifella program-upgrade preflight passed.');
   console.log('mode                  :', options.send ? 'approved send' : 'read-only preflight');
@@ -295,7 +306,7 @@ async function main() {
   console.log('release SHA-256       :', release.sha256);
   console.log('ELF byte delta        :', release.binary.length - currentElf.bytes);
   console.log('ProgramData extension :', Math.max(0, programDataBytes - before.programData.length));
-  console.log('final transactions    :', before.programData.length < programDataBytes ? 2 : 1);
+  console.log('final transactions    :', alreadyDeployed ? 0 : before.programData.length < programDataBytes ? 2 : 1);
   console.log('buffer bytes          :', bufferBytes);
   console.log('buffer rent           :', bufferRent);
   console.log('ProgramData rent      :', programDataRent);
