@@ -29,11 +29,22 @@ import {
   stepSnapBackSpring,
   trackSnapBackVelocity,
 } from './lib/clearCardSnapBack';
+import {
+  createAdaptiveFrameRateMonitor,
+  resolveMedianFrameInterval,
+  resolveAdaptiveSlowFrameThreshold,
+} from './lib/adaptiveFrameRate';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
 const INTERACTION_FRAME_INTERVAL_MS = 1_000 / 30;
+const ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY =
+  'mons.clear-card.interaction-throttle-required.v1';
+const ADAPTIVE_THROTTLE_REPROBE_MS = 60_000;
+const DISPLAY_CADENCE_SAMPLE_SIZE = 8;
+const DISPLAY_CADENCE_MAX_ATTEMPTS = 24;
+const DISPLAY_CADENCE_MAX_INTERVAL_MS = 100;
 const CAMERA_FIT_MARGIN = 1.06;
 const MAX_TILT_X = THREE.MathUtils.degToRad(25);
 const MAX_TILT_Y = THREE.MathUtils.degToRad(14);
@@ -192,6 +203,7 @@ function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
 
 export type ViewerStatus = 'loading' | 'ready' | 'error';
 type ClearCardViewMode = 'tilt' | 'free' | 'orbit';
+type InteractionFrameRateMode = 'unrestricted' | 'throttled' | 'adaptive';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
 
@@ -214,7 +226,7 @@ type ClearCardThreeViewerProps = {
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   snapBackOnRelease?: boolean;
-  throttleInteractionFrameRate?: boolean;
+  interactionFrameRateMode?: InteractionFrameRateMode;
   initiallyRevealed: boolean;
   cameraZoom?: number;
   ariaLabel?: string;
@@ -559,7 +571,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       unrestrictedMovement,
       axisLockedOrbit,
       snapBackOnRelease = false,
-      throttleInteractionFrameRate = false,
+      interactionFrameRateMode = 'unrestricted',
       initiallyRevealed,
       cameraZoom = 1,
       ariaLabel,
@@ -919,11 +931,17 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let modelsReady = false;
       let initializationFrameId: number | null = null;
       let frameId: number | null = null;
+      let displayCadenceFrameId: number | null = null;
       let lastFrameTime = 0;
       let lastInteractionFrameTime = 0;
+      let interactionActive = false;
+      let interactionProbeActive = false;
       let interactionThrottleActive = false;
-      let interactionThrottleStartPending = false;
       let interactionThrottleReleasePending = false;
+      let adaptiveInteractionThrottleRequired = false;
+      let adaptiveThrottleActivatedAt = 0;
+      let displayFrameIntervalMs = 1_000 / 60;
+      let adaptiveFrameRateMonitor = createAdaptiveFrameRateMonitor();
       let renderer: THREE.WebGLRenderer | null = null;
       let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
       let snapshotInFlight = false;
@@ -1853,11 +1871,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (disposed || !renderer || document.visibilityState !== 'visible') return;
         if (interactionThrottleReleasePending && !snapBackRef.current.active) {
           interactionThrottleReleasePending = false;
-          interactionThrottleStartPending = false;
+          interactionActive = false;
+          interactionProbeActive = false;
           setInteractionThrottle(false);
-        } else if (interactionThrottleStartPending) {
-          interactionThrottleStartPending = false;
-          setInteractionThrottle(true);
+          startDisplayCadenceCalibration();
         }
         if (
           interactionThrottleActive &&
@@ -1868,6 +1885,21 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return;
         }
         if (interactionThrottleActive) lastInteractionFrameTime = now;
+        if (interactionProbeActive) {
+          const decision = adaptiveFrameRateMonitor.addFrame(now);
+          if (decision !== 'sampling') interactionProbeActive = false;
+          if (decision === 'throttle') {
+            adaptiveInteractionThrottleRequired = true;
+            adaptiveThrottleActivatedAt = Date.now();
+            try {
+              window.sessionStorage.setItem(
+                ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY,
+                String(adaptiveThrottleActivatedAt),
+              );
+            } catch {}
+            setInteractionThrottle(true);
+          }
+        }
 
         const deltaSeconds = lastFrameTime
           ? Math.min((now - lastFrameTime) / 1_000, 1 / 30)
@@ -2037,7 +2069,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           tiltUnsettled ||
           effectsActive ||
           snapBackRef.current.active ||
-          interactionThrottleReleasePending
+          interactionThrottleReleasePending ||
+          interactionProbeActive
         ) {
           if (frameId === null) frameId = window.requestAnimationFrame(renderFrame);
         } else {
@@ -2057,20 +2090,82 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const setInteractionThrottle = (active: boolean) => {
-        if (!throttleInteractionFrameRate || interactionThrottleActive === active) return;
+        if (interactionFrameRateMode === 'unrestricted' || interactionThrottleActive === active) {
+          return;
+        }
         interactionThrottleActive = active;
         lastInteractionFrameTime = 0;
       };
 
+      const stopDisplayCadenceCalibration = () => {
+        if (displayCadenceFrameId === null) return;
+        window.cancelAnimationFrame(displayCadenceFrameId);
+        displayCadenceFrameId = null;
+      };
+
+      const startDisplayCadenceCalibration = () => {
+        if (interactionFrameRateMode !== 'adaptive' || disposed || interactionActive) return;
+        stopDisplayCadenceCalibration();
+        let previousFrameTime: number | null = null;
+        const frameIntervals: number[] = [];
+        let attemptCount = 0;
+
+        const sampleDisplayCadence = (now: number) => {
+          displayCadenceFrameId = null;
+          if (disposed || interactionActive) return;
+          attemptCount += 1;
+          if (previousFrameTime !== null) {
+            const intervalMs = now - previousFrameTime;
+            if (intervalMs > 0 && intervalMs <= DISPLAY_CADENCE_MAX_INTERVAL_MS) {
+              frameIntervals.push(intervalMs);
+            }
+          }
+          previousFrameTime = now;
+          if (frameIntervals.length >= DISPLAY_CADENCE_SAMPLE_SIZE) {
+            displayFrameIntervalMs = resolveMedianFrameInterval(frameIntervals);
+            return;
+          }
+          if (attemptCount >= DISPLAY_CADENCE_MAX_ATTEMPTS) return;
+          displayCadenceFrameId = window.requestAnimationFrame(sampleDisplayCadence);
+        };
+
+        displayCadenceFrameId = window.requestAnimationFrame(sampleDisplayCadence);
+      };
+
+      const startAdaptiveInteractionProbe = () => {
+        interactionProbeActive =
+          interactionFrameRateMode === 'adaptive' && !adaptiveInteractionThrottleRequired;
+        if (!interactionProbeActive) return;
+        adaptiveFrameRateMonitor = createAdaptiveFrameRateMonitor({
+          slowFrameThresholdMs: resolveAdaptiveSlowFrameThreshold(displayFrameIntervalMs),
+        });
+      };
+
       const beginInteractionThrottle = () => {
-        if (!throttleInteractionFrameRate) return;
+        if (interactionFrameRateMode === 'unrestricted') return;
+        stopDisplayCadenceCalibration();
+        interactionActive = true;
         interactionThrottleReleasePending = false;
-        interactionThrottleStartPending = true;
+        if (interactionFrameRateMode === 'adaptive' && adaptiveInteractionThrottleRequired) {
+          const throttleAge = Date.now() - adaptiveThrottleActivatedAt;
+          if (throttleAge < 0 || throttleAge >= ADAPTIVE_THROTTLE_REPROBE_MS) {
+            adaptiveInteractionThrottleRequired = false;
+            adaptiveThrottleActivatedAt = 0;
+            try {
+              window.sessionStorage.removeItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY);
+            } catch {}
+          }
+        }
+        startAdaptiveInteractionProbe();
+        setInteractionThrottle(
+          interactionFrameRateMode === 'throttled' || adaptiveInteractionThrottleRequired,
+        );
         requestRender();
       };
 
       const releaseInteractionThrottle = () => {
-        if (!interactionThrottleActive && !interactionThrottleStartPending) return;
+        if (!interactionActive) return;
+        if (!interactionProbeActive) startAdaptiveInteractionProbe();
         interactionThrottleReleasePending = true;
         requestRender();
       };
@@ -2242,6 +2337,28 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const initializeViewer = () => {
         initializationFrameId = null;
         if (disposed) return;
+        if (interactionFrameRateMode === 'adaptive') {
+          try {
+            const storedActivationTime = Number(
+              window.sessionStorage.getItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY),
+            );
+            const throttleAge = Date.now() - storedActivationTime;
+            if (
+              Number.isFinite(storedActivationTime) &&
+              storedActivationTime > 0 &&
+              throttleAge >= 0 &&
+              throttleAge < ADAPTIVE_THROTTLE_REPROBE_MS
+            ) {
+              adaptiveInteractionThrottleRequired = true;
+              adaptiveThrottleActivatedAt = storedActivationTime;
+            } else {
+              window.sessionStorage.removeItem(ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY);
+            }
+          } catch {
+            adaptiveInteractionThrottleRequired = false;
+            adaptiveThrottleActivatedAt = 0;
+          }
+        }
         requestRenderRef.current = requestRender;
         beginInteractionThrottleRef.current = beginInteractionThrottle;
         releaseInteractionThrottleRef.current = releaseInteractionThrottle;
@@ -2348,6 +2465,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           resizeObserver.observe(viewport);
         }
         resize();
+        startDisplayCadenceCalibration();
 
         loadingManager = new THREE.LoadingManager();
         dracoLoader = new DRACOLoader(loadingManager);
@@ -2456,6 +2574,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (initializationFrameId !== null) {
           window.cancelAnimationFrame(initializationFrameId);
         }
+        stopDisplayCadenceCalibration();
         if (motionQuery && handleMotionPreference) {
           motionQuery.removeEventListener('change', handleMotionPreference);
         }
@@ -2487,7 +2606,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         renderer?.forceContextLoss();
       };
     }, [
-      throttleInteractionFrameRate,
+      interactionFrameRateMode,
       cancelUnrestrictedDrag,
       cameraZoom,
       cardModelUrl,

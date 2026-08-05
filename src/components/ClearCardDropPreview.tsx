@@ -82,7 +82,7 @@ export default function ClearCardDropPreview({ fallbackImageSrc }: { fallbackIma
               unrestrictedMovement
               axisLockedOrbit={false}
               snapBackOnRelease
-              throttleInteractionFrameRate
+              interactionFrameRateMode="adaptive"
               initiallyRevealed
               ariaLabel="Interactive 3D clear card; drag to rotate"
               onStatusChange={setStatus}
