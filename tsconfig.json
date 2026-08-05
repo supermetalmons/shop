@@ -16,7 +16,6 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "types": ["vite/client", "dom-webcodecs", "wicg-file-system-access"],
-    "baseUrl": "./src",
     "tsBuildInfoFile": "./.cache/tsconfig.tsbuildinfo"
   },
   "include": ["src", "functions/src/shared"],

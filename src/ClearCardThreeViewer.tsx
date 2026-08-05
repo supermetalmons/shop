@@ -195,7 +195,7 @@ type ClearCardViewMode = 'tilt' | 'free' | 'orbit';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
 
-export type ClearCardSnapshot = {
+type ClearCardSnapshot = {
   blob: Blob;
   objectKind: 'pack' | 'card';
 };

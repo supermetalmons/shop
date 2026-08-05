@@ -3,7 +3,6 @@
   "workspaces": {
     ".": {
       "entry": [
-        "src/main.tsx",
         "src/renderer/main.tsx",
         "scripts/*.{ts,cjs}",
         "scripts/newDrops/*.ts",
@@ -15,12 +14,12 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer", "wrangler"],
-      "ignoreBinaries": ["firebase", "mkfifo", "solana"]
+      "ignoreBinaries": ["mkfifo", "solana"]
     },
     "functions": {
-      "entry": ["src/index.ts", "scripts/*.ts", "../tests/*.test.ts"],
+      "entry": ["scripts/*.ts", "../tests/*.test.ts"],
       "project": ["src/**/*.{ts,js}", "scripts/**/*.ts", "../tests/**/*.ts"],
-      "ignoreBinaries": ["firebase", "gcloud"]
+      "ignoreBinaries": ["gcloud"]
     }
   }
 }

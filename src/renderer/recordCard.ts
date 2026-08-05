@@ -1,66 +1,39 @@
 import {
-  ArrayBufferTarget as Mp4ArrayBufferTarget,
-  FileSystemWritableFileStreamTarget as Mp4FileSystemWritableFileStreamTarget,
-  Muxer as Mp4Muxer,
-} from 'mp4-muxer';
+  BufferTarget,
+  CanvasSource,
+  Mp4OutputFormat,
+  Output,
+  Quality,
+  StreamTarget,
+  WebMOutputFormat,
+  type Target,
+} from 'mediabunny';
 import {
-  ArrayBufferTarget as WebMArrayBufferTarget,
-  FileSystemWritableFileStreamTarget as WebMFileSystemWritableFileStreamTarget,
-  Muxer as WebMMuxer,
-} from 'webm-muxer';
+  createRecordingFileStream,
+  deliverRecordingBuffer,
+  getRecordingBaseName,
+  RECORDING_FRAME_RATE as FRAME_RATE,
+  RECORDING_VIDEO_BITRATE as VIDEO_BITRATE,
+  resolveRecordingEncoder,
+  type RecordingOutputContainer,
+} from './recordCardOutput';
 
 const DEFAULT_OUTPUT_SIZE = {
   width: 1080,
   height: 1080,
 } as const;
-const FRAME_RATE = 60;
 const CYCLE_DURATION_MS = 4_600;
 const FLOAT_RADIUS_X = 22;
 const FLOAT_RADIUS_Y = 16;
 const DEFAULT_CARD_WIDTH_PX = 560;
 const RELATIVE_CARD_WIDTH_RATIO_669 = 669.49 / 1600;
 const RELATIVE_CARD_WIDTH_RATIO_551 = 551.72 / 1600;
-const VIDEO_BITRATE = 20_000_000;
 const KEYFRAME_INTERVAL = FRAME_RATE;
-const ENCODER_QUEUE_LIMIT = 12;
 const DEFAULT_RECORDING_BACKGROUND_COLOR = '#000';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 const URL_RE = /url\(\s*["']?([^"')]+?)["']?\s*\)/g;
-
-const WEBM_ENCODER_CANDIDATES = [
-  { codec: 'vp09.00.10.08', muxerCodec: 'V_VP9' },
-  { codec: 'vp8', muxerCodec: 'V_VP8' },
-] as const;
-
-const MP4_ENCODER_CANDIDATES = [
-  {
-    codec: 'avc1.64002a',
-    muxerCodec: 'avc',
-    extraConfig: { avc: { format: 'avc' } },
-  },
-  {
-    codec: 'avc1.640028',
-    muxerCodec: 'avc',
-    extraConfig: { avc: { format: 'avc' } },
-  },
-  {
-    codec: 'avc1.42001f',
-    muxerCodec: 'avc',
-    extraConfig: { avc: { format: 'avc' } },
-  },
-  {
-    codec: 'avc1.640033',
-    muxerCodec: 'avc',
-    extraConfig: { avc: { format: 'avc' } },
-  },
-  {
-    codec: 'avc1.4d0033',
-    muxerCodec: 'avc',
-    extraConfig: { avc: { format: 'avc' } },
-  },
-] as const;
 
 type RenderPhase = 'preparing' | 'capturing' | 'encoding' | 'done';
 
@@ -99,22 +72,13 @@ export type RecordCardOptions = {
   speed?: number;
 };
 
-type EncoderSupport = {
-  encoderConfig: VideoEncoderConfig;
-  muxerCodec: string;
-};
-
 type OutputTarget = {
-  target: unknown;
+  target: Target;
   finalize: () => Promise<void>;
   abort: (reason?: unknown) => Promise<void>;
 };
 
-type OutputContainer = 'mp4' | 'webm';
-
 let embeddedCssSnapshotPromise: Promise<{ embeddedCSS: string; rootVarsInline: string }> | null = null;
-const mp4EncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
-const webmEncoderSupportPromises = new Map<string, Promise<EncoderSupport | null>>();
 const recordingBackgroundPromises = new Map<string, Promise<string | null>>();
 const dataUrlPendingPromises = new WeakMap<Map<string, string>, Map<string, Promise<string>>>();
 
@@ -128,10 +92,6 @@ function round(value: number, precision = 3) {
 
 function adjust(value: number, fromMin: number, fromMax: number, toMin: number, toMax: number) {
   return round(toMin + ((toMax - toMin) * (value - fromMin)) / (fromMax - fromMin));
-}
-
-function toError(error: unknown) {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function getCanvasColorSpace(): PredefinedColorSpace {
@@ -157,120 +117,6 @@ function downloadBlob(blob: Blob, name: string) {
   anchor.click();
   document.body.removeChild(anchor);
   window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
-}
-
-function getBaseOutputName(filename?: string | null) {
-  if (!filename) return 'holo-card';
-  return filename.replace(/\.(webm|mp4)$/i, '');
-}
-
-function getOutputSizeKey(outputSize: OutputSize) {
-  return `${outputSize.width}x${outputSize.height}`;
-}
-
-async function getSupportedMp4Encoder(outputSize: OutputSize): Promise<EncoderSupport | null> {
-  const outputSizeKey = getOutputSizeKey(outputSize);
-  if (!mp4EncoderSupportPromises.has(outputSizeKey)) {
-    mp4EncoderSupportPromises.set(
-      outputSizeKey,
-      (async () => {
-        if (
-          typeof VideoEncoder === 'undefined' ||
-          typeof VideoFrame === 'undefined' ||
-          typeof VideoEncoder.isConfigSupported !== 'function'
-        ) {
-          return null;
-        }
-
-        for (const candidate of MP4_ENCODER_CANDIDATES) {
-          const config: VideoEncoderConfig = {
-            codec: candidate.codec,
-            width: outputSize.width,
-            height: outputSize.height,
-            bitrate: VIDEO_BITRATE,
-            framerate: FRAME_RATE,
-            latencyMode: 'realtime',
-            ...candidate.extraConfig,
-          };
-
-          try {
-            const support = await VideoEncoder.isConfigSupported(config);
-            if (support.supported && support.config) {
-              return {
-                encoderConfig: support.config,
-                muxerCodec: candidate.muxerCodec,
-              };
-            }
-          } catch {}
-        }
-
-        return null;
-      })(),
-    );
-  }
-
-  try {
-    return await mp4EncoderSupportPromises.get(outputSizeKey)!;
-  } catch (error) {
-    mp4EncoderSupportPromises.delete(outputSizeKey);
-    throw error;
-  }
-}
-
-async function getSupportedWebmEncoder(outputSize: OutputSize): Promise<EncoderSupport | null> {
-  const outputSizeKey = getOutputSizeKey(outputSize);
-  if (!webmEncoderSupportPromises.has(outputSizeKey)) {
-    webmEncoderSupportPromises.set(
-      outputSizeKey,
-      (async () => {
-        if (
-          typeof VideoEncoder === 'undefined' ||
-          typeof VideoFrame === 'undefined' ||
-          typeof VideoEncoder.isConfigSupported !== 'function'
-        ) {
-          return null;
-        }
-
-        for (const candidate of WEBM_ENCODER_CANDIDATES) {
-          const config: VideoEncoderConfig = {
-            codec: candidate.codec,
-            width: outputSize.width,
-            height: outputSize.height,
-            bitrate: VIDEO_BITRATE,
-            framerate: FRAME_RATE,
-            latencyMode: 'realtime',
-          };
-
-          try {
-            const support = await VideoEncoder.isConfigSupported(config);
-            if (support.supported && support.config) {
-              return {
-                encoderConfig: support.config,
-                muxerCodec: candidate.muxerCodec,
-              };
-            }
-          } catch {}
-        }
-
-        return null;
-      })(),
-    );
-  }
-
-  try {
-    return await webmEncoderSupportPromises.get(outputSizeKey)!;
-  } catch (error) {
-    webmEncoderSupportPromises.delete(outputSizeKey);
-    throw error;
-  }
-}
-
-function getFrameTimestampUs(frameIndex: number) {
-  return Math.round((frameIndex * 1_000_000) / FRAME_RATE);
-}
-
-function getFrameDurationUs(frameIndex: number) {
-  return getFrameTimestampUs(frameIndex + 1) - getFrameTimestampUs(frameIndex);
 }
 
 function normalizePlaybackSpeed(speed = 1) {
@@ -356,61 +202,28 @@ async function createOutputTarget(
     createWritable,
     saveBlob,
   }: {
-    container: OutputContainer;
+    container: RecordingOutputContainer;
     createWritable?: CreateWritable | null;
     saveBlob?: SaveBlob | null;
   },
 ): Promise<OutputTarget> {
-  const targetConfig =
-    container === 'mp4'
-      ? {
-          arrayBufferTarget: Mp4ArrayBufferTarget,
-          fileTarget: Mp4FileSystemWritableFileStreamTarget,
-          mimeType: 'video/mp4',
-        }
-      : {
-          arrayBufferTarget: WebMArrayBufferTarget,
-          fileTarget: WebMFileSystemWritableFileStreamTarget,
-          mimeType: 'video/webm',
-        };
+  const mimeType = container === 'mp4' ? 'video/mp4' : 'video/webm';
 
   if (typeof createWritable === 'function') {
     const writable = await createWritable(outputName);
-    let closed = false;
+    const fileStream = createRecordingFileStream(writable);
     return {
-      target: new targetConfig.fileTarget(writable),
-      async finalize() {
-        if (closed) return;
-        closed = true;
-        await writable.close();
-      },
-      async abort(reason?: unknown) {
-        if (closed) return;
-        closed = true;
-        if (typeof writable.abort === 'function') {
-          try {
-            await writable.abort(reason);
-            return;
-          } catch {}
-        }
-        try {
-          await writable.close();
-        } catch {}
-      },
+      target: new StreamTarget(fileStream.stream),
+      finalize: fileStream.commit,
+      abort: fileStream.abort,
     };
   }
 
-  const target = new targetConfig.arrayBufferTarget();
+  const target = new BufferTarget();
   return {
     target,
     async finalize() {
-      const buffer = target.buffer;
-      const videoBlob = new Blob([buffer], { type: targetConfig.mimeType });
-      if (saveBlob) {
-        await saveBlob(videoBlob, outputName);
-      } else {
-        downloadBlob(videoBlob, outputName);
-      }
+      await deliverRecordingBuffer(target.buffer, mimeType, outputName, saveBlob || null, downloadBlob);
     },
     async abort() {},
   };
@@ -825,31 +638,6 @@ function normalizeRecordOptions(options: RecordCardOptions = {}) {
   };
 }
 
-function createMuxer(container: OutputContainer, output: OutputTarget, encoderSupport: EncoderSupport, outputSize: OutputSize) {
-  if (container === 'mp4') {
-    return new Mp4Muxer({
-      target: output.target as Mp4ArrayBufferTarget | Mp4FileSystemWritableFileStreamTarget,
-      fastStart: false,
-      video: {
-        codec: encoderSupport.muxerCodec as 'avc' | 'hevc' | 'vp9' | 'av1',
-        width: outputSize.width,
-        height: outputSize.height,
-        frameRate: FRAME_RATE,
-      },
-    });
-  }
-
-  return new WebMMuxer({
-    target: output.target as WebMArrayBufferTarget | WebMFileSystemWritableFileStreamTarget,
-    video: {
-      codec: encoderSupport.muxerCodec,
-      width: outputSize.width,
-      height: outputSize.height,
-      frameRate: FRAME_RATE,
-    },
-  });
-}
-
 export async function recordCard(
   cardElement: HTMLElement,
   onProgress: (progress: RecordProgress) => void = () => {},
@@ -859,18 +647,9 @@ export async function recordCard(
 
   const normalizedOptions = normalizeRecordOptions(options);
   const outputSize = normalizedOptions.outputSize;
-  const mp4EncoderSupport = await getSupportedMp4Encoder(outputSize);
-  if (!mp4EncoderSupport && normalizedOptions.requireMp4) {
-    throw new Error(`This browser does not support MP4/H.264 encoding at ${outputSize.width}x${outputSize.height}`);
-  }
-  const webmEncoderSupport = mp4EncoderSupport ? null : await getSupportedWebmEncoder(outputSize);
-  if (!mp4EncoderSupport && !webmEncoderSupport) {
-    throw new Error('This browser does not support the WebCodecs encoder required for stable batch recording');
-  }
-
-  const outputContainer: OutputContainer = mp4EncoderSupport ? 'mp4' : 'webm';
-  const encoderSupport = mp4EncoderSupport || webmEncoderSupport!;
-  const outputBaseName = getBaseOutputName(normalizedOptions.filename);
+  const encoderSupport = await resolveRecordingEncoder(outputSize, normalizedOptions.requireMp4);
+  const outputContainer = encoderSupport.container;
+  const outputBaseName = getRecordingBaseName(normalizedOptions.filename);
   const outputName = `${outputBaseName}.${outputContainer}`;
   const cardWidthPx = getCardWidthPx(outputSize, normalizedOptions.cardSize, normalizedOptions.customCardWidth);
   const cardOffsetYPx = getCardOffsetYPx(outputSize, normalizedOptions.verticalOffset);
@@ -915,9 +694,8 @@ export async function recordCard(
   );
 
   let output: OutputTarget | null = null;
+  let mediaOutput: Output | null = null;
   let finalized = false;
-  let encoderError: Error | null = null;
-  let encoder: VideoEncoder | null = null;
 
   try {
     const canvas = document.createElement('canvas');
@@ -934,28 +712,27 @@ export async function recordCard(
       createWritable: normalizedOptions.createWritable,
       saveBlob: normalizedOptions.saveBlob,
     });
-    const muxer = createMuxer(outputContainer, output, encoderSupport, outputSize);
-
-    encoder = new VideoEncoder({
-      output: (chunk, meta) => {
-        try {
-          muxer.addVideoChunk(chunk, meta);
-        } catch (error) {
-          encoderError = toError(error);
-        }
-      },
-      error: (error) => {
-        encoderError = toError(error);
-      },
+    const format = outputContainer === 'mp4'
+      ? new Mp4OutputFormat({ fastStart: false })
+      : new WebMOutputFormat();
+    mediaOutput = new Output({
+      format,
+      target: output.target,
     });
-    encoder.configure(encoderSupport.encoderConfig);
+    const videoSource = new CanvasSource(canvas, {
+      codec: encoderSupport.codec,
+      quality: new Quality({ bitrate: VIDEO_BITRATE }),
+      keyFrameInterval: KEYFRAME_INTERVAL / FRAME_RATE,
+      latencyMode: 'realtime',
+      fullCodecString: encoderSupport.fullCodecString,
+    });
+    mediaOutput.addVideoTrack(videoSource, { frameRate: FRAME_RATE });
+    await mediaOutput.start();
 
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     onProgress({ phase: 'capturing', current: 0, total: totalFrames });
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
-      if (encoderError) throw encoderError;
-
       frameClone.setAttribute('style', `${staticStyle};${computeFrameOverrides(frameIndex, totalFrames)}`);
       const renderedFrame = await svgToImage(svgDoc, outputSize);
 
@@ -966,34 +743,17 @@ export async function recordCard(
         if ('close' in renderedFrame) renderedFrame.close();
       }
 
-      const frame = new VideoFrame(canvas, {
-        timestamp: getFrameTimestampUs(frameIndex),
-        duration: getFrameDurationUs(frameIndex),
+      await videoSource.add(frameIndex / FRAME_RATE, 1 / FRAME_RATE, {
+        keyFrame: frameIndex === 0 || frameIndex % KEYFRAME_INTERVAL === 0,
       });
-
-      try {
-        encoder.encode(frame, {
-          keyFrame: frameIndex === 0 || frameIndex % KEYFRAME_INTERVAL === 0,
-        });
-      } finally {
-        frame.close();
-      }
-
-      if (encoder.encodeQueueSize > ENCODER_QUEUE_LIMIT) {
-        await encoder.flush();
-      }
-
-      if (encoderError) throw encoderError;
       onProgress({ phase: 'capturing', current: frameIndex + 1, total: totalFrames });
     }
 
     onProgress({ phase: 'encoding', current: 0, total: 1 });
-    await encoder.flush();
-    if (encoderError) throw encoderError;
-
-    muxer.finalize();
-    finalized = true;
+    videoSource.close();
+    await mediaOutput.finalize();
     await output.finalize();
+    finalized = true;
 
     onProgress({ phase: 'encoding', current: 1, total: 1 });
     onProgress({ phase: 'done', current: 0, total: 0 });
@@ -1010,11 +770,13 @@ export async function recordCard(
     };
   } catch (error) {
     if (!finalized) {
+      try {
+        await mediaOutput?.cancel();
+      } catch {}
       await output?.abort(error);
     }
     throw error;
   } finally {
-    encoder?.close();
     viewport.remove();
   }
 }

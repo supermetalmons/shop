@@ -7,7 +7,6 @@
     "outDir": "lib",
     "rootDir": "src",
     "esModuleInterop": true,
-    "baseUrl": ".",
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "sourceMap": true,
