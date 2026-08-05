@@ -14,6 +14,8 @@ const lsbImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectR
 const ponchoImage = mintPanelPreviewImage('poncho_drifella');
 const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspectRatio('poncho_drifella'));
 const upcomingDropRoutes = listUpcomingDropRoutes();
+const CARD_NFT_BINDER_FLAT_IMAGE_URL = 'https://cdn.lil.org/nft/card_nft_binder/flat.webp';
+const CARD_NFT_BINDER_FLAT_IMAGE_DIMENSIONS = { width: 1298, height: 1242 };
 
 function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return undefined;
@@ -331,8 +333,8 @@ export function DropsPanel() {
     {
       key: 'card_nft_binder',
       size: 'half',
-      image: cardNftBinder.image,
-      imageDimensions: cardNftBinder.imageDimensions,
+      image: CARD_NFT_BINDER_FLAT_IMAGE_URL,
+      imageDimensions: CARD_NFT_BINDER_FLAT_IMAGE_DIMENSIONS,
       alt: cardNftBinder.alt,
       title: cardNftBinder.title,
       path: cardNftBinder.path,
