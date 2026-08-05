@@ -43,6 +43,7 @@ const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upco
 const CARD_MODEL_OPTIONS = [
   { label: 'Card: Sample 15', url: DEFAULT_CLEAR_CARD_MODEL_URL },
   { label: 'Card: Preview', url: CLEAR_CARD_PREVIEW_MODEL_URL },
+  { label: 'Card: Sample Horizontal', url: '/clear_card_sample_horizontal.glb' },
 ] as const;
 const PACK_MODEL_OPTIONS = [
   { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
