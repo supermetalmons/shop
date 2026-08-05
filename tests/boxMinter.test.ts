@@ -8,6 +8,9 @@ import {
   decodeBoxMinterConfigAccount,
   discountMintRecordPda,
 } from '../src/lib/boxMinter.ts';
+import {
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+} from '../functions/src/shared/boxMinterConfigCodec.ts';
 
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 const LEGACY_FIXED_ITEMS_CONFIG_SIZE = 289;
@@ -37,10 +40,12 @@ function u32Tuple(values: [number, number, number]): Buffer {
   return Buffer.concat(values.map((value) => u32LE(value)));
 }
 
-function encodeConfigAccount(dropSeed?: Uint8Array): Buffer {
+function encodeConfigAccount(
+  dropSeed?: Uint8Array,
+  uriBase = `https://assets.example.com/drops/${'x'.repeat(63)}`,
+): Buffer {
   const maxLenName = 'hoodie01';
   const maxLenSymbol = 'monsshop10';
-  const maxLenUriBase = `https://assets.example.com/drops/${'x'.repeat(63)}`;
   return Buffer.concat([
     Buffer.from(ACCOUNT_BOX_MINTER_CONFIG),
     pubkey(1).toBuffer(),
@@ -55,7 +60,7 @@ function encodeConfigAccount(dropSeed?: Uint8Array): Buffer {
     u32LE(7),
     borshString(maxLenName),
     borshString(maxLenSymbol),
-    borshString(maxLenUriBase),
+    borshString(uriBase),
     Buffer.from([1]),
     Buffer.from([254]),
     Buffer.from([2]),
@@ -108,6 +113,54 @@ test('decodeBoxMinterConfigAccount handles legacy and v2 schemas', () => {
   const dropSeed = Uint8Array.from({ length: 32 }, (_, index) => (index + 17) & 0xff);
   const v2 = decodeBoxMinterConfigAccount(accountPubkey, withZeroPadding(encodeConfigAccount(dropSeed)));
   assert.deepEqual(Array.from(v2.dropSeed || []), Array.from(dropSeed));
+});
+
+test('decodeBoxMinterConfigAccount accepts stale seed suffix padding after a shorter URI migration', () => {
+  const dropSeed = Uint8Array.from(
+    { length: 32 },
+    (_, index) => (index + 17) & 0xff,
+  );
+  const legacyUri = 'https://assets.mons.link/drops/cardnft2/json';
+  const cdnUri = 'https://cdn.lil.org/nft/card_nft_2/json';
+  const account = padToAccountSize(
+    encodeConfigAccount(dropSeed, legacyUri),
+    BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+  );
+  const migrated = encodeConfigAccount(dropSeed, cdnUri);
+  migrated.copy(account);
+  const staleSuffixLength = legacyUri.length - cdnUri.length;
+
+  assert.deepEqual(
+    account.subarray(
+      migrated.length,
+      migrated.length + staleSuffixLength,
+    ),
+    Buffer.from(dropSeed.subarray(dropSeed.length - staleSuffixLength)),
+  );
+  const decoded = decodeBoxMinterConfigAccount(pubkey(99), account);
+  assert.equal(decoded.uriBase, cdnUri);
+  assert.deepEqual(Array.from(decoded.dropSeed || []), Array.from(dropSeed));
+});
+
+test('decodeBoxMinterConfigAccount rejects unrelated bytes after a drop seed', () => {
+  const dropSeed = Uint8Array.from(
+    { length: 32 },
+    (_, index) => (index + 17) & 0xff,
+  );
+  const serialized = encodeConfigAccount(
+    dropSeed,
+    'https://cdn.lil.org/nft/card_nft_2/json',
+  );
+  const account = padToAccountSize(
+    serialized,
+    BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+  );
+  account[serialized.length] = 0xff;
+
+  assert.throws(
+    () => decodeBoxMinterConfigAccount(pubkey(99), account),
+    /Unexpected trailing data after drop seed/,
+  );
 });
 
 test('decodeBoxMinterConfigAccount handles pre-items fixed-3 legacy schema', () => {

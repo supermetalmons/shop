@@ -170,6 +170,25 @@ function normalizeDiscountMintsPerWallet(value: number | undefined): number {
   return isBoxMinterDiscountMintsPerWallet(parsed) ? parsed : 1;
 }
 
+function isStaleDropSeedSuffixPadding(
+  padding: Uint8Array,
+  dropSeed: Uint8Array,
+): boolean {
+  const maximumSuffixLength = Math.min(padding.length, dropSeed.length);
+  for (let suffixLength = 1; suffixLength <= maximumSuffixLength; suffixLength += 1) {
+    if (hasAnyNonZeroByte(padding.subarray(suffixLength))) continue;
+    if (
+      bytesEqual(
+        padding.subarray(0, suffixLength),
+        dropSeed.subarray(dropSeed.length - suffixLength),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function decodeOptionalTrailingDropSeed(
   data: Uint8Array,
   offset: number,
@@ -191,7 +210,14 @@ function decodeOptionalTrailingDropSeed(
       'Unsupported box minter config schema. Unexpected trailing data after config payload.',
     );
   }
-  if (hasAnyNonZeroByte(trailing.subarray(32))) {
+  const padding = trailing.subarray(32);
+  if (
+    hasAnyNonZeroByte(padding) &&
+    !(
+      data.length === BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED &&
+      isStaleDropSeedSuffixPadding(padding, dropSeed)
+    )
+  ) {
     throw new BoxMinterConfigCodecError(
       'unexpected-drop-seed-trailing-data',
       'Unsupported box minter config schema. Unexpected trailing data after drop seed.',
