@@ -1522,7 +1522,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     enabled: Boolean(packStatusDropId),
     queryFn: () => getDropPackStatus(packStatusDropId || ''),
     staleTime: 60_000,
-    retry: false,
+    retry: 1,
     refetchOnWindowFocus: false,
   });
   const {

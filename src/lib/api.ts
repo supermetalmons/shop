@@ -1,9 +1,8 @@
 import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp, firestore } from './firebase';
+import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp } from './firebase';
 import {
   AddFulfillmentOrderToShipStationRequest,
   AddFulfillmentOrderToShipStationResponse,
@@ -1038,8 +1037,10 @@ export function supportsFrontendPackStatus(dropId: string | undefined): boolean 
 export async function getDropPackStatus(dropId: string): Promise<PackStatusBreakdown | null> {
   const normalizedDropId = normalizeDropId(dropId);
   if (!normalizedDropId) throw new Error('dropId is required');
-  if (!firestore) throw new Error('Firebase client is not configured');
+  if (!firebaseApp) throw new Error('Firebase client is not configured');
   await ensureAuthenticated();
+  const { doc, getDoc, getFirestore } = await import('firebase/firestore');
+  const firestore = getFirestore(firebaseApp);
   const snap = await getDoc(doc(firestore, 'drops', normalizedDropId, 'meta', 'packStatus'));
   if (!snap.exists()) return null;
   return normalizePackStatusBreakdown(
