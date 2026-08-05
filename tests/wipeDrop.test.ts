@@ -2694,7 +2694,7 @@ function completeRegistryDrop(
 test('untracked legacy Merkle cleanup requires exact journal provenance', async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mons-shop-wipe-owned-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const targetDropId = 'poncho_drifella_devnet_x10';
+  const targetDropId = 'fixture_devnet_drop';
   const targetRoot = '33'.repeat(32);
   const siblingRoot = '44'.repeat(32);
   const registryPath = path.join(
@@ -2919,7 +2919,7 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
     path.join(os.tmpdir(), 'mons-shop-wipe-canonical-owned-'),
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const targetDropId = 'poncho_drifella_devnet_x10';
+  const targetDropId = 'fixture_devnet_drop';
   const targetRoot = '77'.repeat(32);
   const siblingRoot = '88'.repeat(32);
   const registryPath = path.join(
@@ -3090,7 +3090,7 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
 test('row-absent planning uses exact recovery provenance for legacy Merkle cleanup', async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mons-shop-wipe-plan-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const targetDropId = 'poncho_drifella_devnet_x10';
+  const targetDropId = 'fixture_devnet_drop';
   const targetRoot = '33'.repeat(32);
   const siblingRoot = '44'.repeat(32);
   const registryPath = path.join(

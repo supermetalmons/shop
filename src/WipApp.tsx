@@ -18,7 +18,7 @@ import {
   interactiveCardPackRevealSoundUrlsForDropId,
   pickRandomInteractiveCardPackClickSoundUrl,
 } from './lib/interactiveCardPackRevealSounds';
-import { isDropFamily, listFrontendDrops } from './config/deployment';
+import { getFrontendDrop } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
 import {
@@ -33,13 +33,11 @@ import { navigate } from './navigation';
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
 const WIP_DROP = (() => {
-  const devnetCardNft2Drop = listFrontendDrops().find(
-    (drop) => drop.solanaCluster === 'devnet' && isDropFamily(drop, 'card_nft_2'),
-  );
-  if (!devnetCardNft2Drop) {
-    throw new Error('Missing devnet card_nft_2 frontend drop config');
+  const cardNft2Drop = getFrontendDrop('card_nft_2');
+  if (!cardNft2Drop) {
+    throw new Error('Missing card_nft_2 frontend drop config');
   }
-  return devnetCardNft2Drop;
+  return cardNft2Drop;
 })();
 const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
 const WIP_REVEAL_SOUND_URLS = interactiveCardPackRevealSoundUrlsForDropId(WIP_DROP.dropId);

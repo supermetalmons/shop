@@ -197,7 +197,7 @@ test('pack status tracking gates on supported mainnet drops with configured supp
   assert.equal(
     shouldTrackPackStatusForDrop({
       ...CARD_NFT_2_RUNTIME,
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_pack_devnet_fixture',
     }),
     false,
   );
@@ -462,7 +462,7 @@ test('pack status rebuild script accepts supported mainnet drops and rejects uns
   assert.equal(requireSupportedPackStatusDrop('poncho_drifella').itemsPerBox, 1);
   assert.equal(requireSupportedPackStatusDrop('little_swag_boxes').itemsPerBox, 3);
   assert.throws(
-    () => requireSupportedPackStatusDrop('card_nft_2_devnet_final'),
+    () => requireSupportedPackStatusDrop('card_pack_devnet_fixture'),
     /only supports card_nft_2, poncho_drifella, little_swag_boxes/i,
   );
   assert.throws(

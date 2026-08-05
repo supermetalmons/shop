@@ -132,14 +132,14 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS.length, CARD_NFT_2_PACK_INITIAL_COUNT);
   assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp`);
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
-  assert.deepEqual(FRONTEND_DROPS.card_nft_2_devnet_final.boxMedia, CARD_NFT_2_BOX_MEDIA);
+  assert.deepEqual(FRONTEND_DROPS.card_nft_2.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(CARD_NFT_2_PACK_RECEIPT_MEDIA, CARD_NFT_2_BOX_MEDIA);
-  assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
-  assert.equal(resolveDropContent('card_nft_2_devnet_final').box.inventoryImagePathMode, 'folder_initial');
-  assert.equal(resolveBoxMediaIdForDrop('card_nft_2_devnet_final', 5), 1);
+  assert.equal(resolveDropContent('card_nft_2').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
+  assert.equal(resolveDropContent('card_nft_2').box.inventoryImagePathMode, 'folder_initial');
+  assert.equal(resolveBoxMediaIdForDrop('card_nft_2', 5), 1);
   assert.equal(
     normalizeBoxDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 1,
     }),
@@ -147,7 +147,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   );
   assert.equal(
     normalizeBoxDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 5,
     }),
@@ -155,7 +155,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   );
   assert.equal(
     normalizeBoxDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 6,
     }),
@@ -163,7 +163,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   );
   assert.equal(
     normalizeBoxDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
     }),
     'https://assets.example.com/metadata-pack.webp',
@@ -409,9 +409,9 @@ test('little_swag_boxes display media resolves from CDN overrides', () => {
 });
 
 test('drop-specific extra content overrides preserve family CDN defaults', () => {
-  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_boxes_devnet;
+  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_boxes;
   try {
-    DROPS_EXTRA_CONTENT.little_swag_boxes_devnet = {
+    DROPS_EXTRA_CONTENT.little_swag_boxes = {
       box: {
         aspectRatio: 2,
       },
@@ -420,7 +420,7 @@ test('drop-specific extra content overrides preserve family CDN defaults', () =>
       },
     };
 
-    const override = getDropExtraContentOverride('little_swag_boxes_devnet');
+    const override = getDropExtraContentOverride('little_swag_boxes');
     assert.equal(override?.mediaBaseUrl, LITTLE_SWAG_BOXES_CDN_BASE_URL);
     assert.equal(override?.box?.aspectRatio, 2);
     assert.equal(override?.figures?.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL);
@@ -428,9 +428,9 @@ test('drop-specific extra content overrides preserve family CDN defaults', () =>
     assert.equal(override?.certificates?.boxInventoryImageUrl, 'https://cdn.example.com/custom-box-receipt.webp');
   } finally {
     if (previousOverride) {
-      DROPS_EXTRA_CONTENT.little_swag_boxes_devnet = previousOverride;
+      DROPS_EXTRA_CONTENT.little_swag_boxes = previousOverride;
     } else {
-      delete DROPS_EXTRA_CONTENT.little_swag_boxes_devnet;
+      delete DROPS_EXTRA_CONTENT.little_swag_boxes;
     }
   }
 });
@@ -515,8 +515,8 @@ test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls
     `${PONCHO_DRIFELLA_PACK_CDN_BASE_URL}/final_sequence/autoplay/overtop/10.webp`,
   );
 
-  const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 1);
-  const cardPack4 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2_devnet_final', 4);
+  const cardPack1 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2', 1);
+  const cardPack4 = getInteractiveCardPackRevealSequenceForDropId('card_nft_2', 4);
   assert.equal(cardPack1.initialFrameUrl, `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
   assert.equal(cardPack1.segment11FrameUrls[0], `${CARD_NFT_2_PACK_BASE_URL}/1/final_sequence/1/1.webp`);
   assert.equal(cardPack4.initialFrameUrl, `${CARD_NFT_2_PACK_BASE_URL}/4/initial.webp`);
@@ -531,8 +531,8 @@ test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls
 });
 
 test('interactive pack reveal content and selected card presentation are stable', () => {
-  assert.equal(resolveDropContent('poncho_drifella_devnet_x10').reveal.renderer, 'interactive_card_pack');
-  const cardNft2Content = resolveDropContent('card_nft_2_devnet_final');
+  assert.equal(resolveDropContent('poncho_drifella').reveal.renderer, 'interactive_card_pack');
+  const cardNft2Content = resolveDropContent('card_nft_2');
   assert.equal(cardNft2Content.reveal.renderer, 'interactive_card_pack');
   assert.equal(cardNft2Content.reveal.frameTiming?.frameCount, PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE.revealFrameSequence.frameCount);
   assert.equal(cardNft2Content.reveal.frameSequence, undefined);
@@ -546,7 +546,7 @@ test('interactive pack reveal content and selected card presentation are stable'
 });
 
 test('interactive pack reveal sounds resolve by drop family', () => {
-  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('card_nft_2_devnet_final'), {
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('card_nft_2'), {
     click: CARD_NFT_2_BOX_SOUND_CLICK_URLS,
     reveal: CARD_NFT_2_BOX_SOUND_REVEAL_URL,
     cardSwipe: CARD_NFT_2_CARD_SOUND_SWIPE_URL,
@@ -561,7 +561,7 @@ test('interactive pack reveal sounds resolve by drop family', () => {
   assert.equal(CARD_NFT_2_CARD_SOUND_SWIPE_URL, `${CARD_NFT_2_CDN_BASE_URL}/sounds/swipe.mp3`);
   assert.equal(CARD_NFT_2_CARD_SOUND_SPREAD_URL, `${CARD_NFT_2_CDN_BASE_URL}/sounds/spread.mp3`);
 
-  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('poncho_drifella_devnet_x10'), {
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('poncho_drifella'), {
     click: PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS,
     reveal: PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL,
   });
@@ -574,7 +574,7 @@ test('interactive pack reveal sounds resolve by drop family', () => {
 });
 
 function assertCardNft2HoloCard(cardId: number, effectId: string) {
-  const card = getInteractiveCardPackCardByFigureId('card_nft_2_devnet_final', cardId);
+  const card = getInteractiveCardPackCardByFigureId('card_nft_2', cardId);
   assert.ok(card);
   assert.equal(card.imageSrc, cardNft2AssetUrl('img', cardId));
   assert.equal(card.foilSrc, cardNft2AssetUrl('foil', cardId));
@@ -584,7 +584,7 @@ function assertCardNft2HoloCard(cardId: number, effectId: string) {
 }
 
 test('card_nft_2 interactive cards use neutral effects for bundled common ids', () => {
-  const card4 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet_final', 4);
+  const card4 = getInteractiveCardPackCardByFigureId('card_nft_2', 4);
   assert.ok(card4);
   assert.equal(isCardNft2CommonCardId(4), true);
   assert.equal(card4.imageSrc, cardNft2AssetUrl('img', 4));
@@ -607,39 +607,39 @@ test('card_nft_2 interactive cards assign deterministic modulo holo effects for 
   assertCardNft2HoloCard(2, 'swsh6-196');
   assertCardNft2HoloCard(3, 'swsh4-9');
 
-  const card11133 = getInteractiveCardPackCardByFigureId('card_nft_2_devnet_final', 11133);
+  const card11133 = getInteractiveCardPackCardByFigureId('card_nft_2', 11133);
   assert.ok(card11133);
   assert.equal(card11133.imageSrc, cardNft2AssetUrl('img', 11133));
   assert.equal(card11133.effect.id, 'pgo-24');
-  assert.equal(getInteractiveCardPackCardByFigureId('card_nft_2_devnet_final', 11134), undefined);
+  assert.equal(getInteractiveCardPackCardByFigureId('card_nft_2', 11134), undefined);
 });
 
 test('card_nft_2 figure and receipt display images prefer padded CDN assets', () => {
   assert.equal(
-    normalizeFigureDisplayImage('card_nft_2_devnet_final', 'https://assets.example.com/old-card.webp', 2),
+    normalizeFigureDisplayImage('card_nft_2', 'https://assets.example.com/old-card.webp', 2),
     `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0002.webp`,
   );
   assert.equal(
     normalizeFigureDisplayImage(
-      'card_nft_2_devnet_final',
+      'card_nft_2',
       `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp`,
     ),
     `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0101.webp`,
   );
   assert.equal(
     normalizeFigureDisplayImage(
-      'card_nft_2_devnet_final',
+      'card_nft_2',
       `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp/?cache=1`,
     ),
     `${CARD_NFT_2_FRONTS_1400_CDN_BASE_URL}/0101.webp`,
   );
   assert.equal(
-    normalizeFigureDisplayImage('card_nft_2_devnet_final', 'https://legacy.example.com/view?asset=/0101.webp'),
+    normalizeFigureDisplayImage('card_nft_2', 'https://legacy.example.com/view?asset=/0101.webp'),
     undefined,
   );
   assert.equal(
     normalizeFigureDisplayImage(
-      'card_nft_2_devnet_final',
+      'card_nft_2',
       `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_FRONT_IPFS_CID}/0101.webp`,
       2,
     ),
@@ -647,14 +647,14 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   );
   assert.equal(
     normalizeFigureDisplayImage(
-      'card_nft_2_devnet_final',
+      'card_nft_2',
       `https://silver-real-rhinoceros-781.mypinata.cloud/ipfs/${CARD_NFT_2_LEGACY_VIDEO_IPFS_CID}/1.mp4`,
     ),
     undefined,
   );
   assert.equal(
     normalizeCertificateDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/old-receipt.webp',
       figureId: 2,
     }),
@@ -662,14 +662,14 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   );
   assert.equal(
     normalizeCertificateDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/box-receipt.webp',
     }),
     'https://assets.example.com/box-receipt.webp',
   );
   assert.equal(
     normalizeCertificateDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/box-receipt.webp',
       boxId: 5,
     }),
@@ -677,7 +677,7 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   );
   assert.equal(
     normalizeCertificateDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/box-receipt.webp',
       boxId: 184,
     }),
@@ -685,7 +685,7 @@ test('card_nft_2 figure and receipt display images prefer padded CDN assets', ()
   );
   assert.equal(
     normalizeCertificateDisplayImage({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       imageRaw: 'https://assets.example.com/box-receipt.webp',
       boxId: 823,
     }),

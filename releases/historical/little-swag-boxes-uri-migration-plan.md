@@ -108,7 +108,7 @@ The source match is very strong, but byte-for-byte reproducibility remains unres
 - Do **not** run `npm run upgrade-onchain -- little_swag_boxes` as-is. `scripts/upgrade-onchain.ts` temporarily changes `declare_id!` and then compiles current HEAD; it has no legacy-layout guard and also accepts raw private-key input.
 - Do **not** use `scripts/deploy-all-onchain.ts`; it is the modern new/scoped-drop deployment flow.
 - Do not trust current `onchain/Anchor.toml` to select this mainnet target. Use an explicit verified program ID and RPC.
-- `little_swag_boxes_devnet` is a later, changed layout and is not an exact rehearsal target. Prefer a local clone of the mainnet accounts or a disposable deployment built from `02075c7`.
+- The later devnet deployment uses a changed layout and is not an exact rehearsal target. Prefer a local clone of the mainnet accounts or a disposable deployment built from `02075c7`.
 
 ## Minimal program change
 

@@ -451,14 +451,6 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
   );
   assert.equal(
-    DEPLOYMENT_DROPS.card_nft_2_devnet_final.metadataBase,
-    'https://assets.mons.link/drops/cardnft2/json',
-  );
-  assert.equal(
-    DEPLOYMENT_DROPS.card_nft_2_devnet_final.metadataBaseAliases,
-    undefined,
-  );
-  assert.equal(
     DEPLOYMENT_DROPS.little_swag_boxes.metadataBase,
     'https://cdn.lil.org/nft/little_swag_boxes',
   );
@@ -490,20 +482,12 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     FUNCTIONS_DROPS.poncho_drifella.metadataBaseAliases,
     DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
   );
-  assert.equal(
-    DEPLOYMENT_DROPS.poncho_drifella_devnet_x10.metadataBase,
-    'https://assets.mons.link/drops/poncho',
-  );
-  assert.equal(
-    DEPLOYMENT_DROPS.poncho_drifella_devnet_x10.metadataBaseAliases,
-    undefined,
-  );
   assert.deepEqual(
     FRONTEND_DROPS.little_swag_boxes.figureMedia,
     LITTLE_SWAG_BOXES_FIGURE_MEDIA,
   );
   assert.deepEqual(
-    FRONTEND_DROPS.card_nft_2_devnet_final.boxMedia,
+    FRONTEND_DROPS.card_nft_2.boxMedia,
     CARD_NFT_2_BOX_MEDIA,
   );
   const soldOutDropIds = [
@@ -543,6 +527,19 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     FUNCTIONS_DROPS.little_swag_hoodies.stripeProductTaxCode,
     'txcd_30011000',
   );
+});
+
+test('devnet drops do not use the legacy assets host', () => {
+  const matchingDropIds = Object.values(DEPLOYMENT_DROPS)
+    .filter((drop) => drop.solanaCluster === 'devnet')
+    .filter((drop) =>
+      [drop.metadataBase, ...(drop.metadataBaseAliases ?? [])].some(
+        (base) => new URL(base).hostname.toLowerCase() === 'assets.mons.link',
+      ),
+    )
+    .map((drop) => drop.dropId);
+
+  assert.deepEqual(matchingDropIds, []);
 });
 
 test('drop IDs use one bounded safe slug policy and reject prototype names', () => {

@@ -142,7 +142,7 @@ function usage(): string {
     '  npm run assign-stripe-order-cards -- --drop-id <dropId> --execute --manifest <path>',
     '',
     'Options:',
-    '  --drop-id <dropId>  Required drop id, e.g. card_nft_2_devnet_final',
+    '  --drop-id <dropId>  Required registered card_nft_2-family drop id',
     '  --delivery-id <id>  Dry-run one delivery order',
     '  --limit <n>         Dry-run at most n matching orders',
     '  --execute           Apply an existing dry-run manifest',

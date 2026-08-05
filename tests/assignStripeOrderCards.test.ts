@@ -345,17 +345,17 @@ test('Stripe card assignment validates dry-run manifest envelope and totals', ()
 test('Stripe card assignment validates manifest paths against the requested drop id', () => {
   const devnetRuntime = {
     ...scriptRuntime,
-    dropId: 'card_nft_2_devnet_final',
+    dropId: 'card_pack_devnet_fixture',
     cluster: 'devnet' as const,
   };
   const manifest = {
     version: 1,
-    dropId: 'card_nft_2_devnet_final',
+    dropId: 'card_pack_devnet_fixture',
     createdAt: '2026-01-01T00:00:00.000Z',
     generatedByDryRun: true,
     orders: [
       {
-        docPath: 'drops/card_nft_2_devnet_final/deliveryOrders/1',
+        docPath: 'drops/card_pack_devnet_fixture/deliveryOrders/1',
         deliveryId: 1,
         boxes: [
           {

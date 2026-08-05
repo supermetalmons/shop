@@ -269,7 +269,6 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   drifella_binder: 'drifella_binder',
   drifella_shirt: 'drifella_shirt',
   little_swag_boxes: 'little_swag_boxes',
-  little_swag_boxes_devnet: 'little_swag_boxes',
   poncho_drifella: 'poncho_drifella',
 };
 

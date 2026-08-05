@@ -1156,7 +1156,7 @@ test('buildStripeOffchainDeliveryOrderDocument shapes multi-item receipt claims'
 
 test('buildStripeOffchainDeliveryOrderDocument omits variant labels for pack checkouts', () => {
   const input = {
-    dropId: 'card_nft_2_devnet_final',
+    dropId: 'card_nft_2',
     deliveryId: 789,
     owner: 'firebase:anon_uid_pack',
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
@@ -1439,7 +1439,7 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
 });
 
 test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers on retry', async () => {
-  const dropId = 'card_nft_2_devnet_final';
+  const dropId = 'card_nft_2';
   const orderHashHex = '34'.repeat(32);
   const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
   const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_pack_retry` } as any;
@@ -1681,12 +1681,12 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   assert.throws(() => normalizeStripeCheckoutQuantity(16), /1 to 15/);
   assert.deepEqual(
     buildStripeCheckoutSessionMetadata({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       uid: 'anon_uid_pack',
       quantity: STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
     }),
     {
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       uid: 'anon_uid_pack',
       fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
       placeholder: 'stripe_direct_delivery',
@@ -1696,7 +1696,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   assert.throws(
     () =>
       buildStripeCheckoutSessionMetadata({
-        dropId: 'card_nft_2_devnet_final',
+        dropId: 'card_nft_2',
         uid: 'anon_uid_pack',
         quantity: 16,
       }),
@@ -1704,7 +1704,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   );
 
   const checkout = buildStripeCheckoutDocument({
-    dropId: 'card_nft_2_devnet_final',
+    dropId: 'card_nft_2',
     sessionId: 'cs_test_pack',
     uid: 'anon_uid_pack',
     quantity: 15,
@@ -1715,7 +1715,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   assert.equal('variantKey' in checkout, false);
   assert.deepEqual(
     validateStripeCheckoutDocumentData({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       sessionId: 'cs_test_pack',
       checkout,
     }),
@@ -1730,7 +1730,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   assert.throws(
     () =>
       validateStripeCheckoutDocumentData({
-        dropId: 'card_nft_2_devnet_final',
+        dropId: 'card_nft_2',
         variantKey: 'XL',
         sessionId: 'cs_test_pack',
         checkout,
@@ -1789,7 +1789,7 @@ test('stripeCheckoutKindForDrop accepts size variants, standard packs, and expli
   );
   assert.equal(
     stripeCheckoutKindForDrop({
-      dropId: 'card_nft_2_devnet_final',
+      dropId: 'card_nft_2',
       itemsPerBox: 5,
       config: {},
     } as any),
@@ -2049,7 +2049,7 @@ test('enqueueStripeCheckoutFulfillment marks the checkout document fulfillment_p
 });
 
 test('enqueueStripeCheckoutFulfillment accepts pack checkout documents without variantKey', async () => {
-  const dropId = 'card_nft_2_devnet_final';
+  const dropId = 'card_nft_2';
   const sessionId = 'cs_test_pack';
   const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
   const updates: Array<{ ref: any; data: any }> = [];
@@ -2304,7 +2304,7 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
 });
 
 test('startStripeCheckoutFulfillmentDocument starts pack documents without variantKey', async () => {
-  const dropId = 'card_nft_2_devnet_final';
+  const dropId = 'card_nft_2';
   const sessionId = 'cs_test_pack';
   const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
   const updates: Array<{ ref: any; data: any }> = [];
