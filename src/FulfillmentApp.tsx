@@ -1530,6 +1530,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const activeShipstationPackageDraft = activeShipstationOrder
     ? shipstationPackageEdits[activeShipstationOrderKeyResolved] ?? defaultShipStationPackageDraft(activeShipstationOrder)
     : { length: '', width: '', height: '', weight: '' };
+  const activeShipstationCanAdd = Boolean(
+    activeShipstationOrder &&
+      !activeShipstationOrder.shipstationShipmentId &&
+      normalizeFulfillmentStatus(activeShipstationOrder.fulfillmentStatus) !== 'Shipped',
+  );
 
   const handleOpenShipstationModal = useCallback((orderKey: string) => {
     setShipstationError(null);
@@ -2398,7 +2403,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           <div className="muted small">This changes the address for this order only.</div>
           {addressError ? <div className="error">{addressError}</div> : null}
           <div className="row row--end">
-            <button type="button" className="ghost" onClick={handleCloseAddressModal} disabled={addressSaving}>
+            <button
+              type="button"
+              className="secondary-light"
+              onClick={handleCloseAddressModal}
+              disabled={addressSaving}
+            >
               Cancel
             </button>
             <button
@@ -2415,7 +2425,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         open={activeShipstationOrderKey !== null}
         title={activeShipstationOrder ? `Print label · Order ${activeShipstationOrder.deliveryId}` : 'Print label'}
         onClose={handleCloseShipstationModal}
-        showCloseButton={!shipstationSaving}
+        showCloseButton={false}
         closeOnEscape={!shipstationSaving}
       >
         <div className="modal-form">
@@ -2457,19 +2467,26 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                       </label>
                     ))}
                   </div>
-                  <button
-                    type="button"
-                    className="link small no-focus-style"
-                    onClick={() => void handleAddToShipStation()}
-                    disabled={shipstationSaving}
-                  >
-                    {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
-                  </button>
                 </>
               ) : null}
             </div>
           ) : null}
           {shipstationError ? <div className="error">{shipstationError}</div> : null}
+          <div className="row row--end">
+            <button
+              type="button"
+              className="secondary-light"
+              onClick={handleCloseShipstationModal}
+              disabled={shipstationSaving}
+            >
+              Cancel
+            </button>
+            {activeShipstationCanAdd ? (
+              <button type="button" onClick={() => void handleAddToShipStation()} disabled={shipstationSaving}>
+                {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
+              </button>
+            ) : null}
+          </div>
         </div>
       </Modal>
 
@@ -2514,7 +2531,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             />
           ) : null}
           <div className="row row--end">
-            <button type="button" className="ghost" onClick={handleCancelUpdate}>
+            <button type="button" className="secondary-light" onClick={handleCancelUpdate}>
               Cancel
             </button>
             <button
