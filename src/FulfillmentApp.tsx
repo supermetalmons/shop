@@ -62,7 +62,6 @@ import {
 } from './lib/fulfillmentExports';
 import {
   fulfillmentBoxContentsLabel,
-  fulfillmentBoxSecretLabelPrefix,
   resolveFulfillmentDirectDeliveryBoxLabel,
   resolveFulfillmentFigurePreview,
   type FulfillmentFigureLabelOverrideArgs,
@@ -863,6 +862,32 @@ function fulfillmentSecretCodeClassName(receiptClaimStatus: string | undefined):
     : 'fulfillment-secret-code';
 }
 
+function SecretCodeDisplay(props: {
+  secretCode: string;
+  receiptClaimStatus?: string;
+  downloadDisabled?: boolean;
+  onDownload?: () => void;
+  className?: string;
+}) {
+  const className = props.className
+    ? `fulfillment-secret-code-group ${props.className}`
+    : 'fulfillment-secret-code-group';
+
+  return (
+    <span className={className}>
+      <span className="fulfillment-secret-code-heading">
+        <span>Secret Code</span>
+        <SecretCodeDownloadButton
+          secretCode={props.secretCode}
+          disabled={props.downloadDisabled}
+          onClick={props.onDownload}
+        />
+      </span>
+      <span className={fulfillmentSecretCodeClassName(props.receiptClaimStatus)}>{props.secretCode}</span>
+    </span>
+  );
+}
+
 function renderBoxTiles(args: {
   boxes: Array<{ boxId: number; boxIndex: number; secretCode: string; receiptClaimStatus?: string }>;
   keyPrefix: string;
@@ -894,19 +919,15 @@ function renderBoxTiles(args: {
             )}
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
             {secretCode ? (
-              <div className="muted small fulfillment-secret-code-line">
-                <span>
-                  {fulfillmentBoxSecretLabelPrefix(labelSource)}{' '}
-                  <span className={fulfillmentSecretCodeClassName(receiptClaimStatus)}>{secretCode}</span>
-                </span>
-                <SecretCodeDownloadButton
-                  secretCode={secretCode}
-                  disabled={secretCodeDownloadDisabled}
-                  onClick={
-                    onDownloadSecretCode && !hideSecretCodeDownload ? () => onDownloadSecretCode(boxIndex) : undefined
-                  }
-                />
-              </div>
+              <SecretCodeDisplay
+                className="muted small"
+                secretCode={secretCode}
+                receiptClaimStatus={receiptClaimStatus}
+                downloadDisabled={secretCodeDownloadDisabled}
+                onDownload={
+                  onDownloadSecretCode && !hideSecretCodeDownload ? () => onDownloadSecretCode(boxIndex) : undefined
+                }
+              />
             ) : null}
           </div>
         );
@@ -2090,21 +2111,16 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         {secretCode ? (
                           <span className="fulfillment-pack-secret">
                             {packSecretImage}
-                            <span className="fulfillment-secret-code-line">
-                              <span>
-                                {fulfillmentBoxSecretLabelPrefix(orderDrop)}{' '}
-                                <span className={fulfillmentSecretCodeClassName(box.receiptClaimStatus)}>{secretCode}</span>
-                              </span>
-                              <SecretCodeDownloadButton
-                                secretCode={secretCode}
-                                disabled={secretCodeDownloadDisabled}
-                                onClick={
-                                  hideSecretCodeDownload
-                                    ? undefined
-                                    : () => void downloadSecretCodePng(order, { kind: 'box', index: boxIndex })
-                                }
-                              />
-                            </span>
+                            <SecretCodeDisplay
+                              secretCode={secretCode}
+                              receiptClaimStatus={box.receiptClaimStatus}
+                              downloadDisabled={secretCodeDownloadDisabled}
+                              onDownload={
+                                hideSecretCodeDownload
+                                  ? undefined
+                                  : () => void downloadSecretCodePng(order, { kind: 'box', index: boxIndex })
+                              }
+                            />
                           </span>
                         ) : (
                           fulfillmentBoxContentsLabel(orderDrop, box.boxId, '')
@@ -2156,21 +2172,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   }
                   const hideSecretCodeDownload = isUsedReceiptClaimStatus(claim.receiptClaimStatus);
                   return (
-                    <span className="muted small fulfillment-secret-code-line">
-                      <span>
-                        {dropAssetLabel(orderDrop, 'figure', 1, { capitalize: true })} Secret{' '}
-                        <span className={fulfillmentSecretCodeClassName(claim.receiptClaimStatus)}>{secretCode}</span>
-                      </span>
-                      <SecretCodeDownloadButton
-                        secretCode={secretCode}
-                        disabled={secretCodeDownloadDisabled}
-                        onClick={
-                          hideSecretCodeDownload
-                            ? undefined
-                            : () => void downloadSecretCodePng(order, { kind: 'card-claim', index })
-                        }
-                      />
-                    </span>
+                    <SecretCodeDisplay
+                      className="muted small"
+                      secretCode={secretCode}
+                      receiptClaimStatus={claim.receiptClaimStatus}
+                      downloadDisabled={secretCodeDownloadDisabled}
+                      onDownload={
+                        hideSecretCodeDownload
+                          ? undefined
+                          : () => void downloadSecretCodePng(order, { kind: 'card-claim', index })
+                      }
+                    />
                   );
                 },
               })

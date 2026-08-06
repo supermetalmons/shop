@@ -4,7 +4,7 @@ import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraConte
 import { getMediaIdForFigureId } from './figureMediaMap';
 import { figureMetadataCacheKey, figureMetadataHasImage, getCachedFigureMetadata, type FigureMetadataRecord } from './figureMetadata';
 import { resolveFigureMediaImageUrlForMediaId } from './dropContent';
-import { dropAssetLabel, dropAssetReference, dropMintSelectionLabel } from './dropLabels';
+import { dropAssetReference, dropMintSelectionLabel } from './dropLabels';
 
 type FulfillmentLabelSource =
   | Partial<
@@ -107,8 +107,8 @@ export function resolveFulfillmentDirectDeliveryBoxLabel(
   };
 }
 
-export function fulfillmentBoxSecretLabelPrefix(source: FulfillmentLabelSource): string {
-  return `${dropAssetLabel(source, 'box', 1, { capitalize: true })} Secret`;
+export function fulfillmentBoxSecretLabelPrefix(_source: FulfillmentLabelSource): string {
+  return 'Secret Code';
 }
 
 export function fulfillmentBoxContentsLabel(source: FulfillmentLabelSource, boxId: number, secretCode: string): string {

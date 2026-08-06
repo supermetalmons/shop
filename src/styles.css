@@ -4437,25 +4437,39 @@ button.fulfillment-export-menu__item:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-}
-
-.fulfillment-secret-code-line {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  flex-wrap: wrap;
   max-width: 100%;
 }
 
-.fulfillment-secret-code-line > span {
+.fulfillment-secret-code-group {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
-  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
-.fulfillment-pack-secret .fulfillment-secret-code-line {
-  justify-content: flex-start;
+.fulfillment-secret-code-heading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.fulfillment-pack-secret .fulfillment-secret-code-group {
+  align-items: flex-start;
+}
+
+.fulfillment-secret-code-group > .fulfillment-secret-code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.fulfillment-pack-secret .fulfillment-secret-code {
+  text-align: left;
 }
 
 .fulfillment-pack-secret-image {
@@ -4603,6 +4617,10 @@ button.fulfillment-order-address-edit svg {
     flex: 0 1 clamp(0px, calc((100% - 16px) / 3), 130px);
     min-width: 0;
     gap: 4px;
+  }
+
+  .order-items .figure-tile .fulfillment-secret-code-heading {
+    font-size: clamp(10px, 3vw, 12px);
   }
 
   .order-items .figure-image {
