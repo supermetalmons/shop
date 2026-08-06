@@ -98,8 +98,15 @@ test('valid ShipStation rates include every charge and are sorted by total', () 
           carrier_id: 'se-usps',
           carrier_code: 'stamps_com',
           carrier_friendly_name: 'USPS',
+          carrier_nickname: 'Warehouse USPS',
           service_code: 'usps_ground_advantage',
           service_type: 'Ground Advantage',
+          rate_type: 'shipment',
+          zone: 4,
+          carrier_delivery_days: '2 business days',
+          ship_date: '2026-08-06T00:00:00Z',
+          negotiated_rate: true,
+          trackable: true,
           validation_status: 'has_warnings',
           shipping_amount: { currency: 'usd', amount: 7 },
           insurance_amount: { currency: 'usd', amount: 1 },
@@ -118,6 +125,13 @@ test('valid ShipStation rates include every charge and are sorted by total', () 
   assert.equal(response.shipmentId, 'se-shipment');
   assert.deepEqual(response.rates.map((rate) => rate.rateId), ['se-cheap', 'se-expensive']);
   assert.deepEqual(response.rates[0].totalAmount, { currency: 'usd', amount: 9 });
+  assert.equal(response.rates[0].carrierNickname, 'Warehouse USPS');
+  assert.equal(response.rates[0].rateType, 'shipment');
+  assert.equal(response.rates[0].zone, 4);
+  assert.equal(response.rates[0].carrierDeliveryDays, '2 business days');
+  assert.equal(response.rates[0].shipDate, '2026-08-06T00:00:00Z');
+  assert.equal(response.rates[0].negotiatedRate, true);
+  assert.equal(response.rates[0].trackable, true);
   assert.equal(response.rates[0].estimatedDeliveryDays, undefined);
   assert.equal(response.rates[0].estimatedDeliveryDate, '2026-08-10T00:00:00Z');
   assert.deepEqual(response.rates[0].warningMessages, ['Residential surcharge may apply']);

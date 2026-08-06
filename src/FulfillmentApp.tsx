@@ -82,7 +82,11 @@ import {
   isRedeemedForIrlFulfillmentOrder,
   type FulfillmentOrderVisibilityFilter,
 } from './lib/fulfillmentOrderVisibility';
-import { groupFulfillmentShipStationRates } from './lib/fulfillmentShipStationRates';
+import {
+  fulfillmentShipStationDeliveryText,
+  groupFulfillmentShipStationRates,
+  prepareFulfillmentShipStationRates,
+} from './lib/fulfillmentShipStationRates';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
@@ -226,24 +230,15 @@ function formatShipStationMoney(money: ShipStationMoney | undefined): string {
   }
 }
 
-function shipStationDeliveryText(rate: FulfillmentShipStationRate): string {
-  if (rate.estimatedDeliveryDate) {
-    const date = new Date(rate.estimatedDeliveryDate);
-    if (Number.isFinite(date.getTime())) {
-      return `Estimated ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-    }
-  }
-  if (rate.deliveryDays != null) return `${rate.deliveryDays} ${rate.deliveryDays === 1 ? 'day' : 'days'}`;
-  return 'Delivery estimate unavailable';
-}
-
 function ShipStationRateOption({
   rate,
+  detail,
   selected,
   disabled,
   onSelect,
 }: {
   rate: FulfillmentShipStationRate;
+  detail?: string;
   selected: boolean;
   disabled: boolean;
   onSelect: () => void;
@@ -266,8 +261,9 @@ function ShipStationRateOption({
           </span>
           <strong>{formatShipStationMoney(rate.totalAmount)}</strong>
         </span>
+        {detail ? <span className="muted small">{detail}</span> : null}
         <span className="muted small">
-          {shipStationDeliveryText(rate)}
+          {fulfillmentShipStationDeliveryText(rate)}
           {rate.guaranteedService ? ' · Guaranteed' : ''}
         </span>
         {rate.warningMessages.map((warning, warningIndex) => (
@@ -1729,10 +1725,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading;
   const activeShipstationSelectedRate =
     shipstationRates.find((rate) => rate.rateId === shipstationSelectedRateId) ?? null;
-  const activeShipstationRateGroups = useMemo(
-    () => groupFulfillmentShipStationRates(shipstationRates, shipstationSelectedRateId),
-    [shipstationRates, shipstationSelectedRateId],
+  const activeShipstationPreparedRates = useMemo(
+    () => prepareFulfillmentShipStationRates(shipstationRates),
+    [shipstationRates],
   );
+  const activeShipstationRateGroups = useMemo(
+    () => groupFulfillmentShipStationRates(activeShipstationPreparedRates.rates, shipstationSelectedRateId),
+    [activeShipstationPreparedRates.rates, shipstationSelectedRateId],
+  );
+  const activeShipstationSelectedRateDetail = activeShipstationSelectedRate
+    ? activeShipstationPreparedRates.detailByRateId.get(activeShipstationSelectedRate.rateId)
+    : undefined;
   const activeShipstationSelectedOtherRate = activeShipstationRateGroups.selectedOtherRate;
   const visibleShipstationInvalidRates = shipstationRates.length
     ? shipstationInvalidRates.filter((rate) => rate.responseIssue)
@@ -3018,9 +3021,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     <span>Total charge</span>
                     <strong>{formatShipStationMoney(activeShipstationSelectedRate.totalAmount)}</strong>
                   </div>
+                  {activeShipstationSelectedRateDetail ? (
+                    <div className="muted small">{activeShipstationSelectedRateDetail}</div>
+                  ) : null}
                   <div className="muted small">The charge is made through your ShipStation account.</div>
                 </div>
-              ) : shipstationRates.length ? (
+              ) : activeShipstationPreparedRates.rates.length ? (
                 <div className="shipstation-rate-picker">
                   <div className="shipstation-rate-picker__head">
                     <div id="shipstation-lowest-prices-label" className="shipstation-rate-section__label">
@@ -3035,7 +3041,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         onClick={() => setShipstationRatesExpanded((expanded) => !expanded)}
                         disabled={activeShipstationBusy}
                       >
-                        {shipstationRatesExpanded ? 'Show fewer' : `Show all ${shipstationRates.length} rates`}
+                        {shipstationRatesExpanded
+                          ? 'Show fewer'
+                          : `Show all ${activeShipstationPreparedRates.rates.length} rates`}
                       </button>
                     ) : null}
                   </div>
@@ -3055,6 +3063,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                           <ShipStationRateOption
                             key={rate.rateId}
                             rate={rate}
+                            detail={activeShipstationPreparedRates.detailByRateId.get(rate.rateId)}
                             selected={rate.rateId === shipstationSelectedRateId}
                             disabled={activeShipstationBusy}
                             onSelect={() => handleSelectShipstationRate(rate.rateId)}
@@ -3076,6 +3085,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                             <ShipStationRateOption
                               key={rate.rateId}
                               rate={rate}
+                              detail={activeShipstationPreparedRates.detailByRateId.get(rate.rateId)}
                               selected={rate.rateId === shipstationSelectedRateId}
                               disabled={activeShipstationBusy}
                               onSelect={() => handleSelectShipstationRate(rate.rateId)}
@@ -3095,6 +3105,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                         <div className="shipstation-rate-list">
                           <ShipStationRateOption
                             rate={activeShipstationSelectedOtherRate}
+                            detail={activeShipstationPreparedRates.detailByRateId.get(
+                              activeShipstationSelectedOtherRate.rateId,
+                            )}
                             selected
                             disabled={activeShipstationBusy}
                             onSelect={() => handleSelectShipstationRate(activeShipstationSelectedOtherRate.rateId)}

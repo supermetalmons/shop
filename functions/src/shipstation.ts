@@ -439,20 +439,31 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
       ),
     };
     const carrierCode = stringValue(rate.carrier_code);
+    const carrierNickname = stringValue(rate.carrier_nickname);
     const carrierName =
-      stringValue(rate.carrier_friendly_name) || stringValue(rate.carrier_nickname) || carrierCode || 'Carrier';
+      stringValue(rate.carrier_friendly_name) || carrierNickname || carrierCode || 'Carrier';
     const serviceCode = stringValue(rate.service_code);
     const serviceName = stringValue(rate.service_type) || serviceCode || 'Service';
     const deliveryDays = finiteNumber(rate.delivery_days);
+    const zone = finiteNumber(rate.zone);
     rates.push({
       rateId,
       shipmentId: rateShipmentId,
       carrierId: stringValue(rate.carrier_id),
       carrierCode,
       carrierName,
+      ...(carrierNickname ? { carrierNickname } : {}),
       serviceCode,
       serviceName,
       ...(stringValue(rate.package_type) ? { packageType: stringValue(rate.package_type) } : {}),
+      ...(stringValue(rate.rate_type) ? { rateType: stringValue(rate.rate_type) } : {}),
+      ...(zone != null && zone >= 0 ? { zone: Math.floor(zone) } : {}),
+      ...(stringValue(rate.carrier_delivery_days)
+        ? { carrierDeliveryDays: stringValue(rate.carrier_delivery_days) }
+        : {}),
+      ...(stringValue(rate.ship_date) ? { shipDate: stringValue(rate.ship_date) } : {}),
+      ...(typeof rate.negotiated_rate === 'boolean' ? { negotiatedRate: rate.negotiated_rate } : {}),
+      ...(typeof rate.trackable === 'boolean' ? { trackable: rate.trackable } : {}),
       shippingAmount,
       insuranceAmount,
       confirmationAmount,

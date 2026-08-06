@@ -184,9 +184,16 @@ export type FulfillmentShipStationRate = {
   carrierId: string;
   carrierCode: string;
   carrierName: string;
+  carrierNickname?: string;
   serviceCode: string;
   serviceName: string;
   packageType?: string;
+  rateType?: string;
+  zone?: number;
+  carrierDeliveryDays?: string;
+  shipDate?: string;
+  negotiatedRate?: boolean;
+  trackable?: boolean;
   shippingAmount: ShipStationMoney;
   insuranceAmount: ShipStationMoney;
   confirmationAmount: ShipStationMoney;
