@@ -69,6 +69,7 @@ import {
   listShipStationLabelsForShipment,
   parseShipStationShipFrom,
   parseShipStationShipTo,
+  requestShipStationShipmentRates,
   shipStationMoneyMatches,
   shipStationPackageDetails,
   shipStationTrackingCodeUpdate,
@@ -82,6 +83,7 @@ import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
+  type ShipStationPackageInput,
 } from './shared/shipstationPackage.js';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
@@ -6679,6 +6681,38 @@ export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentIn
  * ShipStation round trip, short enough that a crashed call becomes retryable quickly.
  */
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
+const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
+
+type PendingShipStationRateRequest = {
+  requestId: string;
+  createdAt?: string;
+};
+
+function storedPendingShipStationRateRequest(
+  value: unknown,
+  shipmentId: string,
+  parcel: ShipStationPackageInput,
+): PendingShipStationRateRequest | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  const requestId = typeof raw.requestId === 'string' ? raw.requestId.trim() : '';
+  const storedShipmentId = typeof raw.shipmentId === 'string' ? raw.shipmentId.trim() : '';
+  const storedPackage = normalizeShipStationPackage(raw.package);
+  const requestedAt = toMillisMaybe(raw.requestedAt) ?? 0;
+  if (
+    !requestId ||
+    storedShipmentId !== shipmentId ||
+    !storedPackage ||
+    !requestedAt ||
+    Date.now() - requestedAt >= SHIPSTATION_RATE_REQUEST_TTL_MS ||
+    storedPackage.length !== parcel.length ||
+    storedPackage.width !== parcel.width ||
+    storedPackage.height !== parcel.height ||
+    storedPackage.weight !== parcel.weight
+  ) return undefined;
+  const createdAt = typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt.trim() : undefined;
+  return { requestId, ...(createdAt ? { createdAt } : {}) };
+}
 
 function shipStationShipToForOrder(order: any) {
   const addressSnapshot = order?.addressSnapshot || {};
@@ -6821,14 +6855,35 @@ async function transitionFulfillmentShipStationPurchaseState(args: {
   });
 }
 
-async function getCompletedShipStationRates(apiKey: string, shipmentId: string) {
-  let response = await getShipStationShipmentRates(apiKey, shipmentId);
+async function getCompletedShipStationRates(
+  apiKey: string,
+  shipmentId: string,
+  pendingRequest: PendingShipStationRateRequest | undefined,
+  persistPendingRequest: (request: PendingShipStationRateRequest) => Promise<void>,
+) {
+  let response = pendingRequest
+    ? await getShipStationShipmentRates(apiKey, shipmentId, pendingRequest)
+    : await requestShipStationShipmentRates(apiKey, shipmentId);
+  let expectedRequest = pendingRequest;
+  if (!expectedRequest && response.status === 'working') {
+    if (!response.rateRequestId) {
+      throw new HttpsError('internal', 'ShipStation did not identify the pending rate request.');
+    }
+    expectedRequest = {
+      requestId: response.rateRequestId,
+      ...(response.createdAt ? { createdAt: response.createdAt } : {}),
+    };
+    await persistPendingRequest(expectedRequest);
+  }
   for (const delayMs of [400, 800, 1200]) {
     if (response.status !== 'working') break;
+    if (!expectedRequest) {
+      throw new HttpsError('internal', 'ShipStation did not identify the pending rate request.');
+    }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    response = await getShipStationShipmentRates(apiKey, shipmentId);
+    response = await getShipStationShipmentRates(apiKey, shipmentId, expectedRequest);
   }
-  if (response.status === 'working' && !response.rates.length) {
+  if (response.status === 'working') {
     throw new HttpsError('unavailable', 'ShipStation is still calculating rates. Try again in a moment.');
   }
   return {
@@ -7143,6 +7198,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
             packageCount: currentPackageDetails.packageCount,
             package: FieldValue.delete(),
             rateQuotes: FieldValue.delete(),
+            rateRequest: FieldValue.delete(),
             ratesClaimedAt: FieldValue.delete(),
             ratesClaimedBy: FieldValue.delete(),
           },
@@ -7227,7 +7283,32 @@ export const getFulfillmentShipStationRates = onCallLogged(
           ...(adoptedAfterUpdate.downloadUrl ? { labelDownloadUrl: adoptedAfterUpdate.downloadUrl } : {}),
         };
       }
-      const rateResponse = await getCompletedShipStationRates(apiKey, shipmentId);
+      const pendingRateRequest = storedPendingShipStationRateRequest(
+        claimedOrder?.shipstation?.rateRequest,
+        shipmentId,
+        storedPackage,
+      );
+      const rateResponse = await getCompletedShipStationRates(
+        apiKey,
+        shipmentId,
+        pendingRateRequest,
+        async (request) => {
+          await orderRef.set(
+            {
+              shipstation: {
+                rateRequest: {
+                  requestId: request.requestId,
+                  ...(request.createdAt ? { createdAt: request.createdAt } : {}),
+                  shipmentId,
+                  package: storedPackage,
+                  requestedAt: FieldValue.serverTimestamp(),
+                },
+              },
+            },
+            { merge: true },
+          );
+        },
+      );
       const rates = rateResponse.rates;
       await orderRef.set(
         {
@@ -7239,6 +7320,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
               shipmentId: rate.shipmentId,
               totalAmount: rate.totalAmount,
             })),
+            rateRequest: FieldValue.delete(),
             ratesUpdatedAt: FieldValue.serverTimestamp(),
             ratesUpdatedBy: wallet,
             ratesClaimedAt: FieldValue.delete(),

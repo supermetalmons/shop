@@ -8,7 +8,9 @@ import {
   adoptOrPurchaseShipStationLabel,
   buildShipStationPackages,
   createShipStationLabelFromRate,
+  getShipStationShipmentRates,
   isActiveShipStationLabel,
+  requestShipStationShipmentRates,
   shipStationErrorMessage,
   shipStationLabelResult,
   shipStationMoneyMatches,
@@ -152,6 +154,13 @@ test('invalid, errored, incomplete, and mixed-currency ShipStation rates are omi
     ],
   });
   assert.deepEqual(response.rates, []);
+  assert.deepEqual(response.invalidRates.map((rate) => rate.errorMessages), [
+    ['ShipStation validation status is “invalid”.'],
+    ['ShipStation validation status is “unknown”.'],
+    ['The carrier rejected the address.'],
+    ['The other charges amount is missing or invalid.'],
+    ['The rate charges use different currencies.'],
+  ]);
 });
 
 test('invalid ShipStation rate explanations are preserved for operators', () => {
@@ -182,7 +191,7 @@ test('invalid ShipStation rate explanations are preserved for operators', () => 
       carrierName: 'UPS',
       serviceCode: 'ups_ground',
       serviceName: 'UPS Ground',
-      errorMessages: ['Destination postal code is not supported'],
+      errorMessages: ['The carrier rejected the postal code.'],
     },
     {
       carrierId: '',
@@ -193,6 +202,165 @@ test('invalid ShipStation rate explanations are preserved for operators', () => 
       errorMessages: ['ShipStation marked this service as unavailable.'],
     },
   ]);
+});
+
+test('top-level ShipStation rating errors are preserved for operators', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    invalid_rates: [],
+    errors: [{
+      error_code: 'invalid_address',
+      error_type: 'validation',
+      field_name: 'shipment.ship_to.postal_code',
+      error_source: 'carrier',
+      message: '12 Private Street is invalid',
+    }],
+  });
+
+  assert.deepEqual(response.invalidRates, [
+    {
+      carrierId: '',
+      carrierCode: '',
+      carrierName: 'ShipStation',
+      serviceCode: '',
+      serviceName: 'Rating',
+      errorMessages: [
+        'invalid_address · type: validation · field: shipment.ship_to.postal_code · source: carrier',
+      ],
+    },
+  ]);
+});
+
+test('an empty ShipStation rate response reports that no details were provided', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    invalid_rates: [],
+    errors: null,
+  });
+
+  assert.deepEqual(response.invalidRates[0].errorMessages, [
+    'ShipStation returned no rate entries or rejection details (status: completed).',
+  ]);
+});
+
+test('rate shopping requests fresh rates from connected rate-capable carriers', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (url.endsWith('/carriers?page_size=50')) {
+      return new Response(JSON.stringify({
+        carriers: [
+          { carrier_id: 'se-active', send_rates: true },
+          { carrier_id: 'se-no-rates', send_rates: false },
+          { carrier_id: 'se-disabled', send_rates: true, disabled_by_billing_plan: true },
+          { carrier_id: 'se-pending', send_rates: true, connection_status: 'pending_approval' },
+        ],
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      shipment_id: 'se-shipment',
+      rate_response: {
+        shipment_id: 'se-shipment',
+        rate_request_id: 'se-request',
+        created_at: '2026-08-06T12:00:00Z',
+        status: 'completed',
+        rates: [{
+          rate_id: 'se-rate',
+          carrier_id: 'se-active',
+          carrier_code: 'ups',
+          carrier_friendly_name: 'UPS',
+          service_code: 'ups_ground',
+          service_type: 'UPS Ground',
+          validation_status: 'valid',
+          shipping_amount: { currency: 'usd', amount: 10 },
+          insurance_amount: { currency: 'usd', amount: 0 },
+          confirmation_amount: { currency: 'usd', amount: 0 },
+          other_amount: { currency: 'usd', amount: 0 },
+          warning_messages: [],
+          error_messages: [],
+        }],
+        invalid_rates: [],
+        errors: [],
+      },
+    }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const response = await requestShipStationShipmentRates('api-key', 'se-shipment');
+    assert.deepEqual(response.rates.map((rate) => rate.rateId), ['se-rate']);
+    assert.equal(response.rateRequestId, 'se-request');
+    assert.equal(response.createdAt, '2026-08-06T12:00:00Z');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(requests[0].url, 'https://api.shipstation.com/v2/carriers?page_size=50');
+  assert.equal(requests[1].url, 'https://api.shipstation.com/v2/rates');
+  assert.equal(requests[1].init?.method, 'POST');
+  assert.deepEqual(JSON.parse(String(requests[1].init?.body)), {
+    shipment_id: 'se-shipment',
+    rate_options: { carrier_ids: ['se-active'] },
+  });
+});
+
+test('shipment rate polling selects only the expected rate request', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestUrl = '';
+  const rate = (rateId: string) => ({
+    rate_id: rateId,
+    carrier_id: 'se-carrier',
+    carrier_code: 'ups',
+    carrier_friendly_name: 'UPS',
+    service_code: 'ups_ground',
+    service_type: 'UPS Ground',
+    validation_status: 'valid',
+    shipping_amount: { currency: 'usd', amount: 10 },
+    insurance_amount: { currency: 'usd', amount: 0 },
+    confirmation_amount: { currency: 'usd', amount: 0 },
+    other_amount: { currency: 'usd', amount: 0 },
+    warning_messages: [],
+    error_messages: [],
+  });
+  globalThis.fetch = (async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify([
+      {
+        shipment_id: 'se-shipment',
+        rate_request_id: 'se-old-request',
+        created_at: '2026-08-06T11:00:00Z',
+        status: 'completed',
+        rates: [rate('se-old-rate')],
+        invalid_rates: [],
+        errors: [],
+      },
+      {
+        shipment_id: 'se-shipment',
+        rate_request_id: 'se-current-request',
+        created_at: '2026-08-06T12:00:00Z',
+        status: 'completed',
+        rates: [rate('se-current-rate')],
+        invalid_rates: [],
+        errors: [],
+      },
+    ]), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const response = await getShipStationShipmentRates('api-key', 'se-shipment', {
+      requestId: 'se-current-request',
+      createdAt: '2026-08-06T12:00:00Z',
+    });
+    assert.deepEqual(response.rates.map((candidate) => candidate.rateId), ['se-current-rate']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(
+    requestUrl,
+    'https://api.shipstation.com/v2/shipments/se-shipment/rates?created_at_start=2026-08-06T12%3A00%3A00Z',
+  );
 });
 
 test('ShipStation labels expose sanitized purchase details and an HTTPS PDF URL', () => {

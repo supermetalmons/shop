@@ -52,6 +52,8 @@ export type ShipStationRateResponse = {
   status: string;
   rates: FulfillmentShipStationRate[];
   invalidRates: FulfillmentShipStationInvalidRate[];
+  rateRequestId?: string;
+  createdAt?: string;
 };
 
 export function isActiveShipStationLabel(
@@ -246,38 +248,119 @@ export function shipStationLabelResult(value: unknown): ShipStationLabelResult |
   return { label, ...(downloadUrl ? { downloadUrl } : {}) };
 }
 
-export function shipStationRateSummaries(value: unknown): ShipStationRateResponse {
-  const root = Array.isArray(value) ? value[0] : value;
-  const raw = root && typeof root === 'object' ? (root as Record<string, unknown>) : {};
+function shipStationInvalidRateSummary(
+  rate: Record<string, unknown>,
+  errorMessages: string[],
+): FulfillmentShipStationInvalidRate {
+  const carrierCode = stringValue(rate.carrier_code);
+  const serviceCode = stringValue(rate.service_code);
+  return {
+    carrierId: stringValue(rate.carrier_id),
+    carrierCode,
+    carrierName:
+      stringValue(rate.carrier_friendly_name) || stringValue(rate.carrier_nickname) || carrierCode || 'Carrier',
+    serviceCode,
+    serviceName: stringValue(rate.service_type) || serviceCode || 'Service',
+    errorMessages: errorMessages.length ? errorMessages : ['ShipStation marked this service as unavailable.'],
+  };
+}
+
+function shipStationRateErrorMessages(value: unknown): string[] {
+  return Array.from(new Set(stringList(value).map((message) => {
+    const normalized = message.toLowerCase();
+    if (/postal|zip/.test(normalized)) return 'The carrier rejected the postal code.';
+    if (/phone/.test(normalized)) return 'The carrier rejected the phone number.';
+    if (/address/.test(normalized)) return 'The carrier rejected the address.';
+    if (/weight/.test(normalized)) return 'The carrier rejected the package weight.';
+    if (/dimension|length|width|height/.test(normalized)) return 'The carrier rejected the package dimensions.';
+    if (/country/.test(normalized)) return 'The carrier rejected the country.';
+    if (/state|province|region/.test(normalized)) return 'The carrier rejected the state or province.';
+    if (/city|locality/.test(normalized)) return 'The carrier rejected the city.';
+    if (/fund|balance/.test(normalized)) return 'The carrier account may need funds.';
+    if (/package/.test(normalized)) return 'The carrier rejected the package.';
+    if (/service/.test(normalized)) return 'The carrier rejected the service.';
+    if (/carrier|account/.test(normalized)) return 'The carrier account is unavailable.';
+    return 'The carrier rejected this rate.';
+  })));
+}
+
+function shipStationResponseErrorMessages(value: unknown): string[] {
+  const errors = Array.isArray(value) ? value : value ? [value] : [];
+  return errors.flatMap((candidate): string[] => {
+    if (typeof candidate === 'string') return shipStationRateErrorMessages([candidate]);
+    const error = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
+    const code = stringValue(error.error_code) || stringValue(error.code);
+    const type = stringValue(error.error_type);
+    const fieldName = stringValue(error.field_name);
+    const source = stringValue(error.error_source);
+    const details = [code || 'rate_error'];
+    if (type) details.push(`type: ${type}`);
+    if (fieldName) details.push(`field: ${fieldName}`);
+    if (source) details.push(`source: ${source}`);
+    return [details.join(' · ').slice(0, 500)];
+  }).slice(0, 10);
+}
+
+export function shipStationRateSummaries(value: unknown, expectedRateRequestId?: string): ShipStationRateResponse {
+  const roots = Array.isArray(value) ? value : [value];
+  const responses = roots.map((root): Record<string, unknown> => {
+    const rootRecord = root && typeof root === 'object' ? (root as Record<string, unknown>) : {};
+    return rootRecord.rate_response && typeof rootRecord.rate_response === 'object'
+      ? (rootRecord.rate_response as Record<string, unknown>)
+      : rootRecord;
+  });
+  const raw = expectedRateRequestId
+    ? responses.find((response) => stringValue(response.rate_request_id) === expectedRateRequestId) ?? {}
+    : responses[0] ?? {};
   const shipmentId = stringValue(raw.shipment_id);
+  const rateRequestId = stringValue(raw.rate_request_id);
+  const createdAt = stringValue(raw.created_at);
   const ratesRaw = Array.isArray(raw.rates) ? raw.rates : [];
-  const rates = ratesRaw.flatMap((candidate): FulfillmentShipStationRate[] => {
+  const rates: FulfillmentShipStationRate[] = [];
+  const rejectedRates: FulfillmentShipStationInvalidRate[] = [];
+  for (const candidate of ratesRaw) {
     const rate = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
     const rateId = stringValue(rate.rate_id);
     const rateShipmentId = stringValue(rate.shipment_id) || shipmentId;
-    const errorMessages = stringList(rate.error_messages);
+    const errorMessages = shipStationRateErrorMessages(rate.error_messages);
     const validationStatus = stringValue(rate.validation_status);
-    if (
-      !rateId ||
-      !rateShipmentId ||
-      (validationStatus !== 'valid' && validationStatus !== 'has_warnings') ||
-      errorMessages.length
-    ) return [];
+    const rejectionMessages: string[] = [];
+    if (!rateId) rejectionMessages.push('The rate is missing its ShipStation rate ID.');
+    if (!rateShipmentId) rejectionMessages.push('The rate is missing its ShipStation shipment ID.');
+    if (validationStatus !== 'valid' && validationStatus !== 'has_warnings') {
+      rejectionMessages.push(`ShipStation validation status is “${validationStatus || 'missing'}”.`);
+    }
+    rejectionMessages.push(...errorMessages);
     const shippingAmount = shipStationMoney(rate.shipping_amount);
-    if (!shippingAmount) return [];
-    const insuranceAmount = shipStationMoney(rate.insurance_amount, shippingAmount.currency);
-    const confirmationAmount = shipStationMoney(rate.confirmation_amount, shippingAmount.currency);
-    const otherAmount = shipStationMoney(rate.other_amount, shippingAmount.currency);
-    const taxAmount = rate.tax_amount ? shipStationMoney(rate.tax_amount, shippingAmount.currency) : undefined;
-    if (
-      !insuranceAmount ||
-      !confirmationAmount ||
-      !otherAmount ||
-      (rate.tax_amount && !taxAmount) ||
-      [insuranceAmount, confirmationAmount, otherAmount, taxAmount]
-        .filter((amount): amount is ShipStationMoney => Boolean(amount))
-        .some((amount) => amount.currency !== shippingAmount.currency)
-    ) return [];
+    if (!shippingAmount) rejectionMessages.push('The shipping amount is missing or invalid.');
+    const insuranceAmount = shippingAmount
+      ? shipStationMoney(rate.insurance_amount, shippingAmount.currency)
+      : null;
+    const confirmationAmount = shippingAmount
+      ? shipStationMoney(rate.confirmation_amount, shippingAmount.currency)
+      : null;
+    const otherAmount = shippingAmount ? shipStationMoney(rate.other_amount, shippingAmount.currency) : null;
+    const hasTaxAmount = rate.tax_amount != null;
+    const taxAmount = shippingAmount && hasTaxAmount
+      ? shipStationMoney(rate.tax_amount, shippingAmount.currency)
+      : undefined;
+    if (shippingAmount) {
+      if (!insuranceAmount) rejectionMessages.push('The insurance amount is missing or invalid.');
+      if (!confirmationAmount) rejectionMessages.push('The confirmation amount is missing or invalid.');
+      if (!otherAmount) rejectionMessages.push('The other charges amount is missing or invalid.');
+      if (hasTaxAmount && !taxAmount) rejectionMessages.push('The tax amount is invalid.');
+      if (
+        [insuranceAmount, confirmationAmount, otherAmount, taxAmount]
+          .filter((amount): amount is ShipStationMoney => Boolean(amount))
+          .some((amount) => amount.currency !== shippingAmount.currency)
+      ) {
+        rejectionMessages.push('The rate charges use different currencies.');
+      }
+    }
+    if (rejectionMessages.length || !shippingAmount || !insuranceAmount || !confirmationAmount || !otherAmount) {
+      rejectedRates.push(shipStationInvalidRateSummary(rate, Array.from(new Set(rejectionMessages))));
+      continue;
+    }
     const totalAmount = {
       currency: shippingAmount.currency,
       amount: roundCurrency(
@@ -294,7 +377,7 @@ export function shipStationRateSummaries(value: unknown): ShipStationRateRespons
     const serviceCode = stringValue(rate.service_code);
     const serviceName = stringValue(rate.service_type) || serviceCode || 'Service';
     const deliveryDays = finiteNumber(rate.delivery_days);
-    return [{
+    rates.push({
       rateId,
       shipmentId: rateShipmentId,
       carrierId: stringValue(rate.carrier_id),
@@ -315,8 +398,8 @@ export function shipStationRateSummaries(value: unknown): ShipStationRateRespons
         : {}),
       guaranteedService: rate.guaranteed_service === true,
       warningMessages: stringList(rate.warning_messages),
-    }];
-  });
+    });
+  }
   rates.sort(
     (a, b) =>
       a.totalAmount.currency.localeCompare(b.totalAmount.currency) ||
@@ -325,22 +408,38 @@ export function shipStationRateSummaries(value: unknown): ShipStationRateRespons
       a.serviceName.localeCompare(b.serviceName),
   );
   const invalidRatesRaw = Array.isArray(raw.invalid_rates) ? raw.invalid_rates : [];
-  const invalidRates = invalidRatesRaw.slice(0, 50).map((candidate): FulfillmentShipStationInvalidRate => {
+  const explicitInvalidRates = invalidRatesRaw.map((candidate): FulfillmentShipStationInvalidRate => {
     const rate = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
-    const carrierCode = stringValue(rate.carrier_code);
-    const serviceCode = stringValue(rate.service_code);
-    const errorMessages = stringList(rate.error_messages).map((message) => message.slice(0, 500));
-    return {
-      carrierId: stringValue(rate.carrier_id),
-      carrierCode,
-      carrierName:
-        stringValue(rate.carrier_friendly_name) || stringValue(rate.carrier_nickname) || carrierCode || 'Carrier',
-      serviceCode,
-      serviceName: stringValue(rate.service_type) || serviceCode || 'Service',
-      errorMessages: errorMessages.length ? errorMessages : ['ShipStation marked this service as unavailable.'],
-    };
+    const errorMessages = shipStationRateErrorMessages(rate.error_messages);
+    return shipStationInvalidRateSummary(rate, errorMessages);
   });
-  return { shipmentId, status: stringValue(raw.status), rates, invalidRates };
+  const responseErrors = shipStationResponseErrorMessages(raw.errors);
+  const invalidRates = [
+    ...(responseErrors.length
+      ? [shipStationInvalidRateSummary({ carrier_friendly_name: 'ShipStation', service_type: 'Rating' }, responseErrors)]
+      : []),
+    ...explicitInvalidRates,
+    ...rejectedRates,
+  ].filter((rate, index, all) => {
+    const key = `${rate.carrierId}\n${rate.serviceCode}\n${rate.errorMessages.join('\n')}`;
+    return all.findIndex((candidate) =>
+      `${candidate.carrierId}\n${candidate.serviceCode}\n${candidate.errorMessages.join('\n')}` === key) === index;
+  }).slice(0, 50);
+  if (!rates.length && !invalidRates.length) {
+    const status = stringValue(raw.status);
+    invalidRates.push(shipStationInvalidRateSummary(
+      { carrier_friendly_name: 'ShipStation', service_type: 'Rating' },
+      [`ShipStation returned no rate entries or rejection details${status ? ` (status: ${status})` : ''}.`],
+    ));
+  }
+  return {
+    shipmentId,
+    status: stringValue(raw.status),
+    rates,
+    invalidRates,
+    ...(rateRequestId ? { rateRequestId } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
 }
 
 const shipFromSchema = z.object({
@@ -653,17 +752,71 @@ export async function updateShipStationShipment(
   return getShipStationShipmentById(apiKey, shipmentId);
 }
 
-export async function getShipStationShipmentRates(
+export async function requestShipStationShipmentRates(
   apiKey: string,
   shipmentId: string,
 ): Promise<ShipStationRateResponse> {
-  const { status, json } = await shipStationFetch(apiKey, `/shipments/${encodeURIComponent(shipmentId)}/rates`, {
-    method: 'GET',
+  const carriersResponse = await shipStationFetch(apiKey, '/carriers?page_size=50', { method: 'GET' });
+  if (carriersResponse.status < 200 || carriersResponse.status >= 300) {
+    throw httpsErrorForStatus(
+      carriersResponse.status,
+      shipStationErrorMessage(carriersResponse.json, `HTTP ${carriersResponse.status}`),
+    );
+  }
+  const carriers = Array.isArray(carriersResponse.json?.carriers) ? carriersResponse.json.carriers : [];
+  const carrierIds = Array.from(new Set(carriers.flatMap((candidate: unknown): string[] => {
+    const carrier = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
+    const carrierId = stringValue(carrier.carrier_id);
+    if (
+      !carrierId ||
+      carrier.send_rates === false ||
+      carrier.disabled_by_billing_plan === true ||
+      stringValue(carrier.connection_status) === 'pending_approval'
+    ) return [];
+    return [carrierId];
+  })));
+  if (!carrierIds.length) {
+    throw new HttpsError('failed-precondition', 'No connected ShipStation carriers are available for rate shopping.');
+  }
+  const { status, json } = await shipStationFetch(apiKey, '/rates', {
+    method: 'POST',
+    body: {
+      shipment_id: shipmentId,
+      rate_options: { carrier_ids: carrierIds },
+    },
   });
   if (status < 200 || status >= 300) {
     throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
   }
   const response = shipStationRateSummaries(json);
+  return { ...response, shipmentId: response.shipmentId || shipmentId };
+}
+
+export async function getShipStationShipmentRates(
+  apiKey: string,
+  shipmentId: string,
+  expectedRequest?: { requestId: string; createdAt?: string },
+): Promise<ShipStationRateResponse> {
+  const query = expectedRequest?.createdAt
+    ? `?created_at_start=${encodeURIComponent(expectedRequest.createdAt)}`
+    : '';
+  const { status, json } = await shipStationFetch(apiKey, `/shipments/${encodeURIComponent(shipmentId)}/rates${query}`, {
+    method: 'GET',
+  });
+  if (status < 200 || status >= 300) {
+    throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+  }
+  const response = shipStationRateSummaries(json, expectedRequest?.requestId);
+  if (expectedRequest && response.rateRequestId !== expectedRequest.requestId) {
+    return {
+      shipmentId,
+      status: 'working',
+      rates: [],
+      invalidRates: [],
+      rateRequestId: expectedRequest.requestId,
+      ...(expectedRequest.createdAt ? { createdAt: expectedRequest.createdAt } : {}),
+    };
+  }
   return { ...response, shipmentId: response.shipmentId || shipmentId };
 }
 
