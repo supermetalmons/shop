@@ -11,7 +11,7 @@ import {
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
+import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
 import {
   addFulfillmentOrderToShipStation,
   listFulfillmentManualReviewCheckouts,
@@ -1955,14 +1955,31 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const canPrintOrderLabel =
       !isRedeemedForIrlFulfillmentOrder(order) &&
       (Boolean(order.shipstationShipmentId) || normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
+    const showOrderEmailLine =
+      showContactInfo && ((order.address.full !== '***' && Boolean(order.address.email)) || canEditOrderAddress);
     return (
       <div key={orderKey} className="fulfillment-order-section">
         <div className="card__head">
           <div>
             <div className="card__title">Order {order.deliveryId}</div>
             <div className="muted fulfillment-order-date small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
-            {showContactInfo && order.address.full !== '***' && order.address.email ? (
-              <div className="muted small">{order.address.email}</div>
+            {showOrderEmailLine ? (
+              <div className="fulfillment-order-email-line">
+                {order.address.full !== '***' && order.address.email ? (
+                  <div className="muted small">{order.address.email}</div>
+                ) : null}
+                {canEditOrderAddress ? (
+                  <button
+                    type="button"
+                    className="fulfillment-order-address-edit"
+                    onClick={() => handleOpenAddressModal(order)}
+                    aria-label={`Edit address for order ${order.deliveryId}`}
+                    title="Edit address"
+                  >
+                    <FiEdit2 aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             {showContactInfo && order.address.full !== '***' && order.address.phone ? (
               <div className="muted small">{order.address.phone}</div>
@@ -2017,26 +2034,15 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   </>
                 )
               ) : null}
-              {canEditOrderAddress || canPrintOrderLabel ? (
+              {canPrintOrderLabel ? (
                 <div className="fulfillment-order-address-actions">
-                  {canEditOrderAddress ? (
-                    <button
-                      type="button"
-                      className="link fulfillment-order-address-action small no-focus-style"
-                      onClick={() => handleOpenAddressModal(order)}
-                    >
-                      Edit address
-                    </button>
-                  ) : null}
-                  {canPrintOrderLabel ? (
-                    <button
-                      type="button"
-                      className="link fulfillment-order-address-action small no-focus-style"
-                      onClick={() => handleOpenShipstationModal(orderKey)}
-                    >
-                      Print Label
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    className="link fulfillment-order-address-action small no-focus-style"
+                    onClick={() => handleOpenShipstationModal(orderKey)}
+                  >
+                    Print Label
+                  </button>
                 </div>
               ) : null}
             </div>

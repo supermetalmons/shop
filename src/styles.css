@@ -4520,6 +4520,38 @@ button.fulfillment-secret-code-download svg {
   word-break: break-word;
 }
 
+.fulfillment-order-email-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+button.fulfillment-order-address-edit {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.48;
+}
+
+button.fulfillment-order-address-edit:hover:not(:disabled),
+button.fulfillment-order-address-edit:focus-visible {
+  background: transparent;
+  color: var(--fg);
+  opacity: 1;
+}
+
+button.fulfillment-order-address-edit svg {
+  width: 12px;
+  height: 12px;
+}
+
 .fulfillment-order-address-actions {
   display: flex;
   align-items: center;
