@@ -4895,11 +4895,47 @@ button.fulfillment-order-address-edit svg {
   font-size: 13px;
 }
 
+.shipstation-rate-picker,
+.shipstation-rate-groups,
+.shipstation-rate-section,
 .shipstation-rate-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   width: 100%;
+}
+
+.shipstation-rate-picker {
+  gap: 6px;
+}
+
+.shipstation-rate-picker__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.shipstation-rate-groups {
+  gap: 12px;
+}
+
+.shipstation-rate-section {
+  gap: 6px;
+}
+
+.shipstation-rate-section__label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shipstation-rate-list {
+  gap: 8px;
+}
+
+.shipstation-rate-toggle {
+  flex: 0 0 auto;
 }
 
 .shipstation-rate-option {

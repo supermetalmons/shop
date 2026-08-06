@@ -82,6 +82,7 @@ import {
   isRedeemedForIrlFulfillmentOrder,
   type FulfillmentOrderVisibilityFilter,
 } from './lib/fulfillmentOrderVisibility';
+import { groupFulfillmentShipStationRates } from './lib/fulfillmentShipStationRates';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
@@ -234,6 +235,49 @@ function shipStationDeliveryText(rate: FulfillmentShipStationRate): string {
   }
   if (rate.deliveryDays != null) return `${rate.deliveryDays} ${rate.deliveryDays === 1 ? 'day' : 'days'}`;
   return 'Delivery estimate unavailable';
+}
+
+function ShipStationRateOption({
+  rate,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  rate: FulfillmentShipStationRate;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label className={`shipstation-rate-option${selected ? ' shipstation-rate-option--selected' : ''}`}>
+      <input
+        type="radio"
+        name="shipstation-rate"
+        value={rate.rateId}
+        checked={selected}
+        onChange={onSelect}
+        disabled={disabled}
+      />
+      <span className="shipstation-rate-option__body">
+        <span className="shipstation-rate-option__main">
+          <span>
+            <strong>{rate.carrierName}</strong>
+            <span className="muted"> · {rate.serviceName}</span>
+          </span>
+          <strong>{formatShipStationMoney(rate.totalAmount)}</strong>
+        </span>
+        <span className="muted small">
+          {shipStationDeliveryText(rate)}
+          {rate.guaranteedService ? ' · Guaranteed' : ''}
+        </span>
+        {rate.warningMessages.map((warning, warningIndex) => (
+          <span key={`${rate.rateId}:${warningIndex}`} className="shipstation-rate-option__warning small">
+            {warning}
+          </span>
+        ))}
+      </span>
+    </label>
+  );
 }
 
 function isActiveShipStationLabel(label: FulfillmentOrder['shipstationLabel']): boolean {
@@ -1117,6 +1161,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
   const [shipstationRates, setShipstationRates] = useState<FulfillmentShipStationRate[]>([]);
   const [shipstationInvalidRates, setShipstationInvalidRates] = useState<FulfillmentShipStationInvalidRate[]>([]);
+  const [shipstationRatesExpanded, setShipstationRatesExpanded] = useState(false);
   const [shipstationSelectedRateId, setShipstationSelectedRateId] = useState<string | null>(null);
   const [shipstationRatesRequested, setShipstationRatesRequested] = useState(false);
   const [shipstationReviewingPurchase, setShipstationReviewingPurchase] = useState(false);
@@ -1138,6 +1183,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const resetShipstationFlow = useCallback(() => {
     setShipstationRates([]);
     setShipstationInvalidRates([]);
+    setShipstationRatesExpanded(false);
     setShipstationSelectedRateId(null);
     setShipstationRatesRequested(false);
     setShipstationReviewingPurchase(false);
@@ -1683,6 +1729,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading;
   const activeShipstationSelectedRate =
     shipstationRates.find((rate) => rate.rateId === shipstationSelectedRateId) ?? null;
+  const activeShipstationRateGroups = useMemo(
+    () => groupFulfillmentShipStationRates(shipstationRates, shipstationSelectedRateId),
+    [shipstationRates, shipstationSelectedRateId],
+  );
+  const activeShipstationSelectedOtherRate = activeShipstationRateGroups.selectedOtherRate;
   const visibleShipstationInvalidRates = shipstationRates.length
     ? shipstationInvalidRates.filter((rate) => rate.responseIssue)
     : shipstationInvalidRates;
@@ -1697,6 +1748,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       !activeShipstationMultiPackage &&
       !activeShipstationPurchaseUnknown,
   );
+
+  const handleSelectShipstationRate = (rateId: string) => {
+    setShipstationSelectedRateId(rateId);
+    setShipstationPurchaseRequestId(null);
+    setShipstationError(null);
+  };
 
   const handleOpenShipstationModal = useCallback((orderKey: string) => {
     resetShipstationFlow();
@@ -1791,6 +1848,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     }
     setShipstationRatesLoading(true);
     setShipstationRatesRequested(true);
+    setShipstationRatesExpanded(false);
     setShipstationReviewingPurchase(false);
     setShipstationPurchaseRequestId(null);
     setShipstationError(null);
@@ -1899,6 +1957,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         ),
       );
       setShipstationRates([]);
+      setShipstationRatesExpanded(false);
       setShipstationSelectedRateId(null);
       setShipstationReviewingPurchase(false);
       setShipstationPurchaseUnknown(false);
@@ -1921,6 +1980,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         );
       } else if (/rate.*changed|refresh rates|no longer valid/i.test(message)) {
         setShipstationRates([]);
+        setShipstationRatesExpanded(false);
         setShipstationSelectedRateId(null);
         setShipstationReviewingPurchase(false);
         setShipstationPurchaseRequestId(null);
@@ -2923,6 +2983,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                             }));
                             setShipstationRates([]);
                             setShipstationInvalidRates([]);
+                            setShipstationRatesExpanded(false);
                             setShipstationSelectedRateId(null);
                             setShipstationReviewingPurchase(false);
                             setShipstationPurchaseRequestId(null);
@@ -2960,50 +3021,88 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   <div className="muted small">The charge is made through your ShipStation account.</div>
                 </div>
               ) : shipstationRates.length ? (
-                <div className="shipstation-rate-list" role="radiogroup" aria-label="Shipping rates">
-                  {shipstationRates.map((rate) => {
-                    const selected = rate.rateId === shipstationSelectedRateId;
-                    return (
-                      <label
-                        key={rate.rateId}
-                        className={`shipstation-rate-option${selected ? ' shipstation-rate-option--selected' : ''}`}
+                <div className="shipstation-rate-picker">
+                  <div className="shipstation-rate-picker__head">
+                    <div id="shipstation-lowest-prices-label" className="shipstation-rate-section__label">
+                      Lowest prices
+                    </div>
+                    {activeShipstationRateGroups.otherRates.length ? (
+                      <button
+                        type="button"
+                        className="link small shipstation-rate-toggle"
+                        aria-expanded={shipstationRatesExpanded}
+                        aria-controls="shipstation-rate-options"
+                        onClick={() => setShipstationRatesExpanded((expanded) => !expanded)}
+                        disabled={activeShipstationBusy}
                       >
-                        <input
-                          type="radio"
-                          name="shipstation-rate"
-                          value={rate.rateId}
-                          checked={selected}
-                          onChange={() => {
-                            setShipstationSelectedRateId(rate.rateId);
-                            setShipstationPurchaseRequestId(null);
-                            setShipstationError(null);
-                          }}
-                          disabled={activeShipstationBusy}
-                        />
-                        <span className="shipstation-rate-option__body">
-                          <span className="shipstation-rate-option__main">
-                            <span>
-                              <strong>{rate.carrierName}</strong>
-                              <span className="muted"> · {rate.serviceName}</span>
-                            </span>
-                            <strong>{formatShipStationMoney(rate.totalAmount)}</strong>
-                          </span>
-                          <span className="muted small">
-                            {shipStationDeliveryText(rate)}
-                            {rate.guaranteedService ? ' · Guaranteed' : ''}
-                          </span>
-                          {rate.warningMessages.map((warning, warningIndex) => (
-                            <span
-                              key={`${rate.rateId}:${warningIndex}`}
-                              className="shipstation-rate-option__warning small"
-                            >
-                              {warning}
-                            </span>
+                        {shipstationRatesExpanded ? 'Show fewer' : `Show all ${shipstationRates.length} rates`}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div
+                    id="shipstation-rate-options"
+                    className="shipstation-rate-groups"
+                    role="radiogroup"
+                    aria-label="Shipping rates"
+                  >
+                    <div
+                      className="shipstation-rate-section"
+                      role="group"
+                      aria-labelledby="shipstation-lowest-prices-label"
+                    >
+                      <div className="shipstation-rate-list">
+                        {activeShipstationRateGroups.recommendedRates.map((rate) => (
+                          <ShipStationRateOption
+                            key={rate.rateId}
+                            rate={rate}
+                            selected={rate.rateId === shipstationSelectedRateId}
+                            disabled={activeShipstationBusy}
+                            onSelect={() => handleSelectShipstationRate(rate.rateId)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    {shipstationRatesExpanded ? (
+                      <div
+                        className="shipstation-rate-section"
+                        role="group"
+                        aria-labelledby="shipstation-other-rates-label"
+                      >
+                        <div id="shipstation-other-rates-label" className="shipstation-rate-section__label">
+                          Other rates
+                        </div>
+                        <div className="shipstation-rate-list">
+                          {activeShipstationRateGroups.otherRates.map((rate) => (
+                            <ShipStationRateOption
+                              key={rate.rateId}
+                              rate={rate}
+                              selected={rate.rateId === shipstationSelectedRateId}
+                              disabled={activeShipstationBusy}
+                              onSelect={() => handleSelectShipstationRate(rate.rateId)}
+                            />
                           ))}
-                        </span>
-                      </label>
-                    );
-                  })}
+                        </div>
+                      </div>
+                    ) : activeShipstationSelectedOtherRate ? (
+                      <div
+                        className="shipstation-rate-section"
+                        role="group"
+                        aria-labelledby="shipstation-selected-rate-label"
+                      >
+                        <div id="shipstation-selected-rate-label" className="shipstation-rate-section__label">
+                          Selected rate
+                        </div>
+                        <div className="shipstation-rate-list">
+                          <ShipStationRateOption
+                            rate={activeShipstationSelectedOtherRate}
+                            selected
+                            disabled={activeShipstationBusy}
+                            onSelect={() => handleSelectShipstationRate(activeShipstationSelectedOtherRate.rateId)}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
               {visibleShipstationInvalidRates.length ? (
