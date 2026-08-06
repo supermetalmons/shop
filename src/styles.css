@@ -4831,6 +4831,13 @@ button.fulfillment-order-address-edit svg {
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
+  width: 100%;
+}
+
+.shipstation-header-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .shipstation-package {
@@ -4851,6 +4858,126 @@ button.fulfillment-order-address-edit svg {
   padding: 10px;
   font-size: 15px;
   text-align: center;
+}
+
+.shipstation-notice,
+.shipstation-label-summary,
+.shipstation-review {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.shipstation-notice {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.shipstation-label-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shipstation-label-summary__heading,
+.shipstation-review__title {
+  font-weight: 600;
+}
+
+.shipstation-label-summary__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shipstation-rate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.shipstation-rate-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+}
+
+.shipstation-rate-option--selected {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--card));
+}
+
+.shipstation-rate-option input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  box-shadow: none;
+}
+
+.shipstation-rate-option__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.shipstation-rate-option__main {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shipstation-rate-option__warning {
+  color: #b45309;
+}
+
+.shipstation-review {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.shipstation-review__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 14px;
+}
+
+.shipstation-review__row--total {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 540px) {
+  .shipstation-package-field {
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .shipstation-package-field input {
+    width: 100%;
+  }
+
+  .shipstation-rate-option__main {
+    align-items: flex-start;
+  }
 }
 
 .modal-overlay.notify-modal-overlay {

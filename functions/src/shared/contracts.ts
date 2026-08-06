@@ -173,6 +173,50 @@ export type FulfillmentOrderCardClaim = {
   receiptClaimStatus?: string;
 };
 
+export type ShipStationMoney = {
+  currency: string;
+  amount: number;
+};
+
+export type FulfillmentShipStationRate = {
+  rateId: string;
+  shipmentId: string;
+  carrierId: string;
+  carrierCode: string;
+  carrierName: string;
+  serviceCode: string;
+  serviceName: string;
+  packageType?: string;
+  shippingAmount: ShipStationMoney;
+  insuranceAmount: ShipStationMoney;
+  confirmationAmount: ShipStationMoney;
+  otherAmount: ShipStationMoney;
+  taxAmount?: ShipStationMoney;
+  totalAmount: ShipStationMoney;
+  deliveryDays?: number;
+  estimatedDeliveryDate?: string;
+  guaranteedService: boolean;
+  warningMessages: string[];
+};
+
+export type FulfillmentShipStationLabel = {
+  labelId: string;
+  shipmentId: string;
+  status: 'processing' | 'completed' | 'error' | 'voided';
+  rateId?: string;
+  trackingNumber?: string;
+  carrierId?: string;
+  carrierCode?: string;
+  carrierName?: string;
+  serviceCode?: string;
+  serviceName?: string;
+  shipmentCost?: ShipStationMoney;
+  insuranceCost?: ShipStationMoney;
+  totalCost?: ShipStationMoney;
+  purchasedAt?: number;
+  purchasedBy?: string;
+};
+
 export type FulfillmentOrder = {
   dropId: string;
   deliveryId: number;
@@ -187,6 +231,10 @@ export type FulfillmentOrder = {
   fulfillmentInternalStatus?: string;
   shipstationShipmentId?: string;
   shipstationAddedAt?: number;
+  shipstationPackage?: ShipStationPackageInput;
+  shipstationPackageCount?: number;
+  shipstationLabel?: FulfillmentShipStationLabel;
+  shipstationPurchaseUnknown?: boolean;
   address: FulfillmentOrderAddress;
   boxes: FulfillmentOrderBox[];
   looseDudes: number[];
@@ -240,6 +288,52 @@ export type AddFulfillmentOrderToShipStationResponse = {
   /** True when the order was already in ShipStation and no new shipment was created. */
   alreadyAdded: boolean;
   shipstationAddedAt?: number;
+};
+
+export type GetFulfillmentShipStationRatesRequest = {
+  dropId: string;
+  deliveryId: number;
+  package?: ShipStationPackageInput;
+};
+
+export type GetFulfillmentShipStationRatesResponse = {
+  deliveryId: number;
+  shipmentId: string;
+  package?: ShipStationPackageInput;
+  packageCount: number;
+  rates: FulfillmentShipStationRate[];
+  label?: FulfillmentShipStationLabel;
+  labelDownloadUrl?: string;
+  purchaseUnknown?: boolean;
+};
+
+export type PurchaseFulfillmentShipStationLabelRequest = {
+  dropId: string;
+  deliveryId: number;
+  rateId: string;
+  expectedTotal: ShipStationMoney;
+  requestId: string;
+};
+
+export type PurchaseFulfillmentShipStationLabelResponse = {
+  deliveryId: number;
+  shipmentId: string;
+  label: FulfillmentShipStationLabel;
+  labelDownloadUrl?: string;
+  alreadyPurchased: boolean;
+};
+
+export type GetFulfillmentShipStationLabelRequest = {
+  dropId: string;
+  deliveryId: number;
+};
+
+export type GetFulfillmentShipStationLabelResponse = {
+  deliveryId: number;
+  shipmentId: string;
+  label?: FulfillmentShipStationLabel;
+  labelDownloadUrl?: string;
+  purchaseUnknown?: boolean;
 };
 
 export type FulfillmentOrdersCursor = {

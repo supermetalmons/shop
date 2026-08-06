@@ -13,6 +13,10 @@ import {
   FulfillmentStatus,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
+  GetFulfillmentShipStationLabelRequest,
+  GetFulfillmentShipStationLabelResponse,
+  GetFulfillmentShipStationRatesRequest,
+  GetFulfillmentShipStationRatesResponse,
   InventoryItem,
   IssueReceiptsResult,
   ListCardNft2UnrevealedCardsRequest,
@@ -23,6 +27,8 @@ import {
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  PurchaseFulfillmentShipStationLabelRequest,
+  PurchaseFulfillmentShipStationLabelResponse,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
   ShipStationPackageInput,
@@ -1119,6 +1125,36 @@ export async function addFulfillmentOrderToShipStation(
   return callFunction<AddFulfillmentOrderToShipStationRequest, AddFulfillmentOrderToShipStationResponse>(
     'addFulfillmentOrderToShipStation',
     { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
+  );
+}
+
+export async function getFulfillmentShipStationRates(
+  deliveryId: number,
+  dropId: string,
+  packageInput?: ShipStationPackageInput,
+): Promise<GetFulfillmentShipStationRatesResponse> {
+  return callFunction<GetFulfillmentShipStationRatesRequest, GetFulfillmentShipStationRatesResponse>(
+    'getFulfillmentShipStationRates',
+    { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
+  );
+}
+
+export async function purchaseFulfillmentShipStationLabel(
+  args: PurchaseFulfillmentShipStationLabelRequest,
+): Promise<PurchaseFulfillmentShipStationLabelResponse> {
+  return callFunction<PurchaseFulfillmentShipStationLabelRequest, PurchaseFulfillmentShipStationLabelResponse>(
+    'purchaseFulfillmentShipStationLabel',
+    args,
+  );
+}
+
+export async function getFulfillmentShipStationLabel(
+  deliveryId: number,
+  dropId: string,
+): Promise<GetFulfillmentShipStationLabelResponse> {
+  return callFunction<GetFulfillmentShipStationLabelRequest, GetFulfillmentShipStationLabelResponse>(
+    'getFulfillmentShipStationLabel',
+    { deliveryId, dropId },
   );
 }
 

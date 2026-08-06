@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { FulfillmentOrder } from '../src/types.ts';
 import {
   ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
+  canEditFulfillmentOrderAddress,
   filterFulfillmentOrdersByVisibility,
   isRedeemedForIrlFulfillmentOrder,
 } from '../src/lib/fulfillmentOrderVisibility.ts';
@@ -35,4 +36,18 @@ test('IRL redemption detection uses the canonical delivery order source', () => 
   assert.equal(isRedeemedForIrlFulfillmentOrder(orders[3]), true);
   assert.equal(isRedeemedForIrlFulfillmentOrder({ source: 'Admin IRL event' }), false);
   assert.equal(isRedeemedForIrlFulfillmentOrder({}), false);
+});
+
+test('address editing is unavailable after an order is added to ShipStation', () => {
+  const options = { showFullAddress: true, hasAddressAccess: true };
+  assert.equal(canEditFulfillmentOrderAddress({}, options), true);
+  assert.equal(canEditFulfillmentOrderAddress({ shipstationShipmentId: 'se-shipment' }, options), false);
+  assert.equal(
+    canEditFulfillmentOrderAddress(
+      { source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE },
+      options,
+    ),
+    false,
+  );
+  assert.equal(canEditFulfillmentOrderAddress({}, { ...options, hasAddressAccess: false }), false);
 });

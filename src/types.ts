@@ -12,6 +12,11 @@ export type {
   FulfillmentOrderBox,
   FulfillmentOrderCardClaim,
   FulfillmentOrdersCursor,
+  FulfillmentShipStationRate,
+  GetFulfillmentShipStationLabelRequest,
+  GetFulfillmentShipStationLabelResponse,
+  GetFulfillmentShipStationRatesRequest,
+  GetFulfillmentShipStationRatesResponse,
   IssueReceiptsResult,
   ListCardNft2UnrevealedCardsRequest,
   ListCardNft2UnrevealedCardsResponse,
@@ -20,6 +25,8 @@ export type {
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  PurchaseFulfillmentShipStationLabelRequest,
+  PurchaseFulfillmentShipStationLabelResponse,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
   StripeCheckoutSessionRequest,
@@ -27,6 +34,7 @@ export type {
   StripeReceiptClaimResult,
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,
+  ShipStationMoney,
 } from '../functions/src/shared/contracts';
 export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';
 

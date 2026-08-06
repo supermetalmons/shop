@@ -24,6 +24,25 @@ export function isRedeemedForIrlFulfillmentOrder(order: Pick<FulfillmentOrder, '
   return isAdminIrlRedeemDeliveryOrderSource(order.source);
 }
 
+export function canEditFulfillmentOrderAddress(
+  order: Pick<
+    FulfillmentOrder,
+    'source' | 'shipstationShipmentId' | 'shipstationLabel' | 'shipstationPurchaseUnknown'
+  >,
+  options: { showFullAddress: boolean; hasAddressAccess: boolean },
+): boolean {
+  const labelStatus = order.shipstationLabel?.status;
+  const hasActiveLabel = labelStatus === 'completed' || labelStatus === 'processing';
+  return (
+    options.showFullAddress &&
+    options.hasAddressAccess &&
+    !isRedeemedForIrlFulfillmentOrder(order) &&
+    !order.shipstationShipmentId &&
+    !hasActiveLabel &&
+    !order.shipstationPurchaseUnknown
+  );
+}
+
 export function filterFulfillmentOrdersByVisibility<T extends FulfillmentOrderVisibilityInput>(
   orders: readonly T[],
   filter: FulfillmentOrderVisibilityFilter,
