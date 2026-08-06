@@ -1008,6 +1008,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const [activeAddressOrderKey, setActiveAddressOrderKey] = useState<string | null>(null);
+  const [activeShipstationOrderKey, setActiveShipstationOrderKey] = useState<string | null>(null);
   const [addressEditText, setAddressEditText] = useState('');
   const [addressSaving, setAddressSaving] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
@@ -1116,9 +1117,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setStatusSaving({});
       setActiveUpdateOrderKey(null);
       setActiveAddressOrderKey(null);
+      setActiveShipstationOrderKey(null);
       setAddressEditText('');
       setAddressSaving(false);
       setAddressError(null);
+      setShipstationError(null);
       return;
     }
     const requestEpoch = orderRequestEpochRef.current + 1;
@@ -1137,9 +1140,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setStatusSaving({});
     setActiveUpdateOrderKey(null);
     setActiveAddressOrderKey(null);
+    setActiveShipstationOrderKey(null);
     setAddressEditText('');
     setAddressSaving(false);
     setAddressError(null);
+    setShipstationError(null);
     try {
       const responses = await Promise.all(
         selectedDropIds.map(async (dropId) => {
@@ -1510,22 +1515,38 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) ??
       ''
     : '';
-  const activeUpdatePackageDraft = activeUpdateOrder
-    ? shipstationPackageEdits[activeUpdateOrderKeyResolved] ?? defaultShipStationPackageDraft(activeUpdateOrder)
-    : { length: '', width: '', height: '', weight: '' };
   const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
 
   const handleOpenUpdateModal = useCallback((orderKey: string) => {
-    setShipstationError(null);
     setActiveUpdateOrderKey(orderKey);
   }, []);
 
+  const activeShipstationOrder = useMemo(
+    () => orders.find((order) => fulfillmentOrderKey(order) === activeShipstationOrderKey) ?? null,
+    [activeShipstationOrderKey, orders],
+  );
+  const activeShipstationOrderKeyResolved = activeShipstationOrder ? fulfillmentOrderKey(activeShipstationOrder) : '';
+  const activeShipstationPackageDraft = activeShipstationOrder
+    ? shipstationPackageEdits[activeShipstationOrderKeyResolved] ?? defaultShipStationPackageDraft(activeShipstationOrder)
+    : { length: '', width: '', height: '', weight: '' };
+
+  const handleOpenShipstationModal = useCallback((orderKey: string) => {
+    setShipstationError(null);
+    setActiveShipstationOrderKey(orderKey);
+  }, []);
+
+  const handleCloseShipstationModal = useCallback(() => {
+    if (shipstationSaving) return;
+    setActiveShipstationOrderKey(null);
+    setShipstationError(null);
+  }, [shipstationSaving]);
+
   const handleAddToShipStation = useCallback(async () => {
-    if (!activeUpdateOrder || !hasFulfillmentAccess || !signedIn || shipstationSaving) return;
+    if (!activeShipstationOrder || !hasFulfillmentAccess || !signedIn || shipstationSaving) return;
     const requestEpoch = orderRequestEpochRef.current;
-    const key = fulfillmentOrderKey(activeUpdateOrder);
-    const draft = shipstationPackageEdits[key] ?? defaultShipStationPackageDraft(activeUpdateOrder);
+    const key = fulfillmentOrderKey(activeShipstationOrder);
+    const draft = shipstationPackageEdits[key] ?? defaultShipStationPackageDraft(activeShipstationOrder);
     const parcel = normalizeShipStationPackage({
       length: parseShipStationMeasurement(draft.length),
       width: parseShipStationMeasurement(draft.width),
@@ -1540,8 +1561,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setShipstationError(null);
     try {
       const response = await addFulfillmentOrderToShipStation(
-        activeUpdateOrder.deliveryId,
-        activeUpdateOrder.dropId,
+        activeShipstationOrder.deliveryId,
+        activeShipstationOrder.dropId,
         parcel,
       );
       if (orderRequestEpochRef.current !== requestEpoch) return;
@@ -1568,10 +1589,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       // after a reload would disable the button for every order.
       setShipstationSaving(false);
     }
-  }, [activeUpdateOrder, hasFulfillmentAccess, shipstationPackageEdits, shipstationSaving, signedIn]);
+  }, [activeShipstationOrder, hasFulfillmentAccess, shipstationPackageEdits, shipstationSaving, signedIn]);
 
   const handleCancelUpdate = useCallback(() => {
-    setShipstationError(null);
     if (!activeUpdateOrder) {
       setActiveUpdateOrderKey(null);
       return;
@@ -1930,6 +1950,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const looseDudes = fulfillmentLooseFigureIdsExcludingCardClaims(order);
     const showContactInfo = options?.showContactInfo ?? true;
     const showFullAddress = options?.showFullAddress ?? true;
+    const canEditOrderAddress =
+      showFullAddress && canAdminEditFulfillmentAddress && !isRedeemedForIrlFulfillmentOrder(order);
+    const canPrintOrderLabel =
+      !isRedeemedForIrlFulfillmentOrder(order) &&
+      (Boolean(order.shipstationShipmentId) || normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
     return (
       <div key={orderKey} className="fulfillment-order-section">
         <div className="card__head">
@@ -1978,26 +2003,41 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         </div>
 
         <div className="order-items">
-          {showFullAddress ? (
+          {showFullAddress || canPrintOrderLabel ? (
             <div className="address-lines">
-              {order.address.full ? (
-                <div className="address-text">
-                  {formatFulfillmentAddressText(order.address)}
+              {showFullAddress ? (
+                order.address.full ? (
+                  <div className="address-text">
+                    {formatFulfillmentAddressText(order.address)}
+                  </div>
+                ) : (
+                  <>
+                    <div className="muted small">Encrypted address payload</div>
+                    <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
+                  </>
+                )
+              ) : null}
+              {canEditOrderAddress || canPrintOrderLabel ? (
+                <div className="fulfillment-order-address-actions">
+                  {canEditOrderAddress ? (
+                    <button
+                      type="button"
+                      className="link fulfillment-order-address-action small no-focus-style"
+                      onClick={() => handleOpenAddressModal(order)}
+                    >
+                      Edit address
+                    </button>
+                  ) : null}
+                  {canPrintOrderLabel ? (
+                    <button
+                      type="button"
+                      className="link fulfillment-order-address-action small no-focus-style"
+                      onClick={() => handleOpenShipstationModal(orderKey)}
+                    >
+                      Print Label
+                    </button>
+                  ) : null}
                 </div>
-              ) : (
-                <>
-                  <div className="muted small">Encrypted address payload</div>
-                  <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-                </>
-              )}
-              {canAdminEditFulfillmentAddress && !isRedeemedForIrlFulfillmentOrder(order) ? (
-                <button
-                  type="button"
-                  className="link fulfillment-order-address-action small no-focus-style"
-                  onClick={() => handleOpenAddressModal(order)}
-                >
-                  Edit address
-                </button>
               ) : null}
             </div>
           ) : null}
@@ -2366,6 +2406,68 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       </Modal>
 
       <Modal
+        open={activeShipstationOrderKey !== null}
+        title={activeShipstationOrder ? `Print label · Order ${activeShipstationOrder.deliveryId}` : 'Print label'}
+        onClose={handleCloseShipstationModal}
+        showCloseButton={!shipstationSaving}
+        closeOnEscape={!shipstationSaving}
+      >
+        <div className="modal-form">
+          {activeShipstationOrder && !isRedeemedForIrlFulfillmentOrder(activeShipstationOrder) ? (
+            <div className="fulfillment-shipstation">
+              {activeShipstationOrder.shipstationShipmentId ? (
+                <a
+                  className="link small no-focus-style"
+                  href={SHIPSTATION_AWAITING_SHIPMENT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View on ShipStation
+                </a>
+              ) : normalizeFulfillmentStatus(activeShipstationOrder.fulfillmentStatus) !== 'Shipped' ? (
+                <>
+                  <div className="shipstation-package">
+                    {SHIPSTATION_PACKAGE_FIELDS.map((field) => (
+                      <label key={field.key} className="shipstation-package-field">
+                        <span className="muted small">{field.label}</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={activeShipstationPackageDraft[field.key]}
+                          onChange={(evt) => {
+                            const value = evt.target.value;
+                            setShipstationPackageEdits((prev) => ({
+                              ...prev,
+                              [activeShipstationOrderKeyResolved]: {
+                                ...(prev[activeShipstationOrderKeyResolved] ?? activeShipstationPackageDraft),
+                                [field.key]: value,
+                              },
+                            }));
+                          }}
+                          disabled={shipstationSaving}
+                          aria-label={field.ariaLabel}
+                          autoComplete="off"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="link small no-focus-style"
+                    onClick={() => void handleAddToShipStation()}
+                    disabled={shipstationSaving}
+                  >
+                    {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {shipstationError ? <div className="error">{shipstationError}</div> : null}
+        </div>
+      </Modal>
+
+      <Modal
         open={activeUpdateOrderKey !== null}
         title={activeUpdateOrder ? `Order ${activeUpdateOrder.deliveryId}` : 'Order'}
         onClose={handleCancelUpdate}
@@ -2405,57 +2507,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               autoComplete="off"
             />
           ) : null}
-          {activeUpdateOrder && !isRedeemedForIrlFulfillmentOrder(activeUpdateOrder) ? (
-            <div className="fulfillment-shipstation">
-              {activeUpdateOrder.shipstationShipmentId ? (
-                <a
-                  className="link small no-focus-style"
-                  href={SHIPSTATION_AWAITING_SHIPMENT_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  View on ShipStation
-                </a>
-              ) : normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus) !== 'Shipped' ? (
-                <>
-                  <div className="shipstation-package">
-                    {SHIPSTATION_PACKAGE_FIELDS.map((field) => (
-                      <label key={field.key} className="shipstation-package-field">
-                        <span className="muted small">{field.label}</span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={activeUpdatePackageDraft[field.key]}
-                          onChange={(evt) => {
-                            const value = evt.target.value;
-                            setShipstationPackageEdits((prev) => ({
-                              ...prev,
-                              [activeUpdateOrderKeyResolved]: {
-                                ...(prev[activeUpdateOrderKeyResolved] ?? activeUpdatePackageDraft),
-                                [field.key]: value,
-                              },
-                            }));
-                          }}
-                          disabled={shipstationSaving}
-                          aria-label={field.ariaLabel}
-                          autoComplete="off"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="link small no-focus-style"
-                    onClick={() => void handleAddToShipStation()}
-                    disabled={shipstationSaving}
-                  >
-                    {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {shipstationError ? <div className="error">{shipstationError}</div> : null}
           <div className="row row--end">
             <button type="button" className="ghost" onClick={handleCancelUpdate}>
               Cancel

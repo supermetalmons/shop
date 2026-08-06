@@ -4520,7 +4520,11 @@ button.fulfillment-secret-code-download svg {
   word-break: break-word;
 }
 
-.fulfillment-order-address-action {
+.fulfillment-order-address-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-top: 2px;
 }
 
