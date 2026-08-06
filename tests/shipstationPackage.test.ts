@@ -154,6 +154,47 @@ test('invalid, errored, incomplete, and mixed-currency ShipStation rates are omi
   assert.deepEqual(response.rates, []);
 });
 
+test('invalid ShipStation rate explanations are preserved for operators', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    invalid_rates: [
+      {
+        carrier_id: 'se-ups',
+        carrier_code: 'ups',
+        carrier_friendly_name: 'UPS',
+        service_code: 'ups_ground',
+        service_type: 'UPS Ground',
+        error_messages: ['Destination postal code is not supported'],
+      },
+      {
+        carrier_code: 'stamps_com',
+        error_messages: [],
+      },
+    ],
+  });
+
+  assert.deepEqual(response.invalidRates, [
+    {
+      carrierId: 'se-ups',
+      carrierCode: 'ups',
+      carrierName: 'UPS',
+      serviceCode: 'ups_ground',
+      serviceName: 'UPS Ground',
+      errorMessages: ['Destination postal code is not supported'],
+    },
+    {
+      carrierId: '',
+      carrierCode: 'stamps_com',
+      carrierName: 'stamps_com',
+      serviceCode: '',
+      serviceName: 'Service',
+      errorMessages: ['ShipStation marked this service as unavailable.'],
+    },
+  ]);
+});
+
 test('ShipStation labels expose sanitized purchase details and an HTTPS PDF URL', () => {
   const result = shipStationLabelResult({
     label_id: 'se-label',

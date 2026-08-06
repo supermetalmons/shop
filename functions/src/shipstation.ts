@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { normalizeCountryCode } from './normalizers.js';
 import type {
+  FulfillmentShipStationInvalidRate,
   FulfillmentShipStationLabel,
   FulfillmentShipStationRate,
   ShipStationMoney,
@@ -50,6 +51,7 @@ export type ShipStationRateResponse = {
   shipmentId: string;
   status: string;
   rates: FulfillmentShipStationRate[];
+  invalidRates: FulfillmentShipStationInvalidRate[];
 };
 
 export function isActiveShipStationLabel(
@@ -322,7 +324,23 @@ export function shipStationRateSummaries(value: unknown): ShipStationRateRespons
       a.carrierName.localeCompare(b.carrierName) ||
       a.serviceName.localeCompare(b.serviceName),
   );
-  return { shipmentId, status: stringValue(raw.status), rates };
+  const invalidRatesRaw = Array.isArray(raw.invalid_rates) ? raw.invalid_rates : [];
+  const invalidRates = invalidRatesRaw.slice(0, 50).map((candidate): FulfillmentShipStationInvalidRate => {
+    const rate = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
+    const carrierCode = stringValue(rate.carrier_code);
+    const serviceCode = stringValue(rate.service_code);
+    const errorMessages = stringList(rate.error_messages).map((message) => message.slice(0, 500));
+    return {
+      carrierId: stringValue(rate.carrier_id),
+      carrierCode,
+      carrierName:
+        stringValue(rate.carrier_friendly_name) || stringValue(rate.carrier_nickname) || carrierCode || 'Carrier',
+      serviceCode,
+      serviceName: stringValue(rate.service_type) || serviceCode || 'Service',
+      errorMessages: errorMessages.length ? errorMessages : ['ShipStation marked this service as unavailable.'],
+    };
+  });
+  return { shipmentId, status: stringValue(raw.status), rates, invalidRates };
 }
 
 const shipFromSchema = z.object({

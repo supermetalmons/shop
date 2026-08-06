@@ -4947,6 +4947,17 @@ button.fulfillment-order-address-edit svg {
   color: #b45309;
 }
 
+.shipstation-invalid-rates,
+.shipstation-invalid-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shipstation-invalid-rate + .shipstation-invalid-rate {
+  margin-top: 6px;
+}
+
 .shipstation-review {
   display: flex;
   flex-direction: column;

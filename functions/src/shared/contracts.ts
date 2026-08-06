@@ -199,6 +199,15 @@ export type FulfillmentShipStationRate = {
   warningMessages: string[];
 };
 
+export type FulfillmentShipStationInvalidRate = {
+  carrierId: string;
+  carrierCode: string;
+  carrierName: string;
+  serviceCode: string;
+  serviceName: string;
+  errorMessages: string[];
+};
+
 export type FulfillmentShipStationLabel = {
   labelId: string;
   shipmentId: string;
@@ -302,6 +311,7 @@ export type GetFulfillmentShipStationRatesResponse = {
   package?: ShipStationPackageInput;
   packageCount: number;
   rates: FulfillmentShipStationRate[];
+  invalidRates: FulfillmentShipStationInvalidRate[];
   label?: FulfillmentShipStationLabel;
   labelDownloadUrl?: string;
   purchaseUnknown?: boolean;

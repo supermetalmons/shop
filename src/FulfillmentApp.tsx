@@ -26,6 +26,7 @@ import {
   FulfillmentManualReviewCheckout,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
+  FulfillmentShipStationInvalidRate,
   FulfillmentShipStationRate,
   FulfillmentStatus,
   ShipStationMoney,
@@ -1115,6 +1116,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationError, setShipstationError] = useState<string | null>(null);
   const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
   const [shipstationRates, setShipstationRates] = useState<FulfillmentShipStationRate[]>([]);
+  const [shipstationInvalidRates, setShipstationInvalidRates] = useState<FulfillmentShipStationInvalidRate[]>([]);
   const [shipstationSelectedRateId, setShipstationSelectedRateId] = useState<string | null>(null);
   const [shipstationRatesRequested, setShipstationRatesRequested] = useState(false);
   const [shipstationReviewingPurchase, setShipstationReviewingPurchase] = useState(false);
@@ -1135,6 +1137,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   const resetShipstationFlow = useCallback(() => {
     setShipstationRates([]);
+    setShipstationInvalidRates([]);
     setShipstationSelectedRateId(null);
     setShipstationRatesRequested(false);
     setShipstationReviewingPurchase(false);
@@ -1788,6 +1791,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setShipstationReviewingPurchase(false);
     setShipstationPurchaseRequestId(null);
     setShipstationError(null);
+    setShipstationInvalidRates([]);
     try {
       const response = await getFulfillmentShipStationRates(
         activeShipstationOrder.deliveryId,
@@ -1816,6 +1820,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         ),
       );
       setShipstationRates(response.rates);
+      setShipstationInvalidRates(response.invalidRates ?? []);
       setShipstationSelectedRateId(response.rates[0]?.rateId ?? null);
       setShipstationLabelDownloadUrl(response.labelDownloadUrl || null);
       setShipstationPurchaseUnknown(Boolean(response.purchaseUnknown));
@@ -1824,7 +1829,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
       }
       if (!response.label && !response.purchaseUnknown && response.packageCount === 1 && !response.rates.length) {
-        setShipstationError('ShipStation returned no valid rates for this shipment.');
+        if (!response.invalidRates?.length) {
+          setShipstationError('ShipStation returned no valid rates for this shipment.');
+        }
       }
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
@@ -2912,6 +2919,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                               },
                             }));
                             setShipstationRates([]);
+                            setShipstationInvalidRates([]);
                             setShipstationSelectedRateId(null);
                             setShipstationReviewingPurchase(false);
                             setShipstationPurchaseRequestId(null);
@@ -2993,6 +3001,24 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                       </label>
                     );
                   })}
+                </div>
+              ) : null}
+              {shipstationInvalidRates.length ? (
+                <div className="error shipstation-invalid-rates" role="status">
+                  <strong>ShipStation couldn’t quote these services</strong>
+                  {shipstationInvalidRates.map((rate, rateIndex) => (
+                    <div
+                      key={`${rate.carrierId}:${rate.serviceCode}:${rateIndex}`}
+                      className="shipstation-invalid-rate"
+                    >
+                      <span>
+                        {[rate.carrierName, rate.serviceName].filter(Boolean).join(' · ')}
+                      </span>
+                      {rate.errorMessages.map((message, messageIndex) => (
+                        <span key={`${rateIndex}:${messageIndex}`}>{message}</span>
+                      ))}
+                    </div>
+                  ))}
                 </div>
               ) : null}
             </div>

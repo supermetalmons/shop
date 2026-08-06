@@ -6831,7 +6831,10 @@ async function getCompletedShipStationRates(apiKey: string, shipmentId: string) 
   if (response.status === 'working' && !response.rates.length) {
     throw new HttpsError('unavailable', 'ShipStation is still calculating rates. Try again in a moment.');
   }
-  return response.rates.filter((rate) => rate.shipmentId === shipmentId);
+  return {
+    rates: response.rates.filter((rate) => rate.shipmentId === shipmentId),
+    invalidRates: response.invalidRates,
+  };
 }
 
 function requireShipStationShipmentId(order: any): string {
@@ -7098,6 +7101,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
           package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
           packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
           rates: [],
+          invalidRates: [],
           label,
           ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
         };
@@ -7111,6 +7115,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
         package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
         packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
         rates: [],
+        invalidRates: [],
         label: adopted.label,
         ...(adopted.downloadUrl ? { labelDownloadUrl: adopted.downloadUrl } : {}),
       };
@@ -7125,6 +7130,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
         package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
         packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
         rates: [],
+        invalidRates: [],
         purchaseUnknown: true,
       };
     }
@@ -7148,6 +7154,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
         shipmentId,
         packageCount: currentPackageDetails.packageCount,
         rates: [],
+        invalidRates: [],
       };
     }
     const resolvedPackage = packageOverride ?? currentPackageDetails.package;
@@ -7215,11 +7222,13 @@ export const getFulfillmentShipStationRates = onCallLogged(
           package: storedPackage,
           packageCount: 1,
           rates: [],
+          invalidRates: [],
           label: adoptedAfterUpdate.label,
           ...(adoptedAfterUpdate.downloadUrl ? { labelDownloadUrl: adoptedAfterUpdate.downloadUrl } : {}),
         };
       }
-      const rates = await getCompletedShipStationRates(apiKey, shipmentId);
+      const rateResponse = await getCompletedShipStationRates(apiKey, shipmentId);
+      const rates = rateResponse.rates;
       await orderRef.set(
         {
           shipstation: {
@@ -7238,7 +7247,14 @@ export const getFulfillmentShipStationRates = onCallLogged(
         },
         { merge: true },
       );
-      return { deliveryId, shipmentId, package: storedPackage, packageCount: 1, rates };
+      return {
+        deliveryId,
+        shipmentId,
+        package: storedPackage,
+        packageCount: 1,
+        rates,
+        invalidRates: rateResponse.invalidRates,
+      };
     } catch (err) {
       await orderRef.set(
         { shipstation: { ratesClaimedAt: FieldValue.delete(), ratesClaimedBy: FieldValue.delete() } },

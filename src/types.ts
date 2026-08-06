@@ -12,6 +12,7 @@ export type {
   FulfillmentOrderBox,
   FulfillmentOrderCardClaim,
   FulfillmentOrdersCursor,
+  FulfillmentShipStationInvalidRate,
   FulfillmentShipStationRate,
   GetFulfillmentShipStationLabelRequest,
   GetFulfillmentShipStationLabelResponse,
