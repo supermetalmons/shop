@@ -206,6 +206,7 @@ export type FulfillmentShipStationInvalidRate = {
   serviceCode: string;
   serviceName: string;
   errorMessages: string[];
+  responseIssue?: true;
 };
 
 export type FulfillmentShipStationLabel = {

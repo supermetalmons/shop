@@ -143,6 +143,8 @@ test('invalid, errored, incomplete, and mixed-currency ShipStation rates are omi
     rates: [
       { ...base, rate_id: 'invalid', validation_status: 'invalid' },
       { ...base, rate_id: 'unknown', validation_status: 'unknown' },
+      { ...base, rate_id: 'missing-status' },
+      { ...base, rate_id: 'unexpected-status', validation_status: 'pending' },
       { ...base, rate_id: 'errored', validation_status: 'valid', error_messages: ['bad address'] },
       { ...base, rate_id: 'incomplete', validation_status: 'valid', other_amount: undefined },
       {
@@ -157,9 +159,20 @@ test('invalid, errored, incomplete, and mixed-currency ShipStation rates are omi
   assert.deepEqual(response.invalidRates.map((rate) => rate.errorMessages), [
     ['ShipStation validation status is “invalid”.'],
     ['ShipStation validation status is “unknown”.'],
+    ['ShipStation validation status is “missing”.'],
+    ['ShipStation validation status is “pending”.'],
     ['The carrier rejected the address.'],
     ['The other charges amount is missing or invalid.'],
     ['The rate charges use different currencies.'],
+  ]);
+  assert.deepEqual(response.invalidRates.map((rate) => Boolean(rate.responseIssue)), [
+    false,
+    false,
+    true,
+    true,
+    false,
+    true,
+    true,
   ]);
 });
 
@@ -215,22 +228,108 @@ test('top-level ShipStation rating errors are preserved for operators', () => {
       error_type: 'validation',
       field_name: 'shipment.ship_to.postal_code',
       error_source: 'carrier',
+      carrier_id: 'se-ups-account',
+      carrier_code: 'ups',
+      carrier_name: 'UPS account',
       message: '12 Private Street is invalid',
+    }, {
+      error_code: 'unspecified',
+      error_type: 'business_rules',
+      error_source: 'carrier',
+      carrier_id: 'se-ups-account',
+      carrier_code: 'ups',
+      carrier_name: 'UPS account',
+      message: 'Private carrier detail',
     }],
   });
 
   assert.deepEqual(response.invalidRates, [
     {
-      carrierId: '',
-      carrierCode: '',
-      carrierName: 'ShipStation',
+      carrierId: 'se-ups-account',
+      carrierCode: 'ups',
+      carrierName: 'UPS account',
       serviceCode: '',
       serviceName: 'Rating',
       errorMessages: [
         'invalid_address · type: validation · field: shipment.ship_to.postal_code · source: carrier',
+        'unspecified · type: business_rules · source: carrier',
       ],
     },
   ]);
+});
+
+test('top-level rating errors keep distinct carrier accounts without carrier ids', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    errors: [
+      {
+        error_code: 'invalid_field_value',
+        carrier_code: 'ups',
+        carrier_name: 'UPS warehouse',
+      },
+      {
+        error_code: 'invalid_field_value',
+        carrier_code: 'ups',
+        carrier_name: 'UPS studio',
+      },
+      {
+        error_code: 'invalid_field_value',
+        carrier_code: 'fedex',
+        carrier_name: 'FedEx',
+      },
+      {
+        error_code: 'invalid_field_value',
+        carrier_code: 'dhl_express',
+      },
+    ],
+  });
+
+  assert.deepEqual(response.invalidRates.map((rate) => rate.carrierName), [
+    'UPS warehouse',
+    'UPS studio',
+    'FedEx',
+    'dhl_express',
+  ]);
+});
+
+test('unattributed top-level errors remain visible alongside valid rates', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [{
+      rate_id: 'se-rate',
+      carrier_id: 'se-ups',
+      carrier_code: 'ups',
+      carrier_friendly_name: 'UPS',
+      service_code: 'ups_ground',
+      service_type: 'UPS Ground',
+      validation_status: 'valid',
+      shipping_amount: { currency: 'usd', amount: 10 },
+      insurance_amount: { currency: 'usd', amount: 0 },
+      confirmation_amount: { currency: 'usd', amount: 0 },
+      other_amount: { currency: 'usd', amount: 0 },
+      warning_messages: [],
+      error_messages: [],
+    }],
+    errors: [{
+      error_code: 'rating_partial_failure',
+      error_type: 'system',
+      error_source: 'shipstation',
+    }],
+  });
+
+  assert.equal(response.rates.length, 1);
+  assert.deepEqual(response.invalidRates, [{
+    carrierId: '',
+    carrierCode: '',
+    carrierName: 'ShipStation',
+    serviceCode: '',
+    serviceName: 'Rating',
+    errorMessages: ['rating_partial_failure · type: system · source: shipstation'],
+    responseIssue: true,
+  }]);
 });
 
 test('an empty ShipStation rate response reports that no details were provided', () => {

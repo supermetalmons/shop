@@ -251,6 +251,7 @@ export function shipStationLabelResult(value: unknown): ShipStationLabelResult |
 function shipStationInvalidRateSummary(
   rate: Record<string, unknown>,
   errorMessages: string[],
+  responseIssue = false,
 ): FulfillmentShipStationInvalidRate {
   const carrierCode = stringValue(rate.carrier_code);
   const serviceCode = stringValue(rate.service_code);
@@ -258,11 +259,29 @@ function shipStationInvalidRateSummary(
     carrierId: stringValue(rate.carrier_id),
     carrierCode,
     carrierName:
-      stringValue(rate.carrier_friendly_name) || stringValue(rate.carrier_nickname) || carrierCode || 'Carrier',
+      stringValue(rate.carrier_friendly_name) ||
+      stringValue(rate.carrier_name) ||
+      stringValue(rate.carrier_nickname) ||
+      carrierCode ||
+      stringValue(rate.carrier_id) ||
+      'Carrier',
     serviceCode,
     serviceName: stringValue(rate.service_type) || serviceCode || 'Service',
     errorMessages: errorMessages.length ? errorMessages : ['ShipStation marked this service as unavailable.'],
+    ...(responseIssue ? { responseIssue: true as const } : {}),
   };
+}
+
+function shipStationInvalidRateKey(rate: FulfillmentShipStationInvalidRate): string {
+  return [
+    rate.carrierId,
+    rate.carrierCode,
+    rate.carrierName,
+    rate.serviceCode,
+    rate.serviceName,
+    rate.responseIssue ? 'response-issue' : 'unavailable',
+    rate.errorMessages.join('\n'),
+  ].join('\n');
 }
 
 function shipStationRateErrorMessages(value: unknown): string[] {
@@ -284,21 +303,58 @@ function shipStationRateErrorMessages(value: unknown): string[] {
   })));
 }
 
-function shipStationResponseErrorMessages(value: unknown): string[] {
+function shipStationResponseInvalidRates(value: unknown): FulfillmentShipStationInvalidRate[] {
   const errors = Array.isArray(value) ? value : value ? [value] : [];
-  return errors.flatMap((candidate): string[] => {
-    if (typeof candidate === 'string') return shipStationRateErrorMessages([candidate]);
+  const summaries = errors.map((candidate): FulfillmentShipStationInvalidRate => {
+    if (typeof candidate === 'string') {
+      return shipStationInvalidRateSummary(
+        { carrier_friendly_name: 'ShipStation', service_type: 'Rating' },
+        shipStationRateErrorMessages([candidate]),
+        true,
+      );
+    }
     const error = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
     const code = stringValue(error.error_code) || stringValue(error.code);
     const type = stringValue(error.error_type);
     const fieldName = stringValue(error.field_name);
     const source = stringValue(error.error_source);
+    const carrierId = stringValue(error.carrier_id);
+    const carrierCode = stringValue(error.carrier_code);
+    const carrierName =
+      stringValue(error.carrier_name) ||
+      stringValue(error.carrier_friendly_name) ||
+      stringValue(error.carrier_nickname);
+    const hasCarrierIdentity = Boolean(carrierId || carrierCode || carrierName);
+    const responseIssue = !hasCarrierIdentity || Boolean(source && source.toLowerCase() !== 'carrier');
     const details = [code || 'rate_error'];
     if (type) details.push(`type: ${type}`);
     if (fieldName) details.push(`field: ${fieldName}`);
     if (source) details.push(`source: ${source}`);
-    return [details.join(' · ').slice(0, 500)];
-  }).slice(0, 10);
+    return shipStationInvalidRateSummary(
+      {
+        carrier_id: carrierId,
+        carrier_code: carrierCode,
+        carrier_friendly_name: carrierName || (!hasCarrierIdentity ? 'ShipStation' : undefined),
+        service_type: 'Rating',
+      },
+      [details.join(' · ').slice(0, 500)],
+      responseIssue,
+    );
+  });
+  const grouped = new Map<string, FulfillmentShipStationInvalidRate>();
+  for (const summary of summaries) {
+    const key = summary.carrierId
+      ? `id:${summary.carrierId}`
+      : `fallback:${summary.carrierCode}\n${summary.carrierName}`;
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, summary);
+      continue;
+    }
+    existing.errorMessages = Array.from(new Set([...existing.errorMessages, ...summary.errorMessages]));
+    if (summary.responseIssue) existing.responseIssue = true;
+  }
+  return Array.from(grouped.values()).slice(0, 10);
 }
 
 export function shipStationRateSummaries(value: unknown, expectedRateRequestId?: string): ShipStationRateResponse {
@@ -325,14 +381,20 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
     const errorMessages = shipStationRateErrorMessages(rate.error_messages);
     const validationStatus = stringValue(rate.validation_status);
     const rejectionMessages: string[] = [];
-    if (!rateId) rejectionMessages.push('The rate is missing its ShipStation rate ID.');
-    if (!rateShipmentId) rejectionMessages.push('The rate is missing its ShipStation shipment ID.');
+    const responseIssues: string[] = [];
+    if (!rateId) responseIssues.push('The rate is missing its ShipStation rate ID.');
+    if (!rateShipmentId) responseIssues.push('The rate is missing its ShipStation shipment ID.');
     if (validationStatus !== 'valid' && validationStatus !== 'has_warnings') {
-      rejectionMessages.push(`ShipStation validation status is “${validationStatus || 'missing'}”.`);
+      const message = `ShipStation validation status is “${validationStatus || 'missing'}”.`;
+      if (validationStatus === 'invalid' || validationStatus === 'unknown') {
+        rejectionMessages.push(message);
+      } else {
+        responseIssues.push(message);
+      }
     }
     rejectionMessages.push(...errorMessages);
     const shippingAmount = shipStationMoney(rate.shipping_amount);
-    if (!shippingAmount) rejectionMessages.push('The shipping amount is missing or invalid.');
+    if (!shippingAmount) responseIssues.push('The shipping amount is missing or invalid.');
     const insuranceAmount = shippingAmount
       ? shipStationMoney(rate.insurance_amount, shippingAmount.currency)
       : null;
@@ -345,20 +407,25 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
       ? shipStationMoney(rate.tax_amount, shippingAmount.currency)
       : undefined;
     if (shippingAmount) {
-      if (!insuranceAmount) rejectionMessages.push('The insurance amount is missing or invalid.');
-      if (!confirmationAmount) rejectionMessages.push('The confirmation amount is missing or invalid.');
-      if (!otherAmount) rejectionMessages.push('The other charges amount is missing or invalid.');
-      if (hasTaxAmount && !taxAmount) rejectionMessages.push('The tax amount is invalid.');
+      if (!insuranceAmount) responseIssues.push('The insurance amount is missing or invalid.');
+      if (!confirmationAmount) responseIssues.push('The confirmation amount is missing or invalid.');
+      if (!otherAmount) responseIssues.push('The other charges amount is missing or invalid.');
+      if (hasTaxAmount && !taxAmount) responseIssues.push('The tax amount is invalid.');
       if (
         [insuranceAmount, confirmationAmount, otherAmount, taxAmount]
           .filter((amount): amount is ShipStationMoney => Boolean(amount))
           .some((amount) => amount.currency !== shippingAmount.currency)
       ) {
-        rejectionMessages.push('The rate charges use different currencies.');
+        responseIssues.push('The rate charges use different currencies.');
       }
     }
+    rejectionMessages.push(...responseIssues);
     if (rejectionMessages.length || !shippingAmount || !insuranceAmount || !confirmationAmount || !otherAmount) {
-      rejectedRates.push(shipStationInvalidRateSummary(rate, Array.from(new Set(rejectionMessages))));
+      rejectedRates.push(shipStationInvalidRateSummary(
+        rate,
+        Array.from(new Set(rejectionMessages)),
+        responseIssues.length > 0,
+      ));
       continue;
     }
     const totalAmount = {
@@ -413,17 +480,13 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
     const errorMessages = shipStationRateErrorMessages(rate.error_messages);
     return shipStationInvalidRateSummary(rate, errorMessages);
   });
-  const responseErrors = shipStationResponseErrorMessages(raw.errors);
   const invalidRates = [
-    ...(responseErrors.length
-      ? [shipStationInvalidRateSummary({ carrier_friendly_name: 'ShipStation', service_type: 'Rating' }, responseErrors)]
-      : []),
+    ...shipStationResponseInvalidRates(raw.errors),
     ...explicitInvalidRates,
     ...rejectedRates,
   ].filter((rate, index, all) => {
-    const key = `${rate.carrierId}\n${rate.serviceCode}\n${rate.errorMessages.join('\n')}`;
-    return all.findIndex((candidate) =>
-      `${candidate.carrierId}\n${candidate.serviceCode}\n${candidate.errorMessages.join('\n')}` === key) === index;
+    const key = shipStationInvalidRateKey(rate);
+    return all.findIndex((candidate) => shipStationInvalidRateKey(candidate) === key) === index;
   }).slice(0, 50);
   if (!rates.length && !invalidRates.length) {
     const status = stringValue(raw.status);

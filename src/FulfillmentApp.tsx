@@ -1683,6 +1683,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading;
   const activeShipstationSelectedRate =
     shipstationRates.find((rate) => rate.rateId === shipstationSelectedRateId) ?? null;
+  const visibleShipstationInvalidRates = shipstationRates.length
+    ? shipstationInvalidRates.filter((rate) => rate.responseIssue)
+    : shipstationInvalidRates;
   const activeShipstationCanAdd = Boolean(
     activeShipstationOrder &&
       !activeShipstationOrder.shipstationShipmentId &&
@@ -3003,10 +3006,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   })}
                 </div>
               ) : null}
-              {shipstationInvalidRates.length ? (
+              {visibleShipstationInvalidRates.length ? (
                 <div className="error shipstation-invalid-rates" role="status">
-                  <strong>ShipStation couldn’t quote these services</strong>
-                  {shipstationInvalidRates.map((rate, rateIndex) => (
+                  <strong>
+                    {shipstationRates.length
+                      ? 'Some ShipStation rates couldn’t be processed'
+                      : 'ShipStation couldn’t quote these services'}
+                  </strong>
+                  {visibleShipstationInvalidRates.map((rate, rateIndex) => (
                     <div
                       key={`${rate.carrierId}:${rate.serviceCode}:${rateIndex}`}
                       className="shipstation-invalid-rate"
