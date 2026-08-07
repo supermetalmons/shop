@@ -15,9 +15,17 @@ const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 export const LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS = 600_000_000;
 export const LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS = 500_000_000;
 
-type DeliveryItemKind = 'box' | 'dude' | 'certificate';
+export type DeliveryItemKind = 'box' | 'dude' | 'certificate';
 export type DeliveryItem = { kind: DeliveryItemKind };
 export type InvalidDeliveryUnitsPolicy = 'fallback-one' | 'arithmetic';
+
+export function canDeliverItemKind(
+  dropFamily: DropFamily | undefined,
+  kind: DeliveryItemKind,
+): boolean {
+  if (kind === 'certificate') return false;
+  return dropFamily !== 'clear_cards' || kind !== 'box';
+}
 
 export function isDirectDeliveryItemsPerBox(itemsPerBox?: number): boolean {
   const parsed = Number(itemsPerBox);

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateDeliveryLamports,
+  canDeliverItemKind,
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
 } from '../src/lib/shipping.ts';
@@ -13,6 +14,14 @@ import {
 const dude = { kind: 'dude' as const };
 const box = { kind: 'box' as const };
 const certificate = { kind: 'certificate' as const };
+
+test('clear cards delivery accepts unpacked cards but rejects packs', () => {
+  assert.equal(canDeliverItemKind('clear_cards', 'dude'), true);
+  assert.equal(canDeliverItemKind('clear_cards', 'box'), false);
+  assert.equal(canDeliverItemKind('clear_cards', 'certificate'), false);
+  assert.equal(canDeliverItemKind('card_nft_2', 'box'), true);
+  assert.equal(canDeliverItemKind('poncho_drifella', 'dude'), true);
+});
 
 test('card_nft_2 delivery charges 0.2 SOL in the US up to three cards plus 0.06 SOL per extra card', () => {
   assert.equal(calculateDeliveryLamports([dude], 'US', 3, 'card_nft_2'), 200_000_000);

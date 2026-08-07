@@ -3,6 +3,7 @@ import type { InventoryItem } from '../types';
 import { calculateDeliveryLamports as calculateDeliveryLamportsShared } from '../../functions/src/shared/shipping.ts';
 
 export {
+  canDeliverItemKind,
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
 } from '../../functions/src/shared/shipping.ts';

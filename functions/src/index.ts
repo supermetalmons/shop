@@ -272,6 +272,7 @@ import {
   INTL_DELIVERY_EXTRA_LAMPORTS,
   LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS,
   LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS,
+  canDeliverItemKind,
   calculateDeliveryLamports,
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
@@ -8523,6 +8524,9 @@ export const prepareDeliveryTx = onCallLogged(
     if (!kind) throw new HttpsError('failed-precondition', 'Unsupported asset type');
     if (kind === 'certificate') {
       throw new HttpsError('failed-precondition', 'Certificates cannot be delivered');
+    }
+    if (!canDeliverItemKind(dropRuntime.config.dropFamily, kind)) {
+      throw new HttpsError('failed-precondition', 'Clear Cards packs must be opened before delivery');
     }
     if (!assetMatchesRequestedDrop(asset, dropRuntime)) {
       throw new HttpsError('failed-precondition', 'Item does not belong to the requested drop');

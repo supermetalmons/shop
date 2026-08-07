@@ -157,6 +157,7 @@ import {
   shortAddress,
 } from './lib/solana';
 import { solanaExplorerAddressUrl } from './lib/solanaExplorer';
+import { toggleInventorySelection } from './lib/inventorySelection';
 import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from './lib/focusTrap';
 import {
   canonicalReceiptPublicKey,
@@ -172,7 +173,7 @@ import {
   type ReceiptOperation,
   type ReceiptOperationRegistry,
 } from './lib/receiptTransfer';
-import { calculateDeliveryLamports, isDirectDeliveryItemsPerBox } from './lib/shipping';
+import { calculateDeliveryLamports, canDeliverItemKind, isDirectDeliveryItemsPerBox } from './lib/shipping';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
@@ -4034,8 +4035,11 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, [selected, inventoryView]);
   const selectedCount = selected.size;
   const deliverableItems = useMemo(
-    () => selectedItems.filter((item) => item.kind !== 'certificate' && !pendingRevealIds.has(item.id)),
-    [selectedItems, pendingRevealIds],
+    () => selectedItems.filter((item) => (
+      !pendingRevealIds.has(item.id) &&
+      canDeliverItemKind(getDropConfig(item.dropId)?.dropFamily, item.kind)
+    )),
+    [getDropConfig, selectedItems, pendingRevealIds],
   );
   const selectedDropIds = useMemo(
     () => Array.from(new Set(deliverableItems.map((item) => item.dropId).filter(Boolean))),
@@ -4203,6 +4207,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     selectedItems[0]?.kind === 'box' &&
     canOpenBoxesForDropId(selectedItems[0]?.dropId);
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
+  const canShipSelected =
+    selectedCount > 0 &&
+    deliverableItems.length === selectedCount &&
+    selectionHasSingleDrop;
   const selectedInteractiveCardFigure = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
     if (!item || item.kind !== 'dude') return null;
@@ -4258,9 +4266,9 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   }, []);
 
   useEffect(() => {
-    if (!deliveryOpen || selectedCount) return;
+    if (!deliveryOpen || canShipSelected) return;
     setDeliveryOpen(false);
-  }, [deliveryOpen, selectedCount]);
+  }, [canShipSelected, deliveryOpen]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
@@ -4419,29 +4427,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
   ]);
 
   const toggleSelected = (id: string) => {
-    setSelected((prev) => {
-      if (prev.has(id)) {
-        const copy = new Set(prev);
-        copy.delete(id);
-        return copy;
-      }
-      if (prev.size >= MAX_SHIPMENT_ITEMS) return prev;
-      const nextItem = inventoryIndex.get(id);
-      if (!nextItem || nextItem.kind === 'certificate') return prev;
-      const firstSelectedId = prev.values().next().value as string | undefined;
-      const firstSelectedItem = firstSelectedId ? inventoryIndex.get(firstSelectedId) : undefined;
-      if (
-        firstSelectedItem &&
-        firstSelectedItem.dropId &&
-        nextItem.dropId &&
-        firstSelectedItem.dropId !== nextItem.dropId
-      ) {
-        return new Set([id]);
-      }
-      const copy = new Set(prev);
-      copy.add(id);
-      return copy;
-    });
+    setSelected((prev) => toggleInventorySelection({
+      selected: prev,
+      itemId: id,
+      inventoryIndex,
+      maxSelected: MAX_SHIPMENT_ITEMS,
+    }));
   };
 
   const handleMint = async (quantity: number, variantKey?: string) => {
@@ -5196,9 +5187,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
-    if (selectedDropIds.length > 1) {
-      return;
-    }
+    if (!canShipSelected) return;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
     setDeliveryOpen(true);
@@ -5255,6 +5244,10 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     countryCode: string;
   }) => {
     if (blockViewerModeAction()) return;
+    if (!canShipSelected) {
+      setDeliveryOpen(false);
+      return;
+    }
     if (!publicKey) {
       setVisible(true);
       showToast('Connect a wallet to ship items');
@@ -7301,7 +7294,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
             boxNamePrefix={selectedDropConfig?.namePrefix}
             figureNamePrefix={selectedDropConfig?.figureNamePrefix}
             dropFamily={selectedDropConfig?.dropFamily}
-            submitDisabled={!deliverableItems.length || !publicKey || adminIrlRedeeming}
+            submitDisabled={!canShipSelected || !publicKey || adminIrlRedeeming}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
             submitLabel={deliveryCtaLabel}
@@ -7516,15 +7509,17 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
                 <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
               </button>
             ) : null}
-            <button
-              type="button"
-              className="selection-panel__ship"
-              onClick={handleOpenShip}
-              data-selection-panel-action={SELECTION_PANEL_ACTION.ship}
-            >
-              <FaPlane aria-hidden="true" focusable="false" size={16} />
-              <span>Send</span>
-            </button>
+            {canShipSelected ? (
+              <button
+                type="button"
+                className="selection-panel__ship"
+                onClick={handleOpenShip}
+                data-selection-panel-action={SELECTION_PANEL_ACTION.ship}
+              >
+                <FaPlane aria-hidden="true" focusable="false" size={16} />
+                <span>Send</span>
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
