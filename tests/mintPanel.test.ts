@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MintPanel } from '../src/components/MintPanel.tsx';
+import { MintPanel, mintPanelPreviewQuantity } from '../src/components/MintPanel.tsx';
 import { shouldFetchMintProgress } from '../src/hooks/useMintProgress.ts';
 import { resolveDropXProfile } from '../src/lib/dropSocialLinks.ts';
 
@@ -26,6 +26,13 @@ test('drop X profiles cover every current storefront family and inherit across e
     href: 'https://x.com/supermetalx/status/2046959410287669381',
   });
   assert.equal(resolveDropXProfile('future_unassigned_drop'), null);
+});
+
+test('clear cards keep a single pack preview as mint quantity changes', () => {
+  assert.equal(mintPanelPreviewQuantity('clear_cards', 15, false), 1);
+  assert.equal(mintPanelPreviewQuantity('clear_cards_devnet', 8, false), 1);
+  assert.equal(mintPanelPreviewQuantity('little_swag_boxes', 3, false), 3);
+  assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });
 
 test('drop X profile is grouped with the drop name while availability stays separate', () => {

@@ -118,6 +118,16 @@ const ACTION_TEXT_FIT_STYLE_PROPS = [
   '--mint-panel-action-fit-letter-spacing',
 ] as const;
 
+export function mintPanelPreviewQuantity(
+  dropId: string | undefined,
+  quantity: number,
+  hasVideoSources: boolean,
+): number {
+  if (isDropFamily(dropId, 'clear_cards')) return 1;
+  if (hasVideoSources && isDropFamily(dropId, 'card_nft_2')) return 1;
+  return quantity;
+}
+
 function XProfileLogo() {
   return (
     <svg viewBox="26.8 48 460.2 416" aria-hidden="true" focusable="false">
@@ -729,7 +739,7 @@ export function MintPanel({
   const mintBoxImageSrc = boxMedia?.imageSrc;
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
   const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
-  const previewQuantity = hasMintBoxVideoSources && isDropFamily(dropId, 'card_nft_2') ? 1 : quantity;
+  const previewQuantity = mintPanelPreviewQuantity(dropId, quantity, hasMintBoxVideoSources);
   const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
   const mintBoxVideoFallbackImageSrcs = uniqueMediaSrcs(mintBoxVideoPosterSrc, mintBoxImageSrc);
 
