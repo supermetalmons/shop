@@ -30,7 +30,7 @@ const UPCOMING_ROUTES = [
     solanaCluster: 'mainnet-beta',
     label: 'Clear Cards',
     title: 'Clear Cards',
-    previewImageUrl: '/clear_pack.webp',
+    previewImageUrl: 'https://cdn.lil.org/nft/clear_cards/wip/pack_clean.webp',
     previewAspectRatio: 1362 / 1400,
     boxNamePrefix: 'card',
   },
