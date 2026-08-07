@@ -24,6 +24,23 @@ export function isClearCardImpactPointer({
   return isPrimary && button === 0;
 }
 
+export function isClearCardImpactKey({
+  key,
+  repeat,
+  altKey,
+  ctrlKey,
+  metaKey,
+}: {
+  key: string;
+  repeat: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}): boolean {
+  if (repeat || altKey || ctrlKey || metaKey) return false;
+  return key === 'Enter' || key === ' ' || key === 'Spacebar';
+}
+
 export function createClearCardRevealRequestState(hasKnownCard = false): ClearCardRevealRequestState {
   return hasKnownCard ? 'sent' : 'idle';
 }

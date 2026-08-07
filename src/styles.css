@@ -2993,6 +2993,11 @@ button.no-focus-style:focus-visible {
   outline: none;
 }
 
+.clear-card-reveal-overlay .clear-card-wip__canvas[role='button']:focus-visible {
+  outline: 3px solid rgba(0, 113, 227, 0.75);
+  outline-offset: -3px;
+}
+
 .clear-card-reveal-overlay__viewport--ready .clear-card-wip__canvas {
   opacity: 1;
   transform: translate3d(0, 0, 0) scale(1);

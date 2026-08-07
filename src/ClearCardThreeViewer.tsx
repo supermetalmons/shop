@@ -4,6 +4,8 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import * as THREE from 'three';
@@ -37,6 +39,7 @@ import {
 import {
   advanceClearCardGatedHit,
   createClearCardGatedHitState,
+  isClearCardImpactKey,
   isClearCardImpactPointer,
   type ClearCardGatedHitState,
 } from './lib/clearCardReveal';
@@ -238,6 +241,7 @@ type ClearCardThreeViewerProps = {
   snapBackOnRelease?: boolean;
   interactionFrameRateMode?: InteractionFrameRateMode;
   interactionEnabled?: boolean;
+  keyboardActivationEnabled?: boolean;
   hitProgressionMode?: ClearCardHitProgressionMode;
   revealReady?: boolean;
   initiallyRevealed: boolean;
@@ -587,6 +591,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       snapBackOnRelease = false,
       interactionFrameRateMode = 'unrestricted',
       interactionEnabled = true,
+      keyboardActivationEnabled = false,
       hitProgressionMode = 'fixed',
       revealReady = true,
       initiallyRevealed,
@@ -854,6 +859,32 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerEnter = handlePointerMove;
 
+    const handleKeyDown = useCallback(
+      (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+        if (
+          event.defaultPrevented ||
+          !keyboardActivationEnabled ||
+          !isClearCardImpactKey(event)
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        triggerHitRef.current?.();
+      },
+      [keyboardActivationEnabled],
+    );
+
+    const handleSyntheticClick = useCallback(
+      (event: ReactMouseEvent<HTMLCanvasElement>) => {
+        if (event.defaultPrevented || !keyboardActivationEnabled || event.detail !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        triggerHitRef.current?.();
+      },
+      [keyboardActivationEnabled],
+    );
+
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
         if (viewModeRef.current !== 'tilt') {
@@ -968,6 +999,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       let disposed = false;
       let contextLost = false;
+      let rendererRecoveryFailed = false;
       let packLoadFailed = false;
       let packReady = false;
       let cardLoadFailed = false;
@@ -1241,9 +1273,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const updateViewerStatus = () => {
         if (disposed) return;
-        const failed = packLoadFailed || (cardRequiredForViewerStatus() && cardLoadFailed);
+        const failed =
+          rendererRecoveryFailed ||
+          packLoadFailed ||
+          (cardRequiredForViewerStatus() && cardLoadFailed);
         const statusReady = displayModelReady() && (!cardRequiredForViewerStatus() || cardReady);
-        viewerReadyRef.current = !contextLost && statusReady;
+        viewerReadyRef.current = !contextLost && !failed && statusReady;
         onStatusChange(contextLost || failed ? 'error' : statusReady ? 'ready' : 'loading');
       };
 
@@ -2440,10 +2475,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const previousPackVisibility = packGroup.visible;
         const previousCardVisibility = cardGroup.visible;
         const previousFragmentsVisibility = fragmentsGroup?.visible ?? false;
+        const previousStage = stageRef.current;
         try {
           packGroup.visible = false;
           if (fragmentsGroup) fragmentsGroup.visible = false;
           cardGroup.visible = true;
+          syncLightVisibility('revealed', lightingConfigRef.current);
+          syncTransmissionBackdrop('revealed', lightingConfigRef.current);
           renderer.setRenderTarget(target);
           renderer.clear();
           renderer.render(scene, camera);
@@ -2452,8 +2490,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           packGroup.visible = previousPackVisibility;
           if (fragmentsGroup) fragmentsGroup.visible = previousFragmentsVisibility;
           cardGroup.visible = previousCardVisibility;
-          renderer.setRenderTarget(previousTarget);
-          target.dispose();
+          try {
+            syncLightVisibility(previousStage, lightingConfigRef.current);
+            syncTransmissionBackdrop(previousStage, lightingConfigRef.current);
+          } finally {
+            try {
+              renderer.setRenderTarget(previousTarget);
+            } finally {
+              target.dispose();
+            }
+          }
         }
       };
 
@@ -2643,17 +2689,20 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (disposed) return;
           cancelUnrestrictedDrag();
           contextLost = true;
+          rendererRecoveryFailed = false;
           viewerReadyRef.current = false;
           onStatusChange('error');
         };
         handleContextRestored = () => {
           if (disposed) return;
           contextLost = false;
+          rendererRecoveryFailed = false;
           shardTransmissionWarmed = false;
           try {
             applyLightingConfiguration(lightingConfigRef.current, true);
           } catch (error) {
             console.error('[mons] failed to restore the clear-card environment', error);
+            rendererRecoveryFailed = true;
             viewerReadyRef.current = false;
             onStatusChange('error');
             return;
@@ -2661,18 +2710,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (cardRoot && cardReady) {
             reportCardModelLoadStatus('loading');
             try {
-              if (prewarmCardModel()) {
-                reportCardModelLoadStatus('ready');
-              } else {
-                cardReady = false;
-                cardLoadFailed = true;
-                reportCardModelLoadStatus('error');
+              if (!prewarmCardModel()) {
+                throw new Error('The restored clear-card model could not be prewarmed.');
               }
+              reportCardModelLoadStatus('ready');
             } catch (error) {
               console.error('[mons] failed to prewarm the restored clear-card model', error);
-              cardReady = false;
-              cardLoadFailed = true;
-              reportCardModelLoadStatus('error');
+              rendererRecoveryFailed = true;
+              reportCardModelLoadStatus('ready');
+              updateViewerStatus();
+              return;
             }
           }
           updateViewerStatus();
@@ -2854,7 +2901,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             ? ' clear-card-wip__canvas--unrestricted'
             : ''
         }`}
-        role="img"
+        role={keyboardActivationEnabled ? 'button' : 'img'}
         aria-label={
           ariaLabel || (axisLockedOrbit
             ? 'Interactive 3D clear card; drag sideways or vertically with one-axis perspective orbit'
@@ -2863,6 +2910,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               : 'Interactive 3D clear card unboxing')
         }
         aria-hidden={!ready}
+        aria-disabled={keyboardActivationEnabled ? !ready || !interactionEnabled : undefined}
+        aria-keyshortcuts={keyboardActivationEnabled ? 'Enter Space' : undefined}
+        tabIndex={keyboardActivationEnabled && ready && interactionEnabled ? 0 : undefined}
+        onKeyDown={handleKeyDown}
+        onClick={handleSyntheticClick}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}

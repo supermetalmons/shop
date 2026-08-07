@@ -1,4 +1,5 @@
 import {
+  Component,
   lazy,
   Suspense,
   useCallback,
@@ -7,6 +8,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
   type TransitionEvent,
 } from 'react';
 import {
@@ -28,9 +30,37 @@ import {
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
 
-const ClearCardThreeViewer = lazy(() => import('../ClearCardThreeViewer'));
 const CLEAR_CARD_REVEAL_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
 const CLEAR_CARD_REVEAL_CAMERA_ZOOM = 1.5;
+
+function createClearCardThreeViewerComponent() {
+  return lazy(() => import('../ClearCardThreeViewer'));
+}
+
+type ClearCardViewerErrorBoundaryProps = {
+  children: ReactNode;
+  onError: () => void;
+};
+
+class ClearCardViewerErrorBoundary extends Component<
+  ClearCardViewerErrorBoundaryProps,
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[mons] failed to load the clear-card reveal viewer', error);
+    this.props.onError();
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 type ClearCardRevealOverlayProps = {
   overlayStyle?: CSSProperties;
@@ -70,6 +100,9 @@ export default function ClearCardRevealOverlay({
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const requestStateRef = useRef<ClearCardRevealRequestState>('idle');
   const requestGenerationRef = useRef(0);
+  const [ClearCardThreeViewer, setClearCardThreeViewer] = useState(
+    createClearCardThreeViewerComponent,
+  );
   const [viewerAttempt, setViewerAttempt] = useState(0);
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
@@ -146,8 +179,13 @@ export default function ClearCardRevealOverlay({
     setViewerStatus('loading');
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
     setDisplayStage('pack');
+    setClearCardThreeViewer(() => createClearCardThreeViewerComponent());
     setViewerAttempt((attempt) => attempt + 1);
   }, [cardModelUrl]);
+
+  const handleViewerError = useCallback(() => {
+    setViewerStatus('error');
+  }, []);
 
   return (
     <div
@@ -176,30 +214,39 @@ export default function ClearCardRevealOverlay({
               aria-hidden="true"
             />
           ) : null}
-          <Suspense fallback={null}>
-            <ClearCardThreeViewer
-              key={`${String(resetKey)}:${viewerAttempt}`}
-              ref={viewerRef}
-              ready={packReady}
-              cardModelUrl={cardModelUrl}
-              packModelUrl={DEFAULT_CLEAR_PACK_MODEL_URL}
-              lightingConfig={lightingConfig}
-              unrestrictedMovement={false}
-              axisLockedOrbit={false}
-              interactionFrameRateMode="adaptive"
-              interactionEnabled={phase === 'ready' && !closing}
-              hitProgressionMode="reveal-gated"
-              revealReady={cardReady}
-              initiallyRevealed={false}
-              cameraZoom={CLEAR_CARD_REVEAL_CAMERA_ZOOM}
-              ariaLabel={`Interactive 3D ${boxName}`}
-              onStatusChange={setViewerStatus}
-              onCardModelLoadStatusChange={setCardLoadStatus}
-              onStageChange={setDisplayStage}
-              onPackHit={handlePackHit}
-              onPackBreak={handlePackBreak}
-            />
-          </Suspense>
+          <ClearCardViewerErrorBoundary
+            key={`${String(resetKey)}:${viewerAttempt}`}
+            onError={handleViewerError}
+          >
+            <Suspense fallback={null}>
+              <ClearCardThreeViewer
+                ref={viewerRef}
+                ready={packReady}
+                cardModelUrl={cardModelUrl}
+                packModelUrl={DEFAULT_CLEAR_PACK_MODEL_URL}
+                lightingConfig={lightingConfig}
+                unrestrictedMovement={false}
+                axisLockedOrbit={false}
+                interactionFrameRateMode="adaptive"
+                interactionEnabled={phase === 'ready' && !closing}
+                keyboardActivationEnabled={displayStage === 'pack'}
+                hitProgressionMode="reveal-gated"
+                revealReady={cardReady}
+                initiallyRevealed={false}
+                cameraZoom={CLEAR_CARD_REVEAL_CAMERA_ZOOM}
+                ariaLabel={
+                  displayStage === 'pack'
+                    ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
+                    : `Interactive 3D ${boxName} card`
+                }
+                onStatusChange={setViewerStatus}
+                onCardModelLoadStatusChange={setCardLoadStatus}
+                onStageChange={setDisplayStage}
+                onPackHit={handlePackHit}
+                onPackBreak={handlePackBreak}
+              />
+            </Suspense>
+          </ClearCardViewerErrorBoundary>
           {viewerStatus === 'error' ? (
             <button
               type="button"

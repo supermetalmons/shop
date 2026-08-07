@@ -5,6 +5,7 @@ import {
   beginClearCardRevealRequest,
   createClearCardGatedHitState,
   createClearCardRevealRequestState,
+  isClearCardImpactKey,
   isClearCardImpactPointer,
   settleClearCardRevealRequest,
 } from '../src/lib/clearCardReveal.ts';
@@ -48,6 +49,23 @@ test('clear card impacts accept only the primary activation pointer', () => {
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 1 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 2 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: false, button: 0 }), false);
+});
+
+test('clear card impacts accept normal keyboard activation only', () => {
+  const activation = {
+    repeat: false,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+  };
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Enter' }), true);
+  assert.equal(isClearCardImpactKey({ ...activation, key: ' ' }), true);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Spacebar' }), true);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Escape' }), false);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Enter', repeat: true }), false);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Enter', altKey: true }), false);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Enter', ctrlKey: true }), false);
+  assert.equal(isClearCardImpactKey({ ...activation, key: 'Enter', metaKey: true }), false);
 });
 
 test('recoverable clear card hits never consume persistent progress', () => {
