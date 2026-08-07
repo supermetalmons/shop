@@ -18,6 +18,7 @@ import {
 } from '../src/lib/clearCardModels.ts';
 import { CLEAR_CARDS_CARD_MODEL_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import { calcClearCardRevealTargetRect } from '../src/lib/revealOverlayLayout.ts';
+import { runDeferredOverlayActions } from '../src/lib/deferredOverlayActions.ts';
 
 const source = (relativePath: string) =>
   readFileSync(new URL(relativePath, import.meta.url), 'utf8');
@@ -151,6 +152,22 @@ test('clear card reveal target stays centered and within desktop and mobile view
   }
 });
 
+test('suspending an overlay reconciles data without resuming presentation', () => {
+  const completed: string[] = [];
+  const actions = [
+    { kind: 'reconcile' as const, run: () => completed.push('inventory') },
+    { kind: 'presentation' as const, run: () => completed.push('overlay') },
+    { kind: 'reconcile' as const, run: () => completed.push('pending') },
+  ];
+
+  runDeferredOverlayActions(actions, { includePresentation: false });
+  assert.deepEqual(completed, ['inventory', 'pending']);
+
+  completed.length = 0;
+  runDeferredOverlayActions(actions);
+  assert.deepEqual(completed, ['inventory', 'overlay', 'pending']);
+});
+
 test('clear card overlays use a bounded ordinary-filter blur layer', () => {
   const appStyles = source('../src/styles.css');
   const wipStyles = source('../src/clearCardWip.css');
@@ -185,7 +202,7 @@ test('clear card overlays use a bounded ordinary-filter blur layer', () => {
   assert.match(revealOverlay, /document\.body/);
   assert.match(revealOverlay, /role="dialog"/);
   assert.match(revealOverlay, /aria-modal="true"/);
-  assert.match(revealOverlay, /trapTabFocusWithin\(overlay, event\)/);
+  assert.match(revealOverlay, /document\.addEventListener\('focusin', handleFocusIn\)/);
   assert.match(shopRoute, /backdropFilter: clearCard \? 'none' : 'blur\(18px\)'/);
   assert.match(shopRoute, /suspended={isWipRoute}/);
   assert.match(shopRoute, /inert={backgroundUnavailable \|\| undefined}/);
@@ -193,6 +210,8 @@ test('clear card overlays use a bounded ordinary-filter blur layer', () => {
   assert.doesNotMatch(shopRoute, /document\.documentElement\.scrollHeight/);
   assert.match(
     app,
-    /if \(!suspended \|\| !revealOverlayRef\.current\) return;\s+cancelRevealOverlayAnimationFrame\(\);\s+finalizeRevealOverlayDismissal\(\);/,
+    /finalizeRevealOverlayDismissal\(\{ includePresentationActions: false \}\)/,
   );
+  assert.match(app, /revealOverlayRef\.current = suspended \? null : revealOverlay/);
+  assert.match(app, /'presentation'\);/);
 });

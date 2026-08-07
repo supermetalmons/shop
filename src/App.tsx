@@ -162,6 +162,11 @@ import { solanaExplorerAddressUrl } from './lib/solanaExplorer';
 import { toggleInventorySelection } from './lib/inventorySelection';
 import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from './lib/focusTrap';
 import {
+  runDeferredOverlayActions,
+  type DeferredOverlayAction,
+  type DeferredOverlayActionKind,
+} from './lib/deferredOverlayActions';
+import {
   canonicalReceiptPublicKey,
   canSignReceiptTransferTransaction,
   rebaseReceiptOperationsAfterWalletChange,
@@ -1899,8 +1904,10 @@ function App({
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
   const videoPreloadKeyRef = useRef<string>('');
-  const deferredOverlayActionsRef = useRef<Array<() => void>>([]);
+  const deferredOverlayActionsRef = useRef<DeferredOverlayAction[]>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
   const revealOverlaySessionRef = useRef(0);
   const revealLoadingRequestCounterRef = useRef(0);
   const revealLoadingRequestIdRef = useRef<number | null>(null);
@@ -2750,20 +2757,31 @@ function App({
     };
   }, [connectedWallet, isSignedInWallet, isViewerMode, runDeliveryRecovery, scheduledDeliveryRecoveryAt]);
 
-  const queueOverlayAction = useCallback((action: () => void) => {
-    if (revealOverlayRef.current) {
-      deferredOverlayActionsRef.current.push(action);
-      return;
-    }
-    action();
-  }, []);
+  const queueOverlayAction = useCallback(
+    (run: () => void, kind: DeferredOverlayActionKind = 'reconcile') => {
+      if (revealOverlayRef.current) {
+        deferredOverlayActionsRef.current.push({ kind, run });
+        return;
+      }
+      if (kind === 'presentation' && suspendedRef.current) return;
+      run();
+    },
+    [],
+  );
 
-  const flushOverlayActions = useCallback(() => {
-    const actions = deferredOverlayActionsRef.current;
-    if (!actions.length) return;
-    deferredOverlayActionsRef.current = [];
-    actions.forEach((action) => action());
-  }, []);
+  const flushOverlayActions = useCallback(
+    ({
+      includePresentationActions = true,
+    }: { includePresentationActions?: boolean } = {}) => {
+      const actions = deferredOverlayActionsRef.current;
+      if (!actions.length) return;
+      deferredOverlayActionsRef.current = [];
+      runDeferredOverlayActions(actions, {
+        includePresentation: includePresentationActions && !suspendedRef.current,
+      });
+    },
+    [],
+  );
 
   const preloadBoxFrames = useCallback(
     (fromFrame = 1, toFrame?: number, dropId?: string) => {
@@ -3185,25 +3203,34 @@ function App({
     setRevealLoading(null);
   }, []);
 
-  const finalizeRevealOverlayDismissal = useCallback(({ flushActions = true }: { flushActions?: boolean } = {}) => {
-    clearRevealOverlayCloseTimeout();
-    revealOverlayRef.current = null;
-    resetAssetGatedRevealDismissState();
-    setRevealOverlay(null);
-    setRevealOverlayClosing(false);
-    setRevealOverlayActive(false);
-    videoPreloadKeyRef.current = '';
-    if (videoPreloadRootRef.current) {
-      while (videoPreloadRootRef.current.firstChild) {
-        videoPreloadRootRef.current.removeChild(videoPreloadRootRef.current.firstChild);
+  const finalizeRevealOverlayDismissal = useCallback(
+    ({
+      flushActions = true,
+      includePresentationActions = true,
+    }: {
+      flushActions?: boolean;
+      includePresentationActions?: boolean;
+    } = {}) => {
+      clearRevealOverlayCloseTimeout();
+      revealOverlayRef.current = null;
+      resetAssetGatedRevealDismissState();
+      setRevealOverlay(null);
+      setRevealOverlayClosing(false);
+      setRevealOverlayActive(false);
+      videoPreloadKeyRef.current = '';
+      if (videoPreloadRootRef.current) {
+        while (videoPreloadRootRef.current.firstChild) {
+          videoPreloadRootRef.current.removeChild(videoPreloadRootRef.current.firstChild);
+        }
       }
-    }
-    if (flushActions) {
-      flushOverlayActions();
-      return;
-    }
-    deferredOverlayActionsRef.current = [];
-  }, [clearRevealOverlayCloseTimeout, flushOverlayActions, resetAssetGatedRevealDismissState]);
+      if (flushActions) {
+        flushOverlayActions({ includePresentationActions });
+        return;
+      }
+      deferredOverlayActionsRef.current = [];
+    },
+    [clearRevealOverlayCloseTimeout, flushOverlayActions, resetAssetGatedRevealDismissState],
+  );
 
   const cancelRevealOverlayAnimationFrame = useCallback(() => {
     if (revealOverlayRafRef.current === null) return;
@@ -3212,10 +3239,15 @@ function App({
   }, []);
 
   useEffect(() => {
-    if (!suspended || !revealOverlayRef.current) return;
+    if (!suspended || (!revealOverlayRef.current && !revealOverlay)) return;
     cancelRevealOverlayAnimationFrame();
-    finalizeRevealOverlayDismissal();
-  }, [cancelRevealOverlayAnimationFrame, finalizeRevealOverlayDismissal, suspended]);
+    finalizeRevealOverlayDismissal({ includePresentationActions: false });
+  }, [
+    cancelRevealOverlayAnimationFrame,
+    finalizeRevealOverlayDismissal,
+    revealOverlay,
+    suspended,
+  ]);
 
   const closeRevealOverlay = useCallback(() => {
     const overlay = revealOverlayRef.current;
@@ -3292,6 +3324,7 @@ function App({
 
   const presentRevealOverlay = useCallback(
     (nextOverlay: RevealOverlayState) => {
+      if (suspendedRef.current) return;
       revealOverlayRef.current = nextOverlay;
       setRevealOverlay(nextOverlay);
       setRevealOverlayClosing(false);
@@ -3429,16 +3462,16 @@ function App({
   }, [pendingOpenBoxes, revealOverlay]);
 
   useEffect(() => {
-    revealOverlayRef.current = revealOverlay;
-  }, [revealOverlay]);
+    revealOverlayRef.current = suspended ? null : revealOverlay;
+  }, [revealOverlay, suspended]);
 
   useEffect(() => {
-    revealOverlayActiveRef.current = revealOverlayActive;
-  }, [revealOverlayActive]);
+    revealOverlayActiveRef.current = suspended ? false : revealOverlayActive;
+  }, [revealOverlayActive, suspended]);
 
   useEffect(() => {
-    revealOverlayClosingRef.current = revealOverlayClosing;
-  }, [revealOverlayClosing]);
+    revealOverlayClosingRef.current = suspended ? false : revealOverlayClosing;
+  }, [revealOverlayClosing, suspended]);
 
   useEffect(() => {
     if (!connectedWallet || isViewerMode) return;
@@ -4999,7 +5032,7 @@ function App({
 	      openSelectedBoxIdRef.current = selectedBox.id;
 	      if (revealOverlayRef.current?.id === selectedBox.id) return;
 	      if (revealOverlayRef.current || revealOverlayClosingRef.current) {
-	        queueOverlayAction(() => openPreparingOverlayForBox(selectedBox));
+	        queueOverlayAction(() => openPreparingOverlayForBox(selectedBox), 'presentation');
 	        return;
 	      }
 	      openPreparingOverlayForBox(selectedBox);

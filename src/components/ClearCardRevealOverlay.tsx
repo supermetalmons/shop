@@ -13,7 +13,7 @@ import {
   type TransitionEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { trapTabFocusWithin } from '../lib/focusTrap';
+import { focusFirstControl, trapTabFocusWithin } from '../lib/focusTrap';
 import {
   createClearCardLightingPreset,
   type ClearCardLightingPresetId,
@@ -122,8 +122,35 @@ export default function ClearCardRevealOverlay({
 
   useLayoutEffect(() => {
     if (closing) return;
-    overlayRef.current?.focus({ preventScroll: true });
-  }, [closing]);
+    const overlay = overlayRef.current;
+    if (
+      !overlay ||
+      (document.activeElement !== overlay && overlay.contains(document.activeElement))
+    ) {
+      return;
+    }
+    focusFirstControl(overlay);
+  }, [cardLoadStatus, closing, viewerStatus]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const overlay = overlayRef.current;
+      if (overlay) trapTabFocusWithin(overlay, event);
+    };
+    const handleFocusIn = (event: FocusEvent) => {
+      const overlay = overlayRef.current;
+      if (!overlay || overlay.contains(event.target as Node | null)) return;
+      focusFirstControl(overlay);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('focusin', handleFocusIn);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('focusin', handleFocusIn);
+    };
+  }, []);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -205,10 +232,6 @@ export default function ClearCardRevealOverlay({
       aria-label={boxName ? `${boxName} unboxing` : 'Clear card unboxing'}
       tabIndex={-1}
       style={overlayStyle}
-      onKeyDown={(event) => {
-        const overlay = overlayRef.current;
-        if (overlay) trapTabFocusWithin(overlay, event);
-      }}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}
     >
