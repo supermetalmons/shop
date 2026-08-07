@@ -41,10 +41,6 @@ const CARD_MODEL_OPTIONS = Array.from({ length: 192 }, (_, index) => {
   const cardId = index + 1;
   return { label: `Card: ${cardId}`, url: `${CLEAR_CARD_MODEL_BASE_URL}/${cardId}.glb` };
 });
-const PACK_MODEL_OPTIONS = [
-  { label: 'Pack: Sample', url: '/clear_pack_sample.glb' },
-  { label: 'Pack: Sample 18', url: DEFAULT_CLEAR_PACK_MODEL_URL },
-] as const;
 
 function getSnapshotFilename(modelUrl: string, objectKind: 'pack' | 'card') {
   const fallback = objectKind === 'pack' ? 'clear-pack-snapshot' : 'clear-card-snapshot';
@@ -87,7 +83,6 @@ function isWipShortcutTarget(target: EventTarget | null) {
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
-  const [packModelUrl, setPackModelUrl] = useState<string>(DEFAULT_CLEAR_PACK_MODEL_URL);
   const [cardRevealed, setCardRevealed] = useState(false);
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
@@ -149,9 +144,10 @@ export default function ClearCardWipApp() {
     const viewer = viewerRef.current;
     if (!viewer) throw new Error('Snapshot rendering is unavailable.');
     const snapshot = await viewer.captureSnapshot();
-    const modelUrl = snapshot.objectKind === 'pack' ? packModelUrl : cardModelUrl;
+    const modelUrl =
+      snapshot.objectKind === 'pack' ? DEFAULT_CLEAR_PACK_MODEL_URL : cardModelUrl;
     downloadSnapshotBlob(snapshot.blob, getSnapshotFilename(modelUrl, snapshot.objectKind));
-  }, [cardModelUrl, packModelUrl]);
+  }, [cardModelUrl]);
   const handleModelChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
       const nextModelUrl = event.currentTarget.value;
@@ -161,20 +157,6 @@ export default function ClearCardWipApp() {
     },
     [cardModelUrl],
   );
-  const handlePackModelChange = useCallback(
-    (event: ChangeEvent<HTMLSelectElement>) => {
-      const nextModelUrl = event.currentTarget.value;
-      if (nextModelUrl === packModelUrl) return;
-      setStatus('loading');
-      setPackModelUrl(nextModelUrl);
-      // Picking a pack means you want to see that pack, so go back to the unopened
-      // state — otherwise an already-revealed card would mount straight over it.
-      // Card changes deliberately keep the current stage.
-      setCardRevealed(false);
-    },
-    [packModelUrl],
-  );
-
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
     if (soundInitPromiseRef.current) return soundInitPromiseRef.current;
@@ -275,11 +257,13 @@ export default function ClearCardWipApp() {
           >
             <Suspense fallback={null}>
               <ClearCardThreeViewer
-                key={`${cardModelUrl}:${upcomingDropPreview ? 'upcoming-drop' : packModelUrl}`}
+                key={`${cardModelUrl}:${
+                  upcomingDropPreview ? 'upcoming-drop' : DEFAULT_CLEAR_PACK_MODEL_URL
+                }`}
                 ref={viewerRef}
                 ready={ready}
                 cardModelUrl={cardModelUrl}
-                packModelUrl={upcomingDropPreview ? undefined : packModelUrl}
+                packModelUrl={upcomingDropPreview ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                 lightingConfig={lightingConfig}
                 unrestrictedMovement={unrestrictedMovement}
                 axisLockedOrbit={axisLockedOrbit}
@@ -310,18 +294,6 @@ export default function ClearCardWipApp() {
           onChange={handleModelChange}
         >
           {CARD_MODEL_OPTIONS.map((option) => (
-            <option key={option.url} value={option.url}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="clear-card-wip__model-picker"
-          aria-label="Pack model"
-          value={packModelUrl}
-          onChange={handlePackModelChange}
-        >
-          {PACK_MODEL_OPTIONS.map((option) => (
             <option key={option.url} value={option.url}>
               {option.label}
             </option>
