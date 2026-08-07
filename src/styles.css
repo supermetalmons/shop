@@ -63,12 +63,13 @@ html {
 body {
   --page-padding-top: 24px;
   --page-padding-inline: clamp(16px, 4vw, 48px);
+  --page-padding-bottom: 64px;
   margin: 0;
   min-height: 100vh;
   background: var(--bg);
   color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  padding: var(--page-padding-top) var(--page-padding-inline) 64px;
+  padding: var(--page-padding-top) var(--page-padding-inline) var(--page-padding-bottom);
   line-height: 1.5;
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
@@ -113,6 +114,47 @@ body.wip-scroll-lock #root {
   display: flex;
   flex-direction: column;
   gap: var(--page-gap);
+}
+
+.shop-route__app-viewport,
+.shop-route__app-stage {
+  display: contents;
+}
+
+.shop-route__app--clear-card-blur-open {
+  height: var(--clear-card-blur-container-height, 100vh);
+  min-height: calc(100vh - var(--page-padding-top) - var(--page-padding-bottom));
+  min-height: calc(100dvh - var(--page-padding-top) - var(--page-padding-bottom));
+}
+
+.shop-route__app--clear-card-blur-open > .shop-route__app-viewport {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  overflow: hidden;
+  background: var(--bg);
+  filter: blur(0);
+  transition: filter 320ms ease;
+  will-change: filter;
+}
+
+.shop-route__app--clear-card-blur-open > .shop-route__app-viewport--clear-card-blur-active {
+  filter: blur(18px);
+}
+
+.shop-route__app--clear-card-blur-open
+  > .shop-route__app-viewport
+  > .shop-route__app-stage {
+  position: absolute;
+  top: calc(-1 * var(--clear-card-blur-scroll-y, 0px));
+  right: 0;
+  left: 0;
+  display: block;
+  padding:
+    var(--page-padding-top)
+    var(--page-padding-inline)
+    var(--page-padding-bottom);
 }
 
 .fulfillment-page {
@@ -2968,6 +3010,11 @@ button.no-focus-style:focus-visible {
   overflow: visible;
 }
 
+.clear-card-reveal-overlay .reveal-overlay__backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .clear-card-reveal-overlay__viewport {
   position: relative;
   width: 100%;
@@ -3734,6 +3781,10 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .shop-route__app--clear-card-blur-open > .shop-route__app-viewport {
+    transition-duration: 1ms;
+  }
+
   .reveal-overlay__backdrop,
   .reveal-overlay__frame,
   .reveal-overlay__media,

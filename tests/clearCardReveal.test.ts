@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   advanceClearCardGatedHit,
   beginClearCardRevealRequest,
@@ -17,6 +18,18 @@ import {
 } from '../src/lib/clearCardModels.ts';
 import { CLEAR_CARDS_CARD_MODEL_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import { calcClearCardRevealTargetRect } from '../src/lib/revealOverlayLayout.ts';
+
+const source = (relativePath: string) =>
+  readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+
+function cssRule(styles: string, selector: string) {
+  const marker = `${selector} {`;
+  const start = styles.indexOf(marker);
+  assert.notEqual(start, -1, `Missing CSS rule: ${selector}`);
+  const end = styles.indexOf('}', start);
+  assert.notEqual(end, -1, `Unclosed CSS rule: ${selector}`);
+  return styles.slice(start, end + 1);
+}
 
 test('clear card model urls resolve only the 192 supported ids', () => {
   assert.equal(clearCardModelUrl(1), `${CLEAR_CARDS_CARD_MODEL_BASE_URL}/1.glb`);
@@ -136,4 +149,50 @@ test('clear card reveal target stays centered and within desktop and mobile view
     assert.ok(rect.top + rect.height <= viewportHeight);
     assert.ok(Math.abs(rect.left * 2 + rect.width - viewportWidth) <= 1);
   }
+});
+
+test('clear card overlays use a bounded ordinary-filter blur layer', () => {
+  const appStyles = source('../src/styles.css');
+  const wipStyles = source('../src/clearCardWip.css');
+  const app = source('../src/App.tsx');
+  const revealOverlay = source('../src/components/ClearCardRevealOverlay.tsx');
+  const shopRoute = source('../src/ShopRoute.tsx');
+
+  const activeBlurRule = cssRule(
+    appStyles,
+    '.shop-route__app--clear-card-blur-open > .shop-route__app-viewport--clear-card-blur-active',
+  );
+  const liveBackdropRule = cssRule(
+    appStyles,
+    '.clear-card-reveal-overlay .reveal-overlay__backdrop',
+  );
+  const stageRule = cssRule(
+    appStyles,
+    `.shop-route__app--clear-card-blur-open
+  > .shop-route__app-viewport
+  > .shop-route__app-stage`,
+  );
+  const wipBackdropRule = cssRule(wipStyles, '.clear-card-wip__backdrop');
+
+  assert.match(activeBlurRule, /filter: blur\(18px\)/);
+  assert.match(liveBackdropRule, /backdrop-filter: none/);
+  assert.match(
+    stageRule,
+    /padding:\s+var\(--page-padding-top\)\s+var\(--page-padding-inline\)\s+var\(--page-padding-bottom\)/,
+  );
+  assert.doesNotMatch(wipBackdropRule, /backdrop-filter/);
+  assert.match(revealOverlay, /return createPortal\(/);
+  assert.match(revealOverlay, /document\.body/);
+  assert.match(revealOverlay, /role="dialog"/);
+  assert.match(revealOverlay, /aria-modal="true"/);
+  assert.match(revealOverlay, /trapTabFocusWithin\(overlay, event\)/);
+  assert.match(shopRoute, /backdropFilter: clearCard \? 'none' : 'blur\(18px\)'/);
+  assert.match(shopRoute, /suspended={isWipRoute}/);
+  assert.match(shopRoute, /inert={backgroundUnavailable \|\| undefined}/);
+  assert.match(shopRoute, /getBoundingClientRect\(\)\.height/);
+  assert.doesNotMatch(shopRoute, /document\.documentElement\.scrollHeight/);
+  assert.match(
+    app,
+    /if \(!suspended \|\| !revealOverlayRef\.current\) return;\s+cancelRevealOverlayAnimationFrame\(\);\s+finalizeRevealOverlayDismissal\(\);/,
+  );
 });

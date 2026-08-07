@@ -1292,12 +1292,24 @@ async function recoverConnectionSendError(
   throw immediateClassification ?? (tx ? classifySignedTransactionSendError(tx, err) : err);
 }
 
+export type ClearCardBackgroundBlurState = {
+  open: boolean;
+  active: boolean;
+};
+
 type AppProps = {
   currentPath?: string;
   claimDeepLinkCode?: string | null;
+  suspended?: boolean;
+  onClearCardBackgroundBlurChange?: (state: ClearCardBackgroundBlurState) => void;
 };
 
-function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
+function App({
+  currentPath,
+  claimDeepLinkCode = null,
+  suspended = false,
+  onClearCardBackgroundBlurChange,
+}: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey, sendTransaction } = wallet;
@@ -3198,6 +3210,12 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     cancelAnimationFrame(revealOverlayRafRef.current);
     revealOverlayRafRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (!suspended || !revealOverlayRef.current) return;
+    cancelRevealOverlayAnimationFrame();
+    finalizeRevealOverlayDismissal();
+  }, [cancelRevealOverlayAnimationFrame, finalizeRevealOverlayDismissal, suspended]);
 
   const closeRevealOverlay = useCallback(() => {
     const overlay = revealOverlayRef.current;
@@ -6602,6 +6620,22 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
       (!revealOverlay?.revealedIds?.length || interactiveRevealCards.length > 0),
   );
   const revealOverlayCanRenderClearCard3d = revealOverlayHasClearCard3dRenderer;
+  const clearCardBackgroundBlurOpen = Boolean(
+    !suspended && revealOverlayCanRenderClearCard3d,
+  );
+  const clearCardBackgroundBlurActive = Boolean(
+    clearCardBackgroundBlurOpen && revealOverlayActive && !revealOverlayClosing,
+  );
+  useLayoutEffect(() => {
+    onClearCardBackgroundBlurChange?.({
+      open: clearCardBackgroundBlurOpen,
+      active: clearCardBackgroundBlurActive,
+    });
+  }, [
+    clearCardBackgroundBlurActive,
+    clearCardBackgroundBlurOpen,
+    onClearCardBackgroundBlurChange,
+  ]);
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
     return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
@@ -6873,7 +6907,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     (receiptTransferTarget
       ? revealOverlay?.receiptImages?.find((image) => image.key === receiptTransferTarget.id)?.image
       : undefined);
-  const revealOverlayNode = revealOverlay ? (
+  const revealOverlayNode = suspended ? null : revealOverlay ? (
     revealOverlayUsesPonchoViewer ? (
       <PonchoCardViewerOverlay
         overlayStyle={revealOverlayStyle}

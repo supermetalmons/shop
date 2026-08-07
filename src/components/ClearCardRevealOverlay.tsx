@@ -4,6 +4,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,8 @@ import {
   type ReactNode,
   type TransitionEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
+import { trapTabFocusWithin } from '../lib/focusTrap';
 import {
   createClearCardLightingPreset,
   type ClearCardLightingPresetId,
@@ -97,6 +100,7 @@ export default function ClearCardRevealOverlay({
   onRevealCompleteChange,
   onDismissReadyChange,
 }: ClearCardRevealOverlayProps) {
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const requestStateRef = useRef<ClearCardRevealRequestState>('idle');
   const requestGenerationRef = useRef(0);
@@ -115,6 +119,11 @@ export default function ClearCardRevealOverlay({
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const revealComplete = displayStage === 'revealed';
+
+  useLayoutEffect(() => {
+    if (closing) return;
+    overlayRef.current?.focus({ preventScroll: true });
+  }, [closing]);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -187,11 +196,19 @@ export default function ClearCardRevealOverlay({
     setViewerStatus('error');
   }, []);
 
-  return (
+  return createPortal(
     <div
+      ref={overlayRef}
       className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
-      role="presentation"
+      role="dialog"
+      aria-modal="true"
+      aria-label={boxName ? `${boxName} unboxing` : 'Clear card unboxing'}
+      tabIndex={-1}
       style={overlayStyle}
+      onKeyDown={(event) => {
+        const overlay = overlayRef.current;
+        if (overlay) trapTabFocusWithin(overlay, event);
+      }}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}
     >
@@ -266,6 +283,7 @@ export default function ClearCardRevealOverlay({
           ) : null}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
