@@ -214,7 +214,7 @@ import {
   resolveUpcomingDropRouteByPath,
   rpcEndpointForCluster,
 } from './lib/dropConfig';
-import { ADMIN_WALLETS, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
+import { ADMIN_WALLETS, hasDevnetInventoryAccess, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
 import {
   buildCurrentBoxIdIndexes,
@@ -1577,7 +1577,7 @@ function App({ currentPath, claimDeepLinkCode = null }: AppProps) {
     canUseAdminViewer && adminViewedOwner
       ? adminViewedOwner
       : resolveStripeCheckoutDataOwner(connectedWallet, stripeRecoveryOwner);
-  const includeDevnetInventory = isAdminWallet || Boolean(owner && ADMIN_WALLETS.has(owner));
+  const includeDevnetInventory = hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner);
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);

@@ -8,6 +8,7 @@ import {
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentAppAccess,
 } from '../../functions/src/shared/fulfillmentAccess';
+import { DEPLOYMENT_DROPS } from '../../functions/src/shared/deploymentRegistry';
 
 export const ADMIN_WALLETS = new Set<string>(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 
@@ -22,6 +23,15 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, string[]>(
   SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
 );
 
+export const DEVNET_INVENTORY_WALLETS = new Set<string>([
+  ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  ...FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
+  ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
+  ...Object.values(DEPLOYMENT_DROPS).map(({ treasury }) => treasury),
+  '8cC8yaEuoTRfmxEopJ9ttUq8JoKR6QkNnm7UqUXPymDw',
+]);
+
 export function hasFulfillmentAppAccess(wallet: string | null | undefined): boolean {
   return walletHasFulfillmentAppAccess(wallet, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
@@ -32,6 +42,10 @@ export function hasAdminIrlRedeemAccess(wallet: string | null | undefined): bool
 
 export function hasFulfillmentAddressAdminAccess(wallet: string | null | undefined): boolean {
   return walletHasFulfillmentAddressAdminAccess(wallet, FULFILLMENT_ADDRESS_ADMIN_WALLETS);
+}
+
+export function hasDevnetInventoryAccess(wallet: string | null | undefined): boolean {
+  return Boolean(wallet && DEVNET_INVENTORY_WALLETS.has(wallet));
 }
 
 export function listAllowedFulfillmentDropIds(wallet: string | null | undefined, dropIds: string[]): string[] {

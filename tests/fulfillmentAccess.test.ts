@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { DEPLOYMENT_DROPS } from '../functions/src/shared/deploymentRegistry.ts';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
@@ -11,7 +12,9 @@ import {
 } from '../functions/src/shared/fulfillmentAccess.ts';
 import {
   ADMIN_WALLETS,
+  DEVNET_INVENTORY_WALLETS,
   hasAdminIrlRedeemAccess,
+  hasDevnetInventoryAccess,
   hasFulfillmentAddressAdminAccess,
   hasFulfillmentAppAccess,
   listAllowedFulfillmentDropIds,
@@ -33,6 +36,7 @@ const SHIPPER_BINDER_DROP_IDS = CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.filter(
 const ALL_SHIPPER_DROP_IDS = ALL_DROP_IDS.filter((dropId) => dropId !== ADMIN_ONLY_DROP_ID);
 const LIMITED_SHIPPER_WALLET = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const ADDITIONAL_DEVNET_INVENTORY_WALLET = '8cC8yaEuoTRfmxEopJ9ttUq8JoKR6QkNnm7UqUXPymDw';
 
 test('fulfillment access inventory is frozen and preserves configured wallet and drop ordering', () => {
   assert.equal(Object.isFrozen(FULFILLMENT_ADMIN_WALLET_ADDRESSES), true);
@@ -85,6 +89,29 @@ test('frontend fulfillment access keeps admin, shipper, and Admin IRL membership
   assert.equal(hasFulfillmentAddressAdminAccess(FULFILLMENT_ONLY_WALLET), true);
   assert.equal(hasFulfillmentAddressAdminAccess(ADMIN_WALLET), false);
   assert.equal(hasFulfillmentAddressAdminAccess(LIMITED_SHIPPER_WALLET), false);
+});
+
+test('devnet inventory access includes operational, treasury, and explicitly added wallets', () => {
+  FULFILLMENT_ADMIN_WALLET_ADDRESSES.forEach((wallet) => {
+    assert.equal(hasDevnetInventoryAccess(wallet), true);
+  });
+  FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES.forEach((wallet) => {
+    assert.equal(hasDevnetInventoryAccess(wallet), true);
+  });
+  ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES.forEach((wallet) => {
+    assert.equal(hasDevnetInventoryAccess(wallet), true);
+  });
+  SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet }) => {
+    assert.equal(hasDevnetInventoryAccess(wallet), true);
+  });
+  Object.values(DEPLOYMENT_DROPS).forEach(({ treasury }) => {
+    assert.equal(hasDevnetInventoryAccess(treasury), true);
+  });
+
+  assert.equal(DEVNET_INVENTORY_WALLETS.has(ADDITIONAL_DEVNET_INVENTORY_WALLET), true);
+  assert.equal(hasDevnetInventoryAccess(ADDITIONAL_DEVNET_INVENTORY_WALLET), true);
+  assert.equal(hasDevnetInventoryAccess('11111111111111111111111111111111'), false);
+  assert.equal(hasDevnetInventoryAccess(null), false);
 });
 
 test('frontend allowed-drop lists retain caller and configured array references', () => {
