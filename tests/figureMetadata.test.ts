@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL } from '../src/config/dropMediaDefaults.ts';
+import {
+  CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
+} from '../src/config/dropMediaDefaults.ts';
 import { cardNft2AssetUrl } from '../src/lib/cardNft2Assets.ts';
 import { getCachedFigureMetadata, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 
@@ -47,6 +50,30 @@ test('little_swag_boxes figure metadata resolves from derived CDN image without 
     });
     assert.equal(calls.length, 0);
     assert.deepEqual(getCachedFigureMetadata('little_swag_boxes', 504), record);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('clear_cards figure metadata resolves from the direct clean card asset without fetching json', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: unknown[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(input);
+    throw new Error('unexpected metadata fetch');
+  }) as typeof fetch;
+
+  try {
+    const record = await loadFigureMetadata('clear_cards_devnet', 192);
+
+    assert.deepEqual(record, {
+      id: 192,
+      dropId: 'clear_cards_devnet',
+      image: `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/192.webp`,
+    });
+    assert.equal(calls.length, 0);
+    assert.deepEqual(getCachedFigureMetadata('clear_cards_devnet', 192), record);
   } finally {
     globalThis.fetch = originalFetch;
   }

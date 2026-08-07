@@ -13,6 +13,8 @@ import {
   CARD_NFT_2_BOX_MEDIA,
   CARD_NFT_2_PACK_BASE_URL,
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   LITTLE_SWAG_BOXES_BOX_PREVIEW_IMAGE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
@@ -78,6 +80,7 @@ function boxThumbnailUrl(dropId: string, drop: FunctionsDropConfig | undefined, 
     return mediaId ? `${CARD_NFT_2_PACK_BASE_URL}/${mediaId}/initial.webp` : undefined;
   }
   if (family === 'card_nft_binder') return CARD_NFT_BINDER_CLEAN_IMAGE_URL;
+  if (family === 'clear_cards') return CLEAR_CARDS_PACK_CLEAN_IMAGE_URL;
   if (family === 'drifella_shirt') return DRIFELLA_SHIRT_CLEAN_IMAGE_URL;
   if (family === 'little_swag_boxes') return LITTLE_SWAG_BOXES_BOX_PREVIEW_IMAGE_URL;
   if (family === 'little_swag_hoodies') return LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL;
@@ -88,6 +91,7 @@ function boxThumbnailUrl(dropId: string, drop: FunctionsDropConfig | undefined, 
 function figureThumbnailUrl(dropId: string, drop: FunctionsDropConfig | undefined, figureId: number): string | undefined {
   const family = drop?.dropFamily || normalizeDropId(dropId);
   if (family === 'card_nft_2') return cardNft2AssetUrl('img', figureId);
+  if (family === 'clear_cards') return `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/${figureId}.webp`;
   if (family === 'little_swag_boxes') {
     const mediaId = getMediaIdForTokenId(figureId, LITTLE_SWAG_BOXES_FIGURE_MEDIA) || figureId;
     return `${LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL}/${mediaId}.webp`;

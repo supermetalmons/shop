@@ -13,6 +13,11 @@ import {
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
   CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
   CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
+  CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  CLEAR_CARDS_CDN_BASE_URL,
+  CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
+  CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL,
   DRIFELLA_SHIRT_CDN_BASE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_IMAGE_BASE_URL,
@@ -261,6 +266,46 @@ test('card NFT binder uses its clean preview and shared receipt display image', 
     }),
     CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   );
+});
+
+test('clear cards use the clean pack and direct card and receipt assets', () => {
+  assert.equal(CLEAR_CARDS_CDN_BASE_URL, 'https://cdn.lil.org/nft/clear_cards/wip');
+  assert.equal(CLEAR_CARDS_PACK_CLEAN_IMAGE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`);
+  assert.equal(CLEAR_CARDS_CARD_CLEAN_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`);
+  assert.equal(CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/receipts`);
+
+  const content = resolveDropContent('clear_cards_devnet');
+  assert.equal(content.box.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
+  assert.equal(content.box.aspectRatio, CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO);
+  assert.equal(content.mintPanel.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
+  assert.equal(content.mintPanel.aspectRatio, CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO);
+  assert.equal(content.figures.inventoryImageBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
+  assert.equal(content.figures.fulfillmentMediaBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
+  assert.equal(content.certificates.inventoryImageBaseUrl, CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL);
+  assert.equal(mintPanelPreviewImage('clear_cards_devnet'), CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
+
+  for (const id of [1, 192]) {
+    assert.equal(
+      normalizeBoxDisplayImage({
+        dropId: 'clear_cards_devnet',
+        imageRaw: 'https://metadata.example.com/pack.webp',
+        boxId: id,
+      }),
+      CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
+    );
+    assert.equal(
+      normalizeFigureDisplayImage('clear_cards_devnet', 'https://metadata.example.com/card.webp', id),
+      `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/${id}.webp`,
+    );
+    assert.equal(
+      normalizeCertificateDisplayImage({
+        dropId: 'clear_cards_devnet',
+        imageRaw: 'https://metadata.example.com/receipt.webp',
+        figureId: id,
+      }),
+      `${CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL}/${id}.webp`,
+    );
+  }
 });
 
 test('legacy display media urls rewrite to CDN paths with metadata fallback preserved', () => {

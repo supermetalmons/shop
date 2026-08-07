@@ -29,6 +29,8 @@ import {
 } from '../functions/src/orderEmailItems.ts';
 import {
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
+  CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
 } from '../functions/src/shared/dropMediaDefaults.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
@@ -487,6 +489,23 @@ test('card nft binder order email items use the clean thumbnail for every audien
     [CARD_NFT_BINDER_CLEAN_IMAGE_URL],
   );
   assert.deepEqual(shipperItems, buyerItems);
+});
+
+test('clear cards order email items use the configured pack and card thumbnails', async () => {
+  const items = await buildBuyerVisibleOrderEmailItems(
+    {
+      items: [
+        { kind: 'box', refId: 1 },
+        { kind: 'dude', refId: 192 },
+      ],
+    },
+    { dropId: 'clear_cards_devnet' },
+  );
+
+  assert.deepEqual(
+    items.map((item) => item.thumbnailUrl),
+    [CLEAR_CARDS_PACK_CLEAN_IMAGE_URL, `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/192.webp`],
+  );
 });
 
 test('order email items keep assigned card contents hidden for card nft 2 packs', async () => {

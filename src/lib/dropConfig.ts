@@ -13,6 +13,8 @@ import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL
 import {
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
   CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
+  CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
 } from '../config/dropMediaDefaults';
 
@@ -52,8 +54,8 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     solanaCluster: 'mainnet-beta',
     label: 'Clear Cards',
     title: 'Clear Cards',
-    previewImageUrl: 'https://cdn.lil.org/nft/clear_cards/wip/pack_clean.webp',
-    previewAspectRatio: 1362 / 1400,
+    previewImageUrl: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
+    previewAspectRatio: CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
     boxNamePrefix: 'card',
   },
   {
