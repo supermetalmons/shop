@@ -28,7 +28,7 @@ import {
 import { isDropFamily, normalizeDropId, type MediaMapConfig } from './deployment.ts';
 
 export type DropRevealMode = 'animated' | 'static';
-export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack';
+export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack' | 'clear_card_3d';
 export type DropBoxInventoryImagePathMode = 'file' | 'folder_initial';
 export type DropCertificateBoxInventoryImagePathMode = 'file' | 'receipt_file' | 'receipt_pack_file';
 export type DropFigureRevealPresentation = 'videos' | 'metadata_stills';
@@ -59,6 +59,14 @@ export type DropRevealSoundProfile = {
 
 export function usesInteractiveCardPackRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
   return INTERACTIVE_CARD_PACK_REVEAL_RENDERERS.has(renderer as DropRevealRenderer);
+}
+
+export function usesClearCard3dRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
+  return renderer === 'clear_card_3d';
+}
+
+export function usesAssetGatedRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
+  return usesInteractiveCardPackRevealFlow(renderer) || usesClearCard3dRevealFlow(renderer);
 }
 
 const INTERACTIVE_CARD_PACK_REVEAL_RENDERERS = new Set<DropRevealRenderer>([
@@ -213,6 +221,10 @@ const CLEAR_CARDS_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   mintPanel: {
     previewImageUrl: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
     aspectRatio: CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  },
+  reveal: {
+    mode: 'animated',
+    renderer: 'clear_card_3d',
   },
   figures: {
     inventoryImageBaseUrl: CLEAR_CARDS_CARD_CLEAN_BASE_URL,

@@ -34,6 +34,13 @@ import {
   resolveMedianFrameInterval,
   resolveAdaptiveSlowFrameThreshold,
 } from './lib/adaptiveFrameRate';
+import {
+  advanceClearCardGatedHit,
+  createClearCardGatedHitState,
+  isClearCardImpactPointer,
+  type ClearCardGatedHitState,
+} from './lib/clearCardReveal';
+import { clearCardModelLoadDecision } from './lib/clearCardModels';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -202,8 +209,10 @@ function lightMatchesStage(scope: LightStage, stage: ClearCardDisplayStage) {
 }
 
 export type ViewerStatus = 'loading' | 'ready' | 'error';
+export type ClearCardModelLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 type ClearCardViewMode = 'tilt' | 'free' | 'orbit';
 type InteractionFrameRateMode = 'unrestricted' | 'throttled' | 'adaptive';
+type ClearCardHitProgressionMode = 'fixed' | 'reveal-gated';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
 
@@ -215,22 +224,27 @@ type ClearCardSnapshot = {
 export type ClearCardThreeViewerHandle = {
   reset: () => void;
   hit: () => void;
+  retryCardModel: () => void;
   captureSnapshot: () => Promise<ClearCardSnapshot>;
 };
 
 type ClearCardThreeViewerProps = {
   ready: boolean;
-  cardModelUrl: string;
+  cardModelUrl?: string;
   packModelUrl?: string;
   lightingConfig: ClearCardLightingConfig;
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   snapBackOnRelease?: boolean;
   interactionFrameRateMode?: InteractionFrameRateMode;
+  interactionEnabled?: boolean;
+  hitProgressionMode?: ClearCardHitProgressionMode;
+  revealReady?: boolean;
   initiallyRevealed: boolean;
   cameraZoom?: number;
   ariaLabel?: string;
   onStatusChange: (status: ViewerStatus) => void;
+  onCardModelLoadStatusChange?: (status: ClearCardModelLoadStatus) => void;
   onStageChange?: (stage: ClearCardDisplayStage) => void;
   onPackHit?: (hitIndex: number) => void;
   onPackBreak?: () => void;
@@ -572,10 +586,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       axisLockedOrbit,
       snapBackOnRelease = false,
       interactionFrameRateMode = 'unrestricted',
+      interactionEnabled = true,
+      hitProgressionMode = 'fixed',
+      revealReady = true,
       initiallyRevealed,
       cameraZoom = 1,
       ariaLabel,
       onStatusChange,
+      onCardModelLoadStatusChange,
       onStageChange,
       onPackHit,
       onPackBreak,
@@ -596,8 +614,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const viewerReadyRef = useRef(false);
     const stageRef = useRef<ClearCardDisplayStage>('pack');
     const initiallyRevealedRef = useRef(initiallyRevealed);
+    const cardModelUrlRef = useRef(cardModelUrl);
+    const interactionEnabledRef = useRef(interactionEnabled);
+    const hitProgressionModeRef = useRef(hitProgressionMode);
+    const revealReadyRef = useRef(revealReady);
     const triggerHitRef = useRef<((clientX?: number, clientY?: number) => void) | null>(null);
     const performResetRef = useRef<(() => void) | null>(null);
+    const loadCardModelRef = useRef<((modelUrl: string | undefined, force?: boolean) => void) | null>(null);
+    const retryCardModelRef = useRef<(() => void) | null>(null);
     const captureSnapshotRef = useRef<(() => Promise<ClearCardSnapshot>) | null>(null);
     const applyAxisLockedOrbitRef = useRef<(() => void) | null>(null);
     const updateCameraViewRef = useRef<(() => void) | null>(null);
@@ -606,6 +630,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const onStageChangeRef = useRef(onStageChange);
     const onPackHitRef = useRef(onPackHit);
     const onPackBreakRef = useRef(onPackBreak);
+    const onCardModelLoadStatusChangeRef = useRef(onCardModelLoadStatusChange);
     const tiltRef = useRef<TiltState>({
       currentX: 0,
       currentY: 0,
@@ -634,7 +659,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       onPackHitRef.current = onPackHit;
       onPackBreakRef.current = onPackBreak;
       onStageChangeRef.current = onStageChange;
+      onCardModelLoadStatusChangeRef.current = onCardModelLoadStatusChange;
       snapBackOnReleaseRef.current = snapBackOnRelease;
+      cardModelUrlRef.current = cardModelUrl;
+      interactionEnabledRef.current = interactionEnabled;
+      hitProgressionModeRef.current = hitProgressionMode;
+      revealReadyRef.current = revealReady;
     });
 
     useEffect(() => {
@@ -647,6 +677,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       () => ({
         reset: () => performResetRef.current?.(),
         hit: () => triggerHitRef.current?.(),
+        retryCardModel: () => retryCardModelRef.current?.(),
         captureSnapshot: () => {
           const captureSnapshot = captureSnapshotRef.current;
           if (!captureSnapshot) {
@@ -657,6 +688,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       }),
       [],
     );
+
+    useEffect(() => {
+      cardModelUrlRef.current = cardModelUrl;
+      loadCardModelRef.current?.(cardModelUrl);
+    }, [cardModelUrl]);
 
     const resetTilt = useCallback(() => {
       tiltRef.current.targetX = 0;
@@ -745,9 +781,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const updateTilt = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
       if (viewModeRef.current !== 'tilt') return;
       if (!viewerReadyRef.current || reducedMotionRef.current) return;
+      if (!event.isPrimary) return;
       if (stageRef.current === 'breaking') return;
       const bounds = event.currentTarget.getBoundingClientRect();
       if (!bounds.width || !bounds.height) return;
+      beginInteractionThrottleRef.current?.();
       const pointerX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
       const pointerY = THREE.MathUtils.clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
       tiltRef.current.targetX = -(pointerY * 2 - 1) * MAX_TILT_X;
@@ -820,7 +858,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
         if (viewModeRef.current !== 'tilt') {
           if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
-          if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+          if (!isClearCardImpactPointer(event)) return;
           const rotation = unrestrictedRotationRef.current;
           if (rotation.pointerId !== null) return;
           rotation.pointerId = event.pointerId;
@@ -835,7 +873,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           event.preventDefault();
           return;
         }
-        if (stageRef.current === 'pack') {
+        if (stageRef.current === 'pack' && isClearCardImpactPointer(event)) {
           triggerHitRef.current?.(event.clientX, event.clientY);
         }
         updateTilt(event);
@@ -867,6 +905,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return;
         }
         if (event.pointerType === 'mouse') return;
+        releaseInteractionThrottleRef.current?.();
         resetTilt();
       },
       [resetTilt, startSnapBack],
@@ -874,6 +913,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerLeave = useCallback(() => {
       if (viewModeRef.current === 'tilt') {
+        releaseInteractionThrottleRef.current?.();
         resetTilt();
       }
     }, [resetTilt]);
@@ -886,6 +926,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (hadActiveDrag) startSnapBack(event.timeStamp);
           releaseInteractionThrottleRef.current?.();
         } else {
+          releaseInteractionThrottleRef.current?.();
           resetTilt();
         }
       },
@@ -927,8 +968,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       let disposed = false;
       let contextLost = false;
-      let modelLoadFailed = false;
-      let modelsReady = false;
+      let packLoadFailed = false;
+      let packReady = false;
+      let cardLoadFailed = false;
+      let cardReady = false;
+      let cardLoadGeneration = 0;
+      let loadedCardModelUrl: string | undefined;
+      let activeCardModelUrl: string | undefined;
       let initializationFrameId: number | null = null;
       let frameId: number | null = null;
       let displayCadenceFrameId: number | null = null;
@@ -945,7 +991,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let renderer: THREE.WebGLRenderer | null = null;
       let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
       let snapshotInFlight = false;
-      let dracoLoader: DRACOLoader | null = null;
+      let packDracoLoader: DRACOLoader | null = null;
+      let cardDracoLoader: DRACOLoader | null = null;
       let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
       let environmentUpdateTimer: number | null = null;
       let environmentSignature = '';
@@ -953,7 +1000,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let lastToneMapping: THREE.ToneMapping | null = null;
       let rectAreaLightReady = false;
       let rectAreaLightLoadPending = false;
-      let loadingManager: THREE.LoadingManager | null = null;
+      let packLoadingManager: THREE.LoadingManager | null = null;
+      let cardLoadingManager: THREE.LoadingManager | null = null;
       let resizeObserver: ResizeObserver | null = null;
       let motionQuery: MediaQueryList | null = null;
       let handleMotionPreference: (() => void) | null = null;
@@ -969,6 +1017,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let crackGroup: THREE.Group | null = null;
       let shardTransmissionWarmed = false;
       let hitCount = 0;
+      let gatedHitState: ClearCardGatedHitState = createClearCardGatedHitState();
       let breakElapsed = 0;
       let shardLocalScale = 1;
       const shards: PackShard[] = [];
@@ -992,6 +1041,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const packGroup = new THREE.Group();
       const cardGroup = new THREE.Group();
       cardGroup.visible = false;
+      let cardRoot: THREE.Object3D | null = null;
       const camera = new THREE.PerspectiveCamera(28, 1, 0.01, 100);
       let cameraAspect = 1;
       const shardCamera = new THREE.PerspectiveCamera();
@@ -1184,8 +1234,25 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
       setStage('pack');
 
+      const displayModelReady = () => (cardOnly ? cardReady : packReady);
+
+      const cardRequiredForViewerStatus = () =>
+        cardOnly || hitProgressionModeRef.current === 'fixed';
+
+      const updateViewerStatus = () => {
+        if (disposed) return;
+        const failed = packLoadFailed || (cardRequiredForViewerStatus() && cardLoadFailed);
+        const statusReady = displayModelReady() && (!cardRequiredForViewerStatus() || cardReady);
+        viewerReadyRef.current = !contextLost && statusReady;
+        onStatusChange(contextLost || failed ? 'error' : statusReady ? 'ready' : 'loading');
+      };
+
+      const reportCardModelLoadStatus = (status: ClearCardModelLoadStatus) => {
+        onCardModelLoadStatusChangeRef.current?.(status);
+      };
+
       const fitCamera = () => {
-        if (!modelsReady) return;
+        if (!displayModelReady()) return;
         let projectedWidth = fitSize.x;
         let projectedDepth = fitSize.z;
         let projectedHeight = fitSize.y;
@@ -1647,6 +1714,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const startBreak = (hit: HitSample) => {
+        if (!cardReady) return;
         cancelUnrestrictedDrag();
         onPackBreakRef.current?.();
         if (reducedMotionRef.current || shards.length === 0 || !fragmentsGroup) {
@@ -1671,18 +1739,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         requestRender();
       };
 
-      const registerHit = (clientX: number, clientY: number) => {
-        if (disposed || !viewerReadyRef.current || contextLost) return;
-        if (stageRef.current !== 'pack' || !modelsReady) return;
-        hitCount += 1;
-        const hitIndex = hitCount;
-        const hit = computeHitPoint(clientX, clientY);
-        if (hitIndex >= HITS_TO_BREAK) {
-          startBreak(hit);
-          return;
-        }
-        onPackHitRef.current?.(hitIndex);
-        const healable = hitIndex <= HEALABLE_HITS;
+      const applyHitEffect = (hit: HitSample, hitIndex: number, healable: boolean) => {
         if (!reducedMotionRef.current) {
           const rampIndex = Math.min(
             Math.floor(((hitIndex - 1) * HIT_INTENSITIES.length) / (HITS_TO_BREAK - 1)),
@@ -1698,11 +1755,43 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         } else if (!healable) {
           spawnCrack(hit, false, true);
         }
+      };
+
+      const registerHit = (clientX: number, clientY: number) => {
+        if (disposed || !viewerReadyRef.current || contextLost || !interactionEnabledRef.current) return;
+        if (stageRef.current !== 'pack' || !packReady) return;
+        const hit = computeHitPoint(clientX, clientY);
+        if (hitProgressionModeRef.current === 'reveal-gated') {
+          const result = advanceClearCardGatedHit(
+            gatedHitState,
+            cardReady && revealReadyRef.current,
+          );
+          gatedHitState = result.state;
+          onPackHitRef.current?.(result.hitIndex);
+          if (result.effect === 'break') {
+            startBreak(hit);
+            return;
+          }
+          applyHitEffect(hit, result.hitIndex, result.effect === 'recoverable');
+          requestRender();
+          return;
+        }
+
+        if (!cardReady) return;
+        hitCount += 1;
+        const hitIndex = hitCount;
+        if (hitIndex >= HITS_TO_BREAK) {
+          startBreak(hit);
+          return;
+        }
+        onPackHitRef.current?.(hitIndex);
+        const healable = hitIndex <= HEALABLE_HITS;
+        applyHitEffect(hit, hitIndex, healable);
         requestRender();
       };
 
       const performReset = () => {
-        if (disposed || !modelsReady) return;
+        if (disposed || !displayModelReady()) return;
         if (cardOnly) {
           finishBreakInstant();
           requestRender();
@@ -1710,6 +1799,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
         setStage('pack');
         hitCount = 0;
+        gatedHitState = createClearCardGatedHitState();
         breakElapsed = 0;
         clearCracks();
         packGroup.visible = true;
@@ -1744,7 +1834,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (snapshotInFlight) {
           throw new Error('A snapshot is already rendering.');
         }
-        if (disposed || contextLost || !modelsReady || !renderer || !viewerReadyRef.current) {
+        const snapshotModelReady =
+          displayModelReady() && (stageRef.current === 'pack' || cardReady);
+        if (disposed || contextLost || !snapshotModelReady || !renderer || !viewerReadyRef.current) {
           throw new Error('Snapshot rendering is unavailable while the model is loading.');
         }
         const snapshotStage = stageRef.current;
@@ -2143,6 +2235,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const beginInteractionThrottle = () => {
         if (interactionFrameRateMode === 'unrestricted') return;
+        if (interactionActive) {
+          interactionThrottleReleasePending = false;
+          return;
+        }
         stopDisplayCadenceCalibration();
         interactionActive = true;
         interactionThrottleReleasePending = false;
@@ -2334,6 +2430,136 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         requestRender();
       };
 
+      const prewarmCardModel = () => {
+        if (!renderer || !cardRoot || contextLost) return false;
+        const target = new THREE.WebGLRenderTarget(64, 64, {
+          depthBuffer: true,
+          stencilBuffer: false,
+        });
+        const previousTarget = renderer.getRenderTarget();
+        const previousPackVisibility = packGroup.visible;
+        const previousCardVisibility = cardGroup.visible;
+        const previousFragmentsVisibility = fragmentsGroup?.visible ?? false;
+        try {
+          packGroup.visible = false;
+          if (fragmentsGroup) fragmentsGroup.visible = false;
+          cardGroup.visible = true;
+          renderer.setRenderTarget(target);
+          renderer.clear();
+          renderer.render(scene, camera);
+          return true;
+        } finally {
+          packGroup.visible = previousPackVisibility;
+          if (fragmentsGroup) fragmentsGroup.visible = previousFragmentsVisibility;
+          cardGroup.visible = previousCardVisibility;
+          renderer.setRenderTarget(previousTarget);
+          target.dispose();
+        }
+      };
+
+      const clearLoadedCard = () => {
+        if (!cardRoot) return;
+        cardGroup.remove(cardRoot);
+        disposeObject3D(cardRoot);
+        cardRoot = null;
+      };
+
+      const loadCardModel = (modelUrl: string | undefined, force = false) => {
+        if (disposed || !renderer) return;
+        if (!force && modelUrl && loadedCardModelUrl === modelUrl && cardReady) return;
+        const loadDecision = clearCardModelLoadDecision({
+          modelUrl,
+          hasPackModel: !cardOnly,
+          packReady,
+        });
+
+        cardLoadGeneration += 1;
+        const generation = cardLoadGeneration;
+        activeCardModelUrl = modelUrl;
+        cardLoadingManager?.abort();
+        cardDracoLoader?.dispose();
+        cardLoadingManager = null;
+        cardDracoLoader = null;
+        clearLoadedCard();
+        loadedCardModelUrl = undefined;
+        cardReady = false;
+        cardLoadFailed = false;
+
+        if (loadDecision === 'idle' || !modelUrl) {
+          reportCardModelLoadStatus('idle');
+          updateViewerStatus();
+          requestRender();
+          return;
+        }
+
+        reportCardModelLoadStatus('loading');
+        updateViewerStatus();
+        if (loadDecision === 'defer') {
+          requestRender();
+          return;
+        }
+        cardLoadingManager = new THREE.LoadingManager();
+        cardDracoLoader = new DRACOLoader(cardLoadingManager);
+        cardDracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+        cardDracoLoader.setWorkerLimit(1);
+        const loader = new GLTFLoader(cardLoadingManager);
+        loader.setDRACOLoader(cardDracoLoader);
+
+        void loader.loadAsync(modelUrl)
+          .then((cardGltf) => {
+            if (disposed || generation !== cardLoadGeneration) {
+              disposeObject3D(cardGltf.scene);
+              return;
+            }
+            cardRoot = cardGltf.scene;
+            const rawCardSize = new THREE.Box3().setFromObject(cardRoot).getSize(new THREE.Vector3());
+            const embedScale =
+              packReady && rawCardSize.x > 0 && rawCardSize.y > 0
+                ? Math.min(packSize.x / rawCardSize.x, packSize.y / rawCardSize.y) *
+                  CARD_EMBED_FACTOR
+                : 1;
+            cardRoot.scale.setScalar(embedScale);
+            centerObject(cardRoot, cardSize);
+            cardGroup.add(cardRoot);
+            const effectSize = packReady ? packSize : cardSize;
+            sparkleWorldScale = Math.max(effectSize.x, effectSize.y, effectSize.z) || 1;
+            sparkleMaterial.size = sparkleWorldScale * 0.05;
+            if (cardOnly) {
+              cardReady = true;
+              fitSize.copy(cardSize);
+              fitCamera();
+              cardReady = false;
+            }
+            if (!prewarmCardModel()) {
+              throw new Error('The clear-card model could not be prewarmed.');
+            }
+            loadedCardModelUrl = modelUrl;
+            cardReady = true;
+            cardLoadFailed = false;
+            reportCardModelLoadStatus('ready');
+            if (cardOnly || initiallyRevealedRef.current) {
+              finishBreakInstant();
+            }
+            updateViewerStatus();
+            requestRender();
+          })
+          .catch((error: unknown) => {
+            if (disposed || generation !== cardLoadGeneration) return;
+            clearLoadedCard();
+            cardReady = false;
+            cardLoadFailed = true;
+            console.error('[mons] failed to load the clear-card model', error);
+            reportCardModelLoadStatus('error');
+            updateViewerStatus();
+          })
+          .finally(() => {
+            if (generation !== cardLoadGeneration) return;
+            cardDracoLoader?.dispose();
+            cardDracoLoader = null;
+            cardLoadingManager = null;
+          });
+      };
+
       const initializeViewer = () => {
         initializationFrameId = null;
         if (disposed) return;
@@ -2373,6 +2599,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           registerHit(x, y);
         };
         performResetRef.current = performReset;
+        loadCardModelRef.current = loadCardModel;
+        retryCardModelRef.current = () => {
+          if (activeCardModelUrl) loadCardModel(activeCardModelUrl, true);
+        };
 
         syncRendererSize = () => {
           if (disposed || !renderer) return;
@@ -2428,9 +2658,24 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             onStatusChange('error');
             return;
           }
-          const restoredReady = modelsReady && !modelLoadFailed;
-          viewerReadyRef.current = restoredReady;
-          onStatusChange(modelLoadFailed ? 'error' : restoredReady ? 'ready' : 'loading');
+          if (cardRoot && cardReady) {
+            reportCardModelLoadStatus('loading');
+            try {
+              if (prewarmCardModel()) {
+                reportCardModelLoadStatus('ready');
+              } else {
+                cardReady = false;
+                cardLoadFailed = true;
+                reportCardModelLoadStatus('error');
+              }
+            } catch (error) {
+              console.error('[mons] failed to prewarm the restored clear-card model', error);
+              cardReady = false;
+              cardLoadFailed = true;
+              reportCardModelLoadStatus('error');
+            }
+          }
+          updateViewerStatus();
           requestRender();
         };
         canvas.addEventListener('webglcontextlost', handleContextLost);
@@ -2467,91 +2712,71 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         resize();
         startDisplayCadenceCalibration();
 
-        loadingManager = new THREE.LoadingManager();
-        dracoLoader = new DRACOLoader(loadingManager);
-        dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-        dracoLoader.setWorkerLimit(1);
-        const modelLoader = new GLTFLoader(loadingManager);
-        modelLoader.setDRACOLoader(dracoLoader);
+        if (!packModelUrl) {
+          loadCardModel(cardModelUrlRef.current);
+          return;
+        }
 
-        const packModelPromise = packModelUrl
-          ? modelLoader.loadAsync(packModelUrl)
-          : Promise.resolve(null);
+        packLoadingManager = new THREE.LoadingManager();
+        packDracoLoader = new DRACOLoader(packLoadingManager);
+        packDracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+        packDracoLoader.setWorkerLimit(1);
+        const packLoader = new GLTFLoader(packLoadingManager);
+        packLoader.setDRACOLoader(packDracoLoader);
 
-        void Promise.all([packModelPromise, modelLoader.loadAsync(cardModelUrl)])
-          .then(([packGltf, cardGltf]) => {
+        void packLoader.loadAsync(packModelUrl)
+          .then((packGltf) => {
             if (disposed) {
-              if (packGltf) disposeObject3D(packGltf.scene);
-              disposeObject3D(cardGltf.scene);
+              disposeObject3D(packGltf.scene);
               return;
             }
-
-            if (packGltf) {
-              const packRoot = packGltf.scene;
-              centerObject(packRoot, packSize);
-              packGroup.add(packRoot);
-              packRoot.traverse((object) => {
-                if (!(object instanceof THREE.Mesh)) return;
-                packMeshes.push(object);
-                const materials = Array.isArray(object.material) ? object.material : [object.material];
-                if (
-                  materials.some(
-                    (material) =>
-                      material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
-                  )
-                ) {
-                  packUsesTransmission = true;
-                }
-              });
-              setStage(stageRef.current);
-              syncPackDisplayRotation();
-              let largestMeshSizeSq = -1;
-              let largestPackMesh: THREE.Mesh | null = null;
-              packMeshes.forEach((mesh) => {
-                const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
-                const meshSizeSq = meshSize.lengthSq();
-                if (meshSizeSq <= largestMeshSizeSq) return;
-                largestMeshSizeSq = meshSizeSq;
-                largestPackMesh = mesh;
-              });
-              if (largestPackMesh) buildPackShards(packMeshes, largestPackMesh);
-            }
-
-            const cardRoot = cardGltf.scene;
-            const rawCardSize = new THREE.Box3().setFromObject(cardRoot).getSize(new THREE.Vector3());
-            const embedScale =
-              packGltf && rawCardSize.x > 0 && rawCardSize.y > 0
-                ? Math.min(packSize.x / rawCardSize.x, packSize.y / rawCardSize.y) *
-                  CARD_EMBED_FACTOR
-                : 1;
-            cardRoot.scale.setScalar(embedScale);
-            centerObject(cardRoot, cardSize);
-            cardGroup.add(cardRoot);
-
-            const effectSize = packGltf ? packSize : cardSize;
-            sparkleWorldScale = Math.max(effectSize.x, effectSize.y, effectSize.z) || 1;
-            sparkleMaterial.size = sparkleWorldScale * 0.05;
-
-            modelsReady = true;
-            if (cardOnly || initiallyRevealedRef.current) {
-              finishBreakInstant();
-            } else {
-              fitSize.copy(packSize);
-              fitCamera();
-            }
-            viewerReadyRef.current = !contextLost;
-            onStatusChange(contextLost ? 'error' : 'ready');
-            if (!contextLost) requestRender();
+            const packRoot = packGltf.scene;
+            centerObject(packRoot, packSize);
+            packGroup.add(packRoot);
+            packRoot.traverse((object) => {
+              if (!(object instanceof THREE.Mesh)) return;
+              packMeshes.push(object);
+              const materials = Array.isArray(object.material) ? object.material : [object.material];
+              if (
+                materials.some(
+                  (material) =>
+                    material instanceof THREE.MeshPhysicalMaterial && material.transmission > 0,
+                )
+              ) {
+                packUsesTransmission = true;
+              }
+            });
+            setStage(stageRef.current);
+            syncPackDisplayRotation();
+            let largestMeshSizeSq = -1;
+            let largestPackMesh: THREE.Mesh | null = null;
+            packMeshes.forEach((mesh) => {
+              const meshSize = new THREE.Box3().setFromObject(mesh).getSize(new THREE.Vector3());
+              const meshSizeSq = meshSize.lengthSq();
+              if (meshSizeSq <= largestMeshSizeSq) return;
+              largestMeshSizeSq = meshSizeSq;
+              largestPackMesh = mesh;
+            });
+            if (largestPackMesh) buildPackShards(packMeshes, largestPackMesh);
+            packReady = true;
+            packLoadFailed = false;
+            fitSize.copy(packSize);
+            fitCamera();
+            updateViewerStatus();
+            requestRender();
+            loadCardModel(cardModelUrlRef.current);
           })
           .catch((error: unknown) => {
             if (disposed) return;
-            modelLoadFailed = true;
-            console.error('[mons] failed to load the clear-card models', error);
-            onStatusChange('error');
+            packReady = false;
+            packLoadFailed = true;
+            console.error('[mons] failed to load the clear-card pack model', error);
+            updateViewerStatus();
           })
           .finally(() => {
-            dracoLoader?.dispose();
-            dracoLoader = null;
+            packDracoLoader?.dispose();
+            packDracoLoader = null;
+            packLoadingManager = null;
           });
       };
 
@@ -2569,8 +2794,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         releaseInteractionThrottleRef.current = null;
         triggerHitRef.current = null;
         performResetRef.current = null;
+        loadCardModelRef.current = null;
+        retryCardModelRef.current = null;
         captureSnapshotRef.current = null;
-        loadingManager?.abort();
+        cardLoadGeneration += 1;
+        packLoadingManager?.abort();
+        cardLoadingManager?.abort();
         if (initializationFrameId !== null) {
           window.cancelAnimationFrame(initializationFrameId);
         }
@@ -2596,8 +2825,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           environmentUpdateTimer = null;
         }
         pendingEnvironmentConfig = null;
-        dracoLoader?.dispose();
-        dracoLoader = null;
+        packDracoLoader?.dispose();
+        packDracoLoader = null;
+        cardDracoLoader?.dispose();
+        cardDracoLoader = null;
         environmentRenderTarget?.dispose();
         environmentRenderTarget = null;
         disposeObject3D(scene);
@@ -2609,7 +2840,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       interactionFrameRateMode,
       cancelUnrestrictedDrag,
       cameraZoom,
-      cardModelUrl,
       onStatusChange,
       packModelUrl,
       resetTilt,

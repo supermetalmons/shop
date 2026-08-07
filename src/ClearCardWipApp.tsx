@@ -10,7 +10,12 @@ import {
 } from 'react';
 import { navigate } from './navigation';
 import { soundPlayer } from './lib/SoundPlayer';
-import { DEFAULT_CLEAR_PACK_MODEL_URL } from './lib/clearCardModels';
+import {
+  CLEAR_CARD_MODEL_COUNT,
+  DEFAULT_CLEAR_PACK_MODEL_URL,
+  clearCardModelUrl,
+} from './lib/clearCardModels';
+import { CLEAR_CARDS_BREAK_SOUND_URL, CLEAR_CARDS_HIT_SOUND_URLS } from './config/dropMediaDefaults';
 import ClearCardLightingPanel from './components/ClearCardLightingPanel';
 import {
   createClearCardLightingPreset,
@@ -26,20 +31,12 @@ import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
 
-const CLEAR_CARDS_SOUND_BASE_URL = 'https://cdn.lil.org/nft/clear_cards/sounds';
-const HIT_SOUND_URLS = [
-  `${CLEAR_CARDS_SOUND_BASE_URL}/hit1.mp3`,
-  `${CLEAR_CARDS_SOUND_BASE_URL}/hit2.mp3`,
-  `${CLEAR_CARDS_SOUND_BASE_URL}/hit3.mp3`,
-] as const;
-const BREAK_SOUND_URL = `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`;
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
 const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
-const CLEAR_CARD_MODEL_BASE_URL = 'https://cdn.lil.org/nft/clear_cards/wip/cards';
-const CARD_MODEL_OPTIONS = Array.from({ length: 192 }, (_, index) => {
+const CARD_MODEL_OPTIONS = Array.from({ length: CLEAR_CARD_MODEL_COUNT }, (_, index) => {
   const cardId = index + 1;
-  return { label: `Card: ${cardId}`, url: `${CLEAR_CARD_MODEL_BASE_URL}/${cardId}.glb` };
+  return { label: `Card: ${cardId}`, url: clearCardModelUrl(cardId)! };
 });
 
 function getSnapshotFilename(modelUrl: string, objectKind: 'pack' | 'card') {
@@ -172,7 +169,10 @@ export default function ClearCardWipApp() {
 
   const handlePackHit = useCallback(() => {
     void ensureSoundReady().then(() => {
-      const soundUrl = HIT_SOUND_URLS[Math.floor(Math.random() * HIT_SOUND_URLS.length)] || HIT_SOUND_URLS[0];
+      const soundUrl =
+        CLEAR_CARDS_HIT_SOUND_URLS[
+          Math.floor(Math.random() * CLEAR_CARDS_HIT_SOUND_URLS.length)
+        ] || CLEAR_CARDS_HIT_SOUND_URLS[0];
       void soundPlayer.playSound(soundUrl, HIT_SOUND_VOLUME);
     });
   }, [ensureSoundReady]);
@@ -180,7 +180,7 @@ export default function ClearCardWipApp() {
   const handlePackBreak = useCallback(() => {
     setCardRevealed(true);
     const play = () => {
-      void soundPlayer.playSound(BREAK_SOUND_URL, BREAK_SOUND_VOLUME);
+      void soundPlayer.playSound(CLEAR_CARDS_BREAK_SOUND_URL, BREAK_SOUND_VOLUME);
     };
     if (soundPlayer.isInitialized) {
       play();
@@ -196,10 +196,10 @@ export default function ClearCardWipApp() {
 
   useEffect(() => {
     if (status !== 'ready') return;
-    HIT_SOUND_URLS.forEach((soundUrl) => {
+    CLEAR_CARDS_HIT_SOUND_URLS.forEach((soundUrl) => {
       void soundPlayer.preloadSound(soundUrl).catch(() => undefined);
     });
-    void soundPlayer.preloadSound(BREAK_SOUND_URL).catch(() => undefined);
+    void soundPlayer.preloadSound(CLEAR_CARDS_BREAK_SOUND_URL).catch(() => undefined);
   }, [status]);
 
   useLayoutEffect(() => {

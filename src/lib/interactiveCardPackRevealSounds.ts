@@ -1,5 +1,10 @@
 import { isDropFamily } from '../config/deployment.ts';
-import { CARD_NFT_2_CDN_BASE_URL, PONCHO_DRIFELLA_CDN_BASE_URL } from '../config/dropMediaDefaults.ts';
+import {
+  CARD_NFT_2_CDN_BASE_URL,
+  CLEAR_CARDS_BREAK_SOUND_URL,
+  CLEAR_CARDS_HIT_SOUND_URLS,
+  PONCHO_DRIFELLA_CDN_BASE_URL,
+} from '../config/dropMediaDefaults.ts';
 
 const PONCHO_DRIFELLA_SOUND_BASE_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/sounds`;
 
@@ -29,6 +34,12 @@ export type InteractiveCardPackRevealSoundUrls = {
 };
 
 export function interactiveCardPackRevealSoundUrlsForDropId(dropId?: string): InteractiveCardPackRevealSoundUrls {
+  if (isDropFamily(dropId, 'clear_cards')) {
+    return {
+      click: CLEAR_CARDS_HIT_SOUND_URLS,
+      reveal: CLEAR_CARDS_BREAK_SOUND_URL,
+    };
+  }
   if (isDropFamily(dropId, 'card_nft_2')) {
     return {
       click: CARD_NFT_2_BOX_SOUND_CLICK_URLS,

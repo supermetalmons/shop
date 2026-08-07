@@ -14,10 +14,15 @@ import {
   CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
   CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  CLEAR_CARDS_BREAK_SOUND_URL,
+  CLEAR_CARDS_CARD_MODEL_BASE_URL,
   CLEAR_CARDS_CDN_BASE_URL,
+  CLEAR_CARDS_HIT_SOUND_URLS,
+  CLEAR_CARDS_PACK_MODEL_URL,
   CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
   CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
   CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL,
+  CLEAR_CARDS_SOUND_BASE_URL,
   DRIFELLA_SHIRT_CDN_BASE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_IMAGE_BASE_URL,
@@ -273,12 +278,17 @@ test('clear cards use the clean pack and direct card and receipt assets', () => 
   assert.equal(CLEAR_CARDS_PACK_CLEAN_IMAGE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`);
   assert.equal(CLEAR_CARDS_CARD_CLEAN_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`);
   assert.equal(CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/receipts`);
+  assert.equal(CLEAR_CARDS_PACK_MODEL_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack.glb`);
+  assert.equal(CLEAR_CARDS_CARD_MODEL_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards`);
 
   const content = resolveDropContent('clear_cards_devnet');
   assert.equal(content.box.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
   assert.equal(content.box.aspectRatio, CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO);
   assert.equal(content.mintPanel.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
   assert.equal(content.mintPanel.aspectRatio, CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO);
+  assert.equal(content.reveal.renderer, 'clear_card_3d');
+  assert.equal(content.reveal.sound.clickVolume, 0.42);
+  assert.equal(content.reveal.sound.revealVolume, 0.42);
   assert.equal(content.figures.inventoryImageBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
   assert.equal(content.figures.fulfillmentMediaBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
   assert.equal(content.certificates.inventoryImageBaseUrl, CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL);
@@ -591,6 +601,18 @@ test('interactive pack reveal content and selected card presentation are stable'
 });
 
 test('interactive pack reveal sounds resolve by drop family', () => {
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('clear_cards_devnet'), {
+    click: CLEAR_CARDS_HIT_SOUND_URLS,
+    reveal: CLEAR_CARDS_BREAK_SOUND_URL,
+  });
+  assert.deepEqual(CLEAR_CARDS_HIT_SOUND_URLS, [
+    `${CLEAR_CARDS_SOUND_BASE_URL}/hit1.mp3`,
+    `${CLEAR_CARDS_SOUND_BASE_URL}/hit2.mp3`,
+    `${CLEAR_CARDS_SOUND_BASE_URL}/hit3.mp3`,
+  ]);
+  assert.equal(CLEAR_CARDS_SOUND_BASE_URL, 'https://cdn.lil.org/nft/clear_cards/sounds');
+  assert.equal(CLEAR_CARDS_BREAK_SOUND_URL, `${CLEAR_CARDS_SOUND_BASE_URL}/crash.mp3`);
+
   assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('card_nft_2'), {
     click: CARD_NFT_2_BOX_SOUND_CLICK_URLS,
     reveal: CARD_NFT_2_BOX_SOUND_REVEAL_URL,

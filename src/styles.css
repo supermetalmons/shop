@@ -2964,6 +2964,98 @@ button.no-focus-style:focus-visible {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.clear-card-reveal-overlay__frame {
+  overflow: visible;
+}
+
+.clear-card-reveal-overlay__viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 1px;
+  min-height: 1px;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.clear-card-reveal-overlay .clear-card-wip__canvas {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transform: translate3d(0, 8px, 0) scale(0.97);
+  filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
+  transition:
+    opacity 360ms ease,
+    transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+
+.clear-card-reveal-overlay__viewport--ready .clear-card-wip__canvas {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+.clear-card-reveal-overlay__fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 1;
+  transition: opacity 220ms cubic-bezier(0.4, 0, 0.2, 1) 30ms;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.clear-card-reveal-overlay__viewport--ready .clear-card-reveal-overlay__fallback {
+  opacity: 0;
+}
+
+.clear-card-reveal-overlay__retry {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+}
+
+button.clear-card-reveal-overlay__retry {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: color-mix(in srgb, var(--fg) 72%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+button.clear-card-reveal-overlay__retry:hover:not(:disabled),
+button.clear-card-reveal-overlay__retry:focus-visible {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  color: var(--fg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .clear-card-reveal-overlay .clear-card-wip__canvas {
+    filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.38));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clear-card-reveal-overlay .clear-card-wip__canvas,
+  .clear-card-reveal-overlay__fallback {
+    transform: none;
+    transition-duration: 1ms;
+  }
+}
+
 .wip-page {
   position: fixed;
   inset: 0;

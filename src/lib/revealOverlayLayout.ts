@@ -84,6 +84,25 @@ const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
   height: 728,
 });
 
+const CLEAR_CARD_ASPECT_RATIO = 1 / 1.4;
+
+export function calcClearCardRevealTargetRect(
+  viewportWidth: number,
+  viewportHeight: number,
+): PonchoDrifellaViewportFrameRect {
+  const width = Math.max(
+    1,
+    Math.floor(Math.min(viewportWidth * 0.82, 545, viewportHeight * 0.605)),
+  );
+  const height = Math.max(1, Math.floor(width / CLEAR_CARD_ASPECT_RATIO));
+  return {
+    left: Math.round((viewportWidth - width) / 2),
+    top: Math.max(8, Math.round((viewportHeight - height) / 2)),
+    width,
+    height,
+  };
+}
+
 export function calcPonchoDrifellaRevealTargetRect(
   viewportWidth: number,
   viewportHeight: number,
