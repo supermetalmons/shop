@@ -40,15 +40,28 @@ test('final v1 uses the updated unpacking lighting', () => {
   assert.deepEqual(finalV1, expected);
 });
 
-test('final v2 duplicates final v1 with lower pack alpha and is the default', () => {
+test('final v2 duplicates final v1 with lower pack alpha', () => {
   const expected = createClearCardLightingPreset('final_v1');
   expected.transmission.packAlpha = 0.55;
 
   const finalV2 = createClearCardLightingPreset('final_v2');
 
-  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v2');
   assert.deepEqual(finalV2, expected);
-  assert.deepEqual(createClearCardLightingPreset(), finalV2);
+});
+
+test('final v3 adapts pack alpha to the color scheme and is the default', () => {
+  const expectedLight = createClearCardLightingPreset('final_v1');
+  expectedLight.transmission.packAlpha = 0.55;
+  const expectedDark = createClearCardLightingPreset('final_v1');
+  expectedDark.transmission.packAlpha = 0.76;
+
+  const light = createClearCardLightingPreset('final_v3');
+  const dark = createClearCardLightingPreset('final_v3', { darkMode: true });
+
+  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v3');
+  assert.deepEqual(light, expectedLight);
+  assert.deepEqual(dark, expectedDark);
+  assert.deepEqual(createClearCardLightingPreset(), light);
 });
 
 test('MintPanel Clear Cards preview preserves its theme-specific lighting', () => {

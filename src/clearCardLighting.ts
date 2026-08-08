@@ -774,7 +774,20 @@ function createFinalV2LightingConfig() {
   return config;
 }
 
+function createFinalV3LightingConfig(packAlpha: number) {
+  const config = createFinalV1LightingConfig();
+  config.transmission.packAlpha = packAlpha;
+  return config;
+}
+
 export const CLEAR_CARD_LIGHTING_PRESETS = [
+  {
+    id: 'final_v3',
+    label: 'final_v3',
+    description: 'Final v3 lighting with color-scheme-aware pack transparency.',
+    config: createFinalV3LightingConfig(0.55),
+    darkModeConfig: createFinalV3LightingConfig(0.76),
+  },
   {
     id: 'final_v2',
     label: 'final_v2',
@@ -798,11 +811,12 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v2';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v3';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(
   presetId: ClearCardLightingPresetId = DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
+  options: { darkMode?: boolean } = {},
 ): ClearCardLightingConfig {
   const preset =
     CLEAR_CARD_LIGHTING_PRESETS.find((candidate) => candidate.id === presetId) ??
@@ -810,7 +824,9 @@ export function createClearCardLightingPreset(
       (candidate) => candidate.id === DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
     ) ??
     CLEAR_CARD_LIGHTING_PRESETS[0];
-  return cloneConfig(preset.config);
+  const config =
+    options.darkMode && 'darkModeConfig' in preset ? preset.darkModeConfig : preset.config;
+  return cloneConfig(config);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

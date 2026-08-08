@@ -29,6 +29,7 @@ import type {
 } from './ClearCardThreeViewer';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
+import { useDarkColorScheme } from './hooks/useDarkColorScheme';
 import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
@@ -66,6 +67,7 @@ function downloadSnapshotBlob(blob: Blob, filename: string) {
 }
 
 export default function ClearCardWipApp() {
+  const darkMode = useDarkColorScheme();
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
   const [cardRevealed, setCardRevealed] = useState(false);
@@ -74,7 +76,7 @@ export default function ClearCardWipApp() {
   const [axisLockedOrbit, setAxisLockedOrbit] = useState(false);
   const [upcomingDropPreview, setUpcomingDropPreview] = useState(false);
   const [lightingConfig, setLightingConfig] = useState(() =>
-    createClearCardLightingPreset(CLEAR_CARD_WIP_LIGHTING_PRESET_ID),
+    createClearCardLightingPreset(CLEAR_CARD_WIP_LIGHTING_PRESET_ID, { darkMode }),
   );
   const [lightingPresetId, setLightingPresetId] = useState<
     ClearCardLightingPresetId | 'custom'
@@ -82,6 +84,11 @@ export default function ClearCardWipApp() {
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const previewViewModeRef = useRef({ unrestrictedMovement: false, axisLockedOrbit: false });
+
+  useEffect(() => {
+    if (lightingPresetId === 'custom') return;
+    setLightingConfig(createClearCardLightingPreset(lightingPresetId, { darkMode }));
+  }, [darkMode, lightingPresetId]);
 
   const handleStatusChange = useCallback((nextStatus: ViewerStatus) => {
     setStatus(nextStatus);
@@ -99,8 +106,8 @@ export default function ClearCardWipApp() {
   }, []);
   const handleLightingPresetChange = useCallback((presetId: ClearCardLightingPresetId) => {
     setLightingPresetId(presetId);
-    setLightingConfig(createClearCardLightingPreset(presetId));
-  }, []);
+    setLightingConfig(createClearCardLightingPreset(presetId, { darkMode }));
+  }, [darkMode]);
   const handleUnrestrictedMovementChange = useCallback((enabled: boolean) => {
     setUnrestrictedMovement(enabled);
     if (enabled) setAxisLockedOrbit(false);

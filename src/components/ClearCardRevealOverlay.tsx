@@ -26,6 +26,7 @@ import {
   type ClearCardRevealRequestState,
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
+import { useDarkColorScheme } from '../hooks/useDarkColorScheme';
 import { ModalFocusScope } from './ModalFocusScope';
 
 const CLEAR_CARD_REVEAL_CAMERA_ZOOM = 1.5;
@@ -96,6 +97,7 @@ export default function ClearCardRevealOverlay({
   onRevealCompleteChange,
   onDismissReadyChange,
 }: ClearCardRevealOverlayProps) {
+  const darkMode = useDarkColorScheme();
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const requestStateRef = useRef<ClearCardRevealRequestState>('idle');
   const requestGenerationRef = useRef(0);
@@ -106,7 +108,10 @@ export default function ClearCardRevealOverlay({
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
-  const lightingConfig = useMemo(() => createClearCardLightingPreset(), []);
+  const lightingConfig = useMemo(
+    () => createClearCardLightingPreset(undefined, { darkMode }),
+    [darkMode],
+  );
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
