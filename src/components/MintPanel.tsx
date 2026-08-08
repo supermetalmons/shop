@@ -283,7 +283,9 @@ function useDismissiblePopover<T extends HTMLElement>(
       if (root && !root.contains(evt.target as Node)) setOpen(false);
     };
     const onKeyDown = (evt: KeyboardEvent) => {
-      if (evt.key === 'Escape') setOpen(false);
+      if (evt.key !== 'Escape' || evt.defaultPrevented) return;
+      evt.preventDefault();
+      setOpen(false);
     };
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);

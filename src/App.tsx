@@ -6695,6 +6695,18 @@ function App({
     shipment: deliveryOpen,
     notify: notifyOpen,
   });
+  useEffect(() => {
+    if (!selectedCount || activeModalLayer || suspended) return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      setSelected(new Set());
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeModalLayer, selectedCount, suspended]);
   const revealOverlaySuspended = isModalLayerSuspended({
     activeLayer: activeModalLayer,
     layer: 'reveal',

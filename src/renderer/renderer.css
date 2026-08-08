@@ -10,6 +10,11 @@
   box-sizing: border-box;
 }
 
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
 html,
 body,
 #root {
@@ -136,12 +141,6 @@ input:disabled {
   background: rgba(255, 255, 255, 0.07);
   color: #fff;
   padding: 0 12px;
-}
-
-.renderer-list-row input:focus,
-.renderer-field-row input:focus {
-  border-color: #7dd3fc;
-  outline: none;
 }
 
 .renderer-folder-row,

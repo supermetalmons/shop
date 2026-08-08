@@ -48,6 +48,11 @@
   box-sizing: border-box;
 }
 
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -328,11 +333,6 @@ body.wip-scroll-lock #root {
   background: var(--surface);
 }
 
-.card-nft2-unrevealed-selection__copy:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .card-nft2-unrevealed-selection__copy:disabled {
   color: var(--muted);
   cursor: default;
@@ -557,16 +557,6 @@ button.link.top__submenu-section:focus-visible {
   -webkit-tap-highlight-color: transparent;
 }
 
-.brand__home-link:focus {
-  outline: none;
-}
-
-.brand__home-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: var(--radius-sm);
-}
-
 .brand h1 {
   margin: 0;
   letter-spacing: 0;
@@ -774,8 +764,6 @@ header.top--shop.top--spacer {
 
 .mint-panel__social-link:focus-visible {
   color: var(--fg);
-  outline: 2px solid currentColor;
-  outline-offset: 3px;
 }
 
 .mint-panel__remaining {
@@ -1915,15 +1903,6 @@ header.top--shop.top--spacer {
   color: var(--drops-panel-title-color);
 }
 
-.drops-panel__tile:focus {
-  outline: none;
-}
-
-.drops-panel__tile:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 4px;
-}
-
 .drops-panel__title {
   position: relative;
   grid-row: 1;
@@ -2235,7 +2214,7 @@ select:focus,
 textarea:focus {
   outline: none;
   background-color: var(--surface);
-  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.15);
+  box-shadow: none;
 }
 
 input[type='range'] {
@@ -2515,11 +2494,14 @@ button.no-focus-style:focus-visible {
   cursor: pointer;
 }
 
+.inventory__item--selectable:focus,
 .inventory__item--selectable:focus-visible,
-.inventory__item--viewable:focus-visible {
+.inventory__item--viewable:focus,
+.inventory__item--viewable:focus-visible,
+.inventory__item--revealable:focus,
+.inventory__item--revealable:focus-visible {
   outline: none;
-  outline: 2px solid rgba(0, 113, 227, 0.35);
-  outline-offset: 2px;
+  box-shadow: none;
 }
 
 .inventory--receipts .inventory__item:focus,
@@ -2530,12 +2512,6 @@ button.no-focus-style:focus-visible {
 
 .inventory__item--revealable {
   cursor: pointer;
-}
-
-.inventory__item--revealable:focus-visible {
-  outline: none;
-  outline: 2px solid rgba(0, 113, 227, 0.35);
-  outline-offset: 2px;
 }
 
 .inventory__item--selected {
@@ -2698,11 +2674,6 @@ button.no-focus-style:focus-visible {
 .card-nft2-unrevealed-viewer-controls__bookmark:focus-visible {
   background: color-mix(in srgb, var(--bg) 58%, transparent);
   color: rgba(29, 29, 31, 0.72);
-}
-
-.card-nft2-unrevealed-viewer-controls__bookmark:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 .card-nft2-unrevealed-viewer-controls__bookmark--selected {
@@ -3035,8 +3006,7 @@ button.no-focus-style:focus-visible {
 }
 
 .clear-card-reveal-overlay .clear-card-wip__canvas[role='button']:focus-visible {
-  outline: 3px solid rgba(0, 113, 227, 0.75);
-  outline-offset: -3px;
+  outline: none;
 }
 
 .clear-card-reveal-overlay__viewport--ready .clear-card-wip__canvas {
@@ -3712,12 +3682,6 @@ button.wip-reset-btn:active:not(:disabled) {
   color: rgba(29, 29, 31, 0.68);
 }
 
-button.wip-reset-btn:focus-visible {
-  outline: 1px solid currentColor;
-  outline-offset: 3px;
-  border-radius: 2px;
-}
-
 button.wip-close-btn:focus,
 button.wip-reset-btn:focus:not(:focus-visible) {
   outline: none;
@@ -3729,15 +3693,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (prefers-color-scheme: dark) {
-  .inventory__item--selectable:focus-visible,
-  .inventory__item--viewable:focus-visible {
-    outline: 2px solid rgba(41, 151, 255, 0.45);
-  }
-
-  .inventory__item--revealable:focus-visible {
-    outline: 2px solid rgba(41, 151, 255, 0.45);
-  }
-
   .inventory__item--receipt .inventory__image {
     border-color: rgba(255, 255, 255, 0.18);
   }
@@ -5363,7 +5318,6 @@ button.fulfillment-order-address-edit svg {
 .receipt-transfer-form input:focus,
 .receipt-transfer-form input:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--fg) 22%, transparent);
   background: color-mix(in srgb, var(--surface) 96%, var(--fg) 4%);
   box-shadow: none;
 }

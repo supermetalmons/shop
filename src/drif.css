@@ -326,8 +326,7 @@ button.drif-effect-card__rotator:disabled {
   opacity: 1;
 }
 
-.drif-effect-card__rotator,
-.drif-effect-card.active .drif-effect-card__rotator:focus {
+.drif-effect-card__rotator {
   transition: box-shadow 0.4s ease, opacity 0.33s ease-out;
   box-shadow:
     0 0 3px -1px transparent,
@@ -339,8 +338,7 @@ button.drif-effect-card__rotator:disabled {
 }
 
 .drif-effect-card.glowing .drif-effect-card__rotator,
-.drif-effect-card.active .drif-effect-card__rotator,
-.drif-effect-card__rotator:focus {
+.drif-effect-card.active .drif-effect-card__rotator {
   box-shadow:
     0 0 4px -1px #fff,
     0 0 4px 1px var(--card-edge),
@@ -351,8 +349,7 @@ button.drif-effect-card__rotator:disabled {
 }
 
 .drif-effect-card.no-glow .drif-effect-card__rotator,
-.drif-effect-card.no-glow.active .drif-effect-card__rotator,
-.drif-effect-card.no-glow .drif-effect-card__rotator:focus {
+.drif-effect-card.no-glow.active .drif-effect-card__rotator {
   box-shadow:
     0 0 3px -1px transparent,
     0 0 2px 1px transparent,

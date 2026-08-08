@@ -163,7 +163,6 @@
   --lighting-lab-control-border: rgba(22, 24, 29, 0.12);
   --lighting-lab-control-hover: rgba(22, 24, 29, 0.1);
   --lighting-lab-subtle-bg: rgba(22, 24, 29, 0.035);
-  --lighting-lab-focus: #3976b8;
   --lighting-lab-range: #667386;
   position: fixed;
   top: max(14px, env(safe-area-inset-top, 0px));
@@ -665,14 +664,6 @@
 .lighting-lab .lighting-lab__toggle:focus {
   background: transparent;
   box-shadow: none;
-}
-
-.lighting-lab button:focus-visible,
-.lighting-lab input:focus-visible,
-.lighting-lab select:focus-visible,
-.lighting-lab summary:focus-visible {
-  outline: 1px solid var(--lighting-lab-focus);
-  outline-offset: 1px;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
