@@ -759,7 +759,22 @@ function cloneClearCardLightingBasePreset(presetId: ClearCardLightingBasePresetI
 const FINAL_CANDIDATE_SOURCE_PRESET_ID: ClearCardLightingBasePresetId =
   'dgpm-light-upcoming-white-bg';
 
+function createFinalV1LightingConfig() {
+  const config = cloneClearCardLightingBasePreset(FINAL_CANDIDATE_SOURCE_PRESET_ID);
+  config.renderer.exposure = 1;
+  config.environment.intensity = 1.8;
+  config.spot.intensity = 109;
+  config.transmission.packAlpha = 0.76;
+  return config;
+}
+
 export const CLEAR_CARD_LIGHTING_PRESETS = [
+  {
+    id: 'final_v1',
+    label: 'final_v1',
+    description: 'Final v1 lighting for Clear Cards unpacking.',
+    config: createFinalV1LightingConfig(),
+  },
   {
     id: 'final_candidate',
     label: 'final_candidate',
@@ -771,7 +786,7 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_candidate';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v1';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(

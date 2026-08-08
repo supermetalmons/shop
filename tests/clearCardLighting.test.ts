@@ -21,13 +21,25 @@ test('light storefront preset keeps the supplied white-background lighting value
   assert.equal(config.transmission.packAlpha, 0.13);
 });
 
-test('final candidate duplicates the light storefront preset and is the default', () => {
+test('final candidate duplicates the light storefront preset', () => {
   const source = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
   const candidate = createClearCardLightingPreset('final_candidate');
 
-  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_candidate');
   assert.deepEqual(candidate, source);
-  assert.deepEqual(createClearCardLightingPreset(), source);
+});
+
+test('final v1 uses the updated unpacking lighting and is the default', () => {
+  const expected = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
+  expected.renderer.exposure = 1;
+  expected.environment.intensity = 1.8;
+  expected.spot.intensity = 109;
+  expected.transmission.packAlpha = 0.76;
+
+  const finalV1 = createClearCardLightingPreset('final_v1');
+
+  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v1');
+  assert.deepEqual(finalV1, expected);
+  assert.deepEqual(createClearCardLightingPreset(), finalV1);
 });
 
 test('MintPanel Clear Cards preview preserves its theme-specific lighting', () => {
