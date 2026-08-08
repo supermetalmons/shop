@@ -226,7 +226,6 @@ export default function ClearCardWipApp() {
     >
       <div className="clear-card-wip__backdrop" aria-hidden="true" />
       <div
-        id="clear-card-wip-blur-source"
         className={`clear-card-wip__stage${
           upcomingDropPreview ? ' clear-card-wip__stage--upcoming-drop' : ''
         }`}

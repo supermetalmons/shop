@@ -79,11 +79,7 @@ export function ShopHeader({
             variant === 'drif' ? ' top--drif' : ''
           }`}
         >
-          <div
-            className="top__backdrop"
-            aria-hidden="true"
-            data-frosted-surface=""
-          />
+          <div className="top__backdrop" aria-hidden="true" />
           <ShopHeaderBrand
             interactive
             onNavigateHome={onNavigateHome}

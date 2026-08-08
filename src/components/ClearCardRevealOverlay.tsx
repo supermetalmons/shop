@@ -260,7 +260,6 @@ export default function ClearCardRevealOverlay({
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
-              data-frosted-surface=""
               onClick={handleRetryViewer}
             >
               Retry 3D
@@ -269,7 +268,6 @@ export default function ClearCardRevealOverlay({
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
-              data-frosted-surface=""
               onClick={handleRetryCard}
             >
               Retry card

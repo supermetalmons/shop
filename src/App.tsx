@@ -932,7 +932,6 @@ function ReceiptImageViewerOverlay({
               <button
                 type="button"
                 className="ghost receipt-viewer-overlay__admin-irl-button"
-                data-frosted-surface=""
                 disabled={interactionSuspended || adminIrlRedeem.loading}
                 aria-busy={adminIrlRedeem.loading}
                 onClick={(evt) => {
@@ -951,7 +950,6 @@ function ReceiptImageViewerOverlay({
               {explorerHref ? (
                 <a
                   className="receipt-viewer-overlay__action receipt-viewer-overlay__explorer-link"
-                  data-frosted-surface=""
                   href={explorerHref}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -963,7 +961,6 @@ function ReceiptImageViewerOverlay({
                 <button
                   type="button"
                   className="receipt-viewer-overlay__action receipt-viewer-overlay__transfer-button"
-                  data-frosted-surface=""
                   disabled={interactionSuspended || transfer.disabled}
                   aria-disabled={interactionSuspended || transfer.disabled || transfer.unavailable || undefined}
                   aria-busy={transfer.busy || undefined}
@@ -7212,7 +7209,6 @@ function App({
             }`}
             role="status"
             aria-live="polite"
-            data-frosted-surface=""
           >
             {toast}
           </div>
@@ -7563,10 +7559,7 @@ function App({
 
       {selectedCount ? (
         <BackgroundLayerPortal>
-          <div
-            className="selection-panel"
-            data-frosted-surface=""
-          >
+          <div className="selection-panel">
             <div className="selection-panel__left">
               <div className="selection-panel__preview">
                 {selectedPreview.map(({ item, previewImage }, idx) => {

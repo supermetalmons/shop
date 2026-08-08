@@ -95,7 +95,6 @@ export function SuccessHud({ phase, announcement, className }: SuccessHudProps) 
             className ? ` ${className}` : ''
           }`}
           aria-hidden="true"
-          data-frosted-surface=""
         >
           <FaCheck aria-hidden="true" focusable="false" />
         </div>

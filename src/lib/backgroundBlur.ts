@@ -72,13 +72,3 @@ export function shouldRestoreBackgroundFocus({
 }): boolean {
   return !activeElementIsRestorable || activeElementIsInBackground;
 }
-
-type CssSupports = {
-  supports: (property: string, value: string) => boolean;
-};
-
-export function supportsMozElementCapture(css: CssSupports | undefined): boolean {
-  return Boolean(
-    css?.supports('background-image', '-moz-element(#background-blur-source)'),
-  );
-}

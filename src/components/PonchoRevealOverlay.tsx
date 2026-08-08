@@ -1534,7 +1534,11 @@ export function PonchoCardViewerOverlay({
                 onClick={stopOverlayDismiss}
               >
                 <div className="reveal-overlay__media-float">
-                  <WipInteractiveCard card={card} interactive loadingImageSrc={loadingImageSrc} />
+                  <WipInteractiveCard
+                    card={card}
+                    interactive={!suspended}
+                    loadingImageSrc={loadingImageSrc}
+                  />
                 </div>
               </div>
             </div>

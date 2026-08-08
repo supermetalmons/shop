@@ -19,7 +19,6 @@ import {
   normalizeBackgroundBlurState,
   sameBackgroundBlurState,
   shouldRestoreBackgroundFocus,
-  supportsMozElementCapture,
 } from '../src/lib/backgroundBlur.ts';
 import { canRestoreFocus, focusFirstControl } from '../src/lib/focusTrap.ts';
 import {
@@ -154,7 +153,6 @@ test('success HUD renders its announcement and visual content together', () => {
   assert.match(markup, /role="status"/);
   assert.match(markup, />Transfer complete</);
   assert.match(markup, /class="success-hud success-hud--drif"/);
-  assert.match(markup, /data-frosted-surface=""/);
 });
 
 test('background provider preserves header, page, and trailing control tab order', () => {
@@ -165,9 +163,10 @@ test('background provider preserves header, page, and trailing control tab order
       createElement('main', null, 'Page'),
     ),
   );
-  const leadingPortal = markup.indexOf('id="background-blur-leading-portals-source"');
-  const pageStage = markup.indexOf('id="background-blur-source"');
-  const trailingPortal = markup.indexOf('id="background-blur-portals-source"');
+  const portalMarker = 'class="background-blur-layer__portals"';
+  const leadingPortal = markup.indexOf(portalMarker);
+  const pageStage = markup.indexOf('class="background-blur-layer__stage"');
+  const trailingPortal = markup.indexOf(portalMarker, leadingPortal + portalMarker.length);
 
   assert.ok(leadingPortal >= 0);
   assert.ok(pageStage > leadingPortal);
@@ -225,23 +224,6 @@ test('focus restoration rejects controls hidden by closed details', () => {
   };
 
   assert.equal(canRestoreFocus(control as unknown as HTMLElement), false);
-});
-
-test('Firefox element capture detection uses the CSS contract from the stylesheet', () => {
-  let invocation: [string, string] | undefined;
-  const supported = supportsMozElementCapture({
-    supports: (property, value) => {
-      invocation = [property, value];
-      return true;
-    },
-  });
-
-  assert.equal(supported, true);
-  assert.deepEqual(invocation, [
-    'background-image',
-    '-moz-element(#background-blur-source)',
-  ]);
-  assert.equal(supportsMozElementCapture(undefined), false);
 });
 
 test('modal focus scopes expose active, suspended, and nested semantics', () => {
@@ -512,44 +494,30 @@ test('blur viewport background is route-overridable without retheming portals', 
   );
 });
 
-test('Firefox live surfaces composite trailing UI, header UI, then the page', () => {
+test('frosted surfaces use native backdrop filters without live element capture', () => {
   const styles = source('../src/styles.css');
-  const surfaceRule = cssRule(styles, `.toast::before,
-  .success-hud::before`);
-  const trailingPortal = surfaceRule.indexOf(
-    '-moz-element(#background-blur-portals-source)',
-  );
-  const leadingPortal = surfaceRule.indexOf(
-    '-moz-element(#background-blur-leading-portals-source)',
-  );
-  const pageStage = surfaceRule.indexOf('-moz-element(#background-blur-source)');
+  const blurProvider = source('../src/components/BackgroundBlurLayer.tsx');
+  const componentSources = [
+    source('../src/App.tsx'),
+    source('../src/components/ClearCardRevealOverlay.tsx'),
+    source('../src/components/ShopHeader.tsx'),
+    source('../src/components/SuccessHud.tsx'),
+  ].join('\n');
 
-  assert.ok(trailingPortal >= 0);
-  assert.ok(leadingPortal > trailingPortal);
-  assert.ok(pageStage > leadingPortal);
+  assert.match(cssRule(styles, '.top__backdrop'), /backdrop-filter: blur\(18px\)/);
+  assert.match(styles, /\.toast \{[^}]*backdrop-filter: blur\(12px\)/s);
   assert.match(
-    cssRule(styles, '.toast.toast--above-modal'),
-    /background: var\(--card\)/,
+    cssRule(styles, '.success-hud'),
+    /backdrop-filter: blur\(24px\) saturate\(1\.02\)/,
   );
+  assert.match(cssRule(styles, '.selection-panel'), /backdrop-filter: blur\(18px\)/);
   assert.match(
-    cssRule(styles, '.toast.toast--above-modal::before'),
-    /content: none/,
+    cssRule(styles, 'button.clear-card-reveal-overlay__retry'),
+    /backdrop-filter: blur\(12px\)/,
   );
-  assert.match(
-    cssRule(
-      styles,
-      '.receipt-viewer-overlay [data-frosted-surface]',
-    ),
-    /background: var\(--card\)/,
-  );
-  assert.match(
-    cssRule(
-      styles,
-      '.receipt-viewer-overlay [data-frosted-surface]::before',
-    ),
-    /content: none/,
-  );
-  assert.doesNotMatch(styles, /receipt-viewer-blur-source/);
+  assert.doesNotMatch(styles, /-moz-element|--frosted-|data-frosted-surface/);
+  assert.doesNotMatch(blurProvider, /--background-blur-source-scroll-y/);
+  assert.doesNotMatch(componentSources, /data-frosted-surface/);
 });
 
 test('global foreground layers have deterministic stacking', () => {
@@ -579,6 +547,7 @@ test('global foreground layers have deterministic stacking', () => {
 
 test('suspended blur filtering stays scoped to static viewers', () => {
   const styles = source('../src/styles.css');
+  const ponchoViewer = source('../src/components/PonchoRevealOverlay.tsx');
   const genericRule = cssRule(styles, '.reveal-overlay--suspended');
   const staticViewerRule = cssRule(
     styles,
@@ -595,17 +564,25 @@ test('suspended blur filtering stays scoped to static viewers', () => {
     ),
     /filter:/,
   );
+  assert.match(ponchoViewer, /interactive=\{!suspended\}/);
+  assert.doesNotMatch(ponchoViewer, /interactive=\{!interactionSuspended\}/);
 });
 
-test('Clear Card lighting stays opaque without a blur implementation', () => {
+test('Clear Card lighting uses native backdrop blur instead of Firefox live capture', () => {
   const styles = source('../src/clearCardWip.css');
+  const globalStyles = source('../src/styles.css');
 
   assert.match(
     styles,
-    /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\) or \(background-image: -moz-element\(#clear-card-wip-blur-source\)\)\)/,
+    /backdrop-filter: blur\(18px\) saturate\(130%\)/,
+  );
+  assert.match(
+    styles,
+    /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\)/,
   );
   assert.match(
     styles,
     /@supports not [^{]+\{\s*\.lighting-lab \{\s*background: var\(--lighting-lab-panel-solid\)/,
   );
+  assert.doesNotMatch(globalStyles, /-moz-element\(#clear-card-wip-blur-source\)/);
 });

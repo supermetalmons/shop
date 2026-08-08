@@ -18,7 +18,6 @@ import {
   normalizeBackgroundBlurState,
   sameBackgroundBlurState,
   shouldRestoreBackgroundFocus,
-  supportsMozElementCapture,
   type BackgroundBlurState,
   type ResolvedBackgroundBlurState,
 } from '../lib/backgroundBlur';
@@ -137,41 +136,6 @@ export function BackgroundBlurProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useLayoutEffect(() => {
-    if (
-      !supportsMozElementCapture(typeof CSS === 'undefined' ? undefined : CSS)
-    ) {
-      return undefined;
-    }
-
-    let frameId = 0;
-    let lastScrollY: number | undefined;
-    const applyScrollPosition = () => {
-      frameId = 0;
-      const scrollY = window.scrollY;
-      if (scrollY === lastScrollY) return;
-      lastScrollY = scrollY;
-      document.documentElement.style.setProperty(
-        '--background-blur-source-scroll-y',
-        `${scrollY}px`,
-      );
-    };
-    const scheduleScrollPosition = () => {
-      if (frameId) return;
-      frameId = window.requestAnimationFrame(applyScrollPosition);
-    };
-
-    applyScrollPosition();
-    window.addEventListener('scroll', scheduleScrollPosition, { passive: true });
-    window.visualViewport?.addEventListener('scroll', scheduleScrollPosition, { passive: true });
-    return () => {
-      if (frameId) window.cancelAnimationFrame(frameId);
-      window.removeEventListener('scroll', scheduleScrollPosition);
-      window.visualViewport?.removeEventListener('scroll', scheduleScrollPosition);
-      document.documentElement.style.removeProperty('--background-blur-source-scroll-y');
-    };
-  }, []);
-
-  useLayoutEffect(() => {
     const wasOpen = wasOpenRef.current;
     wasOpenRef.current = state.open;
     if (!wasOpen || state.open) return;
@@ -234,15 +198,13 @@ export function BackgroundBlurProvider({ children }: { children: ReactNode }) {
           }`}
         >
           <div
-            id="background-blur-leading-portals-source"
             ref={setLeadingPortalHost}
             className="background-blur-layer__portals"
           />
-          <div id="background-blur-source" className="background-blur-layer__stage">
+          <div className="background-blur-layer__stage">
             {children}
           </div>
           <div
-            id="background-blur-portals-source"
             ref={setTrailingPortalHost}
             className="background-blur-layer__portals"
           />
