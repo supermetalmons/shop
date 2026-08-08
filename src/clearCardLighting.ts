@@ -233,7 +233,7 @@ function createConfig(overrides: LightingOverrides = {}): ClearCardLightingConfi
   };
 }
 
-export const CLEAR_CARD_LIGHTING_PRESETS = [
+const CLEAR_CARD_LIGHTING_BASE_PRESETS = [
   {
     id: 'light-upcoming',
     label: 'LightUpcoming',
@@ -746,9 +746,32 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
   },
 ] as const;
 
+type ClearCardLightingBasePresetId = (typeof CLEAR_CARD_LIGHTING_BASE_PRESETS)[number]['id'];
+
+function cloneClearCardLightingBasePreset(presetId: ClearCardLightingBasePresetId) {
+  const preset = CLEAR_CARD_LIGHTING_BASE_PRESETS.find(
+    (candidate) => candidate.id === presetId,
+  );
+  if (!preset) throw new Error(`Unknown Clear Card lighting base preset: ${presetId}`);
+  return cloneConfig(preset.config);
+}
+
+const FINAL_CANDIDATE_SOURCE_PRESET_ID: ClearCardLightingBasePresetId =
+  'dgpm-light-upcoming-white-bg';
+
+export const CLEAR_CARD_LIGHTING_PRESETS = [
+  {
+    id: 'final_candidate',
+    label: 'final_candidate',
+    description: 'Final candidate based on the light storefront setup.',
+    config: cloneClearCardLightingBasePreset(FINAL_CANDIDATE_SOURCE_PRESET_ID),
+  },
+  ...CLEAR_CARD_LIGHTING_BASE_PRESETS,
+] as const;
+
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_candidate';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(

@@ -11,10 +11,7 @@ import {
   type ReactNode,
   type TransitionEvent,
 } from 'react';
-import {
-  createClearCardLightingPreset,
-  type ClearCardLightingPresetId,
-} from '../clearCardLighting';
+import { createClearCardLightingPreset } from '../clearCardLighting';
 import type {
   ClearCardDisplayStage,
   ClearCardModelLoadStatus,
@@ -31,7 +28,6 @@ import {
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
 import { ModalFocusScope } from './ModalFocusScope';
 
-const CLEAR_CARD_REVEAL_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
 const CLEAR_CARD_REVEAL_CAMERA_ZOOM = 1.5;
 
 function createClearCardThreeViewerComponent() {
@@ -110,10 +106,7 @@ export default function ClearCardRevealOverlay({
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
-  const lightingConfig = useMemo(
-    () => createClearCardLightingPreset(CLEAR_CARD_REVEAL_LIGHTING_PRESET_ID),
-    [],
-  );
+  const lightingConfig = useMemo(() => createClearCardLightingPreset(), []);
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');

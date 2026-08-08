@@ -1,14 +1,20 @@
 import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   createClearCardLightingPreset,
-  DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
   type ClearCardLightingPresetId,
 } from '../clearCardLighting';
 import type { ViewerStatus } from '../ClearCardThreeViewer';
 import { CLEAR_CARD_PREVIEW_MODEL_URL } from '../lib/clearCardModels';
 
 const ClearCardThreeViewer = lazy(() => import('../ClearCardThreeViewer'));
+const DARK_MODE_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
 const LIGHT_MODE_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'dgpm-light-upcoming-white-bg';
+
+export function clearCardDropPreviewLightingPresetId(
+  darkMode: boolean,
+): ClearCardLightingPresetId {
+  return darkMode ? DARK_MODE_LIGHTING_PRESET_ID : LIGHT_MODE_LIGHTING_PRESET_ID;
+}
 
 function prefersDarkColorScheme() {
   return typeof window !== 'undefined' &&
@@ -42,10 +48,7 @@ export default function ClearCardDropPreview({ fallbackImageSrc }: { fallbackIma
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [darkMode, setDarkMode] = useState(prefersDarkColorScheme);
   const lightingConfig = useMemo(
-    () =>
-      createClearCardLightingPreset(
-        darkMode ? DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID : LIGHT_MODE_LIGHTING_PRESET_ID,
-      ),
+    () => createClearCardLightingPreset(clearCardDropPreviewLightingPresetId(darkMode)),
     [darkMode],
   );
   const ready = status === 'ready';

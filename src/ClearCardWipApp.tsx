@@ -18,6 +18,7 @@ import { CLEAR_CARDS_BREAK_SOUND_URL, CLEAR_CARDS_HIT_SOUND_URLS } from './confi
 import ClearCardLightingPanel from './components/ClearCardLightingPanel';
 import {
   createClearCardLightingPreset,
+  DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
   type ClearCardLightingConfig,
   type ClearCardLightingPresetId,
 } from './clearCardLighting';
@@ -34,7 +35,7 @@ const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
 
 const HIT_SOUND_VOLUME = 0.42;
 const BREAK_SOUND_VOLUME = 0.42;
-const CLEAR_CARD_WIP_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
+const CLEAR_CARD_WIP_LIGHTING_PRESET_ID = DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID;
 const CARD_MODEL_OPTIONS = Array.from({ length: CLEAR_CARD_MODEL_COUNT }, (_, index) => {
   const cardId = index + 1;
   return { label: `Card: ${cardId}`, url: clearCardModelUrl(cardId)! };
