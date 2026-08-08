@@ -5793,3 +5793,13 @@ button.wallet-adapter-modal-button-close:hover {
     padding: 20px;
   }
 }
+
+.color-scheme-background-image {
+  background-image: var(--color-scheme-image-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .color-scheme-background-image {
+    background-image: var(--color-scheme-image-dark);
+  }
+}

@@ -5,6 +5,7 @@ import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
 import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
+import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './ColorSchemeImage';
 import {
   createMobileTapCandidate,
   findTouchByIdentifier,
@@ -218,7 +219,8 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
   return (
     <div ref={rootRef} className="inventory__video-stack" role="img" aria-label={item.name}>
       {posterSrc ? (
-        <img
+        <ColorSchemeImage
+          dropId={item.dropId}
           className="inventory__video-poster"
           src={posterSrc}
           alt=""
@@ -270,6 +272,7 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
 }
 
 type InventoryImageWithFallbackProps = {
+  dropId: string;
   src: string;
   alt: string;
   ariaHidden?: boolean;
@@ -277,6 +280,7 @@ type InventoryImageWithFallbackProps = {
 };
 
 function InventoryImageWithFallback({
+  dropId,
   src,
   alt,
   ariaHidden = false,
@@ -284,7 +288,8 @@ function InventoryImageWithFallback({
 }: InventoryImageWithFallbackProps) {
   return (
     <>
-      <img
+      <ColorSchemeImage
+        dropId={dropId}
         className="inventory__image"
         src={src}
         alt={ariaHidden ? '' : alt}
@@ -305,21 +310,32 @@ function InventoryImageWithFallback({
 
 function InventoryFigureBackgroundMedia({ item }: { item: InventoryItem }) {
   const [figureImageFailed, setFigureImageFailed] = useState(false);
+  const image = item.image;
 
   useEffect(() => {
     setFigureImageFailed(false);
-  }, [item.image]);
+  }, [image]);
+
+  if (!image) {
+    return (
+      <div className="placeholder" aria-hidden>
+        <span> </span>
+      </div>
+    );
+  }
 
   return (
     <>
-      <img
-        src={item.image}
+      <ColorSchemeImage
+        dropId={item.dropId}
+        src={image}
         alt=""
         aria-hidden="true"
         hidden
         loading="lazy"
         draggable={false}
         onDragStart={(evt) => evt.preventDefault()}
+        onLoad={() => setFigureImageFailed(false)}
         onError={() => setFigureImageFailed(true)}
       />
       {figureImageFailed ? (
@@ -328,8 +344,8 @@ function InventoryFigureBackgroundMedia({ item }: { item: InventoryItem }) {
         </div>
       ) : (
         <div
-          className="inventory__image"
-          style={{ backgroundImage: `url(${item.image})` }}
+          className="inventory__image color-scheme-background-image"
+          style={colorSchemeBackgroundImageStyle(item.dropId, image)}
           role="img"
           aria-label={item.name}
         />
@@ -365,13 +381,21 @@ function InventoryMedia({
 
   if (isFigure) {
     if (figureMediaMode === 'image') {
-      return <InventoryImageWithFallback src={item.image} alt={item.name} ariaHidden decoding="async" />;
+      return (
+        <InventoryImageWithFallback
+          dropId={item.dropId}
+          src={item.image}
+          alt={item.name}
+          ariaHidden
+          decoding="async"
+        />
+      );
     }
 
     return <InventoryFigureBackgroundMedia item={item} />;
   }
 
-  return <InventoryImageWithFallback src={item.image} alt={item.name} />;
+  return <InventoryImageWithFallback dropId={item.dropId} src={item.image} alt={item.name} />;
 }
 
 export function InventoryGrid({

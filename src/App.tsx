@@ -32,6 +32,7 @@ import {
 } from './components/BackgroundBlurLayer';
 import ClearCardDropPreview from './components/ClearCardDropPreview';
 import ClearCardRevealOverlay from './components/ClearCardRevealOverlay';
+import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './components/ColorSchemeImage';
 import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
 import { inventoryQueryKeyPrefix, useInventory } from './hooks/useInventory';
 import { pendingOpenBoxesQueryKeyPrefix, usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
@@ -710,7 +711,8 @@ function FigureTileImage(props: {
   }
 
   return (
-    <img
+    <ColorSchemeImage
+      dropId={dropId}
       src={activeSrc}
       alt={alt}
       loading="lazy"
@@ -807,6 +809,7 @@ type RevealOverlayState = {
 };
 
 type ReceiptImageViewerOverlayProps = {
+  dropId: string;
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
@@ -832,6 +835,7 @@ type ReceiptImageViewerOverlayProps = {
 };
 
 function ReceiptImageViewerOverlay({
+  dropId,
   overlayStyle,
   active,
   closing,
@@ -886,7 +890,8 @@ function ReceiptImageViewerOverlay({
             <div className="receipt-viewer-overlay__image-frame" key={`${receiptImage.key}:${index}`}>
               {receiptImage.image ? (
                 <>
-                  <img
+                  <ColorSchemeImage
+                    dropId={dropId}
                     src={receiptImage.image}
                     alt={receiptImage.name || alt}
                     className="receipt-viewer-overlay__image"
@@ -6782,7 +6787,8 @@ function App({
                       </video>
                     ) : image ? (
                       <>
-                        <img
+                        <ColorSchemeImage
+                          dropId={revealOverlay.dropId}
                           src={image}
                           alt={name}
                           className="reveal-overlay__still"
@@ -6857,6 +6863,7 @@ function App({
       />
     ) : revealOverlayUsesReceiptImage ? (
       <ReceiptImageViewerOverlay
+        dropId={revealOverlay.dropId}
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
@@ -7520,8 +7527,11 @@ function App({
                   return previewImage ? (
                     <div
                       key={item.id}
-                      className="selection-panel__thumb"
-                      style={{ backgroundImage: `url(${previewImage})`, zIndex: idx + 1 }}
+                      className="selection-panel__thumb color-scheme-background-image"
+                      style={{
+                        ...colorSchemeBackgroundImageStyle(item.dropId, previewImage),
+                        zIndex: idx + 1,
+                      }}
                       aria-hidden="true"
                     />
                   ) : (

@@ -14,6 +14,7 @@ import {
   CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
   CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
   CLEAR_CARDS_CARD_CLEAN_BASE_URL,
+  CLEAR_CARDS_CARD_CLEAN_DARK_BASE_URL,
   CLEAR_CARDS_BREAK_SOUND_URL,
   CLEAR_CARDS_CARD_MODEL_BASE_URL,
   CLEAR_CARDS_CDN_BASE_URL,
@@ -277,6 +278,7 @@ test('clear cards use the clean pack and direct card and receipt assets', () => 
   assert.equal(CLEAR_CARDS_CDN_BASE_URL, 'https://cdn.lil.org/nft/clear_cards/wip');
   assert.equal(CLEAR_CARDS_PACK_CLEAN_IMAGE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`);
   assert.equal(CLEAR_CARDS_CARD_CLEAN_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`);
+  assert.equal(CLEAR_CARDS_CARD_CLEAN_DARK_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean_dark`);
   assert.equal(CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/receipts`);
   assert.equal(CLEAR_CARDS_PACK_MODEL_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack.glb`);
   assert.equal(CLEAR_CARDS_CARD_MODEL_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards`);

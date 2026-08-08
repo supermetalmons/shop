@@ -19,6 +19,7 @@ export const CARD_NFT_2_BOX_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 export const CLEAR_CARDS_CDN_BASE_URL = 'https://cdn.lil.org/nft/clear_cards/wip';
 export const CLEAR_CARDS_PACK_CLEAN_IMAGE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`;
 export const CLEAR_CARDS_CARD_CLEAN_BASE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`;
+export const CLEAR_CARDS_CARD_CLEAN_DARK_BASE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean_dark`;
 export const CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/receipts`;
 export const CLEAR_CARDS_PACK_MODEL_URL = `${CLEAR_CARDS_CDN_BASE_URL}/pack.glb`;
 export const CLEAR_CARDS_CARD_MODEL_BASE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/cards`;
