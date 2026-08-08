@@ -28,7 +28,7 @@ test('final candidate duplicates the light storefront preset', () => {
   assert.deepEqual(candidate, source);
 });
 
-test('final v1 uses the updated unpacking lighting and is the default', () => {
+test('final v1 uses the updated unpacking lighting', () => {
   const expected = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
   expected.renderer.exposure = 1;
   expected.environment.intensity = 1.8;
@@ -37,9 +37,18 @@ test('final v1 uses the updated unpacking lighting and is the default', () => {
 
   const finalV1 = createClearCardLightingPreset('final_v1');
 
-  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v1');
   assert.deepEqual(finalV1, expected);
-  assert.deepEqual(createClearCardLightingPreset(), finalV1);
+});
+
+test('final v2 duplicates final v1 with lower pack alpha and is the default', () => {
+  const expected = createClearCardLightingPreset('final_v1');
+  expected.transmission.packAlpha = 0.55;
+
+  const finalV2 = createClearCardLightingPreset('final_v2');
+
+  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v2');
+  assert.deepEqual(finalV2, expected);
+  assert.deepEqual(createClearCardLightingPreset(), finalV2);
 });
 
 test('MintPanel Clear Cards preview preserves its theme-specific lighting', () => {

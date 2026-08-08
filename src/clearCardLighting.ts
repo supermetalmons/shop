@@ -768,7 +768,19 @@ function createFinalV1LightingConfig() {
   return config;
 }
 
+function createFinalV2LightingConfig() {
+  const config = createFinalV1LightingConfig();
+  config.transmission.packAlpha = 0.55;
+  return config;
+}
+
 export const CLEAR_CARD_LIGHTING_PRESETS = [
+  {
+    id: 'final_v2',
+    label: 'final_v2',
+    description: 'Final v2 lighting for Clear Cards unpacking.',
+    config: createFinalV2LightingConfig(),
+  },
   {
     id: 'final_v1',
     label: 'final_v1',
@@ -786,7 +798,7 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v1';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v2';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(
