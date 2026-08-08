@@ -2058,7 +2058,7 @@ header.top--shop.top--spacer {
       minmax(var(--drops-panel-card-nft-2-min-height), auto)
       auto
       minmax(var(--drops-panel-half-min-height), auto)
-      minmax(var(--drops-panel-full-min-height), auto);
+      auto;
   }
 
   .drops-panel__tile--full {
