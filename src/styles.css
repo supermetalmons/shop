@@ -3242,16 +3242,6 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   outline: none;
   background: transparent;
   box-shadow: none;
-  filter: drop-shadow(0 22px 34px rgba(0, 0, 0, 0.38));
-}
-
-.receipt-viewer-overlay--shipment .receipt-viewer-overlay__image,
-.receipt-viewer-overlay--shipment-figure .receipt-viewer-overlay__image {
-  filter: none;
-}
-
-.receipt-viewer-overlay__image-shell--multi .receipt-viewer-overlay__image {
-  filter: none;
 }
 
 .receipt-viewer-overlay__image--placeholder {
@@ -5445,7 +5435,6 @@ button.fulfillment-order-address-edit svg {
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--border);
   border-radius: 18px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   max-width: calc(100% - 32px);
@@ -5550,7 +5539,6 @@ button.fulfillment-order-address-edit svg {
 @media (prefers-color-scheme: dark) {
   .selection-panel {
     background: rgba(29, 29, 31, 0.82);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
   }
 
   .selection-panel__more {
