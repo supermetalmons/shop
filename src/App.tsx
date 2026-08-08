@@ -7229,7 +7229,6 @@ function App({
         <ShopHeader
           onNavigateHome={restoreHomeOnNextNavigation}
           scrollHomeToTop={dropsPanelFrameActive}
-          fadeBackdrop={Boolean(routeDrop || upcomingDropRoute)}
           renderRight={renderHeaderRight}
         />
 

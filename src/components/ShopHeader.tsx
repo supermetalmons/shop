@@ -1,14 +1,11 @@
-import { useState } from 'react';
 import type React from 'react';
 import { navigate } from '../navigation';
-import { useDropPageScrollFade } from '../hooks/useDropPageScrollFade';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 
 type ShopHeaderProps = {
   onNavigateHome?: () => void;
   renderRight?: (options: { interactive: boolean }) => React.ReactNode;
   scrollHomeToTop?: boolean;
-  fadeBackdrop?: boolean;
   variant?: 'default' | 'drif';
 };
 
@@ -62,22 +59,16 @@ export function ShopHeader({
   onNavigateHome,
   renderRight,
   scrollHomeToTop = false,
-  fadeBackdrop = false,
   variant = 'default',
 }: ShopHeaderProps) {
-  const [fixedHeader, setFixedHeader] = useState<HTMLElement | null>(null);
   const right = renderRight?.({ interactive: true });
   const spacerRight = renderRight?.({ interactive: false });
-  useDropPageScrollFade({ active: fadeBackdrop, target: fixedHeader });
 
   return (
     <>
       <BackgroundLayerPortal placement="leading">
         <header
-          ref={setFixedHeader}
-          className={`top top--fixed top--shop${fadeBackdrop ? ' top--fade-backdrop' : ''}${
-            variant === 'drif' ? ' top--drif' : ''
-          }`}
+          className={`top top--fixed top--shop${variant === 'drif' ? ' top--drif' : ''}`}
         >
           <div className="top__backdrop" aria-hidden="true" />
           <ShopHeaderBrand

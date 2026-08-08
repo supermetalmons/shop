@@ -628,11 +628,6 @@ header.top--shop.top--fixed {
   pointer-events: none;
 }
 
-.top--shop.top--fade-backdrop .top__backdrop {
-  opacity: var(--drop-scroll-progress, 0);
-  transition: opacity 160ms ease;
-}
-
 header.top--shop.top--spacer {
   margin-top: calc(-1 * var(--page-padding-top));
 }
