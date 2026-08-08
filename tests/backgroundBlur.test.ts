@@ -503,6 +503,7 @@ test('blur viewport background is route-overridable without retheming portals', 
 
 test('frosted surfaces use native backdrop filters without live element capture', () => {
   const styles = source('../src/styles.css');
+  const clearCardStyles = source('../src/clearCardWip.css');
   const blurProvider = source('../src/components/BackgroundBlurLayer.tsx');
   const componentSources = [
     source('../src/App.tsx'),
@@ -522,6 +523,10 @@ test('frosted surfaces use native backdrop filters without live element capture'
     cssRule(styles, 'button.clear-card-reveal-overlay__retry'),
     /backdrop-filter: blur\(12px\)/,
   );
+  const standardBeforePrefixed =
+    /(?:^|[{;])\s*backdrop-filter\s*:[^;{}]+;\s*-webkit-backdrop-filter\s*:/m;
+  assert.doesNotMatch(styles, standardBeforePrefixed);
+  assert.doesNotMatch(clearCardStyles, standardBeforePrefixed);
   assert.doesNotMatch(styles, /-moz-element|--frosted-|data-frosted-surface/);
   assert.doesNotMatch(blurProvider, /--background-blur-source-scroll-y/);
   assert.doesNotMatch(componentSources, /data-frosted-surface/);
