@@ -343,7 +343,7 @@ export function DropsPanel() {
       imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
       compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
       imageScale: 0.92,
-      compactImageScale: 1,
+      compactImageScale: 0.88,
       imageGap: 'clamp(26px, 3cqw, 34px)',
       compactImageGap: 'clamp(10px, 3cqw, 16px)',
       imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
