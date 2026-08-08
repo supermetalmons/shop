@@ -4,7 +4,6 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,8 +11,6 @@ import {
   type ReactNode,
   type TransitionEvent,
 } from 'react';
-import { createPortal } from 'react-dom';
-import { focusFirstControl, trapTabFocusWithin } from '../lib/focusTrap';
 import {
   createClearCardLightingPreset,
   type ClearCardLightingPresetId,
@@ -32,6 +29,7 @@ import {
   type ClearCardRevealRequestState,
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
+import { ModalFocusScope } from './ModalFocusScope';
 
 const CLEAR_CARD_REVEAL_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'light-upcoming';
 const CLEAR_CARD_REVEAL_CAMERA_ZOOM = 1.5;
@@ -69,6 +67,7 @@ type ClearCardRevealOverlayProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
+  suspended?: boolean;
   phase: 'preparing' | 'ready' | 'revealed';
   cardId?: number;
   loadingImageSrc?: string;
@@ -87,6 +86,7 @@ export default function ClearCardRevealOverlay({
   overlayStyle,
   active,
   closing,
+  suspended = false,
   phase,
   cardId,
   loadingImageSrc,
@@ -100,7 +100,6 @@ export default function ClearCardRevealOverlay({
   onRevealCompleteChange,
   onDismissReadyChange,
 }: ClearCardRevealOverlayProps) {
-  const overlayRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const requestStateRef = useRef<ClearCardRevealRequestState>('idle');
   const requestGenerationRef = useRef(0);
@@ -119,38 +118,6 @@ export default function ClearCardRevealOverlay({
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const revealComplete = displayStage === 'revealed';
-
-  useLayoutEffect(() => {
-    if (closing) return;
-    const overlay = overlayRef.current;
-    if (
-      !overlay ||
-      (document.activeElement !== overlay && overlay.contains(document.activeElement))
-    ) {
-      return;
-    }
-    focusFirstControl(overlay);
-  }, [cardLoadStatus, closing, viewerStatus]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
-      const overlay = overlayRef.current;
-      if (overlay) trapTabFocusWithin(overlay, event);
-    };
-    const handleFocusIn = (event: FocusEvent) => {
-      const overlay = overlayRef.current;
-      if (!overlay || overlay.contains(event.target as Node | null)) return;
-      focusFirstControl(overlay);
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('focusin', handleFocusIn);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('focusin', handleFocusIn);
-    };
-  }, []);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -193,18 +160,20 @@ export default function ClearCardRevealOverlay({
   }, [onRequestReveal]);
 
   const handlePackHit = useCallback(() => {
+    if (closing || suspended) return;
     onPlayHit?.();
     if (!cardModelUrl) requestReveal();
-  }, [cardModelUrl, onPlayHit, requestReveal]);
+  }, [cardModelUrl, closing, onPlayHit, requestReveal, suspended]);
 
   const handlePackBreak = useCallback(() => {
+    if (closing || suspended) return;
     onPlayBreak?.();
-  }, [onPlayBreak]);
+  }, [closing, onPlayBreak, suspended]);
 
   const handleBackdropClick = useCallback(() => {
-    if (!revealComplete || closing) return;
+    if (!revealComplete || closing || suspended) return;
     onDismiss?.();
-  }, [closing, onDismiss, revealComplete]);
+  }, [closing, onDismiss, revealComplete, suspended]);
 
   const handleRetryCard = useCallback(() => {
     setCardLoadStatus('loading');
@@ -223,14 +192,12 @@ export default function ClearCardRevealOverlay({
     setViewerStatus('error');
   }, []);
 
-  return createPortal(
-    <div
-      ref={overlayRef}
-      className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
-      role="dialog"
-      aria-modal="true"
-      aria-label={boxName ? `${boxName} unboxing` : 'Clear card unboxing'}
-      tabIndex={-1}
+  return (
+    <ModalFocusScope
+      ariaLabel={boxName ? `${boxName} unboxing` : 'Clear card unboxing'}
+      suspended={closing || suspended}
+      focusKey={`${viewerStatus}:${cardLoadStatus}:${displayStage}`}
+      className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
       style={overlayStyle}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}
@@ -245,52 +212,55 @@ export default function ClearCardRevealOverlay({
           className={`clear-card-reveal-overlay__viewport${packReady ? ' clear-card-reveal-overlay__viewport--ready' : ''}`}
           aria-busy={!packReady || cardLoadStatus === 'loading'}
         >
-          {loadingImageSrc ? (
-            <img
-              className="clear-card-reveal-overlay__fallback"
-              src={loadingImageSrc}
-              alt=""
-              draggable={false}
-              aria-hidden="true"
-            />
-          ) : null}
-          <ClearCardViewerErrorBoundary
-            key={`${String(resetKey)}:${viewerAttempt}`}
-            onError={handleViewerError}
-          >
-            <Suspense fallback={null}>
-              <ClearCardThreeViewer
-                ref={viewerRef}
-                ready={packReady}
-                cardModelUrl={cardModelUrl}
-                packModelUrl={DEFAULT_CLEAR_PACK_MODEL_URL}
-                lightingConfig={lightingConfig}
-                unrestrictedMovement={false}
-                axisLockedOrbit={false}
-                interactionFrameRateMode="adaptive"
-                interactionEnabled={phase === 'ready' && !closing}
-                keyboardActivationEnabled={displayStage === 'pack'}
-                hitProgressionMode="reveal-gated"
-                revealReady={cardReady}
-                initiallyRevealed={false}
-                cameraZoom={CLEAR_CARD_REVEAL_CAMERA_ZOOM}
-                ariaLabel={
-                  displayStage === 'pack'
-                    ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
-                    : `Interactive 3D ${boxName} card`
-                }
-                onStatusChange={setViewerStatus}
-                onCardModelLoadStatusChange={setCardLoadStatus}
-                onStageChange={setDisplayStage}
-                onPackHit={handlePackHit}
-                onPackBreak={handlePackBreak}
+          <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
+            {loadingImageSrc ? (
+              <img
+                className="clear-card-reveal-overlay__fallback"
+                src={loadingImageSrc}
+                alt=""
+                draggable={false}
+                aria-hidden="true"
               />
-            </Suspense>
-          </ClearCardViewerErrorBoundary>
+            ) : null}
+            <ClearCardViewerErrorBoundary
+              key={`${String(resetKey)}:${viewerAttempt}`}
+              onError={handleViewerError}
+            >
+              <Suspense fallback={null}>
+                <ClearCardThreeViewer
+                  ref={viewerRef}
+                  ready={packReady}
+                  cardModelUrl={cardModelUrl}
+                  packModelUrl={DEFAULT_CLEAR_PACK_MODEL_URL}
+                  lightingConfig={lightingConfig}
+                  unrestrictedMovement={false}
+                  axisLockedOrbit={false}
+                  interactionFrameRateMode="adaptive"
+                  interactionEnabled={phase === 'ready' && !closing && !suspended}
+                  keyboardActivationEnabled={displayStage === 'pack'}
+                  hitProgressionMode="reveal-gated"
+                  revealReady={cardReady}
+                  initiallyRevealed={false}
+                  cameraZoom={CLEAR_CARD_REVEAL_CAMERA_ZOOM}
+                  ariaLabel={
+                    displayStage === 'pack'
+                      ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
+                      : `Interactive 3D ${boxName} card`
+                  }
+                  onStatusChange={setViewerStatus}
+                  onCardModelLoadStatusChange={setCardLoadStatus}
+                  onStageChange={setDisplayStage}
+                  onPackHit={handlePackHit}
+                  onPackBreak={handlePackBreak}
+                />
+              </Suspense>
+            </ClearCardViewerErrorBoundary>
+          </div>
           {viewerStatus === 'error' ? (
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
+              data-frosted-surface=""
               onClick={handleRetryViewer}
             >
               Retry 3D
@@ -299,6 +269,7 @@ export default function ClearCardRevealOverlay({
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
+              data-frosted-surface=""
               onClick={handleRetryCard}
             >
               Retry card
@@ -306,7 +277,6 @@ export default function ClearCardRevealOverlay({
           ) : null}
         </div>
       </div>
-    </div>,
-    document.body,
+    </ModalFocusScope>
   );
 }

@@ -12,6 +12,7 @@ import {
 } from './lib/dropConfig';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import ShopRoute from './ShopRoute';
+import { BackgroundBlurProvider } from './components/BackgroundBlurLayer';
 import './styles.css';
 
 if (!window.Buffer) {
@@ -166,7 +167,9 @@ function RoutedContent({ route }: RoutedContentProps) {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RoutedApp />
+      <BackgroundBlurProvider>
+        <RoutedApp />
+      </BackgroundBlurProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   InteractiveCardPackRevealOverlay,
   PonchoRevealOverlay,
@@ -28,7 +28,9 @@ import {
   sameRevealOverlayRect,
 } from './lib/revealOverlayLayout';
 import { soundPlayer } from './lib/SoundPlayer';
+import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { navigate } from './navigation';
+import { ModalFocusScope } from './components/ModalFocusScope';
 
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
@@ -117,19 +119,6 @@ function nextRandomWipCardIds(currentIds: readonly number[]) {
   return randomWipCardIds(currentIds.length || WIP_ITEMS_PER_BOX);
 }
 
-function isWipShortcutTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tagName = target.tagName;
-  return (
-    tagName === 'INPUT' ||
-    tagName === 'TEXTAREA' ||
-    tagName === 'SELECT' ||
-    tagName === 'BUTTON' ||
-    tagName === 'A'
-  );
-}
-
 function LocalPlayWipApp() {
   const [targetRect, setTargetRect] = useState<OverlayRect>(calcWipTargetRect);
   const [cardIds, setCardIds] = useState(() => randomWipCardIds());
@@ -139,7 +128,6 @@ function LocalPlayWipApp() {
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
-  const pageRef = useRef<HTMLDivElement | null>(null);
   const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const packSequence = useMemo(
@@ -314,7 +302,7 @@ function LocalPlayWipApp() {
       if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
         return;
       }
-      if (isWipShortcutTarget(event.target)) {
+      if (isKeyboardShortcutTarget(event.target)) {
         return;
       }
       if (event.code === 'KeyR' || event.key === 'r' || event.key === 'R') {
@@ -334,20 +322,15 @@ function LocalPlayWipApp() {
     };
   }, [handleReset]);
 
-  useLayoutEffect(() => {
-    pageRef.current?.focus({ preventScroll: true });
-  }, []);
-
   return (
-    <div
-      ref={pageRef}
+    <ModalFocusScope
       className="wip-page"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Card pack preview"
-      tabIndex={-1}
+      ariaLabel="Card pack preview"
+      focusTarget="scope"
+      onEscape={handleClose}
     >
       <PonchoRevealOverlay
+        modal={false}
         overlayStyle={revealOverlayStyle}
         active
         closing={false}
@@ -377,7 +360,7 @@ function LocalPlayWipApp() {
       <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">
         Reset
       </button>
-    </div>
+    </ModalFocusScope>
   );
 }
 

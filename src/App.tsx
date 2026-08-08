@@ -24,13 +24,18 @@ import { SuccessHud, useSuccessHud } from './components/SuccessHud';
 import { ClaimForm } from './components/ClaimForm';
 import { ReceiptTransferForm } from './components/ReceiptTransferForm';
 import { ShopHeader } from './components/ShopHeader';
+import { ModalFocusScope, useModalFocusScope } from './components/ModalFocusScope';
+import {
+  BackgroundBlurPortal,
+  BackgroundLayerPortal,
+  BodyPortal,
+} from './components/BackgroundBlurLayer';
 import ClearCardDropPreview from './components/ClearCardDropPreview';
 import ClearCardRevealOverlay from './components/ClearCardRevealOverlay';
 import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
 import { inventoryQueryKeyPrefix, useInventory } from './hooks/useInventory';
 import { pendingOpenBoxesQueryKeyPrefix, usePendingOpenBoxes } from './hooks/usePendingOpenBoxes';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { useDropPageScrollFade } from './hooks/useDropPageScrollFade';
 import { useHomePageScrollRestoration } from './hooks/useHomePageScrollRestoration';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import {
@@ -160,12 +165,16 @@ import {
 } from './lib/solana';
 import { solanaExplorerAddressUrl } from './lib/solanaExplorer';
 import { toggleInventorySelection } from './lib/inventorySelection';
-import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from './lib/focusTrap';
 import {
   runDeferredOverlayActions,
   type DeferredOverlayAction,
   type DeferredOverlayActionKind,
 } from './lib/deferredOverlayActions';
+import {
+  isModalLayerSuspended,
+  resolveActiveModalLayer,
+  shouldToastAppearAboveModal,
+} from './lib/modalLayers';
 import {
   canonicalReceiptPublicKey,
   canSignReceiptTransferTransaction,
@@ -863,94 +872,23 @@ function ReceiptImageViewerOverlay({
       ? { '--receipt-viewer-count': String(receiptImages.length) }
       : undefined;
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const openerRef = useRef<HTMLElement | null>(null);
-  const openerFocusRestoredRef = useRef(false);
-  const suspendedRef = useRef(suspended);
-  const interactionActiveRef = useRef(!interactionSuspended);
-  suspendedRef.current = suspended;
-  interactionActiveRef.current = !interactionSuspended;
-
-  useLayoutEffect(() => {
-    const dialog = dialogRef.current;
-    const activeElement = document.activeElement;
-    if (
-      dialog &&
-      activeElement instanceof HTMLElement &&
-      activeElement !== document.body &&
-      !dialog.contains(activeElement)
-    ) {
-      openerRef.current = activeElement;
-    }
-
-    return () => {
-      const opener = openerRef.current;
-      openerRef.current = null;
-      if (
-        !openerFocusRestoredRef.current &&
-        !suspendedRef.current &&
-        opener &&
-        canRestoreFocus(opener)
-      ) {
-        opener.focus({ preventScroll: true });
-      }
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!closing || suspended || openerFocusRestoredRef.current) return;
-    const opener = openerRef.current;
-    if (!opener || !canRestoreFocus(opener)) return;
-    opener.focus({ preventScroll: true });
-    if (document.activeElement === opener) {
-      openerFocusRestoredRef.current = true;
-      openerRef.current = null;
-    }
-  }, [closing, suspended]);
-
-  useLayoutEffect(() => {
-    const dialog = dialogRef.current;
-    if (
-      !dialog ||
-      dialog.closest('[inert]') ||
-      interactionSuspended ||
-      dialog.contains(document.activeElement)
-    ) {
-      return;
-    }
-    focusFirstControl(dialog);
-  }, [active, interactionSuspended]);
-
-  useEffect(() => {
-    if (interactionSuspended) return;
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if (!interactionActiveRef.current || evt.key !== 'Tab') return;
-      const dialog = dialogRef.current;
-      if (dialog && !dialog.closest('[inert]')) trapTabFocusWithin(dialog, evt);
-    };
-    const onFocusIn = (evt: FocusEvent) => {
-      if (!interactionActiveRef.current) return;
-      const dialog = dialogRef.current;
-      if (!dialog || dialog.closest('[inert]') || dialog.contains(evt.target as Node | null)) return;
-      focusFirstControl(dialog);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('focusin', onFocusIn);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('focusin', onFocusIn);
-    };
-  }, [interactionSuspended]);
+  useModalFocusScope({
+    dialogRef,
+    focusKey: closing ? 'closing' : active ? 'active' : 'opening',
+    suspended,
+  });
 
   return (
     <div
       ref={dialogRef}
-      className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${
+        suspended ? ' reveal-overlay--suspended' : ''
+      }`}
       role="dialog"
-      aria-modal={interactionSuspended ? undefined : 'true'}
-      aria-hidden={interactionSuspended || undefined}
+      aria-modal={suspended ? undefined : 'true'}
+      aria-hidden={suspended || undefined}
       aria-label={`${alt} viewer`}
-      inert={interactionSuspended || undefined}
+      inert={suspended || undefined}
       tabIndex={-1}
       style={overlayStyle}
       onClick={() => {
@@ -984,12 +922,17 @@ function ReceiptImageViewerOverlay({
         </div>
       </div>
       {explorerHref || transfer || adminIrlRedeem ? (
-        <div className="receipt-viewer-overlay__controls" onClick={(evt) => evt.stopPropagation()}>
+        <div
+          className="receipt-viewer-overlay__controls"
+          inert={interactionSuspended || undefined}
+          onClick={(evt) => evt.stopPropagation()}
+        >
           {adminIrlRedeem ? (
             <div className="receipt-viewer-overlay__admin-irl">
               <button
                 type="button"
                 className="ghost receipt-viewer-overlay__admin-irl-button"
+                data-frosted-surface=""
                 disabled={interactionSuspended || adminIrlRedeem.loading}
                 aria-busy={adminIrlRedeem.loading}
                 onClick={(evt) => {
@@ -1008,6 +951,7 @@ function ReceiptImageViewerOverlay({
               {explorerHref ? (
                 <a
                   className="receipt-viewer-overlay__action receipt-viewer-overlay__explorer-link"
+                  data-frosted-surface=""
                   href={explorerHref}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -1019,6 +963,7 @@ function ReceiptImageViewerOverlay({
                 <button
                   type="button"
                   className="receipt-viewer-overlay__action receipt-viewer-overlay__transfer-button"
+                  data-frosted-surface=""
                   disabled={interactionSuspended || transfer.disabled}
                   aria-disabled={interactionSuspended || transfer.disabled || transfer.unavailable || undefined}
                   aria-busy={transfer.busy || undefined}
@@ -1297,26 +1242,22 @@ async function recoverConnectionSendError(
   throw immediateClassification ?? (tx ? classifySignedTransactionSendError(tx, err) : err);
 }
 
-export type ClearCardBackgroundBlurState = {
-  open: boolean;
-  active: boolean;
-};
-
 type AppProps = {
   currentPath?: string;
   claimDeepLinkCode?: string | null;
   suspended?: boolean;
-  onClearCardBackgroundBlurChange?: (state: ClearCardBackgroundBlurState) => void;
 };
 
 function App({
   currentPath,
   claimDeepLinkCode = null,
   suspended = false,
-  onClearCardBackgroundBlurChange,
 }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
+  const statusUiSuspended = suspended || walletModalVisible;
+  const statusUiSuspendedRef = useRef(statusUiSuspended);
+  statusUiSuspendedRef.current = statusUiSuspended;
   const { publicKey, sendTransaction } = wallet;
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
   const cardNft2PackInventoryPreviewVideo = useMemo(
@@ -1747,7 +1688,8 @@ function App({
   const [toastVisible, setToastVisible] = useState(false);
   const toastFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { phase: successHudPhase, announcement: successAnnouncement, show: showSuccessHud } = useSuccessHud();
+  const { phase: successHudPhase, announcement: successAnnouncement, show: showSuccessHud } =
+    useSuccessHud(statusUiSuspended);
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
@@ -2046,22 +1988,44 @@ function App({
   const revealFrameSequence = revealFrameSequenceForDropId(revealOverlay?.dropId || routeDrop?.dropId);
   const revealMediaBase = revealMediaBaseForDropId(revealOverlay?.dropId || routeDrop?.dropId);
 
-  const showToast = useCallback((message: string) => {
-    setToast(message);
-    setToastVisible(true);
-    if (toastFadeTimeoutRef.current) {
+  const cancelToastTimers = useCallback(() => {
+    if (toastFadeTimeoutRef.current !== null) {
       clearTimeout(toastFadeTimeoutRef.current);
+      toastFadeTimeoutRef.current = null;
     }
-    if (toastClearTimeoutRef.current) {
+    if (toastClearTimeoutRef.current !== null) {
       clearTimeout(toastClearTimeoutRef.current);
+      toastClearTimeoutRef.current = null;
     }
-    toastFadeTimeoutRef.current = setTimeout(() => {
-      setToastVisible(false);
-    }, TOAST_VISIBLE_MS);
-    toastClearTimeoutRef.current = setTimeout(() => {
-      setToast(null);
-    }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
   }, []);
+
+  const clearToast = useCallback(() => {
+    cancelToastTimers();
+    setToastVisible(false);
+    setToast(null);
+  }, [cancelToastTimers]);
+
+  const showToast = useCallback(
+    (message: string) => {
+      if (statusUiSuspendedRef.current) return;
+      cancelToastTimers();
+      setToast(message);
+      setToastVisible(true);
+      toastFadeTimeoutRef.current = setTimeout(() => {
+        toastFadeTimeoutRef.current = null;
+        setToastVisible(false);
+      }, TOAST_VISIBLE_MS);
+      toastClearTimeoutRef.current = setTimeout(() => {
+        toastClearTimeoutRef.current = null;
+        setToast(null);
+      }, TOAST_VISIBLE_MS + TOAST_FADE_MS);
+    },
+    [cancelToastTimers],
+  );
+
+  useEffect(() => {
+    if (statusUiSuspended) clearToast();
+  }, [clearToast, statusUiSuspended]);
 
   useEffect(() => {
     if (!auth) return;
@@ -3696,7 +3660,11 @@ function App({
     walletModalVisible,
   ]);
 
-  useOverlayScrollLock({ active: revealOverlayOpen, onEscape: handleRevealOverlayEscape });
+  useOverlayScrollLock({
+    active: revealOverlayOpen,
+    escapeEnabled: !walletModalVisible && !receiptTransferTarget,
+    onEscape: handleRevealOverlayEscape,
+  });
 
   useEffect(() => {
     if (!revealOverlayOpen) return;
@@ -3779,12 +3747,7 @@ function App({
 
   useEffect(() => {
     return () => {
-      if (toastFadeTimeoutRef.current) {
-        clearTimeout(toastFadeTimeoutRef.current);
-      }
-      if (toastClearTimeoutRef.current) {
-        clearTimeout(toastClearTimeoutRef.current);
-      }
+      cancelToastTimers();
       cancelRevealOverlayAnimationFrame();
       if (revealOverlayResizeRafRef.current) {
         cancelAnimationFrame(revealOverlayResizeRafRef.current);
@@ -3793,7 +3756,7 @@ function App({
         clearTimeout(revealOverlayCloseTimeoutRef.current);
       }
     };
-  }, [cancelRevealOverlayAnimationFrame]);
+  }, [cancelRevealOverlayAnimationFrame, cancelToastTimers]);
 
   const markAssetsHidden = useMemo(() => {
     if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
@@ -5346,7 +5309,6 @@ function App({
     }
     if (!publicKey) {
       setVisible(true);
-      showToast('Connect a wallet to ship items');
       return;
     }
     if (!selected.size) {
@@ -5623,11 +5585,6 @@ function App({
     }
     if (!publicKey) {
       setVisible(true);
-      showToast(
-        receiptTarget?.kind === 'certificate'
-          ? 'Connect a wallet to redeem this card receipt'
-          : 'Connect a wallet to redeem packs',
-      );
       return;
     }
     if (isReceiptTarget && !receiptTransferWalletSupported) {
@@ -6653,22 +6610,6 @@ function App({
       (!revealOverlay?.revealedIds?.length || interactiveRevealCards.length > 0),
   );
   const revealOverlayCanRenderClearCard3d = revealOverlayHasClearCard3dRenderer;
-  const clearCardBackgroundBlurOpen = Boolean(
-    !suspended && revealOverlayCanRenderClearCard3d,
-  );
-  const clearCardBackgroundBlurActive = Boolean(
-    clearCardBackgroundBlurOpen && revealOverlayActive && !revealOverlayClosing,
-  );
-  useLayoutEffect(() => {
-    onClearCardBackgroundBlurChange?.({
-      open: clearCardBackgroundBlurOpen,
-      active: clearCardBackgroundBlurActive,
-    });
-  }, [
-    clearCardBackgroundBlurActive,
-    clearCardBackgroundBlurOpen,
-    onClearCardBackgroundBlurChange,
-  ]);
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
     return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
@@ -6806,12 +6747,35 @@ function App({
     revealOverlay && !revealOverlayCanRenderInteractiveCardPack && revealOverlay.frame
       ? animatedRevealFrameSrc || revealOverlay.image || boxImageForDropId(revealOverlay.dropId)
       : undefined;
+  const activeModalLayer = resolveActiveModalLayer({
+    wallet: walletModalVisible,
+    transfer: Boolean(receiptTransferTarget),
+    reveal: revealOverlayOpen && !revealOverlayClosing,
+    claim: claimOpen,
+    shipment: deliveryOpen,
+    notify: notifyOpen,
+  });
+  const revealOverlaySuspended = isModalLayerSuspended({
+    activeLayer: activeModalLayer,
+    layer: 'reveal',
+    open: revealOverlayOpen,
+  });
+  const toastAboveModal = shouldToastAppearAboveModal({
+    activeLayer: activeModalLayer,
+    receiptTransferOpen: Boolean(receiptTransferTarget),
+    receiptViewerOpen: revealOverlayUsesReceiptImage,
+  });
   const defaultRevealOverlayNode = revealOverlay ? (
-    <div
-      className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}`}
-      role="presentation"
+    <ModalFocusScope
+      ariaLabel={`${revealOverlay.name} unboxing`}
+      suspended={revealOverlayClosing || revealOverlaySuspended}
+      className={`reveal-overlay reveal-overlay--${revealOverlayStage}${revealOverlayActive ? ' reveal-overlay--active' : ''}${revealOverlayClosing ? ' reveal-overlay--closing' : ''}${revealOverlaySuspended ? ' reveal-overlay--suspended' : ''}`}
       style={revealOverlayStyle}
-      onClick={() => handleRevealOverlayDismiss()}
+      onClick={() => {
+        if (!revealOverlayClosing && !revealOverlaySuspended) {
+          handleRevealOverlayDismiss();
+        }
+      }}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -6919,22 +6883,8 @@ function App({
           )}
         </button>
       </div>
-    </div>
+    </ModalFocusScope>
   ) : null;
-  const activeModalLayer =
-    walletModalVisible
-      ? 'wallet'
-      : receiptTransferTarget
-      ? 'transfer'
-      : revealOverlayOpen && !revealOverlayClosing
-        ? 'reveal'
-        : claimOpen
-          ? 'claim'
-          : deliveryOpen
-            ? 'shipment'
-            : notifyOpen
-              ? 'notify'
-              : null;
   const receiptTransferThumbnail =
     receiptTransferTarget?.image ||
     (receiptTransferTarget
@@ -6946,6 +6896,8 @@ function App({
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
+        suspended={revealOverlaySuspended}
+        ariaLabel={`${revealOverlay.name} viewer`}
         card={interactiveViewerCard}
         loadingImageSrc={revealOverlay.image}
         onDismiss={handleRevealOverlayDismiss}
@@ -6956,7 +6908,7 @@ function App({
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
-        suspended={activeModalLayer === 'wallet' || activeModalLayer === 'transfer'}
+        suspended={revealOverlaySuspended}
         images={revealOverlay.receiptImages}
         imageSrc={revealOverlay.image}
         alt={revealOverlay.name}
@@ -7016,6 +6968,7 @@ function App({
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
+        suspended={revealOverlaySuspended}
         phase={revealOverlay.phase}
         cardId={clearCardRevealId}
         loadingImageSrc={revealOverlay.image}
@@ -7035,6 +6988,7 @@ function App({
         overlayStyle={revealOverlayStyle}
         active={revealOverlayActive}
         closing={revealOverlayClosing}
+        suspended={revealOverlaySuspended}
         phase={revealOverlay.phase}
         cards={interactiveRevealCards}
         cardReady={interactiveRevealCards.length > 0}
@@ -7073,16 +7027,11 @@ function App({
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
-  const pageRef = useRef<HTMLDivElement | null>(null);
   const primaryFrameClassName = [
     'drop-page-frame',
     dropPageFrameViewport ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
   ].filter(Boolean).join(' ');
-  useDropPageScrollFade({
-    active: Boolean(routeDrop || upcomingDropRoute),
-    pageRef,
-  });
   const renderHeaderRight = ({ interactive }: { interactive: boolean }) => {
     const walletAction = showHeaderWalletButton ? (
       <button
@@ -7104,6 +7053,7 @@ function App({
           className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
           onClick={() => setSettingsOpen((prev) => !prev)}
           aria-label="App menu"
+          data-background-blur-focus-fallback=""
           aria-haspopup="menu"
           aria-expanded={settingsOpen}
         >
@@ -7249,29 +7199,41 @@ function App({
   };
 
   return (
-    <div className="page" ref={pageRef}>
-      <SuccessHud phase={successHudPhase} announcement={successAnnouncement} />
-      {toast ? (
-        <div
-          className={`toast${toastVisible ? '' : ' toast--hidden'}${
-            receiptTransferTarget || revealOverlayUsesReceiptImage ? ' toast--above-modal' : ''
-          }`}
-          role="status"
-          aria-live="polite"
-        >
-          {toast}
-        </div>
+    <div className="page">
+      <SuccessHud
+        phase={successHudPhase}
+        announcement={successAnnouncement}
+      />
+      {!statusUiSuspended && toast ? (
+        <BodyPortal>
+          <div
+            className={`toast${toastVisible ? '' : ' toast--hidden'}${
+              toastAboveModal ? ' toast--above-modal' : ''
+            }`}
+            role="status"
+            aria-live="polite"
+            data-frosted-surface=""
+          >
+            {toast}
+          </div>
+        </BodyPortal>
       ) : null}
       <NotifySubscription
         open={notifyOpen}
         onOpenChange={handleNotifyOpenChange}
         onSubscribed={showSuccessHud}
-        suspended={notifyOpen && activeModalLayer !== 'notify'}
+        suspended={isModalLayerSuspended({
+          activeLayer: activeModalLayer,
+          appSuspended: suspended,
+          layer: 'notify',
+          open: notifyOpen,
+        })}
       />
       <div className={primaryFrameClassName}>
         <ShopHeader
           onNavigateHome={restoreHomeOnNextNavigation}
           scrollHomeToTop={dropsPanelFrameActive}
+          fadeBackdrop={Boolean(routeDrop || upcomingDropRoute)}
           renderRight={renderHeaderRight}
         />
 
@@ -7404,9 +7366,15 @@ function App({
         onClose={closeReceiptTransferModal}
         className="compact-modal receipt-transfer-modal"
         overlayClassName="receipt-transfer-modal-overlay"
+        blurBackground
         showCloseButton={false}
         closeOnEscape={!receiptTransferInFlight}
-        suspended={Boolean(receiptTransferTarget) && activeModalLayer !== 'transfer'}
+        suspended={isModalLayerSuspended({
+          activeLayer: activeModalLayer,
+          appSuspended: suspended,
+          layer: 'transfer',
+          open: Boolean(receiptTransferTarget),
+        })}
         returnFocusRef={receiptTransferReturnFocusRef}
       >
         {receiptTransferTarget ? (
@@ -7424,7 +7392,12 @@ function App({
         onClose={() => {
           setDeliveryOpen(false);
         }}
-        suspended={deliveryOpen && activeModalLayer !== 'shipment'}
+        suspended={isModalLayerSuspended({
+          activeLayer: activeModalLayer,
+          appSuspended: suspended,
+          layer: 'shipment',
+          open: deliveryOpen,
+        })}
       >
         <div className="modal-form delivery-modal">
           <div className="delivery-modal__summary">
@@ -7470,7 +7443,12 @@ function App({
         title="Secret Code"
         onClose={closeClaimModal}
         closeOnEscape={!claimSubmitting}
-        suspended={claimOpen && activeModalLayer !== 'claim'}
+        suspended={isModalLayerSuspended({
+          activeLayer: activeModalLayer,
+          appSuspended: suspended,
+          layer: 'claim',
+          open: claimOpen,
+        })}
       >
         <ClaimForm
           onClaim={handleClaim}
@@ -7486,7 +7464,12 @@ function App({
         />
       </Modal>
 
-      {revealOverlayNode}
+      <BackgroundBlurPortal
+        open={Boolean(revealOverlayNode)}
+        active={Boolean(revealOverlayNode && revealOverlayActive && !revealOverlayClosing)}
+      >
+        {revealOverlayNode}
+      </BackgroundBlurPortal>
 
       {activeError ? <div className="error">{activeError}</div> : null}
       <section className="app-section shipments-section">
@@ -7579,97 +7562,105 @@ function App({
       </section>
 
       {selectedCount ? (
-        <div className="selection-panel">
-          <div className="selection-panel__left">
-            <div className="selection-panel__preview">
-              {selectedPreview.map(({ item, previewImage }, idx) => {
-                return previewImage ? (
+        <BackgroundLayerPortal>
+          <div
+            className="selection-panel"
+            data-frosted-surface=""
+          >
+            <div className="selection-panel__left">
+              <div className="selection-panel__preview">
+                {selectedPreview.map(({ item, previewImage }, idx) => {
+                  return previewImage ? (
+                    <div
+                      key={item.id}
+                      className="selection-panel__thumb"
+                      style={{ backgroundImage: `url(${previewImage})`, zIndex: idx + 1 }}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <div
+                      key={item.id}
+                      className="selection-panel__thumb selection-panel__thumb--empty"
+                      style={{ zIndex: idx + 1 }}
+                      aria-hidden="true"
+                    >
+                      <span>#</span>
+                    </div>
+                  );
+                })}
+                {selectedOverflow ? (
                   <div
-                    key={item.id}
-                    className="selection-panel__thumb"
-                    style={{ backgroundImage: `url(${previewImage})`, zIndex: idx + 1 }}
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <div
-                    key={item.id}
-                    className="selection-panel__thumb selection-panel__thumb--empty"
-                    style={{ zIndex: idx + 1 }}
-                    aria-hidden="true"
+                    className="selection-panel__more"
+                    style={{ zIndex: selectedPreview.length + 2 }}
                   >
-                    <span>#</span>
+                    +{selectedOverflow}
                   </div>
-                );
-              })}
-              {selectedOverflow ? (
-                <div className="selection-panel__more" style={{ zIndex: selectedPreview.length + 2 }}>
-                  +{selectedOverflow}
-                </div>
+                ) : null}
+              </div>
+            </div>
+            <div className="selection-panel__actions">
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => setSelected(new Set())}
+                data-selection-panel-action={SELECTION_PANEL_ACTION.cancel}
+              >
+                Cancel
+              </button>
+              {canViewSelected ? (
+                <button
+                  type="button"
+                  className="selection-panel__view"
+                  onClick={handleViewSelectedInteractiveCard}
+                  data-selection-panel-action={SELECTION_PANEL_ACTION.view}
+                >
+                  <svg
+                    aria-hidden="true"
+                    focusable="false"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                  >
+                    <rect
+                      x="3.25"
+                      y="1.75"
+                      width="9.5"
+                      height="12.5"
+                      rx="2.5"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                    />
+                  </svg>
+                  <span>View</span>
+                </button>
+              ) : null}
+              {canOpenSelected ? (
+                <button
+                  type="button"
+                  className="selection-panel__open"
+                  onClick={handleOpenSelectedBox}
+                  data-selection-panel-action={SELECTION_PANEL_ACTION.open}
+                  disabled={Boolean(startOpenLoading)}
+                >
+                  <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
+                  <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
+                </button>
+              ) : null}
+              {canShipSelected ? (
+                <button
+                  type="button"
+                  className="selection-panel__ship"
+                  onClick={handleOpenShip}
+                  data-selection-panel-action={SELECTION_PANEL_ACTION.ship}
+                >
+                  <FaPlane aria-hidden="true" focusable="false" size={16} />
+                  <span>Send</span>
+                </button>
               ) : null}
             </div>
           </div>
-          <div className="selection-panel__actions">
-            <button
-              type="button"
-              className="quiet"
-              onClick={() => setSelected(new Set())}
-              data-selection-panel-action={SELECTION_PANEL_ACTION.cancel}
-            >
-              Cancel
-            </button>
-            {canViewSelected ? (
-              <button
-                type="button"
-                className="selection-panel__view"
-                onClick={handleViewSelectedInteractiveCard}
-                data-selection-panel-action={SELECTION_PANEL_ACTION.view}
-              >
-                <svg
-                  aria-hidden="true"
-                  focusable="false"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                >
-                  <rect
-                    x="3.25"
-                    y="1.75"
-                    width="9.5"
-                    height="12.5"
-                    rx="2.5"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                  />
-                </svg>
-                <span>View</span>
-              </button>
-            ) : null}
-            {canOpenSelected ? (
-              <button
-                type="button"
-                className="selection-panel__open"
-                onClick={handleOpenSelectedBox}
-                data-selection-panel-action={SELECTION_PANEL_ACTION.open}
-                disabled={Boolean(startOpenLoading)}
-              >
-                <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
-                <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
-              </button>
-            ) : null}
-            {canShipSelected ? (
-              <button
-                type="button"
-                className="selection-panel__ship"
-                onClick={handleOpenShip}
-                data-selection-panel-action={SELECTION_PANEL_ACTION.ship}
-              >
-                <FaPlane aria-hidden="true" focusable="false" size={16} />
-                <span>Send</span>
-              </button>
-            ) : null}
-          </div>
-        </div>
+        </BackgroundLayerPortal>
       ) : null}
     </div>
   );

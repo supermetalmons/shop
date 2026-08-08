@@ -35,9 +35,13 @@ export default function DrifApp() {
 
   return (
     <div className="drif-page">
-      <SuccessHud phase={successHudPhase} announcement={successAnnouncement} />
+      <SuccessHud
+        phase={successHudPhase}
+        announcement={successAnnouncement}
+        className="success-hud--drif"
+      />
       <NotifySubscription open={notifyOpen} onOpenChange={setNotifyOpen} onSubscribed={showSuccessHud} />
-      <ShopHeader scrollHomeToTop />
+      <ShopHeader scrollHomeToTop variant="drif" />
       <main className="drif-main">
         <div className="drif-card-showcase">
           <DrifEffectCard

@@ -1,4 +1,5 @@
 .drif-body {
+  --background-blur-background: #000;
   min-height: 100%;
   padding: 24px clamp(16px, 4vw, 48px) 64px;
   margin: 0;
@@ -17,6 +18,15 @@
   min-height: calc(100vh - 88px);
   min-height: calc(100svh - 88px);
   overflow: visible;
+}
+
+.drif-body .background-blur-layer {
+  height: 100%;
+}
+
+.drif-body .background-blur-layer__stage {
+  height: calc(100vh - var(--page-padding-top) - var(--page-padding-bottom));
+  height: calc(100svh - var(--page-padding-top) - var(--page-padding-bottom));
 }
 
 .drif-page {
@@ -38,12 +48,12 @@
   touch-action: none;
 }
 
-.drif-page header.top--shop {
+header.top--shop.top--drif {
   color: #fff;
   flex: 0 0 auto;
 }
 
-.drif-page header.top--shop.top--fixed::before {
+header.top--shop.top--drif .top__backdrop {
   display: none;
 }
 
@@ -111,7 +121,7 @@
   opacity: 0.75;
 }
 
-.drif-page .success-hud {
+.success-hud--drif {
   --fg: #fff;
 }
 

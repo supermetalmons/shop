@@ -1,10 +1,15 @@
+import { useState } from 'react';
 import type React from 'react';
 import { navigate } from '../navigation';
+import { useDropPageScrollFade } from '../hooks/useDropPageScrollFade';
+import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 
 type ShopHeaderProps = {
   onNavigateHome?: () => void;
   renderRight?: (options: { interactive: boolean }) => React.ReactNode;
   scrollHomeToTop?: boolean;
+  fadeBackdrop?: boolean;
+  variant?: 'default' | 'drif';
 };
 
 function ShopHeaderBrand({
@@ -53,21 +58,44 @@ function ShopHeaderBrand({
   );
 }
 
-export function ShopHeader({ onNavigateHome, renderRight, scrollHomeToTop = false }: ShopHeaderProps) {
+export function ShopHeader({
+  onNavigateHome,
+  renderRight,
+  scrollHomeToTop = false,
+  fadeBackdrop = false,
+  variant = 'default',
+}: ShopHeaderProps) {
+  const [fixedHeader, setFixedHeader] = useState<HTMLElement | null>(null);
   const right = renderRight?.({ interactive: true });
   const spacerRight = renderRight?.({ interactive: false });
+  useDropPageScrollFade({ active: fadeBackdrop, target: fixedHeader });
 
   return (
     <>
-      <header className="top top--fixed top--shop">
-        <ShopHeaderBrand
-          interactive
-          onNavigateHome={onNavigateHome}
-          scrollHomeToTop={scrollHomeToTop}
-        />
-        {right ? <div className="top__right">{right}</div> : null}
-      </header>
-      <header className="top top--spacer top--shop" aria-hidden="true">
+      <BackgroundLayerPortal placement="leading">
+        <header
+          ref={setFixedHeader}
+          className={`top top--fixed top--shop${fadeBackdrop ? ' top--fade-backdrop' : ''}${
+            variant === 'drif' ? ' top--drif' : ''
+          }`}
+        >
+          <div
+            className="top__backdrop"
+            aria-hidden="true"
+            data-frosted-surface=""
+          />
+          <ShopHeaderBrand
+            interactive
+            onNavigateHome={onNavigateHome}
+            scrollHomeToTop={scrollHomeToTop}
+          />
+          {right ? <div className="top__right">{right}</div> : null}
+        </header>
+      </BackgroundLayerPortal>
+      <header
+        className={`top top--spacer top--shop${variant === 'drif' ? ' top--drif' : ''}`}
+        aria-hidden="true"
+      >
         <ShopHeaderBrand interactive={false} scrollHomeToTop={false} />
         {spacerRight ? <div className="top__right">{spacerRight}</div> : null}
       </header>

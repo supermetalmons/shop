@@ -56,6 +56,7 @@ import { isDirectDeliveryItemsPerBox } from './lib/shipping';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { ShopHeader } from './components/ShopHeader';
+import { BodyPortal } from './components/BackgroundBlurLayer';
 import {
   buildFulfillmentAddressExport,
   buildFulfillmentCardClaimSecretCodeExportEntry,
@@ -2836,15 +2837,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       ) : null}
 
       {secretCodesExporting ? (
-        <div className="fulfillment-export-progress" role="status" aria-live="polite" aria-busy="true">
-          <div className="fulfillment-export-progress__panel">
-            <div className="fulfillment-export-progress__title">Exporting Secret Codes ZIP</div>
-            <div className="fulfillment-export-progress__percent">{secretCodesExportPercent}%</div>
-            <div className="muted small">
-              {displayedSecretCodeCount} {displayedSecretCodeCount === 1 ? 'PNG' : 'PNGs'}
+        <BodyPortal>
+          <div className="fulfillment-export-progress" role="status" aria-live="polite" aria-busy="true">
+            <div className="fulfillment-export-progress__panel">
+              <div className="fulfillment-export-progress__title">Exporting Secret Codes ZIP</div>
+              <div className="fulfillment-export-progress__percent">{secretCodesExportPercent}%</div>
+              <div className="muted small">
+                {displayedSecretCodeCount} {displayedSecretCodeCount === 1 ? 'PNG' : 'PNGs'}
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       ) : null}
 
       <Modal
@@ -2853,6 +2856,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         onClose={handleCloseAddressModal}
         showCloseButton={false}
         closeOnEscape={!addressSaving}
+        suspended={walletModalVisible}
       >
         <form
           className="modal-form fulfillment-address-form"
@@ -2901,6 +2905,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         onClose={handleCloseShipstationModal}
         showCloseButton={false}
         closeOnEscape={!activeShipstationBusy}
+        suspended={walletModalVisible}
       >
         <div className="modal-form">
           {activeShipstationOrder && !isRedeemedForIrlFulfillmentOrder(activeShipstationOrder) ? (
@@ -3220,6 +3225,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         title={activeUpdateOrder ? `Order ${activeUpdateOrder.deliveryId}` : 'Order'}
         onClose={handleCancelUpdate}
         showCloseButton={false}
+        suspended={walletModalVisible}
       >
         <div className="modal-form">
           <select

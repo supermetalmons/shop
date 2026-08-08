@@ -7,6 +7,7 @@ import {
   useState,
   type AnimationEvent,
   type CSSProperties,
+  type ReactNode,
   type RefObject,
   type SyntheticEvent,
   type TransitionEvent,
@@ -41,6 +42,7 @@ import {
   updateMobileTapCandidateForMove,
   type MobileTapCandidate,
 } from '../lib/mobileInteractionGuards';
+import { ModalFocusScope } from './ModalFocusScope';
 import WipInteractiveCard from './WipInteractiveCard';
 
 export type PonchoRevealDismissReadySource = 'card' | 'row';
@@ -49,6 +51,8 @@ type PonchoRevealSharedProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
+  suspended?: boolean;
+  modal?: boolean;
   phase: PonchoDrifellaRevealPhase;
   boxLabel: string;
   boxName: string;
@@ -88,9 +92,12 @@ export type PonchoCardViewerOverlayProps = {
   overlayStyle?: CSSProperties;
   active: boolean;
   closing: boolean;
+  suspended?: boolean;
+  ariaLabel?: string;
   card?: DrifCardConfig;
   cardIdLabel?: string;
   loadingImageSrc?: string;
+  controls?: ReactNode;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
@@ -499,6 +506,8 @@ export function PonchoRevealOverlay({
   overlayStyle,
   active,
   closing,
+  suspended = false,
+  modal = true,
   phase,
   boxLabel,
   boxName,
@@ -1153,7 +1162,7 @@ export function PonchoRevealOverlay({
   );
 
   const handleAdvance = () => {
-    if (closing) return;
+    if (closing || suspended) return;
     if (onBeforeAdvance && !onBeforeAdvance()) return;
     playerRef.current?.handleAdvance();
   };
@@ -1164,6 +1173,7 @@ export function PonchoRevealOverlay({
   };
 
   const handleOverlayClick = useCallback(() => {
+    if (suspended) return;
     if (stackRevealEnabled) {
       if (cardStackRowVisible && cardStackRowTransitionComplete) {
         onDismiss?.();
@@ -1178,9 +1188,11 @@ export function PonchoRevealOverlay({
     cardStackRowVisible,
     onDismiss,
     stackRevealEnabled,
+    suspended,
   ]);
 
   const activateCardStack = useCallback(() => {
+    if (suspended) return;
     if (stackRevealEnabled) {
       if (cardStackRowVisible) return;
       if (cardStackCanCycle && !cardStackAdvanceLockedRef.current) {
@@ -1204,6 +1216,7 @@ export function PonchoRevealOverlay({
     spreadCardStackToRow,
     stackRevealEnabled,
     startCardStackCycle,
+    suspended,
   ]);
 
   const handleCardClick = useCallback((evt: SyntheticEvent) => {
@@ -1211,7 +1224,12 @@ export function PonchoRevealOverlay({
     activateCardStack();
   }, [activateCardStack]);
 
-  const boxDisabled = closing || playerState.phase !== 'ready' || playerState.revealComplete || playerState.advanceLocked;
+  const boxDisabled =
+    closing ||
+    suspended ||
+    playerState.phase !== 'ready' ||
+    playerState.revealComplete ||
+    playerState.advanceLocked;
   const cardLocked = playerState.packDiscarded && playerState.cardVisible && !playerState.cardInteractive;
   const cardTapCandidateRef = useRef<MobileTapCandidate | null>(null);
   const mobileTouchStateRef = useRef({
@@ -1373,9 +1391,12 @@ export function PonchoRevealOverlay({
   };
 
   return (
-    <div
-      className={`reveal-overlay wip-overlay reveal-overlay--${playerState.phase}${active ? ' reveal-overlay--active' : ''}${cardStackTransitioning ? ' wip-overlay--card-motion' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
-      role="presentation"
+    <ModalFocusScope
+      ariaLabel={`${boxName} unboxing`}
+      enabled={modal}
+      suspended={closing || suspended}
+      focusKey={`${playerState.phase}:${String(boxDisabled)}`}
+      className={`reveal-overlay wip-overlay reveal-overlay--${playerState.phase}${active ? ' reveal-overlay--active' : ''}${cardStackTransitioning ? ' wip-overlay--card-motion' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
       style={overlayStyleWithMotionVars}
       onClick={handleOverlayClick}
       onContextMenu={(evt) => evt.preventDefault()}
@@ -1450,7 +1471,7 @@ export function PonchoRevealOverlay({
           )}
         </div>
       ) : null}
-    </div>
+    </ModalFocusScope>
   );
 }
 
@@ -1471,22 +1492,34 @@ export function PonchoCardViewerOverlay({
   overlayStyle,
   active,
   closing,
+  suspended = false,
+  ariaLabel = 'Card viewer',
   card,
   cardIdLabel,
   loadingImageSrc,
+  controls,
   onDismiss,
   onTransitionEnd,
 }: PonchoCardViewerOverlayProps) {
+  const interactionSuspended = closing || suspended;
+
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
   };
 
   return (
-    <div
-      className={`reveal-overlay wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
-      role="presentation"
+    <ModalFocusScope
+      ariaLabel={ariaLabel}
+      suspended={interactionSuspended}
+      className={`reveal-overlay wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${
+        active ? ' reveal-overlay--active' : ''
+      }${closing ? ' reveal-overlay--closing' : ''}${
+        suspended ? ' reveal-overlay--suspended' : ''
+      }`}
       style={overlayStyle}
-      onClick={() => onDismiss?.()}
+      onClick={() => {
+        if (!interactionSuspended) onDismiss?.();
+      }}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -1508,6 +1541,7 @@ export function PonchoCardViewerOverlay({
           ) : null}
         </div>
       </div>
-    </div>
+      {controls}
+    </ModalFocusScope>
   );
 }

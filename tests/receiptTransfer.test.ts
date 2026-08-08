@@ -6,6 +6,7 @@ import { Modal } from '../src/components/Modal.tsx';
 import { ReceiptTransferForm } from '../src/components/ReceiptTransferForm.tsx';
 import { acquireBodyScrollLock, releaseBodyScrollLock } from '../src/lib/bodyScrollLock.ts';
 import { trapTabFocusWithin } from '../src/lib/focusTrap.ts';
+import { shouldHandleOverlayEscape } from '../src/hooks/useOverlayScrollLock.ts';
 import {
   canSignReceiptTransferTransaction,
   normalizeReceiptTransferDestination,
@@ -25,6 +26,45 @@ const OWNER = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const DESTINATION = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const RECEIPT_ASSET_ID = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const OTHER_RECEIPT_ASSET_ID = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+
+test('an underlying overlay handles Escape only while it owns dismissal', () => {
+  assert.equal(
+    shouldHandleOverlayEscape({
+      defaultPrevented: false,
+      escapeEnabled: true,
+      hasEscapeHandler: true,
+      key: 'Escape',
+    }),
+    true,
+  );
+  assert.equal(
+    shouldHandleOverlayEscape({
+      defaultPrevented: false,
+      escapeEnabled: false,
+      hasEscapeHandler: true,
+      key: 'Escape',
+    }),
+    false,
+  );
+  assert.equal(
+    shouldHandleOverlayEscape({
+      defaultPrevented: true,
+      escapeEnabled: true,
+      hasEscapeHandler: true,
+      key: 'Escape',
+    }),
+    false,
+  );
+  assert.equal(
+    shouldHandleOverlayEscape({
+      defaultPrevented: false,
+      escapeEnabled: true,
+      hasEscapeHandler: false,
+      key: 'Escape',
+    }),
+    false,
+  );
+});
 
 test('receipt transfer signing requires a signTransaction function', () => {
   assert.equal(canSignReceiptTransferTransaction(undefined, new Set(['legacy', 0])), false);
@@ -262,6 +302,10 @@ test('Tab containment recovers when the focused modal control becomes disabled',
   let focused: unknown = disabledControl;
   let prevented = false;
   const firstControl = {
+    tabIndex: 0,
+    isConnected: true,
+    matches: () => false,
+    closest: () => null,
     focus: () => {
       focused = firstControl;
     },
@@ -492,5 +536,6 @@ test('a suspended modal is inert and hidden instead of exposing a second aria-mo
 
   assert.match(markup, /inert=""/);
   assert.match(markup, /aria-hidden="true"/);
+  assert.match(markup, /modal-overlay--suspended/);
   assert.doesNotMatch(markup, /aria-modal=/);
 });

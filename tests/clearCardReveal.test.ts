@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import {
   advanceClearCardGatedHit,
   beginClearCardRevealRequest,
@@ -19,18 +18,6 @@ import {
 import { CLEAR_CARDS_CARD_MODEL_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import { calcClearCardRevealTargetRect } from '../src/lib/revealOverlayLayout.ts';
 import { runDeferredOverlayActions } from '../src/lib/deferredOverlayActions.ts';
-
-const source = (relativePath: string) =>
-  readFileSync(new URL(relativePath, import.meta.url), 'utf8');
-
-function cssRule(styles: string, selector: string) {
-  const marker = `${selector} {`;
-  const start = styles.indexOf(marker);
-  assert.notEqual(start, -1, `Missing CSS rule: ${selector}`);
-  const end = styles.indexOf('}', start);
-  assert.notEqual(end, -1, `Unclosed CSS rule: ${selector}`);
-  return styles.slice(start, end + 1);
-}
 
 test('clear card model urls resolve only the 192 supported ids', () => {
   assert.equal(clearCardModelUrl(1), `${CLEAR_CARDS_CARD_MODEL_BASE_URL}/1.glb`);
@@ -166,52 +153,4 @@ test('suspending an overlay reconciles data without resuming presentation', () =
   completed.length = 0;
   runDeferredOverlayActions(actions);
   assert.deepEqual(completed, ['inventory', 'overlay', 'pending']);
-});
-
-test('clear card overlays use a bounded ordinary-filter blur layer', () => {
-  const appStyles = source('../src/styles.css');
-  const wipStyles = source('../src/clearCardWip.css');
-  const app = source('../src/App.tsx');
-  const revealOverlay = source('../src/components/ClearCardRevealOverlay.tsx');
-  const shopRoute = source('../src/ShopRoute.tsx');
-
-  const activeBlurRule = cssRule(
-    appStyles,
-    '.shop-route__app--clear-card-blur-open > .shop-route__app-viewport--clear-card-blur-active',
-  );
-  const liveBackdropRule = cssRule(
-    appStyles,
-    '.clear-card-reveal-overlay .reveal-overlay__backdrop',
-  );
-  const stageRule = cssRule(
-    appStyles,
-    `.shop-route__app--clear-card-blur-open
-  > .shop-route__app-viewport
-  > .shop-route__app-stage`,
-  );
-  const wipBackdropRule = cssRule(wipStyles, '.clear-card-wip__backdrop');
-
-  assert.match(activeBlurRule, /filter: blur\(18px\)/);
-  assert.match(liveBackdropRule, /backdrop-filter: none/);
-  assert.match(
-    stageRule,
-    /padding:\s+var\(--page-padding-top\)\s+var\(--page-padding-inline\)\s+var\(--page-padding-bottom\)/,
-  );
-  assert.doesNotMatch(wipBackdropRule, /backdrop-filter/);
-  assert.match(revealOverlay, /return createPortal\(/);
-  assert.match(revealOverlay, /document\.body/);
-  assert.match(revealOverlay, /role="dialog"/);
-  assert.match(revealOverlay, /aria-modal="true"/);
-  assert.match(revealOverlay, /document\.addEventListener\('focusin', handleFocusIn\)/);
-  assert.match(shopRoute, /backdropFilter: clearCard \? 'none' : 'blur\(18px\)'/);
-  assert.match(shopRoute, /suspended={isWipRoute}/);
-  assert.match(shopRoute, /inert={backgroundUnavailable \|\| undefined}/);
-  assert.match(shopRoute, /getBoundingClientRect\(\)\.height/);
-  assert.doesNotMatch(shopRoute, /document\.documentElement\.scrollHeight/);
-  assert.match(
-    app,
-    /finalizeRevealOverlayDismissal\(\{ includePresentationActions: false \}\)/,
-  );
-  assert.match(app, /revealOverlayRef\.current = suspended \? null : revealOverlay/);
-  assert.match(app, /'presentation'\);/);
 });

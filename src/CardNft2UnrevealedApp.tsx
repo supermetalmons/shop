@@ -3,6 +3,7 @@ import { FaBookmark, FaRegBookmark, FaRegCopy } from 'react-icons/fa';
 import { InventoryGrid } from './components/InventoryGrid';
 import { PonchoCardViewerOverlay } from './components/PonchoRevealOverlay';
 import { ShopHeader } from './components/ShopHeader';
+import { BackgroundBlurPortal } from './components/BackgroundBlurLayer';
 import { useCardNft2UnrevealedCards } from './hooks/useCardNft2UnrevealedCards';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import { cardNft2AssetUrl, normalizeCardNft2CardId } from './lib/cardNft2Assets';
@@ -327,47 +328,59 @@ export default function CardNft2UnrevealedApp() {
 
   return (
     <div className="page card-nft2-unrevealed-page">
-      {viewer ? (
-        <PonchoCardViewerOverlay
-          overlayStyle={viewerOverlayStyle}
-          active={viewer.active}
-          closing={viewer.closing}
-          card={viewer.card}
-          loadingImageSrc={viewer.loadingImageSrc}
-          onDismiss={dismissViewer}
-          onTransitionEnd={handleViewerTransitionEnd}
-        />
-      ) : null}
-      {viewer && !viewer.closing ? (
-        <div className="card-nft2-unrevealed-viewer-controls">
-          <span className="card-nft2-unrevealed-viewer-controls__id">{viewer.figureId}</span>
-          <button
-            type="button"
-            className={`card-nft2-unrevealed-viewer-controls__bookmark${
-              viewerCardIsSelected ? ' card-nft2-unrevealed-viewer-controls__bookmark--selected' : ''
-            }`}
-            aria-label={
-              viewerCardIsSelected
-                ? `Remove Card #${viewer.figureId} from selected cards`
-                : `Add Card #${viewer.figureId} to selected cards`
+      <BackgroundBlurPortal
+        open={Boolean(viewer)}
+        active={Boolean(viewer?.active && !viewer.closing)}
+      >
+        {viewer ? (
+          <PonchoCardViewerOverlay
+            overlayStyle={viewerOverlayStyle}
+            active={viewer.active}
+            closing={viewer.closing}
+            ariaLabel={`Card #${viewer.figureId} viewer`}
+            card={viewer.card}
+            loadingImageSrc={viewer.loadingImageSrc}
+            controls={
+              !viewer.closing ? (
+                <div className="card-nft2-unrevealed-viewer-controls">
+                  <span className="card-nft2-unrevealed-viewer-controls__id">
+                    {viewer.figureId}
+                  </span>
+                  <button
+                    type="button"
+                    className={`card-nft2-unrevealed-viewer-controls__bookmark${
+                      viewerCardIsSelected
+                        ? ' card-nft2-unrevealed-viewer-controls__bookmark--selected'
+                        : ''
+                    }`}
+                    aria-label={
+                      viewerCardIsSelected
+                        ? `Remove Card #${viewer.figureId} from selected cards`
+                        : `Add Card #${viewer.figureId} to selected cards`
+                    }
+                    aria-pressed={viewerCardIsSelected}
+                    onClick={(evt) => {
+                      evt.stopPropagation();
+                      toggleSelectedCardId(viewer.figureId);
+                    }}
+                    onPointerDown={(evt) => {
+                      evt.stopPropagation();
+                    }}
+                  >
+                    {viewerCardIsSelected ? (
+                      <FaBookmark aria-hidden="true" focusable="false" />
+                    ) : (
+                      <FaRegBookmark aria-hidden="true" focusable="false" />
+                    )}
+                  </button>
+                </div>
+              ) : null
             }
-            aria-pressed={viewerCardIsSelected}
-            onClick={(evt) => {
-              evt.stopPropagation();
-              toggleSelectedCardId(viewer.figureId);
-            }}
-            onPointerDown={(evt) => {
-              evt.stopPropagation();
-            }}
-          >
-            {viewerCardIsSelected ? (
-              <FaBookmark aria-hidden="true" focusable="false" />
-            ) : (
-              <FaRegBookmark aria-hidden="true" focusable="false" />
-            )}
-          </button>
-        </div>
-      ) : null}
+            onDismiss={dismissViewer}
+            onTransitionEnd={handleViewerTransitionEnd}
+          />
+        ) : null}
+      </BackgroundBlurPortal>
       <ShopHeader scrollHomeToTop renderRight={renderHeaderRight} />
       <main className="card-nft2-unrevealed-gallery" aria-label="Unrevealed cards">
         <InventoryGrid

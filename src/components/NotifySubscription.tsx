@@ -29,6 +29,7 @@ export function NotifySubscription({
       onClose={close}
       className="compact-modal notify-modal"
       overlayClassName="notify-modal-overlay"
+      blurBackground
       showCloseButton={false}
       suspended={suspended}
     >

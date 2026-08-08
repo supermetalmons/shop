@@ -430,7 +430,11 @@ export default function ClearCardLightingPanel({
   );
 
   return (
-    <aside className={`lighting-lab${open ? ' lighting-lab--open' : ''}`} aria-label="Lighting lab">
+    <aside
+      className={`lighting-lab${open ? ' lighting-lab--open' : ''}`}
+      aria-label="Lighting lab"
+      data-frosted-surface=""
+    >
       <button
         type="button"
         className="lighting-lab__header"

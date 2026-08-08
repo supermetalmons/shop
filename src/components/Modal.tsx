@@ -1,6 +1,9 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from 'react';
 import { acquireBodyScrollLock, releaseBodyScrollLock } from '../lib/bodyScrollLock';
-import { canRestoreFocus, focusFirstControl, trapTabFocusWithin } from '../lib/focusTrap';
+import { DEFAULT_BACKGROUND_BLUR_RADIUS } from '../lib/backgroundBlur';
+import { canRestoreFocus } from '../lib/focusTrap';
+import { BodyPortal, useBackgroundBlur } from './BackgroundBlurLayer';
+import { useModalFocusScope } from './ModalFocusScope';
 
 interface ModalProps {
   open: boolean;
@@ -12,6 +15,8 @@ interface ModalProps {
   overlayClassName?: string;
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
+  blurBackground?: boolean;
+  blurRadius?: number;
   suspended?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
@@ -27,6 +32,8 @@ export function Modal({
   overlayClassName,
   showCloseButton = true,
   closeOnEscape = true,
+  blurBackground = false,
+  blurRadius = DEFAULT_BACKGROUND_BLUR_RADIUS,
   suspended = false,
   returnFocusRef,
   children,
@@ -37,9 +44,12 @@ export function Modal({
   const openRef = useRef(open);
   const wasOpenRef = useRef(false);
   const lastOpenSuspendedRef = useRef(false);
-  const activeRef = useRef(open && !suspended);
   openRef.current = open;
-  activeRef.current = open && !suspended;
+  useBackgroundBlur({
+    open: blurBackground && open && !suspended,
+    active: blurBackground && open && !suspended,
+    radius: blurRadius,
+  });
 
   useEffect(() => {
     const rememberFocusedElement = (event: FocusEvent) => {
@@ -82,88 +92,62 @@ export function Modal({
     wasOpenRef.current = open;
   }, [open, returnFocusRef, suspended]);
 
-  useLayoutEffect(() => {
-    if (!open || suspended) return;
-    const dialog = dialogRef.current;
-    if (!dialog || dialog.contains(document.activeElement)) return;
-    focusFirstControl(dialog);
-  }, [open, suspended]);
-
   useEffect(() => {
     if (!open) return;
     acquireBodyScrollLock();
     return () => releaseBodyScrollLock();
   }, [open]);
 
-  useEffect(() => {
-    if (!open || suspended) return;
-    const onKeyDown = (evt: KeyboardEvent) => {
-      if (!activeRef.current) return;
-      const dialog = dialogRef.current;
-      if (!dialog || dialog.closest('[inert]')) return;
-      if (evt.key === 'Tab' && dialog) {
-        trapTabFocusWithin(dialog, evt);
-        return;
-      }
-      if (evt.key === 'Escape' && closeOnEscape) {
-        evt.preventDefault();
-        onClose();
-      }
-    };
-    const onFocusIn = (evt: FocusEvent) => {
-      if (!activeRef.current) return;
-      const dialog = dialogRef.current;
-      if (!dialog || dialog.closest('[inert]') || dialog.contains(evt.target as Node | null)) return;
-      focusFirstControl(dialog);
-    };
-
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('focusin', onFocusIn);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('focusin', onFocusIn);
-    };
-  }, [closeOnEscape, onClose, open, suspended]);
+  useModalFocusScope({
+    dialogRef,
+    enabled: open,
+    onEscape: closeOnEscape ? onClose : undefined,
+    suspended,
+  });
 
   if (!open) return null;
 
   return (
-    <div
-      className={`modal-overlay${overlayClassName ? ` ${overlayClassName}` : ''}`}
-      role="presentation"
-      inert={suspended || undefined}
-      onClick={(evt) => {
-        if (!suspended && evt.target === evt.currentTarget) onClose();
-      }}
-    >
+    <BodyPortal>
       <div
-        ref={dialogRef}
-        className={`modal card${className ? ` ${className}` : ''}`}
-        role="dialog"
-        aria-modal={suspended ? undefined : 'true'}
-        aria-hidden={suspended || undefined}
+        className={`modal-overlay${overlayClassName ? ` ${overlayClassName}` : ''}${
+          suspended ? ' modal-overlay--suspended' : ''
+        }`}
+        role="presentation"
         inert={suspended || undefined}
-        aria-label={ariaLabel || title}
-        data-overlay-scroll-allow=""
-        tabIndex={-1}
+        onClick={(evt) => {
+          if (!suspended && evt.target === evt.currentTarget) onClose();
+        }}
       >
-        <div className="modal__head">
-          <div className="modal__title">
-            {titleAbove ? (
-              <div className="modal__title-above" aria-hidden="true">
-                {titleAbove}
-              </div>
+        <div
+          ref={dialogRef}
+          className={`modal card${className ? ` ${className}` : ''}`}
+          role="dialog"
+          aria-modal={suspended ? undefined : 'true'}
+          aria-hidden={suspended || undefined}
+          inert={suspended || undefined}
+          aria-label={ariaLabel || title}
+          data-overlay-scroll-allow=""
+          tabIndex={-1}
+        >
+          <div className="modal__head">
+            <div className="modal__title">
+              {titleAbove ? (
+                <div className="modal__title-above" aria-hidden="true">
+                  {titleAbove}
+                </div>
+              ) : null}
+              <div className="card__title">{title}</div>
+            </div>
+            {showCloseButton ? (
+              <button type="button" className="ghost" onClick={onClose}>
+                Close
+              </button>
             ) : null}
-            <div className="card__title">{title}</div>
           </div>
-          {showCloseButton ? (
-            <button type="button" className="ghost" onClick={onClose}>
-              Close
-            </button>
-          ) : null}
+          {children}
         </div>
-        {children}
       </div>
-    </div>
+    </BodyPortal>
   );
 }

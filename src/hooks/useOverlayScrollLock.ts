@@ -19,10 +19,29 @@ function eventAllowsNestedOverlayScroll(evt: Event): boolean {
 
 type UseOverlayScrollLockOptions = {
   active: boolean;
+  escapeEnabled?: boolean;
   onEscape?: () => void;
 };
 
-export function useOverlayScrollLock({ active, onEscape }: UseOverlayScrollLockOptions) {
+export function shouldHandleOverlayEscape({
+  defaultPrevented,
+  escapeEnabled,
+  hasEscapeHandler,
+  key,
+}: {
+  defaultPrevented: boolean;
+  escapeEnabled: boolean;
+  hasEscapeHandler: boolean;
+  key: string;
+}): boolean {
+  return key === 'Escape' && !defaultPrevented && escapeEnabled && hasEscapeHandler;
+}
+
+export function useOverlayScrollLock({
+  active,
+  escapeEnabled = true,
+  onEscape,
+}: UseOverlayScrollLockOptions) {
   useEffect(() => {
     if (!active) return undefined;
 
@@ -31,7 +50,16 @@ export function useOverlayScrollLock({ active, onEscape }: UseOverlayScrollLockO
         evt.preventDefault();
         return;
       }
-      if (evt.key !== 'Escape') return;
+      if (
+        !shouldHandleOverlayEscape({
+          defaultPrevented: evt.defaultPrevented,
+          escapeEnabled,
+          hasEscapeHandler: Boolean(onEscape),
+          key: evt.key,
+        })
+      ) {
+        return;
+      }
       evt.preventDefault();
       onEscape?.();
     };
@@ -63,5 +91,5 @@ export function useOverlayScrollLock({ active, onEscape }: UseOverlayScrollLockO
       html.style.overflow = previousHtmlOverflow;
       releaseBodyScrollLock();
     };
-  }, [active, onEscape]);
+  }, [active, escapeEnabled, onEscape]);
 }

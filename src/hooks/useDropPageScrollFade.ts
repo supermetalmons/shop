@@ -1,8 +1,8 @@
-import { useLayoutEffect, type RefObject } from 'react';
+import { useLayoutEffect } from 'react';
 
 type DropPageScrollFadeOptions = {
   active: boolean;
-  pageRef: RefObject<HTMLElement | null>;
+  target: HTMLElement | null;
 };
 
 const SCROLL_FADE_RANGE = 220;
@@ -23,20 +23,24 @@ function formatCssNumber(value: number): string {
   return value.toFixed(CSS_NUMBER_PRECISION).replace(/\.?0+$/, '');
 }
 
-export function useDropPageScrollFade({ active, pageRef }: DropPageScrollFadeOptions): void {
+export function useDropPageScrollFade({ active, target }: DropPageScrollFadeOptions): void {
   useLayoutEffect(() => {
-    const page = pageRef.current;
-    if (!active || !page || typeof window === 'undefined') {
-      page?.style.removeProperty('--drop-scroll-progress');
-      return;
+    if (typeof window === 'undefined' || !target) return undefined;
+    if (!active) {
+      target.style.removeProperty('--drop-scroll-progress');
+      return undefined;
     }
 
     let frameId = 0;
+    let lastFormattedProgress: string | undefined;
 
     const applyProgress = () => {
       frameId = 0;
       const progress = smoothStep((window.scrollY || 0) / SCROLL_FADE_RANGE);
-      page.style.setProperty('--drop-scroll-progress', formatCssNumber(progress));
+      const formattedProgress = formatCssNumber(progress);
+      if (formattedProgress === lastFormattedProgress) return;
+      lastFormattedProgress = formattedProgress;
+      target.style.setProperty('--drop-scroll-progress', formattedProgress);
     };
 
     const requestApplyProgress = () => {
@@ -56,7 +60,7 @@ export function useDropPageScrollFade({ active, pageRef }: DropPageScrollFadeOpt
       window.removeEventListener('resize', requestApplyProgress);
       window.visualViewport?.removeEventListener('scroll', requestApplyProgress);
       window.visualViewport?.removeEventListener('resize', requestApplyProgress);
-      page.style.removeProperty('--drop-scroll-progress');
+      target.style.removeProperty('--drop-scroll-progress');
     };
-  }, [active, pageRef]);
+  }, [active, target]);
 }

@@ -3,7 +3,6 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -27,6 +26,8 @@ import type {
   ClearCardThreeViewerHandle,
   ViewerStatus,
 } from './ClearCardThreeViewer';
+import { ModalFocusScope } from './components/ModalFocusScope';
+import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import './clearCardWip.css';
 
 const ClearCardThreeViewer = lazy(() => import('./ClearCardThreeViewer'));
@@ -63,20 +64,6 @@ function downloadSnapshotBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function isWipShortcutTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tagName = target.tagName;
-  return (
-    tagName === 'INPUT' ||
-    tagName === 'TEXTAREA' ||
-    tagName === 'SELECT' ||
-    tagName === 'BUTTON' ||
-    tagName === 'SUMMARY' ||
-    tagName === 'A'
-  );
-}
-
 export default function ClearCardWipApp() {
   const [status, setStatus] = useState<ViewerStatus>('loading');
   const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
@@ -91,7 +78,6 @@ export default function ClearCardWipApp() {
   const [lightingPresetId, setLightingPresetId] = useState<
     ClearCardLightingPresetId | 'custom'
   >(CLEAR_CARD_WIP_LIGHTING_PRESET_ID);
-  const pageRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const previewViewModeRef = useRef({ unrestrictedMovement: false, axisLockedOrbit: false });
@@ -202,10 +188,6 @@ export default function ClearCardWipApp() {
     void soundPlayer.preloadSound(CLEAR_CARDS_BREAK_SOUND_URL).catch(() => undefined);
   }, [status]);
 
-  useLayoutEffect(() => {
-    pageRef.current?.focus({ preventScroll: true });
-  }, []);
-
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
@@ -213,7 +195,7 @@ export default function ClearCardWipApp() {
       if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
         return;
       }
-      if (isWipShortcutTarget(event.target)) {
+      if (isKeyboardShortcutTarget(event.target)) {
         return;
       }
       if (event.code === 'KeyR' || event.key === 'r' || event.key === 'R') {
@@ -236,16 +218,15 @@ export default function ClearCardWipApp() {
   const ready = status === 'ready';
 
   return (
-    <div
-      ref={pageRef}
+    <ModalFocusScope
       className="clear-card-wip"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Clear card sample"
-      tabIndex={-1}
+      ariaLabel="Clear card sample"
+      focusTarget="scope"
+      onEscape={handleClose}
     >
       <div className="clear-card-wip__backdrop" aria-hidden="true" />
       <div
+        id="clear-card-wip-blur-source"
         className={`clear-card-wip__stage${
           upcomingDropPreview ? ' clear-card-wip__stage--upcoming-drop' : ''
         }`}
@@ -330,6 +311,6 @@ export default function ClearCardWipApp() {
       >
         Reset
       </button>
-    </div>
+    </ModalFocusScope>
   );
 }
