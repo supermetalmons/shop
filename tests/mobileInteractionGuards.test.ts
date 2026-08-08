@@ -44,6 +44,7 @@ test('mobile touchstart guard allows the first touch', () => {
     currentTime: 1,
     isMobile: true,
     lastTouchStartTime: null,
+    sameTarget: true,
   });
 
   assert.equal(result.shouldPrevent, false);
@@ -55,10 +56,23 @@ test('mobile touchstart guard prevents rapid repeated touchstarts without advanc
     currentTime: 1 + MIN_TIME_BETWEEN_TOUCHSTARTS - 1,
     isMobile: true,
     lastTouchStartTime: 1,
+    sameTarget: true,
   });
 
   assert.equal(result.shouldPrevent, true);
   assert.equal(result.nextLastTouchStartTime, 1);
+});
+
+test('mobile touchstart guard allows rapid touches on different controls', () => {
+  const result = getTouchstartGuardResult({
+    currentTime: 1 + MIN_TIME_BETWEEN_TOUCHSTARTS - 1,
+    isMobile: true,
+    lastTouchStartTime: 1,
+    sameTarget: false,
+  });
+
+  assert.equal(result.shouldPrevent, false);
+  assert.equal(result.nextLastTouchStartTime, 1 + MIN_TIME_BETWEEN_TOUCHSTARTS - 1);
 });
 
 test('mobile touchstart guard allows touchstarts after the suppression window', () => {
@@ -66,6 +80,7 @@ test('mobile touchstart guard allows touchstarts after the suppression window', 
     currentTime: 1 + MIN_TIME_BETWEEN_TOUCHSTARTS,
     isMobile: true,
     lastTouchStartTime: 1,
+    sameTarget: true,
   });
 
   assert.equal(result.shouldPrevent, false);
@@ -77,6 +92,7 @@ test('touchstart guard is a no-op for non-mobile targets', () => {
     currentTime: 2,
     isMobile: false,
     lastTouchStartTime: 1,
+    sameTarget: true,
   });
 
   assert.equal(result.shouldPrevent, false);

@@ -173,6 +173,13 @@ test('background provider preserves header, page, and trailing control tab order
   assert.ok(trailingPortal > pageStage);
 });
 
+test('background portal hosts do not create viewport-sized hit-testing boxes', () => {
+  const portalRule = cssRule(source('../src/styles.css'), '.background-blur-layer__portals');
+
+  assert.match(portalRule, /display: contents/);
+  assert.doesNotMatch(portalRule, /position: fixed|inset:|pointer-events:/);
+});
+
 test('focus fallback skips non-tabbable and hidden controls', () => {
   let focused = '';
   let focusableSelector = '';
@@ -523,7 +530,8 @@ test('frosted surfaces use native backdrop filters without live element capture'
 test('global foreground layers have deterministic stacking', () => {
   const styles = source('../src/styles.css');
   const orderedLayers = [
-    cssZIndex(styles, '.background-blur-layer__portals'),
+    cssZIndex(styles, 'header.top--fixed'),
+    cssZIndex(styles, '.selection-panel'),
     cssZIndex(styles, '.fulfillment-export-progress'),
     cssZIndex(styles, '.modal-overlay--suspended'),
     cssZIndex(styles, '.modal-overlay'),
@@ -537,7 +545,7 @@ test('global foreground layers have deterministic stacking', () => {
     cssZIndex(styles, 'body .wallet-adapter-modal'),
   ];
 
-  assert.deepEqual(orderedLayers, [900, 950, 990, 1000, 1100, 1110, 1200, 1210, 1300]);
+  assert.deepEqual(orderedLayers, [900, 900, 950, 990, 1000, 1100, 1110, 1200, 1210, 1300]);
   assert.match(cssRule(styles, '.modal-overlay--suspended'), /filter: blur\(18px\)/);
   assert.ok(
     styles.indexOf('.modal-overlay.receipt-transfer-modal-overlay.modal-overlay--suspended') >

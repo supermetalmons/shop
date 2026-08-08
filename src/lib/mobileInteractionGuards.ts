@@ -5,6 +5,7 @@ type TouchstartGuardInput = {
   currentTime: number;
   isMobile: boolean;
   lastTouchStartTime: number | null;
+  sameTarget: boolean;
 };
 
 type TouchstartPreventableEvent = {
@@ -69,6 +70,7 @@ export function getTouchstartGuardResult({
   currentTime,
   isMobile,
   lastTouchStartTime,
+  sameTarget,
 }: TouchstartGuardInput): TouchstartGuardResult {
   if (!isMobile || lastTouchStartTime === null) {
     return {
@@ -77,7 +79,7 @@ export function getTouchstartGuardResult({
     };
   }
 
-  if (currentTime - lastTouchStartTime < MIN_TIME_BETWEEN_TOUCHSTARTS) {
+  if (sameTarget && currentTime - lastTouchStartTime < MIN_TIME_BETWEEN_TOUCHSTARTS) {
     return {
       shouldPrevent: true,
       nextLastTouchStartTime: lastTouchStartTime,
@@ -92,17 +94,28 @@ export function getTouchstartGuardResult({
 
 let installed = false;
 let lastTouchStartTime: number | null = null;
+let lastTouchStartTarget: EventTarget | null = null;
+
+function mobileTouchGuardTarget(target: EventTarget | null | undefined): EventTarget | null {
+  if (!(target instanceof Element)) return target ?? null;
+  return target.closest('a[href], button, [role="button"], summary') ?? target;
+}
 
 function preventTouchstartIfNeeded(event: TouchstartPreventableEvent): boolean {
   if (!isMobileBrowser()) return false;
   if (isEditableMobileInteractionTarget(event.target ?? null)) return false;
 
+  const target = mobileTouchGuardTarget(event.target);
   const result = getTouchstartGuardResult({
     currentTime: event.timeStamp,
     isMobile: true,
     lastTouchStartTime,
+    sameTarget: target === lastTouchStartTarget,
   });
   lastTouchStartTime = result.nextLastTouchStartTime;
+  if (!result.shouldPrevent) {
+    lastTouchStartTarget = target;
+  }
 
   if (result.shouldPrevent) {
     event.preventDefault();
@@ -169,6 +182,7 @@ export function installMobileInteractionGuards(): boolean {
 
   installed = true;
   lastTouchStartTime = null;
+  lastTouchStartTarget = null;
 
   document.addEventListener(
     'touchstart',

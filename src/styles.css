@@ -125,14 +125,7 @@ body.wip-scroll-lock #root {
 }
 
 .background-blur-layer__portals {
-  position: fixed;
-  inset: 0;
-  z-index: 900;
-  pointer-events: none;
-}
-
-.background-blur-layer__portals > * {
-  pointer-events: auto;
+  display: contents;
 }
 
 .background-blur-layer--open {
