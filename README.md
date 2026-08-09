@@ -56,6 +56,11 @@ select a preview-only upload rather than the prior production deployment. The
 Amplify app and its CloudFront DNS targets were retired after the migration, so
 subsequent application rollbacks must use an explicit Worker version.
 
+For a coordinated application and Firebase rollback, restore the frontend Worker
+before deploying older Functions or Firestore rules. A newer frontend can depend
+on backend authentication and read contracts that older Firebase releases do not
+provide.
+
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `src/App.tsx` (`ADDRESS_ENCRYPTION_PUBLIC_KEY`):
   ```bash
@@ -67,30 +72,12 @@ subsequent application rollbacks must use an explicit Worker version.
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
 - Deploy from the repo root:
-  - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, verifies the production shipment projection, and only then deploys Firestore rules in a separate Firebase CLI invocation.
+  - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, and then deploys Firestore rules in a separate Firebase CLI invocation.
   - `npm run deploy:functions` deploys Functions only to `mons-shop`.
-  - `npm run deploy:profile-read-model-rules` runs the Firestore Emulator rules suite and production shipment verification before deploying owner-only rules.
+- Verify the production profile shipment projection with `npm run verify:profile-shipments`. The command is read-only, runs independently of deployment, and exits nonzero if it detects drift.
+  - Application Default Credentials must be authorized for `mons-shop`.
+  - If the combined source and projection collections exceed 20,000 documents, pass `--max-audit-documents <count>` up to 50,000 after confirming the expected collection size.
 - Java is required for every rules deployment because `npm run test:firestore-rules` fails closed when the Firestore Emulator cannot run.
-- Production shipment audit, repair, and verification use the Firebase Admin SDK and require Application Default Credentials authorized for `mons-shop`. For a local operator, configure them with `gcloud auth application-default login` before running those commands.
-
-### Initial profile read-model rollout
-
-Run the migration in this order from the repo root:
-
-If the combined source-plus-destination audit is expected to exceed 20,000 documents, export `PROFILE_SHIPMENTS_MAX_AUDIT_DOCUMENTS` to a reviewed value from 1 to 50,000 before starting. Every audit, repair, verification, and rules-deployment gate inherits it; `--max-audit-documents` can override it for one direct backfill command.
-
-1. Deploy the compatible callables and shipment projection trigger with `npm run deploy:profile-read-model-functions`.
-2. Confirm `projectDeliveryOrderToProfileShipment` deployed successfully and has no trigger errors in the Firebase Functions logs.
-3. Run the read-only production audit with `npm run backfill:profile-shipments -- --project mons-shop`. The audit fails closed above 20,000 total source-plus-destination documents; after confirming the expected collection size, raise the ceiling explicitly with `--max-audit-documents` up to 50,000.
-4. Repair drift explicitly with `npm run backfill:profile-shipments -- --project mons-shop --apply --confirm-project mons-shop --confirm-trigger-deployed`.
-5. Run the independent read-only gate with `npm run verify:profile-shipments` and require zero drift.
-6. Deploy the owner-only rules with `npm run deploy:profile-read-model-rules`; this repeats the emulator suite and production verification immediately before the rules deployment.
-7. Upload and smoke-test the frontend candidate with `npm run deploy -- preview --token-file /path/to/cloudflare-token`.
-8. After wallet authentication, profile shipments, and post-Stripe recovery succeed in preview, deploy the frontend with `npm run deploy -- production --token-file /path/to/cloudflare-token`.
-
-No deployment script runs the shipment repair automatically. If production verification fails, leave the compatible Functions deployed, investigate the projection drift, and do not deploy the owner-only rules.
-
-The old frontend is compatible with the new Functions and rules. The new frontend must not run against old Functions or rules: it depends on session-mode authentication, the explicit wallet-global recovery response, and direct owner-only profile reads. For rollback, restore the previous frontend Worker version first. Roll back Functions or rules only afterward if that remains necessary; never leave the new frontend live against the old backend or rules.
 
 ### Function env + secrets
 - `HELIUS_API_KEY` (env/runtime config)

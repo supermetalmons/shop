@@ -178,7 +178,7 @@ export type ProfileShipmentTarget = {
   data: ProfileShipment;
 };
 
-export type ProfileShipmentInvalidSourceReason =
+type ProfileShipmentInvalidSourceReason =
   | 'invalid_path'
   | 'invalid_owner'
   | 'invalid_summary'
@@ -253,11 +253,6 @@ export type ProfileShipmentSyncPlan = {
   upsert: ProfileShipmentTarget | null;
 };
 
-export type ProfileShipmentSyncResult = {
-  deletes: number;
-  upserts: number;
-};
-
 export function profileShipmentMatchesProjection(stored: unknown, expected: ProfileShipment): boolean {
   return isDeepStrictEqual(stored, expected);
 }
@@ -294,11 +289,11 @@ export function planConvergentProfileShipmentSync(params: {
   };
 }
 
-export async function applyProfileShipmentSyncPlanWithResult(
+export async function applyProfileShipmentSyncPlan(
   db: Pick<Firestore, 'doc'>,
   tx: Pick<Transaction, 'getAll' | 'delete' | 'set'>,
   plan: ProfileShipmentSyncPlan,
-): Promise<ProfileShipmentSyncResult> {
+): Promise<void> {
   const destinationRefsByPath = new Map<string, ReturnType<Firestore['doc']>>();
   for (const target of plan.deletes) {
     const ref = db.doc(`profiles/${target.ownerWallet}/shipments/${target.documentId}`);
@@ -317,32 +312,19 @@ export async function applyProfileShipmentSyncPlanWithResult(
     destinationSnapshots.map((snapshot) => [snapshot.ref.path, snapshot]),
   );
 
-  let deletes = 0;
   for (const target of plan.deletes) {
     const path = `profiles/${target.ownerWallet}/shipments/${target.documentId}`;
     if (snapshotsByPath.get(path)?.exists) {
       tx.delete(db.doc(path));
-      deletes += 1;
     }
   }
-  let upserts = 0;
   if (plan.upsert) {
     const path = `profiles/${plan.upsert.ownerWallet}/shipments/${plan.upsert.documentId}`;
     const existing = snapshotsByPath.get(path);
     if (!existing?.exists || !profileShipmentMatchesProjection(existing.data(), plan.upsert.data)) {
       tx.set(db.doc(path), plan.upsert.data);
-      upserts = 1;
     }
   }
-  return { deletes, upserts };
-}
-
-export async function applyProfileShipmentSyncPlan(
-  db: Pick<Firestore, 'doc'>,
-  tx: Pick<Transaction, 'getAll' | 'delete' | 'set'>,
-  plan: ProfileShipmentSyncPlan,
-): Promise<void> {
-  await applyProfileShipmentSyncPlanWithResult(db, tx, plan);
 }
 
 export function deliveryOrderSummaryFromProfileShipment(value: unknown): DeliveryOrderSummary | null {

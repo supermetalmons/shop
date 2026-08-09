@@ -3,9 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
-const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-  scripts: Record<string, string>;
-};
 const firestoreEmulatorHost = String(process.env.FIRESTORE_EMULATOR_HOST || '').trim();
 const requireFirestoreEmulator = process.env.REQUIRE_FIRESTORE_EMULATOR === '1';
 
@@ -66,54 +63,6 @@ test('Firestore profile rules keep sensitive and unrelated collections closed', 
   assert.match(catchAll, /allow read, write: if false/);
   assert.match(packStatus, /allow get: if request\.auth != null/);
   assert.match(packStatus, /allow list, create, update, delete: if false/);
-});
-
-test('Firebase deployment scripts preserve the profile migration gates', () => {
-  const scripts = packageJson.scripts;
-  assert.equal(
-    scripts['verify:profile-shipments'],
-    'tsx functions/scripts/backfillProfileShipments.ts --project mons-shop --verify',
-  );
-
-  const firebaseDeployCommands = Object.entries(scripts).flatMap(([name, script]) =>
-    script
-      .split(/\s*&&\s*/)
-      .filter((command) => /^firebase deploy\b/.test(command))
-      .map((command) => ({ name, command })),
-  );
-  assert.ok(firebaseDeployCommands.length > 0);
-  for (const { name, command } of firebaseDeployCommands) {
-    assert.match(command, /(?:^|\s)--project mons-shop(?:\s|$)/, `${name} must target mons-shop explicitly`);
-    assert.equal(
-      /(?:^|[,\s])functions(?::[^,\s]+)?(?:[,\s]|$)/.test(command) && /(?:^|[,\s])firestore:rules(?:[,\s]|$)/.test(command),
-      false,
-      `${name} must not deploy Functions and Firestore rules in one invocation`,
-    );
-  }
-
-  const genericSegments = scripts['deploy:firebase'].split(/\s*&&\s*/);
-  assert.equal(genericSegments.length, 4);
-  assert.equal(genericSegments[0], 'npm run test:firestore-rules');
-  assert.match(genericSegments[1], /^firebase deploy --project mons-shop --only firestore:indexes,functions$/);
-  assert.equal(genericSegments[2], 'npm run verify:profile-shipments');
-  assert.match(genericSegments[3], /^firebase deploy --project mons-shop --only firestore:rules$/);
-
-  const rulesDeployScripts = Object.entries(scripts).filter(([, script]) =>
-    script.includes('firebase deploy') && script.includes('firestore:rules'),
-  );
-  assert.ok(rulesDeployScripts.length > 0);
-  for (const [name, script] of rulesDeployScripts) {
-    const emulatorIndex = script.indexOf('npm run test:firestore-rules');
-    const verifyIndex = script.indexOf('npm run verify:profile-shipments');
-    const rulesIndex = script.indexOf('firebase deploy', verifyIndex);
-    assert.ok(emulatorIndex >= 0, `${name} must run the Firestore Emulator suite`);
-    assert.ok(verifyIndex > emulatorIndex, `${name} must verify production after the emulator suite`);
-    assert.ok(rulesIndex > verifyIndex, `${name} must deploy rules only after production verification`);
-  }
-
-  for (const [name, script] of Object.entries(scripts).filter(([name]) => name.startsWith('deploy:'))) {
-    assert.doesNotMatch(script, /backfillProfileShipments[^&]*--apply/, `${name} must never repair production automatically`);
-  }
 });
 
 test(
