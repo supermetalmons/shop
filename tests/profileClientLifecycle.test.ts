@@ -389,7 +389,7 @@ test('a rejected inventory refresh keeps its matching key pending for retry', as
   assert.equal(refreshRef.current, null);
 });
 
-test('shipment content is ready while receipts remain hidden during inventory recovery', () => {
+test('shipment content waits for the initial inventory response', () => {
   const recovered = { owner: 'wallet-a', key: 'checkout-2' };
   const inventoryRecovery = beginKeyedInventoryRecovery(null, recovered, 20);
   assert.equal(
@@ -404,6 +404,17 @@ test('shipment content is ready while receipts remain hidden during inventory re
     profileSectionReadiness({
       shipmentCount: 1,
       shipmentsEmptyStateReady: false,
+      inventoryInitialResponseReady: false,
+      receiptItemCount: 0,
+      inventoryEmptyStateVisible: false,
+    }),
+    { shipments: false, receipts: false },
+  );
+  assert.deepEqual(
+    profileSectionReadiness({
+      shipmentCount: 1,
+      shipmentsEmptyStateReady: false,
+      inventoryInitialResponseReady: true,
       receiptItemCount: 0,
       inventoryEmptyStateVisible: false,
     }),
@@ -412,7 +423,31 @@ test('shipment content is ready while receipts remain hidden during inventory re
   assert.deepEqual(
     profileSectionReadiness({
       shipmentCount: 0,
+      shipmentsEmptyStateReady: true,
+      inventoryInitialResponseReady: false,
+      receiptItemCount: 0,
+      inventoryEmptyStateVisible: false,
+    }),
+    { shipments: false, receipts: false },
+  );
+  assert.deepEqual(
+    profileSectionReadiness({
+      shipmentCount: 0,
+      shipmentsEmptyStateReady: true,
+      inventoryInitialResponseReady: true,
+      receiptItemCount: 0,
+      inventoryEmptyStateVisible: false,
+    }),
+    { shipments: true, receipts: false },
+  );
+});
+
+test('receipt readiness remains independent of the initial inventory response', () => {
+  assert.deepEqual(
+    profileSectionReadiness({
+      shipmentCount: 0,
       shipmentsEmptyStateReady: false,
+      inventoryInitialResponseReady: false,
       receiptItemCount: 1,
       inventoryEmptyStateVisible: false,
     }),
@@ -485,6 +520,7 @@ test('retained shipment failures show a local warning only when rows remain', ()
     profileSectionReadiness({
       shipmentCount: 1,
       shipmentsEmptyStateReady: true,
+      inventoryInitialResponseReady: true,
       receiptItemCount: 1,
       inventoryEmptyStateVisible: false,
     }),

@@ -4180,6 +4180,7 @@ function App({
     : walletIdleReady && !stripeCheckoutProfileRecoveryPending
       ? 'visible'
       : 'hidden';
+  const inventoryInitialResponseReady = !owner || inventoryFetched;
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
     const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
@@ -6428,6 +6429,7 @@ function App({
   const profileSectionsReady = profileSectionReadiness({
     shipmentCount: deliveryOrders.length,
     shipmentsEmptyStateReady,
+    inventoryInitialResponseReady,
     receiptItemCount: receiptItems.length,
     inventoryEmptyStateVisible: inventoryEmptyStateVisibility === 'visible',
   });

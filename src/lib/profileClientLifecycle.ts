@@ -234,11 +234,14 @@ export function keyedInventoryRecoveryPendingForOwner(args: {
 export function profileSectionReadiness(args: {
   shipmentCount: number;
   shipmentsEmptyStateReady: boolean;
+  inventoryInitialResponseReady: boolean;
   receiptItemCount: number;
   inventoryEmptyStateVisible: boolean;
 }): { shipments: boolean; receipts: boolean } {
   return {
-    shipments: args.shipmentCount > 0 || args.shipmentsEmptyStateReady,
+    shipments:
+      args.inventoryInitialResponseReady &&
+      (args.shipmentCount > 0 || args.shipmentsEmptyStateReady),
     receipts: args.receiptItemCount > 0 || args.inventoryEmptyStateVisible,
   };
 }
