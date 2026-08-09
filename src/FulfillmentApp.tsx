@@ -1085,7 +1085,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
-  const { profile, signIn, loading: authLoading, error: authError } = useSolanaAuth();
+  const { sessionWallet, token, signIn, loading: authLoading, error: authError } = useSolanaAuth();
   const walletAddress = publicKey?.toBase58() || '';
   const allowedDropIds = useMemo(
     () => listAllowedFulfillmentDropIds(walletAddress, allDrops.map((drop) => drop.dropId)),
@@ -1112,7 +1112,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   );
   const duplicateDropContent = useMemo(() => (duplicateDrop ? resolveDropContent(duplicateDrop) : null), [duplicateDrop]);
   const duplicateFigureMediaBase = duplicateDropContent?.figures.fulfillmentMediaBaseUrl;
-  const signedIn = Boolean(profile && profile.wallet === walletAddress);
+  const signedIn = Boolean(token && sessionWallet && sessionWallet === walletAddress);
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
   const canAdminEditFulfillmentAddress = signedIn && hasFulfillmentAddressAdminAccess(walletAddress);
@@ -1221,10 +1221,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       authLoadingSeenRef.current = true;
       return;
     }
-    if (profile?.wallet === walletAddress || authLoadingSeenRef.current) {
+    if (sessionWallet === walletAddress || authLoadingSeenRef.current) {
       setAuthReady(true);
     }
-  }, [authLoading, profile?.wallet, walletAddress]);
+  }, [authLoading, sessionWallet, walletAddress]);
 
   useEffect(() => {
     if (!walletAddress) {

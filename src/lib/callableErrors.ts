@@ -1,4 +1,8 @@
-import { normalizeCallableErrorCode } from '../../functions/src/shared/callableErrorCode';
+import {
+  STRIPE_OWNER_MERGE_LIMIT_ERROR_REASON,
+  WALLET_SESSION_SUPERSEDED_ERROR_REASON,
+  normalizeCallableErrorCode,
+} from '../../functions/src/shared/callableErrorCode';
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -16,6 +20,14 @@ export function isRetryableCallableError(err: unknown): boolean {
   const anyErr = err as any;
   const code = typeof anyErr?.code === 'string' ? anyErr.code : '';
   const normalized = normalizeCallableErrorCode(code);
+  const reason = typeof anyErr?.details?.reason === 'string' ? anyErr.details.reason : '';
+
+  if (
+    reason === STRIPE_OWNER_MERGE_LIMIT_ERROR_REASON ||
+    reason === WALLET_SESSION_SUPERSEDED_ERROR_REASON
+  ) {
+    return false;
+  }
 
   if (
     normalized === 'unavailable' ||

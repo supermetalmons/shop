@@ -1,6 +1,6 @@
 import type { FulfillmentShipStationRate } from '../types';
 
-export const FULFILLMENT_SHIPSTATION_RECOMMENDED_RATE_COUNT = 3;
+const FULFILLMENT_SHIPSTATION_RECOMMENDED_RATE_COUNT = 3;
 
 function moneyKey(money: FulfillmentShipStationRate['totalAmount'] | undefined): string {
   return money ? `${money.currency}:${money.amount}` : '';

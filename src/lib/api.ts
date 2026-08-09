@@ -13,6 +13,8 @@ import {
   FulfillmentStatus,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
+  GetAdminProfileViewRequest,
+  GetAdminProfileViewResponse,
   GetFulfillmentShipStationLabelRequest,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesRequest,
@@ -31,6 +33,8 @@ import {
   PurchaseFulfillmentShipStationLabelResponse,
   RecoverDeliveryOrdersArgs,
   RecoverDeliveryOrdersResult,
+  ReconcileProfileStateRequest,
+  ReconcileProfileStateResponse,
   ShipStationPackageInput,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
@@ -83,6 +87,8 @@ import {
 export type {
   ListCardNft2UnrevealedCardsRequest,
   ListCardNft2UnrevealedCardsResponse,
+  ReconcileProfileStateRequest,
+  ReconcileProfileStateResponse,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
   SubscribeToNotificationsRequest,
@@ -1248,12 +1254,25 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
+  options: { responseMode: 'session' },
+): Promise<{ wallet: string }>;
+export async function solanaAuth(
+  wallet: string,
+  message: string,
+  signature: Uint8Array,
   options?: { mergeStripeDeliveryOrders?: boolean },
-): Promise<{ profile: Profile }> {
+): Promise<{ profile: Profile }>;
+export async function solanaAuth(
+  wallet: string,
+  message: string,
+  signature: Uint8Array,
+  options?: { responseMode?: 'session'; mergeStripeDeliveryOrders?: boolean },
+): Promise<{ wallet: string } | { profile: Profile }> {
   type SolanaAuthRequest = {
     wallet: string;
     message: string;
     signature: number[];
+    responseMode?: 'session';
     mergeStripeDeliveryOrders?: boolean;
   };
   const payload: SolanaAuthRequest = {
@@ -1261,29 +1280,30 @@ export async function solanaAuth(
     message,
     signature: Array.from(signature),
   };
+  if (options?.responseMode === 'session') {
+    payload.responseMode = 'session';
+  }
   if (options?.mergeStripeDeliveryOrders) {
     payload.mergeStripeDeliveryOrders = true;
   }
-  return callFunction<SolanaAuthRequest, { profile: Profile }>('solanaAuth', payload);
+  return callFunction<SolanaAuthRequest, { wallet: string } | { profile: Profile }>('solanaAuth', payload);
 }
 
-type GetProfileRequest = {
-  ownerWallet?: string;
-  mergeStripeDeliveryOrders?: boolean;
-};
-
-export async function getProfile(
-  ownerWallet?: string,
-  options?: { mergeStripeDeliveryOrders?: boolean },
-): Promise<{ profile: Profile }> {
-  const payload: GetProfileRequest = {};
-  if (typeof ownerWallet === 'string' && ownerWallet.trim()) {
-    payload.ownerWallet = ownerWallet;
-  }
-  if (options?.mergeStripeDeliveryOrders) {
+export async function reconcileProfileState(
+  options?: ReconcileProfileStateRequest,
+): Promise<ReconcileProfileStateResponse> {
+  const payload: ReconcileProfileStateRequest = {};
+  if (options?.mergeStripeDeliveryOrders === true) {
     payload.mergeStripeDeliveryOrders = true;
   }
-  return callFunction<GetProfileRequest, { profile: Profile }>('getProfile', payload);
+  if (typeof options?.includeDeliveryRecovery === 'boolean') {
+    payload.includeDeliveryRecovery = options.includeDeliveryRecovery;
+  }
+  return callFunction<ReconcileProfileStateRequest, ReconcileProfileStateResponse>('reconcileProfileState', payload);
+}
+
+export async function getAdminProfileView(ownerWallet: string): Promise<GetAdminProfileViewResponse> {
+  return callFunction<GetAdminProfileViewRequest, GetAdminProfileViewResponse>('getAdminProfileView', { ownerWallet });
 }
 
 export async function getAnonymousStripeDeliveryHistory(): Promise<{ orders: Profile['orders'] }> {

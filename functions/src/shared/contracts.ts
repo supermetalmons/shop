@@ -93,8 +93,17 @@ export type DeliveryOrderSummary = {
   fulfillmentUpdatedAt?: number;
 };
 
+export type ProfileShipment = DeliveryOrderSummary & {
+  sortAt: number;
+};
+
 export type DeliveryRecoveryState = {
   nextCheckAt?: number;
+};
+
+export type WalletDeliveryRecoveryState = {
+  remainingProcessing: number;
+  nextCheckAt: number | null;
 };
 
 export type Profile = {
@@ -102,6 +111,26 @@ export type Profile = {
   email?: string;
   orders?: DeliveryOrderSummary[];
   deliveryRecovery?: DeliveryRecoveryState;
+};
+
+export type ReconcileProfileStateRequest = {
+  mergeStripeDeliveryOrders?: boolean;
+  includeDeliveryRecovery?: boolean;
+};
+
+export type ReconcileProfileStateResponse = {
+  mergedStripeDeliveryOrders: number;
+  deliveryRecovery?: {
+    nextCheckAt: number;
+  };
+};
+
+export type GetAdminProfileViewRequest = {
+  ownerWallet: string;
+};
+
+export type GetAdminProfileViewResponse = {
+  profile: Profile;
 };
 
 export type IssueReceiptsResult = {
@@ -143,6 +172,7 @@ export type RecoverDeliveryOrdersResult = {
   recovered: number;
   remainingProcessing: number;
   nextCheckAt?: number;
+  walletRecovery: WalletDeliveryRecoveryState;
   results: RecoverDeliveryOrdersItemResult[];
 };
 

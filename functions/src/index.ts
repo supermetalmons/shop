@@ -183,7 +183,37 @@ import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from './orderEmailItems.js';
-import { mergeFirebaseStripeDeliveryOrdersToWalletInDb } from './deliveryOrderHistory.js';
+import {
+  classifyStripeOwnerMergeError,
+  mergeFirebaseStripeDeliveryOrdersToWalletInDb,
+} from './deliveryOrderHistory.js';
+import {
+  buildRecoverDeliveryOrdersResult,
+  buildWalletDeliveryRecoveryState,
+} from './deliveryRecovery.js';
+import {
+  DELIVERY_ORDER_SUMMARY_FIELDS,
+  applyProfileShipmentSyncPlan,
+  deliveryOrderSummaryFromProfileShipment,
+  dropIdFromDeliveryOrderPath,
+  planConvergentProfileShipmentSync,
+  resolveDeliveryOrderIdentity,
+  resolveDeliveryOrderDropId,
+  toDeliveryOrderSummaries,
+} from './profileShipments.js';
+import {
+  runLegacyGetProfileFlow,
+  runProfileStateReconciliationFlow,
+  runVerifiedSolanaAuthProfileFlow,
+} from './profileLifecycle.js';
+import {
+  WALLET_SESSION_COLLECTION,
+  WalletSessionWriteSupersededError,
+  establishVerifiedWalletSession,
+  readWalletSessionBaseline,
+  resolveWalletSessionBinding,
+  writeWalletSessionAndProfileIfCurrent,
+} from './walletSessions.js';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
@@ -220,10 +250,11 @@ import {
   type ListCardNft2UnrevealedCardsResponse,
 } from './cardNft2Unrevealed.js';
 import type {
-  DeliveryOrderItemSummary,
   DeliveryOrderSummary,
   DeliveryRecoveryOutcome,
   DeliveryRecoveryState,
+  GetAdminProfileViewResponse,
+  ReconcileProfileStateResponse,
   FulfillmentOrderAddress,
   FulfillmentOrderBox,
   FulfillmentOrderCardClaim,
@@ -232,6 +263,7 @@ import type {
   ShipStationMoney,
   RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
+  WalletDeliveryRecoveryState,
 } from './shared/contracts.js';
 import {
   dasAssetBoxId,
@@ -314,7 +346,10 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from './shared/solanaProgramAddresses.js';
-import { normalizeCallableErrorCode } from './shared/callableErrorCode.js';
+import {
+  WALLET_SESSION_SUPERSEDED_ERROR_REASON,
+  normalizeCallableErrorCode,
+} from './shared/callableErrorCode.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -395,7 +430,6 @@ function requireAuth(request: CallableReq<any>): string {
   return uid;
 }
 
-const WALLET_SESSION_COLLECTION = 'authSessions';
 const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
@@ -653,24 +687,19 @@ function normalizeWallet(wallet: string): string {
 async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const uid = requireAuth(request);
   const snap = await db.doc(`${WALLET_SESSION_COLLECTION}/${uid}`).get();
-  const data = snap.exists ? (snap.data() as any) : null;
-  const wallet = typeof data?.wallet === 'string' ? data.wallet : null;
-
-  // Backwards compatibility: if the caller is already authenticated as the wallet UID.
-  if (!wallet) {
-    try {
-      return { uid, wallet: normalizeWallet(uid) };
-    } catch {
-      throw new HttpsError('unauthenticated', 'Sign in with your wallet first.');
+  const resolution = resolveWalletSessionBinding({
+    uid,
+    sessionExists: snap.exists,
+    sessionData: snap.exists ? snap.data() : null,
+    nowMs: Date.now(),
+  });
+  if ('reason' in resolution) {
+    if (resolution.reason === 'expired') {
+      throw new HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
     }
+    throw new HttpsError('unauthenticated', 'Sign in with your wallet first.');
   }
-
-  const expiresAt = data?.expiresAt;
-  if (expiresAt && typeof expiresAt.toMillis === 'function' && expiresAt.toMillis() < Date.now()) {
-    throw new HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
-  }
-
-  return { uid, wallet: normalizeWallet(wallet) };
+  return { uid, wallet: resolution.wallet };
 }
 
 type ShipperReadyToShipNotificationConfig = {
@@ -5227,71 +5256,6 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
   },
 );
 
-function dropIdFromDeliveryOrderPath(path: string): string | null {
-  const parts = String(path || '').split('/');
-  if (parts.length !== 4) return null;
-  if (parts[0] !== 'drops' || parts[2] !== 'deliveryOrders') return null;
-  return normalizeDropIdMaybe(parts[1]);
-}
-
-function resolveDeliveryOrderDropId(order: any, docPath: string): string | null {
-  return normalizeDropIdMaybe(order?.dropId) || dropIdFromDeliveryOrderPath(docPath);
-}
-
-function toDeliveryOrderSummary(docId: string, order: any, docPath: string): DeliveryOrderSummary | null {
-  if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) return null;
-
-  const deliveryIdRaw = order?.deliveryId ?? docId;
-  const deliveryId = Number(deliveryIdRaw);
-  if (!Number.isFinite(deliveryId)) return null;
-  const dropId = resolveDeliveryOrderDropId(order, docPath);
-  if (!dropId) return null;
-
-  const itemsRaw = Array.isArray(order?.items) ? order.items : [];
-  const items = itemsRaw
-    .filter((item: any) => item && (item.kind === 'box' || item.kind === 'dude'))
-    .map((item: any) => ({
-      kind: item.kind as 'box' | 'dude',
-      refId: Math.floor(Number(item.refId)),
-    }))
-    .filter((item: DeliveryOrderItemSummary) => Number.isFinite(item.refId) && item.refId > 0);
-
-  return {
-    dropId,
-    deliveryId,
-    status: typeof order?.status === 'string' ? order.status : 'unknown',
-    stripeCheckoutSessionId: optionalTrimmedString(order?.stripeCheckoutSessionId),
-    createdAt: toMillisMaybe(order?.createdAt),
-    processingAt: toMillisMaybe(order?.processingAt),
-    processedAt: toMillisMaybe(order?.processedAt),
-    items,
-    fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
-    fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order?.fulfillmentTrackingCode),
-    fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
-  };
-}
-
-const DELIVERY_ORDER_SUMMARY_FIELDS = [
-  'dropId',
-  'deliveryId',
-  'source',
-  'status',
-  'stripeCheckoutSessionId',
-  'createdAt',
-  'processingAt',
-  'processedAt',
-  'items',
-  'fulfillmentStatus',
-  'fulfillmentTrackingCode',
-  'fulfillmentUpdatedAt',
-] as const;
-
-function toDeliveryOrderSummaries(docs: Array<{ id: string; data(): any; ref: { path: string } }>): DeliveryOrderSummary[] {
-  return docs
-    .map((doc) => toDeliveryOrderSummary(doc.id, doc.data(), doc.ref.path))
-    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
-}
-
 async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrderSummary[]> {
   const [readySnap, processingSnap] = await Promise.all([
     db
@@ -5632,12 +5596,6 @@ function processingDeliveryRecoveryNextCheckMs(order: any, nowMs: number): numbe
   return Math.max(nowMs, nextCheckAt);
 }
 
-function nextDeliveryRecoveryCheckMs(current: number | undefined, candidate: number | null): number | undefined {
-  if (candidate == null || !Number.isFinite(candidate)) return current;
-  if (current == null || candidate < current) return candidate;
-  return current;
-}
-
 function deliveryRecoveryPriorityMs(order: any): number {
   const status = typeof order?.status === 'string' ? order.status : '';
   const createdAt = toMillisMaybe(order?.createdAt) ?? 0;
@@ -5699,10 +5657,10 @@ function orderResultBase(doc: DeliveryOrderDoc): {
   statusBefore: string;
 } | null {
   const order = doc.data() || {};
-  const deliveryId = Number(order?.deliveryId ?? doc.id);
-  if (!Number.isFinite(deliveryId) || deliveryId <= 0) return null;
-  const dropId = resolveDeliveryOrderDropId(order, doc.ref.path);
-  if (!dropId) return null;
+  const identity = resolveDeliveryOrderIdentity(doc.id, order, doc.ref.path);
+  if (!('identity' in identity)) return null;
+  const { deliveryId, dropId } = identity.identity;
+  if (resolveDeliveryOrderDropId(order, doc.ref.path) !== dropId) return null;
   return {
     dropId,
     deliveryId,
@@ -5793,26 +5751,30 @@ async function stopPreparedDeliveryRecoveryChecks(
 
 async function fetchDeliveryRecoveryState(
   ownerWallet: string,
-  filterDropId?: string,
-): Promise<DeliveryRecoveryState & { remainingProcessing: number }> {
+): Promise<WalletDeliveryRecoveryState> {
   const nowMs = Date.now();
-  const [processingDocs, preparedDocs] = await Promise.all([
-    listOwnedDeliveryOrdersByStatus(ownerWallet, 'processing', filterDropId),
-    listOwnedDeliveryOrdersByStatus(ownerWallet, 'prepared', filterDropId),
-  ]);
-
-  let nextCheckAt: number | undefined;
-  for (const doc of processingDocs) {
-    nextCheckAt = nextDeliveryRecoveryCheckMs(nextCheckAt, processingDeliveryRecoveryNextCheckMs(doc.data(), nowMs));
+  const snapshot = await db
+    .collectionGroup('deliveryOrders')
+    .where('owner', '==', ownerWallet)
+    .where('status', 'in', ['processing', 'prepared'])
+    .select('status', 'createdAt', 'receiptRecovery')
+    .get();
+  let remainingProcessing = 0;
+  const nextCheckCandidates: Array<number | null> = [];
+  for (const doc of snapshot.docs) {
+    const order = doc.data();
+    if (order?.status === 'processing') {
+      remainingProcessing += 1;
+      nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(order, nowMs));
+    } else if (order?.status === 'prepared') {
+      nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(order));
+    }
   }
-  for (const doc of preparedDocs) {
-    nextCheckAt = nextDeliveryRecoveryCheckMs(nextCheckAt, preparedDeliveryRecoveryNextCheckMs(doc.data()));
-  }
 
-  return {
-    remainingProcessing: processingDocs.length,
-    ...(nextCheckAt != null ? { nextCheckAt } : {}),
-  };
+  return buildWalletDeliveryRecoveryState({
+    remainingProcessing,
+    nextCheckCandidates,
+  });
 }
 
 async function acquireDeliveryRecoveryLease(
@@ -5951,6 +5913,61 @@ async function buildProfileResponse(profileWallet: string, profileData: any, inc
   };
 }
 
+export const projectDeliveryOrderToProfileShipment = onDocumentWritten(
+  {
+    document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
+    retry: true,
+  },
+  async (event) => {
+    const beforeSnap = event.data?.before;
+    const afterSnap = event.data?.after;
+    const sourceRef = afterSnap?.ref || beforeSnap?.ref;
+    if (!sourceRef) return;
+    const beforeOrder = beforeSnap?.exists ? beforeSnap.data() : null;
+    const afterOrder = afterSnap?.exists ? afterSnap.data() : null;
+
+    await db.runTransaction(async (tx) => {
+      const currentSnap = await tx.get(sourceRef);
+      const plan = planConvergentProfileShipmentSync({
+        docId: sourceRef.id,
+        docPath: sourceRef.path,
+        beforeOrder,
+        afterOrder,
+        currentOrder: currentSnap.exists ? currentSnap.data() : null,
+      });
+      await applyProfileShipmentSyncPlan(db, tx, plan);
+    });
+  },
+);
+
+function stripeOwnerMergeDiagnostic(
+  err: unknown,
+  classification = classifyStripeOwnerMergeError(err),
+): Record<string, unknown> {
+  if (classification.kind === 'session_changed') {
+    return { error: summarizeError(err), reason: classification.reason };
+  }
+  if (classification.kind === 'unexpected_path') {
+    return { error: summarizeError(err), path: classification.path };
+  }
+  return { error: summarizeError(err) };
+}
+
+function throwStripeOwnerMergeCallableError(err: unknown, wallet: string): never {
+  const classification = classifyStripeOwnerMergeError(err);
+  logger.error('reconcileProfileState:stripeOwnerMergeRejected', {
+    wallet,
+    ...stripeOwnerMergeDiagnostic(err, classification),
+  });
+  if (classification.kind === 'session_changed') {
+    throw new HttpsError('unauthenticated', 'Wallet session changed. Sign in again.');
+  }
+  if (classification.kind === 'unexpected_path') {
+    throw new HttpsError('failed-precondition', 'Stripe order reconciliation found invalid server data.');
+  }
+  throw err;
+}
+
 async function tryMergeFirebaseStripeDeliveryOrdersToWallet(
   uid: string,
   wallet: string,
@@ -5963,7 +5980,10 @@ async function tryMergeFirebaseStripeDeliveryOrdersToWallet(
     }
     return merged;
   } catch (err) {
-    logger.warn(`${logContext}:stripeOwnerMergeFailed`, { wallet, error: summarizeError(err) });
+    logger.warn(`${logContext}:stripeOwnerMergeFailed`, {
+      wallet,
+      ...stripeOwnerMergeDiagnostic(err),
+    });
     return 0;
   }
 }
@@ -5974,8 +5994,9 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
     message: z.string().min(1).max(1024),
     signature: z.array(z.number().int().min(0).max(255)).length(64),
     mergeStripeDeliveryOrders: z.boolean().optional(),
+    responseMode: z.literal('session').optional(),
   });
-  const { wallet: rawWallet, message, signature, mergeStripeDeliveryOrders } = parseRequest(schema, request.data);
+  const { wallet: rawWallet, message, signature, mergeStripeDeliveryOrders, responseMode } = parseRequest(schema, request.data);
   const wallet = normalizeWallet(rawWallet);
 
   const statement = parseSolanaSignInMessage(message);
@@ -6000,26 +6021,52 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   }
 
   const pubkey = new PublicKey(wallet);
-  const verified = nacl.sign.detached.verify(new TextEncoder().encode(message), parseSignature(signature), pubkey.toBytes());
-  if (!verified) throw new HttpsError('unauthenticated', 'Invalid signature');
-
-  await db.doc(`${WALLET_SESSION_COLLECTION}/${uid}`).set(
-    {
-      wallet,
-      updatedAt: FieldValue.serverTimestamp(),
-      expiresAt: Timestamp.fromMillis(Date.now() + WALLET_SESSION_TTL_MS),
-    },
-    { merge: true },
-  );
 
   const profileRef = db.doc(`profiles/${wallet}`);
-  const snap = await profileRef.get();
-  const profileData = snap.exists ? (snap.data() as any) : {};
-  if (!snap.exists) await profileRef.set({ wallet }, { merge: true });
-  if (mergeStripeDeliveryOrders === true) {
-    await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'solanaAuth');
-  }
-  return buildProfileResponse(wallet, profileData, true);
+  return runVerifiedSolanaAuthProfileFlow(
+    { wallet, responseMode, mergeStripeDeliveryOrders },
+    {
+      invalidSessionMergeError: () =>
+        new HttpsError('invalid-argument', 'Session response mode cannot merge Stripe delivery orders.'),
+      establishSession: () => establishVerifiedWalletSession({
+        readBaseline: () => readWalletSessionBaseline(db, uid),
+        verifySignature: () => nacl.sign.detached.verify(
+          new TextEncoder().encode(message),
+          parseSignature(signature),
+          pubkey.toBytes(),
+        ),
+        invalidSignatureError: () => new HttpsError('unauthenticated', 'Invalid signature'),
+        writeSession: async (baseline) => {
+          try {
+            await writeWalletSessionAndProfileIfCurrent({
+              db,
+              uid,
+              wallet,
+              baseline,
+              expiresAtMs: Date.now() + WALLET_SESSION_TTL_MS,
+            });
+          } catch (error) {
+            if (error instanceof WalletSessionWriteSupersededError) {
+              throw new HttpsError(
+                'failed-precondition',
+                'A newer wallet sign-in superseded this request. Sign in again.',
+                { reason: WALLET_SESSION_SUPERSEDED_ERROR_REASON },
+              );
+            }
+            throw error;
+          }
+        },
+      }),
+      loadProfile: async () => {
+        const snap = await profileRef.get();
+        return { exists: snap.exists, data: snap.exists ? (snap.data() as any) : {} };
+      },
+      mergeStripeDeliveryOrders: async () => {
+        await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'solanaAuth');
+      },
+      buildLegacyResponse: (profileData) => buildProfileResponse(wallet, profileData, true),
+    },
+  );
 });
 
 export const getProfile = onCallLogged('getProfile', async (request) => {
@@ -6039,16 +6086,90 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
     profileWallet = requestedWallet;
   }
 
+  logger.info('getProfile:legacy', {
+    callerWallet: wallet,
+    profileWallet,
+    mode: profileWallet === wallet ? 'own' : 'admin',
+  });
+
   const profileRef = db.doc(`profiles/${profileWallet}`);
-  const snap = await profileRef.get();
-  const profileData = snap.exists ? (snap.data() as any) : {};
-  if (!snap.exists && profileWallet === wallet) {
-    await profileRef.set({ wallet: profileWallet }, { merge: true });
+  return runLegacyGetProfileFlow(
+    { callerWallet: wallet, profileWallet, mergeStripeDeliveryOrders },
+    {
+      loadProfile: async () => {
+        const snap = await profileRef.get();
+        return { exists: snap.exists, data: snap.exists ? (snap.data() as any) : {} };
+      },
+      ensureProfile: () => profileRef.set({ wallet: profileWallet }, { merge: true }),
+      mergeStripeDeliveryOrders: () =>
+        tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'getProfile'),
+      buildResponse: (profileData) =>
+        buildProfileResponse(profileWallet, profileData, profileWallet === wallet),
+    },
+  );
+});
+
+export const reconcileProfileState = onCallLogged('reconcileProfileState', async (request) => {
+  const { uid, wallet } = await requireWalletSession(request);
+  const schema = z.object({
+    mergeStripeDeliveryOrders: z.boolean().optional(),
+    includeDeliveryRecovery: z.boolean().optional(),
+  });
+  const { mergeStripeDeliveryOrders, includeDeliveryRecovery } = parseRequest(schema, request.data || {});
+
+  const state = await runProfileStateReconciliationFlow(
+    { mergeStripeDeliveryOrders, includeDeliveryRecovery },
+    {
+      mergeStripeDeliveryOrders: async () => {
+        let merged: number;
+        try {
+          merged = await mergeFirebaseStripeDeliveryOrdersToWalletInDb(db, uid, wallet);
+        } catch (err) {
+          throwStripeOwnerMergeCallableError(err, wallet);
+        }
+        if (merged > 0) {
+          logger.info('reconcileProfileState:stripeOwnerMerge', { wallet, merged });
+        }
+        return merged;
+      },
+      loadDeliveryRecovery: () => fetchDeliveryRecoveryState(wallet),
+    },
+  );
+
+  const response: ReconcileProfileStateResponse = {
+    mergedStripeDeliveryOrders: state.mergedStripeDeliveryOrders,
+  };
+  if (state.deliveryRecovery?.nextCheckAt != null) {
+    response.deliveryRecovery = { nextCheckAt: state.deliveryRecovery.nextCheckAt };
   }
-  if (profileWallet === wallet && mergeStripeDeliveryOrders === true) {
-    await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'getProfile');
-  }
-  return buildProfileResponse(profileWallet, profileData, profileWallet === wallet);
+  return response;
+});
+
+export const getAdminProfileView = onCallLogged('getAdminProfileView', async (request) => {
+  await requireAdminAccess(request);
+  const schema = z.object({
+    ownerWallet: z.string().min(32).max(64),
+  });
+  const { ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
+  const ownerWallet = normalizeWallet(rawOwnerWallet);
+  const profileRef = db.doc(`profiles/${ownerWallet}`);
+  const [profileSnap, shipmentsSnap] = await Promise.all([
+    profileRef.get(),
+    profileRef.collection('shipments').orderBy('sortAt', 'desc').get(),
+  ]);
+  const profileData = profileSnap.exists ? (profileSnap.data() as any) : {};
+  const email = optionalTrimmedString(profileData.email);
+  const orders = shipmentsSnap.docs
+    .map((doc) => deliveryOrderSummaryFromProfileShipment(doc.data()))
+    .filter((order): order is DeliveryOrderSummary => Boolean(order));
+  const response: GetAdminProfileViewResponse = {
+    profile: {
+      wallet: ownerWallet,
+      ...(email ? { email } : {}),
+      orders,
+    },
+  };
+  return response;
 });
 
 export const getAnonymousStripeDeliveryHistory = onCallAuthed('getAnonymousStripeDeliveryHistory', async (_request, uid) => {
@@ -9666,25 +9787,17 @@ export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', a
   if (filterDropId && deliveryId != null) {
     const doc = await db.doc(dropDeliveryOrderPath(filterDropId, deliveryId)).get();
     if (!doc.exists) {
-      const recoveryState = await fetchDeliveryRecoveryState(wallet, filterDropId);
-      return {
-        attempted,
-        recovered,
-        remainingProcessing: recoveryState.remainingProcessing,
-        ...(recoveryState.nextCheckAt != null ? { nextCheckAt: recoveryState.nextCheckAt } : {}),
-        results: [
-          {
-            dropId: filterDropId,
-            deliveryId,
-            statusBefore: 'missing',
-            outcome: 'not_found',
-            verification: 'delivery_pda',
-            message: 'delivery order not found',
-          },
-        ],
-      } satisfies RecoverMyDeliveryOrdersResult;
+      results.push({
+        dropId: filterDropId,
+        deliveryId,
+        statusBefore: 'missing',
+        outcome: 'not_found',
+        verification: 'delivery_pda',
+        message: 'delivery order not found',
+      });
+    } else {
+      candidateDocs = [doc];
     }
-    candidateDocs = [doc];
   } else {
     const [processingDocs, preparedDocs] = await Promise.all([
       listOwnedDeliveryOrdersByStatus(wallet, 'processing', filterDropId),
@@ -9845,14 +9958,13 @@ export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', a
     }
   }
 
-  const recoveryState = await fetchDeliveryRecoveryState(wallet, filterDropId);
-  return {
+  const walletRecovery = await fetchDeliveryRecoveryState(wallet);
+  return buildRecoverDeliveryOrdersResult({
     attempted,
     recovered,
-    remainingProcessing: recoveryState.remainingProcessing,
-    ...(recoveryState.nextCheckAt != null ? { nextCheckAt: recoveryState.nextCheckAt } : {}),
+    walletRecovery,
     results,
-  } satisfies RecoverMyDeliveryOrdersResult;
+  }) satisfies RecoverMyDeliveryOrdersResult;
 });
 
 type StripeReceiptClaimStart =

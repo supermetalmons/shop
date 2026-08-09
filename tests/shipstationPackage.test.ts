@@ -132,7 +132,7 @@ test('valid ShipStation rates include every charge and are sorted by total', () 
   assert.equal(response.rates[0].shipDate, '2026-08-06T00:00:00Z');
   assert.equal(response.rates[0].negotiatedRate, true);
   assert.equal(response.rates[0].trackable, true);
-  assert.equal(response.rates[0].estimatedDeliveryDays, undefined);
+  assert.equal('estimatedDeliveryDays' in response.rates[0], false);
   assert.equal(response.rates[0].estimatedDeliveryDate, '2026-08-10T00:00:00Z');
   assert.deepEqual(response.rates[0].warningMessages, ['Residential surcharge may apply']);
 });

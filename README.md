@@ -66,9 +66,31 @@ subsequent application rollbacks must use an explicit Worker version.
 
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
-- Deploy (from repo root):
-  - `npm run deploy:firebase` (rules + functions)
-  - `npm run deploy:functions` (functions only)
+- Deploy from the repo root:
+  - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, verifies the production shipment projection, and only then deploys Firestore rules in a separate Firebase CLI invocation.
+  - `npm run deploy:functions` deploys Functions only to `mons-shop`.
+  - `npm run deploy:profile-read-model-rules` runs the Firestore Emulator rules suite and production shipment verification before deploying owner-only rules.
+- Java is required for every rules deployment because `npm run test:firestore-rules` fails closed when the Firestore Emulator cannot run.
+- Production shipment audit, repair, and verification use the Firebase Admin SDK and require Application Default Credentials authorized for `mons-shop`. For a local operator, configure them with `gcloud auth application-default login` before running those commands.
+
+### Initial profile read-model rollout
+
+Run the migration in this order from the repo root:
+
+If the combined source-plus-destination audit is expected to exceed 20,000 documents, export `PROFILE_SHIPMENTS_MAX_AUDIT_DOCUMENTS` to a reviewed value from 1 to 50,000 before starting. Every audit, repair, verification, and rules-deployment gate inherits it; `--max-audit-documents` can override it for one direct backfill command.
+
+1. Deploy the compatible callables and shipment projection trigger with `npm run deploy:profile-read-model-functions`.
+2. Confirm `projectDeliveryOrderToProfileShipment` deployed successfully and has no trigger errors in the Firebase Functions logs.
+3. Run the read-only production audit with `npm run backfill:profile-shipments -- --project mons-shop`. The audit fails closed above 20,000 total source-plus-destination documents; after confirming the expected collection size, raise the ceiling explicitly with `--max-audit-documents` up to 50,000.
+4. Repair drift explicitly with `npm run backfill:profile-shipments -- --project mons-shop --apply --confirm-project mons-shop --confirm-trigger-deployed`.
+5. Run the independent read-only gate with `npm run verify:profile-shipments` and require zero drift.
+6. Deploy the owner-only rules with `npm run deploy:profile-read-model-rules`; this repeats the emulator suite and production verification immediately before the rules deployment.
+7. Upload and smoke-test the frontend candidate with `npm run deploy -- preview --token-file /path/to/cloudflare-token`.
+8. After wallet authentication, profile shipments, and post-Stripe recovery succeed in preview, deploy the frontend with `npm run deploy -- production --token-file /path/to/cloudflare-token`.
+
+No deployment script runs the shipment repair automatically. If production verification fails, leave the compatible Functions deployed, investigate the projection drift, and do not deploy the owner-only rules.
+
+The old frontend is compatible with the new Functions and rules. The new frontend must not run against old Functions or rules: it depends on session-mode authentication, the explicit wallet-global recovery response, and direct owner-only profile reads. For rollback, restore the previous frontend Worker version first. Roll back Functions or rules only afterward if that remains necessary; never leave the new frontend live against the old backend or rules.
 
 ### Function env + secrets
 - `HELIUS_API_KEY` (env/runtime config)

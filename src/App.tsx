@@ -43,9 +43,9 @@ import {
   claimStripeReceipt,
   createStripeCheckoutSession,
   finalizeAdminIrlRedeem,
+  getAdminProfileView,
   getAnonymousStripeDeliveryHistory,
   getDropPackStatus,
-  getProfile,
   listDeliveryOrderOwners,
   packStatusDisplayLabelsForDropId,
   prepareAdminIrlRedeemTx,
@@ -67,6 +67,33 @@ import {
   rememberPendingAdminIrlRedeem,
 } from './lib/adminIrlRedeem';
 import { auth } from './lib/firebase';
+import {
+  profileForAuthorizedView,
+  ownProfileShipmentsEmptyState,
+  stripeProfileRecoveryAfterSnapshot,
+  stripeMergeReconciliationOptions,
+} from './lib/profileFirestore';
+import {
+  authoritativeProfileShipmentsContainStripeSessions,
+  beginKeyedInventoryRecovery,
+  cappedDeadlineStep,
+  getOrStartKeyedInventoryRefresh,
+  invalidateWalletScopedSerialRun,
+  keyedInventoryRecoveryPendingForOwner,
+  observeKeyedInventoryRefresh,
+  profileSectionReadiness,
+  retainedProfileShipmentsError,
+  retainMatchingOwnerRecoveryKey,
+  runWalletScopedSerial,
+  settleKeyedInventoryRecovery,
+  stripeInventoryRecoveryTargetForResolvedSessions,
+  stripeRecoveryKeyForResolvedSessions,
+  walletDeliveryRecoveryNextCheckAt,
+  type KeyedInventoryRecovery,
+  type KeyedInventoryRefreshRun,
+  type OwnerRecoveryKey,
+  type WalletScopedSerialRun,
+} from './lib/profileClientLifecycle';
 import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
 import {
   applyOptimisticStripeCheckoutMintProgress,
@@ -83,8 +110,10 @@ import {
   mergeStripeCheckoutRecoverySessionIds,
   pendingStripeCheckoutRecoverySessionIds,
   resolveStripeCheckoutDataOwner,
-  shouldContinueStripeCheckoutRecovery,
+  shouldObserveDisconnectedStripeSession,
+  stripeCheckoutRetryDelay,
   shouldUseAnonymousStripeHistory,
+  type StripeCheckoutProfileRecoveryStatus,
 } from './lib/stripeCheckoutRecovery';
 import {
   buildMintBoxesTxWithAccounts,
@@ -210,7 +239,6 @@ import {
   PendingOpenBox,
   PreviewVideoSource,
   RecoverDeliveryOrdersArgs,
-  RecoverDeliveryOrdersResult,
 } from './types';
 import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from './config/deployment';
 import {
@@ -275,6 +303,7 @@ const ADMIN_MENU_WIP_PATHS: { path: string; dropId?: string }[] = [
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const RECEIPT_SIGNED_SEND_TIMEOUT_MS = 10_000;
 const RECEIPT_STATUS_CHECK_TIMEOUT_MS = 12_000;
+const STRIPE_CHECKOUT_INVENTORY_RETRY_MS = 5_000;
 const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hidden']);
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
@@ -296,21 +325,13 @@ type StripeCheckoutReturn =
       status: 'cancel' | 'unverified_success';
       sessionId?: undefined;
     };
-type StripeCheckoutProfileRecovery = {
-  key: string;
-  phase: 'pending' | 'recovered' | 'fallback';
-};
-type StripeCheckoutInventoryRecovery = {
-  owner: string;
-  phase: 'pending' | 'complete';
-  baselineUpdatedAt: number;
-};
+type StripeCheckoutRecoveredProfile = OwnerRecoveryKey;
+type StripeCheckoutInventoryRecovery = KeyedInventoryRecovery;
 type StripeCheckoutOptimisticMintProgress = StripeCheckoutMintProgress & {
   expiresAt: number;
 };
 type CardNft2PackVideoSources = readonly PreviewVideoSource[];
 
-const STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS = 3_000;
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
 
 function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
@@ -759,30 +780,6 @@ const EMPTY_LOCAL_MINTED_BOXES: readonly LocalMintedBox[] = [];
 
 function boxDisplayImageForInventoryItem(item: Pick<InventoryItem, 'dropId' | 'image' | 'boxId'>): string | undefined {
   return normalizeBoxDisplayImage({ dropId: item.dropId, imageRaw: item.image, boxId: item.boxId });
-}
-
-function mergeDeliveryRecoveryRequest(
-  current: RecoverDeliveryOrdersArgs | null,
-  next: RecoverDeliveryOrdersArgs,
-): RecoverDeliveryOrdersArgs {
-  const merged: RecoverDeliveryOrdersArgs = { ...(current ?? {}) };
-  if (next.dropId) merged.dropId = next.dropId;
-  if (next.deliveryId != null) merged.deliveryId = next.deliveryId;
-  if (current?.force || next.force) merged.force = true;
-  return merged;
-}
-
-function deliveryRecoveryNextCheckAtFromResult(result: RecoverDeliveryOrdersResult): number | null {
-  return typeof result.nextCheckAt === 'number' && Number.isFinite(result.nextCheckAt) ? result.nextCheckAt : null;
-}
-
-function earliestDeliveryRecoveryCheckAt(...values: Array<number | null | undefined>): number | null {
-  let earliest: number | null = null;
-  for (const value of values) {
-    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-    if (earliest == null || value < earliest) earliest = value;
-  }
-  return earliest;
 }
 
 type RevealOverlayState = {
@@ -1243,6 +1240,40 @@ function App({
   const statusUiSuspendedRef = useRef(statusUiSuspended);
   statusUiSuspendedRef.current = statusUiSuspended;
   const { publicKey, sendTransaction } = wallet;
+  const connectedWallet = publicKey?.toBase58();
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(() => auth?.currentUser?.uid || null);
+  const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
+  const [stripeCheckoutReturnSessionId, setStripeCheckoutReturnSessionId] = useState<string | null>(null);
+  const [stripeRecoveryOwner, setStripeRecoveryOwner] = useState<string | null>(null);
+  const [stripeCheckoutProfileRecovery, setStripeCheckoutProfileRecovery] =
+    useState<StripeCheckoutProfileRecoveryStatus | null>(null);
+  const [stripeCheckoutObservedSessionKey, setStripeCheckoutObservedSessionKey] =
+    useState<string | null>(null);
+  const anonymousStripeHistoryCompletion = useMemo(
+    () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
+    [firebaseUid, stripeCheckoutMarkers],
+  );
+  const anonymousStripeHistoryMarkerKey = anonymousStripeHistoryCompletion.markerKey;
+  const completedStripeCheckoutSessionIds = anonymousStripeHistoryCompletion.sessionIds;
+  const stripeCheckoutRecoverySessionIds = useMemo(
+    () =>
+      mergeStripeCheckoutRecoverySessionIds(
+        completedStripeCheckoutSessionIds,
+        stripeCheckoutReturnSessionId,
+      ),
+    [anonymousStripeHistoryMarkerKey, stripeCheckoutReturnSessionId],
+  );
+  const stripeCheckoutRecoveryKey = stripeRecoveryKeyForResolvedSessions(
+    firebaseUid,
+    stripeCheckoutRecoverySessionIds,
+  );
+  const observeDisconnectedSession = shouldObserveDisconnectedStripeSession({
+    connectedWallet,
+    recoveryKey: stripeCheckoutRecoveryKey,
+    recoveryStatus: stripeCheckoutProfileRecovery,
+    recoveredWallet: stripeRecoveryOwner,
+    hasObservedSession: stripeCheckoutObservedSessionKey === stripeCheckoutRecoveryKey,
+  });
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
   const cardNft2PackInventoryPreviewVideo = useMemo(
     () => createCardNft2PackInventoryPreviewVideo(cardNft2PackVideoSources),
@@ -1493,26 +1524,29 @@ function App({
   });
   const {
     profile,
+    shipments: profileShipments,
+    sessionWallet,
     token,
     loading: authLoading,
     error: authError,
+    profileError,
+    shipmentsReady: profileShipmentsReady,
+    shipmentsError: profileShipmentsError,
+    deliveryRecoveryNextCheckAt,
+    sessionResolution,
     signIn,
-    updateProfile,
-    refreshProfile,
-    restoreProfileFromSession,
-  } = useSolanaAuth();
+    reconcileProfile,
+    beginDeliveryRecoveryScheduleUpdate,
+    hasCurrentWalletSession,
+  } = useSolanaAuth({ observeDisconnectedSession });
   const queryClient = useQueryClient();
-  const connectedWallet = publicKey?.toBase58();
-  const [stripeRecoveryOwner, setStripeRecoveryOwner] = useState<string | null>(null);
-  const [stripeCheckoutRecoveredProfileWallet, setStripeCheckoutRecoveredProfileWallet] =
-    useState<string | null>(null);
-  const [stripeCheckoutProfileRecovery, setStripeCheckoutProfileRecovery] =
-    useState<StripeCheckoutProfileRecovery | null>(null);
+  const [stripeCheckoutRecoveredProfile, setStripeCheckoutRecoveredProfile] =
+    useState<StripeCheckoutRecoveredProfile | null>(null);
   const [stripeCheckoutInventoryRecovery, setStripeCheckoutInventoryRecovery] =
     useState<StripeCheckoutInventoryRecovery | null>(null);
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
   const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
-  const isSignedInWallet = Boolean(token && connectedWallet && profile?.wallet === connectedWallet);
+  const isSignedInWallet = Boolean(token && connectedWallet && sessionWallet === connectedWallet);
   const canUseAdminMenu = Boolean(isSignedInWallet && hasFulfillmentAppAccess(connectedWallet));
   const canUseAdminViewer = isAdminWallet && isSignedInWallet;
   const owner =
@@ -1521,6 +1555,9 @@ function App({
       : resolveStripeCheckoutDataOwner(connectedWallet, stripeRecoveryOwner);
   const includeDevnetInventory = hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner);
   const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
+  const canReadOwnProfile = Boolean(
+    token && owner && sessionWallet === owner && !isViewerMode,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
   const [devnetDropsPickerOpened, setDevnetDropsPickerOpened] = useState(false);
@@ -1576,28 +1613,28 @@ function App({
     error: viewedProfileError,
   } = useQuery({
     queryKey: ['viewedProfile', connectedWallet, owner, isSignedInWallet],
-    enabled: Boolean(
-      isSignedInWallet &&
-        connectedWallet &&
-        owner &&
-        (owner === connectedWallet || canUseAdminViewer) &&
-        (isViewerMode || !profile || profile.wallet !== owner),
-    ),
-    queryFn: () => getProfile(owner || undefined),
+    enabled: Boolean(isSignedInWallet && canUseAdminViewer && isViewerMode && owner),
+    queryFn: () => getAdminProfileView(owner || ''),
     staleTime: 10_000,
   });
 
   const viewedProfile = useMemo(() => {
-    if (profile && profile.wallet === owner) return profile;
-    return viewedProfileData?.profile || null;
-  }, [owner, profile, viewedProfileData?.profile]);
+    return profileForAuthorizedView({
+      ownProfile: profile,
+      adminProfile: viewedProfileData?.profile || null,
+      canReadOwnProfile,
+      canUseAdminViewer,
+      isViewerMode,
+    });
+  }, [
+    canUseAdminViewer,
+    canReadOwnProfile,
+    isViewerMode,
+    profile,
+    viewedProfileData?.profile,
+  ]);
   const currentOwnerDeliveryRecoveryNextCheckAt =
-    typeof profile?.deliveryRecovery?.nextCheckAt === 'number' &&
-    isSignedInWallet &&
-    !isViewerMode &&
-    profile?.wallet === connectedWallet
-      ? profile.deliveryRecovery.nextCheckAt
-      : null;
+    isSignedInWallet && !isViewerMode ? deliveryRecoveryNextCheckAt : null;
 
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
@@ -1678,34 +1715,26 @@ function App({
   const revealOverlayResizeRafRef = useRef<number | null>(null);
   const authLoadingSeenRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
-  const [firebaseUid, setFirebaseUid] = useState<string | null>(() => auth?.currentUser?.uid || null);
   const [walletIdleReady, setWalletIdleReady] = useState(false);
-  const [shipmentsReady, setShipmentsReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
   const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
   const [pendingClaimSignIn, setPendingClaimSignIn] = useState(false);
   const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
-  const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
-  const [stripeCheckoutReturnSessionId, setStripeCheckoutReturnSessionId] = useState<string | null>(null);
-  const [stripeCheckoutHistoryNow, setStripeCheckoutHistoryNow] = useState(() => Date.now());
-  const anonymousStripeHistoryCompletion = useMemo(
-    () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
-    [firebaseUid, stripeCheckoutMarkers],
-  );
-  const anonymousStripeHistoryMarkerKey = anonymousStripeHistoryCompletion.markerKey;
-  const completedStripeCheckoutSessionIds = anonymousStripeHistoryCompletion.sessionIds;
-  const stripeCheckoutRecoverySessionIds = useMemo(
+  const profileShipmentStripeSessionIds = useMemo(
     () =>
-      mergeStripeCheckoutRecoverySessionIds(
-        completedStripeCheckoutSessionIds,
-        stripeCheckoutReturnSessionId,
-      ),
-    [anonymousStripeHistoryMarkerKey, stripeCheckoutReturnSessionId],
+      profileShipments
+        .map((order) => order.stripeCheckoutSessionId?.trim() || '')
+        .filter(Boolean),
+    [profileShipments],
   );
-  const stripeCheckoutRecoveryKey =
-    firebaseUid && stripeCheckoutRecoverySessionIds.length
-      ? `${firebaseUid}:${stripeCheckoutRecoverySessionIds.join('|')}`
-      : '';
+  const pendingProfileStripeSessionIds = useMemo(
+    () =>
+      pendingStripeCheckoutRecoverySessionIds(
+        stripeCheckoutRecoverySessionIds,
+        profileShipmentStripeSessionIds,
+      ),
+    [profileShipmentStripeSessionIds, stripeCheckoutRecoverySessionIds],
+  );
   const stripeCheckoutProfileRecoveryPending = Boolean(
     stripeCheckoutRecoveryKey &&
       (stripeCheckoutProfileRecovery?.key !== stripeCheckoutRecoveryKey ||
@@ -1728,7 +1757,7 @@ function App({
   });
   const anonymousStripeHistoryPollActive =
     anonymousStripeHistoryEnabled &&
-    Boolean(anonymousStripeHistoryPollUntil && stripeCheckoutHistoryNow < anonymousStripeHistoryPollUntil);
+    Boolean(anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil);
   const {
     data: anonymousStripeHistoryData,
     isFetching: anonymousStripeHistoryLoading,
@@ -1739,9 +1768,21 @@ function App({
     queryFn: getAnonymousStripeDeliveryHistory,
     refetchInterval: (query) => {
       if (!anonymousStripeHistoryPollActive || !anonymousStripeHistoryPollUntil) return false;
-      if (Date.now() >= anonymousStripeHistoryPollUntil) return false;
-      if (query.state.error) return false;
-      return STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS;
+      const error = query.state.error;
+      const completedAttempts = query.state.dataUpdateCount + query.state.errorUpdateCount;
+      const presentSessionIds = (query.state.data?.orders || [])
+        .map((order) => order.stripeCheckoutSessionId || '')
+        .filter(Boolean);
+      return stripeCheckoutRetryDelay({
+        hasPendingWork: pendingStripeCheckoutRecoverySessionIds(
+          stripeCheckoutRecoverySessionIds,
+          presentSessionIds,
+        ).length > 0,
+        retryable: !error || isRetryableCallableError(error),
+        now: Date.now(),
+        stopAt: anonymousStripeHistoryPollUntil,
+        retryIndex: Math.max(0, completedAttempts - 1),
+      }) ?? false;
     },
     refetchOnReconnect: anonymousStripeHistoryPollActive,
     refetchOnWindowFocus: anonymousStripeHistoryPollActive,
@@ -1789,13 +1830,14 @@ function App({
   const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
   const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
-  const authTokenRef = useRef<string | null>(null);
-  const authTokenWalletRef = useRef<string | null>(null);
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
+  const profileShipmentsRef = useRef({
+    shipments: profileShipments,
+    ready: profileShipmentsReady,
+  });
   const signInPromiseRef = useRef<Promise<boolean> | null>(null);
-  const deliveryRecoveryPromiseRef = useRef<Promise<void> | null>(null);
-  const deliveryRecoveryQueuedRef = useRef<RecoverDeliveryOrdersArgs | null>(null);
-  const lastScheduledDeliveryRecoveryAtRef = useRef<number | null>(null);
+  const deliveryRecoveryRunRef = useRef<WalletScopedSerialRun<RecoverDeliveryOrdersArgs> | null>(null);
+  const lastTriggeredDeliveryRecoveryAtRef = useRef<number | null>(null);
   const authReadyRef = useRef(false);
   const authLoadingRef = useRef(false);
   const receiptTransferWalletSupportedRef = useRef(receiptTransferWalletSupported);
@@ -1825,7 +1867,6 @@ function App({
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const preloadedInteractivePackKeysRef = useRef<Set<string>>(new Set());
   const interactiveRevealCompleteRef = useRef(false);
-  const [deliveryRecoveryOverrideNextCheckAt, setDeliveryRecoveryOverrideNextCheckAt] = useState<number | null>(null);
   const autoplayFramePreloadScheduledDropIdRef = useRef<string | null>(null);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const videoPreloadRootRef = useRef<HTMLDivElement | null>(null);
@@ -1846,11 +1887,8 @@ function App({
   const stripeCheckoutOptimisticMintSessionRef = useRef<string | null>(null);
   const stripeCheckoutCompletionHandledRef = useRef(false);
   const stripeCheckoutReturnPollUntilRef = useRef(0);
-  const stripeCheckoutRecoveredProfileKeysRef = useRef<Set<string>>(new Set());
-  const stripeCheckoutInventoryRecoveryPromiseRef = useRef<{
-    owner: string;
-    inventoryPromise: Promise<void>;
-  } | null>(null);
+  const stripeCheckoutRecoveryLoadedKeysRef = useRef<Set<string>>(new Set());
+  const stripeCheckoutInventoryRecoveryPromiseRef = useRef<KeyedInventoryRefreshRun | null>(null);
   const receiptTransferInFlightRef = useRef(false);
 
   const updateReceiptOperations = useCallback(
@@ -2019,19 +2057,6 @@ function App({
   }, []);
 
   useEffect(() => {
-    setStripeCheckoutHistoryNow(Date.now());
-    if (!anonymousStripeHistoryPollUntil) return;
-    const remaining = anonymousStripeHistoryPollUntil - Date.now();
-    if (remaining <= 0) return;
-    const timeout = setTimeout(() => {
-      setStripeCheckoutHistoryNow(Date.now());
-    }, remaining);
-    return () => {
-      clearTimeout(timeout);
-    };
-  }, [anonymousStripeHistoryPollUntil]);
-
-  useEffect(() => {
     if (stripeCheckoutReturnRef.current === undefined) {
       stripeCheckoutReturnRef.current = consumeStripeCheckoutReturnFromUrl();
     }
@@ -2143,91 +2168,223 @@ function App({
   }, [mintStats, routeDrop?.dropId, stripeCheckoutOptimisticMintProgress]);
 
   useEffect(() => {
-    if (connectedWallet) setStripeRecoveryOwner(null);
-  }, [connectedWallet]);
+    if (connectedWallet) {
+      setStripeRecoveryOwner(null);
+      return;
+    }
+    if (
+      observeDisconnectedSession &&
+      sessionResolution === 'settled' &&
+      stripeRecoveryOwner &&
+      sessionWallet !== stripeRecoveryOwner
+    ) {
+      setStripeRecoveryOwner(null);
+    }
+  }, [
+    connectedWallet,
+    observeDisconnectedSession,
+    sessionResolution,
+    sessionWallet,
+    stripeRecoveryOwner,
+  ]);
+
+  useEffect(() => {
+    if (connectedWallet || !stripeCheckoutRecoveryKey) {
+      setStripeCheckoutObservedSessionKey(null);
+      return;
+    }
+    if (sessionWallet) {
+      setStripeCheckoutObservedSessionKey(stripeCheckoutRecoveryKey);
+      return;
+    }
+    if (
+      sessionResolution === 'settled' &&
+      stripeCheckoutObservedSessionKey === stripeCheckoutRecoveryKey
+    ) {
+      setStripeCheckoutObservedSessionKey(null);
+    }
+  }, [
+    connectedWallet,
+    sessionResolution,
+    sessionWallet,
+    stripeCheckoutObservedSessionKey,
+    stripeCheckoutRecoveryKey,
+  ]);
+
+  useEffect(() => {
+    profileShipmentsRef.current = {
+      shipments: profileShipments,
+      ready: profileShipmentsReady,
+    };
+  }, [profileShipments, profileShipmentsReady]);
+
+  useEffect(() => {
+    if (
+      !firebaseUid ||
+      !stripeCheckoutRecoveryKey ||
+      !stripeCheckoutRecoverySessionIds.length ||
+      !profileShipmentsReady
+    ) {
+      return;
+    }
+    const markerResult = forgetCompletedStripeCheckoutMarkersForFirebaseUid({
+      firebaseUid,
+      sessionIds: profileShipmentStripeSessionIds,
+    });
+    if (markerResult.removed) {
+      setStripeCheckoutMarkers(markerResult.markers);
+      const inventoryRecoveryTarget = stripeInventoryRecoveryTargetForResolvedSessions({
+        owner: sessionWallet,
+        firebaseUid,
+        sessionIds: markerResult.removedSessionIds,
+      });
+      if (inventoryRecoveryTarget) {
+        setStripeCheckoutRecoveredProfile((current) =>
+          retainMatchingOwnerRecoveryKey(current, inventoryRecoveryTarget),
+        );
+      }
+      if (anonymousStripeHistoryMarkerKey) {
+        queryClient.removeQueries({
+          queryKey: anonymousStripeDeliveryHistoryQueryKey(firebaseUid, anonymousStripeHistoryMarkerKey),
+          exact: true,
+        });
+      }
+    }
+    if (
+      stripeCheckoutReturnSessionId &&
+      profileShipmentStripeSessionIds.includes(stripeCheckoutReturnSessionId)
+    ) {
+      setStripeCheckoutReturnSessionId((current) =>
+        current === stripeCheckoutReturnSessionId ? null : current,
+      );
+    }
+    if (!sessionWallet || pendingProfileStripeSessionIds.length) return;
+    setStripeCheckoutProfileRecovery((current) =>
+      stripeProfileRecoveryAfterSnapshot(current, stripeCheckoutRecoveryKey, true),
+    );
+    setStripeCheckoutRecoveredProfile((current) =>
+      retainMatchingOwnerRecoveryKey(current, {
+        owner: sessionWallet,
+        key: stripeCheckoutRecoveryKey,
+      }),
+    );
+    if (!connectedWallet) setStripeRecoveryOwner(sessionWallet);
+  }, [
+    anonymousStripeHistoryMarkerKey,
+    connectedWallet,
+    firebaseUid,
+    pendingProfileStripeSessionIds,
+    profileShipmentStripeSessionIds,
+    profileShipmentsReady,
+    queryClient,
+    sessionWallet,
+    stripeCheckoutRecoveryKey,
+    stripeCheckoutRecoverySessionIds.length,
+    stripeCheckoutReturnSessionId,
+  ]);
 
   useEffect(() => {
     if (!firebaseUid || !stripeCheckoutRecoveryKey || !stripeCheckoutRecoverySessionIds.length) return;
+    if (!sessionWallet) {
+      if (connectedWallet && (!authReady || authLoading)) return;
+      if (
+        !connectedWallet &&
+        observeDisconnectedSession &&
+        sessionResolution !== 'settled'
+      ) {
+        return;
+      }
+      setStripeCheckoutProfileRecovery({ key: stripeCheckoutRecoveryKey, phase: 'fallback' });
+      return;
+    }
     let cancelled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
-    const completedMarkerKey = anonymousStripeHistoryMarkerKey;
-    const completedMarkerFirebaseUid = firebaseUid;
     const recoveryKey = stripeCheckoutRecoveryKey;
     const stopAt = Math.max(
       Date.now(),
       anonymousStripeHistoryPollUntil,
       stripeCheckoutReturnPollUntilRef.current,
     );
-    let pendingSessionIds = stripeCheckoutRecoverySessionIds;
-    let profileRecovered = stripeCheckoutRecoveredProfileKeysRef.current.has(recoveryKey);
-    setStripeCheckoutProfileRecovery((current) => {
-      if (current?.key === recoveryKey && current.phase === 'recovered') return current;
-      return { key: recoveryKey, phase: 'pending' };
-    });
+    let deliveryRecoveryLoaded = stripeCheckoutRecoveryLoadedKeysRef.current.has(recoveryKey);
+    let retryIndex = 0;
+    setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'pending' });
+
+    const readCurrentShipments = () => {
+      const snapshot = profileShipmentsRef.current;
+      const expectedSessionsPresent = authoritativeProfileShipmentsContainStripeSessions({
+        shipments: snapshot.shipments,
+        ready: snapshot.ready,
+        expectedSessionIds: stripeCheckoutRecoverySessionIds,
+      });
+      const walletStripeSessionIds = (snapshot.ready ? snapshot.shipments : [])
+        .map((order) => order.stripeCheckoutSessionId || '')
+        .filter(Boolean);
+      return {
+        expectedSessionsPresent,
+        pendingSessionIds: pendingStripeCheckoutRecoverySessionIds(
+          stripeCheckoutRecoverySessionIds,
+          walletStripeSessionIds,
+        ),
+      };
+    };
+
+    const markRecovered = () => {
+      setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'recovered' });
+      setStripeCheckoutRecoveredProfile((current) =>
+        retainMatchingOwnerRecoveryKey(current, { owner: sessionWallet, key: recoveryKey }),
+      );
+      if (!connectedWallet) setStripeRecoveryOwner(sessionWallet);
+    };
 
     const recoverUntilSettled = () => {
       if (cancelled) return;
+      const { expectedSessionsPresent } = readCurrentShipments();
+      if (expectedSessionsPresent) {
+        markRecovered();
+        return;
+      }
       let retryable = true;
-      void restoreProfileFromSession({ mergeStripeDeliveryOrders: true })
-        .then((refreshedProfile) => {
-          if (cancelled || !refreshedProfile) {
+      const reconciliationOptions = stripeMergeReconciliationOptions(deliveryRecoveryLoaded);
+      void reconcileProfile(reconciliationOptions)
+        .then((result) => {
+          if (!result) {
             retryable = false;
             return;
           }
-          profileRecovered = true;
-          stripeCheckoutRecoveredProfileKeysRef.current.add(recoveryKey);
-          setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'recovered' });
-          setStripeCheckoutRecoveredProfileWallet(refreshedProfile.wallet);
-          if (!connectedWallet) {
-            setStripeRecoveryOwner(refreshedProfile.wallet);
+          if (reconciliationOptions.includeDeliveryRecovery) {
+            deliveryRecoveryLoaded = true;
+            stripeCheckoutRecoveryLoadedKeysRef.current.add(recoveryKey);
           }
-          const walletStripeSessionIds = (refreshedProfile.orders || [])
-            .map((order) => order.stripeCheckoutSessionId || '')
-            .filter(Boolean);
-          pendingSessionIds = pendingStripeCheckoutRecoverySessionIds(
-            stripeCheckoutRecoverySessionIds,
-            walletStripeSessionIds,
-          );
-          const result = forgetCompletedStripeCheckoutMarkersForFirebaseUid({
-            firebaseUid: completedMarkerFirebaseUid,
-            sessionIds: walletStripeSessionIds,
-          });
-          if (result.removed) {
-            setStripeCheckoutMarkers(result.markers);
-            if (completedMarkerKey) {
-              queryClient.removeQueries({
-                queryKey: anonymousStripeDeliveryHistoryQueryKey(completedMarkerFirebaseUid, completedMarkerKey),
-                exact: true,
-              });
-            }
-          }
-          if (
-            stripeCheckoutReturnSessionId &&
-            !pendingSessionIds.includes(stripeCheckoutReturnSessionId)
-          ) {
-            setStripeCheckoutReturnSessionId(null);
-          }
+          if (cancelled) return;
+          const { expectedSessionsPresent } = readCurrentShipments();
+          if (expectedSessionsPresent) markRecovered();
         })
         .catch((err) => {
           retryable = isRetryableCallableError(err);
-          console.warn('[mons] failed to restore profile after Stripe checkout', err);
+          console.warn('[mons] failed to reconcile profile after Stripe checkout', err);
         })
         .finally(() => {
           if (cancelled) return;
-          const nextAttemptAt = Date.now() + STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS;
-          const shouldContinue = shouldContinueStripeCheckoutRecovery({
-            pendingSessionIds,
+          const { expectedSessionsPresent, pendingSessionIds } = readCurrentShipments();
+          if (expectedSessionsPresent) {
+            markRecovered();
+            return;
+          }
+          const retryDelay = stripeCheckoutRetryDelay({
+            hasPendingWork: pendingSessionIds.length > 0,
             retryable,
-            nextAttemptAt,
+            now: Date.now(),
             stopAt,
+            retryIndex,
           });
-          if (!shouldContinue) {
-            if (!profileRecovered) {
+          if (retryDelay === null) {
+            if (pendingSessionIds.length) {
               setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'fallback' });
             }
             return;
           }
-          timeout = setTimeout(recoverUntilSettled, STRIPE_CHECKOUT_HISTORY_POLL_INTERVAL_MS);
+          retryIndex += 1;
+          timeout = setTimeout(recoverUntilSettled, retryDelay);
         });
     };
 
@@ -2237,70 +2394,72 @@ function App({
       if (timeout) clearTimeout(timeout);
     };
   }, [
-    anonymousStripeHistoryMarkerKey,
     anonymousStripeHistoryPollUntil,
+    authLoading,
+    authReady,
     connectedWallet,
     firebaseUid,
-    queryClient,
-    restoreProfileFromSession,
+    observeDisconnectedSession,
+    profileShipmentsReady,
+    reconcileProfile,
+    sessionWallet,
+    sessionResolution,
     stripeCheckoutRecoveryKey,
     stripeCheckoutRecoverySessionIds,
-    stripeCheckoutReturnSessionId,
   ]);
 
   useEffect(() => {
-    const recoveredOwner = stripeCheckoutRecoveredProfileWallet;
-    if (!recoveredOwner) return;
+    const recoveredProfile = stripeCheckoutRecoveredProfile;
+    if (!recoveredProfile) return;
+    const { owner: recoveredOwner } = recoveredProfile;
 
     let cancelled = false;
-    setStripeCheckoutInventoryRecovery((current) => {
-      if (current?.owner === recoveredOwner && current.phase === 'complete') return current;
-      return {
-        owner: recoveredOwner,
-        phase: 'pending',
-        baselineUpdatedAt: inventoryDataUpdatedAt,
-      };
-    });
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    setStripeCheckoutInventoryRecovery((current) =>
+      beginKeyedInventoryRecovery(current, recoveredProfile, inventoryDataUpdatedAt),
+    );
 
-    let recovery = stripeCheckoutInventoryRecoveryPromiseRef.current;
-    if (!recovery || recovery.owner !== recoveredOwner) {
-      const inventoryPromise = queryClient.invalidateQueries(
-        { queryKey: inventoryQueryKeyPrefix(recoveredOwner) },
-        { throwOnError: true },
-      );
-      const pendingOpenBoxesPromise = queryClient.invalidateQueries(
-        { queryKey: pendingOpenBoxesQueryKeyPrefix(recoveredOwner) },
-        { throwOnError: true },
-      );
-      const nextRecovery = { owner: recoveredOwner, inventoryPromise };
-      recovery = nextRecovery;
-      stripeCheckoutInventoryRecoveryPromiseRef.current = nextRecovery;
-      void Promise.allSettled([inventoryPromise, pendingOpenBoxesPromise]).then(() => {
-        if (stripeCheckoutInventoryRecoveryPromiseRef.current === nextRecovery) {
-          stripeCheckoutInventoryRecoveryPromiseRef.current = null;
-        }
+    const refreshInventory = () => {
+      if (cancelled) return;
+      const { run: recovery } = getOrStartKeyedInventoryRefresh({
+        runRef: stripeCheckoutInventoryRecoveryPromiseRef,
+        target: recoveredProfile,
+        start: () => {
+          const inventoryPromise = queryClient.invalidateQueries(
+            { queryKey: inventoryQueryKeyPrefix(recoveredOwner) },
+            { throwOnError: true },
+          );
+          const pendingOpenBoxesPromise = queryClient.invalidateQueries(
+            { queryKey: pendingOpenBoxesQueryKeyPrefix(recoveredOwner) },
+            { throwOnError: true },
+          );
+          return {
+            inventoryPromise,
+            completionPromise: Promise.allSettled([inventoryPromise, pendingOpenBoxesPromise]),
+          };
+        },
       });
-    }
-
-    void recovery.inventoryPromise
-      .then(() => {
-        if (cancelled) return;
-        setStripeCheckoutInventoryRecovery((current) =>
-          current?.owner === recoveredOwner
-            ? { ...current, phase: 'complete' }
-            : current,
-        );
-      })
-      .catch((err) => {
-        if (!cancelled) {
+      void observeKeyedInventoryRefresh({
+        run: recovery,
+        isCancelled: () => cancelled,
+        reportError: (err) => {
           console.warn('[mons] failed to refresh inventory after Stripe checkout', err);
-        }
+        },
+        settle: (target) => {
+          setStripeCheckoutInventoryRecovery((current) => settleKeyedInventoryRecovery(current, target));
+        },
+      }).then((succeeded) => {
+        if (cancelled || succeeded) return;
+        retryTimeout = setTimeout(refreshInventory, STRIPE_CHECKOUT_INVENTORY_RETRY_MS);
       });
+    };
+    refreshInventory();
 
     return () => {
       cancelled = true;
+      if (retryTimeout) clearTimeout(retryTimeout);
     };
-  }, [queryClient, stripeCheckoutRecoveredProfileWallet]);
+  }, [queryClient, stripeCheckoutRecoveredProfile]);
 
   useEffect(() => {
     if (
@@ -2314,7 +2473,10 @@ function App({
       return;
     }
     setStripeCheckoutInventoryRecovery((current) =>
-      current?.owner === owner ? { ...current, phase: 'complete' } : current,
+      settleKeyedInventoryRecovery(current, {
+        owner,
+        key: stripeCheckoutInventoryRecovery.key,
+      }),
     );
   }, [
     inventoryDataUpdatedAt,
@@ -2421,18 +2583,10 @@ function App({
   ]);
 
   useEffect(() => {
-    authTokenRef.current = null;
-    authTokenWalletRef.current = null;
     signInPromiseRef.current = null;
-    deliveryRecoveryQueuedRef.current = null;
-    lastScheduledDeliveryRecoveryAtRef.current = null;
-    setDeliveryRecoveryOverrideNextCheckAt(null);
-  }, [connectedWallet]);
-
-  useEffect(() => {
-    authTokenRef.current = token;
-    authTokenWalletRef.current = token && profile?.wallet ? profile.wallet : null;
-  }, [token, profile?.wallet]);
+    invalidateWalletScopedSerialRun(deliveryRecoveryRunRef);
+    lastTriggeredDeliveryRecoveryAtRef.current = null;
+  }, [connectedWallet, sessionWallet]);
 
   useEffect(() => {
     authReadyRef.current = authReady;
@@ -2443,21 +2597,14 @@ function App({
   }, [authLoading]);
 
   const ensureSignedIn = async (): Promise<boolean> => {
-    const hasWalletBoundToken =
-      Boolean(connectedWallet) &&
-      Boolean(authTokenRef.current) &&
-      Boolean(authTokenWalletRef.current) &&
-      authTokenWalletRef.current === connectedWallet;
+    const hasCurrentSession =
+      Boolean(connectedWallet) && hasCurrentWalletSession(connectedWallet);
     if (!publicKey) {
       setVisible(true);
       return false;
     }
-    if (isSignedInWallet && token) {
-      authTokenRef.current = token;
-      authTokenWalletRef.current = connectedWallet || null;
-      return true;
-    }
-    if (hasWalletBoundToken) return true;
+    if (isSignedInWallet && token) return true;
+    if (hasCurrentSession) return true;
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
     if (typeof window !== 'undefined' && (!authReadyRef.current || authLoadingRef.current)) {
@@ -2465,9 +2612,7 @@ function App({
       while (Date.now() < deadline) {
         if (
           connectedWallet &&
-          authTokenRef.current &&
-          authTokenWalletRef.current &&
-          authTokenWalletRef.current === connectedWallet
+          hasCurrentWalletSession(connectedWallet)
         ) {
           return true;
         }
@@ -2479,21 +2624,15 @@ function App({
 
     if (
       connectedWallet &&
-      authTokenRef.current &&
-      authTokenWalletRef.current &&
-      authTokenWalletRef.current === connectedWallet
+      hasCurrentWalletSession(connectedWallet)
     ) {
       return true;
     }
     if (signInPromiseRef.current) return signInPromiseRef.current;
 
     let promise: Promise<boolean>;
-    promise = signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined)
-      .then((session) => {
-        authTokenRef.current = session?.token ?? null;
-        authTokenWalletRef.current = session?.token && session.profile?.wallet ? session.profile.wallet : null;
-        return true;
-      })
+    promise = signIn()
+      .then(() => true)
       .catch((err) => {
         if (!isUserRejectedError(err)) {
           showToast(err instanceof Error ? err.message : 'Failed to sign in');
@@ -2614,94 +2753,86 @@ function App({
       const recoveryWallet = connectedWallet;
       if (!recoveryWallet || !isSignedInWallet || isViewerMode) return;
 
-      if (deliveryRecoveryPromiseRef.current) {
-        deliveryRecoveryQueuedRef.current = mergeDeliveryRecoveryRequest(deliveryRecoveryQueuedRef.current, request);
-        return deliveryRecoveryPromiseRef.current;
-      }
-
-      let promise: Promise<void>;
-      promise = (async () => {
-        let nextRequest: RecoverDeliveryOrdersArgs | null = request;
-
-        while (nextRequest) {
-          const activeRequest = nextRequest;
-          deliveryRecoveryQueuedRef.current = null;
+      return runWalletScopedSerial({
+        runRef: deliveryRecoveryRunRef,
+        wallet: recoveryWallet,
+        request,
+        isContextCurrent: () =>
+          connectedWalletRef.current === recoveryWallet && hasCurrentWalletSession(recoveryWallet),
+        execute: async (activeRequest, isCurrentRun) => {
+          const commitRecoverySchedule = beginDeliveryRecoveryScheduleUpdate();
 
           try {
             const result = await recoverMyDeliveryOrders(activeRequest);
             const stillCurrent =
+              isCurrentRun() &&
               connectedWalletRef.current === recoveryWallet &&
-              authTokenWalletRef.current === recoveryWallet;
+              hasCurrentWalletSession(recoveryWallet);
 
             if (stillCurrent) {
-              const nextCheckAt = deliveryRecoveryNextCheckAtFromResult(result);
-              let refreshedProfile = false;
-              await Promise.all([
-                refreshProfile()
-                  .then(() => {
-                    refreshedProfile = true;
-                  })
-                  .catch(() => null),
-                result.attempted > 0 || result.recovered > 0
-                  ? refetchInventory().catch(() => undefined)
-                  : Promise.resolve(undefined),
-              ]);
-              setDeliveryRecoveryOverrideNextCheckAt(refreshedProfile ? null : nextCheckAt);
+              const nextCheckAt = walletDeliveryRecoveryNextCheckAt(result);
+              if (nextCheckAt === undefined) {
+                await reconcileProfile({ includeDeliveryRecovery: true });
+              } else {
+                commitRecoverySchedule(nextCheckAt);
+              }
+              if (result.attempted > 0 || result.recovered > 0) {
+                await refetchInventory().catch(() => undefined);
+              }
             }
           } catch (err) {
             console.warn('Delivery recovery failed', err);
-            if (connectedWalletRef.current === recoveryWallet && authTokenWalletRef.current === recoveryWallet) {
-              setDeliveryRecoveryOverrideNextCheckAt(Date.now() + 30_000);
+            if (
+              isCurrentRun() &&
+              connectedWalletRef.current === recoveryWallet &&
+              hasCurrentWalletSession(recoveryWallet)
+            ) {
+              commitRecoverySchedule(Date.now() + 30_000);
             }
           }
-
-          nextRequest = deliveryRecoveryQueuedRef.current;
-        }
-      })().finally(() => {
-        if (deliveryRecoveryPromiseRef.current === promise) {
-          deliveryRecoveryPromiseRef.current = null;
-        }
+        },
       });
-
-      deliveryRecoveryPromiseRef.current = promise;
-      return promise;
     },
-    [connectedWallet, isSignedInWallet, isViewerMode, refreshProfile, refetchInventory],
+    [
+      beginDeliveryRecoveryScheduleUpdate,
+      connectedWallet,
+      hasCurrentWalletSession,
+      isSignedInWallet,
+      isViewerMode,
+      reconcileProfile,
+      refetchInventory,
+    ],
   );
 
-  const scheduledDeliveryRecoveryAt = useMemo(
-    () =>
-      earliestDeliveryRecoveryCheckAt(
-        currentOwnerDeliveryRecoveryNextCheckAt,
-        deliveryRecoveryOverrideNextCheckAt,
-      ),
-    [currentOwnerDeliveryRecoveryNextCheckAt, deliveryRecoveryOverrideNextCheckAt],
-  );
+  const scheduledDeliveryRecoveryAt = currentOwnerDeliveryRecoveryNextCheckAt;
 
   useEffect(() => {
     if (!connectedWallet || !isSignedInWallet || isViewerMode) {
-      lastScheduledDeliveryRecoveryAtRef.current = null;
       return;
     }
     if (scheduledDeliveryRecoveryAt == null) {
-      lastScheduledDeliveryRecoveryAtRef.current = null;
+      lastTriggeredDeliveryRecoveryAtRef.current = null;
       return;
     }
 
-    if (scheduledDeliveryRecoveryAt <= Date.now()) {
-      if (lastScheduledDeliveryRecoveryAtRef.current === scheduledDeliveryRecoveryAt) return;
-      lastScheduledDeliveryRecoveryAtRef.current = scheduledDeliveryRecoveryAt;
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    const runWhenDue = () => {
+      if (cancelled) return;
+      timeoutId = null;
+      const step = cappedDeadlineStep(scheduledDeliveryRecoveryAt, Date.now());
+      if (step.kind === 'wait') {
+        timeoutId = window.setTimeout(runWhenDue, step.delayMs);
+        return;
+      }
+      if (lastTriggeredDeliveryRecoveryAtRef.current === scheduledDeliveryRecoveryAt) return;
+      lastTriggeredDeliveryRecoveryAtRef.current = scheduledDeliveryRecoveryAt;
       void runDeliveryRecovery();
-      return;
-    }
-
-    lastScheduledDeliveryRecoveryAtRef.current = scheduledDeliveryRecoveryAt;
-    const timeoutMs = Math.min(Math.max(0, scheduledDeliveryRecoveryAt - Date.now()), 0x7fffffff);
-    const timeoutId = window.setTimeout(() => {
-      void runDeliveryRecovery();
-    }, timeoutMs);
+    };
+    runWhenDue();
     return () => {
-      window.clearTimeout(timeoutId);
+      cancelled = true;
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
   }, [connectedWallet, isSignedInWallet, isViewerMode, runDeliveryRecovery, scheduledDeliveryRecoveryAt]);
 
@@ -3711,10 +3842,10 @@ function App({
       authLoadingSeenRef.current = true;
       return;
     }
-    if (profile || authLoadingSeenRef.current) {
+    if (sessionWallet || authLoadingSeenRef.current) {
       setAuthReady(true);
     }
-  }, [connectedWallet, authLoading, profile]);
+  }, [authLoading, connectedWallet, sessionWallet]);
 
   useEffect(() => {
     if (connectedWallet || walletBusy) {
@@ -4037,12 +4168,11 @@ function App({
     () => moveLittleSwagBoxesFamilyToEnd(visibleInventory.filter((item) => item.kind === 'certificate')),
     [visibleInventory],
   );
-  const stripeCheckoutInventoryRefreshPending = Boolean(
-    owner &&
-      stripeCheckoutRecoveredProfileWallet === owner &&
-      (stripeCheckoutInventoryRecovery?.owner !== owner ||
-        stripeCheckoutInventoryRecovery.phase === 'pending'),
-  );
+  const stripeCheckoutInventoryRefreshPending = keyedInventoryRecoveryPendingForOwner({
+    owner,
+    recovered: stripeCheckoutRecoveredProfile,
+    inventoryRecovery: stripeCheckoutInventoryRecovery,
+  });
   const inventoryEmptyStateVisibility = owner
     ? inventoryFetched && !stripeCheckoutInventoryRefreshPending
       ? 'visible'
@@ -4050,11 +4180,6 @@ function App({
     : walletIdleReady && !stripeCheckoutProfileRecoveryPending
       ? 'visible'
       : 'hidden';
-  const inventoryReadyForShipments =
-    stripeCheckoutRecoveredProfileWallet === viewedProfile?.wallet ||
-    inventoryItems.length > 0 ||
-    inventoryEmptyStateVisibility === 'visible';
-
   const selectedItems = useMemo(() => {
     if (!selected.size) return [] as InventoryItem[];
     const inventoryById = new Map(inventoryView.map((item) => [item.id, item]));
@@ -5286,18 +5411,9 @@ function App({
     try {
       const deliveryDrop = requireKnownDropConfig(deliveryDropId, 'delivery selection');
       const deliveryConnection = getDropConnection(deliveryDrop.dropId);
-      const session = isSignedInWallet
-        ? { profile }
-        : await signIn(hasLocalCompletedStripeCheckout ? { mergeStripeDeliveryOrders: true } : undefined);
+      if (!isSignedInWallet) await signIn();
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
-      const base = session?.profile || profile;
-      if (updateProfile && base) {
-        updateProfile({
-          ...base,
-          email: email || base.email,
-        });
-      }
 
       const requestTx = () =>
         requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id }, deliveryDrop.dropId);
@@ -5337,7 +5453,7 @@ function App({
           );
           const minted = Number(issued?.receiptsMinted || 0);
           showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
-          await Promise.all([refetchInventory(), refreshProfile().catch(() => null)]);
+          await refetchInventory();
         } catch (err) {
           console.warn('Direct issueReceipts failed, starting background recovery', err);
           void runDeliveryRecovery({
@@ -5773,14 +5889,9 @@ function App({
         const orderSuffix = finalized.deliveryId ? ` · order ${finalized.deliveryId}` : '';
         showToast(`Admin IRL redeem ready${orderSuffix} · ${codeCount} ${codeLabel}`);
         if (!isReceiptTarget) setDeliveryOpen(false);
-        await Promise.all([
-          refetchInventory().catch((refreshErr) => {
-            console.warn('[mons] failed to refresh inventory after Admin IRL finalization', refreshErr);
-          }),
-          refreshProfile().catch((refreshErr) => {
-            console.warn('[mons] failed to refresh profile after Admin IRL finalization', refreshErr);
-          }),
-        ]);
+        await refetchInventory().catch((refreshErr) => {
+          console.warn('[mons] failed to refresh inventory after Admin IRL finalization', refreshErr);
+        });
       }
     } catch (err) {
       const hadPendingSubmission = Boolean(pendingFinalizeRequestId);
@@ -6220,7 +6331,8 @@ function App({
     };
   };
 
-  const profileLoadingForView = viewedProfileLoading && (!profile || profile.wallet !== owner);
+  const isOwnProfileView = canReadOwnProfile;
+  const profileLoadingForView = isViewerMode && viewedProfileLoading;
   const anonymousStripeDeliveryOrders = anonymousStripeHistoryData?.orders || [];
   const anonymousStripeHistoryHasOrders = anonymousStripeDeliveryOrders.length > 0;
   const anonymousStripeHistoryInitialLoading =
@@ -6237,7 +6349,9 @@ function App({
     !anonymousStripeHistoryError &&
     (anonymousStripeHistoryInitialLoading ||
       Boolean(anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil));
-  const deliveryOrders = viewedProfile?.orders || (anonymousStripeHistoryVisible ? anonymousStripeDeliveryOrders : []);
+  const deliveryOrders = isOwnProfileView
+    ? profileShipments
+    : viewedProfile?.orders || (anonymousStripeHistoryVisible ? anonymousStripeDeliveryOrders : []);
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();
     deliveryOrders.forEach((order) => {
@@ -6261,14 +6375,31 @@ function App({
     });
     return Array.from(targetsByKey.values());
   }, [deliveryOrders, figureMetadataByKey, getDropContent]);
+  const ownShipmentsEmptyState = ownProfileShipmentsEmptyState({
+    ready: profileShipmentsReady,
+    error: profileShipmentsError,
+    checkoutRecoveryPending: stripeCheckoutProfileRecoveryPending,
+  });
+  const shipmentsRetainedError = retainedProfileShipmentsError({
+    isOwnProfileView,
+    shipmentCount: deliveryOrders.length,
+    error: profileShipmentsError,
+  });
   const shipmentsEmptyContent = (() => {
-    if (viewedProfile) return 'No shipments yet.';
+    if (isOwnProfileView) {
+      if (ownShipmentsEmptyState === 'error') return 'Unable to load shipments.';
+      if (ownShipmentsEmptyState === 'preparing') return 'Preparing shipment…';
+      return ownShipmentsEmptyState === 'empty' ? 'No shipments yet.' : 'Loading shipments…';
+    }
+    if (isViewerMode) {
+      if (viewedProfileError) return 'Unable to load shipments.';
+      return profileLoadingForView ? 'Loading shipments…' : 'No shipments yet.';
+    }
     if (anonymousStripeHistoryVisible) {
       if (anonymousStripeHistoryInitialLoading) return 'Loading shipments…';
       if (anonymousStripeHistoryError) return 'Unable to load shipments.';
       return anonymousStripeHistoryWaitingForFulfillment ? 'Preparing shipment…' : 'No shipments yet.';
     }
-    if (isSignedInWallet && owner) return profileLoadingForView ? 'Loading shipments…' : 'No shipments yet.';
     return (
       <span className="shipments-signin">
         <button
@@ -6284,24 +6415,24 @@ function App({
       </span>
     );
   })();
-  const shipmentsOwnerDataReady = connectedWallet ? authReady : Boolean(viewedProfile);
-  const shipmentsEmptyStateReady = owner
-    ? shipmentsOwnerDataReady
-    : walletIdleReady && !stripeCheckoutProfileRecoveryPending;
+  const shipmentsEmptyStateReady = isOwnProfileView
+    ? ownShipmentsEmptyState !== 'loading'
+    : isViewerMode
+      ? !viewedProfileLoading
+      : anonymousStripeHistoryVisible
+        ? !anonymousStripeHistoryInitialLoading
+        : connectedWallet
+          ? authReady
+          : walletIdleReady && !stripeCheckoutProfileRecoveryPending;
   const shipmentsEmptyStateVisibility = shipmentsEmptyStateReady ? 'visible' : 'hidden';
-  const shipmentsLookupPendingForReceipts =
-    (!viewedProfile && profileLoadingForView) ||
-    (anonymousStripeHistoryVisible &&
-      (anonymousStripeHistoryInitialLoading || anonymousStripeHistoryWaitingForFulfillment));
-  const shipmentsLookupFailedForReceipts =
-    Boolean(!viewedProfile && viewedProfileError) ||
-    Boolean(anonymousStripeHistoryVisible && !anonymousStripeHistoryHasOrders && anonymousStripeHistoryError);
-  const receiptsContentVisible =
-    shipmentsReady &&
-    (deliveryOrders.length > 0 ||
-      (shipmentsEmptyStateVisibility === 'visible' &&
-        !shipmentsLookupPendingForReceipts &&
-        !shipmentsLookupFailedForReceipts));
+  const profileSectionsReady = profileSectionReadiness({
+    shipmentCount: deliveryOrders.length,
+    shipmentsEmptyStateReady,
+    receiptItemCount: receiptItems.length,
+    inventoryEmptyStateVisible: inventoryEmptyStateVisibility === 'visible',
+  });
+  const shipmentsSectionReady = profileSectionsReady.shipments;
+  const receiptsContentVisible = profileSectionsReady.receipts;
   const closeClaimModal = useCallback(() => {
     claimModalGenerationRef.current += 1;
     setClaimOpen(false);
@@ -6313,13 +6444,6 @@ function App({
     }
   }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
 
-  useEffect(() => {
-    if (!inventoryReadyForShipments) {
-      setShipmentsReady(false);
-      return;
-    }
-    setShipmentsReady(true);
-  }, [inventoryReadyForShipments]);
   useEffect(() => {
     if (!shipmentFigureTargetsNeedingMetadata.length) return;
     if (typeof window === 'undefined') return;
@@ -6982,7 +7106,9 @@ function App({
   const activeError =
     authError && !isUserRejectedError(authError)
       ? authError
-      : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
+      : canReadOwnProfile && profileError
+        ? profileError
+        : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
@@ -7433,45 +7559,52 @@ function App({
         <div className="app-section__head">
           <div className="app-section__title">Shipments</div>
         </div>
-        {shipmentsReady ? (
+        {shipmentsSectionReady ? (
           deliveryOrders.length ? (
-          <div className="delivery-list">
-            {deliveryOrders.map((order) => {
-              const trackingCode = shouldShowDeliveryTrackingCode(order)
-                ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
-                : '';
-              const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
-              return (
-                <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
-                  <div className="delivery-row__head">
-                    <div>
-                      <div className="delivery-row__title">
-                        {dropById.get(order.dropId)?.displayName || dropById.get(order.dropId)?.collectionName || order.dropId}
+          <>
+            {shipmentsRetainedError ? (
+              <div className="muted small" role="status">
+                {shipmentsRetainedError}
+              </div>
+            ) : null}
+            <div className="delivery-list">
+              {deliveryOrders.map((order) => {
+                const trackingCode = shouldShowDeliveryTrackingCode(order)
+                  ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
+                  : '';
+                const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
+                return (
+                  <div key={`${order.dropId}:${order.deliveryId}`} className="delivery-row">
+                    <div className="delivery-row__head">
+                      <div>
+                        <div className="delivery-row__title">
+                          {dropById.get(order.dropId)?.displayName || dropById.get(order.dropId)?.collectionName || order.dropId}
+                        </div>
+                        <div className="muted small">{formatOrderDate(order)}</div>
                       </div>
-                      <div className="muted small">{formatOrderDate(order)}</div>
+                      <div className="delivery-status">
+                        <div>{displayOrderStatus(order)}</div>
+                        {trackingCode ? (
+                          trackingHref ? (
+                            <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
+                              Tracking
+                            </a>
+                          ) : (
+                            <div className="tracking-code-readout mono small">{trackingCode}</div>
+                          )
+                        ) : null}
+                      </div>
                     </div>
-                    <div className="delivery-status">
-                      <div>{displayOrderStatus(order)}</div>
-                      {trackingCode ? (
-                        trackingHref ? (
-                          <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
-                            Tracking
-                          </a>
-                        ) : (
-                          <div className="tracking-code-readout mono small">{trackingCode}</div>
-                        )
-                      ) : null}
-                    </div>
+                    {order.items.length ? (
+                      renderShipmentItems(order)
+                    ) : (
+                      <div className="muted small">Items unavailable.</div>
+                    )}
                   </div>
-                  {order.items.length ? (
-                    renderShipmentItems(order)
-                  ) : (
-                    <div className="muted small">Items unavailable.</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
           ) : (
           <div
             className={`muted small${shipmentsEmptyStateVisibility === 'hidden' ? ' empty-state--hidden' : ''}`}

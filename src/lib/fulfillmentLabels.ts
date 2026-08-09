@@ -107,7 +107,7 @@ export function resolveFulfillmentDirectDeliveryBoxLabel(
   };
 }
 
-export function fulfillmentBoxSecretLabelPrefix(_source: FulfillmentLabelSource): string {
+function fulfillmentBoxSecretLabelPrefix(_source: FulfillmentLabelSource): string {
   return 'Secret Code';
 }
 

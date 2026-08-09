@@ -4,7 +4,8 @@ import {
   mergeStripeCheckoutRecoverySessionIds,
   pendingStripeCheckoutRecoverySessionIds,
   resolveStripeCheckoutDataOwner,
-  shouldContinueStripeCheckoutRecovery,
+  shouldObserveDisconnectedStripeSession,
+  stripeCheckoutRetryDelay,
   shouldUseAnonymousStripeHistory,
 } from '../src/lib/stripeCheckoutRecovery.ts';
 
@@ -38,43 +39,70 @@ test('Stripe recovery remains pending until every checkout reaches the wallet pr
   );
 });
 
-test('Stripe recovery retries only retryable unsettled work inside the polling window', () => {
+test('Stripe recovery backs off adaptively and schedules a final deadline attempt', () => {
+  const base = { hasPendingWork: true, retryable: true, now: 1_000, stopAt: 30_000 };
+  assert.equal(stripeCheckoutRetryDelay({ ...base, retryIndex: 0 }), 3_000);
+  assert.equal(stripeCheckoutRetryDelay({ ...base, retryIndex: 1 }), 6_000);
+  assert.equal(stripeCheckoutRetryDelay({ ...base, retryIndex: 2 }), 12_000);
+  assert.equal(stripeCheckoutRetryDelay({ ...base, retryIndex: 3 }), 15_000);
   assert.equal(
-    shouldContinueStripeCheckoutRecovery({
-      pendingSessionIds: ['session-a'],
-      retryable: true,
-      nextAttemptAt: 9_000,
-      stopAt: 10_000,
-    }),
-    true,
+    stripeCheckoutRetryDelay({ ...base, now: 29_500, retryIndex: 3 }),
+    500,
   );
   assert.equal(
-    shouldContinueStripeCheckoutRecovery({
-      pendingSessionIds: [],
-      retryable: true,
-      nextAttemptAt: 9_000,
-      stopAt: 10_000,
-    }),
-    false,
+    stripeCheckoutRetryDelay({ ...base, now: 30_000, retryIndex: 0 }),
+    null,
   );
   assert.equal(
-    shouldContinueStripeCheckoutRecovery({
-      pendingSessionIds: ['session-a'],
-      retryable: false,
-      nextAttemptAt: 9_000,
-      stopAt: 10_000,
-    }),
-    false,
+    stripeCheckoutRetryDelay({ ...base, hasPendingWork: false, retryIndex: 0 }),
+    null,
   );
   assert.equal(
-    shouldContinueStripeCheckoutRecovery({
-      pendingSessionIds: ['session-a'],
-      retryable: true,
-      nextAttemptAt: 11_000,
-      stopAt: 10_000,
-    }),
-    false,
+    stripeCheckoutRetryDelay({ ...base, retryable: false, retryIndex: 0 }),
+    null,
   );
+});
+
+test('disconnected session observation survives fallback only for a previously bound session', () => {
+  const pending = { key: 'uid:cs_1', phase: 'pending' as const };
+  const fallback = { key: 'uid:cs_1', phase: 'fallback' as const };
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: null,
+    recoveryKey: pending.key,
+    recoveryStatus: null,
+    recoveredWallet: null,
+  }), true);
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: null,
+    recoveryKey: pending.key,
+    recoveryStatus: pending,
+    recoveredWallet: null,
+  }), true);
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: null,
+    recoveryKey: fallback.key,
+    recoveryStatus: fallback,
+    recoveredWallet: null,
+  }), false);
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: null,
+    recoveryKey: fallback.key,
+    recoveryStatus: fallback,
+    recoveredWallet: null,
+    hasObservedSession: true,
+  }), true);
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: null,
+    recoveryKey: fallback.key,
+    recoveryStatus: fallback,
+    recoveredWallet: 'wallet',
+  }), true);
+  assert.equal(shouldObserveDisconnectedStripeSession({
+    connectedWallet: 'connected',
+    recoveryKey: pending.key,
+    recoveryStatus: pending,
+    recoveredWallet: 'wallet',
+  }), false);
 });
 
 test('anonymous Stripe history is limited to returns without a connected or recovered owner', () => {

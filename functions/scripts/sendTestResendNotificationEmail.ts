@@ -517,7 +517,7 @@ async function fetchLatestDeliveryOrderCandidatesForStatus(
           `Indexed ${options.kind} lookup failed for drop ${dropId}, status ${status}.`,
           `Error: ${summarizeFetchError(err)}`,
           'Required Firestore indexes are declared in firestore.indexes.json.',
-          'Deploy them with: firebase deploy --only firestore:indexes',
+          'Deploy them with: firebase deploy --project mons-shop --only firestore:indexes',
         ].join('\n'),
       );
     }

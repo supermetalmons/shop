@@ -134,8 +134,11 @@ test('active blur portals render even when open is false', () => {
   const markup = renderToStaticMarkup(
     createElement(
       BackgroundBlurPortal,
-      { open: false, active: true },
-      createElement('span', null, 'Foreground'),
+      {
+        open: false,
+        active: true,
+        children: createElement('span', null, 'Foreground'),
+      },
     ),
   );
   assert.equal(markup, '<span>Foreground</span>');
@@ -237,15 +240,17 @@ test('modal focus scopes expose active, suspended, and nested semantics', () => 
   const activeMarkup = renderToStaticMarkup(
     createElement(
       ModalFocusScope,
-      { ariaLabel: 'Card viewer' },
-      createElement('button', { type: 'button' }, 'Bookmark'),
+      {
+        ariaLabel: 'Card viewer',
+        children: createElement('button', { type: 'button' }, 'Bookmark'),
+      },
     ),
   );
   const suspendedMarkup = renderToStaticMarkup(
-    createElement(ModalFocusScope, { ariaLabel: 'Exporting', suspended: true }),
+    createElement(ModalFocusScope, { ariaLabel: 'Exporting', children: null, suspended: true }),
   );
   const nestedMarkup = renderToStaticMarkup(
-    createElement(ModalFocusScope, { ariaLabel: 'Nested', enabled: false }),
+    createElement(ModalFocusScope, { ariaLabel: 'Nested', children: null, enabled: false }),
   );
 
   assert.match(activeMarkup, /role="dialog"/);

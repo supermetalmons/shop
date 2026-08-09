@@ -1,16 +1,41 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function hasSession(uid) {
+      return exists(/databases/$(database)/documents/authSessions/$(uid));
+    }
+
+    function canReadOwnProfile(wallet) {
+      return request.auth != null && (
+        (
+          hasSession(request.auth.uid) &&
+          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.wallet == wallet &&
+          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.expiresAt is timestamp &&
+          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.expiresAt > request.time
+        ) || (
+          request.auth.uid == wallet &&
+          !hasSession(request.auth.uid)
+        )
+      );
+    }
+
     match /profiles/{wallet} {
-      allow read, write: if false;
+      allow get: if canReadOwnProfile(wallet);
+      allow list, create, update, delete: if false;
 
       match /addresses/{addressId} {
         allow read, write: if false;
       }
+
+      match /shipments/{summaryId} {
+        allow get, list: if canReadOwnProfile(wallet);
+        allow create, update, delete: if false;
+      }
     }
 
     match /authSessions/{uid} {
-      allow read, write: if false;
+      allow get: if request.auth != null && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
     }
 
     match /claimCodes/{code} {
