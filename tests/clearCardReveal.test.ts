@@ -5,6 +5,7 @@ import {
   beginClearCardRevealRequest,
   createClearCardGatedHitState,
   createClearCardRevealRequestState,
+  isClearCardInteractionPoint,
   isClearCardImpactKey,
   isClearCardImpactPointer,
   settleClearCardRevealRequest,
@@ -50,6 +51,25 @@ test('clear card impacts accept only the primary activation pointer', () => {
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 1 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 2 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: false, button: 0 }), false);
+});
+
+test('clear card interactions stay within the nominal viewer frame', () => {
+  const bounds = { left: 10, top: 20, right: 110, bottom: 220 };
+  for (const point of [
+    { clientX: 10, clientY: 20 },
+    { clientX: 60, clientY: 120 },
+    { clientX: 110, clientY: 220 },
+  ]) {
+    assert.equal(isClearCardInteractionPoint(point, bounds), true);
+  }
+  for (const point of [
+    { clientX: 9, clientY: 120 },
+    { clientX: 111, clientY: 120 },
+    { clientX: 60, clientY: 19 },
+    { clientX: 60, clientY: 221 },
+  ]) {
+    assert.equal(isClearCardInteractionPoint(point, bounds), false);
+  }
 });
 
 test('clear card impacts accept normal keyboard activation only', () => {

@@ -39,6 +39,7 @@ import {
 import {
   advanceClearCardGatedHit,
   createClearCardGatedHitState,
+  isClearCardInteractionPoint,
   isClearCardImpactKey,
   isClearCardImpactPointer,
   type ClearCardGatedHitState,
@@ -98,6 +99,7 @@ const SHARD_SIDE_CENTERING_RAMP_S = 0.4;
 const MAX_SPARKLES = 64;
 const HIT_SPARKLE_COUNT = 12;
 const BREAK_SPARKLE_COUNT = 28;
+const SPARKLE_POINT_SIZE_FACTOR = 0.05;
 const TRANSMISSIVE_PACK_ROTATION_X = THREE.MathUtils.degToRad(7);
 const TRANSMISSIVE_PACK_ROTATION_Y = THREE.MathUtils.degToRad(-4);
 const TRANSMISSION_RESOLUTION_SCALE_DEFAULT = 1;
@@ -241,6 +243,7 @@ type ClearCardThreeViewerProps = {
   snapBackOnRelease?: boolean;
   interactionFrameRateMode?: InteractionFrameRateMode;
   interactionEnabled?: boolean;
+  interactionBounds?: 'canvas' | 'parent';
   keyboardActivationEnabled?: boolean;
   hitProgressionMode?: ClearCardHitProgressionMode;
   revealReady?: boolean;
@@ -591,6 +594,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       snapBackOnRelease = false,
       interactionFrameRateMode = 'unrestricted',
       interactionEnabled = true,
+      interactionBounds = 'canvas',
       keyboardActivationEnabled = false,
       hitProgressionMode = 'fixed',
       revealReady = true,
@@ -783,20 +787,42 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       requestRenderRef.current?.();
     }, [axisLockedOrbit, cancelUnrestrictedDrag, unrestrictedMovement]);
 
-    const updateTilt = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (viewModeRef.current !== 'tilt') return;
-      if (!viewerReadyRef.current || reducedMotionRef.current) return;
-      if (!event.isPrimary) return;
-      if (stageRef.current === 'breaking') return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      if (!bounds.width || !bounds.height) return;
-      beginInteractionThrottleRef.current?.();
-      const pointerX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
-      const pointerY = THREE.MathUtils.clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
-      tiltRef.current.targetX = -(pointerY * 2 - 1) * MAX_TILT_X;
-      tiltRef.current.targetY = -(pointerX * 2 - 1) * MAX_TILT_Y;
-      requestRenderRef.current?.();
-    }, []);
+    const getInteractionBounds = useCallback(
+      (canvas: HTMLCanvasElement) =>
+        interactionBounds === 'parent'
+          ? canvas.parentElement?.getBoundingClientRect() ?? canvas.getBoundingClientRect()
+          : canvas.getBoundingClientRect(),
+      [interactionBounds],
+    );
+
+    const pointerIsWithinInteractionBounds = useCallback(
+      (event: ReactPointerEvent<HTMLCanvasElement>) =>
+        isClearCardInteractionPoint(event, getInteractionBounds(event.currentTarget)),
+      [getInteractionBounds],
+    );
+
+    const updateTilt = useCallback(
+      (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (viewModeRef.current !== 'tilt') return;
+        if (!viewerReadyRef.current || reducedMotionRef.current) return;
+        if (!event.isPrimary) return;
+        if (stageRef.current === 'breaking') return;
+        const bounds = getInteractionBounds(event.currentTarget);
+        if (!bounds.width || !bounds.height) return;
+        if (!isClearCardInteractionPoint(event, bounds)) {
+          releaseInteractionThrottleRef.current?.();
+          resetTilt();
+          return;
+        }
+        beginInteractionThrottleRef.current?.();
+        const pointerX = THREE.MathUtils.clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+        const pointerY = THREE.MathUtils.clamp((event.clientY - bounds.top) / bounds.height, 0, 1);
+        tiltRef.current.targetX = -(pointerY * 2 - 1) * MAX_TILT_X;
+        tiltRef.current.targetY = -(pointerX * 2 - 1) * MAX_TILT_Y;
+        requestRenderRef.current?.();
+      },
+      [getInteractionBounds, resetTilt],
+    );
 
     const handlePointerMove = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -887,6 +913,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (!pointerIsWithinInteractionBounds(event)) return;
         if (viewModeRef.current !== 'tilt') {
           if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
           if (!isClearCardImpactPointer(event)) return;
@@ -909,7 +936,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
         updateTilt(event);
       },
-      [updateTilt],
+      [pointerIsWithinInteractionBounds, updateTilt],
     );
 
     const handlePointerUp = useCallback(
@@ -1175,7 +1202,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         sizeAttenuation: true,
-        size: 1,
+        size: SPARKLE_POINT_SIZE_FACTOR,
       });
       const sparklePoints = new THREE.Points(sparkleGeometry, sparkleMaterial);
       sparklePoints.frustumCulled = false;
@@ -1183,6 +1210,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       sparklePoints.visible = false;
       sparklePoints.layers.set(SHARD_LAYER);
       scene.add(sparklePoints);
+
+      const syncSparkleScale = (effectSize: THREE.Vector3) => {
+        sparkleWorldScale = Math.max(effectSize.x, effectSize.y, effectSize.z) || 1;
+        sparkleMaterial.size = sparkleWorldScale * SPARKLE_POINT_SIZE_FACTOR;
+      };
 
       const markSceneMaterialsForUpdate = () => {
         scene.traverse((object) => {
@@ -2567,9 +2599,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             cardRoot.scale.setScalar(embedScale);
             centerObject(cardRoot, cardSize);
             cardGroup.add(cardRoot);
-            const effectSize = packReady ? packSize : cardSize;
-            sparkleWorldScale = Math.max(effectSize.x, effectSize.y, effectSize.z) || 1;
-            sparkleMaterial.size = sparkleWorldScale * 0.05;
+            syncSparkleScale(packReady ? packSize : cardSize);
             if (cardOnly) {
               cardReady = true;
               fitSize.copy(cardSize);
@@ -2779,6 +2809,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             }
             const packRoot = packGltf.scene;
             centerObject(packRoot, packSize);
+            syncSparkleScale(packSize);
             packGroup.add(packRoot);
             packRoot.traverse((object) => {
               if (!(object instanceof THREE.Mesh)) return;

@@ -2993,9 +2993,10 @@ button.no-focus-style:focus-visible {
 .clear-card-reveal-overlay .clear-card-wip__canvas {
   display: block;
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  left: -25%;
+  top: -25%;
+  width: 150%;
+  height: 150%;
   opacity: 0;
   transform: translate3d(0, 8px, 0) scale(0.97);
   filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));

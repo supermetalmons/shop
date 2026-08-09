@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type TransitionEvent,
 } from 'react';
@@ -22,14 +23,13 @@ import { DEFAULT_CLEAR_PACK_MODEL_URL, clearCardModelUrl } from '../lib/clearCar
 import {
   beginClearCardRevealRequest,
   createClearCardRevealRequestState,
+  isClearCardInteractionPoint,
   settleClearCardRevealRequest,
   type ClearCardRevealRequestState,
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
 import { useDarkColorScheme } from '../hooks/useDarkColorScheme';
 import { ModalFocusScope } from './ModalFocusScope';
-
-const CLEAR_CARD_REVEAL_CAMERA_ZOOM = 1.5;
 
 function createClearCardThreeViewerComponent() {
   return lazy(() => import('../ClearCardThreeViewer'));
@@ -173,6 +173,12 @@ export default function ClearCardRevealOverlay({
     onDismiss?.();
   }, [closing, onDismiss, revealComplete, suspended]);
 
+  const handleFrameClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isClearCardInteractionPoint(event, event.currentTarget.getBoundingClientRect())) {
+      event.stopPropagation();
+    }
+  }, []);
+
   const handleRetryCard = useCallback(() => {
     setCardLoadStatus('loading');
     viewerRef.current?.retryCardModel();
@@ -199,11 +205,12 @@ export default function ClearCardRevealOverlay({
       style={overlayStyle}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}
+      onClick={handleBackdropClick}
     >
-      <div className="reveal-overlay__backdrop" onClick={handleBackdropClick} />
+      <div className="reveal-overlay__backdrop" />
       <div
         className="reveal-overlay__frame clear-card-reveal-overlay__frame"
-        onClick={(event) => event.stopPropagation()}
+        onClick={handleFrameClick}
         onTransitionEnd={onTransitionEnd}
       >
         <div
@@ -235,11 +242,11 @@ export default function ClearCardRevealOverlay({
                   axisLockedOrbit={false}
                   interactionFrameRateMode="adaptive"
                   interactionEnabled={phase === 'ready' && !closing && !suspended}
+                  interactionBounds="parent"
                   keyboardActivationEnabled={displayStage === 'pack'}
                   hitProgressionMode="reveal-gated"
                   revealReady={cardReady}
                   initiallyRevealed={false}
-                  cameraZoom={CLEAR_CARD_REVEAL_CAMERA_ZOOM}
                   ariaLabel={
                     displayStage === 'pack'
                       ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`

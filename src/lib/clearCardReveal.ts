@@ -24,6 +24,13 @@ export function isClearCardImpactPointer({
   return isPrimary && button === 0;
 }
 
+export function isClearCardInteractionPoint(
+  { clientX, clientY }: { clientX: number; clientY: number },
+  { left, top, right, bottom }: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
+}
+
 export function isClearCardImpactKey({
   key,
   repeat,
