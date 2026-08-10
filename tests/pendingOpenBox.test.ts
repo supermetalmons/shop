@@ -6,7 +6,7 @@ import { encodeFinalizeOpenBoxArgs } from '../functions/src/finalizeOpenBoxArgs.
 import { ACCOUNT_PENDING_OPEN_BOX, decodePendingOpenBox } from '../functions/src/pendingOpenBox.ts';
 import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
-import { decodePendingOpenRecordData } from '../src/lib/api.ts';
+import { decodePendingOpenRecordData } from '../functions/src/shared/shopDomain.ts';
 
 const LIVE_LITTLE_SWAG_BOXES_LEGACY_PENDING =
   'RQdFGvAMQ6Ge0Y5xVn5l/WqYRLjb7HsYQ8nLgzuLwMnRD7Ow2WA4t/d94N7kPVYpYdwdU4ja0Dhqq35JtKtJ7dgEh3CmAh5hWITpOHGmTOxKTZcquT0CAU7flx38JqkeNnCs35PJ1Qw1DARXjX2i6mRBhwls4tXoZUQHOOugR2fJxqKKzakLpDn+bRCMKIqxIt5kmUIiNMc3d3054wf9ZEULXH5lF+EAGuhkGQAAAAD7';

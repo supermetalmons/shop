@@ -4,16 +4,20 @@
     ".": {
       "entry": [
         "src/renderer/main.tsx",
+        "cloud/workers/api/src/index.ts",
+        "cloud/workers/api/test/*.test.ts",
+        "cloud/workers/api/runtime-test/*.test.ts",
         "scripts/*.{ts,cjs}",
         "scripts/newDrops/*.ts",
         "tests/*.test.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
+        "cloud/workers/api/**/*.{ts,tsx}",
         "scripts/**/*.{ts,cjs}",
         "tests/**/*.ts"
       ],
-      "ignoreDependencies": ["buffer", "wrangler"],
+      "ignoreDependencies": ["buffer"],
       "ignoreBinaries": ["mkfifo", "solana"]
     },
     "functions": {

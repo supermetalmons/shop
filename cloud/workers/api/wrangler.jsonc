@@ -1,0 +1,68 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "mons-shop-api",
+  "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": true,
+  "placement": {
+    "mode": "smart"
+  },
+  "routes": [
+    {
+      "pattern": "api.mons.shop",
+      "custom_domain": true
+    }
+  ],
+  "secrets": {
+    "required": ["HELIUS_API_KEY"]
+  },
+  "ratelimits": [
+    {
+      "name": "IP_RATE_LIMITER",
+      "namespace_id": "2026080901",
+      "simple": {
+        "limit": 60000,
+        "period": 60
+      }
+    },
+    {
+      "name": "OWNER_RATE_LIMITER",
+      "namespace_id": "2026080902",
+      "simple": {
+        "limit": 60000,
+        "period": 60
+      }
+    },
+    {
+      "name": "RPC_IP_RATE_LIMITER",
+      "namespace_id": "2026080903",
+      "simple": {
+        "limit": 120000,
+        "period": 60
+      }
+    },
+    {
+      "name": "RPC_EXPENSIVE_RATE_LIMITER",
+      "namespace_id": "2026080904",
+      "simple": {
+        "limit": 12000,
+        "period": 60
+      }
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+      "invocation_logs": false,
+      "persist": true
+    },
+    "traces": {
+      "enabled": false
+    }
+  }
+}

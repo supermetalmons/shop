@@ -6,6 +6,7 @@ Thumbs.db
 *.swp
 *.bak
 
+.dev.vars*
 .env
 .env.*
 !.env.example
@@ -26,6 +27,7 @@ pnpm-debug.log*
 
 .firebase/
 firebase-debug.log
+firestore-debug.log
 functions/node_modules/
 functions/lib/
 functions/.runtimeconfig.json

@@ -51,7 +51,6 @@ import {
   prepareAdminIrlRedeemTx,
   prepareReceiptTransferTx,
   recoverMyDeliveryOrders,
-  rememberPendingOpenDropId,
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
@@ -181,6 +180,7 @@ import { clearCardModelIdFromRevealResult, clearCardModelUrl } from './lib/clear
 import { preloadRevealFrames, resolveRevealFrameSrc } from './lib/revealFrameSequence';
 import {
   classifySignedTransactionSendError,
+  confirmSubmittedTransactionByPolling,
   encryptAddressPayload,
   isBlockhashExpiredError,
   isPotentiallySubmittedTransactionError,
@@ -254,8 +254,8 @@ import {
   listFrontendDrops,
   resolveFrontendDropByPath,
   resolveUpcomingDropRouteByPath,
-  rpcEndpointForCluster,
 } from './lib/dropConfig';
+import { createShopConnection } from './lib/shopRpc';
 import { ADMIN_WALLETS, hasDevnetInventoryAccess, hasFulfillmentAppAccess } from './lib/fulfillmentAccess';
 import { getInventoryRevealRect } from './lib/inventoryMediaRect';
 import {
@@ -1330,7 +1330,7 @@ function App({
       const cacheKey = `${drop.solanaCluster}:${drop.dropId}`;
       const cached = dropConnectionCacheRef.current.get(cacheKey);
       if (cached) return cached;
-      const created = new Connection(rpcEndpointForCluster(drop.solanaCluster), { commitment: 'confirmed' });
+      const created = createShopConnection(drop.solanaCluster);
       dropConnectionCacheRef.current.set(cacheKey, created);
       return created;
     },
@@ -3723,7 +3723,7 @@ function App({
     let cancelled = false;
     const tick = () => {
       if (cancelled) return;
-      void refetchInventory();
+      void refetchInventory({ cancelRefetch: false });
     };
     tick();
     const interval = window.setInterval(tick, 3_000);
@@ -4477,7 +4477,7 @@ function App({
   ): Promise<string | null> {
     const signature = await signAndSendViaConnection(tx, targetConnection, options);
     if (signature) {
-      await targetConnection.confirmTransaction(signature, 'confirmed');
+      await confirmSubmittedTransactionByPolling(targetConnection, signature);
     }
     return signature;
   }
@@ -4489,8 +4489,13 @@ function App({
   ): Promise<boolean> {
     const signature = await signAndSendViaConnection(tx, targetConnection, options);
     if (!signature) return false;
-    const result = await targetConnection.confirmTransaction(signature, 'confirmed');
-    return Boolean(result.value.err);
+    try {
+      await confirmSubmittedTransactionByPolling(targetConnection, signature);
+      return false;
+    } catch (error) {
+      if (isSubmittedTransactionFailureError(error)) return true;
+      throw error;
+    }
   }
 
   const signAndSendPreparedViaConnection = useCallback(
@@ -4826,7 +4831,6 @@ function App({
         });
       };
       await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
-      rememberPendingOpenDropId(targetDrop.solanaCluster, item.id, targetDrop.dropId);
       queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;

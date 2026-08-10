@@ -1,20 +1,76 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  cloudflareVersionIdPattern as versionIdPattern,
+  writeProductionEvidence,
+} from './finalize-cloudflare-release.ts';
 
 type DeployMode = 'dry-run' | 'preview' | 'production';
 
 type CliOptions = {
   mode: DeployMode;
   tokenFile?: string;
+  versionId?: string;
 };
+
+type FrontendUploadMetadata = {
+  versionId: string;
+  previewUrl: string;
+};
+
+type FrontendCandidateRecord = FrontendUploadMetadata & {
+  workerName: 'mons-shop';
+  testedAt: string;
+  htmlSha256: string;
+};
+
+type FrontendSmokeDependencies = {
+  fetch?: typeof fetch;
+  sleep?: (milliseconds: number) => Promise<void>;
+};
+
+class DeployFailure extends Error {
+  readonly exitCode: number;
+
+  constructor(message: string, exitCode = 1) {
+    super(message);
+    this.name = 'DeployFailure';
+    this.exitCode = exitCode;
+  }
+}
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
 const npmBinary = isWindows ? 'npm.cmd' : 'npm';
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', isWindows ? 'wrangler.cmd' : 'wrangler');
+const workersDevSubdomain = 'lil-org.workers.dev';
+const frontendWorkerName = 'mons-shop';
+const frontendAccountId = 'e25f90fc073ea309b54b8b5144bf28e0';
+const frontendProductionOrigins = ['https://mons.shop', 'https://www.mons.shop'] as const;
+const frontendCandidateRecordDirectory = resolve(repoRoot, '.cache', 'mons-shop-frontend-candidates');
+const frontendCandidateMaxAgeMs = 6 * 60 * 60 * 1000;
+const frontendCandidateClockSkewMs = 5 * 60 * 1000;
+const frontendSmokeResponseLimit = 256 * 1024;
+const frontendSmokeAssetResponseLimit = 2 * 1024 * 1024;
+const frontendSmokeRetryDelaysMs = [0, 500, 1_500] as const;
+const frontendValidationSteps = [
+  { args: ['run', 'typecheck'], label: 'Frontend typecheck' },
+  { args: ['test'], label: 'Frontend tests' },
+  { args: ['run', 'build'], label: 'Frontend build' },
+  { args: ['run', 'validate:browser-bundle'], label: 'Frontend bundle validation' },
+] as const;
 
 function usage(): string {
   return [
@@ -23,7 +79,7 @@ function usage(): string {
     'Usage:',
     '  npm run deploy -- dry-run',
     '  npm run deploy -- preview --token-file /path/to/cloudflare-token',
-    '  npm run deploy -- production --token-file /path/to/cloudflare-token',
+    '  npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token',
     '',
     'Authentication:',
     '  Pass --token-file, or set CLOUDFLARE_API_TOKEN in the shell.',
@@ -32,11 +88,46 @@ function usage(): string {
 }
 
 function fail(message: string, exitCode = 1): never {
-  console.error(`\n[deploy] ${message}\n`);
-  process.exit(exitCode);
+  throw new DeployFailure(message, exitCode);
 }
 
-function parseArgs(argv: string[]): CliOptions {
+function normalizeVersionId(value: string, label = 'version ID'): string {
+  if (!versionIdPattern.test(value)) fail(`${label} must be an exact UUID.`);
+  return value.toLowerCase();
+}
+
+export function expectedFrontendPreviewOrigin(versionId: string): string {
+  const normalized = normalizeVersionId(versionId);
+  return `https://${normalized.slice(0, 8)}-${frontendWorkerName}.${workersDevSubdomain}`;
+}
+
+export function parseFrontendUploadMetadata(path: string): FrontendUploadMetadata {
+  const lines = readFileSync(path, 'utf8').trim().split(/\r?\n/).reverse();
+  const record = lines.flatMap((line) => {
+    try {
+      const value = JSON.parse(line) as Record<string, unknown>;
+      return value.type === 'version-upload' ? [value] : [];
+    } catch {
+      return [];
+    }
+  })[0];
+  if (
+    !record ||
+    record.worker_name !== frontendWorkerName ||
+    typeof record.version_id !== 'string' ||
+    !versionIdPattern.test(record.version_id)
+  ) {
+    fail('Wrangler did not report a valid uploaded version for the mons-shop Worker.');
+  }
+  const versionId = record.version_id.toLowerCase();
+  const previewUrl = expectedFrontendPreviewOrigin(versionId);
+  if (record.preview_url !== previewUrl) {
+    fail('Wrangler reported an unexpected frontend Version Preview URL.');
+  }
+  return { versionId, previewUrl };
+}
+
+export function parseFrontendDeployArgs(argv: string[]): CliOptions {
   if (argv.includes('-h') || argv.includes('--help')) {
     console.log(usage());
     process.exit(0);
@@ -48,26 +139,32 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   let tokenFile: string | undefined;
+  let versionId: string | undefined;
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--token-file') {
+      if (tokenFile !== undefined) fail('--token-file may only be provided once.', 2);
       const value = argv[++i];
       if (!value) fail('Missing value for --token-file.', 2);
       tokenFile = value;
       continue;
     }
+    if (arg === '--version-id') {
+      if (versionId !== undefined) fail('--version-id may only be provided once.', 2);
+      const value = argv[++i];
+      if (!value) fail('Missing value for --version-id.', 2);
+      versionId = normalizeVersionId(value, '--version-id');
+      continue;
+    }
     fail(`Unknown argument: ${arg}\n\n${usage()}`, 2);
   }
 
-  return { mode, tokenFile };
+  if (mode === 'production' && !versionId) fail('Production promotion requires --version-id <uuid>.', 2);
+  if (mode !== 'production' && versionId) fail('--version-id is only valid for production promotion.', 2);
+  return { mode, tokenFile, versionId };
 }
 
-function run(
-  command: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  label: string,
-): void {
+function run(command: string, args: string[], env: NodeJS.ProcessEnv, label: string): void {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     env,
@@ -75,9 +172,7 @@ function run(
     shell: false,
   });
 
-  if (result.error) {
-    fail(`${label} could not start: ${result.error.message}`);
-  }
+  if (result.error) fail(`${label} could not start: ${result.error.message}`);
   if (result.status !== 0) {
     fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
   }
@@ -97,14 +192,377 @@ function readApiToken(tokenFile?: string): string {
   }
 
   const value = (process.env.CLOUDFLARE_API_TOKEN || '').trim();
-  if (!value) {
-    fail('Missing Cloudflare authentication. Pass --token-file or set CLOUDFLARE_API_TOKEN.');
+  if (!value) fail('Missing Cloudflare authentication. Pass --token-file or set CLOUDFLARE_API_TOKEN.');
+  return value;
+}
+
+function credentialFreeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = { ...source };
+  for (const name of Object.keys(environment)) {
+    const normalized = name.toUpperCase();
+    if (
+      normalized.startsWith('VITE_') ||
+      normalized.startsWith('CLOUDFLARE_') ||
+      normalized.startsWith('CF_') ||
+      normalized.startsWith('WRANGLER_') ||
+      normalized === 'HELIUS_API_KEY' ||
+      normalized === 'DOTENV_KEY' ||
+      normalized === 'STRIPE_TEST_UNIT_AMOUNT_CENTS'
+    ) {
+      delete environment[name];
+    }
+  }
+  return environment;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
+}
+
+export function isExactFrontendDeploymentConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    value.name !== frontendWorkerName ||
+    value.account_id !== frontendAccountId ||
+    value.workers_dev !== false ||
+    value.preview_urls !== true ||
+    !Array.isArray(value.routes) ||
+    value.routes.length !== frontendProductionOrigins.length
+  ) {
+    return false;
+  }
+  const routes = value.routes.flatMap((route) => {
+    if (!isRecord(route) || !hasExactKeys(route, ['pattern', 'custom_domain']) || route.custom_domain !== true) {
+      return [];
+    }
+    return typeof route.pattern === 'string' ? [route.pattern] : [];
+  });
+  return (
+    routes.length === frontendProductionOrigins.length &&
+    routes.sort().join('\0') === frontendProductionOrigins.map((origin) => new URL(origin).hostname).sort().join('\0')
+  );
+}
+
+function readFrontendDeploymentConfig(path = resolve(repoRoot, 'wrangler.jsonc')): unknown {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`Unable to read frontend Wrangler config: ${detail}`);
+  }
+}
+
+export function assertFrontendDeploymentConfig(path = resolve(repoRoot, 'wrangler.jsonc')): void {
+  if (!isExactFrontendDeploymentConfig(readFrontendDeploymentConfig(path))) {
+    fail(
+      'Frontend Wrangler config must target only the mons-shop Worker, account e25f90fc073ea309b54b8b5144bf28e0, and the mons.shop/www.mons.shop custom domains.',
+    );
+  }
+}
+
+export function frontendCandidateRecordPath(
+  versionId: string,
+  directory = frontendCandidateRecordDirectory,
+): string {
+  return resolve(directory, `${normalizeVersionId(versionId)}.json`);
+}
+
+export function isFrontendCandidateRecord(
+  value: unknown,
+  now = new Date(),
+): value is FrontendCandidateRecord {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['workerName', 'versionId', 'previewUrl', 'testedAt', 'htmlSha256'])
+  ) {
+    return false;
+  }
+  if (
+    value.workerName !== frontendWorkerName ||
+    typeof value.versionId !== 'string' ||
+    !versionIdPattern.test(value.versionId) ||
+    value.versionId !== value.versionId.toLowerCase() ||
+    value.previewUrl !== expectedFrontendPreviewOrigin(value.versionId) ||
+    typeof value.testedAt !== 'string' ||
+    typeof value.htmlSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(value.htmlSha256)
+  ) {
+    return false;
+  }
+  const testedAt = Date.parse(value.testedAt);
+  return (
+    Number.isFinite(testedAt) &&
+    testedAt <= now.getTime() + frontendCandidateClockSkewMs &&
+    testedAt >= now.getTime() - frontendCandidateMaxAgeMs
+  );
+}
+
+export function writeFrontendCandidateRecord(
+  metadata: FrontendUploadMetadata & { htmlSha256: string },
+  options: { directory?: string; now?: Date } = {},
+): FrontendCandidateRecord {
+  const now = options.now ?? new Date();
+  const record: FrontendCandidateRecord = {
+    workerName: frontendWorkerName,
+    versionId: normalizeVersionId(metadata.versionId),
+    previewUrl: metadata.previewUrl,
+    testedAt: now.toISOString(),
+    htmlSha256: metadata.htmlSha256,
+  };
+  if (!isFrontendCandidateRecord(record, now)) fail('Refusing to write invalid frontend candidate evidence.');
+  const directory = options.directory ?? frontendCandidateRecordDirectory;
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  writeFileSync(frontendCandidateRecordPath(record.versionId, directory), `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  });
+  return record;
+}
+
+export function requireFrontendCandidateRecord(
+  versionId: string,
+  options: { directory?: string; now?: Date } = {},
+): FrontendCandidateRecord {
+  const normalized = normalizeVersionId(versionId);
+  const path = frontendCandidateRecordPath(normalized, options.directory);
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    fail(`Frontend production promotion requires fresh candidate evidence for version ${normalized}.`);
+  }
+  const now = options.now ?? new Date();
+  if (!isFrontendCandidateRecord(value, now) || value.versionId !== normalized) {
+    fail(`Frontend candidate evidence for version ${normalized} is invalid or stale.`);
   }
   return value;
 }
 
-function main(): void {
-  const opts = parseArgs(process.argv.slice(2));
+async function readBoundedSmokeBody(
+  response: Response,
+  maxBytes = frontendSmokeResponseLimit,
+): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const parsed = Number.parseInt(contentLength, 10);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > maxBytes) {
+      fail('Frontend smoke response exceeded the allowed size.');
+    }
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        fail('Frontend smoke response exceeded the allowed size.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+type FrontendAssetReference = {
+  path: string;
+  contentType: 'javascript' | 'text/css';
+};
+
+function frontendAssetReferences(html: string): FrontendAssetReference[] {
+  const references = new Map<string, FrontendAssetReference>();
+  for (const tag of html.match(/<(?:script|link)\b[^>]*>/gi) ?? []) {
+    const attributes = new Map<string, string>();
+    for (const match of tag.matchAll(/\b([a-z-]+)\s*=\s*(["'])(.*?)\2/gi)) {
+      attributes.set(match[1].toLowerCase(), match[3]);
+    }
+    const type = attributes.get('type')?.toLowerCase();
+    const rel = attributes.get('rel')?.toLowerCase().split(/\s+/) ?? [];
+    const path = tag.toLowerCase().startsWith('<script')
+      ? type === 'module' ? attributes.get('src') : undefined
+      : rel.includes('stylesheet') || rel.includes('modulepreload') ? attributes.get('href') : undefined;
+    if (!path) continue;
+    references.set(path, {
+      path,
+      contentType: rel.includes('stylesheet') ? 'text/css' : 'javascript',
+    });
+  }
+  const values = [...references.values()];
+  if (!values.some((reference) => reference.contentType === 'javascript')) {
+    fail('Frontend smoke response did not reference a module asset.');
+  }
+  return values;
+}
+
+async function fetchFrontendSmokeResponse(
+  fetchImpl: typeof fetch,
+  sleep: (milliseconds: number) => Promise<void>,
+  url: string,
+): Promise<Response> {
+  for (let attempt = 0; attempt < frontendSmokeRetryDelaysMs.length; attempt++) {
+    const delay = frontendSmokeRetryDelaysMs[attempt];
+    if (delay) await sleep(delay);
+    try {
+      const response = await fetchImpl(url, {
+        method: 'GET',
+        headers: { accept: '*/*' },
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (
+        (response.status === 404 || response.status === 502 || response.status === 504) &&
+        attempt + 1 < frontendSmokeRetryDelaysMs.length
+      ) {
+        await response.body?.cancel();
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (attempt + 1 === frontendSmokeRetryDelaysMs.length) throw error;
+    }
+  }
+  fail(`Frontend smoke request failed for ${url}.`);
+}
+
+export async function smokeFrontendOrigin(
+  origin: string,
+  dependencies: FrontendSmokeDependencies = {},
+): Promise<string> {
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolveDelay) => {
+    setTimeout(resolveDelay, milliseconds);
+  }));
+  const url = `${origin}/`;
+  for (let attempt = 0; attempt < frontendSmokeRetryDelaysMs.length; attempt++) {
+    const delay = frontendSmokeRetryDelaysMs[attempt];
+    if (delay) await sleep(delay);
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: 'GET',
+        headers: { accept: 'text/html' },
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error) {
+      if (attempt + 1 < frontendSmokeRetryDelaysMs.length) continue;
+      const detail = error instanceof Error ? error.message : String(error);
+      fail(`Frontend smoke request failed for ${origin}: ${detail}`);
+    }
+    if (
+      (response.status === 404 || response.status === 502 || response.status === 504) &&
+      attempt + 1 < frontendSmokeRetryDelaysMs.length
+    ) {
+      await response.body?.cancel();
+      continue;
+    }
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      fail(`Frontend smoke request for ${origin} returned HTTP ${response.status}.`);
+    }
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    if (!contentType.includes('text/html')) {
+      await response.body?.cancel();
+      fail(`Frontend smoke request for ${origin} did not return HTML.`);
+    }
+    const body = await readBoundedSmokeBody(response);
+    if (!/<title>mons\.shop<\/title>/i.test(body) || !/<div\s+id=["']root["']/i.test(body)) {
+      fail(`Frontend smoke request for ${origin} returned unexpected HTML.`);
+    }
+    for (const reference of frontendAssetReferences(body)) {
+      const assetUrl = new URL(reference.path, url);
+      if (assetUrl.origin !== origin || !assetUrl.pathname.startsWith('/assets/')) {
+        fail(`Frontend smoke response for ${origin} referenced an unexpected asset URL.`);
+      }
+      let assetResponse: Response;
+      try {
+        assetResponse = await fetchFrontendSmokeResponse(fetchImpl, sleep, assetUrl.href);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        fail(`Frontend asset smoke request failed for ${assetUrl.href}: ${detail}`);
+      }
+      if (assetResponse.status !== 200) {
+        await assetResponse.body?.cancel();
+        fail(`Frontend asset smoke request for ${assetUrl.href} returned HTTP ${assetResponse.status}.`);
+      }
+      const contentType = assetResponse.headers.get('content-type')?.toLowerCase() ?? '';
+      if (!contentType.includes(reference.contentType)) {
+        await assetResponse.body?.cancel();
+        fail(`Frontend asset smoke request for ${assetUrl.href} returned an unexpected content type.`);
+      }
+      if (!(await readBoundedSmokeBody(assetResponse, frontendSmokeAssetResponseLimit))) {
+        fail(`Frontend asset smoke request for ${assetUrl.href} returned an empty body.`);
+      }
+    }
+    return createHash('sha256').update(body).digest('hex');
+  }
+  fail(`Frontend smoke request failed for ${origin}.`);
+}
+
+export function frontendProductionWranglerCommands(versionId: string): readonly {
+  label: string;
+  args: string[];
+}[] {
+  const normalized = normalizeVersionId(versionId);
+  return [
+    {
+      label: 'Frontend exact-version promotion',
+      args: [
+        'versions',
+        'deploy',
+        '--version-id',
+        normalized,
+        '--percentage',
+        '100',
+        '--yes',
+        '--config',
+        'wrangler.jsonc',
+      ],
+    },
+    {
+      label: 'Frontend trigger deployment',
+      args: ['triggers', 'deploy', '--config', 'wrangler.jsonc'],
+    },
+  ];
+}
+
+function runFrontendValidation(environment: NodeJS.ProcessEnv): void {
+  console.log('[deploy] Validation: typecheck, tests, build, and bundle scan (isolated environment)');
+  const viteEnvironmentDirectory = mkdtempSync(join(tmpdir(), 'mons-shop-vite-env-'));
+  const buildEnvironment = {
+    ...environment,
+    MONS_SHOP_VITE_ENV_DIR: viteEnvironmentDirectory,
+    VITE_BUILD_DATETIME: String(Math.floor(Date.now() / 1000)),
+  };
+  try {
+    for (const step of frontendValidationSteps) run(npmBinary, [...step.args], buildEnvironment, step.label);
+  } finally {
+    rmSync(viteEnvironmentDirectory, { force: true, recursive: true });
+  }
+}
+
+async function main(): Promise<void> {
+  const options = parseFrontendDeployArgs(process.argv.slice(2));
   const [nodeMajor = Number.NaN, nodeMinor = Number.NaN] = process.versions.node
     .split('.')
     .slice(0, 2)
@@ -117,56 +575,132 @@ function main(): void {
   ) {
     fail(`Node 22.12 or newer is required; current version is ${process.versions.node}.`);
   }
-  if (!existsSync(wranglerBinary)) {
-    fail('Pinned Wrangler binary not found. Run npm install --legacy-peer-deps first.');
-  }
+  if (!existsSync(wranglerBinary)) fail('Pinned Wrangler binary not found. Run npm install --legacy-peer-deps first.');
 
-  const buildEnv = { ...process.env };
-  for (const name of Object.keys(buildEnv)) {
-    if (
-      name.startsWith('VITE_') ||
-      name.startsWith('CLOUDFLARE_') ||
-      name === 'STRIPE_TEST_UNIT_AMOUNT_CENTS'
-    ) {
-      delete buildEnv[name];
-    }
-  }
-  buildEnv.VITE_BUILD_DATETIME = String(Math.floor(Date.now() / 1000));
-
-  console.log(`[deploy] Mode:  ${opts.mode}`);
-  console.log('[deploy] Build: npm run build (isolated Vite environment)');
-  const viteEnvDirectory = mkdtempSync(join(tmpdir(), 'mons-shop-vite-env-'));
-  buildEnv.MONS_SHOP_VITE_ENV_DIR = viteEnvDirectory;
-  try {
-    run(npmBinary, ['run', 'build'], buildEnv, 'Frontend build');
-  } finally {
-    rmSync(viteEnvDirectory, { force: true, recursive: true });
-  }
-
+  assertFrontendDeploymentConfig();
+  const validationEnvironment = credentialFreeEnvironment(process.env);
   const wranglerLogDirectory = resolve(repoRoot, '.cache', 'wrangler-logs');
   mkdirSync(wranglerLogDirectory, { recursive: true });
-
-  const wranglerEnv: NodeJS.ProcessEnv = {
-    ...buildEnv,
+  const unauthenticatedWranglerEnvironment: NodeJS.ProcessEnv = {
+    ...validationEnvironment,
     WRANGLER_LOG_PATH: wranglerLogDirectory,
     WRANGLER_LOG_SANITIZE: 'true',
     WRANGLER_SEND_ERROR_REPORTS: 'false',
     WRANGLER_SEND_METRICS: 'false',
   };
 
-  let wranglerArgs: string[];
-  if (opts.mode === 'dry-run') {
-    wranglerArgs = ['deploy', '--dry-run', '--config', 'wrangler.jsonc'];
-  } else {
-    wranglerEnv.CLOUDFLARE_API_TOKEN = readApiToken(opts.tokenFile);
-    wranglerArgs =
-      opts.mode === 'preview'
-        ? ['versions', 'upload', '--preview-alias', 'candidate', '--config', 'wrangler.jsonc']
-        : ['deploy', '--config', 'wrangler.jsonc'];
+  console.log(`[deploy] Mode: ${options.mode}`);
+  if (options.mode === 'dry-run') {
+    runFrontendValidation(validationEnvironment);
+    run(
+      wranglerBinary,
+      ['deploy', '--dry-run', '--config', 'wrangler.jsonc'],
+      unauthenticatedWranglerEnvironment,
+      'Frontend Worker dry run',
+    );
+    run(
+      wranglerBinary,
+      ['triggers', 'deploy', '--dry-run', '--config', 'wrangler.jsonc'],
+      unauthenticatedWranglerEnvironment,
+      'Frontend trigger dry run',
+    );
+    return;
   }
 
-  console.log(`[deploy] Wrangler: ${wranglerArgs.slice(0, 2).join(' ')}`);
-  run(wranglerBinary, wranglerArgs, wranglerEnv, 'Wrangler');
+  if (options.mode === 'preview') {
+    runFrontendValidation(validationEnvironment);
+    const authenticatedEnvironment: NodeJS.ProcessEnv = {
+      ...unauthenticatedWranglerEnvironment,
+      CLOUDFLARE_API_TOKEN: readApiToken(options.tokenFile),
+    };
+    const outputFile = resolve(
+      wranglerLogDirectory,
+      `frontend-preview-${process.pid}-${Date.now()}.json`,
+    );
+    authenticatedEnvironment.WRANGLER_OUTPUT_FILE_PATH = outputFile;
+    let metadata: FrontendUploadMetadata | undefined;
+    let uploadError: unknown;
+    try {
+      run(
+        wranglerBinary,
+        ['versions', 'upload', '--preview-alias', 'candidate', '--config', 'wrangler.jsonc'],
+        authenticatedEnvironment,
+        'Frontend version upload',
+      );
+      metadata = parseFrontendUploadMetadata(outputFile);
+    } catch (error) {
+      uploadError = error;
+    }
+    let cleanupError: unknown;
+    try {
+      rmSync(outputFile, { force: true });
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (uploadError && cleanupError) {
+      throw new AggregateError([uploadError, cleanupError], 'Frontend upload and output cleanup both failed.');
+    }
+    if (uploadError) throw uploadError;
+    if (cleanupError) throw cleanupError;
+    if (!metadata) fail('Frontend version upload completed without version metadata.');
+    console.log(`[deploy] Frontend version ID: ${metadata.versionId}`);
+    console.log(`[deploy] Version Preview: ${metadata.previewUrl}`);
+    const htmlSha256 = await smokeFrontendOrigin(metadata.previewUrl);
+    writeFrontendCandidateRecord({ ...metadata, htmlSha256 });
+    console.log('[deploy] Exact-version frontend candidate evidence recorded.');
+    return;
+  }
+
+  const versionId = options.versionId;
+  if (!versionId) fail('Production promotion requires --version-id <uuid>.');
+  const candidate = requireFrontendCandidateRecord(versionId);
+  run(
+    wranglerBinary,
+    ['triggers', 'deploy', '--dry-run', '--config', 'wrangler.jsonc'],
+    unauthenticatedWranglerEnvironment,
+    'Frontend trigger dry run',
+  );
+  console.log(`[deploy] Re-smoke exact Version Preview: ${candidate.previewUrl}`);
+  const previewHtmlSha256 = await smokeFrontendOrigin(candidate.previewUrl);
+  if (previewHtmlSha256 !== candidate.htmlSha256) {
+    fail('Exact frontend Version Preview no longer matches its tested candidate evidence.');
+  }
+  const authenticatedEnvironment: NodeJS.ProcessEnv = {
+    ...unauthenticatedWranglerEnvironment,
+    CLOUDFLARE_API_TOKEN: readApiToken(options.tokenFile),
+  };
+  for (const command of frontendProductionWranglerCommands(versionId)) {
+    run(wranglerBinary, command.args, authenticatedEnvironment, command.label);
+  }
+  for (const origin of frontendProductionOrigins) {
+    console.log(`[deploy] Production smoke: ${origin}`);
+    const productionHtmlSha256 = await smokeFrontendOrigin(origin);
+    if (productionHtmlSha256 !== candidate.htmlSha256) {
+      fail(`Frontend production smoke for ${origin} did not serve the exact promoted candidate.`);
+    }
+  }
+  writeProductionEvidence('frontend', versionId);
+  console.log(`[deploy] Verified frontend production version ID: ${versionId}`);
 }
 
-main();
+export const frontendDeployTestHooks = {
+  frontendValidationSteps,
+  credentialFreeEnvironment,
+  expectedFrontendPreviewOrigin,
+  frontendCandidateRecordPath,
+  frontendProductionOrigins,
+  frontendProductionWranglerCommands,
+  isExactFrontendDeploymentConfig,
+  isFrontendCandidateRecord,
+  requireFrontendCandidateRecord,
+  writeFrontendCandidateRecord,
+};
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const exitCode = error instanceof DeployFailure ? error.exitCode : 1;
+    console.error(`\n[deploy] ${message}\n`);
+    process.exitCode = exitCode;
+  });
+}

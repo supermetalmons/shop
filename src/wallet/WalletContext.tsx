@@ -9,7 +9,7 @@ import {
 } from '@solana/wallet-adapter-phantom';
 import { LedgerWalletAdapter } from '@solana/wallet-adapter-ledger';
 import '@solana/wallet-adapter-react-ui/styles.css';
-import { rpcEndpointForCluster } from '../lib/dropConfig';
+import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../lib/shopRpc';
 import type { SolanaCluster } from '../config/deployment';
 import { WalletModalFocusManager } from './WalletModalFocusManager';
 
@@ -29,7 +29,7 @@ export const WalletContextProvider: FC<Props> = ({ cluster, children }) => {
   );
 
   return (
-    <ConnectionProvider endpoint={rpcEndpoint} config={{ commitment: 'confirmed' }}>
+    <ConnectionProvider endpoint={rpcEndpoint} config={SHOP_SOLANA_CONNECTION_CONFIG}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
           <WalletModalFocusManager />

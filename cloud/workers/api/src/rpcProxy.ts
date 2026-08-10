@@ -1,0 +1,433 @@
+import type { SolanaCluster } from '../../../../functions/src/shared/deploymentCore.js';
+import {
+  isExactShopRpcRequest,
+  isExactShopRpcResponse,
+  isTransientShopRpcError,
+  SHOP_RPC_METHODS,
+  type ShopRpcId,
+  type ShopRpcMethod,
+} from '../../../../functions/src/shared/solanaRpcProxy.js';
+
+const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
+const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
+const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const EXPENSIVE_METHODS = new Set<ShopRpcMethod>(['simulateTransaction', 'sendTransaction']);
+
+export type RpcProviderFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export type RpcRequestMetrics = {
+  upstreamCalls: number;
+  providerDurationMs: number;
+};
+
+export type RpcProxyDependencies = {
+  providerFetch: RpcProviderFetch;
+  providerTimeoutMs: number;
+  providerAttemptTimeoutMs: number;
+  randomUint32: () => number;
+  sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+};
+
+type RpcFailureKind = 'deadline' | 'timeout' | 'unavailable';
+
+class RpcFailure extends Error {
+  constructor(readonly kind: RpcFailureKind) {
+    super(kind);
+    this.name = 'RpcFailure';
+  }
+}
+
+type AttemptScope = {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  dispose: () => void;
+};
+
+function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): AttemptScope {
+  const controller = new AbortController();
+  let attemptTimedOut = false;
+  const onOverallAbort = () => {
+    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
+  };
+  if (overallSignal.aborted) onOverallAbort();
+  else overallSignal.addEventListener('abort', onOverallAbort, { once: true });
+  const timeout = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    attemptTimedOut = true;
+    controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    timedOut: () => attemptTimedOut,
+    dispose: () => {
+      clearTimeout(timeout);
+      overallSignal.removeEventListener('abort', onOverallAbort);
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isAllowedRpcOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.origin !== origin || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false;
+  if (url.protocol === 'https:' && (url.hostname === 'mons.shop' || url.hostname === 'www.mons.shop')) return true;
+  if (
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+  ) return true;
+  if (url.protocol !== 'https:') return false;
+  const match = url.hostname.match(/^([^.]+)-mons-shop\.lil-org\.workers\.dev$/);
+  return match?.[1] === 'candidate' || /^[0-9a-f]{8}$/i.test(match?.[1] || '');
+}
+
+function rpcCorsHeaders(origin: string | null): Record<string, string> {
+  const allowedOrigin = origin && isAllowedRpcOrigin(origin) ? origin : null;
+  return {
+    ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin } : {}),
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Solana-Client',
+    'Access-Control-Max-Age': '86400',
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Timing-Allow-Origin': allowedOrigin || 'https://mons.shop',
+    'Vary': 'Origin',
+    'X-Content-Type-Options': 'nosniff',
+  };
+}
+
+function rpcErrorResponse(
+  origin: string | null,
+  id: ShopRpcId | null,
+  code: number,
+  message: string,
+  status: number,
+  headers?: HeadersInit,
+): Response {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }), {
+    status,
+    headers: { ...rpcCorsHeaders(origin), ...headers },
+  });
+}
+
+async function readBoundedText(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const chunks: string[] = [];
+  let size = 0;
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  try {
+    while (true) {
+      if (signal?.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (signal?.aborted) throw signal.reason;
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw new RpcFailure('unavailable');
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return chunks.join('');
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    void response.body?.cancel().catch(() => undefined);
+  } catch {}
+}
+
+async function parseRpcRequest(request: Request): Promise<unknown> {
+  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+    throw new Error('invalid-request');
+  }
+  const contentLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RPC_REQUEST_BODY_BYTES) throw new Error('invalid-request');
+  if (!request.body) throw new Error('invalid-request');
+  try {
+    return JSON.parse(await readBoundedText(request.body, MAX_RPC_REQUEST_BODY_BYTES));
+  } catch {
+    throw new Error('invalid-request');
+  }
+}
+
+async function readRpcResponse(
+  response: Response,
+  expectedId: ShopRpcId,
+  signal: AbortSignal,
+): Promise<{ payload: Record<string, unknown>; text: string }> {
+  const contentLength = Number(response.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_RPC_RESPONSE_BODY_BYTES) {
+    await cancelResponseBody(response);
+    throw new RpcFailure('unavailable');
+  }
+  if (!response.body) throw new RpcFailure('unavailable');
+  try {
+    const text = await readBoundedText(response.body, MAX_RPC_RESPONSE_BODY_BYTES, signal);
+    const payload: unknown = JSON.parse(text);
+    if (!isExactShopRpcResponse(payload, expectedId)) throw new RpcFailure('unavailable');
+    return { payload, text };
+  } catch (error) {
+    if (error instanceof RpcFailure) throw error;
+    throw new RpcFailure('unavailable');
+  }
+}
+
+function heliusRpcUrl(cluster: SolanaCluster, apiKey: string): string {
+  const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : 'devnet';
+  return `https://${subdomain}.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
+}
+
+function retryDelayMs(dependencies: RpcProxyDependencies, response?: Response): number {
+  const retryAfterHeader = response?.headers.get('Retry-After');
+  if (retryAfterHeader !== undefined && retryAfterHeader !== null && retryAfterHeader.trim()) {
+    const retryAfter = Number(retryAfterHeader);
+    if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(1000, retryAfter * 1000);
+  }
+  return 100 + (dependencies.randomUint32() % 151);
+}
+
+function providerHttpFailure(status: number): RpcFailure {
+  return new RpcFailure(status === 408 || status === 504 ? 'timeout' : 'unavailable');
+}
+
+async function fetchRpc(
+  cluster: SolanaCluster,
+  apiKey: string,
+  requestBody: ReturnType<typeof requireRpcRequest>,
+  signal: AbortSignal,
+  dependencies: RpcProxyDependencies,
+  metrics: RpcRequestMetrics,
+): Promise<string> {
+  const attempts = requestBody.method === 'sendTransaction' ? 1 : 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal.aborted) throw new RpcFailure('deadline');
+    const attemptScope = createAttemptScope(signal, dependencies.providerAttemptTimeoutMs);
+    let response: Response | undefined;
+    const startedAt = performance.now();
+    try {
+      metrics.upstreamCalls += 1;
+      response = await dependencies.providerFetch(heliusRpcUrl(cluster, apiKey), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: attemptScope.signal,
+      });
+      let parsed: Awaited<ReturnType<typeof readRpcResponse>>;
+      try {
+        parsed = await readRpcResponse(response, requestBody.id, attemptScope.signal);
+      } catch (error) {
+        if (signal.aborted) throw new RpcFailure('deadline');
+        if (
+          !response.ok &&
+          attempt + 1 < attempts &&
+          TRANSIENT_HTTP_STATUSES.has(response.status)
+        ) {
+          await dependencies.sleep(retryDelayMs(dependencies, response), attemptScope.signal);
+          continue;
+        }
+        if (!response.ok) throw providerHttpFailure(response.status);
+        throw error;
+      }
+      const encodedApiKey = encodeURIComponent(apiKey);
+      if (parsed.text.includes(apiKey) || (encodedApiKey !== apiKey && parsed.text.includes(encodedApiKey))) {
+        throw new RpcFailure('unavailable');
+      }
+      const responseError = isRecord(parsed.payload.error) ? parsed.payload.error : null;
+      if (
+        !response.ok &&
+        attempt + 1 < attempts &&
+        TRANSIENT_HTTP_STATUSES.has(response.status)
+      ) {
+        await dependencies.sleep(retryDelayMs(dependencies, response), attemptScope.signal);
+        continue;
+      }
+      if (!response.ok && !responseError) {
+        throw providerHttpFailure(response.status);
+      }
+      if (
+        attempt + 1 < attempts &&
+        responseError &&
+        isTransientShopRpcError(responseError)
+      ) {
+        await dependencies.sleep(retryDelayMs(dependencies), attemptScope.signal);
+        continue;
+      }
+      return parsed.text;
+    } catch (error) {
+      if (signal.aborted) throw new RpcFailure('deadline');
+      if (attemptScope.timedOut()) {
+        if (attempt + 1 < attempts) continue;
+        throw new RpcFailure('timeout');
+      }
+      if (error instanceof RpcFailure) throw error;
+      if (attempt + 1 < attempts) {
+        await dependencies.sleep(retryDelayMs(dependencies), attemptScope.signal);
+        continue;
+      }
+      throw new RpcFailure('unavailable');
+    } finally {
+      attemptScope.dispose();
+      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
+    }
+  }
+  throw new RpcFailure('unavailable');
+}
+
+function requireRpcRequest(value: unknown) {
+  if (!isExactShopRpcRequest(value)) throw new Error('invalid-request');
+  return value;
+}
+
+async function applyRateLimit(binding: RateLimit, key: string): Promise<boolean> {
+  return (await binding.limit({ key })).success;
+}
+
+export function handleRpcPreflight(request: Request): Response {
+  const origin = request.headers.get('Origin');
+  if (!origin || !isAllowedRpcOrigin(origin)) {
+    return rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403);
+  }
+  return new Response(null, { status: 204, headers: rpcCorsHeaders(origin) });
+}
+
+export function handleRpcMethodNotAllowed(request: Request): Response {
+  const origin = request.headers.get('Origin');
+  if (origin && !isAllowedRpcOrigin(origin)) {
+    return rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403);
+  }
+  return rpcErrorResponse(origin, null, -32600, 'Invalid request', 405, { Allow: 'POST, OPTIONS' });
+}
+
+export async function handleRpcPost(
+  request: Request,
+  env: Env,
+  cluster: SolanaCluster,
+  dependencies: RpcProxyDependencies,
+  metrics: RpcRequestMetrics,
+): Promise<{ response: Response; rpcMethod?: ShopRpcMethod }> {
+  const origin = request.headers.get('Origin');
+  if (origin && !isAllowedRpcOrigin(origin)) {
+    return { response: rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403) };
+  }
+  const connectingIp = request.headers.get('CF-Connecting-IP')?.trim();
+  if (!connectingIp) {
+    return { response: rpcErrorResponse(origin, null, -32097, 'Rate limit unavailable', 503) };
+  }
+  let rawBody: unknown;
+  let invalid: { id: ShopRpcId | null; code: number; message: string } | undefined;
+  try {
+    rawBody = await parseRpcRequest(request);
+  } catch {
+    invalid = { id: null, code: -32600, message: 'Invalid request' };
+  }
+  if (!invalid && isRecord(rawBody) && typeof rawBody.method === 'string' && !isExactShopRpcRequest(rawBody)) {
+    const id = (typeof rawBody.id === 'string' || typeof rawBody.id === 'number') ? rawBody.id : null;
+    const methodAllowed = SHOP_RPC_METHODS.includes(rawBody.method as ShopRpcMethod);
+    invalid = {
+      id,
+      code: methodAllowed ? -32600 : -32601,
+      message: methodAllowed ? 'Invalid request' : 'Method not allowed',
+    };
+  }
+  let requestBody: ReturnType<typeof requireRpcRequest> | undefined;
+  if (!invalid) {
+    try {
+      requestBody = requireRpcRequest(rawBody);
+    } catch {
+      invalid = { id: null, code: -32600, message: 'Invalid request' };
+    }
+  }
+  if (invalid) {
+    try {
+      if (!await applyRateLimit(env.RPC_IP_RATE_LIMITER, `${cluster}:invalid:${connectingIp}`)) {
+        return {
+          response: rpcErrorResponse(origin, invalid.id, -32005, 'Rate limit exceeded', 429, {
+            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+          }),
+        };
+      }
+    } catch {}
+    return { response: rpcErrorResponse(origin, invalid.id, invalid.code, invalid.message, 400) };
+  }
+  if (!requestBody) {
+    return { response: rpcErrorResponse(origin, null, -32600, 'Invalid request', 400) };
+  }
+  try {
+    if (!await applyRateLimit(env.RPC_IP_RATE_LIMITER, `${cluster}:${requestBody.method}:${connectingIp}`)) {
+      return {
+        response: rpcErrorResponse(origin, requestBody.id, -32005, 'Rate limit exceeded', 429, {
+          'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+        }),
+        rpcMethod: requestBody.method,
+      };
+    }
+  } catch {}
+  if (EXPENSIVE_METHODS.has(requestBody.method)) {
+    try {
+      if (!await applyRateLimit(
+        env.RPC_EXPENSIVE_RATE_LIMITER,
+        `${cluster}:${requestBody.method}:${connectingIp}`,
+      )) {
+        return {
+          response: rpcErrorResponse(origin, requestBody.id, -32005, 'Rate limit exceeded', 429, {
+            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
+          }),
+          rpcMethod: requestBody.method,
+        };
+      }
+    } catch {}
+  }
+  const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
+  if (!apiKey) {
+    return {
+      response: rpcErrorResponse(origin, requestBody.id, -32099, 'Provider unavailable', 502),
+      rpcMethod: requestBody.method,
+    };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), dependencies.providerTimeoutMs);
+  try {
+    const text = await fetchRpc(cluster, apiKey, requestBody, controller.signal, dependencies, metrics);
+    return {
+      response: new Response(text, { status: 200, headers: rpcCorsHeaders(origin) }),
+      rpcMethod: requestBody.method,
+    };
+  } catch (error) {
+    const kind = error instanceof RpcFailure ? error.kind : 'unavailable';
+    const timedOut = kind === 'deadline' || kind === 'timeout';
+    return {
+      response: rpcErrorResponse(
+        origin,
+        requestBody.id,
+        timedOut ? -32098 : -32099,
+        timedOut ? 'Provider timeout' : 'Provider unavailable',
+        timedOut ? 504 : 502,
+      ),
+      rpcMethod: requestBody.method,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

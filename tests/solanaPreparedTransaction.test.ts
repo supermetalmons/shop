@@ -9,6 +9,7 @@ import {
   type Connection,
   type SimulateTransactionConfig,
 } from '@solana/web3.js';
+import { WalletSendTransactionError } from '@solana/wallet-adapter-base';
 import bs58 from 'bs58';
 
 import {
@@ -759,6 +760,91 @@ test('classifySignedTransactionSendError treats an internal JSON-RPC failure as 
   if (!isPotentiallySubmittedTransactionError(classified)) return;
   assert.equal(classified.signature, bs58.encode(tx.signatures[0]));
   assert.equal(classified.cause, rpcError);
+});
+
+test('classifySignedTransactionSendError preserves shop RPC pre-provider failures as ordinary errors', () => {
+  const payer = Keypair.generate();
+  const tx = VersionedTransaction.deserialize(
+    Buffer.from(buildEncodedPreparedTransaction(payer.publicKey), 'base64'),
+  );
+  tx.sign([payer]);
+  const rateLimitError = new SendTransactionError({
+    action: 'simulate',
+    signature: '',
+    transactionMessage: 'Rate limit exceeded',
+  });
+  const originCause = new SendTransactionError({
+    action: 'simulate',
+    signature: '',
+    transactionMessage: 'Origin not allowed',
+  });
+  const originError = new WalletSendTransactionError(originCause.message, originCause);
+  const rateLimitUnavailableCause = new SendTransactionError({
+    action: 'simulate',
+    signature: '',
+    transactionMessage: 'Rate limit unavailable',
+  });
+  const rateLimitUnavailableError = new WalletSendTransactionError(
+    rateLimitUnavailableCause.message,
+    rateLimitUnavailableCause,
+  );
+  const rawRateLimitCodeError = Object.assign(new Error('RPC request failed'), { code: -32005 });
+  const nestedOriginCodeError = new WalletSendTransactionError(
+    'Wallet adapter send failed',
+    Object.assign(new Error('RPC request failed'), { code: -32096 }),
+  );
+  const nestedRateLimitUnavailableCodeError = Object.assign(new Error('Wallet adapter send failed'), {
+    cause: Object.assign(new Error('RPC request failed'), {
+      error: Object.assign(new Error('RPC request failed'), { code: -32097 }),
+    }),
+  });
+
+  for (const rpcError of [
+    rateLimitError,
+    originError,
+    rateLimitUnavailableError,
+    rawRateLimitCodeError,
+    nestedOriginCodeError,
+    nestedRateLimitUnavailableCodeError,
+  ]) {
+    const classified = classifySignedTransactionSendError(tx, rpcError);
+    assert.equal(classified, rpcError);
+    assert.equal(isPotentiallySubmittedTransactionError(classified), false);
+  }
+});
+
+test('classifySignedTransactionSendError keeps provider timeout and unavailable failures ambiguous', () => {
+  const payer = Keypair.generate();
+  const tx = VersionedTransaction.deserialize(
+    Buffer.from(buildEncodedPreparedTransaction(payer.publicKey), 'base64'),
+  );
+  tx.sign([payer]);
+  const providerTimeoutCause = Object.assign(new SendTransactionError({
+    action: 'simulate',
+    signature: '',
+    transactionMessage: 'Provider timeout',
+  }), { code: -32098 });
+  const providerTimeoutError = new WalletSendTransactionError(
+    providerTimeoutCause.message,
+    providerTimeoutCause,
+  );
+  const providerUnavailableCause = Object.assign(new SendTransactionError({
+    action: 'simulate',
+    signature: '',
+    transactionMessage: 'Provider unavailable',
+  }), { code: -32099 });
+  const providerUnavailableError = new WalletSendTransactionError(
+    providerUnavailableCause.message,
+    providerUnavailableCause,
+  );
+
+  for (const rpcError of [providerTimeoutError, providerUnavailableError]) {
+    const classified = classifySignedTransactionSendError(tx, rpcError);
+    assert.equal(isPotentiallySubmittedTransactionError(classified), true);
+    if (!isPotentiallySubmittedTransactionError(classified)) continue;
+    assert.equal(classified.signature, bs58.encode(tx.signatures[0]));
+    assert.equal(classified.cause, rpcError);
+  }
 });
 
 test('classifySignedTransactionSendError preserves a signature returned inside a wallet adapter error', () => {

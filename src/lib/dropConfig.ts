@@ -1,4 +1,3 @@
-import { clusterApiUrl } from '@solana/web3.js';
 import {
   FRONTEND_DROPS,
   isDropFamily,
@@ -8,7 +7,6 @@ import {
   type SolanaCluster,
   getFrontendDrop,
 } from '../config/deployment';
-import { getHeliusApiKey } from './helius';
 import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
 import {
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
@@ -148,15 +146,4 @@ export function resolveFrontendDropByPath(
   if (exactDrop) return exactDrop;
 
   return resolveUpcomingRouteDrop(upcomingRoute, options?.drops);
-}
-
-function heliusRpcUrlForCluster(cluster: SolanaCluster): string | null {
-  const apiKey = getHeliusApiKey();
-  if (!apiKey) return null;
-  const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : cluster;
-  return `https://${subdomain}.helius-rpc.com/?api-key=${apiKey}`;
-}
-
-export function rpcEndpointForCluster(cluster: SolanaCluster): string {
-  return heliusRpcUrlForCluster(cluster) || clusterApiUrl(cluster);
 }

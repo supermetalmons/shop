@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Inventory is fetched client-side via Helius DAS.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pending-open reads, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps the Helius credential out of the browser.
 
 ## Shared domain core
 
@@ -11,10 +11,10 @@ SDK, secrets, and environment access in thin runtime adapters. See
 
 ## Frontend
 - Install deps: `npm install`
-- Optional env overrides for the frontend's public client-side API keys (local dev: in your shell, or a local `.env` that you do NOT commit):
-  - `VITE_HELIUS_API_KEY`
+- Optional frontend env overrides for local development (in your shell, or a local `.env` that you do NOT commit):
+  - `VITE_MONS_API_ORIGIN` (defaults to `https://api.mons.shop`)
   - `VITE_FIREBASE_API_KEY`
-- If unset, the frontend falls back to the bundled defaults in `src/lib/helius.ts` and `src/lib/firebase.ts`.
+- If unset, the frontend uses the committed API origin and Firebase public configuration.
 - Configure everything else in **committed config**:
   - `src/lib/firebase.ts` (Firebase non-secret config, functions region)
   - `src/App.tsx` (delivery encryption public key)
@@ -24,29 +24,76 @@ SDK, secrets, and environment access in thin runtime adapters. See
 - Build for production: `npm run build` (outputs `dist/`)
 
 ## Deployment
-The frontend is an asset-only Cloudflare Worker named `mons-shop`. Firebase,
-Firestore, and Cloud Functions remain independently deployed to Firebase.
+The frontend is an asset-only Cloudflare Worker named `mons-shop`. Public Helius
+reads are served by the separate `mons-shop-api` Worker at `api.mons.shop`.
+Firebase, Firestore, and Cloud Functions remain independently deployed to Firebase.
 
 - Prerequisite: Node.js 22.12 or newer.
 - Install dependencies: `npm install --legacy-peer-deps`
 - Validate the build and Wrangler config without authenticating:
   - `npm run deploy -- dry-run`
-- Upload a non-production Worker version with the `candidate` preview alias:
+- Upload a non-production Worker version, smoke-test its exact Version Preview, and write an ignored version-keyed candidate record:
   - `npm run deploy -- preview --token-file /path/to/cloudflare-token`
-- Build and deploy to `mons.shop` and `www.mons.shop`:
-  - `npm run deploy -- production --token-file /path/to/cloudflare-token`
+- Re-smoke and promote that exact version, apply the reviewed custom-domain triggers, smoke both production domains, and only then write production evidence:
+  - `npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token`
+- After both exact API and frontend production versions have been verified, atomically record them:
+  - `npm run release:finalize -- --api-version-id <uuid> --frontend-version-id <uuid> --confirm`
 
 The token file must contain only a scoped Cloudflare API token. Alternatively,
 set `CLOUDFLARE_API_TOKEN` in the invoking shell. The deploy helper strips
 Cloudflare credentials and all local `VITE_*` overrides from the Vite build
 environment, sets `VITE_BUILD_DATETIME`, and only passes the token to the pinned
 local Wrangler process. Deployment builds therefore use the committed Firebase
-and Helius client fallbacks; no Worker runtime variables are required. Never
-commit the token or expose it through a `VITE_*` variable.
+configuration and API origin; no frontend Worker runtime variables are required.
+Never commit the token or expose secrets through a `VITE_*` variable.
+
+### Shop API deployment
+
+The API Worker uses the encrypted `HELIUS_API_KEY` secret, four fail-closed
+Cloudflare rate-limit bindings, Smart Placement, and a version-first release
+flow. It serves `/inventory`, `/pending-open-boxes`, `/rpc/mainnet-beta`, and
+`/rpc/devnet`; every response is uncached.
+
+- Validate code, generated bindings, tests, dry-run bundling, and startup time:
+  - `npm run check:api`
+- Load the Helius key without placing its value in shell history before preview, production, or standalone benchmark commands:
+  - `read -s HELIUS_API_KEY`
+  - `export HELIUS_API_KEY`
+- Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
+  - `npm run deploy:api -- preview --smoke-owner <wallet>`
+- Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview before promotion; only then promote it, apply the reviewed `api.mons.shop` trigger, smoke-test production, and write production evidence:
+  - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
+- Reapply reviewed triggers without changing code:
+  - `npm run deploy:api -- triggers --smoke-owner <wallet>`
+- Roll back only to an explicit known-good API version:
+  - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
+- Run the standalone comparison against an explicit origin:
+  - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
+- Remove the key from the invoking shell after the release work:
+  - `unset HELIUS_API_KEY`
+
+Preview upload writes `HELIUS_API_KEY` to a newly created mode-`0600` file inside
+a mode-`0700` temporary directory, passes that file directly to Wrangler, and
+deletes the validated temporary path immediately afterward.
+The Cloudflare token and Helius secret are stripped from all other child-process
+environment data and are never printed.
 
 Wrangler can upload a preview version only after the Worker exists. The
-`mons-shop` Worker was bootstrapped once without routes during this migration;
+`mons-shop-api` Worker was bootstrapped once without routes during this migration;
 subsequent releases can use the preview command directly.
+
+Both deployment helpers keep short-lived, exact-version verification records
+under the ignored `.cache` directory. Frontend production promotion requires the
+matching candidate record created by the preview command and never rebuilds the
+candidate. Production evidence is written only after both `mons.shop` and
+`www.mons.shop` pass their smoke tests. The release finalization command requires
+both IDs, matching fresh evidence, and a deliberate `--confirm`; it never deploys
+or changes the approved rollback pair.
+
+Tracked release and rollback IDs live in `cloud/release-manifest.json`. The
+approved rollback targets are API `5ca5a74a-a68b-43b3-a6fb-6e218d2a3950` and
+frontend `0ffe94c8-97e7-46b1-8ae0-63c0abfddaef`; an older frontend containing
+direct browser Helius access is not an approved rollback target.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,

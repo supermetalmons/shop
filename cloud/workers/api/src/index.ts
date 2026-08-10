@@ -1,0 +1,969 @@
+import bs58 from 'bs58';
+import {
+  HELIUS_COLLECTION_GROUPING_OPTIONS,
+} from '../../../../functions/src/shared/dasAssetCollections.js';
+import type { DasAsset } from '../../../../functions/src/shared/dasAsset.js';
+import {
+  HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
+  HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
+  HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
+  HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS,
+  HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
+  HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
+  heliusSearchAssetsCursorPageInfo,
+  heliusSearchAssetsItems,
+} from '../../../../functions/src/shared/heliusDas.js';
+import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.js';
+import {
+  isExactShopApiRequest,
+  isExactShopInventoryResponse,
+  isExactShopPendingOpenBoxesResponse,
+  type ShopApiRequest,
+  type ShopInventoryItem,
+  type ShopInventoryResponse,
+  type ShopPendingOpenBoxesResponse,
+} from '../../../../functions/src/shared/shopApi.js';
+import {
+  decodePendingOpenRecordData,
+  listShopCollectionQueryRuntimes,
+  listShopPendingOpenProgramScopes,
+  resolvePendingOpenDropId,
+  shopDropById,
+  toShopPendingOpenBox,
+  transformShopInventoryItem,
+  type PendingOpenRecordCandidate,
+  type ShopDropRuntime,
+} from '../../../../functions/src/shared/shopDomain.js';
+import type { SolanaCluster } from '../../../../functions/src/shared/deploymentCore.js';
+import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
+import {
+  handleRpcPost,
+  handleRpcPreflight,
+  handleRpcMethodNotAllowed,
+  type RpcProviderFetch,
+  type RpcProxyDependencies,
+  type RpcRequestMetrics,
+} from './rpcProxy.js';
+import {
+  MAX_INVENTORY_RESPONSE_BODY_BYTES,
+  MAX_INVENTORY_SERIALIZED_ITEM_BYTES,
+} from './inventoryLimits.js';
+
+const HELIUS_BATCH_LIMIT = 1000;
+const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
+const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
+const MAX_REQUEST_BODY_BYTES = 1024;
+const PROVIDER_CONCURRENCY = 3;
+const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400',
+};
+const BASE_HEADERS = {
+  ...CORS_HEADERS,
+  'Cache-Control': 'no-store',
+  'Content-Type': 'application/json; charset=utf-8',
+  'Timing-Allow-Origin': '*',
+  'X-Content-Type-Options': 'nosniff',
+};
+const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
+const KNOWN_LOG_ROUTES = new Set([
+  '/health',
+  '/inventory',
+  '/pending-open-boxes',
+  '/rpc/mainnet-beta',
+  '/rpc/devnet',
+]);
+
+export type ProviderFetch = RpcProviderFetch;
+
+type ProviderFailureKind = 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit';
+
+class ProviderFailure extends Error {
+  constructor(readonly kind: ProviderFailureKind) {
+    super(kind);
+    this.name = 'ProviderFailure';
+  }
+}
+
+type AttemptScope = {
+  signal: AbortSignal;
+  timedOut: () => boolean;
+  pauseTimeout: () => void;
+  resumeTimeout: () => void;
+  dispose: () => void;
+};
+
+class ProviderReadGate {
+  private tail = Promise.resolve();
+
+  async run<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tail;
+    const queued = previous.then(() => {
+      if (signal.aborted) throw signal.reason;
+      return operation();
+    });
+    this.tail = queued.then(() => undefined, () => undefined);
+    if (signal.aborted) throw signal.reason;
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        reject(signal.reason);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+      void queued.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        },
+      ).finally(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
+    });
+  }
+}
+
+function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): AttemptScope {
+  const controller = new AbortController();
+  let attemptTimedOut = false;
+  let disposed = false;
+  const onOverallAbort = () => {
+    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
+  };
+  if (overallSignal.aborted) onOverallAbort();
+  else overallSignal.addEventListener('abort', onOverallAbort, { once: true });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timeoutStartedAt = 0;
+  let remainingTimeoutMs = timeoutMs;
+  const pauseTimeout = () => {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+      remainingTimeoutMs = Math.max(0, remainingTimeoutMs - (performance.now() - timeoutStartedAt));
+    }
+    timeout = undefined;
+  };
+  const resumeTimeout = () => {
+    if (disposed || controller.signal.aborted || timeout !== undefined) return;
+    if (remainingTimeoutMs <= 0) {
+      attemptTimedOut = true;
+      controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
+      return;
+    }
+    timeoutStartedAt = performance.now();
+    timeout = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      timeout = undefined;
+      remainingTimeoutMs = 0;
+      attemptTimedOut = true;
+      controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
+    }, remainingTimeoutMs);
+  };
+  resumeTimeout();
+  return {
+    signal: controller.signal,
+    timedOut: () => attemptTimedOut,
+    pauseTimeout,
+    resumeTimeout,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      pauseTimeout();
+      overallSignal.removeEventListener('abort', onOverallAbort);
+    },
+  };
+}
+
+type WorkerDependencies = RpcProxyDependencies & {
+  providerMaxResponseBodyBytes: number;
+  providerMaxTotalResponseBodyBytes: number;
+  inventoryMaxCandidates: number;
+  inventoryMaxCursorPages: number;
+  inventoryMaxProviderCalls: number;
+  inventoryMaxResponseBodyBytes: number;
+  log: (entry: Record<string, unknown>) => void;
+  validateInventoryResponse: typeof isExactShopInventoryResponse;
+  validatePendingOpenBoxesResponse: typeof isExactShopPendingOpenBoxesResponse;
+};
+
+type ProviderContext = {
+  apiKey: string;
+  signal: AbortSignal;
+  dependencies: WorkerDependencies;
+  metrics: RpcRequestMetrics;
+  providerResponseBodyBytes: number;
+  inventoryCandidates: number;
+  inventoryCursorPages: number;
+  inventoryProviderCalls: number;
+  providerReadGate: ProviderReadGate;
+};
+
+type GroupedInventoryResult = {
+  scope: ShopDropRuntime;
+  items: ShopInventoryItem[];
+  needsFallback: boolean;
+};
+
+function jsonResponse(body: unknown, status: number, headers?: HeadersInit): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...BASE_HEADERS, ...headers },
+  });
+}
+
+function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+function inventoryItemWithinLimit(item: ShopInventoryItem): boolean {
+  return utf8ByteLength(JSON.stringify(item)) <= MAX_INVENTORY_SERIALIZED_ITEM_BYTES;
+}
+
+function compactInventoryItem(item: ShopInventoryItem): ShopInventoryItem {
+  const {
+    attributes: _attributes,
+    ...withoutAttributes
+  } = item as ShopInventoryItem & { attributes?: unknown };
+  if (inventoryItemWithinLimit(withoutAttributes)) return withoutAttributes;
+  const { rawImage: _rawImage, ...withoutImage } = withoutAttributes;
+  if (inventoryItemWithinLimit(withoutImage)) return withoutImage;
+  const { boxId: _boxId, ...withoutBoxId } = withoutImage;
+  if (inventoryItemWithinLimit(withoutBoxId)) return withoutBoxId;
+  const withFallbackName = { ...withoutBoxId, name: withoutBoxId.id };
+  if (inventoryItemWithinLimit(withFallbackName)) return withFallbackName;
+  throw new ProviderFailure('unavailable');
+}
+
+async function readBoundedText(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  createLimitError: () => Error,
+  consumeBytes?: (bytes: number) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const chunks: string[] = [];
+  let size = 0;
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  try {
+    while (true) {
+      if (signal?.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (signal?.aborted) throw signal.reason;
+      if (done) break;
+      size += value.byteLength;
+      consumeBytes?.(value.byteLength);
+      if (size > maxBytes) throw createLimitError();
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    return chunks.join('');
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+async function readBoundedRequestBody(request: Request): Promise<string> {
+  const contentLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) throw new Error('invalid-request');
+  if (!request.body) throw new Error('invalid-request');
+  return readBoundedText(request.body, MAX_REQUEST_BODY_BYTES, () => new Error('invalid-request'));
+}
+
+async function parseRequestBody(request: Request): Promise<ShopApiRequest> {
+  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+    throw new Error('invalid-request');
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(await readBoundedRequestBody(request));
+  } catch {
+    throw new Error('invalid-request');
+  }
+  if (!isExactShopApiRequest(value) || !isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
+  return value.includeDevnet === true ? { owner: value.owner, includeDevnet: true } : { owner: value.owner };
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    void response.body?.cancel().catch(() => undefined);
+  } catch {}
+}
+
+async function readBoundedJsonResponse(
+  response: Response,
+  context: ProviderContext,
+  pageOverflowIsRetryable = false,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const maxBytes = context.dependencies.providerMaxResponseBodyBytes;
+  const contentLength = Number(response.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await cancelResponseBody(response);
+    throw new ProviderFailure(pageOverflowIsRetryable ? 'page-too-large' : 'unavailable');
+  }
+  if (
+    Number.isFinite(contentLength) &&
+    context.providerResponseBodyBytes + contentLength > context.dependencies.providerMaxTotalResponseBodyBytes
+  ) {
+    await cancelResponseBody(response);
+    throw new ProviderFailure('limit');
+  }
+  if (!response.body) throw new ProviderFailure('unavailable');
+  try {
+    return JSON.parse(await readBoundedText(
+      response.body,
+      maxBytes,
+      () => new ProviderFailure(pageOverflowIsRetryable ? 'page-too-large' : 'unavailable'),
+      (bytes) => {
+        context.providerResponseBodyBytes += bytes;
+        if (context.providerResponseBodyBytes > context.dependencies.providerMaxTotalResponseBodyBytes) {
+          throw new ProviderFailure('limit');
+        }
+      },
+      signal,
+    ));
+  } catch (error) {
+    if (error instanceof ProviderFailure) throw error;
+    throw new ProviderFailure('unavailable');
+  }
+}
+
+function heliusRpcOrigin(cluster: SolanaCluster): string {
+  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+}
+
+function isTransientRpcError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as Record<string, unknown>;
+  if (typeof record.code === 'number' && (record.code === 408 || record.code === 429 || record.code === -32005 || record.code === -32603)) return true;
+  const message = typeof record.message === 'string' ? record.message.toLowerCase() : '';
+  return /timeout|timed out|rate limit|temporar|overload|internal/.test(message);
+}
+
+function retryDelayMs(dependencies: WorkerDependencies, response?: Response): number {
+  const retryAfterHeader = response?.headers.get('Retry-After');
+  if (retryAfterHeader !== undefined && retryAfterHeader !== null && retryAfterHeader.trim()) {
+    const retryAfter = Number(retryAfterHeader);
+    if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(1000, retryAfter * 1000);
+  }
+  return 100 + (dependencies.randomUint32() % 151);
+}
+
+async function heliusRpc<T>(
+  context: ProviderContext,
+  cluster: SolanaCluster,
+  method: string,
+  params: unknown,
+  options: { inventoryCall?: boolean; pageOverflowIsRetryable?: boolean } = {},
+): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (context.signal.aborted) throw new ProviderFailure('deadline');
+    if (options.inventoryCall) {
+      if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
+        throw new ProviderFailure('limit');
+      }
+      context.inventoryProviderCalls += 1;
+    }
+    const attemptScope = createAttemptScope(context.signal, context.dependencies.providerAttemptTimeoutMs);
+    let response: Response | undefined;
+    const startedAt = performance.now();
+    try {
+      context.metrics.upstreamCalls += 1;
+      const requestId = `${method}-${context.metrics.upstreamCalls}`;
+      response = await context.dependencies.providerFetch(
+        `${heliusRpcOrigin(cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
+          signal: attemptScope.signal,
+        },
+      );
+      if (!response.ok) {
+        const retryable = TRANSIENT_HTTP_STATUSES.has(response.status);
+        await cancelResponseBody(response);
+        if (context.signal.aborted) throw new ProviderFailure('deadline');
+        if (attempt === 0 && retryable) {
+          await context.dependencies.sleep(retryDelayMs(context.dependencies, response), attemptScope.signal);
+          continue;
+        }
+        throw new ProviderFailure(response.status === 408 || response.status === 504 ? 'timeout' : 'unavailable');
+      }
+      const successfulResponse = response;
+      attemptScope.pauseTimeout();
+      const payload = await context.providerReadGate.run(attemptScope.signal, () => {
+        attemptScope.resumeTimeout();
+        if (attemptScope.signal.aborted) throw attemptScope.signal.reason;
+        return readBoundedJsonResponse(
+          successfulResponse,
+          context,
+          options.pageOverflowIsRetryable === true,
+          attemptScope.signal,
+        );
+      });
+      if (attemptScope.signal.aborted) throw attemptScope.signal.reason;
+      if (!payload || typeof payload !== 'object') throw new ProviderFailure('unavailable');
+      const rpc = payload as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown };
+      if (rpc.jsonrpc !== '2.0' || rpc.id !== requestId) throw new ProviderFailure('unavailable');
+      if (rpc.error) {
+        if (attempt === 0 && isTransientRpcError(rpc.error)) {
+          await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
+          continue;
+        }
+        throw new ProviderFailure('unavailable');
+      }
+      if (!Object.hasOwn(rpc, 'result')) throw new ProviderFailure('unavailable');
+      return rpc.result as T;
+    } catch (error) {
+      if (context.signal.aborted) throw new ProviderFailure('deadline');
+      if (error instanceof ProviderFailure && error.kind === 'page-too-large') throw error;
+      if (attemptScope.timedOut()) {
+        if (attempt === 0) continue;
+        throw new ProviderFailure('timeout');
+      }
+      if (error instanceof ProviderFailure) throw error;
+      if (attempt === 0) {
+        await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
+        continue;
+      }
+      throw new ProviderFailure('unavailable');
+    } finally {
+      attemptScope.dispose();
+      context.metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
+    }
+  }
+  throw new ProviderFailure('unavailable');
+}
+
+async function mapConcurrent<T, R>(items: readonly T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function parseSearchAssetsResult(value: unknown): { raw: unknown; items: DasAsset[] } {
+  if (!value || typeof value !== 'object' || !Array.isArray((value as { items?: unknown }).items)) throw new ProviderFailure('unavailable');
+  return { raw: value, items: heliusSearchAssetsItems<DasAsset>(value) };
+}
+
+function compactInventoryPage(
+  context: ProviderContext,
+  assets: DasAsset[],
+  cluster: SolanaCluster,
+  seenIds: Set<string>,
+): ShopInventoryItem[] {
+  context.inventoryCandidates += assets.length;
+  if (context.inventoryCandidates > context.dependencies.inventoryMaxCandidates) {
+    throw new ProviderFailure('limit');
+  }
+  const items: ShopInventoryItem[] = [];
+  for (const asset of assets) {
+    if (typeof asset?.id !== 'string' || !isBase58Bytes(asset.id, 32) || seenIds.has(asset.id)) {
+      throw new ProviderFailure('unavailable');
+    }
+    seenIds.add(asset.id);
+    const item = transformShopInventoryItem(asset, cluster);
+    if (!item) continue;
+    const drop = shopDropById(item.dropId);
+    if (drop?.solanaCluster === cluster) items.push(compactInventoryItem(item));
+  }
+  return items;
+}
+
+function decodePendingOpenRecordCandidate(
+  entry: unknown,
+  owner: string,
+  scope: ReturnType<typeof listShopPendingOpenProgramScopes>[number],
+): PendingOpenRecordCandidate {
+  if (!entry || typeof entry !== 'object') throw new ProviderFailure('unavailable');
+  const record = entry as Record<string, unknown>;
+  const pendingPda = typeof record.pubkey === 'string' ? record.pubkey : '';
+  const account = record.account && typeof record.account === 'object'
+    ? record.account as Record<string, unknown>
+    : null;
+  const dataField = account?.data;
+  const dataBase64 = Array.isArray(dataField) && typeof dataField[0] === 'string'
+    ? dataField[0]
+    : typeof dataField === 'string' ? dataField : '';
+  if (
+    !isBase58Bytes(pendingPda, 32) ||
+    !dataBase64 ||
+    (Array.isArray(dataField) && dataField[1] !== undefined && dataField[1] !== 'base64')
+  ) throw new ProviderFailure('unavailable');
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(dataBase64), (character) => character.charCodeAt(0));
+  } catch {
+    throw new ProviderFailure('unavailable');
+  }
+  const decoded = decodePendingOpenRecordData(bytes, scope);
+  if (!decoded || decoded.owner !== owner) throw new ProviderFailure('unavailable');
+  return {
+    solanaCluster: scope.solanaCluster,
+    pendingPda,
+    boxAssetId: decoded.boxAssetId,
+    dudeAssetIds: decoded.dudeAssetIds,
+    candidateDrops: scope.drops,
+    ...(decoded.createdSlot != null ? { createdSlot: decoded.createdSlot } : {}),
+    ...(decoded.configPda ? { configPda: decoded.configPda } : {}),
+  };
+}
+
+async function fetchGroupedInventoryScope(
+  context: ProviderContext,
+  owner: string,
+  scope: ShopDropRuntime,
+): Promise<GroupedInventoryResult> {
+  const progress = { receivedResult: false };
+  try {
+    const items = await fetchInventoryCursorChain(
+      context,
+      owner,
+      scope.solanaCluster,
+      ['collection', scope.collectionMint],
+      progress,
+    );
+    return { scope, items, needsFallback: false };
+  } catch (error) {
+    if (
+      !progress.receivedResult &&
+      !context.signal.aborted &&
+      error instanceof ProviderFailure &&
+      (error.kind === 'unavailable' || error.kind === 'timeout')
+    ) {
+      return { scope, items: [], needsFallback: true };
+    }
+    throw error;
+  }
+}
+
+async function fetchInventoryCursorChain(
+  context: ProviderContext,
+  owner: string,
+  cluster: SolanaCluster,
+  grouping?: ['collection', string],
+  progress?: { receivedResult: boolean },
+): Promise<ShopInventoryItem[]> {
+  const items: ShopInventoryItem[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  let pageLimitIndex = 0;
+  let hasPageReservation = false;
+  while (true) {
+    if (!hasPageReservation) {
+      if (context.inventoryCursorPages >= context.dependencies.inventoryMaxCursorPages) {
+        throw new ProviderFailure('limit');
+      }
+      context.inventoryCursorPages += 1;
+      hasPageReservation = true;
+    }
+    const limit = HELIUS_SEARCH_ASSETS_PAGE_LIMITS[pageLimitIndex];
+    let parsed: { raw: unknown; items: DasAsset[] };
+    try {
+      const result = await heliusRpc(
+        context,
+        cluster,
+        'searchAssets',
+        {
+          ownerAddress: owner,
+          ...(grouping ? { grouping } : {}),
+          tokenType: 'nonFungible',
+          limit,
+          ...(cursor ? { cursor } : {}),
+          sortBy: { sortBy: 'id', sortDirection: 'asc' },
+          burnt: false,
+          options: HELIUS_COLLECTION_GROUPING_OPTIONS,
+        },
+        { inventoryCall: true, pageOverflowIsRetryable: true },
+      );
+      if (progress) progress.receivedResult = true;
+      parsed = parseSearchAssetsResult(result);
+    } catch (error) {
+      if (error instanceof ProviderFailure && error.kind === 'page-too-large') {
+        if (pageLimitIndex + 1 < HELIUS_SEARCH_ASSETS_PAGE_LIMITS.length) {
+          pageLimitIndex += 1;
+          continue;
+        }
+        throw new ProviderFailure('unavailable');
+      }
+      throw error;
+    }
+    let pageInfo: ReturnType<typeof heliusSearchAssetsCursorPageInfo>;
+    try {
+      pageInfo = heliusSearchAssetsCursorPageInfo(
+        parsed.raw,
+        parsed.items.length,
+        limit,
+        seenCursors,
+      );
+    } catch {
+      throw new ProviderFailure('unavailable');
+    }
+    items.push(...compactInventoryPage(context, parsed.items, cluster, seenIds));
+    if (!pageInfo.hasMore) return items;
+    seenCursors.add(pageInfo.cursor);
+    cursor = pageInfo.cursor;
+    hasPageReservation = false;
+  }
+}
+
+async function fetchUngroupedInventory(
+  context: ProviderContext,
+  owner: string,
+  cluster: SolanaCluster,
+): Promise<ShopInventoryItem[]> {
+  return fetchInventoryCursorChain(context, owner, cluster);
+}
+
+async function fetchInventory(
+  context: ProviderContext,
+  requestBody: ShopApiRequest,
+): Promise<ShopInventoryResponse> {
+  const scopes = listShopCollectionQueryRuntimes(requestBody.includeDevnet === true);
+  const grouped = await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
+    fetchGroupedInventoryScope(context, requestBody.owner, scope));
+  const fallbackClusters = Array.from(new Set(
+    grouped.filter((entry) => entry.needsFallback).map((entry) => entry.scope.solanaCluster),
+  ));
+  const fallbackRows = await mapConcurrent(fallbackClusters, PROVIDER_CONCURRENCY, async (cluster) => ({
+    cluster,
+    items: await fetchUngroupedInventory(context, requestBody.owner, cluster),
+  }));
+  const itemsById = new Map<string, ShopInventoryItem>();
+  for (const result of grouped) {
+    for (const item of result.items) itemsById.set(item.id, item);
+  }
+  for (const fallback of fallbackRows) {
+    for (const item of fallback.items) itemsById.set(item.id, item);
+  }
+  return { ok: true, items: Array.from(itemsById.values()) };
+}
+
+async function fetchPendingProgramScope(
+  context: ProviderContext,
+  owner: string,
+  scope: ReturnType<typeof listShopPendingOpenProgramScopes>[number],
+): Promise<PendingOpenRecordCandidate[]> {
+  const result = await heliusRpc<unknown>(context, scope.solanaCluster, 'getProgramAccounts', [
+    scope.boxMinterProgramId,
+    {
+      commitment: 'confirmed',
+      encoding: 'base64',
+      filters: [
+        { memcmp: { offset: 0, bytes: PENDING_OPEN_DISCRIMINATOR_BASE58 } },
+        { memcmp: { offset: 8, bytes: owner } },
+      ],
+    },
+  ]);
+  if (!Array.isArray(result)) throw new ProviderFailure('unavailable');
+  return result.map((entry) => decodePendingOpenRecordCandidate(entry, owner, scope));
+}
+
+async function fetchAssetBatch(
+  context: ProviderContext,
+  cluster: SolanaCluster,
+  ids: string[],
+): Promise<Map<string, DasAsset>> {
+  const byId = new Map<string, DasAsset>();
+  for (let offset = 0; offset < ids.length; offset += HELIUS_BATCH_LIMIT) {
+    const batchIds = ids.slice(offset, offset + HELIUS_BATCH_LIMIT);
+    const requestedIds = new Set(batchIds);
+    const result = await heliusRpc<unknown>(context, cluster, 'getAssetBatch', {
+      ids: batchIds,
+      options: HELIUS_COLLECTION_GROUPING_OPTIONS,
+    });
+    if (!Array.isArray(result)) throw new ProviderFailure('unavailable');
+    for (const asset of result) {
+      if (asset === null) continue;
+      if (!asset || typeof asset !== 'object') throw new ProviderFailure('unavailable');
+      const assetId = (asset as DasAsset).id;
+      if (typeof assetId !== 'string' || !requestedIds.has(assetId) || byId.has(assetId)) {
+        throw new ProviderFailure('unavailable');
+      }
+      byId.set(assetId, asset as DasAsset);
+    }
+  }
+  return byId;
+}
+
+async function fetchPendingOpenBoxes(
+  context: ProviderContext,
+  requestBody: ShopApiRequest,
+): Promise<ShopPendingOpenBoxesResponse> {
+  const scopes = listShopPendingOpenProgramScopes(requestBody.includeDevnet === true);
+  const rows = (await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
+    fetchPendingProgramScope(context, requestBody.owner, scope))).flat();
+  const deduped = new Map<string, PendingOpenRecordCandidate>();
+  for (const row of rows) {
+    const key = `${row.solanaCluster}:${row.pendingPda}`;
+    if (deduped.has(key)) throw new ProviderFailure('unavailable');
+    deduped.set(key, row);
+  }
+  const records = Array.from(deduped.values());
+  const unresolved = records.filter((entry) => resolvePendingOpenDropId(entry) === null && !entry.configPda);
+  const assetsByCluster = new Map<SolanaCluster, Map<string, DasAsset>>();
+  const unresolvedClusters = Array.from(new Set(unresolved.map((entry) => entry.solanaCluster)));
+  await mapConcurrent(unresolvedClusters, PROVIDER_CONCURRENCY, async (cluster) => {
+    const ids = Array.from(new Set(unresolved.filter((entry) => entry.solanaCluster === cluster).map((entry) => entry.boxAssetId)));
+    assetsByCluster.set(cluster, await fetchAssetBatch(context, cluster, ids));
+  });
+  const items = records.flatMap((entry) => {
+    const resolvedWithoutAsset = resolvePendingOpenDropId(entry);
+    if (resolvedWithoutAsset) return [toShopPendingOpenBox(entry, resolvedWithoutAsset)];
+    if (entry.configPda) return [];
+    const asset = assetsByCluster.get(entry.solanaCluster)?.get(entry.boxAssetId);
+    const dropId = resolvePendingOpenDropId(entry, asset);
+    if (!dropId) return [];
+    return [toShopPendingOpenBox(entry, dropId)];
+  });
+  items.sort((left, right) => Number(right.createdSlot || 0) - Number(left.createdSlot || 0));
+  return { ok: true, items };
+}
+
+export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== undefined) clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      reject(new ProviderFailure('deadline'));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+const defaultDependencies: WorkerDependencies = {
+  providerFetch: (input, init) => fetch(input, init),
+  providerTimeoutMs: HELIUS_OVERALL_TIMEOUT_MS,
+  providerAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
+  providerMaxResponseBodyBytes: HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
+  providerMaxTotalResponseBodyBytes: HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
+  inventoryMaxCandidates: HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
+  inventoryMaxCursorPages: HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
+  inventoryMaxProviderCalls: HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS,
+  inventoryMaxResponseBodyBytes: MAX_INVENTORY_RESPONSE_BODY_BYTES,
+  randomUint32: () => crypto.getRandomValues(new Uint32Array(1))[0],
+  sleep: sleepWithAbort,
+  log: (entry) => console.log(entry),
+  validateInventoryResponse: isExactShopInventoryResponse,
+  validatePendingOpenBoxesResponse: isExactShopPendingOpenBoxesResponse,
+};
+
+async function applyRateLimit(binding: RateLimit, key: string): Promise<boolean> {
+  const outcome = await binding.limit({ key });
+  return outcome.success;
+}
+
+async function handlePost(
+  request: Request,
+  env: Env,
+  pathname: '/inventory' | '/pending-open-boxes',
+  dependencies: WorkerDependencies,
+  metrics: RpcRequestMetrics,
+): Promise<{ response: Response; includeDevnet: boolean }> {
+  const connectingIp = request.headers.get('CF-Connecting-IP')?.trim() || 'unknown';
+  try {
+    if (!await applyRateLimit(env.IP_RATE_LIMITER, `${pathname}:${connectingIp}`)) {
+      return {
+        response: jsonResponse({ ok: false, error: 'rate-limited' }, 429, { 'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS) }),
+        includeDevnet: false,
+      };
+    }
+  } catch {}
+  let requestBody: ShopApiRequest;
+  try {
+    requestBody = await parseRequestBody(request);
+  } catch {
+    return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400), includeDevnet: false };
+  }
+  try {
+    if (!await applyRateLimit(env.OWNER_RATE_LIMITER, `${pathname}:${requestBody.owner}`)) {
+      return {
+        response: jsonResponse({ ok: false, error: 'rate-limited' }, 429, { 'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS) }),
+        includeDevnet: requestBody.includeDevnet === true,
+      };
+    }
+  } catch {}
+  const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
+  if (!apiKey) {
+    return {
+      response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
+      includeDevnet: requestBody.includeDevnet === true,
+    };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), dependencies.providerTimeoutMs);
+  const context: ProviderContext = {
+    apiKey,
+    signal: controller.signal,
+    dependencies,
+    metrics,
+    providerResponseBodyBytes: 0,
+    inventoryCandidates: 0,
+    inventoryCursorPages: 0,
+    inventoryProviderCalls: 0,
+    providerReadGate: new ProviderReadGate(),
+  };
+  try {
+    const body = pathname === '/inventory'
+      ? await fetchInventory(context, requestBody)
+      : await fetchPendingOpenBoxes(context, requestBody);
+    const valid = pathname === '/inventory'
+      ? dependencies.validateInventoryResponse(body)
+      : dependencies.validatePendingOpenBoxesResponse(body);
+    if (!valid) throw new ProviderFailure('unavailable');
+    const text = JSON.stringify(body);
+    if (
+      pathname === '/inventory' &&
+      utf8ByteLength(text) > dependencies.inventoryMaxResponseBodyBytes
+    ) throw new ProviderFailure('limit');
+    return {
+      response: new Response(text, { status: 200, headers: BASE_HEADERS }),
+      includeDevnet: requestBody.includeDevnet === true,
+    };
+  } catch (error) {
+    controller.abort();
+    const kind = error instanceof ProviderFailure ? error.kind : 'unavailable';
+    return {
+      response: jsonResponse(
+        { ok: false, error: kind === 'timeout' || kind === 'deadline' ? 'provider-timeout' : 'provider-unavailable' },
+        kind === 'timeout' || kind === 'deadline' ? 504 : 502,
+      ),
+      includeDevnet: requestBody.includeDevnet === true,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  dependencyOverrides: Partial<WorkerDependencies> = {},
+): Promise<Response> {
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const startedAt = performance.now();
+  const metrics: RpcRequestMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
+  const pathname = new URL(request.url).pathname;
+  let includeDevnet = false;
+  let rpcMethod: string | undefined;
+  let response: Response;
+  const rpcCluster = pathname === '/rpc/mainnet-beta'
+    ? 'mainnet-beta'
+    : pathname === '/rpc/devnet' ? 'devnet' : null;
+  if (request.method === 'OPTIONS' && rpcCluster) {
+    response = handleRpcPreflight(request);
+  } else if (request.method === 'OPTIONS' && (pathname === '/inventory' || pathname === '/pending-open-boxes')) {
+    response = new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store', 'Timing-Allow-Origin': '*' } });
+  } else if (pathname === '/health') {
+    response = request.method === 'GET'
+      ? jsonResponse({ ok: true }, 200)
+      : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
+  } else if (rpcCluster) {
+    if (request.method !== 'POST') {
+      response = handleRpcMethodNotAllowed(request);
+    } else {
+      const result = await handleRpcPost(
+        request,
+        env,
+        rpcCluster,
+        dependencies,
+        metrics,
+      );
+      response = result.response;
+      rpcMethod = result.rpcMethod;
+    }
+  } else if (pathname === '/inventory' || pathname === '/pending-open-boxes') {
+    if (request.method !== 'POST') {
+      response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' });
+    } else {
+      const result = await handlePost(request, env, pathname, dependencies, metrics);
+      response = result.response;
+      includeDevnet = result.includeDevnet;
+    }
+  } else {
+    response = jsonResponse({ ok: false, error: 'not-found' }, 404);
+  }
+  const totalDurationMs = performance.now() - startedAt;
+  response.headers.set('Server-Timing', `total;dur=${totalDurationMs.toFixed(1)}, provider;dur=${metrics.providerDurationMs.toFixed(1)}`);
+  dependencies.log({
+    event: 'shop_api_request',
+    route: KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found',
+    method: request.method,
+    status: response.status,
+    durationMs: Math.round(totalDurationMs),
+    providerDurationMs: Math.round(metrics.providerDurationMs),
+    upstreamCalls: metrics.upstreamCalls,
+    includeDevnet,
+    ...(rpcMethod ? { rpcMethod } : {}),
+  });
+  return response;
+}
+
+export default {
+  fetch(request, env) {
+    return handleRequest(request, env);
+  },
+} satisfies ExportedHandler<Env>;

@@ -15,7 +15,7 @@ export function usePendingOpenBoxes(ownerOverride?: string, options?: DropFetchO
   return useQuery<PendingOpenBox[]>({
     queryKey: [...pendingOpenBoxesQueryKeyPrefix(owner), includeDevnet],
     enabled: Boolean(owner),
-    queryFn: () => fetchPendingOpenBoxes(owner!, { includeDevnet }),
+    queryFn: ({ signal }) => fetchPendingOpenBoxes(owner!, { includeDevnet, signal }),
     refetchInterval: 20_000,
   });
 }

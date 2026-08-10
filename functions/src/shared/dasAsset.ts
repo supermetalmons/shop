@@ -98,11 +98,16 @@ export function dasAssetBoxId(
 }
 
 export function dasAssetDudeId(asset: DasAsset | null | undefined): number | undefined {
-  const attributeId = Number(dasAssetMetadataAttributeValue(asset, 'dude_id'));
-  if (Number.isFinite(attributeId)) return attributeId;
+  const attributeValue = dasAssetMetadataAttributeValue(asset, 'dude_id');
+  const attributeId = typeof attributeValue === 'number'
+    ? attributeValue
+    : typeof attributeValue === 'string' && /^\d+$/.test(attributeValue.trim())
+      ? Number(attributeValue.trim())
+      : Number.NaN;
+  if (Number.isSafeInteger(attributeId) && attributeId > 0) return attributeId;
 
   const uriId = dudeIdFromMetadataUri(dasAssetMetadataUri(asset));
-  return typeof uriId === 'number' ? uriId : undefined;
+  return Number.isSafeInteger(uriId) && Number(uriId) > 0 ? uriId : undefined;
 }
 
 export function dasAssetLooksBurntOrClosed(

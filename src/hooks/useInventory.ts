@@ -15,7 +15,7 @@ export function useInventory(ownerOverride?: string, options?: DropFetchOptions)
   return useQuery<InventoryItem[]>({
     queryKey: [...inventoryQueryKeyPrefix(owner), includeDevnet],
     enabled: Boolean(owner),
-    queryFn: () => fetchInventory(owner!, { includeDevnet }),
+    queryFn: ({ signal }) => fetchInventory(owner!, { includeDevnet, signal }),
     refetchInterval: 45_000,
   });
 }

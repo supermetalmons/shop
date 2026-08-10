@@ -5,7 +5,6 @@ import {
   SIGNATURE_LENGTH_IN_BYTES,
   VersionedTransaction,
   type SendOptions,
-  type SignatureStatus,
 } from '@solana/web3.js';
 import {
   ADDRESS_CIPHER_PUBLIC_KEY_LENGTH,
@@ -13,6 +12,11 @@ import {
   encryptAddressCipherText,
   serializeAddressCipherPayload,
 } from '../../functions/src/shared/addressCipher.js';
+import {
+  isExactShopRpcResponse,
+  type ShopRpcRequest,
+} from '../../functions/src/shared/solanaRpcProxy.ts';
+import { monsApiOrigin } from './monsApiOrigin';
 
 export { normalizeCountryCode } from '../../functions/src/shared/countryNormalization.ts';
 
@@ -27,13 +31,35 @@ function unwrapTxErrorMessage(err: unknown): string {
   return 'Unexpected error';
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal) {
+  if (!signal) return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
 }
 
 const ALREADY_PROCESSED_ERROR_RE = /this transaction has already been processed|already been processed/i;
 const BLOCKHASH_EXPIRED_ERROR_RE =
   /blockhash[\s_-]*not[\s_-]*found|blockhash expired|transaction expired|expired blockhash|signature has expired|block height exceeded|TransactionExpiredBlockheightExceededError/i;
+const DETERMINISTIC_SHOP_RPC_ERROR_CODES = new Set([-32005, -32096, -32097]);
+const DETERMINISTIC_SHOP_RPC_MESSAGE_RE = /^(?:rate limit exceeded|origin not allowed|rate limit unavailable)$/i;
+const DETERMINISTIC_SHOP_RPC_CODE_IN_JSON_RE = /"code"\s*:\s*(-32005|-32096|-32097)(?=\s*[,}])/;
 
 export function isBlockhashExpiredError(err: unknown, seen = new Set<unknown>(), depth = 0): boolean {
   if (!err || depth > 6) return false;
@@ -85,9 +111,10 @@ type AttemptPollingOptions = {
   delayMs?: number;
 };
 
-type SignatureWaitOptions = AttemptPollingOptions & {
+export type SignatureWaitOptions = AttemptPollingOptions & {
   timeoutMs?: number;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 // Only the duplicate-submit recovery path uses this longer window.
@@ -98,12 +125,16 @@ const ALREADY_PROCESSED_RECOVERY_WAIT: AttemptPollingOptions = {
   delayMs: 1_000,
 };
 
-// Keep post-submit confirmation bounded and explicit. This is one status RPC call
-// per interval for a single active transaction, plus one history lookup at the end.
 const SUBMITTED_SIGNATURE_WAIT: SignatureWaitOptions = {
   delayMs: 500,
   timeoutMs: 12_000,
   requestTimeoutMs: 2_000,
+};
+
+const TRANSACTION_CONFIRMATION_WAIT: SignatureWaitOptions = {
+  delayMs: 500,
+  timeoutMs: 75_000,
+  requestTimeoutMs: 35_000,
 };
 
 const DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS = 2_000;
@@ -129,20 +160,24 @@ type Deadline = {
   promise: Promise<typeof DEADLINE_REACHED>;
   reached: () => boolean;
   cancel: () => void;
+  signal: AbortSignal;
 };
 
 function createDeadline(timeoutMs: number): Deadline {
   let reached = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const controller = new AbortController();
   const promise = new Promise<typeof DEADLINE_REACHED>((resolve) => {
     timer = setTimeout(() => {
       reached = true;
+      controller.abort(new DOMException('Deadline reached', 'TimeoutError'));
       resolve(DEADLINE_REACHED);
     }, Math.max(0, timeoutMs));
   });
   return {
     promise,
     reached: () => reached,
+    signal: controller.signal,
     cancel: () => {
       if (timer != null) clearTimeout(timer);
       timer = null;
@@ -150,9 +185,24 @@ function createDeadline(timeoutMs: number): Deadline {
   };
 }
 
-async function raceDeadline<T>(promise: Promise<T>, deadline: Deadline): Promise<T | typeof DEADLINE_REACHED> {
+async function raceDeadline<T>(
+  promise: Promise<T>,
+  deadline: Deadline,
+  signal?: AbortSignal,
+): Promise<T | typeof DEADLINE_REACHED> {
   if (deadline.reached()) return DEADLINE_REACHED;
-  return Promise.race([promise, deadline.promise]);
+  if (!signal) return Promise.race([promise, deadline.promise]);
+  if (signal.aborted) throw signal.reason;
+  let abort: (() => void) | null = null;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, deadline.promise, aborted]);
+  } finally {
+    if (abort) signal.removeEventListener('abort', abort);
+  }
 }
 
 async function withRequestTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -318,6 +368,8 @@ function isDeterministicSignedTransactionSendError(err: unknown, seen = new Set<
     const message = unwrapTxErrorMessage(err);
     return (
       isBlockhashExpiredError(err) ||
+      DETERMINISTIC_SHOP_RPC_MESSAGE_RE.test(message.trim()) ||
+      DETERMINISTIC_SHOP_RPC_CODE_IN_JSON_RE.test(message) ||
       /simulation failed|transaction simulation failed|preflight failure|signature verification failure|user rejected|user declined/i.test(
         message,
       )
@@ -330,18 +382,32 @@ function isDeterministicSignedTransactionSendError(err: unknown, seen = new Set<
   const anyErr = err as any;
   if (anyErr?.name === 'PreparedTransactionSimulationError') return true;
   if (anyErr?.code === 4001 || anyErr?.code === 4100) return true;
-  if (anyErr?.transactionError != null) return true;
+  if (DETERMINISTIC_SHOP_RPC_ERROR_CODES.has(anyErr?.code)) return true;
   if (Array.isArray(anyErr?.logs) && anyErr.logs.length > 0) return true;
 
   const message = unwrapTxErrorMessage(err);
+  const nestedErrors = [anyErr?.cause, anyErr?.error].filter(Boolean);
+  const transactionMessage = typeof anyErr?.transactionMessage === 'string'
+    ? anyErr.transactionMessage
+    : nestedErrors.length === 0
+      ? message
+      : '';
+  if (
+    DETERMINISTIC_SHOP_RPC_MESSAGE_RE.test(transactionMessage.trim()) ||
+    DETERMINISTIC_SHOP_RPC_CODE_IN_JSON_RE.test(message)
+  ) {
+    return true;
+  }
   if (
     /simulation failed|transaction simulation failed|preflight failure|signature verification failure|invalid params|invalid request|method not found|parse error|unsupported transaction version|user rejected|user declined/i.test(
-      message,
+      transactionMessage,
     )
   ) {
     return true;
   }
-  return anyErr?.cause ? isDeterministicSignedTransactionSendError(anyErr.cause, seen, depth + 1) : false;
+  return nestedErrors.some((nestedError) => (
+    isDeterministicSignedTransactionSendError(nestedError, seen, depth + 1)
+  ));
 }
 
 /**
@@ -395,20 +461,206 @@ export async function sendSignedTransactionViaConnection(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  const keys = Object.keys(value);
+  return required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
+    keys.every((key) => allowed.has(key));
+}
+
+type PolledSignatureStatus = {
+  slot: number;
+  confirmations: number | null;
+  err: unknown;
+  confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null;
+};
+
+type PolledConfirmationStatus = NonNullable<PolledSignatureStatus['confirmationStatus']> | null;
+
+function isPolledConfirmationStatus(value: unknown): value is PolledConfirmationStatus {
+  return value === null || value === 'processed' || value === 'confirmed' || value === 'finalized';
+}
+
+function requireSignatureStatusResult(value: unknown): PolledSignatureStatus | null {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.context) ||
+    !Number.isSafeInteger(value.context.slot) ||
+    Number(value.context.slot) < 0
+  ) {
+    throw new Error('Solana RPC returned an invalid signature-status response');
+  }
+  if (!Array.isArray(value.value) || value.value.length !== 1) {
+    throw new Error('Solana RPC returned an invalid signature-status response');
+  }
+  const status = value.value[0];
+  if (status === null) return null;
+  const confirmationStatus = isRecord(status) ? status.confirmationStatus : undefined;
+  if (
+    !isRecord(status) ||
+    !Number.isSafeInteger(status.slot) ||
+    Number(status.slot) < 0 ||
+    !(status.confirmations === null || (
+      Number.isSafeInteger(status.confirmations) && Number(status.confirmations) >= 0
+    )) ||
+    !Object.prototype.hasOwnProperty.call(status, 'err') ||
+    (confirmationStatus !== undefined && !isPolledConfirmationStatus(confirmationStatus))
+  ) {
+    throw new Error('Solana RPC returned an invalid signature-status response');
+  }
+  const parsedConfirmationStatus = isPolledConfirmationStatus(confirmationStatus)
+    ? confirmationStatus
+    : undefined;
+  return {
+    slot: Number(status.slot),
+    confirmations: status.confirmations === null ? null : Number(status.confirmations),
+    err: status.err,
+    ...(parsedConfirmationStatus !== undefined ? { confirmationStatus: parsedConfirmationStatus } : {}),
+  };
+}
+
+type RequestAbortScope = {
+  signal: AbortSignal;
+  dispose: () => void;
+};
+
+function createRequestAbortScope(
+  requestTimeoutMs: number,
+  signals: readonly (AbortSignal | undefined)[],
+): RequestAbortScope {
+  const controller = new AbortController();
+  const aborters = signals.flatMap((signal) => {
+    if (!signal) return [];
+    const abort = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      }
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+    return [{ signal, abort }];
+  });
+  const timeout = setTimeout(() => {
+    if (!controller.signal.aborted) {
+      controller.abort(new DOMException('Solana RPC request timed out', 'TimeoutError'));
+    }
+  }, requestTimeoutMs);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timeout);
+      for (const { signal, abort } of aborters) signal.removeEventListener('abort', abort);
+    },
+  };
+}
+
+async function fetchShopRpcResult(
+  endpoint: string,
+  requestBody: ShopRpcRequest,
+  requestTimeoutMs: number,
+  signals: readonly (AbortSignal | undefined)[],
+): Promise<unknown> {
+  const scope = createRequestAbortScope(requestTimeoutMs, signals);
+  try {
+    if (scope.signal.aborted) throw scope.signal.reason;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+      cache: 'no-store',
+      signal: scope.signal,
+    });
+    if (scope.signal.aborted) throw scope.signal.reason;
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (scope.signal.aborted) throw scope.signal.reason;
+      throw new Error('Solana RPC returned malformed JSON', { cause: error });
+    }
+    if (scope.signal.aborted) throw scope.signal.reason;
+    if (!isExactShopRpcResponse(payload, requestBody.id)) {
+      throw new Error('Solana RPC returned an invalid response');
+    }
+    if (payload.error) {
+      throw Object.assign(new Error(`Solana RPC request failed: ${payload.error.message}`), {
+        code: payload.error.code,
+        data: payload.error.data,
+      });
+    }
+    if (!response.ok) {
+      throw new Error(`Solana RPC request failed with HTTP ${response.status}`);
+    }
+    return payload.result;
+  } finally {
+    scope.dispose();
+  }
+}
+
+function shopRpcEndpointForConnection(connection: Connection): string | null {
+  const endpoint = Reflect.get(connection, 'rpcEndpoint');
+  if (typeof endpoint === 'string' && endpoint.length > 0) {
+    const origin = monsApiOrigin();
+    if (endpoint !== `${origin}/rpc/mainnet-beta` && endpoint !== `${origin}/rpc/devnet`) {
+      throw new Error('Solana RPC connection does not use the mons API');
+    }
+    return endpoint;
+  }
+  if (connection instanceof Connection) {
+    throw new Error('Solana RPC connection is missing its endpoint');
+  }
+  return null;
+}
+
+async function fetchSignatureStatusValue(
+  endpoint: string,
+  signature: string,
+  searchTransactionHistory: boolean,
+  requestTimeoutMs: number,
+  signals: readonly (AbortSignal | undefined)[],
+): Promise<PolledSignatureStatus | null> {
+  const requestBody: ShopRpcRequest = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'getSignatureStatuses',
+    params: [[signature], { searchTransactionHistory }],
+  };
+  const result = await fetchShopRpcResult(endpoint, requestBody, requestTimeoutMs, signals);
+  return requireSignatureStatusResult(result);
+}
+
 async function getSignatureStatusValue(
   connection: Connection,
   signature: string,
   searchTransactionHistory: boolean,
   requestTimeoutMs = DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
-): Promise<SignatureStatus | null> {
-  const status = await withRequestTimeout(
-    connection.getSignatureStatus(signature, { searchTransactionHistory }),
-    requestTimeoutMs,
-  );
+  signals: readonly (AbortSignal | undefined)[] = [],
+): Promise<PolledSignatureStatus | null> {
+  const endpoint = shopRpcEndpointForConnection(connection);
+  if (endpoint) {
+    return fetchSignatureStatusValue(endpoint, signature, searchTransactionHistory, requestTimeoutMs, signals);
+  }
+  const getSignatureStatus = Reflect.get(connection, 'getSignatureStatus');
+  if (typeof getSignatureStatus !== 'function') {
+    throw new Error('Solana RPC connection is missing its endpoint');
+  }
+  const statusPromise = Reflect.apply(getSignatureStatus, connection, [
+    signature,
+    { searchTransactionHistory },
+  ]) as Promise<{ value: PolledSignatureStatus | null }>;
+  const status = await withRequestTimeout(statusPromise, requestTimeoutMs);
   return status.value ?? null;
 }
 
-function isConfirmedSignatureStatus(status: SignatureStatus | null): boolean {
+function isConfirmedSignatureStatus(status: PolledSignatureStatus | null): boolean {
   if (!status || status.err) return false;
   return (
     status.confirmationStatus === 'confirmed' ||
@@ -418,7 +670,7 @@ function isConfirmedSignatureStatus(status: SignatureStatus | null): boolean {
   );
 }
 
-function assertSignatureStatusSucceeded(signature: string, status: SignatureStatus | null) {
+function assertSignatureStatusSucceeded(signature: string, status: PolledSignatureStatus | null) {
   if (status?.err) {
     throw new SubmittedTransactionFailureError(signature, status.err);
   }
@@ -428,6 +680,7 @@ async function waitForSuccessfulSignature(
   connection: Connection,
   signature: string,
   opts: SignatureWaitOptions = {},
+  pollHistoricalUntilDeadline = false,
 ): Promise<boolean> {
   const timeoutMs = normalizeOptionalIntegerOption(opts.timeoutMs, 1);
   const requestTimeoutMs = normalizeIntegerOption(
@@ -441,27 +694,89 @@ async function waitForSuccessfulSignature(
     const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
     try {
       while (!pollingDeadline.reached()) {
-        const statusResult = await raceDeadline(
-          getSignatureStatusValue(connection, signature, false, requestTimeoutMs).catch(() => null),
-          pollingDeadline,
-        );
-        if (statusResult === DEADLINE_REACHED) break;
-        assertSignatureStatusSucceeded(signature, statusResult);
-        if (isConfirmedSignatureStatus(statusResult)) return true;
+        let status: PolledSignatureStatus | null;
+        try {
+          const statusResult = await raceDeadline(
+            getSignatureStatusValue(
+              connection,
+              signature,
+              false,
+              requestTimeoutMs,
+              [opts.signal, pollingDeadline.signal],
+            ),
+            pollingDeadline,
+            opts.signal,
+          );
+          if (statusResult === DEADLINE_REACHED) break;
+          status = statusResult;
+        } catch {
+          if (opts.signal?.aborted) throw opts.signal.reason;
+          if (pollingDeadline.reached()) break;
+          status = null;
+        }
+        assertSignatureStatusSucceeded(signature, status);
+        if (isConfirmedSignatureStatus(status)) return true;
 
         if (delayMs > 0) {
-          const delayResult = await raceDeadline(sleep(delayMs), pollingDeadline);
+          const delayResult = await raceDeadline(sleep(delayMs, opts.signal), pollingDeadline, opts.signal);
           if (delayResult === DEADLINE_REACHED) break;
         }
       }
 
-      const historicalResult = await raceDeadline(
-        getSignatureStatusValue(connection, signature, true, requestTimeoutMs).catch(() => null),
-        overallDeadline,
-      );
-      if (historicalResult === DEADLINE_REACHED) return false;
-      assertSignatureStatusSucceeded(signature, historicalResult);
-      return isConfirmedSignatureStatus(historicalResult);
+      if (pollHistoricalUntilDeadline) {
+        while (!overallDeadline.reached()) {
+          let historicalStatus: PolledSignatureStatus | null;
+          try {
+            const historicalResult = await raceDeadline(
+              getSignatureStatusValue(
+                connection,
+                signature,
+                true,
+                requestTimeoutMs,
+                [opts.signal, overallDeadline.signal],
+              ),
+              overallDeadline,
+              opts.signal,
+            );
+            if (historicalResult === DEADLINE_REACHED) break;
+            historicalStatus = historicalResult;
+          } catch {
+            if (opts.signal?.aborted) throw opts.signal.reason;
+            if (overallDeadline.reached()) break;
+            historicalStatus = null;
+          }
+          assertSignatureStatusSucceeded(signature, historicalStatus);
+          if (isConfirmedSignatureStatus(historicalStatus)) return true;
+
+          if (delayMs > 0) {
+            const delayResult = await raceDeadline(sleep(delayMs, opts.signal), overallDeadline, opts.signal);
+            if (delayResult === DEADLINE_REACHED) break;
+          }
+        }
+        return false;
+      }
+
+      let historicalStatus: PolledSignatureStatus | null;
+      try {
+        const historicalResult = await raceDeadline(
+          getSignatureStatusValue(
+            connection,
+            signature,
+            true,
+            requestTimeoutMs,
+            [opts.signal, overallDeadline.signal],
+          ),
+          overallDeadline,
+          opts.signal,
+        );
+        if (historicalResult === DEADLINE_REACHED) return false;
+        historicalStatus = historicalResult;
+      } catch {
+        if (opts.signal?.aborted) throw opts.signal.reason;
+        return false;
+      }
+      assertSignatureStatusSucceeded(signature, historicalStatus);
+      return isConfirmedSignatureStatus(historicalStatus);
     } finally {
       pollingDeadline.cancel();
       overallDeadline.cancel();
@@ -472,20 +787,65 @@ async function waitForSuccessfulSignature(
   const delayMs = Math.max(0, Math.floor(opts.delayMs ?? 500));
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const status = await getSignatureStatusValue(connection, signature, false, requestTimeoutMs).catch(() => null);
+    let status: PolledSignatureStatus | null;
+    try {
+      status = await getSignatureStatusValue(
+        connection,
+        signature,
+        false,
+        requestTimeoutMs,
+        [opts.signal],
+      );
+    } catch {
+      if (opts.signal?.aborted) throw opts.signal.reason;
+      status = null;
+    }
     assertSignatureStatusSucceeded(signature, status);
     if (isConfirmedSignatureStatus(status)) return true;
 
     if (attempt < attempts - 1 && delayMs > 0) {
-      await sleep(delayMs);
+      await sleep(delayMs, opts.signal);
     }
   }
 
-  const historicalStatus = await getSignatureStatusValue(connection, signature, true, requestTimeoutMs).catch(
-    () => null,
-  );
+  let historicalStatus: PolledSignatureStatus | null;
+  try {
+    historicalStatus = await getSignatureStatusValue(
+      connection,
+      signature,
+      true,
+      requestTimeoutMs,
+      [opts.signal],
+    );
+  } catch {
+    if (opts.signal?.aborted) throw opts.signal.reason;
+    historicalStatus = null;
+  }
   assertSignatureStatusSucceeded(signature, historicalStatus);
   return isConfirmedSignatureStatus(historicalStatus);
+}
+
+export async function confirmSubmittedTransactionByPolling(
+  connection: Connection,
+  signatureValue: string,
+  options: SignatureWaitOptions = {},
+): Promise<void> {
+  const signature = requireValidTransactionSignature(signatureValue);
+  const confirmed = await waitForSuccessfulSignature(
+    connection,
+    signature,
+    {
+      ...TRANSACTION_CONFIRMATION_WAIT,
+      ...options,
+    },
+    true,
+  );
+  if (!confirmed) {
+    throw new PotentiallySubmittedTransactionError(
+      signature,
+      new Error('Transaction confirmation timed out'),
+    );
+  }
 }
 
 export type SubmittedTransactionReconciliationResult = 'confirmed' | 'failed' | 'expired' | 'unknown';
@@ -494,6 +854,7 @@ export type SubmittedTransactionReconciliationOptions = {
   timeoutMs?: number;
   pollIntervalMs?: number;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 function requireValidRecentBlockhash(value: unknown): string {
@@ -506,6 +867,61 @@ function requireValidRecentBlockhash(value: unknown): string {
     // Fall through to the stable validation error below.
   }
   throw new Error('Invalid recent blockhash');
+}
+
+function requireBlockhashValidityResult(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['context', 'value']) ||
+    typeof value.value !== 'boolean' ||
+    !isRecord(value.context) ||
+    !hasExactKeys(value.context, ['slot'], ['apiVersion']) ||
+    !Number.isSafeInteger(value.context.slot) ||
+    Number(value.context.slot) < 0 ||
+    (value.context.apiVersion !== undefined && typeof value.context.apiVersion !== 'string')
+  ) {
+    throw new Error('Solana RPC returned an invalid blockhash-validity response');
+  }
+  return value.value;
+}
+
+async function fetchBlockhashValidityValue(
+  endpoint: string,
+  recentBlockhash: string,
+  requestTimeoutMs: number,
+  signals: readonly (AbortSignal | undefined)[],
+): Promise<boolean> {
+  const requestBody: ShopRpcRequest = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'isBlockhashValid',
+    params: [recentBlockhash, { commitment: 'confirmed' }],
+  };
+  const result = await fetchShopRpcResult(endpoint, requestBody, requestTimeoutMs, signals);
+  return requireBlockhashValidityResult(result);
+}
+
+async function getBlockhashValidityValue(
+  connection: Connection,
+  recentBlockhash: string,
+  requestTimeoutMs: number,
+  signals: readonly (AbortSignal | undefined)[],
+): Promise<boolean> {
+  const endpoint = shopRpcEndpointForConnection(connection);
+  if (endpoint) {
+    return fetchBlockhashValidityValue(endpoint, recentBlockhash, requestTimeoutMs, signals);
+  }
+  const isBlockhashValid = Reflect.get(connection, 'isBlockhashValid');
+  if (typeof isBlockhashValid !== 'function') {
+    throw new Error('Solana RPC connection is missing its endpoint');
+  }
+  const activeSignal = signals.find((signal) => signal?.aborted);
+  if (activeSignal?.aborted) throw activeSignal.reason;
+  const result = await withRequestTimeout(
+    Reflect.apply(isBlockhashValid, connection, [recentBlockhash, { commitment: 'confirmed' }]),
+    requestTimeoutMs,
+  );
+  return requireBlockhashValidityResult(result);
 }
 
 /**
@@ -538,19 +954,33 @@ export async function reconcileSubmittedTransaction(
   const deadline = createDeadline(timeoutMs);
 
   try {
+    if (options.signal?.aborted) throw options.signal.reason;
     while (!deadline.reached()) {
-      let status: SignatureStatus | null;
+      let status: PolledSignatureStatus | null;
       try {
         const statusResult = await raceDeadline(
-          getSignatureStatusValue(connection, signature, false, requestTimeoutMs),
+          getSignatureStatusValue(
+            connection,
+            signature,
+            false,
+            requestTimeoutMs,
+            [options.signal, deadline.signal],
+          ),
           deadline,
+          options.signal,
         );
         if (statusResult === DEADLINE_REACHED) return 'unknown';
         status = statusResult;
       } catch {
+        if (options.signal?.aborted) throw options.signal.reason;
+        if (deadline.reached()) return 'unknown';
         status = null;
         if (pollIntervalMs > 0) {
-          const delayResult = await raceDeadline(sleep(pollIntervalMs), deadline);
+          const delayResult = await raceDeadline(
+            sleep(pollIntervalMs, options.signal),
+            deadline,
+            options.signal,
+          );
           if (delayResult === DEADLINE_REACHED) return 'unknown';
         }
         continue;
@@ -563,36 +993,54 @@ export async function reconcileSubmittedTransaction(
         let blockhashValid: boolean;
         try {
           const validityResult = await raceDeadline(
-            withRequestTimeout(
-              connection.isBlockhashValid(recentBlockhash, { commitment: 'confirmed' }),
+            getBlockhashValidityValue(
+              connection,
+              recentBlockhash,
               requestTimeoutMs,
+              [options.signal, deadline.signal],
             ),
             deadline,
+            options.signal,
           );
           if (validityResult === DEADLINE_REACHED) return 'unknown';
-          blockhashValid = validityResult.value;
+          blockhashValid = validityResult;
         } catch {
+          if (options.signal?.aborted) throw options.signal.reason;
+          if (deadline.reached()) return 'unknown';
           blockhashValid = true;
         }
 
         if (!blockhashValid) {
           try {
             const historicalResult = await raceDeadline(
-              getSignatureStatusValue(connection, signature, true, requestTimeoutMs),
+              getSignatureStatusValue(
+                connection,
+                signature,
+                true,
+                requestTimeoutMs,
+                [options.signal, deadline.signal],
+              ),
               deadline,
+              options.signal,
             );
             if (historicalResult === DEADLINE_REACHED) return 'unknown';
             if (historicalResult?.err) return 'failed';
             if (isConfirmedSignatureStatus(historicalResult)) return 'confirmed';
             if (historicalResult == null) return 'expired';
           } catch {
+            if (options.signal?.aborted) throw options.signal.reason;
+            if (deadline.reached()) return 'unknown';
             // A failed history lookup cannot prove expiration; keep observing.
           }
         }
       }
 
       if (pollIntervalMs > 0) {
-        const delayResult = await raceDeadline(sleep(pollIntervalMs), deadline);
+        const delayResult = await raceDeadline(
+          sleep(pollIntervalMs, options.signal),
+          deadline,
+          options.signal,
+        );
         if (delayResult === DEADLINE_REACHED) return 'unknown';
       }
     }
