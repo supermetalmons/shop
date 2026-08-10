@@ -14,8 +14,20 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   cloudflareVersionIdPattern as versionIdPattern,
+  readReleaseManifest,
   writeProductionEvidence,
 } from './finalize-cloudflare-release.ts';
+import {
+  cloudflareReleaseExitCode,
+  cloudflareStatusReconciliationDelaysMs,
+  formatCloudflareReleaseError,
+  guardCloudflareReleaseStart,
+  readWranglerDeploymentStatus,
+  reconcileCloudflareStableVersion,
+  stableCloudflareVersionId,
+  type CloudflareDeploymentStatus,
+  type CloudflareSleep,
+} from './cloudflare-deployment-state.ts';
 
 type DeployMode = 'dry-run' | 'preview' | 'production';
 
@@ -39,6 +51,26 @@ type FrontendCandidateRecord = FrontendUploadMetadata & {
 type FrontendSmokeDependencies = {
   fetch?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
+};
+
+type FrontendProductionSequenceInput = {
+  candidateHtmlSha256: string;
+  expectedCurrentVersionId: string;
+  versionId: string;
+  wranglerEnvironment: NodeJS.ProcessEnv;
+};
+
+type FrontendProductionSequenceDependencies = {
+  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  evidence: typeof writeProductionEvidence;
+  run: typeof run;
+  sleep: CloudflareSleep;
+  smoke: typeof smokeFrontendOrigin;
+};
+
+type FrontendProductionCandidateDependencies = {
+  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  readCandidate: (versionId: string) => FrontendCandidateRecord | undefined;
 };
 
 class DeployFailure extends Error {
@@ -176,6 +208,19 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, label: str
   if (result.status !== 0) {
     fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
   }
+}
+
+function readFrontendDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
+  return readWranglerDeploymentStatus({
+    configArgs: ['--config', 'wrangler.jsonc'],
+    cwd: repoRoot,
+    environment,
+    wranglerBinary,
+  });
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 function readApiToken(tokenFile?: string): string {
@@ -342,6 +387,50 @@ export function requireFrontendCandidateRecord(
     fail(`Frontend candidate evidence for version ${normalized} is invalid or stale.`);
   }
   return value;
+}
+
+function readFrontendCandidateRecordIfValid(
+  versionId: string,
+  options: { directory?: string; now?: Date } = {},
+): FrontendCandidateRecord | undefined {
+  const normalized = normalizeVersionId(versionId);
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(frontendCandidateRecordPath(normalized, options.directory), 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+  const now = options.now ?? new Date();
+  return isFrontendCandidateRecord(value, now) && value.versionId === normalized ? value : undefined;
+}
+
+async function resolveFrontendProductionCandidate(
+  input: {
+    expectedCurrentVersionId: string;
+    versionId: string;
+    wranglerEnvironment: NodeJS.ProcessEnv;
+  },
+  dependencies: FrontendProductionCandidateDependencies = {
+    deployment: readFrontendDeploymentStatus,
+    readCandidate: readFrontendCandidateRecordIfValid,
+  },
+): Promise<{ previewUrl: string; recordedHtmlSha256?: string }> {
+  const candidateVersionId = normalizeVersionId(input.versionId);
+  const candidate = dependencies.readCandidate(candidateVersionId);
+  if (candidate) {
+    return { previewUrl: candidate.previewUrl, recordedHtmlSha256: candidate.htmlSha256 };
+  }
+  const liveVersionId = stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
+  const releaseStart = guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: input.expectedCurrentVersionId,
+    liveVersionId,
+    workerLabel: frontendWorkerName,
+  });
+  if (!releaseStart.resumeCandidate) {
+    fail(`Frontend production promotion requires fresh candidate evidence for version ${candidateVersionId}.`);
+  }
+  return { previewUrl: expectedFrontendPreviewOrigin(candidateVersionId) };
 }
 
 async function readBoundedSmokeBody(
@@ -526,6 +615,10 @@ export function frontendProductionWranglerCommands(versionId: string): readonly 
   const normalized = normalizeVersionId(versionId);
   return [
     {
+      label: 'Frontend trigger deployment',
+      args: ['triggers', 'deploy', '--config', 'wrangler.jsonc'],
+    },
+    {
       label: 'Frontend exact-version promotion',
       args: [
         'versions',
@@ -539,11 +632,338 @@ export function frontendProductionWranglerCommands(versionId: string): readonly 
         'wrangler.jsonc',
       ],
     },
-    {
-      label: 'Frontend trigger deployment',
-      args: ['triggers', 'deploy', '--config', 'wrangler.jsonc'],
-    },
   ];
+}
+
+function deployFrontendTriggers(
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+): void {
+  const [trigger] = frontendProductionWranglerCommands(input.versionId);
+  if (!trigger) fail('Frontend production sequence was missing its trigger deployment.');
+  try {
+    dependencies.run(wranglerBinary, trigger.args, input.wranglerEnvironment, trigger.label);
+  } catch (firstError) {
+    try {
+      dependencies.run(
+        wranglerBinary,
+        trigger.args,
+        input.wranglerEnvironment,
+        'Frontend trigger deployment retry',
+      );
+      console.log('[deploy] Frontend trigger deployment converged on its declarative retry.');
+    } catch (retryError) {
+      throw new AggregateError(
+        [firstError, retryError],
+        'Frontend trigger deployment failed twice; no new Worker version was promoted.',
+      );
+    }
+  }
+}
+
+async function exactFrontendLiveVersion(
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+): Promise<string> {
+  return stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
+}
+
+async function assertFrontendLiveVersion(
+  expectedVersionId: string,
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+  label: string,
+): Promise<void> {
+  const liveVersionId = await exactFrontendLiveVersion(input, dependencies);
+  if (liveVersionId !== expectedVersionId) {
+    throw new Error(`${label} expected ${expectedVersionId}, but Cloudflare reported ${liveVersionId}.`);
+  }
+}
+
+async function reconcileFrontendVersion(
+  preferredVersionId: string,
+  allowedPendingVersionIds: readonly string[],
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+  requireAllPendingObservations = false,
+): Promise<string> {
+  return reconcileCloudflareStableVersion({
+    allowedPendingVersionIds,
+    preferredVersionId,
+    read: () => dependencies.deployment(input.wranglerEnvironment),
+    requireAllPendingObservations,
+    sleep: dependencies.sleep,
+    workerLabel: frontendWorkerName,
+  });
+}
+
+async function smokeFrontendProduction(
+  dependencies: FrontendProductionSequenceDependencies,
+): Promise<void> {
+  for (const origin of frontendProductionOrigins) {
+    console.log(`[deploy] Production smoke: ${origin}`);
+    await dependencies.smoke(origin);
+  }
+}
+
+async function smokeExactFrontendProduction(
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+): Promise<void> {
+  for (const origin of frontendProductionOrigins) {
+    let lastError: unknown;
+    let lastHash: string | undefined;
+    for (const delayMs of cloudflareStatusReconciliationDelaysMs) {
+      if (delayMs) await dependencies.sleep(delayMs);
+      try {
+        console.log(`[deploy] Exact production smoke: ${origin}`);
+        lastHash = await dependencies.smoke(origin);
+        lastError = undefined;
+        if (lastHash === input.candidateHtmlSha256) break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastHash !== input.candidateHtmlSha256) {
+      throw new Error(
+        `Frontend production smoke for ${origin} did not serve the exact promoted candidate after bounded propagation retries${lastHash ? `; last HTML SHA-256 was ${lastHash}` : ''}.`,
+        { cause: lastError },
+      );
+    }
+  }
+}
+
+async function recoverFrontendProduction(
+  releaseError: unknown,
+  baselineVersionId: string,
+  candidateVersionId: string,
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies,
+): Promise<never> {
+  let observedVersionId: string;
+  try {
+    observedVersionId = await reconcileFrontendVersion(
+      candidateVersionId,
+      [baselineVersionId],
+      input,
+      dependencies,
+    );
+  } catch (stateError) {
+    throw new AggregateError(
+      [releaseError, stateError],
+      'Frontend release failed after the candidate became mutation-eligible, and live state was unsafe to overwrite. No blind rollback was attempted; inspect deployment status and recover manually.',
+    );
+  }
+
+  let rollbackCommandError: unknown;
+  const recoveryVerificationErrors: unknown[] = [];
+  let baselineConfirmed = observedVersionId === baselineVersionId;
+  if (observedVersionId === candidateVersionId && candidateVersionId !== baselineVersionId) {
+    try {
+      await assertFrontendLiveVersion(
+        candidateVersionId,
+        input,
+        dependencies,
+        'Frontend pre-rollback candidate guard',
+      );
+    } catch (stateError) {
+      throw new AggregateError(
+        [releaseError, stateError],
+        'Frontend release failed, but the candidate changed after reconciliation; automatic rollback was suppressed. Inspect deployment status and recover manually.',
+      );
+    }
+    try {
+      dependencies.run(
+        wranglerBinary,
+        [
+          'rollback',
+          baselineVersionId,
+          '--yes',
+          '--message',
+          'Automatic recovery after failed mons-shop frontend release',
+          '--config',
+          'wrangler.jsonc',
+        ],
+        input.wranglerEnvironment,
+        'Frontend compensating rollback',
+      );
+    } catch (rollbackError) {
+      rollbackCommandError = rollbackError;
+    }
+    try {
+      const recoveredVersionId = await reconcileFrontendVersion(
+        baselineVersionId,
+        [candidateVersionId],
+        input,
+        dependencies,
+      );
+      if (recoveredVersionId !== baselineVersionId) {
+        recoveryVerificationErrors.push(new Error(
+          `Frontend compensating rollback did not make baseline ${baselineVersionId} live; ${recoveredVersionId} remained active.`,
+        ));
+      } else {
+        baselineConfirmed = true;
+      }
+    } catch (stateError) {
+      recoveryVerificationErrors.push(stateError);
+    }
+  }
+
+  if (baselineConfirmed) {
+    try {
+      await smokeFrontendProduction(dependencies);
+    } catch (smokeError) {
+      recoveryVerificationErrors.push(smokeError);
+    }
+    try {
+      await assertFrontendLiveVersion(
+        baselineVersionId,
+        input,
+        dependencies,
+        'Frontend recovery verification',
+      );
+    } catch (stateError) {
+      recoveryVerificationErrors.push(stateError);
+    }
+  }
+
+  if (recoveryVerificationErrors.length > 0) {
+    throw new AggregateError(
+      [releaseError, ...(rollbackCommandError === undefined ? [] : [rollbackCommandError]), ...recoveryVerificationErrors],
+      'Frontend production release failed and exact baseline recovery was not cleanly verified. No further automatic mutation was attempted; inspect deployment status and recover manually.',
+    );
+  }
+  if (rollbackCommandError !== undefined) {
+    console.log(`[deploy] Automatic frontend recovery verified at version ${baselineVersionId} despite a rollback command failure.`);
+    throw new AggregateError(
+      [releaseError, rollbackCommandError],
+      'Frontend production release failed; baseline recovery was verified, but the rollback command reported failure.',
+    );
+  }
+  console.log(`[deploy] Automatic frontend recovery verified at version ${baselineVersionId}.`);
+  throw releaseError;
+}
+
+function resumedFrontendReleaseFailure(error: unknown, candidateVersionId: string): Error {
+  return new Error(
+    `Frontend candidate ${candidateVersionId} was already live when this command started. Automatic rollback was suppressed because this invocation did not capture its predecessor; inspect production and rerun the same production command after resolving the failure.`,
+    { cause: error },
+  );
+}
+
+function frontendEvidenceFailure(error: unknown, candidateVersionId: string): Error {
+  return new Error(
+    `Frontend candidate ${candidateVersionId} remains live and verified, but production evidence could not be written. No rollback was attempted; rerun the same production command with this version ID to regenerate evidence through guarded resume.`,
+    { cause: error },
+  );
+}
+
+async function runFrontendProductionSequence(
+  input: FrontendProductionSequenceInput,
+  dependencies: FrontendProductionSequenceDependencies = {
+    deployment: readFrontendDeploymentStatus,
+    evidence: writeProductionEvidence,
+    run,
+    sleep,
+    smoke: smokeFrontendOrigin,
+  },
+): Promise<void> {
+  const candidateVersionId = normalizeVersionId(input.versionId);
+  const initialLiveVersionId = await exactFrontendLiveVersion(input, dependencies);
+  const releaseStart = guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: input.expectedCurrentVersionId,
+    liveVersionId: initialLiveVersionId,
+    workerLabel: frontendWorkerName,
+  });
+
+  if (releaseStart.resumeCandidate) {
+    try {
+      deployFrontendTriggers(input, dependencies);
+    } catch (error) {
+      throw resumedFrontendReleaseFailure(error, candidateVersionId);
+    }
+  } else {
+    deployFrontendTriggers(input, dependencies);
+    await smokeFrontendProduction(dependencies);
+    await assertFrontendLiveVersion(
+      releaseStart.baselineVersionId,
+      input,
+      dependencies,
+      'Frontend pre-promotion baseline recheck',
+    );
+
+    const commands = frontendProductionWranglerCommands(candidateVersionId);
+    const promotion = commands.find((command) => command.label === 'Frontend exact-version promotion');
+    if (!promotion) fail('Frontend production sequence was missing its exact-version promotion.');
+    let promotionError: unknown;
+    try {
+      dependencies.run(wranglerBinary, promotion.args, input.wranglerEnvironment, promotion.label);
+    } catch (error) {
+      promotionError = error;
+    }
+
+    let observedVersionId: string;
+    try {
+      observedVersionId = await reconcileFrontendVersion(
+        candidateVersionId,
+        [releaseStart.baselineVersionId],
+        input,
+        dependencies,
+        true,
+      );
+    } catch (stateError) {
+      if (promotionError !== undefined) {
+        throw new AggregateError(
+          [promotionError, stateError],
+          'Frontend exact-version promotion failed and live mutation state could not be safely reconciled. No blind rollback was attempted; inspect deployment status and recover manually.',
+        );
+      }
+      throw new Error(
+        'Frontend exact-version promotion returned, but live mutation state could not be safely reconciled. No blind rollback was attempted; inspect deployment status and recover manually.',
+        { cause: stateError },
+      );
+    }
+    if (observedVersionId !== candidateVersionId) {
+      if (promotionError !== undefined) throw promotionError;
+      throw new Error(`Frontend exact-version promotion left baseline ${observedVersionId} live.`);
+    }
+    if (promotionError !== undefined) {
+      await recoverFrontendProduction(
+        promotionError,
+        releaseStart.baselineVersionId,
+        candidateVersionId,
+        input,
+        dependencies,
+      );
+    }
+  }
+
+  try {
+    await smokeExactFrontendProduction(input, dependencies);
+    await assertFrontendLiveVersion(
+      candidateVersionId,
+      input,
+      dependencies,
+      'Frontend production commit verification',
+    );
+  } catch (error) {
+    if (releaseStart.resumeCandidate) {
+      throw resumedFrontendReleaseFailure(error, candidateVersionId);
+    }
+    await recoverFrontendProduction(
+      error,
+      releaseStart.baselineVersionId,
+      candidateVersionId,
+      input,
+      dependencies,
+    );
+  }
+  try {
+    dependencies.evidence('frontend', candidateVersionId);
+  } catch (error) {
+    throw frontendEvidenceFailure(error, candidateVersionId);
+  }
 }
 
 function runFrontendValidation(environment: NodeJS.ProcessEnv): void {
@@ -653,33 +1073,33 @@ async function main(): Promise<void> {
 
   const versionId = options.versionId;
   if (!versionId) fail('Production promotion requires --version-id <uuid>.');
-  const candidate = requireFrontendCandidateRecord(versionId);
   run(
     wranglerBinary,
     ['triggers', 'deploy', '--dry-run', '--config', 'wrangler.jsonc'],
     unauthenticatedWranglerEnvironment,
     'Frontend trigger dry run',
   );
-  console.log(`[deploy] Re-smoke exact Version Preview: ${candidate.previewUrl}`);
-  const previewHtmlSha256 = await smokeFrontendOrigin(candidate.previewUrl);
-  if (previewHtmlSha256 !== candidate.htmlSha256) {
-    fail('Exact frontend Version Preview no longer matches its tested candidate evidence.');
-  }
   const authenticatedEnvironment: NodeJS.ProcessEnv = {
     ...unauthenticatedWranglerEnvironment,
     CLOUDFLARE_API_TOKEN: readApiToken(options.tokenFile),
   };
-  for (const command of frontendProductionWranglerCommands(versionId)) {
-    run(wranglerBinary, command.args, authenticatedEnvironment, command.label);
+  const expectedCurrentVersionId = readReleaseManifest().currentProduction.frontendVersionId;
+  const candidate = await resolveFrontendProductionCandidate({
+    expectedCurrentVersionId,
+    versionId,
+    wranglerEnvironment: authenticatedEnvironment,
+  });
+  console.log(`[deploy] Re-smoke exact Version Preview: ${candidate.previewUrl}`);
+  const previewHtmlSha256 = await smokeFrontendOrigin(candidate.previewUrl);
+  if (candidate.recordedHtmlSha256 && previewHtmlSha256 !== candidate.recordedHtmlSha256) {
+    fail('Exact frontend Version Preview no longer matches its tested candidate evidence.');
   }
-  for (const origin of frontendProductionOrigins) {
-    console.log(`[deploy] Production smoke: ${origin}`);
-    const productionHtmlSha256 = await smokeFrontendOrigin(origin);
-    if (productionHtmlSha256 !== candidate.htmlSha256) {
-      fail(`Frontend production smoke for ${origin} did not serve the exact promoted candidate.`);
-    }
-  }
-  writeProductionEvidence('frontend', versionId);
+  await runFrontendProductionSequence({
+    candidateHtmlSha256: previewHtmlSha256,
+    expectedCurrentVersionId,
+    versionId,
+    wranglerEnvironment: authenticatedEnvironment,
+  });
   console.log(`[deploy] Verified frontend production version ID: ${versionId}`);
 }
 
@@ -693,13 +1113,15 @@ export const frontendDeployTestHooks = {
   isExactFrontendDeploymentConfig,
   isFrontendCandidateRecord,
   requireFrontendCandidateRecord,
+  resolveFrontendProductionCandidate,
+  runFrontendProductionSequence,
   writeFrontendCandidateRecord,
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const exitCode = error instanceof DeployFailure ? error.exitCode : 1;
+    const message = formatCloudflareReleaseError(error);
+    const exitCode = cloudflareReleaseExitCode(error);
     console.error(`\n[deploy] ${message}\n`);
     process.exitCode = exitCode;
   });

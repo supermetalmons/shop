@@ -36,7 +36,7 @@
     "test:api:runtime": "node --import tsx --test cloud/workers/api/runtime-test/*.test.ts",
     "dry-run:api": "wrangler versions upload --dry-run --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env",
     "dry-run:api:triggers": "wrangler triggers deploy --dry-run --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env",
-    "startup:api": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && wrangler check startup --config cloud/workers/api/wrangler.jsonc --outfile .cache/mons-shop-api-startup.cpuprofile",
+    "startup:api": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && wrangler check startup --args=\"--config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env\" --outfile .cache/mons-shop-api-startup.cpuprofile",
     "check:api": "npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run dry-run:api:triggers && npm run startup:api",
     "validate:lsb-cdn": "node --experimental-strip-types scripts/validate-lsb-cdn.ts",
     "validate:poncho-cdn": "node --experimental-strip-types scripts/validate-poncho-cdn.ts",

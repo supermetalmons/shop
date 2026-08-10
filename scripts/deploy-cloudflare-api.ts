@@ -26,6 +26,16 @@ import {
   readReleaseManifest,
   writeProductionEvidence,
 } from './finalize-cloudflare-release.ts';
+import {
+  cloudflareReleaseExitCode,
+  formatCloudflareReleaseError,
+  guardCloudflareReleaseStart,
+  readWranglerDeploymentStatus,
+  reconcileCloudflareStableVersion,
+  stableCloudflareVersionId,
+  type CloudflareDeploymentStatus,
+  type CloudflareSleep,
+} from './cloudflare-deployment-state.ts';
 
 type Mode = 'preview' | 'production' | 'triggers' | 'rollback';
 
@@ -76,6 +86,7 @@ type ProcessRunner = (
 ) => void;
 
 type ProductionSequenceInput = {
+  expectedCurrentVersionId: string;
   heliusApiKey: string;
   previewUrl: string;
   smokeOwner: string;
@@ -85,9 +96,16 @@ type ProductionSequenceInput = {
 
 type ProductionSequenceDependencies = {
   benchmark: typeof benchmarkApi;
+  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   evidence: typeof writeProductionEvidence;
+  sleep: CloudflareSleep;
   smoke: typeof smokeApi;
   wrangler: typeof runWrangler;
+};
+
+type ApiProductionCandidateDependencies = {
+  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  readCandidate: (versionId: string, smokeOwner: string) => CandidateRecord | undefined;
 };
 
 type SmokeApiDependencies = {
@@ -110,6 +128,7 @@ const configPath = 'cloud/workers/api/wrangler.jsonc';
 const releaseEnvPath = 'cloud/workers/api/release.env';
 const configArgs = ['--config', configPath, '--env-file', releaseEnvPath];
 const workerName = 'mons-shop-api';
+const accountId = 'e25f90fc073ea309b54b8b5144bf28e0';
 const productionUrl = 'https://api.mons.shop';
 const workersDevSubdomain = 'lil-org.workers.dev';
 const candidateRecordDirectory = resolve(repoRoot, '.cache', 'mons-shop-api-candidates');
@@ -258,6 +277,19 @@ function runProcess(command: string, args: string[], environment: NodeJS.Process
   if (result.status !== 0) fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
 }
 
+function readApiDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
+  return readWranglerDeploymentStatus({
+    configArgs,
+    cwd: repoRoot,
+    environment,
+    wranglerBinary,
+  });
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
 function runApiValidation(
   source: NodeJS.ProcessEnv = process.env,
   runner: ProcessRunner = runProcess,
@@ -311,6 +343,49 @@ function removeSecretDirectory(directory: string, operations: SecretFileOperatio
 
 function expectedPreviewOrigin(versionId: string): string {
   return `https://${versionId.slice(0, 8).toLowerCase()}-${workerName}.${workersDevSubdomain}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
+}
+
+function isExactApiDeploymentConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    value.name !== workerName ||
+    value.account_id !== accountId ||
+    value.main !== 'src/index.ts' ||
+    value.workers_dev !== false ||
+    value.preview_urls !== true ||
+    !Array.isArray(value.routes) ||
+    value.routes.length !== 1
+  ) {
+    return false;
+  }
+  const route = value.routes[0];
+  return isRecord(route) &&
+    hasExactKeys(route, ['pattern', 'custom_domain']) &&
+    route.pattern === new URL(productionUrl).hostname &&
+    route.custom_domain === true;
+}
+
+function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`Unable to read API Wrangler config: ${detail}`);
+  }
+  if (!isExactApiDeploymentConfig(value)) {
+    fail(
+      `API Wrangler config must target only ${workerName}, account ${accountId}, and the ${new URL(productionUrl).hostname} custom domain.`,
+    );
+  }
 }
 
 function isCandidateRecord(value: unknown, now = new Date()): value is CandidateRecord {
@@ -374,6 +449,53 @@ function requireCandidateRecord(versionId: string, smokeOwner: string, now = new
   return value;
 }
 
+function readCandidateRecordIfValid(
+  versionId: string,
+  smokeOwner: string,
+  now = new Date(),
+): CandidateRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(candidateRecordPath(versionId), 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isCandidateRecord(value, now) ||
+    value.versionId.toLowerCase() !== versionId.toLowerCase() ||
+    value.smokeOwner !== smokeOwner
+  ) return undefined;
+  return value;
+}
+
+async function resolveApiProductionPreviewUrl(
+  input: {
+    expectedCurrentVersionId: string;
+    smokeOwner: string;
+    versionId: string;
+    wranglerEnvironment: NodeJS.ProcessEnv;
+  },
+  dependencies: ApiProductionCandidateDependencies = {
+    deployment: readApiDeploymentStatus,
+    readCandidate: readCandidateRecordIfValid,
+  },
+): Promise<string> {
+  const candidateVersionId = input.versionId.toLowerCase();
+  const candidate = dependencies.readCandidate(candidateVersionId, input.smokeOwner);
+  if (candidate) return candidate.previewUrl;
+  const liveVersionId = stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
+  const releaseStart = guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: input.expectedCurrentVersionId,
+    liveVersionId,
+    workerLabel: workerName,
+  });
+  if (!releaseStart.resumeCandidate) {
+    fail('Production promotion requires a fresh local candidate record created by preview mode.');
+  }
+  return expectedPreviewOrigin(candidateVersionId);
+}
+
 function createBootstrapConfig(directory: string): string {
   const sourcePath = resolve(repoRoot, configPath);
   const config = JSON.parse(readFileSync(sourcePath, 'utf8')) as Record<string, unknown>;
@@ -388,7 +510,7 @@ function createBootstrapConfig(directory: string): string {
 
 async function workerExists(apiToken: string): Promise<boolean> {
   const response = await fetch(
-    'https://api.cloudflare.com/client/v4/accounts/e25f90fc073ea309b54b8b5144bf28e0/workers/scripts/mons-shop-api',
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}`,
     { headers: { Authorization: `Bearer ${apiToken}` }, signal: AbortSignal.timeout(15_000) },
   );
   await response.body?.cancel().catch(() => undefined);
@@ -545,11 +667,188 @@ async function smokeApi(
   );
 }
 
+function deployReviewedApiTriggers(
+  input: ProductionSequenceInput,
+  dependencies: ProductionSequenceDependencies,
+): void {
+  const args = ['triggers', 'deploy', ...configArgs];
+  try {
+    dependencies.wrangler(args, input.wranglerEnvironment, 'Reviewed trigger deployment');
+  } catch (firstError) {
+    try {
+      dependencies.wrangler(args, input.wranglerEnvironment, 'Reviewed trigger deployment retry');
+      console.log('[api-deploy] Reviewed trigger deployment converged on its declarative retry.');
+    } catch (retryError) {
+      throw new AggregateError(
+        [firstError, retryError],
+        'Reviewed API trigger deployment failed twice; no new Worker version was promoted.',
+      );
+    }
+  }
+}
+
+async function exactApiLiveVersion(
+  input: ProductionSequenceInput,
+  dependencies: ProductionSequenceDependencies,
+): Promise<string> {
+  return stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
+}
+
+async function assertApiLiveVersion(
+  expectedVersionId: string,
+  input: ProductionSequenceInput,
+  dependencies: ProductionSequenceDependencies,
+  label: string,
+): Promise<void> {
+  const liveVersionId = await exactApiLiveVersion(input, dependencies);
+  if (liveVersionId !== expectedVersionId) {
+    throw new Error(`${label} expected ${expectedVersionId}, but Cloudflare reported ${liveVersionId}.`);
+  }
+}
+
+async function reconcileApiVersion(
+  preferredVersionId: string,
+  allowedPendingVersionIds: readonly string[],
+  input: ProductionSequenceInput,
+  dependencies: ProductionSequenceDependencies,
+  requireAllPendingObservations = false,
+): Promise<string> {
+  return reconcileCloudflareStableVersion({
+    allowedPendingVersionIds,
+    preferredVersionId,
+    read: () => dependencies.deployment(input.wranglerEnvironment),
+    requireAllPendingObservations,
+    sleep: dependencies.sleep,
+    workerLabel: workerName,
+  });
+}
+
+async function recoverApiProduction(
+  releaseError: unknown,
+  baselineVersionId: string,
+  candidateVersionId: string,
+  input: ProductionSequenceInput,
+  dependencies: ProductionSequenceDependencies,
+): Promise<never> {
+  let observedVersionId: string;
+  try {
+    observedVersionId = await reconcileApiVersion(
+      candidateVersionId,
+      [baselineVersionId],
+      input,
+      dependencies,
+    );
+  } catch (stateError) {
+    throw new AggregateError(
+      [releaseError, stateError],
+      'API release failed after the candidate became mutation-eligible, and live state was unsafe to overwrite. No blind rollback was attempted; inspect deployment status and recover manually.',
+    );
+  }
+
+  let rollbackCommandError: unknown;
+  const recoveryVerificationErrors: unknown[] = [];
+  let baselineConfirmed = observedVersionId === baselineVersionId;
+  if (observedVersionId === candidateVersionId && candidateVersionId !== baselineVersionId) {
+    try {
+      await assertApiLiveVersion(
+        candidateVersionId,
+        input,
+        dependencies,
+        'API pre-rollback candidate guard',
+      );
+    } catch (stateError) {
+      throw new AggregateError(
+        [releaseError, stateError],
+        'API release failed, but the candidate changed after reconciliation; automatic rollback was suppressed. Inspect deployment status and recover manually.',
+      );
+    }
+    try {
+      dependencies.wrangler([
+        'rollback',
+        baselineVersionId,
+        '--yes',
+        '--message',
+        'Automatic recovery after failed mons-shop-api release',
+        ...configArgs,
+      ], input.wranglerEnvironment, 'API compensating rollback');
+    } catch (rollbackError) {
+      rollbackCommandError = rollbackError;
+    }
+    try {
+      const recoveredVersionId = await reconcileApiVersion(
+        baselineVersionId,
+        [candidateVersionId],
+        input,
+        dependencies,
+      );
+      if (recoveredVersionId !== baselineVersionId) {
+        recoveryVerificationErrors.push(new Error(
+          `API compensating rollback did not make baseline ${baselineVersionId} live; ${recoveredVersionId} remained active.`,
+        ));
+      } else {
+        baselineConfirmed = true;
+      }
+    } catch (stateError) {
+      recoveryVerificationErrors.push(stateError);
+    }
+  }
+
+  if (baselineConfirmed) {
+    try {
+      await dependencies.smoke(productionUrl, input.smokeOwner);
+    } catch (smokeError) {
+      recoveryVerificationErrors.push(smokeError);
+    }
+    try {
+      await assertApiLiveVersion(
+        baselineVersionId,
+        input,
+        dependencies,
+        'API recovery verification',
+      );
+    } catch (stateError) {
+      recoveryVerificationErrors.push(stateError);
+    }
+  }
+
+  if (recoveryVerificationErrors.length > 0) {
+    throw new AggregateError(
+      [releaseError, ...(rollbackCommandError === undefined ? [] : [rollbackCommandError]), ...recoveryVerificationErrors],
+      'API production release failed and exact baseline recovery was not cleanly verified. No further automatic mutation was attempted; inspect deployment status and recover manually.',
+    );
+  }
+  if (rollbackCommandError !== undefined) {
+    console.log(`[api-deploy] Automatic recovery verified at version ${baselineVersionId} despite a rollback command failure.`);
+    throw new AggregateError(
+      [releaseError, rollbackCommandError],
+      'API production release failed; baseline recovery was verified, but the rollback command reported failure.',
+    );
+  }
+  console.log(`[api-deploy] Automatic recovery verified at version ${baselineVersionId}.`);
+  throw releaseError;
+}
+
+function resumedApiReleaseFailure(error: unknown, candidateVersionId: string): Error {
+  return new Error(
+    `API candidate ${candidateVersionId} was already live when this command started. Automatic rollback was suppressed because this invocation did not capture its predecessor; inspect production and rerun the same production command after resolving the failure.`,
+    { cause: error },
+  );
+}
+
+function apiEvidenceFailure(error: unknown, candidateVersionId: string): Error {
+  return new Error(
+    `API candidate ${candidateVersionId} remains live and verified, but production evidence could not be written. No rollback was attempted; rerun the same production command with this version ID to regenerate evidence through guarded resume.`,
+    { cause: error },
+  );
+}
+
 async function runProductionSequence(
   input: ProductionSequenceInput,
   dependencies: ProductionSequenceDependencies = {
     benchmark: benchmarkApi,
+    deployment: readApiDeploymentStatus,
     evidence: writeProductionEvidence,
+    sleep,
     smoke: smokeApi,
     wrangler: runWrangler,
   },
@@ -559,16 +858,109 @@ async function runProductionSequence(
     { apiOrigin: input.previewUrl, owner: input.smokeOwner, runs: 5 },
     input.heliusApiKey,
   );
-  dependencies.wrangler([
-    'versions', 'deploy', '--version-id', input.versionId, '--percentage', '100', '--yes', ...configArgs,
-  ], input.wranglerEnvironment, 'Exact version promotion');
-  dependencies.wrangler(
-    ['triggers', 'deploy', ...configArgs],
-    input.wranglerEnvironment,
-    'Reviewed trigger deployment',
-  );
-  await dependencies.smoke(productionUrl, input.smokeOwner);
-  dependencies.evidence('api', input.versionId);
+
+  const candidateVersionId = input.versionId.toLowerCase();
+  const initialLiveVersionId = await exactApiLiveVersion(input, dependencies);
+  const releaseStart = guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: input.expectedCurrentVersionId,
+    liveVersionId: initialLiveVersionId,
+    workerLabel: workerName,
+  });
+
+  if (releaseStart.resumeCandidate) {
+    try {
+      deployReviewedApiTriggers(input, dependencies);
+    } catch (error) {
+      throw resumedApiReleaseFailure(error, candidateVersionId);
+    }
+  } else {
+    deployReviewedApiTriggers(input, dependencies);
+    await dependencies.smoke(productionUrl, input.smokeOwner);
+    await assertApiLiveVersion(
+      releaseStart.baselineVersionId,
+      input,
+      dependencies,
+      'API pre-promotion baseline recheck',
+    );
+
+    let promotionError: unknown;
+    try {
+      dependencies.wrangler([
+        'versions',
+        'deploy',
+        '--version-id',
+        candidateVersionId,
+        '--percentage',
+        '100',
+        '--yes',
+        ...configArgs,
+      ], input.wranglerEnvironment, 'Exact version promotion');
+    } catch (error) {
+      promotionError = error;
+    }
+
+    let observedVersionId: string;
+    try {
+      observedVersionId = await reconcileApiVersion(
+        candidateVersionId,
+        [releaseStart.baselineVersionId],
+        input,
+        dependencies,
+        true,
+      );
+    } catch (stateError) {
+      if (promotionError !== undefined) {
+        throw new AggregateError(
+          [promotionError, stateError],
+          'API exact-version promotion failed and live mutation state could not be safely reconciled. No blind rollback was attempted; inspect deployment status and recover manually.',
+        );
+      }
+      throw new Error(
+        'API exact-version promotion returned, but live mutation state could not be safely reconciled. No blind rollback was attempted; inspect deployment status and recover manually.',
+        { cause: stateError },
+      );
+    }
+    if (observedVersionId !== candidateVersionId) {
+      if (promotionError !== undefined) throw promotionError;
+      throw new Error(`API exact-version promotion left baseline ${observedVersionId} live.`);
+    }
+    if (promotionError !== undefined) {
+      await recoverApiProduction(
+        promotionError,
+        releaseStart.baselineVersionId,
+        candidateVersionId,
+        input,
+        dependencies,
+      );
+    }
+  }
+
+  try {
+    await dependencies.smoke(productionUrl, input.smokeOwner);
+    await assertApiLiveVersion(
+      candidateVersionId,
+      input,
+      dependencies,
+      'API production commit verification',
+    );
+  } catch (error) {
+    if (releaseStart.resumeCandidate) {
+      throw resumedApiReleaseFailure(error, candidateVersionId);
+    }
+    await recoverApiProduction(
+      error,
+      releaseStart.baselineVersionId,
+      candidateVersionId,
+      input,
+      dependencies,
+    );
+  }
+  try {
+    dependencies.evidence('api', candidateVersionId);
+  } catch (error) {
+    throw apiEvidenceFailure(error, candidateVersionId);
+  }
 }
 
 async function main(): Promise<void> {
@@ -576,6 +968,7 @@ async function main(): Promise<void> {
   const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10);
   if (!Number.isFinite(nodeMajor) || nodeMajor < 22) fail(`Node 22 or newer is required; current version is ${process.versions.node}.`);
   if (!existsSync(wranglerBinary)) fail('Pinned Wrangler binary not found. Run npm install first.');
+  assertApiDeploymentConfig();
   const logsDirectory = resolve(repoRoot, '.cache', 'wrangler-logs');
   mkdirSync(logsDirectory, { recursive: true });
   const checkEnvironment = validationEnvironment();
@@ -651,10 +1044,17 @@ async function main(): Promise<void> {
 
   if (options.mode === 'production') {
     if (!heliusApiKey) fail('Production mode requires HELIUS_API_KEY for the mandatory direct-path benchmark.');
-    const candidate = requireCandidateRecord(options.versionId!, options.smokeOwner);
+    const expectedCurrentVersionId = readReleaseManifest().currentProduction.apiVersionId;
+    const previewUrl = await resolveApiProductionPreviewUrl({
+      expectedCurrentVersionId,
+      smokeOwner: options.smokeOwner,
+      versionId: options.versionId!,
+      wranglerEnvironment,
+    });
     await runProductionSequence({
+      expectedCurrentVersionId,
       heliusApiKey,
-      previewUrl: candidate.previewUrl,
+      previewUrl,
       smokeOwner: options.smokeOwner,
       versionId: options.versionId!,
       wranglerEnvironment,
@@ -668,6 +1068,7 @@ async function main(): Promise<void> {
 }
 
 export const deployApiTestHooks = {
+  assertApiDeploymentConfig,
   authenticatedWranglerEnvironment,
   candidateRecordPath,
   createSecretFile,
@@ -675,6 +1076,7 @@ export const deployApiTestHooks = {
   expectedPreviewOrigin,
   installTerminationCleanup,
   inventorySmokeTimeoutMs: INVENTORY_SMOKE_TIMEOUT_MS,
+  isExactApiDeploymentConfig,
   isCandidateRecord,
   isReleaseManifest,
   parseArgs,
@@ -682,6 +1084,7 @@ export const deployApiTestHooks = {
   removeSecretDirectory,
   readReleaseManifest,
   requireCandidateRecord,
+  resolveApiProductionPreviewUrl,
   runApiValidation,
   runProductionSequence,
   secretFileOperations,
@@ -691,8 +1094,8 @@ export const deployApiTestHooks = {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const exitCode = error instanceof DeployFailure ? error.exitCode : 1;
+    const message = formatCloudflareReleaseError(error);
+    const exitCode = cloudflareReleaseExitCode(error);
     console.error(`\n[api-deploy] ${message}\n`);
     process.exitCode = exitCode;
   });

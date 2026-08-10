@@ -33,8 +33,57 @@ import {
   parseFinalizeReleaseArgs,
   writeProductionEvidence,
 } from '../../../../scripts/finalize-cloudflare-release.ts';
+import {
+  CloudflareProcessFailure,
+  cloudflareReleaseExitCode,
+  formatCloudflareReleaseError,
+  guardCloudflareReleaseStart,
+  parseCloudflareDeploymentStatus,
+  readWranglerDeploymentStatus,
+  reconcileCloudflareStableVersion,
+  runWranglerForOutput,
+  stableCloudflareVersionId,
+  wranglerDeploymentStatusTimeoutMs,
+  type CloudflareDeploymentStatus,
+} from '../../../../scripts/cloudflare-deployment-state.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+
+type DeploymentObservation = CloudflareDeploymentStatus | Error | string;
+
+function stableDeployment(versionId: string): CloudflareDeploymentStatus {
+  return {
+    id: randomUUID(),
+    strategy: 'percentage',
+    versions: [{ percentage: 100, versionId: versionId.toLowerCase() }],
+  };
+}
+
+function deploymentReader(
+  observations: readonly DeploymentObservation[],
+  events?: string[],
+): () => Promise<CloudflareDeploymentStatus> {
+  let index = 0;
+  return async () => {
+    events?.push('deployment-status');
+    const observation = observations[Math.min(index, observations.length - 1)];
+    index += 1;
+    if (observation === undefined) throw new Error('Deployment test fixture had no observation.');
+    if (observation instanceof Error) throw observation;
+    return typeof observation === 'string' ? stableDeployment(observation) : observation;
+  };
+}
+
+function splitDeployment(firstVersionId: string, secondVersionId: string): CloudflareDeploymentStatus {
+  return {
+    id: randomUUID(),
+    strategy: 'percentage',
+    versions: [
+      { percentage: 50, versionId: firstVersionId },
+      { percentage: 50, versionId: secondVersionId },
+    ],
+  };
+}
 
 test('release CLI starts under its production TypeScript runner', () => {
   const result = spawnSync(process.execPath, [
@@ -48,6 +97,192 @@ test('release CLI starts under its production TypeScript runner', () => {
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Release, update, or roll back the mons-shop-api Worker/);
+});
+
+test('Wrangler deployment status parsing requires exact percentage state and captures the pinned command', () => {
+  const deploymentId = randomUUID();
+  const versionId = randomUUID();
+  const rawStatus = JSON.stringify({
+    id: deploymentId.toUpperCase(),
+    strategy: 'percentage',
+    versions: [{ percentage: 100, version_id: versionId.toUpperCase() }],
+  });
+  const environment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  let captured: unknown;
+  const status = readWranglerDeploymentStatus({
+    configArgs: ['--config', 'wrangler.jsonc'],
+    cwd: '/repo',
+    environment,
+    wranglerBinary: '/repo/node_modules/.bin/wrangler',
+  }, (command, args, runnerEnvironment, cwd, label, timeoutMs) => {
+    captured = { command, args, runnerEnvironment, cwd, label, timeoutMs };
+    return rawStatus;
+  });
+  assert.deepEqual(status, {
+    id: deploymentId,
+    strategy: 'percentage',
+    versions: [{ percentage: 100, versionId }],
+  });
+  assert.equal(stableCloudflareVersionId(status), versionId);
+  assert.deepEqual(captured, {
+    command: '/repo/node_modules/.bin/wrangler',
+    args: ['deployments', 'status', '--json', '--config', 'wrangler.jsonc'],
+    runnerEnvironment: environment,
+    cwd: '/repo',
+    label: 'Wrangler deployment status',
+    timeoutMs: wranglerDeploymentStatusTimeoutMs,
+  });
+  assert.throws(
+    () => stableCloudflareVersionId(splitDeployment(versionId, randomUUID())),
+    /not a stable single-version deployment/,
+  );
+  assert.throws(
+    () => stableCloudflareVersionId({
+      ...status,
+      versions: [{ percentage: 99.999_999, versionId }],
+    }),
+    /not a stable single-version deployment/,
+  );
+  assert.throws(
+    () => parseCloudflareDeploymentStatus(JSON.stringify({
+      id: deploymentId,
+      strategy: 'percentage',
+      versions: [
+        { percentage: 60, version_id: versionId },
+        { percentage: 30, version_id: randomUUID() },
+      ],
+    })),
+    /did not total 100/,
+  );
+  assert.throws(
+    () => parseCloudflareDeploymentStatus(JSON.stringify({
+      id: deploymentId,
+      strategy: 'percentage',
+      versions: [{ percentage: 100, version_id: 'latest' }],
+    })),
+    /was not an exact Cloudflare version UUID/,
+  );
+  assert.throws(
+    () => parseCloudflareDeploymentStatus(JSON.stringify({
+      id: deploymentId,
+      strategy: 'percentage',
+      versions: [
+        { percentage: 50, version_id: versionId },
+        { percentage: 50, version_id: versionId.toUpperCase() },
+      ],
+    })),
+    /repeated a version ID/,
+  );
+  assert.throws(() => parseCloudflareDeploymentStatus('not json'), /did not return valid JSON/);
+});
+
+test('Wrangler deployment status subprocesses are killed and classified after their deadline', () => {
+  const timeoutError = Object.assign(new Error('spawnSync timed out'), { code: 'ETIMEDOUT' });
+  const environment = { HELIUS_API_KEY: '' };
+  let capturedOptions: unknown;
+  assert.throws(
+    () => runWranglerForOutput(
+      '/repo/node_modules/.bin/wrangler',
+      ['deployments', 'status', '--json'],
+      environment,
+      '/repo',
+      'Wrangler deployment status',
+      25,
+      (_command, _args, options) => {
+        capturedOptions = options;
+        return { error: timeoutError, signal: 'SIGKILL', status: null, stdout: '' };
+      },
+    ),
+    (error) => error instanceof CloudflareProcessFailure &&
+      error.message === 'Wrangler deployment status timed out after 25ms.' &&
+      error.cause === timeoutError,
+  );
+  assert.deepEqual(capturedOptions, {
+    cwd: '/repo',
+    encoding: 'utf8',
+    env: environment,
+    killSignal: 'SIGKILL',
+    shell: false,
+    stdio: ['ignore', 'pipe', 'inherit'],
+    timeout: 25,
+  });
+});
+
+test('release start permits only tracked baseline or requested-candidate guarded resume', () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  assert.deepEqual(guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: baselineVersionId,
+    liveVersionId: baselineVersionId,
+    workerLabel: 'test-worker',
+  }), { baselineVersionId, resumeCandidate: false });
+  assert.deepEqual(guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: baselineVersionId,
+    liveVersionId: candidateVersionId,
+    workerLabel: 'test-worker',
+  }), { baselineVersionId, resumeCandidate: true });
+  assert.deepEqual(guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: candidateVersionId,
+    liveVersionId: candidateVersionId,
+    workerLabel: 'test-worker',
+  }), { baselineVersionId: candidateVersionId, resumeCandidate: true });
+  assert.throws(
+    () => guardCloudflareReleaseStart({
+      candidateVersionId,
+      expectedCurrentVersionId: baselineVersionId,
+      liveVersionId: randomUUID(),
+      workerLabel: 'test-worker',
+    }),
+    /matched neither tracked production nor requested candidate|matched neither tracked production/,
+  );
+});
+
+test('bounded status reconciliation is strict for untouched-baseline decisions and tolerant before preferred success', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const strictSleeps: number[] = [];
+  await assert.rejects(
+    () => reconcileCloudflareStableVersion({
+      allowedPendingVersionIds: [baselineVersionId],
+      preferredVersionId: candidateVersionId,
+      read: deploymentReader([
+        baselineVersionId,
+        new Error('transient status failure'),
+        baselineVersionId,
+        baselineVersionId,
+      ]),
+      requireAllPendingObservations: true,
+      sleep: async (milliseconds) => {
+        strictSleeps.push(milliseconds);
+      },
+      workerLabel: 'test-worker',
+    }),
+    /could not be read after bounded retries/,
+  );
+  assert.deepEqual(strictSleeps, [500, 1_500, 3_000]);
+
+  const preferredSleeps: number[] = [];
+  assert.equal(await reconcileCloudflareStableVersion({
+    allowedPendingVersionIds: [baselineVersionId],
+    preferredVersionId: candidateVersionId,
+    read: deploymentReader([new Error('transient status failure'), candidateVersionId]),
+    sleep: async (milliseconds) => {
+      preferredSleeps.push(milliseconds);
+    },
+    workerLabel: 'test-worker',
+  }), candidateVersionId);
+  assert.deepEqual(preferredSleeps, [500]);
+});
+
+test('release diagnostics recurse through aggregates and causes and retain nested process exit codes', () => {
+  const processFailure = new CloudflareProcessFailure('Wrangler failed with exit code 17.', 17);
+  const wrapped = new Error('promotion wrapper', { cause: processFailure });
+  const releaseError = new AggregateError([new Error('smoke failed'), wrapped], 'release failed');
+  assert.equal(cloudflareReleaseExitCode(releaseError), 17);
+  assert.match(formatCloudflareReleaseError(releaseError), /release failed[\s\S]*1\. smoke failed[\s\S]*2\. promotion wrapper[\s\S]*Caused by: Wrangler failed with exit code 17/);
 });
 
 test('standalone benchmark requires an explicit HTTPS API origin and a valid owner', () => {
@@ -216,6 +451,73 @@ test('frontend promotion requires exact version-keyed fresh candidate evidence',
   }
 });
 
+test('API production candidate resolution permits cache-free resume only for the exact live version', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  const input = {
+    expectedCurrentVersionId: baselineVersionId,
+    smokeOwner: OWNER,
+    versionId: candidateVersionId,
+    wranglerEnvironment,
+  };
+
+  assert.equal(
+    await deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
+      deployment: deploymentReader([candidateVersionId]),
+      readCandidate: () => undefined,
+    }),
+    deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+  );
+  await assert.rejects(
+    () => deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
+      deployment: deploymentReader([baselineVersionId]),
+      readCandidate: () => undefined,
+    }),
+    /requires a fresh local candidate record/,
+  );
+  await assert.rejects(
+    () => deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
+      deployment: deploymentReader([splitDeployment(baselineVersionId, candidateVersionId)]),
+      readCandidate: () => undefined,
+    }),
+    /not a stable single-version deployment/,
+  );
+});
+
+test('frontend production candidate resolution revalidates an exact live version without local evidence', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  const input = {
+    expectedCurrentVersionId: baselineVersionId,
+    versionId: candidateVersionId,
+    wranglerEnvironment,
+  };
+
+  assert.deepEqual(
+    await frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
+      deployment: deploymentReader([candidateVersionId]),
+      readCandidate: () => undefined,
+    }),
+    { previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId) },
+  );
+  await assert.rejects(
+    () => frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
+      deployment: deploymentReader([baselineVersionId]),
+      readCandidate: () => undefined,
+    }),
+    /requires fresh candidate evidence/,
+  );
+  await assert.rejects(
+    () => frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
+      deployment: deploymentReader([splitDeployment(baselineVersionId, candidateVersionId)]),
+      readCandidate: () => undefined,
+    }),
+    /not a stable single-version deployment/,
+  );
+});
+
 test('frontend deployment validates exact Worker and custom-domain targets before mutation', () => {
   const config = JSON.parse(readFileSync('wrangler.jsonc', 'utf8')) as Record<string, unknown>;
   assert.equal(frontendDeployTestHooks.isExactFrontendDeploymentConfig(config), true);
@@ -242,32 +544,364 @@ test('frontend deployment validates exact Worker and custom-domain targets befor
   );
 });
 
-test('frontend production promotes the exact version before reviewed triggers', () => {
+test('API deployment validates exact Worker and custom-domain targets before mutation', () => {
+  const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8')) as Record<string, unknown>;
+  assert.equal(deployApiTestHooks.isExactApiDeploymentConfig(config), true);
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({ ...config, account_id: randomUUID() }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      routes: [
+        ...(config.routes as unknown[]),
+        { pattern: 'unexpected.mons.shop', custom_domain: true },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      routes: [{ pattern: 'api.mons.shop', custom_domain: true, zone_name: 'mons.shop' }],
+    }),
+    false,
+  );
+});
+
+test('frontend production deploys reviewed triggers before exact promotion', () => {
   const versionId = randomUUID();
   assert.deepEqual(frontendDeployTestHooks.frontendProductionWranglerCommands(versionId), [
     {
-      label: 'Frontend exact-version promotion',
-      args: [
-        'versions',
-        'deploy',
-        '--version-id',
-        versionId,
-        '--percentage',
-        '100',
-        '--yes',
-        '--config',
-        'wrangler.jsonc',
-      ],
-    },
-    {
       label: 'Frontend trigger deployment',
       args: ['triggers', 'deploy', '--config', 'wrangler.jsonc'],
+    },
+    {
+      label: 'Frontend exact-version promotion',
+      args: [
+        'versions', 'deploy', '--version-id', versionId, '--percentage', '100', '--yes',
+        '--config', 'wrangler.jsonc',
+      ],
     },
   ]);
   assert.deepEqual(frontendDeployTestHooks.frontendProductionOrigins, [
     'https://mons.shop',
     'https://www.mons.shop',
   ]);
+});
+
+test('frontend production reconciles exact state and retries hash propagation before evidence', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const candidateHtmlSha256 = 'a'.repeat(64);
+  const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  const events: string[] = [];
+  const sleeps: number[] = [];
+  let smokeCalls = 0;
+
+  await frontendDeployTestHooks.runFrontendProductionSequence(
+    {
+      candidateHtmlSha256,
+      expectedCurrentVersionId: baselineVersionId,
+      versionId: candidateVersionId,
+      wranglerEnvironment,
+    },
+    {
+      deployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+      ], events),
+      run: (_command, args, environment, label) => {
+        assert.equal(environment, wranglerEnvironment);
+        events.push(label);
+        if (label === 'Frontend trigger deployment') {
+          assert.deepEqual(args, ['triggers', 'deploy', '--config', 'wrangler.jsonc']);
+        }
+        if (label === 'Frontend exact-version promotion') {
+          assert.deepEqual(args.slice(0, 7), [
+            'versions', 'deploy', '--version-id', candidateVersionId, '--percentage', '100', '--yes',
+          ]);
+        }
+      },
+      smoke: async (origin) => {
+        smokeCalls += 1;
+        events.push(`smoke:${origin}`);
+        if (smokeCalls === 3 || smokeCalls === 4) return 'b'.repeat(64);
+        return candidateHtmlSha256;
+      },
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+      },
+      evidence: (kind, versionId) => {
+        assert.equal(kind, 'frontend');
+        assert.equal(versionId, candidateVersionId);
+        events.push('evidence');
+        return {
+          schemaVersion: 1,
+          kind: 'frontend',
+          workerName: 'mons-shop',
+          versionId,
+          verifiedAt: new Date().toISOString(),
+        };
+      },
+    },
+  );
+  assert.deepEqual(sleeps, [500, 1_500]);
+  assert.deepEqual(events, [
+    'deployment-status',
+    'Frontend trigger deployment',
+    'smoke:https://mons.shop',
+    'smoke:https://www.mons.shop',
+    'deployment-status',
+    'Frontend exact-version promotion',
+    'deployment-status',
+    'smoke:https://mons.shop',
+    'smoke:https://mons.shop',
+    'smoke:https://mons.shop',
+    'smoke:https://www.mons.shop',
+    'deployment-status',
+    'evidence',
+  ]);
+});
+
+test('frontend trigger deployment gets exactly one declarative retry before promotion', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+  let triggerAttempts = 0;
+
+  await frontendDeployTestHooks.runFrontendProductionSequence(
+    {
+      candidateHtmlSha256: 'a'.repeat(64),
+      expectedCurrentVersionId: baselineVersionId,
+      versionId: candidateVersionId,
+      wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    },
+    {
+      deployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+      ]),
+      run: (_command, _args, _environment, label) => {
+        labels.push(label);
+        if (label.startsWith('Frontend trigger deployment')) {
+          triggerAttempts += 1;
+          if (triggerAttempts === 1) throw new Error('transient trigger failure');
+        }
+      },
+      smoke: async () => 'a'.repeat(64),
+      sleep: async () => undefined,
+      evidence: (_kind, versionId) => ({
+        schemaVersion: 1,
+        kind: 'frontend',
+        workerName: 'mons-shop',
+        versionId,
+        verifiedAt: new Date().toISOString(),
+      }),
+    },
+  );
+  assert.deepEqual(labels, [
+    'Frontend trigger deployment',
+    'Frontend trigger deployment retry',
+    'Frontend exact-version promotion',
+  ]);
+});
+
+test('frontend guarded resume never rolls back when its trigger retry fails', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.runFrontendProductionSequence(
+      {
+        candidateHtmlSha256: 'a'.repeat(64),
+        expectedCurrentVersionId: baselineVersionId,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId]),
+        run: (_command, _args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Frontend compensating rollback') assert.fail('guarded resume attempted rollback');
+          throw new Error('injected trigger failure');
+        },
+        smoke: async () => assert.fail('guarded resume smoked after failed triggers'),
+        sleep: async () => undefined,
+        evidence: () => assert.fail('guarded resume wrote evidence after failed triggers'),
+      },
+    ),
+    /already live[\s\S]*Automatic rollback was suppressed/,
+  );
+  assert.deepEqual(labels, ['Frontend trigger deployment', 'Frontend trigger deployment retry']);
+});
+
+test('frontend guarded resume never rolls back when candidate verification fails', async () => {
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.runFrontendProductionSequence(
+      {
+        candidateHtmlSha256: 'a'.repeat(64),
+        expectedCurrentVersionId: candidateVersionId,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId]),
+        run: (_command, _args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Frontend compensating rollback') assert.fail('guarded resume attempted rollback');
+        },
+        smoke: async () => {
+          throw new Error('injected candidate smoke failure');
+        },
+        sleep: async () => undefined,
+        evidence: () => assert.fail('guarded resume wrote evidence after failed smoke'),
+      },
+    ),
+    /already live[\s\S]*Automatic rollback was suppressed/,
+  );
+  assert.deepEqual(labels, ['Frontend trigger deployment']);
+});
+
+test('frontend recovery rechecks the candidate immediately before exact rollback', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const promotionError = new Error('injected frontend promotion failure');
+  const labels: string[] = [];
+  const statusEvents: string[] = [];
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.runFrontendProductionSequence(
+      {
+        candidateHtmlSha256: 'a'.repeat(64),
+        expectedCurrentVersionId: baselineVersionId,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          baselineVersionId,
+          baselineVersionId,
+        ], statusEvents),
+        run: (_command, args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Frontend exact-version promotion') throw promotionError;
+          if (label === 'Frontend compensating rollback') {
+            assert.equal(statusEvents.length, 5);
+            assert.deepEqual(args.slice(0, 2), ['rollback', baselineVersionId]);
+          }
+        },
+        smoke: async () => 'a'.repeat(64),
+        sleep: async () => undefined,
+        evidence: () => assert.fail('frontend recovery wrote production evidence'),
+      },
+    ),
+    (error) => error === promotionError,
+  );
+  assert.equal(statusEvents.length, 7);
+  assert.deepEqual(labels, [
+    'Frontend trigger deployment',
+    'Frontend exact-version promotion',
+    'Frontend compensating rollback',
+  ]);
+});
+
+test('frontend recovery refuses rollback when the candidate guard observes concurrent drift', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const concurrentVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.runFrontendProductionSequence(
+      {
+        candidateHtmlSha256: 'a'.repeat(64),
+        expectedCurrentVersionId: baselineVersionId,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          concurrentVersionId,
+        ]),
+        run: (_command, _args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Frontend exact-version promotion') {
+            throw new Error('injected frontend promotion failure');
+          }
+          if (label === 'Frontend compensating rollback') assert.fail('concurrent drift was overwritten');
+        },
+        smoke: async () => 'a'.repeat(64),
+        sleep: async () => undefined,
+        evidence: () => assert.fail('concurrent release wrote production evidence'),
+      },
+    ),
+    /candidate changed after reconciliation; automatic rollback was suppressed/,
+  );
+  assert.deepEqual(labels, ['Frontend trigger deployment', 'Frontend exact-version promotion']);
+});
+
+test('frontend evidence failure leaves the verified candidate live for guarded resume', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.runFrontendProductionSequence(
+      {
+        candidateHtmlSha256: 'a'.repeat(64),
+        expectedCurrentVersionId: baselineVersionId,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId, candidateVersionId]),
+        run: (_command, _args, _environment, label) => {
+          labels.push(label);
+          if (label.includes('rollback') || label.includes('promotion')) {
+            assert.fail('guarded evidence retry mutated the live version');
+          }
+        },
+        smoke: async () => 'a'.repeat(64),
+        sleep: async () => undefined,
+        evidence: () => {
+          throw new Error('injected evidence failure');
+        },
+      },
+    ),
+    /remains live and verified[\s\S]*rerun the same production command[\s\S]*guarded resume/,
+  );
+  assert.deepEqual(labels, ['Frontend trigger deployment']);
+});
+
+test('API startup profiling passes the nested Worker config through Wrangler build args', () => {
+  const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
+    scripts?: Record<string, string>;
+  };
+  assert.equal(
+    packageJson.scripts?.['startup:api'],
+    'node -e "require(\'fs\').mkdirSync(\'.cache\',{recursive:true})" && ' +
+      'wrangler check startup --args="--config cloud/workers/api/wrangler.jsonc ' +
+      '--env-file cloud/workers/api/release.env" --outfile .cache/mons-shop-api-startup.cpuprofile',
+  );
 });
 
 test('frontend smoke requires the expected production HTML', async () => {
@@ -514,7 +1148,28 @@ test('direct benchmark uses bounded cursor requests and keeps a successful size-
   assert.equal(clearedTimers.length, scheduledTimeouts.length);
 });
 
-test('direct benchmark retries a transient grouped failure before whole-wallet fallback', async () => {
+test('direct benchmark never invokes whole-wallet fallback for successful empty grouped scopes', async () => {
+  const requests: Array<{ params: Record<string, unknown> }> = [];
+  let nextTimer = 0;
+  const items = await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+    clearTimer: () => undefined,
+    fetch: async (_input, init) => {
+      const rpc = JSON.parse(String(init?.body)) as { id: string; params: Record<string, unknown> };
+      requests.push(rpc);
+      return Response.json({ jsonrpc: '2.0', id: rpc.id, result: { items: [] } });
+    },
+    scheduleTimer: () => {
+      nextTimer += 1;
+      return nextTimer;
+    },
+    sleep: async () => assert.fail('successful empty scopes must not retry'),
+  });
+  assert.deepEqual(items, []);
+  assert.equal(requests.length > 0, true);
+  assert.equal(requests.some((request) => !request.params.grouping), false);
+});
+
+test('direct benchmark retains cluster fallback after an initial grouped provider failure', async () => {
   const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
   const retryDelays: number[] = [];
   let nextTimer = 0;
@@ -638,19 +1293,27 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
 });
 
 test('API production benchmarks the exact preview before mutation and writes evidence last', async () => {
-  const versionId = randomUUID();
-  const previewUrl = deployApiTestHooks.expectedPreviewOrigin(versionId);
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const previewUrl = deployApiTestHooks.expectedPreviewOrigin(candidateVersionId);
   const events: string[] = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
     {
+      expectedCurrentVersionId: baselineVersionId,
       heliusApiKey: 'helius-test-key',
       previewUrl,
       smokeOwner: OWNER,
-      versionId,
+      versionId: candidateVersionId,
       wranglerEnvironment,
     },
     {
+      deployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+      ], events),
       smoke: async (origin, owner) => {
         assert.equal(owner, OWNER);
         events.push(`smoke:${origin}`);
@@ -666,7 +1329,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         events.push(label);
         if (label === 'Exact version promotion') {
           assert.deepEqual(args.slice(0, 7), [
-            'versions', 'deploy', '--version-id', versionId, '--percentage', '100', '--yes',
+            'versions', 'deploy', '--version-id', candidateVersionId, '--percentage', '100', '--yes',
           ]);
         } else {
           assert.deepEqual(args.slice(0, 2), ['triggers', 'deploy']);
@@ -674,25 +1337,31 @@ test('API production benchmarks the exact preview before mutation and writes evi
       },
       evidence: (kind, evidenceVersionId) => {
         assert.equal(kind, 'api');
-        assert.equal(evidenceVersionId, versionId);
+        assert.equal(evidenceVersionId, candidateVersionId);
         events.push(`evidence:${evidenceVersionId}`);
         return {
           schemaVersion: 1,
           kind: 'api',
           workerName: 'mons-shop-api',
-          versionId,
+          versionId: candidateVersionId,
           verifiedAt: new Date().toISOString(),
         };
       },
+      sleep: async () => undefined,
     },
   );
   assert.deepEqual(events, [
     `smoke:${previewUrl}`,
     `benchmark:${previewUrl}`,
-    'Exact version promotion',
+    'deployment-status',
     'Reviewed trigger deployment',
     'smoke:https://api.mons.shop',
-    `evidence:${versionId}`,
+    'deployment-status',
+    'Exact version promotion',
+    'deployment-status',
+    'smoke:https://api.mons.shop',
+    'deployment-status',
+    `evidence:${candidateVersionId}`,
   ]);
 });
 
@@ -704,6 +1373,7 @@ test('API production benchmark failure performs no deployment mutation', async (
   await assert.rejects(
     () => deployApiTestHooks.runProductionSequence(
       {
+        expectedCurrentVersionId: randomUUID(),
         heliusApiKey: 'helius-test-key',
         previewUrl,
         smokeOwner: OWNER,
@@ -719,13 +1389,388 @@ test('API production benchmark failure performs no deployment mutation', async (
           events.push(`benchmark:${options.apiOrigin}`);
           throw new Error('injected benchmark failure');
         },
+        deployment: async () => assert.fail('deployment state was read after a failed benchmark'),
         wrangler: () => assert.fail('Wrangler mutation ran after a failed benchmark'),
         evidence: () => assert.fail('production evidence was written after a failed benchmark'),
+        sleep: async () => undefined,
       },
     ),
     /injected benchmark failure/,
   );
   assert.deepEqual(events, [`smoke:${previewUrl}`, `benchmark:${previewUrl}`]);
+});
+
+test('API trigger deployment gets exactly one declarative retry before promotion', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+  let triggerAttempts = 0;
+
+  await deployApiTestHooks.runProductionSequence(
+    {
+      expectedCurrentVersionId: baselineVersionId,
+      heliusApiKey: 'helius-test-key',
+      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+      smokeOwner: OWNER,
+      versionId: candidateVersionId,
+      wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    },
+    {
+      deployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+      ]),
+      smoke: async () => undefined,
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      wrangler: (_args, _environment, label) => {
+        labels.push(label);
+        if (label.startsWith('Reviewed trigger deployment')) {
+          triggerAttempts += 1;
+          if (triggerAttempts === 1) throw new Error('transient API trigger failure');
+        }
+      },
+      evidence: (_kind, versionId) => ({
+        schemaVersion: 1,
+        kind: 'api',
+        workerName: 'mons-shop-api',
+        versionId,
+        verifiedAt: new Date().toISOString(),
+      }),
+      sleep: async () => undefined,
+    },
+  );
+  assert.deepEqual(labels, [
+    'Reviewed trigger deployment',
+    'Reviewed trigger deployment retry',
+    'Exact version promotion',
+  ]);
+});
+
+test('API guarded resume never rolls back when its trigger retry fails', async () => {
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: candidateVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId]),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          labels.push(label);
+          if (label === 'API compensating rollback') assert.fail('guarded resume attempted rollback');
+          throw new Error('injected resumed API trigger failure');
+        },
+        evidence: () => assert.fail('guarded resume wrote evidence after failed triggers'),
+        sleep: async () => undefined,
+      },
+    ),
+    /already live[\s\S]*Automatic rollback was suppressed/,
+  );
+  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Reviewed trigger deployment retry']);
+});
+
+test('API guarded resume never rolls back when candidate verification fails', async () => {
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+  let smokeCalls = 0;
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: candidateVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId]),
+        smoke: async () => {
+          smokeCalls += 1;
+          if (smokeCalls === 2) throw new Error('injected resumed API smoke failure');
+        },
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          labels.push(label);
+          if (label === 'API compensating rollback') assert.fail('guarded resume attempted rollback');
+        },
+        evidence: () => assert.fail('guarded resume wrote evidence after failed smoke'),
+        sleep: async () => undefined,
+      },
+    ),
+    /already live[\s\S]*Automatic rollback was suppressed/,
+  );
+  assert.deepEqual(labels, ['Reviewed trigger deployment']);
+});
+
+test('API recovery confirms the candidate immediately before exact rollback and verifies baseline', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const promotionError = new Error('injected API promotion failure');
+  const labels: string[] = [];
+  const statusEvents: string[] = [];
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          baselineVersionId,
+          baselineVersionId,
+        ], statusEvents),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Exact version promotion') throw promotionError;
+          if (label === 'API compensating rollback') {
+            assert.equal(statusEvents.length, 5);
+            assert.deepEqual(args, [
+              'rollback',
+              baselineVersionId,
+              '--yes',
+              '--message',
+              'Automatic recovery after failed mons-shop-api release',
+              '--config',
+              'cloud/workers/api/wrangler.jsonc',
+              '--env-file',
+              'cloud/workers/api/release.env',
+            ]);
+          }
+        },
+        evidence: () => assert.fail('API recovery wrote production evidence'),
+        sleep: async () => undefined,
+      },
+    ),
+    (error) => error === promotionError,
+  );
+  assert.equal(statusEvents.length, 7);
+  assert.deepEqual(labels, [
+    'Reviewed trigger deployment',
+    'Exact version promotion',
+    'API compensating rollback',
+  ]);
+});
+
+test('API recovery verifies a committed rollback while retaining the rollback command failure', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const promotionError = new Error('injected API promotion failure');
+  const rollbackError = new CloudflareProcessFailure('injected API rollback command failure', 19);
+  const statusEvents: string[] = [];
+  let smokeCalls = 0;
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          candidateVersionId,
+          baselineVersionId,
+          baselineVersionId,
+        ], statusEvents),
+        smoke: async () => {
+          smokeCalls += 1;
+        },
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          if (label === 'Exact version promotion') throw promotionError;
+          if (label === 'API compensating rollback') throw rollbackError;
+        },
+        evidence: () => assert.fail('ambiguous rollback wrote production evidence'),
+        sleep: async () => undefined,
+      },
+    ),
+    (error) => error instanceof AggregateError &&
+      /baseline recovery was verified, but the rollback command reported failure/.test(error.message) &&
+      error.errors[0] === promotionError &&
+      error.errors[1] === rollbackError &&
+      cloudflareReleaseExitCode(error) === 19,
+  );
+  assert.equal(statusEvents.length, 7);
+  assert.equal(smokeCalls, 3);
+});
+
+test('API refuses rollback when failed promotion has any unreadable baseline observation', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+  const sleeps: number[] = [];
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          baselineVersionId,
+          new Error('injected unreadable deployment state'),
+          baselineVersionId,
+          baselineVersionId,
+        ]),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          labels.push(label);
+          if (label === 'Exact version promotion') throw new Error('injected API promotion failure');
+          if (label === 'API compensating rollback') assert.fail('unreadable state was overwritten');
+        },
+        evidence: () => assert.fail('unreadable release wrote production evidence'),
+        sleep: async (milliseconds) => {
+          sleeps.push(milliseconds);
+        },
+      },
+    ),
+    /live mutation state could not be safely reconciled/,
+  );
+  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Exact version promotion']);
+  assert.deepEqual(sleeps, [500, 1_500, 3_000]);
+});
+
+test('API successful promotion command reports manual intervention for ambiguous live state', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([
+          baselineVersionId,
+          baselineVersionId,
+          splitDeployment(baselineVersionId, candidateVersionId),
+        ]),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          labels.push(label);
+          if (label === 'API compensating rollback') assert.fail('ambiguous split state was overwritten');
+        },
+        evidence: () => assert.fail('ambiguous split state wrote production evidence'),
+        sleep: async () => undefined,
+      },
+    ),
+    /No blind rollback was attempted; inspect deployment status and recover manually/,
+  );
+  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Exact version promotion']);
+});
+
+test('API refuses split or third-version state before any mutation', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  for (const initialState of [
+    splitDeployment(baselineVersionId, candidateVersionId),
+    stableDeployment(randomUUID()),
+  ]) {
+    await assert.rejects(
+      () => deployApiTestHooks.runProductionSequence(
+        {
+          expectedCurrentVersionId: baselineVersionId,
+          heliusApiKey: 'helius-test-key',
+          previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+          smokeOwner: OWNER,
+          versionId: candidateVersionId,
+          wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+        },
+        {
+          deployment: deploymentReader([initialState]),
+          smoke: async () => undefined,
+          benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+          wrangler: () => assert.fail('unsafe initial state was mutated'),
+          evidence: () => assert.fail('unsafe initial state wrote evidence'),
+          sleep: async () => undefined,
+        },
+      ),
+      /not a stable single-version deployment|matched neither tracked production/,
+    );
+  }
+});
+
+test('API evidence failure never rolls back and directs a guarded-resume rerun', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const labels: string[] = [];
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([candidateVersionId, candidateVersionId]),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        wrangler: (_args, _environment, label) => {
+          labels.push(label);
+          if (label.includes('rollback') || label.includes('promotion')) {
+            assert.fail('guarded API evidence retry mutated the live version');
+          }
+        },
+        evidence: () => {
+          throw new Error('injected API evidence failure');
+        },
+        sleep: async () => undefined,
+      },
+    ),
+    /remains live and verified[\s\S]*rerun the same production command[\s\S]*guarded resume/,
+  );
+  assert.deepEqual(labels, ['Reviewed trigger deployment']);
 });
 
 test('temporary secret setup enforces modes and removes partial files after injected failures', () => {

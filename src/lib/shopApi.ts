@@ -2,8 +2,10 @@ import {
   isExactShopApiErrorResponse,
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
-  type ShopApiRequest,
+  type ShopExpectedAssetIds,
+  type ShopInventoryRequest,
   type ShopInventoryItem,
+  type ShopPendingOpenBoxesRequest,
 } from '../../functions/src/shared/shopApi.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
@@ -20,9 +22,13 @@ export type DropFetchOptions = {
   signal?: AbortSignal;
 };
 
+export type InventoryFetchOptions = DropFetchOptions & {
+  expectedAssetIds?: ShopExpectedAssetIds;
+};
+
 async function postShopApi(
   pathname: '/inventory' | '/pending-open-boxes',
-  requestBody: ShopApiRequest,
+  requestBody: ShopInventoryRequest | ShopPendingOpenBoxesRequest,
   signal?: AbortSignal,
 ): Promise<unknown> {
   const controller = new AbortController();
@@ -78,10 +84,19 @@ function normalizeInventoryItem(item: ShopInventoryItem): InventoryItem {
   };
 }
 
-export async function fetchInventory(owner: string, options: DropFetchOptions = {}): Promise<InventoryItem[]> {
+export async function fetchInventory(owner: string, options: InventoryFetchOptions = {}): Promise<InventoryItem[]> {
+  const expectedAssetIds = options.expectedAssetIds;
+  const hasExpectedAssetIds = Boolean(
+    expectedAssetIds?.['mainnet-beta']?.length || expectedAssetIds?.devnet?.length,
+  );
+  const requestBody: ShopInventoryRequest = {
+    owner,
+    ...(options.includeDevnet === true ? { includeDevnet: true } : {}),
+    ...(hasExpectedAssetIds ? { expectedAssetIds } : {}),
+  };
   const payload = await postShopApi(
     '/inventory',
-    options.includeDevnet === true ? { owner, includeDevnet: true } : { owner },
+    requestBody,
     options.signal,
   );
   if (!isExactShopInventoryResponse(payload)) throw new Error('Shop API returned an invalid inventory response');

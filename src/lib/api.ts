@@ -165,7 +165,7 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
   }
 }
 
-export { fetchInventory, fetchPendingOpenBoxes } from './shopApi';
+export { fetchPendingOpenBoxes } from './shopApi';
 export type { DropFetchOptions } from './shopApi';
 
 export async function listCardNft2UnrevealedCards(

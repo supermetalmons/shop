@@ -2,11 +2,25 @@ import {
   BOX_MINTER_MAX_ITEMS_PER_BOX,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
 } from './boxMinterProtocol.js';
+import { isBase58Bytes } from './solanaRpcProxy.js';
 
-export type ShopApiRequest = {
+type ShopApiBaseRequest = {
   owner: string;
   includeDevnet?: boolean;
 };
+
+export const SHOP_EXPECTED_ASSET_IDS_MAX = 15;
+
+export type ShopExpectedAssetIds = {
+  'mainnet-beta'?: string[];
+  devnet?: string[];
+};
+
+export type ShopInventoryRequest = ShopApiBaseRequest & {
+  expectedAssetIds?: ShopExpectedAssetIds;
+};
+
+export type ShopPendingOpenBoxesRequest = ShopApiBaseRequest;
 
 type LegacyShopApiAttribute = {
   trait_type: string;
@@ -95,10 +109,44 @@ function hasExactKeys(value: Record<string, unknown>, required: readonly string[
   return required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) && keys.every((key) => allowed.has(key));
 }
 
-export function isExactShopApiRequest(value: unknown): value is ShopApiRequest {
-  if (!isRecord(value) || !hasExactKeys(value, ['owner'], ['includeDevnet'])) return false;
+function isExactShopApiBaseRequest(
+  value: Record<string, unknown>,
+  optional: readonly string[] = [],
+): boolean {
+  if (!hasExactKeys(value, ['owner'], ['includeDevnet', ...optional])) return false;
   if (typeof value.owner !== 'string') return false;
   return value.includeDevnet === undefined || typeof value.includeDevnet === 'boolean';
+}
+
+function isExactShopExpectedAssetIds(
+  value: unknown,
+  includeDevnet: boolean,
+): value is ShopExpectedAssetIds {
+  if (!isRecord(value) || !hasExactKeys(value, [], ['mainnet-beta', 'devnet'])) return false;
+  const groups = [value['mainnet-beta'], value.devnet].filter((group) => group !== undefined);
+  if (!groups.length || (value.devnet !== undefined && !includeDevnet)) return false;
+  const seen = new Set<string>();
+  let count = 0;
+  for (const group of groups) {
+    if (!Array.isArray(group) || group.length === 0) return false;
+    for (const id of group) {
+      if (typeof id !== 'string' || !isBase58Bytes(id, 32) || seen.has(id)) return false;
+      seen.add(id);
+      count += 1;
+      if (count > SHOP_EXPECTED_ASSET_IDS_MAX) return false;
+    }
+  }
+  return count > 0;
+}
+
+export function isExactShopInventoryRequest(value: unknown): value is ShopInventoryRequest {
+  if (!isRecord(value) || !isExactShopApiBaseRequest(value, ['expectedAssetIds'])) return false;
+  return value.expectedAssetIds === undefined ||
+    isExactShopExpectedAssetIds(value.expectedAssetIds, value.includeDevnet === true);
+}
+
+export function isExactShopPendingOpenBoxesRequest(value: unknown): value is ShopPendingOpenBoxesRequest {
+  return isRecord(value) && isExactShopApiBaseRequest(value);
 }
 
 function isExactLegacyShopApiAttribute(value: unknown): value is LegacyShopApiAttribute {

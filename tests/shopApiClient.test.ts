@@ -75,6 +75,30 @@ test('inventory client uses api.mons.shop, no-store, abort signals, and display-
   });
 });
 
+test('inventory client serializes expected asset IDs by cluster without changing the default request', async () => {
+  const mainnetAsset = '11111111111111111111111111111111';
+  const devnetAsset = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+  await withFetch((async (_input, init) => {
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      owner: OWNER,
+      includeDevnet: true,
+      expectedAssetIds: {
+        'mainnet-beta': [mainnetAsset],
+        devnet: [devnetAsset],
+      },
+    });
+    return Response.json({ ok: true, items: [] });
+  }) as typeof fetch, async () => {
+    await fetchInventory(OWNER, {
+      includeDevnet: true,
+      expectedAssetIds: {
+        'mainnet-beta': [mainnetAsset],
+        devnet: [devnetAsset],
+      },
+    });
+  });
+});
+
 test('inventory client accepts exact string bounds and rejects each over-limit field', async () => {
   const boundaryItem = {
     id: 'boundary-item',

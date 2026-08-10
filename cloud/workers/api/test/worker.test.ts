@@ -13,6 +13,7 @@ import {
   listShopPendingOpenProgramScopes,
 } from '../../../../functions/src/shared/shopDomain.ts';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.ts';
+import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../functions/src/shared/shopApi.ts';
 import { isExactShopRpcRequest } from '../../../../functions/src/shared/solanaRpcProxy.ts';
 import { handleRequest, sleepWithAbort, type ProviderFetch } from '../src/index.ts';
 
@@ -114,6 +115,7 @@ function quietDependencies(providerFetch: ProviderFetch) {
 function cardAsset(id: string, packId: number) {
   return {
     id: assetId(id),
+    interface: 'MplCoreAsset',
     burnt: false,
     grouping: [{ group_key: 'collection', group_value: CARD_COLLECTION }],
     content: {
@@ -130,6 +132,7 @@ function cardAsset(id: string, packId: number) {
 function unknownAsset(id: string, collection: string) {
   return {
     id: assetId(id),
+    interface: 'MplCoreAsset',
     burnt: false,
     grouping: [{ group_key: 'collection', group_value: collection }],
     content: { metadata: { name: id } },
@@ -774,6 +777,62 @@ test('requests reject extra keys, invalid addresses, and bodies over 1 KiB', asy
   assert.equal((await handleRequest(wrongType, env(), quietDependencies(providerFetch))).status, 400);
 });
 
+test('inventory expected asset IDs use an exact bounded cluster contract', async () => {
+  const expectedIds = Array.from(
+    { length: SHOP_EXPECTED_ASSET_IDS_MAX },
+    (_, index) => assetId(`expected-contract-${index}`),
+  );
+  const batchCalls: Array<{ hostname: string; ids: string[] }> = [];
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+    assert.equal(body.method, 'getAssetBatch');
+    batchCalls.push({ hostname: new URL(String(input)).hostname, ids: body.params.ids });
+    return rpcResult(body.id, []);
+  };
+  const valid = await handleRequest(request('/inventory', {
+    owner: OWNER,
+    includeDevnet: true,
+    expectedAssetIds: {
+      'mainnet-beta': expectedIds.slice(0, 8),
+      devnet: expectedIds.slice(8),
+    },
+  }), env(), quietDependencies(providerFetch));
+  assert.equal(valid.status, 200);
+  assert.deepEqual(batchCalls, [
+    { hostname: 'mainnet.helius-rpc.com', ids: expectedIds.slice(0, 8) },
+    { hostname: 'devnet.helius-rpc.com', ids: expectedIds.slice(8) },
+  ]);
+
+  const invalidBodies = [
+    { owner: OWNER, expectedAssetIds: {} },
+    { owner: OWNER, expectedAssetIds: { 'mainnet-beta': [] } },
+    { owner: OWNER, expectedAssetIds: { testnet: [expectedIds[0]] } },
+    { owner: OWNER, expectedAssetIds: { 'mainnet-beta': ['not-an-address'] } },
+    { owner: OWNER, expectedAssetIds: { 'mainnet-beta': [expectedIds[0], expectedIds[0]] } },
+    {
+      owner: OWNER,
+      includeDevnet: true,
+      expectedAssetIds: { 'mainnet-beta': [expectedIds[0]], devnet: [expectedIds[0]] },
+    },
+    {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [...expectedIds, assetId('expected-contract-over-limit')] },
+    },
+    { owner: OWNER, expectedAssetIds: { devnet: [expectedIds[0]] } },
+  ];
+  for (const body of invalidBodies) {
+    const response = await handleRequest(request('/inventory', body), env(), quietDependencies(providerFetch));
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { ok: false, error: 'invalid-request' });
+  }
+  const pending = await handleRequest(request('/pending-open-boxes', {
+    owner: OWNER,
+    expectedAssetIds: { 'mainnet-beta': [expectedIds[0]] },
+  }), env(), quietDependencies(providerFetch));
+  assert.equal(pending.status, 400);
+});
+
 test('inventory rate limits reject explicit exhaustion but fail open on binding errors', async () => {
   const providerFetch: ProviderFetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body));
@@ -1099,6 +1158,351 @@ test('successful empty inventory scopes never scan the whole wallet', async () =
   assert.ok(groupedClusters.includes('mainnet.helius-rpc.com'));
   assert.ok(groupedClusters.includes('devnet.helius-rpc.com'));
   assert.deepEqual(ungroupedClusters, []);
+});
+
+test('3,001 grouped raw assets are not recounted through empty-scope wallet fallback', async () => {
+  const assets = Array.from(
+    { length: 3_001 },
+    (_, index) => unknownAsset(`large-grouped-${index}`, CARD_COLLECTION),
+  );
+  let ungroupedCalls = 0;
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const collection = body.params?.grouping?.[1];
+    if (body.params?.grouping && collection !== CARD_COLLECTION) return rpcCursorSearchResult(body, []);
+    if (!body.params?.grouping) ungroupedCalls += 1;
+    const cursor = typeof body.params.cursor === 'string' ? body.params.cursor : '';
+    const page = cursor ? Number(cursor.slice(cursor.lastIndexOf('-') + 1)) : 0;
+    const items = assets.slice(page * body.params.limit, (page + 1) * body.params.limit);
+    return rpcResult(body.id, {
+      limit: body.params.limit,
+      total: assets.length,
+      ...(items.length ? { cursor: `large-grouped-${page + 1}` } : {}),
+      items,
+    });
+  };
+  const response = await handleRequest(request('/inventory'), env(), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, items: [] });
+  assert.equal(ungroupedCalls, 0);
+});
+
+test('expected asset IDs recover partial index lag without scanning the whole wallet', async () => {
+  const indexedId = assetId('expected-indexed-pack');
+  const recoveredId = assetId('expected-recovered-pack');
+  const logs: Record<string, unknown>[] = [];
+  let batchCalls = 0;
+  let ungroupedCalls = 0;
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getAssetBatch') {
+      batchCalls += 1;
+      assert.deepEqual(body.params, {
+        ids: [indexedId, recoveredId],
+      });
+      return rpcResult(body.id, [
+        { ...cardAsset(indexedId, 184), ownership: { owner: OWNER } },
+        { ...cardAsset(recoveredId, 185), ownership: { owner: OWNER } },
+      ]);
+    }
+    if (!body.params?.grouping) {
+      ungroupedCalls += 1;
+      return rpcCursorSearchResult(body, []);
+    }
+    return body.params.grouping[1] === CARD_COLLECTION
+      ? rpcCursorSearchResult(body, [cardAsset(indexedId, 184)])
+      : rpcCursorSearchResult(body, []);
+  };
+  const response = await handleRequest(request('/inventory', {
+    owner: OWNER,
+    expectedAssetIds: { 'mainnet-beta': [indexedId, recoveredId] },
+  }), env(), {
+    ...quietDependencies(providerFetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    (await response.json() as any).items.map((item: any) => item.id),
+    [indexedId, recoveredId],
+  );
+  assert.equal(batchCalls, 1);
+  assert.equal(ungroupedCalls, 0);
+  assert.equal(logs[0]?.expectedAssetIds, 2);
+  assert.equal(logs[0]?.expectedAssetResolved, 1);
+  assert.equal(logs[0]?.expectedAssetRecoveryFailures, 0);
+});
+
+test('one missing expected asset does not discard a valid batch sibling', async () => {
+  const missingId = assetId('expected-missing-sibling');
+  const recoveredId = assetId('expected-valid-sibling');
+  const batchCalls: string[][] = [];
+  const logs: Record<string, unknown>[] = [];
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+    batchCalls.push(body.params.ids);
+    if (body.params.ids.includes(missingId)) {
+      return rpcError(body.id, -32004, 'Asset not found');
+    }
+    return rpcResult(body.id, [
+      { ...cardAsset(recoveredId, 184), ownership: { owner: OWNER } },
+    ]);
+  };
+  const response = await handleRequest(request('/inventory', {
+    owner: OWNER,
+    expectedAssetIds: { 'mainnet-beta': [missingId, recoveredId] },
+  }), env(), {
+    ...quietDependencies(providerFetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json() as any).items.map((item: any) => item.id), [recoveredId]);
+  assert.deepEqual(batchCalls, [[missingId, recoveredId], [missingId], [recoveredId]]);
+  assert.equal(logs[0]?.expectedAssetResolved, 1);
+  assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+});
+
+test('expected asset recovery validates ownership, burn state, drop, and cluster', async () => {
+  const recoveredId = assetId('expected-valid-pack');
+  const wrongOwnerId = assetId('expected-wrong-owner-pack');
+  const missingOwnerId = assetId('expected-missing-owner-pack');
+  const burnedId = assetId('expected-burned-pack');
+  const missingBurnStateId = assetId('expected-missing-burn-state-pack');
+  const wrongInterfaceId = assetId('expected-wrong-interface-pack');
+  const wrongDropId = assetId('expected-wrong-drop-pack');
+  const wrongClusterId = assetId('expected-wrong-cluster-pack');
+  const otherOwner = assetId('expected-other-owner');
+  const logs: Record<string, unknown>[] = [];
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+    assert.equal(Object.hasOwn(body.params, 'options'), false);
+    const hostname = new URL(String(input)).hostname;
+    if (hostname === 'devnet.helius-rpc.com') {
+      return rpcResult(body.id, [
+        { ...cardAsset(wrongClusterId, 184), ownership: { owner: OWNER } },
+      ]);
+    }
+    return rpcResult(body.id, [
+      { ...cardAsset(recoveredId, 184), ownership: { owner: OWNER } },
+      { ...cardAsset(wrongOwnerId, 185), ownership: { owner: otherOwner } },
+      cardAsset(missingOwnerId, 186),
+      { ...cardAsset(burnedId, 187), burnt: true, ownership: { owner: OWNER } },
+      {
+        id: missingBurnStateId,
+        interface: 'MplCoreAsset',
+        grouping: [{ group_key: 'collection', group_value: CARD_COLLECTION }],
+        ownership: { owner: OWNER },
+        content: { metadata: { name: 'blind box' } },
+      },
+      { ...cardAsset(wrongInterfaceId, 188), interface: 'V1_NFT', ownership: { owner: OWNER } },
+      { ...unknownAsset(wrongDropId, OWNER), ownership: { owner: OWNER } },
+    ]);
+  };
+  const response = await handleRequest(request('/inventory', {
+    owner: OWNER,
+    includeDevnet: true,
+    expectedAssetIds: {
+      'mainnet-beta': [
+        recoveredId,
+        wrongOwnerId,
+        missingOwnerId,
+        burnedId,
+        missingBurnStateId,
+        wrongInterfaceId,
+        wrongDropId,
+      ],
+      devnet: [wrongClusterId],
+    },
+  }), env(), {
+    ...quietDependencies(providerFetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json() as any).items.map((item: any) => item.id), [recoveredId]);
+  assert.equal(logs[0]?.expectedAssetIds, 8);
+  assert.equal(logs[0]?.expectedAssetResolved, 1);
+  assert.equal(logs[0]?.expectedAssetRecoveryFailures, 0);
+});
+
+test('expected asset recovery is single-attempt, optional, and budget bounded', async (context) => {
+  const expectedId = assetId('expected-soft-recovery');
+
+  await context.test('provider failure is soft and never retried', async () => {
+    let batchCalls = 0;
+    const logs: Record<string, unknown>[] = [];
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      batchCalls += 1;
+      return new Response('unavailable', { status: 503 });
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, items: [] });
+    assert.equal(batchCalls, 1);
+    assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+  });
+
+  await context.test('malformed batch output skips the whole cluster result', async () => {
+    const logs: Record<string, unknown>[] = [];
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      return rpcResult(body.id, [
+        { ...cardAsset(expectedId, 184), ownership: { owner: OWNER } },
+        { ...cardAsset('expected-unrequested-result', 185), ownership: { owner: OWNER } },
+      ]);
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, items: [] });
+    assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+    assert.equal(logs[0]?.expectedAssetResolved, 0);
+  });
+
+  await context.test('extra null batch entries skip the whole cluster result', async () => {
+    const logs: Record<string, unknown>[] = [];
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      return rpcResult(body.id, [
+        { ...cardAsset(expectedId, 184), ownership: { owner: OWNER } },
+        null,
+      ]);
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, items: [] });
+    assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+    assert.equal(logs[0]?.expectedAssetResolved, 0);
+  });
+
+  await context.test('attempt timeout is soft and uses one call', async () => {
+    let batchCalls = 0;
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      batchCalls += 1;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('aborted', 'AbortError')),
+          { once: true },
+        );
+      });
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      expectedAssetRecoveryTimeoutMs: 5,
+      providerTimeoutMs: 100,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, items: [] });
+    assert.equal(batchCalls, 1);
+  });
+
+  await context.test('overall deadline remains fatal during optional recovery', async () => {
+    let batchCalls = 0;
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      batchCalls += 1;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('aborted', 'AbortError')),
+          { once: true },
+        );
+      });
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      expectedAssetRecoveryTimeoutMs: 100,
+      providerTimeoutMs: 10,
+    });
+    assert.equal(response.status, 504);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-timeout' });
+    assert.equal(batchCalls, 1);
+  });
+
+  await context.test('candidate capacity skips the whole cluster result', async () => {
+    const logs: Record<string, unknown>[] = [];
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'searchAssets') return rpcCursorSearchResult(body, []);
+      return rpcResult(body.id, [
+        { ...cardAsset(expectedId, 184), ownership: { owner: OWNER } },
+      ]);
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      inventoryMaxCandidates: 0,
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, items: [] });
+    assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+    assert.equal(logs[0]?.expectedAssetResolved, 0);
+  });
+
+  await context.test('response capacity preserves the authoritative grouped result', async () => {
+    const indexedId = assetId('expected-budget-indexed');
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'getAssetBatch') {
+        return rpcResult(body.id, [
+          { ...cardAsset(expectedId, 185), ownership: { owner: OWNER } },
+        ]);
+      }
+      return body.params.grouping[1] === CARD_COLLECTION
+        ? rpcCursorSearchResult(body, [cardAsset(indexedId, 184)])
+        : rpcCursorSearchResult(body, []);
+    };
+    const baseline = await handleRequest(request('/inventory'), env(), quietDependencies(providerFetch));
+    assert.equal(baseline.status, 200);
+    const baselineText = await baseline.text();
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER,
+      expectedAssetIds: { 'mainnet-beta': [expectedId] },
+    }), env(), {
+      ...quietDependencies(providerFetch),
+      inventoryMaxResponseBodyBytes: new TextEncoder().encode(baselineText).byteLength,
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), baselineText);
+    assert.equal(logs[0]?.expectedAssetRecoveryFailures, 1);
+    assert.equal(logs[0]?.expectedAssetResolved, 0);
+  });
 });
 
 test('failed fallbacks and incomplete grouped pagination fail the whole refresh', async () => {

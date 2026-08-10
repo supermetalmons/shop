@@ -66,6 +66,7 @@ import {
   rememberPendingAdminIrlRedeem,
 } from './lib/adminIrlRedeem';
 import { auth } from './lib/firebase';
+import { refetchInventoryWithLatestExpectedAssets } from './lib/inventoryQuery';
 import {
   profileForAuthorizedView,
   ownProfileShipmentsEmptyState,
@@ -271,6 +272,7 @@ import {
   type LocalMintedBox,
   type LocalMintedBoxMatch,
 } from './lib/localMintedBoxes';
+import { registerRecentExpectedInventoryAssets } from './lib/recentExpectedInventoryAssets';
 import {
   calcAspectLockedRevealOriginRect,
   calcClearCardRevealTargetRect,
@@ -1571,7 +1573,16 @@ function App({
     dataUpdatedAt: inventoryDataUpdatedAt,
   } = useInventory(owner, {
     includeDevnet: includeDevnetInventory,
+    useRecentExpectedAssets: !isViewerMode,
   });
+  const refreshInventoryAfterMint = useCallback(
+    () => refetchInventoryWithLatestExpectedAssets(
+      queryClient,
+      [...inventoryQueryKeyPrefix(owner), includeDevnetInventory],
+      () => refetchInventory(),
+    ),
+    [includeDevnetInventory, owner, queryClient, refetchInventory],
+  );
   const {
     data: pendingOpenBoxesData,
     refetch: refetchPendingOpenBoxes,
@@ -4635,11 +4646,19 @@ function App({
         'Transaction expired before you approved it. Please approve again…',
       );
       if (!hasConfirmationError) {
+        registerRecentExpectedInventoryAssets(
+          publicKey.toBase58(),
+          mintDrop.solanaCluster,
+          mintedBoxAssetIds,
+        );
         addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
         setSuccessfulMintToken((prev) => prev + 1);
         didConfirmMint = true;
       }
-      await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
+      await Promise.all([
+        shouldFetchMintStats ? refetchStats() : Promise.resolve(),
+        didConfirmMint ? refreshInventoryAfterMint() : refetchInventory(),
+      ]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
       if (didConfirmMint) {
@@ -4727,6 +4746,11 @@ function App({
         'Transaction expired before you approved it. Please approve again…',
       );
       if (!hasConfirmationError) {
+        registerRecentExpectedInventoryAssets(
+          publicKey.toBase58(),
+          mintDrop.solanaCluster,
+          mintedBoxAssetIds,
+        );
         addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
         setSuccessfulMintToken((prev) => prev + 1);
         didConfirmMint = true;
@@ -4738,7 +4762,10 @@ function App({
       setDiscountRemainingCount(nextRemainingCount);
       setDiscountEligible(nextRemainingCount > 0);
       if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, nextUsedCount);
-      await Promise.all([shouldFetchMintStats ? refetchStats() : Promise.resolve(), refetchInventory()]);
+      await Promise.all([
+        shouldFetchMintStats ? refetchStats() : Promise.resolve(),
+        didConfirmMint ? refreshInventoryAfterMint() : refetchInventory(),
+      ]);
     } catch (err) {
       if (isUserRejectedError(err)) return;
       if (didConfirmMint) {

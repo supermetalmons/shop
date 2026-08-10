@@ -1,6 +1,7 @@
 import bs58 from 'bs58';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
+  uniqueAssetGroupingCollectionMint,
 } from '../../../../functions/src/shared/dasAssetCollections.js';
 import type { DasAsset } from '../../../../functions/src/shared/dasAsset.js';
 import {
@@ -15,12 +16,16 @@ import {
 } from '../../../../functions/src/shared/heliusDas.js';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.js';
 import {
-  isExactShopApiRequest,
+  isExactShopInventoryRequest,
   isExactShopInventoryResponse,
+  isExactShopPendingOpenBoxesRequest,
   isExactShopPendingOpenBoxesResponse,
-  type ShopApiRequest,
+  SHOP_API_MAX_RESPONSE_ITEMS,
+  type ShopExpectedAssetIds,
+  type ShopInventoryRequest,
   type ShopInventoryItem,
   type ShopInventoryResponse,
+  type ShopPendingOpenBoxesRequest,
   type ShopPendingOpenBoxesResponse,
 } from '../../../../functions/src/shared/shopApi.js';
 import {
@@ -52,6 +57,7 @@ import {
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
 const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
+const EXPECTED_ASSET_RECOVERY_TIMEOUT_MS = 5_000;
 const MAX_REQUEST_BODY_BYTES = 1024;
 const PROVIDER_CONCURRENCY = 3;
 const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
@@ -80,7 +86,7 @@ const KNOWN_LOG_ROUTES = new Set([
 
 export type ProviderFetch = RpcProviderFetch;
 
-type ProviderFailureKind = 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit';
+type ProviderFailureKind = 'asset-not-found' | 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit';
 
 class ProviderFailure extends Error {
   constructor(readonly kind: ProviderFailureKind) {
@@ -186,6 +192,7 @@ function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): Atte
 }
 
 type WorkerDependencies = RpcProxyDependencies & {
+  expectedAssetRecoveryTimeoutMs: number;
   providerMaxResponseBodyBytes: number;
   providerMaxTotalResponseBodyBytes: number;
   inventoryMaxCandidates: number;
@@ -197,11 +204,17 @@ type WorkerDependencies = RpcProxyDependencies & {
   validatePendingOpenBoxesResponse: typeof isExactShopPendingOpenBoxesResponse;
 };
 
+type WorkerRequestMetrics = RpcRequestMetrics & {
+  expectedAssetIds: number;
+  expectedAssetRecoveryFailures: number;
+  expectedAssetResolved: number;
+};
+
 type ProviderContext = {
   apiKey: string;
   signal: AbortSignal;
   dependencies: WorkerDependencies;
-  metrics: RpcRequestMetrics;
+  metrics: WorkerRequestMetrics;
   providerResponseBodyBytes: number;
   inventoryCandidates: number;
   inventoryCursorPages: number;
@@ -308,7 +321,10 @@ async function readBoundedRequestBody(request: Request): Promise<string> {
   return readBoundedText(request.body, MAX_REQUEST_BODY_BYTES, () => new Error('invalid-request'));
 }
 
-async function parseRequestBody(request: Request): Promise<ShopApiRequest> {
+async function parseRequestBody<T extends ShopInventoryRequest | ShopPendingOpenBoxesRequest>(
+  request: Request,
+  validate: (value: unknown) => value is T,
+): Promise<T> {
   if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     throw new Error('invalid-request');
   }
@@ -318,8 +334,8 @@ async function parseRequestBody(request: Request): Promise<ShopApiRequest> {
   } catch {
     throw new Error('invalid-request');
   }
-  if (!isExactShopApiRequest(value) || !isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
-  return value.includeDevnet === true ? { owner: value.owner, includeDevnet: true } : { owner: value.owner };
+  if (!validate(value) || !isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
+  return value;
 }
 
 async function cancelResponseBody(response: Response): Promise<void> {
@@ -379,6 +395,11 @@ function isTransientRpcError(error: unknown): boolean {
   return /timeout|timed out|rate limit|temporar|overload|internal/.test(message);
 }
 
+function isAssetBatchNotFoundRpcError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  return (error as Record<string, unknown>).code === -32004;
+}
+
 function retryDelayMs(dependencies: WorkerDependencies, response?: Response): number {
   const retryAfterHeader = response?.headers.get('Retry-After');
   if (retryAfterHeader !== undefined && retryAfterHeader !== null && retryAfterHeader.trim()) {
@@ -393,17 +414,29 @@ async function heliusRpc<T>(
   cluster: SolanaCluster,
   method: string,
   params: unknown,
-  options: { inventoryCall?: boolean; pageOverflowIsRetryable?: boolean } = {},
+  options: {
+    assetBatchNotFoundIsRecoverable?: boolean;
+    attemptTimeoutMs?: number;
+    inventoryCall?: boolean;
+    maxAttempts?: number;
+    pageOverflowIsRetryable?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<T> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (context.signal.aborted) throw new ProviderFailure('deadline');
+  const maxAttempts = options.maxAttempts ?? 2;
+  const signal = options.signal ?? context.signal;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal.aborted) throw new ProviderFailure('deadline');
     if (options.inventoryCall) {
       if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
         throw new ProviderFailure('limit');
       }
       context.inventoryProviderCalls += 1;
     }
-    const attemptScope = createAttemptScope(context.signal, context.dependencies.providerAttemptTimeoutMs);
+    const attemptScope = createAttemptScope(
+      signal,
+      options.attemptTimeoutMs ?? context.dependencies.providerAttemptTimeoutMs,
+    );
     let response: Response | undefined;
     const startedAt = performance.now();
     try {
@@ -421,8 +454,8 @@ async function heliusRpc<T>(
       if (!response.ok) {
         const retryable = TRANSIENT_HTTP_STATUSES.has(response.status);
         await cancelResponseBody(response);
-        if (context.signal.aborted) throw new ProviderFailure('deadline');
-        if (attempt === 0 && retryable) {
+        if (signal.aborted) throw new ProviderFailure('deadline');
+        if (attempt + 1 < maxAttempts && retryable) {
           await context.dependencies.sleep(retryDelayMs(context.dependencies, response), attemptScope.signal);
           continue;
         }
@@ -445,7 +478,10 @@ async function heliusRpc<T>(
       const rpc = payload as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown };
       if (rpc.jsonrpc !== '2.0' || rpc.id !== requestId) throw new ProviderFailure('unavailable');
       if (rpc.error) {
-        if (attempt === 0 && isTransientRpcError(rpc.error)) {
+        if (options.assetBatchNotFoundIsRecoverable && isAssetBatchNotFoundRpcError(rpc.error)) {
+          throw new ProviderFailure('asset-not-found');
+        }
+        if (attempt + 1 < maxAttempts && isTransientRpcError(rpc.error)) {
           await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
           continue;
         }
@@ -454,14 +490,14 @@ async function heliusRpc<T>(
       if (!Object.hasOwn(rpc, 'result')) throw new ProviderFailure('unavailable');
       return rpc.result as T;
     } catch (error) {
-      if (context.signal.aborted) throw new ProviderFailure('deadline');
+      if (signal.aborted) throw new ProviderFailure('deadline');
       if (error instanceof ProviderFailure && error.kind === 'page-too-large') throw error;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) continue;
+        if (attempt + 1 < maxAttempts) continue;
         throw new ProviderFailure('timeout');
       }
       if (error instanceof ProviderFailure) throw error;
-      if (attempt === 0) {
+      if (attempt + 1 < maxAttempts) {
         await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
         continue;
       }
@@ -665,8 +701,10 @@ async function fetchUngroupedInventory(
 
 async function fetchInventory(
   context: ProviderContext,
-  requestBody: ShopApiRequest,
+  requestBody: ShopInventoryRequest,
 ): Promise<ShopInventoryResponse> {
+  const expectedGroups = expectedAssetGroups(requestBody.expectedAssetIds);
+  context.metrics.expectedAssetIds = expectedGroups.reduce((total, group) => total + group.ids.length, 0);
   const scopes = listShopCollectionQueryRuntimes(requestBody.includeDevnet === true);
   const grouped = await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
     fetchGroupedInventoryScope(context, requestBody.owner, scope));
@@ -684,6 +722,7 @@ async function fetchInventory(
   for (const fallback of fallbackRows) {
     for (const item of fallback.items) itemsById.set(item.id, item);
   }
+  await mergeExpectedInventoryItems(context, requestBody.owner, expectedGroups, itemsById);
   return { ok: true, items: Array.from(itemsById.values()) };
 }
 
@@ -711,16 +750,27 @@ async function fetchAssetBatch(
   context: ProviderContext,
   cluster: SolanaCluster,
   ids: string[],
+  options: {
+    assetBatchNotFoundIsRecoverable?: boolean;
+    attemptTimeoutMs?: number;
+    includeUnverifiedCollections?: boolean;
+    inventoryCall?: boolean;
+    maxAttempts?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<Map<string, DasAsset>> {
+  const { includeUnverifiedCollections = true, ...rpcOptions } = options;
   const byId = new Map<string, DasAsset>();
   for (let offset = 0; offset < ids.length; offset += HELIUS_BATCH_LIMIT) {
     const batchIds = ids.slice(offset, offset + HELIUS_BATCH_LIMIT);
     const requestedIds = new Set(batchIds);
     const result = await heliusRpc<unknown>(context, cluster, 'getAssetBatch', {
       ids: batchIds,
-      options: HELIUS_COLLECTION_GROUPING_OPTIONS,
-    });
-    if (!Array.isArray(result)) throw new ProviderFailure('unavailable');
+      ...(includeUnverifiedCollections ? { options: HELIUS_COLLECTION_GROUPING_OPTIONS } : {}),
+    }, rpcOptions);
+    if (!Array.isArray(result) || result.length > batchIds.length) {
+      throw new ProviderFailure('unavailable');
+    }
     for (const asset of result) {
       if (asset === null) continue;
       if (!asset || typeof asset !== 'object') throw new ProviderFailure('unavailable');
@@ -734,9 +784,128 @@ async function fetchAssetBatch(
   return byId;
 }
 
+type ExpectedAssetGroup = {
+  cluster: SolanaCluster;
+  ids: string[];
+};
+
+function expectedAssetGroups(expectedAssetIds?: ShopExpectedAssetIds): ExpectedAssetGroup[] {
+  if (!expectedAssetIds) return [];
+  const groups: ExpectedAssetGroup[] = [];
+  if (expectedAssetIds['mainnet-beta']?.length) {
+    groups.push({ cluster: 'mainnet-beta', ids: expectedAssetIds['mainnet-beta'] });
+  }
+  if (expectedAssetIds.devnet?.length) groups.push({ cluster: 'devnet', ids: expectedAssetIds.devnet });
+  return groups;
+}
+
+function recoveredExpectedInventoryItem(
+  asset: DasAsset,
+  owner: string,
+  cluster: SolanaCluster,
+): ShopInventoryItem | null {
+  if (asset?.interface !== 'MplCoreAsset' || asset?.burnt !== false) return null;
+  const assetOwner = asset?.ownership?.owner;
+  if (typeof assetOwner !== 'string' || !isBase58Bytes(assetOwner, 32) || assetOwner !== owner) return null;
+  const collectionMint = uniqueAssetGroupingCollectionMint(asset);
+  if (!collectionMint) return null;
+  const collectionIsRegistered = listShopCollectionQueryRuntimes(true).some((scope) =>
+    scope.solanaCluster === cluster && scope.collectionMint === collectionMint);
+  if (!collectionIsRegistered) return null;
+  const item = transformShopInventoryItem(asset, cluster);
+  if (!item) return null;
+  const drop = shopDropById(item.dropId);
+  if (
+    !drop ||
+    drop.solanaCluster !== cluster ||
+    drop.collectionMint !== collectionMint
+  ) return null;
+  return compactInventoryItem(item);
+}
+
+async function fetchExpectedAssetGroup(
+  context: ProviderContext,
+  cluster: SolanaCluster,
+  ids: string[],
+  signal: AbortSignal,
+): Promise<{ assetsById: Map<string, DasAsset>; failures: number }> {
+  try {
+    return {
+      assetsById: await fetchAssetBatch(context, cluster, ids, {
+        assetBatchNotFoundIsRecoverable: true,
+        attemptTimeoutMs: context.dependencies.expectedAssetRecoveryTimeoutMs,
+        includeUnverifiedCollections: false,
+        inventoryCall: true,
+        maxAttempts: 1,
+        signal,
+      }),
+      failures: 0,
+    };
+  } catch (error) {
+    if (context.signal.aborted) throw new ProviderFailure('deadline');
+    if (error instanceof ProviderFailure && error.kind === 'asset-not-found' && ids.length > 1) {
+      const midpoint = Math.floor(ids.length / 2);
+      const left = await fetchExpectedAssetGroup(context, cluster, ids.slice(0, midpoint), signal);
+      const right = await fetchExpectedAssetGroup(context, cluster, ids.slice(midpoint), signal);
+      for (const [id, asset] of right.assetsById) left.assetsById.set(id, asset);
+      return { assetsById: left.assetsById, failures: left.failures + right.failures };
+    }
+    return { assetsById: new Map(), failures: 1 };
+  }
+}
+
+async function mergeExpectedInventoryItems(
+  context: ProviderContext,
+  owner: string,
+  groups: ExpectedAssetGroup[],
+  itemsById: Map<string, ShopInventoryItem>,
+): Promise<void> {
+  if (groups.length === 0) return;
+  const recoveryScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
+  try {
+    const rows = await mapConcurrent(groups, PROVIDER_CONCURRENCY, async ({ cluster, ids }) => {
+      const recovery = await fetchExpectedAssetGroup(context, cluster, ids, recoveryScope.signal);
+      context.metrics.expectedAssetRecoveryFailures += recovery.failures;
+      const items: ShopInventoryItem[] = [];
+      for (const asset of recovery.assetsById.values()) {
+        const item = recoveredExpectedInventoryItem(asset, owner, cluster);
+        if (item) items.push(item);
+      }
+      return { items, rawAssets: recovery.assetsById.size };
+    });
+    if (context.signal.aborted) throw new ProviderFailure('deadline');
+    for (const row of rows) {
+      if (context.inventoryCandidates + row.rawAssets > context.dependencies.inventoryMaxCandidates) {
+        context.metrics.expectedAssetRecoveryFailures += 1;
+        continue;
+      }
+      context.inventoryCandidates += row.rawAssets;
+      const nextItemsById = new Map(itemsById);
+      let resolved = 0;
+      for (const item of row.items) {
+        if (!nextItemsById.has(item.id)) resolved += 1;
+        nextItemsById.set(item.id, item);
+      }
+      const nextItems = Array.from(nextItemsById.values());
+      if (
+        nextItems.length > SHOP_API_MAX_RESPONSE_ITEMS ||
+        utf8ByteLength(JSON.stringify({ ok: true, items: nextItems })) > context.dependencies.inventoryMaxResponseBodyBytes
+      ) {
+        context.metrics.expectedAssetRecoveryFailures += 1;
+        continue;
+      }
+      itemsById.clear();
+      for (const [id, item] of nextItemsById) itemsById.set(id, item);
+      context.metrics.expectedAssetResolved += resolved;
+    }
+  } finally {
+    recoveryScope.dispose();
+  }
+}
+
 async function fetchPendingOpenBoxes(
   context: ProviderContext,
-  requestBody: ShopApiRequest,
+  requestBody: ShopPendingOpenBoxesRequest,
 ): Promise<ShopPendingOpenBoxesResponse> {
   const scopes = listShopPendingOpenProgramScopes(requestBody.includeDevnet === true);
   const rows = (await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
@@ -795,6 +964,7 @@ export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promi
 }
 
 const defaultDependencies: WorkerDependencies = {
+  expectedAssetRecoveryTimeoutMs: EXPECTED_ASSET_RECOVERY_TIMEOUT_MS,
   providerFetch: (input, init) => fetch(input, init),
   providerTimeoutMs: HELIUS_OVERALL_TIMEOUT_MS,
   providerAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
@@ -821,7 +991,7 @@ async function handlePost(
   env: Env,
   pathname: '/inventory' | '/pending-open-boxes',
   dependencies: WorkerDependencies,
-  metrics: RpcRequestMetrics,
+  metrics: WorkerRequestMetrics,
 ): Promise<{ response: Response; includeDevnet: boolean }> {
   const connectingIp = request.headers.get('CF-Connecting-IP')?.trim() || 'unknown';
   try {
@@ -832,12 +1002,17 @@ async function handlePost(
       };
     }
   } catch {}
-  let requestBody: ShopApiRequest;
+  let parsedRequest:
+    | { kind: 'inventory'; body: ShopInventoryRequest }
+    | { kind: 'pending-open-boxes'; body: ShopPendingOpenBoxesRequest };
   try {
-    requestBody = await parseRequestBody(request);
+    parsedRequest = pathname === '/inventory'
+      ? { kind: 'inventory', body: await parseRequestBody(request, isExactShopInventoryRequest) }
+      : { kind: 'pending-open-boxes', body: await parseRequestBody(request, isExactShopPendingOpenBoxesRequest) };
   } catch {
     return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400), includeDevnet: false };
   }
+  const requestBody = parsedRequest.body;
   try {
     if (!await applyRateLimit(env.OWNER_RATE_LIMITER, `${pathname}:${requestBody.owner}`)) {
       return {
@@ -867,10 +1042,10 @@ async function handlePost(
     providerReadGate: new ProviderReadGate(),
   };
   try {
-    const body = pathname === '/inventory'
-      ? await fetchInventory(context, requestBody)
-      : await fetchPendingOpenBoxes(context, requestBody);
-    const valid = pathname === '/inventory'
+    const body = parsedRequest.kind === 'inventory'
+      ? await fetchInventory(context, parsedRequest.body)
+      : await fetchPendingOpenBoxes(context, parsedRequest.body);
+    const valid = parsedRequest.kind === 'inventory'
       ? dependencies.validateInventoryResponse(body)
       : dependencies.validatePendingOpenBoxesResponse(body);
     if (!valid) throw new ProviderFailure('unavailable');
@@ -905,7 +1080,13 @@ export async function handleRequest(
 ): Promise<Response> {
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const startedAt = performance.now();
-  const metrics: RpcRequestMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
+  const metrics: WorkerRequestMetrics = {
+    upstreamCalls: 0,
+    providerDurationMs: 0,
+    expectedAssetIds: 0,
+    expectedAssetRecoveryFailures: 0,
+    expectedAssetResolved: 0,
+  };
   const pathname = new URL(request.url).pathname;
   let includeDevnet = false;
   let rpcMethod: string | undefined;
@@ -957,6 +1138,11 @@ export async function handleRequest(
     providerDurationMs: Math.round(metrics.providerDurationMs),
     upstreamCalls: metrics.upstreamCalls,
     includeDevnet,
+    ...(pathname === '/inventory' ? {
+      expectedAssetIds: metrics.expectedAssetIds,
+      expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,
+      expectedAssetResolved: metrics.expectedAssetResolved,
+    } : {}),
     ...(rpcMethod ? { rpcMethod } : {}),
   });
   return response;

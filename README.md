@@ -34,7 +34,7 @@ Firebase, Firestore, and Cloud Functions remain independently deployed to Fireba
   - `npm run deploy -- dry-run`
 - Upload a non-production Worker version, smoke-test its exact Version Preview, and write an ignored version-keyed candidate record:
   - `npm run deploy -- preview --token-file /path/to/cloudflare-token`
-- Re-smoke and promote that exact version, apply the reviewed custom-domain triggers, smoke both production domains, and only then write production evidence:
+- Re-smoke that exact version, apply the reviewed custom-domain triggers, verify the tracked baseline, promote the exact version, smoke both production domains until they serve the candidate hash, and only then write production evidence:
   - `npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token`
 - After both exact API and frontend production versions have been verified, atomically record them:
   - `npm run release:finalize -- --api-version-id <uuid> --frontend-version-id <uuid> --confirm`
@@ -61,7 +61,7 @@ flow. It serves `/inventory`, `/pending-open-boxes`, `/rpc/mainnet-beta`, and
   - `export HELIUS_API_KEY`
 - Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
   - `npm run deploy:api -- preview --smoke-owner <wallet>`
-- Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview before promotion; only then promote it, apply the reviewed `api.mons.shop` trigger, smoke-test production, and write production evidence:
+- Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
   - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
 - Reapply reviewed triggers without changing code:
   - `npm run deploy:api -- triggers --smoke-owner <wallet>`
@@ -83,12 +83,36 @@ Wrangler can upload a preview version only after the Worker exists. The
 subsequent releases can use the preview command directly.
 
 Both deployment helpers keep short-lived, exact-version verification records
-under the ignored `.cache` directory. Frontend production promotion requires the
-matching candidate record created by the preview command and never rebuilds the
-candidate. Production evidence is written only after both `mons.shop` and
-`www.mons.shop` pass their smoke tests. The release finalization command requires
-both IDs, matching fresh evidence, and a deliberate `--confirm`; it never deploys
-or changes the approved rollback pair.
+under the ignored `.cache` directory. A new production promotion requires the
+matching fresh candidate record created by the preview command and never rebuilds
+the candidate. If that exact version is already live at 100%, guarded resume does
+not depend on the local cache: it derives the immutable Version Preview again and
+reruns the frontend hash checks or API smoke and benchmark before touching
+triggers or evidence. Production evidence is written only after both `mons.shop`
+and `www.mons.shop` pass their smoke tests. The release finalization command
+requires both IDs, matching fresh evidence, and a deliberate `--confirm`; it never
+deploys or changes the approved rollback pair.
+
+Production promotion reads the pinned Wrangler's `deployments status --json`
+before and after every mutation. It proceeds only from a stable 100% deployment
+that matches either the manifest's current production version or the exact
+requested candidate. Split traffic, unreadable state, and an unexpected third
+version stop the release before promotion when observed initially. If state
+becomes ambiguous after promotion is mutation-eligible, the helpers suppress a
+blind rollback and require manual inspection. Reviewed triggers get one
+declarative retry before promotion, followed by a baseline smoke and live version
+recheck. Promotion state is reconciled at 0, 500, 1500, and 3000ms.
+
+Automatic recovery uses the observed live baseline that was required to equal
+the manifest's current production version at the start of this invocation. It
+runs only after the requested candidate is confirmed live, rechecks that
+candidate immediately before rollback, and then verifies the recovered baseline
+with status, smoke, and status checks. If the requested candidate was already
+live when the command started, the command uses guarded resume to reapply
+triggers and regenerate evidence but never guesses a predecessor for automatic
+rollback. An evidence-write failure also leaves the verified candidate live;
+resolve the local write problem and rerun the same production command with the
+same version ID.
 
 Tracked release and rollback IDs live in `cloud/release-manifest.json`. The
 approved rollback targets are API `5ca5a74a-a68b-43b3-a6fb-6e218d2a3950` and
