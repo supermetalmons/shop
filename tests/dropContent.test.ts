@@ -141,7 +141,11 @@ test('shared drop labels preserve pluralization, actions, and mint selection ran
 
 test('card_nft_2 box inventory images resolve from token id', () => {
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS.length, CARD_NFT_2_PACK_INITIAL_COUNT);
-  assert.equal(CARD_NFT_2_PACK_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp`);
+  assert.equal(
+    CARD_NFT_2_PACK_IMAGE_SRCS[0],
+    `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp?v=b60db42ea73570ce877f7f47ea037132`,
+  );
+  assert.ok(CARD_NFT_2_PACK_IMAGE_SRCS.every((src) => /\/tight\.webp\?v=[a-f0-9]{32}$/.test(src)));
   assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
   assert.deepEqual(FRONTEND_DROPS.card_nft_2.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(CARD_NFT_2_PACK_RECEIPT_MEDIA, CARD_NFT_2_BOX_MEDIA);

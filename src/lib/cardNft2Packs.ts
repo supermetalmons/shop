@@ -19,10 +19,10 @@ export type CardNft2PackVideoSource = PreviewVideoSource & {
 };
 
 export const CARD_NFT_2_PACK_IMAGES: readonly CardNft2PackImage[] = [
-  { src: `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp`, width: 837, height: 1400 },
-  { src: `${CARD_NFT_2_PACK_BASE_URL}/2/tight.webp`, width: 844, height: 1400 },
-  { src: `${CARD_NFT_2_PACK_BASE_URL}/3/tight.webp`, width: 872, height: 1400 },
-  { src: `${CARD_NFT_2_PACK_BASE_URL}/4/tight.webp`, width: 866, height: 1400 },
+  { src: `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp?v=b60db42ea73570ce877f7f47ea037132`, width: 837, height: 1400 },
+  { src: `${CARD_NFT_2_PACK_BASE_URL}/2/tight.webp?v=037bed5a725cef208c6e4c5382407689`, width: 844, height: 1400 },
+  { src: `${CARD_NFT_2_PACK_BASE_URL}/3/tight.webp?v=ea6dc00ad25a517fbe68f533adc57991`, width: 872, height: 1400 },
+  { src: `${CARD_NFT_2_PACK_BASE_URL}/4/tight.webp?v=dd464feb00356877f550713fbc1e6929`, width: 866, height: 1400 },
 ];
 
 const CARD_NFT_2_PACK_INITIAL_IMAGES: readonly CardNft2PackImage[] = Array.from(

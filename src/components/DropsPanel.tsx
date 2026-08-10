@@ -191,7 +191,7 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
                     width={dimensions?.width}
                     height={dimensions?.height}
                     draggable={false}
-                    decoding="async"
+                    decoding="sync"
                     onDragStart={(evt) => evt.preventDefault()}
                   />
                 </span>
