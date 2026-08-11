@@ -279,7 +279,7 @@ test('card NFT binder uses its clean preview and shared receipt display image', 
 });
 
 test('clear cards use the clean pack and direct card and receipt assets', () => {
-  assert.equal(CLEAR_CARDS_CDN_BASE_URL, 'https://cdn.lil.org/nft/clear_cards/wip');
+  assert.equal(CLEAR_CARDS_CDN_BASE_URL, 'https://cdn.lil.org/nft/clear_cards');
   assert.equal(CLEAR_CARDS_PACK_CLEAN_IMAGE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`);
   assert.equal(CLEAR_CARDS_CARD_CLEAN_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`);
   assert.equal(CLEAR_CARDS_CARD_CLEAN_DARK_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean_dark`);

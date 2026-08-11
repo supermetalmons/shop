@@ -28,7 +28,7 @@ const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
 const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
 const canonicalCardNft2WipPath = '/card_nft_2/wip';
-const canonicalClearCardsWipPath = '/clear_cards/wip';
+const canonicalClearCardsWipPath = '/clear_cards';
 const canonicalClaimPath = '/claim';
 const drifPaths = new Set([canonicalDrifPath]);
 const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));

@@ -16,7 +16,7 @@ export const NEW_DROP = defineNewDropConfig({
   onchain: {
     dropId: 'clear_cards_devnet',
     dropFamily: 'clear_cards',
-    metadataBase: 'https://cdn.lil.org/nft/clear_cards/wip/json',
+    metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
     collectionMetadata: {
       name: 'Clear Cards',
       description: 'clear cards · physical on mons dot shop',

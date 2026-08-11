@@ -237,7 +237,7 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     dropId: 'clear_cards_devnet',
     dropFamily: 'clear_cards',
     collectionName: 'Clear Cards',
-    metadataBase: 'https://cdn.lil.org/nft/clear_cards/wip/json',
+    metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
     metadataPathFormat: 'compact',
     treasury: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE',
     priceSol: 0.069,
