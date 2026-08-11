@@ -48,7 +48,7 @@ export const NEW_DROP = defineNewDropConfig({
       deliveryPaymentReceiver:
         'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
     },
-    priceSol: 0.069,
+    priceSol: 0.5,
     discountPriceSol: 0.01,
     stripeCheckoutEnabled: false,
     discountMintsPerWallet: 1,
