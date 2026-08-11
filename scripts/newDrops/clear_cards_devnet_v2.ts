@@ -1,5 +1,4 @@
 import { defineNewDropConfig } from '../shared/newDropConfig.ts';
-import { CLEAR_CARDS_PACK_CLEAN_IMAGE_URL } from '../../functions/src/shared/dropMediaDefaults.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {
@@ -21,7 +20,7 @@ export const NEW_DROP = defineNewDropConfig({
       name: 'Clear Cards',
       description: 'clear cards by duguccipourmonchat · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
-      image: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
+      image: 'https://cdn.lil.org/nft/clear_cards/pack.webp',
     },
     discountWhitelistCsvRelativePath: 'scripts/discounts/clear_cards.csv',
     receiptsTree: {
