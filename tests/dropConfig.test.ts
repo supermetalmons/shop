@@ -29,6 +29,7 @@ const UPCOMING_ROUTES = [
     path: '/clear_cards',
     dropFamily: 'clear_cards',
     solanaCluster: 'mainnet-beta',
+    notifyOnly: true,
     label: 'Clear Cards',
     title: 'Clear Cards',
     previewImageUrl: 'https://cdn.lil.org/nft/clear_cards/pack_clean.webp',
@@ -73,6 +74,17 @@ test('Clear Cards keeps its public upcoming route separate from its WIP route', 
   assert.match(app, /\{ path: '\/clear_cards\/wip' \}/);
   assert.deepEqual(resolveUpcomingDropRouteByPath('/clear_cards'), UPCOMING_ROUTES[0]);
   assert.equal(resolveUpcomingDropRouteByPath('/clear_cards/wip'), null);
+});
+
+test('Clear Cards stays notify-only until its route override is removed', () => {
+  assert.equal(resolveFrontendDropByPath('/clear_cards'), null);
+  assert.equal(resolveFrontendDropByPath('/clear_cards/'), null);
+  assert.equal(
+    resolveFrontendDropByPath('/clear_cards', {
+      drops: [FRONTEND_DROPS.clear_cards],
+    }),
+    null,
+  );
 });
 
 test('legacy binder route redirects to the canonical family route', () => {

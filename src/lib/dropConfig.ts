@@ -50,6 +50,7 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     path: '/clear_cards',
     dropFamily: 'clear_cards',
     solanaCluster: 'mainnet-beta',
+    notifyOnly: true,
     label: 'Clear Cards',
     title: 'Clear Cards',
     previewImageUrl: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
