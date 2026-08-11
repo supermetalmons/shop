@@ -15,7 +15,10 @@ import { createHash } from 'node:crypto';
 import {
   cloudflareVersionIdPattern as versionIdPattern,
   readReleaseManifest,
+  recordFrontendProductionVersion,
   writeProductionEvidence,
+  type ReleaseManifest,
+  type ReleaseVersionPair,
 } from './finalize-cloudflare-release.ts';
 import {
   cloudflareReleaseExitCode,
@@ -42,6 +45,10 @@ type FrontendUploadMetadata = {
   previewUrl: string;
 };
 
+type VerifiedFrontendCandidate = FrontendUploadMetadata & {
+  htmlSha256: string;
+};
+
 type FrontendCandidateRecord = FrontendUploadMetadata & {
   workerName: 'mons-shop';
   testedAt: string;
@@ -56,6 +63,7 @@ type FrontendSmokeDependencies = {
 type FrontendProductionSequenceInput = {
   candidateHtmlSha256: string;
   expectedCurrentVersionId: string;
+  verifyBeforePromotion?: () => Promise<void>;
   versionId: string;
   wranglerEnvironment: NodeJS.ProcessEnv;
 };
@@ -73,6 +81,37 @@ type FrontendProductionCandidateDependencies = {
   readCandidate: (versionId: string) => FrontendCandidateRecord | undefined;
 };
 
+type FrontendCandidateUploadInput = {
+  authenticatedEnvironment: NodeJS.ProcessEnv;
+  unauthenticatedEnvironment: NodeJS.ProcessEnv;
+  validationEnvironment: NodeJS.ProcessEnv;
+  wranglerLogDirectory: string;
+};
+
+type FrontendCandidateUploadDependencies = {
+  run: typeof run;
+  smoke: typeof smokeFrontendOrigin;
+  validate: typeof runFrontendValidation;
+  writeCandidate: typeof writeFrontendCandidateRecord;
+};
+
+type CompleteFrontendReleaseInput = FrontendCandidateUploadInput & {
+  tokenFile?: string;
+  versionId?: string;
+};
+
+type CompleteFrontendReleaseDependencies = {
+  apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  manifest: () => ReleaseManifest;
+  production: typeof runFrontendProductionSequence;
+  record: typeof recordFrontendProductionVersion;
+  resolveCandidate: typeof resolveFrontendProductionCandidate;
+  smoke: typeof smokeFrontendOrigin;
+  triggerDryRun: (environment: NodeJS.ProcessEnv) => void;
+  upload: typeof uploadFrontendCandidate;
+};
+
 class DeployFailure extends Error {
   readonly exitCode: number;
 
@@ -87,6 +126,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const isWindows = process.platform === 'win32';
 const npmBinary = isWindows ? 'npm.cmd' : 'npm';
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', isWindows ? 'wrangler.cmd' : 'wrangler');
+const frontendConfigArgs = ['--config', 'wrangler.jsonc'] as const;
+const apiConfigArgs = [
+  '--config',
+  'cloud/workers/api/wrangler.jsonc',
+  '--env-file',
+  'cloud/workers/api/release.env',
+] as const;
 const workersDevSubdomain = 'lil-org.workers.dev';
 const frontendWorkerName = 'mons-shop';
 const frontendAccountId = 'e25f90fc073ea309b54b8b5144bf28e0';
@@ -111,7 +157,11 @@ function usage(): string {
     'Usage:',
     '  npm run deploy -- dry-run',
     '  npm run deploy -- preview --token-file /path/to/cloudflare-token',
+    '  npm run deploy -- production [--token-file /path/to/cloudflare-token]',
     '  npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token',
+    '',
+    'Production without --version-id validates, uploads, verifies, promotes, and records one exact frontend version.',
+    'Use --version-id to promote or resume an existing exact candidate.',
     '',
     'Authentication:',
     '  Pass --token-file, or set CLOUDFLARE_API_TOKEN in the shell.',
@@ -191,7 +241,6 @@ export function parseFrontendDeployArgs(argv: string[]): CliOptions {
     fail(`Unknown argument: ${arg}\n\n${usage()}`, 2);
   }
 
-  if (mode === 'production' && !versionId) fail('Production promotion requires --version-id <uuid>.', 2);
   if (mode !== 'production' && versionId) fail('--version-id is only valid for production promotion.', 2);
   return { mode, tokenFile, versionId };
 }
@@ -212,7 +261,16 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, label: str
 
 function readFrontendDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
   return readWranglerDeploymentStatus({
-    configArgs: ['--config', 'wrangler.jsonc'],
+    configArgs: frontendConfigArgs,
+    cwd: repoRoot,
+    environment,
+    wranglerBinary,
+  });
+}
+
+function readApiDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
+  return readWranglerDeploymentStatus({
+    configArgs: apiConfigArgs,
     cwd: repoRoot,
     environment,
     wranglerBinary,
@@ -880,6 +938,7 @@ async function runFrontendProductionSequence(
   if (releaseStart.resumeCandidate) {
     try {
       deployFrontendTriggers(input, dependencies);
+      await input.verifyBeforePromotion?.();
     } catch (error) {
       throw resumedFrontendReleaseFailure(error, candidateVersionId);
     }
@@ -892,6 +951,7 @@ async function runFrontendProductionSequence(
       dependencies,
       'Frontend pre-promotion baseline recheck',
     );
+    await input.verifyBeforePromotion?.();
 
     const commands = frontendProductionWranglerCommands(candidateVersionId);
     const promotion = commands.find((command) => command.label === 'Frontend exact-version promotion');
@@ -981,6 +1041,204 @@ function runFrontendValidation(environment: NodeJS.ProcessEnv): void {
   }
 }
 
+function runFrontendTriggerDryRun(environment: NodeJS.ProcessEnv): void {
+  run(
+    wranglerBinary,
+    ['triggers', 'deploy', '--dry-run', ...frontendConfigArgs],
+    environment,
+    'Frontend trigger dry run',
+  );
+}
+
+async function uploadFrontendCandidate(
+  input: FrontendCandidateUploadInput,
+  dependencies: FrontendCandidateUploadDependencies = {
+    run,
+    smoke: smokeFrontendOrigin,
+    validate: runFrontendValidation,
+    writeCandidate: writeFrontendCandidateRecord,
+  },
+): Promise<VerifiedFrontendCandidate> {
+  dependencies.validate(input.validationEnvironment);
+  dependencies.run(
+    wranglerBinary,
+    ['triggers', 'deploy', '--dry-run', ...frontendConfigArgs],
+    input.unauthenticatedEnvironment,
+    'Frontend trigger dry run',
+  );
+  mkdirSync(input.wranglerLogDirectory, { recursive: true });
+  const outputFile = resolve(
+    input.wranglerLogDirectory,
+    `frontend-preview-${process.pid}-${Date.now()}.json`,
+  );
+  const uploadEnvironment: NodeJS.ProcessEnv = {
+    ...input.authenticatedEnvironment,
+    WRANGLER_OUTPUT_FILE_PATH: outputFile,
+  };
+  let metadata: FrontendUploadMetadata | undefined;
+  let uploadError: unknown;
+  try {
+    dependencies.run(
+      wranglerBinary,
+      ['versions', 'upload', '--preview-alias', 'candidate', ...frontendConfigArgs],
+      uploadEnvironment,
+      'Frontend version upload',
+    );
+    metadata = parseFrontendUploadMetadata(outputFile);
+  } catch (error) {
+    uploadError = error;
+  }
+  let cleanupError: unknown;
+  try {
+    rmSync(outputFile, { force: true });
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (uploadError && cleanupError) {
+    throw new AggregateError([uploadError, cleanupError], 'Frontend upload and output cleanup both failed.');
+  }
+  if (uploadError) throw uploadError;
+  if (cleanupError) throw cleanupError;
+  if (!metadata) fail('Frontend version upload completed without version metadata.');
+  console.log(`[deploy] Frontend version ID: ${metadata.versionId}`);
+  console.log(`[deploy] Version Preview: ${metadata.previewUrl}`);
+  const htmlSha256 = await dependencies.smoke(metadata.previewUrl);
+  dependencies.writeCandidate({ ...metadata, htmlSha256 });
+  console.log('[deploy] Exact-version frontend candidate evidence recorded.');
+  return { ...metadata, htmlSha256 };
+}
+
+async function readStableReleasePair(
+  environment: NodeJS.ProcessEnv,
+  dependencies: Pick<CompleteFrontendReleaseDependencies, 'apiDeployment' | 'frontendDeployment'>,
+): Promise<ReleaseVersionPair> {
+  const [apiStatus, frontendStatus] = await Promise.all([
+    dependencies.apiDeployment(environment),
+    dependencies.frontendDeployment(environment),
+  ]);
+  return {
+    apiVersionId: stableCloudflareVersionId(apiStatus),
+    frontendVersionId: stableCloudflareVersionId(frontendStatus),
+  };
+}
+
+function assertReleasePair(
+  actual: ReleaseVersionPair,
+  expected: ReleaseVersionPair,
+  label: string,
+): void {
+  if (
+    actual.apiVersionId !== expected.apiVersionId.toLowerCase() ||
+    actual.frontendVersionId !== expected.frontendVersionId.toLowerCase()
+  ) {
+    fail(
+      `${label} expected API ${expected.apiVersionId} and frontend ${expected.frontendVersionId}, ` +
+      `but Cloudflare reported API ${actual.apiVersionId} and frontend ${actual.frontendVersionId}.`,
+    );
+  }
+}
+
+function assertAdvancedReleaseStartPair(
+  actual: ReleaseVersionPair,
+  expected: ReleaseVersionPair,
+  candidateVersionId: string,
+): void {
+  const expectedApiVersionId = expected.apiVersionId.toLowerCase();
+  const expectedFrontendVersionId = expected.frontendVersionId.toLowerCase();
+  if (
+    actual.apiVersionId !== expectedApiVersionId ||
+    (actual.frontendVersionId !== expectedFrontendVersionId && actual.frontendVersionId !== candidateVersionId)
+  ) {
+    fail(
+      `Frontend release preflight expected API ${expected.apiVersionId} and frontend ` +
+      `${expected.frontendVersionId} or candidate ${candidateVersionId}, but Cloudflare reported ` +
+      `API ${actual.apiVersionId} and frontend ${actual.frontendVersionId}.`,
+    );
+  }
+}
+
+function frontendManifestRecoveryCommand(versionId: string, tokenFile?: string): string {
+  const tokenFileArgument = tokenFile ? ` --token-file ${JSON.stringify(tokenFile)}` : '';
+  return `npm run deploy -- production --version-id ${versionId}${tokenFileArgument}`;
+}
+
+async function runCompleteFrontendRelease(
+  input: CompleteFrontendReleaseInput,
+  dependencies: CompleteFrontendReleaseDependencies = {
+    apiDeployment: readApiDeploymentStatus,
+    frontendDeployment: readFrontendDeploymentStatus,
+    manifest: readReleaseManifest,
+    production: runFrontendProductionSequence,
+    record: recordFrontendProductionVersion,
+    resolveCandidate: resolveFrontendProductionCandidate,
+    smoke: smokeFrontendOrigin,
+    triggerDryRun: runFrontendTriggerDryRun,
+    upload: uploadFrontendCandidate,
+  },
+): Promise<VerifiedFrontendCandidate> {
+  const expectedCurrentProduction = dependencies.manifest().currentProduction;
+  const initialLivePair = await readStableReleasePair(input.authenticatedEnvironment, dependencies);
+  const requestedVersionId = input.versionId ? normalizeVersionId(input.versionId) : undefined;
+  if (requestedVersionId) {
+    assertAdvancedReleaseStartPair(initialLivePair, expectedCurrentProduction, requestedVersionId);
+  } else {
+    assertReleasePair(initialLivePair, expectedCurrentProduction, 'Frontend release preflight');
+  }
+
+  let candidate: VerifiedFrontendCandidate;
+  if (requestedVersionId) {
+    dependencies.triggerDryRun(input.unauthenticatedEnvironment);
+    const resolved = await dependencies.resolveCandidate({
+      expectedCurrentVersionId: expectedCurrentProduction.frontendVersionId,
+      versionId: requestedVersionId,
+      wranglerEnvironment: input.authenticatedEnvironment,
+    });
+    console.log(`[deploy] Re-smoke exact Version Preview: ${resolved.previewUrl}`);
+    const htmlSha256 = await dependencies.smoke(resolved.previewUrl);
+    if (resolved.recordedHtmlSha256 && htmlSha256 !== resolved.recordedHtmlSha256) {
+      fail('Exact frontend Version Preview no longer matches its tested candidate evidence.');
+    }
+    candidate = { versionId: requestedVersionId, previewUrl: resolved.previewUrl, htmlSha256 };
+  } else {
+    candidate = await dependencies.upload(input);
+  }
+
+  await dependencies.production({
+    candidateHtmlSha256: candidate.htmlSha256,
+    expectedCurrentVersionId: expectedCurrentProduction.frontendVersionId,
+    verifyBeforePromotion: async () => {
+      const apiVersionId = stableCloudflareVersionId(
+        await dependencies.apiDeployment(input.authenticatedEnvironment),
+      );
+      if (apiVersionId !== expectedCurrentProduction.apiVersionId.toLowerCase()) {
+        fail(
+          `API changed before frontend promotion: expected ${expectedCurrentProduction.apiVersionId}, ` +
+          `but Cloudflare reported ${apiVersionId}.`,
+        );
+      }
+    },
+    versionId: candidate.versionId,
+    wranglerEnvironment: input.authenticatedEnvironment,
+  });
+
+  const finalLivePair = await readStableReleasePair(input.authenticatedEnvironment, dependencies);
+  assertReleasePair(finalLivePair, {
+    apiVersionId: expectedCurrentProduction.apiVersionId,
+    frontendVersionId: candidate.versionId,
+  }, 'Frontend release commit verification');
+  try {
+    dependencies.record(candidate.versionId, { expectedCurrentProduction });
+  } catch (error) {
+    throw new Error(
+      `Frontend version ${candidate.versionId} is live and verified, but cloud/release-manifest.json was not updated. ` +
+      `Reconcile it with the same authentication by running: ` +
+      frontendManifestRecoveryCommand(candidate.versionId, input.tokenFile),
+      { cause: error },
+    );
+  }
+  return candidate;
+}
+
 async function main(): Promise<void> {
   const options = parseFrontendDeployArgs(process.argv.slice(2));
   const [nodeMajor = Number.NaN, nodeMinor = Number.NaN] = process.versions.node
@@ -1028,79 +1286,32 @@ async function main(): Promise<void> {
   }
 
   if (options.mode === 'preview') {
-    runFrontendValidation(validationEnvironment);
     const authenticatedEnvironment: NodeJS.ProcessEnv = {
       ...unauthenticatedWranglerEnvironment,
       CLOUDFLARE_API_TOKEN: readApiToken(options.tokenFile),
     };
-    const outputFile = resolve(
+    await uploadFrontendCandidate({
+      authenticatedEnvironment,
+      unauthenticatedEnvironment: unauthenticatedWranglerEnvironment,
+      validationEnvironment,
       wranglerLogDirectory,
-      `frontend-preview-${process.pid}-${Date.now()}.json`,
-    );
-    authenticatedEnvironment.WRANGLER_OUTPUT_FILE_PATH = outputFile;
-    let metadata: FrontendUploadMetadata | undefined;
-    let uploadError: unknown;
-    try {
-      run(
-        wranglerBinary,
-        ['versions', 'upload', '--preview-alias', 'candidate', '--config', 'wrangler.jsonc'],
-        authenticatedEnvironment,
-        'Frontend version upload',
-      );
-      metadata = parseFrontendUploadMetadata(outputFile);
-    } catch (error) {
-      uploadError = error;
-    }
-    let cleanupError: unknown;
-    try {
-      rmSync(outputFile, { force: true });
-    } catch (error) {
-      cleanupError = error;
-    }
-    if (uploadError && cleanupError) {
-      throw new AggregateError([uploadError, cleanupError], 'Frontend upload and output cleanup both failed.');
-    }
-    if (uploadError) throw uploadError;
-    if (cleanupError) throw cleanupError;
-    if (!metadata) fail('Frontend version upload completed without version metadata.');
-    console.log(`[deploy] Frontend version ID: ${metadata.versionId}`);
-    console.log(`[deploy] Version Preview: ${metadata.previewUrl}`);
-    const htmlSha256 = await smokeFrontendOrigin(metadata.previewUrl);
-    writeFrontendCandidateRecord({ ...metadata, htmlSha256 });
-    console.log('[deploy] Exact-version frontend candidate evidence recorded.');
+    });
     return;
   }
 
-  const versionId = options.versionId;
-  if (!versionId) fail('Production promotion requires --version-id <uuid>.');
-  run(
-    wranglerBinary,
-    ['triggers', 'deploy', '--dry-run', '--config', 'wrangler.jsonc'],
-    unauthenticatedWranglerEnvironment,
-    'Frontend trigger dry run',
-  );
   const authenticatedEnvironment: NodeJS.ProcessEnv = {
     ...unauthenticatedWranglerEnvironment,
     CLOUDFLARE_API_TOKEN: readApiToken(options.tokenFile),
   };
-  const expectedCurrentVersionId = readReleaseManifest().currentProduction.frontendVersionId;
-  const candidate = await resolveFrontendProductionCandidate({
-    expectedCurrentVersionId,
-    versionId,
-    wranglerEnvironment: authenticatedEnvironment,
+  const candidate = await runCompleteFrontendRelease({
+    authenticatedEnvironment,
+    tokenFile: options.tokenFile,
+    unauthenticatedEnvironment: unauthenticatedWranglerEnvironment,
+    validationEnvironment,
+    versionId: options.versionId,
+    wranglerLogDirectory,
   });
-  console.log(`[deploy] Re-smoke exact Version Preview: ${candidate.previewUrl}`);
-  const previewHtmlSha256 = await smokeFrontendOrigin(candidate.previewUrl);
-  if (candidate.recordedHtmlSha256 && previewHtmlSha256 !== candidate.recordedHtmlSha256) {
-    fail('Exact frontend Version Preview no longer matches its tested candidate evidence.');
-  }
-  await runFrontendProductionSequence({
-    candidateHtmlSha256: previewHtmlSha256,
-    expectedCurrentVersionId,
-    versionId,
-    wranglerEnvironment: authenticatedEnvironment,
-  });
-  console.log(`[deploy] Verified frontend production version ID: ${versionId}`);
+  console.log(`[deploy] Frontend production version ${candidate.versionId} deployed, verified, and recorded.`);
 }
 
 export const frontendDeployTestHooks = {
@@ -1112,9 +1323,12 @@ export const frontendDeployTestHooks = {
   frontendProductionWranglerCommands,
   isExactFrontendDeploymentConfig,
   isFrontendCandidateRecord,
+  readStableReleasePair,
   requireFrontendCandidateRecord,
   resolveFrontendProductionCandidate,
+  runCompleteFrontendRelease,
   runFrontendProductionSequence,
+  uploadFrontendCandidate,
   writeFrontendCandidateRecord,
 };
 

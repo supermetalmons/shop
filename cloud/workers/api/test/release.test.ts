@@ -32,6 +32,7 @@ import {
   isProductionEvidence,
   parseFinalizeReleaseArgs,
   recordApiProductionVersion,
+  recordFrontendProductionVersion,
   writeProductionEvidence,
 } from '../../../../scripts/finalize-cloudflare-release.ts';
 import {
@@ -408,7 +409,7 @@ test('frontend Wrangler metadata parsing requires the exact upload, Worker, and 
   }
 });
 
-test('frontend promotion requires exact version-keyed fresh candidate evidence', () => {
+test('frontend production supports one-step release and exact version-keyed recovery evidence', () => {
   const directory = mkdtempSync(join(tmpdir(), 'mons-shop-frontend-candidate-test-'));
   const versionId = randomUUID();
   const now = new Date('2026-08-10T12:34:56.000Z');
@@ -422,9 +423,9 @@ test('frontend promotion requires exact version-keyed fresh candidate evidence',
       parseFrontendDeployArgs(['production', '--version-id', versionId, '--token-file', '/tmp/token']),
       { mode: 'production', versionId, tokenFile: '/tmp/token' },
     );
-    assert.throws(
-      () => parseFrontendDeployArgs(['production', '--token-file', '/tmp/token']),
-      /requires --version-id/,
+    assert.deepEqual(
+      parseFrontendDeployArgs(['production', '--token-file', '/tmp/token']),
+      { mode: 'production', versionId: undefined, tokenFile: '/tmp/token' },
     );
     assert.throws(
       () => parseFrontendDeployArgs(['preview', '--version-id', versionId]),
@@ -452,6 +453,71 @@ test('frontend promotion requires exact version-keyed fresh candidate evidence',
       }),
       /invalid or stale/,
     );
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, records, and cleans output', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-frontend-upload-test-'));
+  const versionId = randomUUID();
+  const previewUrl = frontendDeployTestHooks.expectedFrontendPreviewOrigin(versionId);
+  const htmlSha256 = 'a'.repeat(64);
+  const events: string[] = [];
+  try {
+    const candidate = await frontendDeployTestHooks.uploadFrontendCandidate({
+      authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+      unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '' },
+      validationEnvironment: { CI: 'true', HELIUS_API_KEY: '' },
+      wranglerLogDirectory: directory,
+    }, {
+      run: (_command, args, environment, label) => {
+        events.push(label);
+        if (label === 'Frontend trigger dry run') {
+          assert.deepEqual(args, ['triggers', 'deploy', '--dry-run', '--config', 'wrangler.jsonc']);
+          assert.equal(environment.CLOUDFLARE_API_TOKEN, '');
+          return;
+        }
+        assert.equal(label, 'Frontend version upload');
+        assert.deepEqual(args, ['versions', 'upload', '--preview-alias', 'candidate', '--config', 'wrangler.jsonc']);
+        assert.equal(environment.CLOUDFLARE_API_TOKEN, 'scoped-token');
+        const outputPath = environment.WRANGLER_OUTPUT_FILE_PATH;
+        assert.equal(typeof outputPath, 'string');
+        writeFileSync(outputPath!, JSON.stringify({
+          type: 'version-upload',
+          worker_name: 'mons-shop',
+          version_id: versionId,
+          preview_url: previewUrl,
+        }));
+      },
+      smoke: async (origin) => {
+        events.push('preview-smoke');
+        assert.equal(origin, previewUrl);
+        return htmlSha256;
+      },
+      validate: (environment) => {
+        events.push('validation');
+        assert.equal(environment.CI, 'true');
+      },
+      writeCandidate: (metadata) => {
+        events.push('candidate-evidence');
+        assert.deepEqual(metadata, { versionId, previewUrl, htmlSha256 });
+        return {
+          ...metadata,
+          workerName: 'mons-shop',
+          testedAt: new Date().toISOString(),
+        };
+      },
+    });
+    assert.deepEqual(candidate, { versionId, previewUrl, htmlSha256 });
+    assert.deepEqual(events, [
+      'validation',
+      'Frontend trigger dry run',
+      'Frontend version upload',
+      'preview-smoke',
+      'candidate-evidence',
+    ]);
+    assert.deepEqual(readdirSync(directory), []);
   } finally {
     rmSync(directory, { recursive: true });
   }
@@ -1395,6 +1461,261 @@ test('complete API release blocks stale API or frontend state before upload', as
   }
 });
 
+test('complete frontend release verifies the production pair around upload, promotion, and manifest recording', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const candidate = {
+    htmlSha256: 'a'.repeat(64),
+    previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId),
+    versionId: candidateVersionId,
+  };
+  const events: string[] = [];
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+  const frontendStatuses = [frontendVersionId, candidateVersionId];
+  const result = await frontendDeployTestHooks.runCompleteFrontendRelease({
+    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+    unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '' },
+    validationEnvironment: { CI: 'true', HELIUS_API_KEY: '' },
+    wranglerLogDirectory: '/tmp/logs',
+  }, {
+    apiDeployment: async () => {
+      events.push('api-status');
+      return stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read'));
+    },
+    frontendDeployment: async () => {
+      events.push('frontend-status');
+      return stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read'));
+    },
+    manifest: () => {
+      events.push('manifest');
+      return manifest;
+    },
+    production: async (input) => {
+      events.push('production');
+      assert.equal(input.candidateHtmlSha256, candidate.htmlSha256);
+      assert.equal(input.expectedCurrentVersionId, frontendVersionId);
+      assert.equal(input.versionId, candidateVersionId);
+      await input.verifyBeforePromotion?.();
+      events.push('promotion-guard-passed');
+    },
+    record: (versionId, options) => {
+      events.push('record');
+      assert.equal(versionId, candidateVersionId);
+      assert.deepEqual(options.expectedCurrentProduction, { apiVersionId, frontendVersionId });
+      return {
+        ...manifest,
+        currentProduction: { apiVersionId, frontendVersionId: versionId },
+      };
+    },
+    resolveCandidate: async () => assert.fail('one-step release resolved an existing candidate'),
+    smoke: async () => assert.fail('one-step release repeated the upload helper smoke'),
+    triggerDryRun: () => assert.fail('one-step release bypassed the upload helper trigger dry-run'),
+    upload: async (input) => {
+      events.push('upload');
+      assert.equal(input.validationEnvironment.CI, 'true');
+      return candidate;
+    },
+  });
+  assert.deepEqual(result, candidate);
+  assert.deepEqual(events, [
+    'manifest',
+    'api-status',
+    'frontend-status',
+    'upload',
+    'production',
+    'api-status',
+    'promotion-guard-passed',
+    'api-status',
+    'frontend-status',
+    'record',
+  ]);
+});
+
+test('complete frontend release blocks stale state before uploading or promoting', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  for (const livePair of [
+    { apiVersionId: randomUUID(), frontendVersionId },
+    { apiVersionId, frontendVersionId: randomUUID() },
+  ]) {
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(livePair.apiVersionId),
+        frontendDeployment: async () => stableDeployment(livePair.frontendVersionId),
+        manifest: () => manifest,
+        production: async () => assert.fail('stale preflight reached production'),
+        record: () => assert.fail('stale preflight recorded release metadata'),
+        resolveCandidate: async () => assert.fail('stale preflight resolved a candidate'),
+        smoke: async () => assert.fail('stale preflight smoked a candidate'),
+        triggerDryRun: () => assert.fail('stale preflight ran trigger validation'),
+        upload: async () => assert.fail('stale preflight uploaded a candidate'),
+      }),
+      /Frontend release preflight expected API/,
+    );
+  }
+});
+
+test('complete frontend release retains exact-version recovery and records the resumed candidate', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const previewUrl = frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId);
+  const htmlSha256 = 'b'.repeat(64);
+  const events: string[] = [];
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+  const frontendStatuses = [candidateVersionId, candidateVersionId];
+  await frontendDeployTestHooks.runCompleteFrontendRelease({
+    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+    unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+    validationEnvironment: { HELIUS_API_KEY: '' },
+    versionId: candidateVersionId,
+    wranglerLogDirectory: '/tmp/logs',
+  }, {
+    apiDeployment: async () => stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read')),
+    frontendDeployment: async () => stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read')),
+    manifest: () => manifest,
+    production: async (input) => {
+      events.push('production');
+      assert.equal(input.versionId, candidateVersionId);
+      await input.verifyBeforePromotion?.();
+    },
+    record: (versionId, options) => {
+      events.push('record');
+      assert.equal(versionId, candidateVersionId);
+      assert.deepEqual(options.expectedCurrentProduction, manifest.currentProduction);
+      return {
+        ...manifest,
+        currentProduction: { apiVersionId, frontendVersionId: versionId },
+      };
+    },
+    resolveCandidate: async () => {
+      events.push('resolve-candidate');
+      return { previewUrl, recordedHtmlSha256: htmlSha256 };
+    },
+    smoke: async (origin) => {
+      events.push('preview-smoke');
+      assert.equal(origin, previewUrl);
+      return htmlSha256;
+    },
+    triggerDryRun: () => events.push('trigger-dry-run'),
+    upload: async () => assert.fail('exact-version recovery uploaded a new candidate'),
+  });
+  assert.deepEqual(events, [
+    'trigger-dry-run',
+    'resolve-candidate',
+    'preview-smoke',
+    'production',
+    'record',
+  ]);
+});
+
+test('complete frontend release rejects API drift and reports exact recovery after manifest failure', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const candidate = {
+    htmlSha256: 'c'.repeat(64),
+    previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId),
+    versionId: candidateVersionId,
+  };
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  {
+    const apiStatuses = [apiVersionId, randomUUID()];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        frontendDeployment: async () => stableDeployment(frontendVersionId),
+        manifest: () => manifest,
+        production: async (input) => input.verifyBeforePromotion?.(),
+        record: () => assert.fail('API drift recorded release metadata'),
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+      }),
+      /API changed before frontend promotion/,
+    );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, randomUUID()];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: async (input) => input.verifyBeforePromotion?.(),
+        record: () => assert.fail('final pair drift recorded release metadata'),
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+      }),
+      /Frontend release commit verification expected API/,
+    );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, candidateVersionId];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        tokenFile: '/tmp/cloudflare token',
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: async (input) => input.verifyBeforePromotion?.(),
+        record: () => {
+          throw new Error('injected manifest write failure');
+        },
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+      }),
+      new RegExp(
+        `Frontend version ${candidateVersionId} is live and verified[\\s\\S]*` +
+        `production --version-id ${candidateVersionId}[\\s\\S]*cloudflare token`,
+      ),
+    );
+  }
+});
+
 test('complete API release verifies the full pair around one exact API promotion', async () => {
   const apiVersionId = randomUUID();
   const frontendVersionId = randomUUID();
@@ -2301,6 +2622,67 @@ test('one-step API release advances only the verified API production baseline', 
     assert.equal(after.currentProduction.apiVersionId, apiVersionId);
     assert.equal(after.currentProduction.frontendVersionId, before.currentProduction.frontendVersionId);
     assert.deepEqual(after.approvedRollback, before.approvedRollback);
+    assert.equal(after.recordedAt, now.toISOString());
+    assert.equal(statSync(path).mode & 0o777, 0o640);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('one-step frontend release advances only the verified frontend production baseline', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-frontend-release-manifest-test-'));
+  const path = join(directory, 'release-manifest.json');
+  const evidenceDirectory = join(directory, 'evidence');
+  const before = deployApiTestHooks.readReleaseManifest();
+  const frontendVersionId = randomUUID();
+  const now = new Date('2026-08-11T12:34:56.000Z');
+  try {
+    writeFileSync(path, `${JSON.stringify(before, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    assert.throws(
+      () => recordFrontendProductionVersion(frontendVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: before.currentProduction,
+        manifestPath: path,
+        now,
+      }),
+      /requires frontend evidence/,
+    );
+    writeProductionEvidence('frontend', frontendVersionId, { directory: evidenceDirectory, now });
+    assert.throws(
+      () => recordFrontendProductionVersion(frontendVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: {
+          ...before.currentProduction,
+          apiVersionId: randomUUID(),
+        },
+        manifestPath: path,
+        now,
+      }),
+      /changed during deployment/,
+    );
+    assert.throws(
+      () => recordFrontendProductionVersion(frontendVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: {
+          ...before.currentProduction,
+          frontendVersionId: randomUUID(),
+        },
+        manifestPath: path,
+        now,
+      }),
+      /changed during deployment/,
+    );
+    const after = recordFrontendProductionVersion(frontendVersionId, {
+      evidenceDirectory,
+      expectedCurrentProduction: before.currentProduction,
+      manifestPath: path,
+      now,
+    });
+    assert.equal(after.currentProduction.apiVersionId, before.currentProduction.apiVersionId);
+    assert.equal(after.currentProduction.frontendVersionId, frontendVersionId);
+    assert.deepEqual(after.approvedRollback, before.approvedRollback);
+    assert.equal(after.allowDirectHeliusFrontendRollback, false);
     assert.equal(after.recordedAt, now.toISOString());
     assert.equal(statSync(path).mode & 0o777, 0o640);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);

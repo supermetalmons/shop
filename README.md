@@ -32,11 +32,17 @@ Firebase, Firestore, and Cloud Functions remain independently deployed to Fireba
 - Install dependencies: `npm install --legacy-peer-deps`
 - Validate the build and Wrangler config without authenticating:
   - `npm run deploy -- dry-run`
+- Run the complete guarded frontend release without an intermediate preview command or version argument:
+  - `npm run deploy -- production`
+  - The command verifies the tracked API/frontend pair, validates and uploads the frontend, smoke-tests its exact Version Preview, promotes only that version, verifies both production domains and the unchanged API version, then updates `cloud/release-manifest.json`.
+
+Advanced frontend release controls remain available for recovery or separately managed releases:
+
 - Upload a non-production Worker version, smoke-test its exact Version Preview, and write an ignored version-keyed candidate record:
   - `npm run deploy -- preview --token-file /path/to/cloudflare-token`
-- Re-smoke that exact version, apply the reviewed custom-domain triggers, verify the tracked baseline, promote the exact version, smoke both production domains until they serve the candidate hash, and only then write production evidence:
+- Promote or resume an exact candidate, re-verify production, and update the local release manifest:
   - `npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token`
-- After both exact API and frontend production versions have been verified, atomically record them:
+- Atomically reconcile an already verified API/frontend pair when fresh production evidence exists:
   - `npm run release:finalize -- --api-version-id <uuid> --frontend-version-id <uuid> --confirm`
 
 The token file must contain only a scoped Cloudflare API token. Alternatively,

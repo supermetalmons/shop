@@ -35,6 +35,10 @@ type RecordApiProductionOptions = FinalizeOptions & {
   expectedCurrentProduction: ReleaseVersionPair;
 };
 
+type RecordFrontendProductionOptions = FinalizeOptions & {
+  expectedCurrentProduction: ReleaseVersionPair;
+};
+
 export type ProductionEvidenceKind = 'api' | 'frontend';
 
 export type ProductionEvidence = {
@@ -281,6 +285,34 @@ export function recordApiProductionVersion(
     currentProduction: {
       apiVersionId: versionId.toLowerCase(),
       frontendVersionId: options.expectedCurrentProduction.frontendVersionId.toLowerCase(),
+    },
+  };
+  return writeReleaseManifest(path, next);
+}
+
+export function recordFrontendProductionVersion(
+  versionId: string,
+  options: RecordFrontendProductionOptions,
+): ReleaseManifest {
+  if (!cloudflareVersionIdPattern.test(versionId)) fail('The frontend production version ID must be an exact UUID.');
+  if (!isReleaseVersionPair(options.expectedCurrentProduction)) fail('The expected production pair must contain exact UUIDs.');
+  const path = resolve(options.manifestPath || releaseManifestPath);
+  const now = options.now || new Date();
+  if (!Number.isFinite(now.getTime())) fail('The release timestamp is invalid.');
+  requireProductionEvidence('frontend', versionId, { directory: options.evidenceDirectory, now });
+  const current = readReleaseManifest(path);
+  if (
+    current.currentProduction.apiVersionId.toLowerCase() !== options.expectedCurrentProduction.apiVersionId.toLowerCase() ||
+    current.currentProduction.frontendVersionId.toLowerCase() !== options.expectedCurrentProduction.frontendVersionId.toLowerCase()
+  ) {
+    fail('The tracked production pair changed during deployment; refusing to overwrite release metadata.');
+  }
+  const next: ReleaseManifest = {
+    ...current,
+    recordedAt: now.toISOString(),
+    currentProduction: {
+      apiVersionId: options.expectedCurrentProduction.apiVersionId.toLowerCase(),
+      frontendVersionId: versionId.toLowerCase(),
     },
   };
   return writeReleaseManifest(path, next);
