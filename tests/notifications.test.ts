@@ -499,7 +499,7 @@ test('clear cards order email items use the configured pack and card thumbnails'
         { kind: 'dude', refId: 192 },
       ],
     },
-    { dropId: 'clear_cards_devnet' },
+    { dropId: 'clear_cards_devnet_v2' },
   );
 
   assert.deepEqual(

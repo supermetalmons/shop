@@ -11,7 +11,7 @@ import {
 test('color-scheme images preserve the original bare image layout', () => {
   const markup = renderToStaticMarkup(
     createElement(ColorSchemeImage, {
-      dropId: 'clear_cards_devnet',
+      dropId: 'clear_cards_devnet_v2',
       src: `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/167.webp`,
       alt: 'Clear Card #167',
       className: 'inventory__image',

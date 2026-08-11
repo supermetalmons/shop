@@ -30,7 +30,7 @@ test('drop X profiles cover every current storefront family and inherit across e
 
 test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('clear_cards', 15, false), 1);
-  assert.equal(mintPanelPreviewQuantity('clear_cards_devnet', 8, false), 1);
+  assert.equal(mintPanelPreviewQuantity('clear_cards_devnet_v2', 8, false), 1);
   assert.equal(mintPanelPreviewQuantity('little_swag_boxes', 3, false), 3);
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });

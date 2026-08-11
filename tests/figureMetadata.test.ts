@@ -65,15 +65,15 @@ test('clear_cards figure metadata resolves from the direct clean card asset with
   }) as typeof fetch;
 
   try {
-    const record = await loadFigureMetadata('clear_cards_devnet', 192);
+    const record = await loadFigureMetadata('clear_cards_devnet_v2', 192);
 
     assert.deepEqual(record, {
       id: 192,
-      dropId: 'clear_cards_devnet',
+      dropId: 'clear_cards_devnet_v2',
       image: `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/192.webp`,
     });
     assert.equal(calls.length, 0);
-    assert.deepEqual(getCachedFigureMetadata('clear_cards_devnet', 192), record);
+    assert.deepEqual(getCachedFigureMetadata('clear_cards_devnet_v2', 192), record);
   } finally {
     globalThis.fetch = originalFetch;
   }

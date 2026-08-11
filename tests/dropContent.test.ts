@@ -287,7 +287,7 @@ test('clear cards use the clean pack and direct card and receipt assets', () => 
   assert.equal(CLEAR_CARDS_PACK_MODEL_URL, `${CLEAR_CARDS_CDN_BASE_URL}/pack.glb`);
   assert.equal(CLEAR_CARDS_CARD_MODEL_BASE_URL, `${CLEAR_CARDS_CDN_BASE_URL}/cards`);
 
-  const content = resolveDropContent('clear_cards_devnet');
+  const content = resolveDropContent('clear_cards_devnet_v2');
   assert.equal(content.box.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
   assert.equal(content.box.aspectRatio, CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO);
   assert.equal(content.mintPanel.previewImageUrl, CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
@@ -298,24 +298,24 @@ test('clear cards use the clean pack and direct card and receipt assets', () => 
   assert.equal(content.figures.inventoryImageBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
   assert.equal(content.figures.fulfillmentMediaBaseUrl, CLEAR_CARDS_CARD_CLEAN_BASE_URL);
   assert.equal(content.certificates.inventoryImageBaseUrl, CLEAR_CARDS_RECEIPT_IMAGE_BASE_URL);
-  assert.equal(mintPanelPreviewImage('clear_cards_devnet'), CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
+  assert.equal(mintPanelPreviewImage('clear_cards_devnet_v2'), CLEAR_CARDS_PACK_CLEAN_IMAGE_URL);
 
   for (const id of [1, 192]) {
     assert.equal(
       normalizeBoxDisplayImage({
-        dropId: 'clear_cards_devnet',
+        dropId: 'clear_cards_devnet_v2',
         imageRaw: 'https://metadata.example.com/pack.webp',
         boxId: id,
       }),
       CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
     );
     assert.equal(
-      normalizeFigureDisplayImage('clear_cards_devnet', 'https://metadata.example.com/card.webp', id),
+      normalizeFigureDisplayImage('clear_cards_devnet_v2', 'https://metadata.example.com/card.webp', id),
       `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/${id}.webp`,
     );
     assert.equal(
       normalizeCertificateDisplayImage({
-        dropId: 'clear_cards_devnet',
+        dropId: 'clear_cards_devnet_v2',
         imageRaw: 'https://metadata.example.com/receipt.webp',
         figureId: id,
       }),
@@ -607,7 +607,7 @@ test('interactive pack reveal content and selected card presentation are stable'
 });
 
 test('interactive pack reveal sounds resolve by drop family', () => {
-  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('clear_cards_devnet'), {
+  assert.deepEqual(interactiveCardPackRevealSoundUrlsForDropId('clear_cards_devnet_v2'), {
     click: CLEAR_CARDS_HIT_SOUND_URLS,
     reveal: CLEAR_CARDS_BREAK_SOUND_URL,
   });

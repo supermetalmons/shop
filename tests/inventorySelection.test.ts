@@ -4,10 +4,10 @@ import { toggleInventorySelection } from '../src/lib/inventorySelection.ts';
 import type { InventoryItem } from '../src/types.ts';
 
 const items: InventoryItem[] = [
-  { id: 'clear-pack-1', dropId: 'clear_cards_devnet', name: 'Pack 1', kind: 'box' },
-  { id: 'clear-pack-2', dropId: 'clear_cards_devnet', name: 'Pack 2', kind: 'box' },
-  { id: 'clear-card-1', dropId: 'clear_cards_devnet', name: 'Card 1', kind: 'dude' },
-  { id: 'clear-card-2', dropId: 'clear_cards_devnet', name: 'Card 2', kind: 'dude' },
+  { id: 'clear-pack-1', dropId: 'clear_cards_devnet_v2', name: 'Pack 1', kind: 'box' },
+  { id: 'clear-pack-2', dropId: 'clear_cards_devnet_v2', name: 'Pack 2', kind: 'box' },
+  { id: 'clear-card-1', dropId: 'clear_cards_devnet_v2', name: 'Card 1', kind: 'dude' },
+  { id: 'clear-card-2', dropId: 'clear_cards_devnet_v2', name: 'Card 2', kind: 'dude' },
   { id: 'other-pack', dropId: 'card_nft_2', name: 'Pack 1', kind: 'box' },
   { id: 'other-pack-2', dropId: 'card_nft_2', name: 'Pack 2', kind: 'box' },
 ];
