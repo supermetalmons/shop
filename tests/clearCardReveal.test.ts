@@ -16,8 +16,14 @@ import {
   clearCardModelIdFromRevealResult,
   clearCardModelUrl,
 } from '../src/lib/clearCardModels.ts';
-import { CLEAR_CARDS_CARD_MODEL_BASE_URL } from '../src/config/dropMediaDefaults.ts';
-import { calcClearCardRevealTargetRect } from '../src/lib/revealOverlayLayout.ts';
+import {
+  CLEAR_CARDS_CARD_MODEL_BASE_URL,
+  CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+} from '../src/config/dropMediaDefaults.ts';
+import {
+  calcClearCardRevealTargetRect,
+  calcContainedMediaRevealOriginRect,
+} from '../src/lib/revealOverlayLayout.ts';
 import { runDeferredOverlayActions } from '../src/lib/deferredOverlayActions.ts';
 
 test('clear card model urls resolve only the 192 supported ids', () => {
@@ -157,6 +163,28 @@ test('clear card reveal target stays centered and within desktop and mobile view
     assert.ok(rect.top + rect.height <= viewportHeight);
     assert.ok(Math.abs(rect.left * 2 + rect.width - viewportWidth) <= 1);
   }
+});
+
+test('clear card pack transition preserves the contained preview aspect ratio', () => {
+  const source = { left: 100, top: 200, width: 300, height: 300 };
+  const target = { left: 400, top: 50, width: 400, height: 560 };
+  const origin = calcContainedMediaRevealOriginRect(
+    source,
+    target,
+    CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  );
+  const scaleX = origin.width / target.width;
+  const scaleY = origin.height / target.height;
+  const sourceMediaWidth = source.height * CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO;
+  const sourceMediaLeft = source.left + (source.width - sourceMediaWidth) / 2;
+  const targetMediaHeight = target.width / CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO;
+  const targetMediaTop = (target.height - targetMediaHeight) / 2;
+
+  assert.ok(Math.abs(scaleX - scaleY) < 1e-12);
+  assert.ok(Math.abs(origin.left - sourceMediaLeft) < 1e-9);
+  assert.ok(Math.abs(origin.top + targetMediaTop * scaleY - source.top) < 1e-9);
+  assert.ok(Math.abs(target.width * scaleX - sourceMediaWidth) < 1e-9);
+  assert.ok(Math.abs(targetMediaHeight * scaleY - source.height) < 1e-9);
 });
 
 test('suspending an overlay reconciles data without resuming presentation', () => {

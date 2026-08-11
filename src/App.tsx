@@ -275,6 +275,7 @@ import {
 import { registerRecentExpectedInventoryAssets } from './lib/recentExpectedInventoryAssets';
 import {
   calcAspectLockedRevealOriginRect,
+  calcContainedMediaRevealOriginRect,
   calcClearCardRevealTargetRect,
   calcPonchoDrifellaAbsoluteCardRect,
   calcPonchoDrifellaRevealTargetRectInViewport,
@@ -3447,11 +3448,16 @@ function App({
     clearRevealOverlayCloseTimeout();
     const packMediaId = resolveInteractiveCardPackMediaIdForBox(overlayDropId, item.boxId);
     preloadRevealAssetsForPackMedia(overlayDropId, packMediaId);
-    const originRect = toRevealOverlayRect(rect);
+    const inventoryOriginRect = toRevealOverlayRect(rect);
+    const revealRenderer = revealRendererForDropId(overlayDropId);
+    const boxAspectRatio = boxAspectRatioForDropId(overlayDropId);
     const targetRect = calcRevealTargetRectForRendererInViewport(
-      revealRendererForDropId(overlayDropId),
-      boxAspectRatioForDropId(overlayDropId),
+      revealRenderer,
+      boxAspectRatio,
     );
+    const originRect = usesClearCard3dRevealFlow(revealRenderer)
+      ? calcContainedMediaRevealOriginRect(inventoryOriginRect, targetRect, boxAspectRatio)
+      : inventoryOriginRect;
     setInventorySnapshot(inventory);
     setPendingOpenSnapshot(pendingOpenBoxes);
     const nextOverlay: RevealOverlayState = {
@@ -4839,6 +4845,10 @@ function App({
       return;
     }
     if (!publicKey) throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
+    console.info('[mons] sending inventory asset to the vault', {
+      assetId: item.id,
+      dropId: item.dropId,
+    });
     setStartOpenLoading(item.id);
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
@@ -4858,6 +4868,10 @@ function App({
         });
       };
       await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
+      console.info('[mons] inventory asset sent to the vault', {
+        assetId: item.id,
+        dropId: item.dropId,
+      });
       queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;
@@ -7446,7 +7460,6 @@ function App({
           revealDisabled={Boolean(revealLoading) || Boolean(startOpenLoading) || Boolean(revealOverlay)}
           emptyStateVisibility={inventoryEmptyStateVisibility}
         />
-        {startOpenLoading ? <div className="muted">Sending {shortAddress(startOpenLoading)} to the vault…</div> : null}
       </section>
 
       <Modal

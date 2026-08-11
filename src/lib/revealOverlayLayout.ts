@@ -171,6 +171,45 @@ export function calcAspectLockedRevealOriginRect(
   );
 }
 
+export function calcContainedMediaRevealOriginRect(
+  originRect: Readonly<PonchoDrifellaFrameRect>,
+  targetRect: Readonly<PonchoDrifellaFrameRect>,
+  mediaAspectRatio: number,
+): PonchoDrifellaFrameRect {
+  const safeOriginWidth = Math.max(1, originRect.width);
+  const safeOriginHeight = Math.max(1, originRect.height);
+  const safeTargetWidth = Math.max(1, targetRect.width);
+  const safeTargetHeight = Math.max(1, targetRect.height);
+  const safeMediaAspectRatio =
+    Number.isFinite(mediaAspectRatio) && mediaAspectRatio > 0 ? mediaAspectRatio : 1;
+  const originContainsByHeight = safeOriginWidth / safeOriginHeight > safeMediaAspectRatio;
+  const originMediaWidth = originContainsByHeight
+    ? safeOriginHeight * safeMediaAspectRatio
+    : safeOriginWidth;
+  const originMediaHeight = originContainsByHeight
+    ? safeOriginHeight
+    : safeOriginWidth / safeMediaAspectRatio;
+  const originMediaLeft = originRect.left + (safeOriginWidth - originMediaWidth) / 2;
+  const originMediaTop = originRect.top + (safeOriginHeight - originMediaHeight) / 2;
+  const targetContainsByHeight = safeTargetWidth / safeTargetHeight > safeMediaAspectRatio;
+  const targetMediaWidth = targetContainsByHeight
+    ? safeTargetHeight * safeMediaAspectRatio
+    : safeTargetWidth;
+  const targetMediaHeight = targetContainsByHeight
+    ? safeTargetHeight
+    : safeTargetWidth / safeMediaAspectRatio;
+  const targetMediaLeft = (safeTargetWidth - targetMediaWidth) / 2;
+  const targetMediaTop = (safeTargetHeight - targetMediaHeight) / 2;
+  const scale = originMediaWidth / targetMediaWidth;
+
+  return {
+    left: originMediaLeft - targetMediaLeft * scale,
+    top: originMediaTop - targetMediaTop * scale,
+    width: safeTargetWidth * scale,
+    height: safeTargetHeight * scale,
+  };
+}
+
 export function getRevealOverlayViewport(): RevealOverlayViewport {
   if (typeof window === 'undefined') return { left: 0, top: 0, width: 1, height: 1 };
   const visualViewport = window.visualViewport;
