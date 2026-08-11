@@ -221,16 +221,24 @@ type ClearCardHitProgressionMode = 'fixed' | 'reveal-gated';
 
 export type ClearCardDisplayStage = 'pack' | 'breaking' | 'revealed';
 
-type ClearCardSnapshot = {
+export type ClearCardSnapshot = {
   blob: Blob;
   objectKind: 'pack' | 'card';
+  cropSize: {
+    width: number;
+    height: number;
+  };
+};
+
+export type ClearCardSnapshotOptions = {
+  longestEdge?: number;
 };
 
 export type ClearCardThreeViewerHandle = {
   reset: () => void;
   hit: () => void;
   retryCardModel: () => void;
-  captureSnapshot: () => Promise<ClearCardSnapshot>;
+  captureSnapshot: (options?: ClearCardSnapshotOptions) => Promise<ClearCardSnapshot>;
 };
 
 type ClearCardThreeViewerProps = {
@@ -631,7 +639,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const performResetRef = useRef<(() => void) | null>(null);
     const loadCardModelRef = useRef<((modelUrl: string | undefined, force?: boolean) => void) | null>(null);
     const retryCardModelRef = useRef<(() => void) | null>(null);
-    const captureSnapshotRef = useRef<(() => Promise<ClearCardSnapshot>) | null>(null);
+    const captureSnapshotRef = useRef<
+      ((options?: ClearCardSnapshotOptions) => Promise<ClearCardSnapshot>) | null
+    >(null);
     const applyAxisLockedOrbitRef = useRef<(() => void) | null>(null);
     const updateCameraViewRef = useRef<(() => void) | null>(null);
     const beginInteractionThrottleRef = useRef<(() => void) | null>(null);
@@ -687,12 +697,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         reset: () => performResetRef.current?.(),
         hit: () => triggerHitRef.current?.(),
         retryCardModel: () => retryCardModelRef.current?.(),
-        captureSnapshot: () => {
+        captureSnapshot: (options) => {
           const captureSnapshot = captureSnapshotRef.current;
           if (!captureSnapshot) {
             return Promise.reject(new Error('Snapshot rendering is unavailable.'));
           }
-          return captureSnapshot();
+          return captureSnapshot(options);
         },
       }),
       [],
@@ -1897,7 +1907,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         requestRender();
       };
 
-      const captureSnapshot = async (): Promise<ClearCardSnapshot> => {
+      const captureSnapshot = async (
+        options: ClearCardSnapshotOptions = {},
+      ): Promise<ClearCardSnapshot> => {
         if (snapshotInFlight) {
           throw new Error('A snapshot is already rendering.');
         }
@@ -1925,6 +1937,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         const previousPackScale = packGroup.scale.clone();
         let analysisTarget: THREE.WebGLRenderTarget | null = null;
         let blobPromise: Promise<Blob> | null = null;
+        let snapshotCropSize: ClearCardSnapshot['cropSize'] | null = null;
 
         try {
           sparklePoints.visible = false;
@@ -1968,9 +1981,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             analysisHeight,
             SNAPSHOT_PADDING_RATIO,
           );
+          snapshotCropSize = {
+            width: cropBounds.width,
+            height: cropBounds.height,
+          };
           const outputSize = resolveSnapshotOutputSize(
             cropBounds,
-            SNAPSHOT_OUTPUT_LONGEST_EDGE,
+            options.longestEdge ?? SNAPSHOT_OUTPUT_LONGEST_EDGE,
           );
 
           snapshotOutputTarget = null;
@@ -2018,10 +2035,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           requestRender();
         }
 
-        if (!blobPromise) throw new Error('The PNG snapshot could not be rendered.');
+        if (!blobPromise || !snapshotCropSize) {
+          throw new Error('The PNG snapshot could not be rendered.');
+        }
         return {
           blob: await blobPromise,
           objectKind: snapshotStage === 'pack' ? 'pack' : 'card',
+          cropSize: snapshotCropSize,
         };
       };
 

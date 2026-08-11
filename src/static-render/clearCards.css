@@ -1,0 +1,51 @@
+:root {
+  color: #111;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: #f4f4f4;
+}
+
+.clear-card-static-renderer {
+  min-width: 800px;
+  min-height: 1120px;
+  position: relative;
+}
+
+.clear-card-static-renderer__viewport {
+  height: 1120px;
+  width: 800px;
+}
+
+.clear-card-static-renderer__viewport canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.clear-card-static-renderer__status {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  left: 12px;
+  padding: 8px 10px;
+  position: fixed;
+  top: 12px;
+  z-index: 1;
+}
+
+.clear-card-static-renderer__status--error {
+  color: #b00020;
+}

@@ -21,6 +21,7 @@
   "scripts": {
     "dev": "vite",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
+    "render:clear-cards": "node scripts/render-clear-cards.mjs",
     "remotely": "node scripts/remotely.cjs",
     "build": "vite build",
     "validate:browser-bundle": "node --experimental-strip-types scripts/validate-browser-bundle.ts",
