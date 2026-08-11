@@ -31,6 +31,10 @@ type FinalizeOptions = {
   now?: Date;
 };
 
+type RecordApiProductionOptions = FinalizeOptions & {
+  expectedCurrentProduction: ReleaseVersionPair;
+};
+
 export type ProductionEvidenceKind = 'api' | 'frontend';
 
 export type ProductionEvidence = {
@@ -251,6 +255,38 @@ export function finalizeReleaseManifest(
     recordedAt: now.toISOString(),
     currentProduction: { ...versions },
   };
+  return writeReleaseManifest(path, next);
+}
+
+export function recordApiProductionVersion(
+  versionId: string,
+  options: RecordApiProductionOptions,
+): ReleaseManifest {
+  if (!cloudflareVersionIdPattern.test(versionId)) fail('The API production version ID must be an exact UUID.');
+  if (!isReleaseVersionPair(options.expectedCurrentProduction)) fail('The expected production pair must contain exact UUIDs.');
+  const path = resolve(options.manifestPath || releaseManifestPath);
+  const now = options.now || new Date();
+  if (!Number.isFinite(now.getTime())) fail('The release timestamp is invalid.');
+  requireProductionEvidence('api', versionId, { directory: options.evidenceDirectory, now });
+  const current = readReleaseManifest(path);
+  if (
+    current.currentProduction.apiVersionId.toLowerCase() !== options.expectedCurrentProduction.apiVersionId.toLowerCase() ||
+    current.currentProduction.frontendVersionId.toLowerCase() !== options.expectedCurrentProduction.frontendVersionId.toLowerCase()
+  ) {
+    fail('The tracked production pair changed during deployment; refusing to overwrite release metadata.');
+  }
+  const next: ReleaseManifest = {
+    ...current,
+    recordedAt: now.toISOString(),
+    currentProduction: {
+      apiVersionId: versionId.toLowerCase(),
+      frontendVersionId: options.expectedCurrentProduction.frontendVersionId.toLowerCase(),
+    },
+  };
+  return writeReleaseManifest(path, next);
+}
+
+function writeReleaseManifest(path: string, next: ReleaseManifest): ReleaseManifest {
   if (!isReleaseManifest(next)) fail('Refusing to write invalid release metadata.');
 
   const temporaryPath = resolve(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);

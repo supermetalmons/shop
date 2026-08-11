@@ -54,11 +54,16 @@ Cloudflare rate-limit bindings, Smart Placement, and a version-first release
 flow. It serves `/inventory`, `/pending-open-boxes`, `/rpc/mainnet-beta`, and
 `/rpc/devnet`; every response is uncached.
 
+- Run the complete guarded API release with no intermediate commands or arguments:
+  - `npm run deploy:api`
+  - This requires `HELIUS_API_KEY` and `CLOUDFLARE_API_TOKEN` in the process environment. It does not read `.env.local` or accept either secret as a command argument.
+  - The command verifies the tracked API/frontend production pair before upload, validates the API, tests an exact Version Preview against devnet inventory, runs the mandatory comparison, promotes only the API version, verifies that the frontend stayed unchanged, and records the new pair.
+  - The fulfillment admin wallet is used for smoke requests unless `--smoke-owner` is supplied. The default release requires `clear_cards_devnet_v2` and rejects stale `clear_cards_devnet` inventory.
 - Validate code, generated bindings, tests, dry-run bundling, and startup time:
   - `npm run check:api`
-- Load the Helius key without placing its value in shell history before preview, production, or standalone benchmark commands:
-  - `read -s HELIUS_API_KEY`
-  - `export HELIUS_API_KEY`
+
+Advanced release controls remain available for separately managed releases:
+
 - Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
   - `npm run deploy:api -- preview --smoke-owner <wallet>`
 - Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
@@ -69,8 +74,7 @@ flow. It serves `/inventory`, `/pending-open-boxes`, `/rpc/mainnet-beta`, and
   - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
 - Run the standalone comparison against an explicit origin:
   - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
-- Remove the key from the invoking shell after the release work:
-  - `unset HELIUS_API_KEY`
+  - Add `--include-devnet` when the comparison should include both mainnet and devnet inventory.
 
 Preview upload writes `HELIUS_API_KEY` to a newly created mode-`0600` file inside
 a mode-`0700` temporary directory, passes that file directly to Wrangler, and

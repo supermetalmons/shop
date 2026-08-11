@@ -27,6 +27,7 @@ import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
 
 export type ApiBenchmarkOptions = {
   apiOrigin: string;
+  includeDevnet?: boolean;
   owner: string;
   runs: number;
 };
@@ -121,10 +122,16 @@ function fail(message: string): never {
 
 export function parseApiBenchmarkArgs(argv: string[]): ApiBenchmarkOptions {
   let apiOrigin = '';
+  let includeDevnet = false;
   let owner = '';
   let runs = 5;
   for (let index = 0; index < argv.length; index += 1) {
     const option = argv[index];
+    if (option === '--include-devnet') {
+      if (includeDevnet) fail('--include-devnet may only be provided once.');
+      includeDevnet = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (option !== '--api-origin' && option !== '--owner' && option !== '--runs') fail(`Unknown argument: ${option}`);
     if (!value || value.startsWith('--')) fail(`Missing value for ${option}`);
@@ -145,7 +152,7 @@ export function parseApiBenchmarkArgs(argv: string[]): ApiBenchmarkOptions {
   }
   if (!isBase58Bytes(owner, 32)) fail('--owner must be a valid 32-byte Solana address.');
   if (!Number.isSafeInteger(runs) || runs < 1 || runs > 10) fail('--runs must be an integer from 1 through 10.');
-  return { apiOrigin, owner, runs };
+  return { apiOrigin, includeDevnet, owner, runs };
 }
 
 function median(values: number[]): number {
@@ -469,6 +476,7 @@ async function legacyInventory(
   apiKey: string,
   owner: string,
   networkOverrides: Partial<InventoryNetworkDependencies> = {},
+  includeDevnet = false,
 ): Promise<ShopInventoryItem[]> {
   const network = { ...defaultInventoryNetworkDependencies, ...networkOverrides };
   const overallTimeout = createManagedTimeout(network, LEGACY_INVENTORY_TIMEOUT_MS);
@@ -484,7 +492,7 @@ async function legacyInventory(
   try {
     const itemsById = new Map<string, ShopInventoryItem>();
     const fallbackClusters = new Set<SolanaCluster>();
-    for (const scope of listShopCollectionQueryRuntimes(false)) {
+    for (const scope of listShopCollectionQueryRuntimes(includeDevnet)) {
       const grouped = await fetchCursorInventory(
         context,
         owner,
@@ -513,6 +521,7 @@ async function workerInventory(
   apiOrigin: string,
   owner: string,
   networkOverrides: Partial<InventoryNetworkDependencies> = {},
+  includeDevnet = false,
 ): Promise<ShopInventoryItem[]> {
   const network = { ...defaultInventoryNetworkDependencies, ...networkOverrides };
   const requestTimeout = createManagedTimeout(network, WORKER_INVENTORY_TIMEOUT_MS);
@@ -520,7 +529,7 @@ async function workerInventory(
     const response = await network.fetch(`${apiOrigin}/inventory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner }),
+      body: JSON.stringify(includeDevnet ? { owner, includeDevnet: true } : { owner }),
       cache: 'no-store',
       signal: requestTimeout.signal,
     });
@@ -546,23 +555,24 @@ export async function benchmarkApi(
   const loadLegacyInventory = dependencies.legacyInventory || legacyInventory;
   const loadWorkerInventory = dependencies.workerInventory || workerInventory;
   const now = dependencies.now || (() => performance.now());
+  const includeDevnet = options.includeDevnet === true;
   const workerDurations: number[] = [];
   const legacyDurations: number[] = [];
-  const warmWorker = await loadWorkerInventory(options.apiOrigin, options.owner);
-  const warmLegacy = await loadLegacyInventory(apiKey, options.owner);
+  const warmWorker = await loadWorkerInventory(options.apiOrigin, options.owner, {}, includeDevnet);
+  const warmLegacy = await loadLegacyInventory(apiKey, options.owner, {}, includeDevnet);
   if (JSON.stringify(itemIds(warmWorker)) !== JSON.stringify(itemIds(warmLegacy))) {
     fail('Inventory IDs differed during benchmark warmup.');
   }
   for (let index = 0; index < options.runs; index += 1) {
     const measureWorker = async (): Promise<ShopInventoryItem[]> => {
       const startedAt = now();
-      const items = await loadWorkerInventory(options.apiOrigin, options.owner);
+      const items = await loadWorkerInventory(options.apiOrigin, options.owner, {}, includeDevnet);
       workerDurations.push(now() - startedAt);
       return items;
     };
     const measureLegacy = async (): Promise<ShopInventoryItem[]> => {
       const startedAt = now();
-      const items = await loadLegacyInventory(apiKey, options.owner);
+      const items = await loadLegacyInventory(apiKey, options.owner, {}, includeDevnet);
       legacyDurations.push(now() - startedAt);
       return items;
     };

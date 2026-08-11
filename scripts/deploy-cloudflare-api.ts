@@ -18,12 +18,16 @@ import {
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
 } from '../functions/src/shared/shopApi.ts';
+import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../functions/src/shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
 import { benchmarkApi, type ApiBenchmarkResult } from './benchmark-cloudflare-api.ts';
 import {
   cloudflareVersionIdPattern as versionIdPattern,
   isReleaseManifest,
   readReleaseManifest,
+  recordApiProductionVersion,
+  type ReleaseManifest,
+  type ReleaseVersionPair,
   writeProductionEvidence,
 } from './finalize-cloudflare-release.ts';
 import {
@@ -37,7 +41,7 @@ import {
   type CloudflareSleep,
 } from './cloudflare-deployment-state.ts';
 
-type Mode = 'preview' | 'production' | 'triggers' | 'rollback';
+type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
 
 type CliOptions = {
   mode: Mode;
@@ -52,9 +56,17 @@ type UploadMetadata = {
 };
 
 type CandidateRecord = UploadMetadata & ApiBenchmarkResult & {
+  includeDevnet: true;
   workerName: 'mons-shop-api';
   smokeOwner: string;
   testedAt: string;
+};
+
+type SmokeApiOptions = {
+  expectedInventoryDropId?: string;
+  forbiddenInventoryDropId?: string;
+  includeDevnet: boolean;
+  owner: string;
 };
 
 export type SecretFileOperations = {
@@ -86,11 +98,13 @@ type ProcessRunner = (
 ) => void;
 
 type ProductionSequenceInput = {
+  candidateSmoke?: SmokeApiOptions;
   expectedCurrentVersionId: string;
   heliusApiKey: string;
   previewUrl: string;
   smokeOwner: string;
   versionId: string;
+  verifyBeforePromotion?: () => Promise<void>;
   wranglerEnvironment: NodeJS.ProcessEnv;
 };
 
@@ -112,6 +126,26 @@ type SmokeApiDependencies = {
   fetchSmoke: typeof fetchSmoke;
 };
 
+type CompleteApiReleaseInput = {
+  apiToken: string;
+  checkEnvironment: NodeJS.ProcessEnv;
+  heliusApiKey: string;
+  logsDirectory: string;
+  smokeOwner: string;
+  wranglerEnvironment: NodeJS.ProcessEnv;
+};
+
+type CompleteApiReleaseDependencies = {
+  apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  manifest: () => ReleaseManifest;
+  production: typeof runProductionSequence;
+  record: typeof recordApiProductionVersion;
+  triggerDryRun: (environment: NodeJS.ProcessEnv) => void;
+  upload: typeof uploadApiCandidate;
+  validate: () => void;
+};
+
 class DeployFailure extends Error {
   readonly exitCode: number;
 
@@ -127,6 +161,7 @@ const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platfor
 const configPath = 'cloud/workers/api/wrangler.jsonc';
 const releaseEnvPath = 'cloud/workers/api/release.env';
 const configArgs = ['--config', configPath, '--env-file', releaseEnvPath];
+const frontendConfigArgs = ['--config', 'wrangler.jsonc'];
 const workerName = 'mons-shop-api';
 const accountId = 'e25f90fc073ea309b54b8b5144bf28e0';
 const productionUrl = 'https://api.mons.shop';
@@ -134,6 +169,9 @@ const workersDevSubdomain = 'lil-org.workers.dev';
 const candidateRecordDirectory = resolve(repoRoot, '.cache', 'mons-shop-api-candidates');
 const candidateRecordMaxAgeMs = 6 * 60 * 60 * 1000;
 const candidateRecordClockSkewMs = 5 * 60 * 1000;
+const defaultSmokeOwner = FULFILLMENT_ADMIN_WALLET_ADDRESSES[0];
+const expectedReleaseDropId = 'clear_cards_devnet_v2';
+const forbiddenReleaseDropId = 'clear_cards_devnet';
 const DEFAULT_SMOKE_TIMEOUT_MS = 15_000;
 const INVENTORY_SMOKE_TIMEOUT_MS = 70_000;
 const secretFileOperations: SecretFileOperations = {
@@ -152,12 +190,15 @@ function usage(): string {
     'Release, update, or roll back the mons-shop-api Worker.',
     '',
     'Usage:',
+    '  npm run deploy:api',
+    '  npm run deploy:api -- release [--smoke-owner <wallet>] [--token-file <path>]',
     '  npm run deploy:api -- preview --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- triggers --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
-    'Preview and production modes require HELIUS_API_KEY for the mandatory direct-path benchmark.',
+    'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
+    'Release, preview, and production require HELIUS_API_KEY in the process environment.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
 }
@@ -171,14 +212,17 @@ function parseArgs(argv: string[]): CliOptions {
     console.log(usage());
     process.exit(0);
   }
-  const mode = argv[0];
-  if (mode !== 'preview' && mode !== 'production' && mode !== 'triggers' && mode !== 'rollback') {
-    fail(`Expected preview, production, triggers, or rollback.\n\n${usage()}`, 2);
+  const requestedMode = argv[0];
+  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers', 'rollback'];
+  const mode: Mode = requestedMode && knownModes.includes(requestedMode as Mode) ? requestedMode as Mode : 'release';
+  const optionStart = mode === requestedMode ? 1 : 0;
+  if (requestedMode && !requestedMode.startsWith('--') && optionStart === 0) {
+    fail(`Expected release, preview, production, triggers, or rollback.\n\n${usage()}`, 2);
   }
-  let smokeOwner = '';
+  let smokeOwner = mode === 'release' ? defaultSmokeOwner : '';
   let tokenFile: string | undefined;
   let versionId: string | undefined;
-  for (let index = 1; index < argv.length; index += 1) {
+  for (let index = optionStart; index < argv.length; index += 1) {
     const option = argv[index];
     const value = argv[index + 1];
     if (option !== '--smoke-owner' && option !== '--token-file' && option !== '--version-id') {
@@ -194,8 +238,14 @@ function parseArgs(argv: string[]): CliOptions {
   if ((mode === 'production' || mode === 'rollback') && (!versionId || !versionIdPattern.test(versionId))) {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
   }
-  if ((mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
+  if ((mode === 'release' || mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
   return { mode, smokeOwner, tokenFile, versionId };
+}
+
+function resolveHeliusApiKey(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  return source.HELIUS_API_KEY?.trim() || '';
 }
 
 function readApiToken(path?: string): string {
@@ -208,7 +258,14 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
   const environment = { ...source };
   for (const name of Object.keys(environment)) {
     const normalized = name.toUpperCase();
-    if (normalized.startsWith('CLOUDFLARE_') || normalized.startsWith('CF_') || normalized.startsWith('WRANGLER_') || normalized === 'HELIUS_API_KEY' || normalized === 'DOTENV_KEY') {
+    if (
+      normalized.startsWith('CLOUDFLARE_') ||
+      normalized.startsWith('CF_') ||
+      normalized.startsWith('WRANGLER_') ||
+      normalized === 'HELIUS_API_KEY' ||
+      normalized === 'VITE_HELIUS_API_KEY' ||
+      normalized === 'DOTENV_KEY'
+    ) {
       delete environment[name];
     }
   }
@@ -286,6 +343,15 @@ function readApiDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDepl
   });
 }
 
+function readFrontendDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
+  return readWranglerDeploymentStatus({
+    configArgs: frontendConfigArgs,
+    cwd: repoRoot,
+    environment,
+    wranglerBinary,
+  });
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -304,9 +370,10 @@ function runApiValidation(
 
 function createSecretFile(
   operations: SecretFileOperations = secretFileOperations,
+  heliusApiKey = String(process.env.HELIUS_API_KEY || '').trim(),
 ): { directory: string; path: string; dispose: () => void } {
-  const secret = String(process.env.HELIUS_API_KEY || '').trim();
-  if (!secret) fail('Preview mode requires HELIUS_API_KEY in the invoking shell.');
+  const secret = heliusApiKey.trim();
+  if (!secret) fail('A Helius API key is required for Worker candidate upload.');
   let directory: string | undefined;
   try {
     directory = operations.mkdtemp(join(tmpdir(), 'mons-shop-api-secret-'));
@@ -394,6 +461,7 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
   const testedAt = typeof record.testedAt === 'string' ? Date.parse(record.testedAt) : Number.NaN;
   const ageMs = now.getTime() - testedAt;
   return Object.keys(record).sort().join(',') === [
+    'includeDevnet',
     'legacyMedianMs',
     'previewUrl',
     'runs',
@@ -403,6 +471,7 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
     'workerMedianMs',
     'workerName',
   ].sort().join(',') &&
+    record.includeDevnet === true &&
     record.workerName === workerName &&
     typeof record.versionId === 'string' && versionIdPattern.test(record.versionId) &&
     typeof record.previewUrl === 'string' && record.previewUrl === expectedPreviewOrigin(record.versionId) &&
@@ -424,6 +493,7 @@ function writeCandidateRecord(metadata: UploadMetadata, smokeOwner: string, benc
   const record: CandidateRecord = {
     workerName,
     ...metadata,
+    includeDevnet: true,
     smokeOwner,
     testedAt: new Date().toISOString(),
     ...benchmark,
@@ -580,9 +650,21 @@ async function fetchSmoke(
   fail(`${label} failed after bounded retries.`);
 }
 
+function assertInventorySmokeDrops(
+  items: readonly { dropId: string }[],
+  options: Pick<SmokeApiOptions, 'expectedInventoryDropId' | 'forbiddenInventoryDropId'>,
+): void {
+  if (options.expectedInventoryDropId && !items.some((item) => item.dropId === options.expectedInventoryDropId)) {
+    fail(`Inventory smoke response did not contain ${options.expectedInventoryDropId}.`);
+  }
+  if (options.forbiddenInventoryDropId && items.some((item) => item.dropId === options.forbiddenInventoryDropId)) {
+    fail(`Inventory smoke response still contained ${options.forbiddenInventoryDropId}.`);
+  }
+}
+
 async function smokeApi(
   baseUrl: string,
-  owner: string,
+  options: SmokeApiOptions,
   dependencies: SmokeApiDependencies = { fetchSmoke },
 ): Promise<void> {
   const request = dependencies.fetchSmoke;
@@ -628,12 +710,15 @@ async function smokeApi(
     const result = await request(`${baseUrl}${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-      body: JSON.stringify({ owner }),
+      body: JSON.stringify(options.includeDevnet ? { owner: options.owner, includeDevnet: true } : { owner: options.owner }),
     }, `${route} smoke request`, INVENTORY_SMOKE_TIMEOUT_MS);
     if (result.response.status !== 200) fail(`${route} smoke request returned ${result.response.status}.`);
     assertResponseHeaders(result.response, `${route} smoke response`);
     const payload: unknown = await result.response.json();
-    if (route === '/inventory' ? !isExactShopInventoryResponse(payload) : !isExactShopPendingOpenBoxesResponse(payload)) {
+    if (route === '/inventory') {
+      if (!isExactShopInventoryResponse(payload)) fail(`${route} smoke response had an unexpected shape.`);
+      assertInventorySmokeDrops(payload.items, options);
+    } else if (!isExactShopPendingOpenBoxesResponse(payload)) {
       fail(`${route} smoke response had an unexpected shape.`);
     }
     durations[route] = Math.round(result.durationMs);
@@ -795,7 +880,11 @@ async function recoverApiProduction(
 
   if (baselineConfirmed) {
     try {
-      await dependencies.smoke(productionUrl, input.smokeOwner);
+      const candidateSmoke = productionCandidateSmoke(input);
+      await dependencies.smoke(productionUrl, {
+        includeDevnet: candidateSmoke.includeDevnet,
+        owner: input.smokeOwner,
+      });
     } catch (smokeError) {
       recoveryVerificationErrors.push(smokeError);
     }
@@ -842,6 +931,10 @@ function apiEvidenceFailure(error: unknown, candidateVersionId: string): Error {
   );
 }
 
+function productionCandidateSmoke(input: ProductionSequenceInput): SmokeApiOptions {
+  return input.candidateSmoke || { includeDevnet: true, owner: input.smokeOwner };
+}
+
 async function runProductionSequence(
   input: ProductionSequenceInput,
   dependencies: ProductionSequenceDependencies = {
@@ -853,9 +946,16 @@ async function runProductionSequence(
     wrangler: runWrangler,
   },
 ): Promise<void> {
-  await dependencies.smoke(input.previewUrl, input.smokeOwner);
+  const candidateSmoke = productionCandidateSmoke(input);
+  if (candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the release owner.');
+  await dependencies.smoke(input.previewUrl, candidateSmoke);
   await dependencies.benchmark(
-    { apiOrigin: input.previewUrl, owner: input.smokeOwner, runs: 5 },
+    {
+      apiOrigin: input.previewUrl,
+      includeDevnet: candidateSmoke.includeDevnet,
+      owner: input.smokeOwner,
+      runs: 5,
+    },
     input.heliusApiKey,
   );
 
@@ -876,13 +976,17 @@ async function runProductionSequence(
     }
   } else {
     deployReviewedApiTriggers(input, dependencies);
-    await dependencies.smoke(productionUrl, input.smokeOwner);
+    await dependencies.smoke(productionUrl, {
+      includeDevnet: candidateSmoke.includeDevnet,
+      owner: input.smokeOwner,
+    });
     await assertApiLiveVersion(
       releaseStart.baselineVersionId,
       input,
       dependencies,
       'API pre-promotion baseline recheck',
     );
+    await input.verifyBeforePromotion?.();
 
     let promotionError: unknown;
     try {
@@ -937,7 +1041,7 @@ async function runProductionSequence(
   }
 
   try {
-    await dependencies.smoke(productionUrl, input.smokeOwner);
+    await dependencies.smoke(productionUrl, candidateSmoke);
     await assertApiLiveVersion(
       candidateVersionId,
       input,
@@ -963,6 +1067,178 @@ async function runProductionSequence(
   }
 }
 
+async function uploadApiCandidate(input: {
+  apiToken: string;
+  candidateSmoke: SmokeApiOptions;
+  heliusApiKey: string;
+  logsDirectory: string;
+  smokeOwner: string;
+  wranglerEnvironment: NodeJS.ProcessEnv;
+}): Promise<UploadMetadata> {
+  if (input.candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the upload owner.');
+  const secretFile = createSecretFile(secretFileOperations, input.heliusApiKey);
+  const removeTerminationCleanup = installTerminationCleanup(secretFile.dispose);
+  const outputFile = resolve(input.logsDirectory, `api-upload-${process.pid}-${Date.now()}.json`);
+  let metadata: UploadMetadata | undefined;
+  let releaseError: unknown;
+  try {
+    if (!await workerExists(input.apiToken)) {
+      const bootstrapConfig = createBootstrapConfig(secretFile.directory);
+      console.log('[api-deploy] Bootstrapping route-free Worker before candidate upload.');
+      runWrangler([
+        'deploy', '--strict', '--secrets-file', secretFile.path, '--config', bootstrapConfig, '--env-file', releaseEnvPath,
+      ], input.wranglerEnvironment, 'Route-free Worker bootstrap');
+    }
+    const uploadEnvironment = { ...input.wranglerEnvironment, WRANGLER_OUTPUT_FILE_PATH: outputFile };
+    runWrangler([
+      'versions', 'upload', '--strict', '--preview-alias', 'candidate', '--secrets-file', secretFile.path, ...configArgs,
+    ], uploadEnvironment, 'Candidate version upload');
+    metadata = parseUploadMetadata(outputFile);
+    console.log(`[api-deploy] Version: ${metadata.versionId}`);
+    console.log(`[api-deploy] Preview: ${metadata.previewUrl}`);
+    await smokeApi(metadata.previewUrl, input.candidateSmoke);
+    const benchmark = await benchmarkApi(
+      {
+        apiOrigin: metadata.previewUrl,
+        includeDevnet: input.candidateSmoke.includeDevnet,
+        owner: input.smokeOwner,
+        runs: 5,
+      },
+      input.heliusApiKey,
+    );
+    writeCandidateRecord(metadata, input.smokeOwner, benchmark);
+    console.log(`[api-deploy] Candidate smoke checks and benchmark passed; record written for ${metadata.versionId}.`);
+  } catch (error) {
+    releaseError = error;
+  }
+  removeTerminationCleanup();
+  let secretCleanupError: unknown;
+  let outputCleanupError: unknown;
+  try {
+    secretFile.dispose();
+  } catch (error) {
+    secretCleanupError = error;
+  }
+  try {
+    rmSync(outputFile, { force: true });
+  } catch (error) {
+    outputCleanupError = error;
+  }
+  const errors = [releaseError, secretCleanupError, outputCleanupError].filter((error) => error !== undefined);
+  if (errors.length > 1) throw new AggregateError(errors, 'Candidate release cleanup failed after another release error.');
+  if (errors.length === 1) throw errors[0];
+  if (!metadata) fail('Candidate upload completed without exact version metadata.');
+  return metadata;
+}
+
+async function readStableReleasePair(
+  environment: NodeJS.ProcessEnv,
+  dependencies: Pick<CompleteApiReleaseDependencies, 'apiDeployment' | 'frontendDeployment'>,
+): Promise<ReleaseVersionPair> {
+  const [apiStatus, frontendStatus] = await Promise.all([
+    dependencies.apiDeployment(environment),
+    dependencies.frontendDeployment(environment),
+  ]);
+  return {
+    apiVersionId: stableCloudflareVersionId(apiStatus),
+    frontendVersionId: stableCloudflareVersionId(frontendStatus),
+  };
+}
+
+function assertReleasePair(
+  actual: ReleaseVersionPair,
+  expected: ReleaseVersionPair,
+  label: string,
+): void {
+  if (
+    actual.apiVersionId !== expected.apiVersionId.toLowerCase() ||
+    actual.frontendVersionId !== expected.frontendVersionId.toLowerCase()
+  ) {
+    fail(
+      `${label} expected API ${expected.apiVersionId} and frontend ${expected.frontendVersionId}, ` +
+      `but Cloudflare reported API ${actual.apiVersionId} and frontend ${actual.frontendVersionId}.`,
+    );
+  }
+}
+
+async function runCompleteApiRelease(
+  input: CompleteApiReleaseInput,
+  dependencies: CompleteApiReleaseDependencies = {
+    apiDeployment: readApiDeploymentStatus,
+    frontendDeployment: readFrontendDeploymentStatus,
+    manifest: readReleaseManifest,
+    production: runProductionSequence,
+    record: recordApiProductionVersion,
+    triggerDryRun: (environment) => runWrangler(
+      ['triggers', 'deploy', '--dry-run', ...configArgs],
+      environment,
+      'Trigger configuration dry-run',
+    ),
+    upload: uploadApiCandidate,
+    validate: runApiValidation,
+  },
+): Promise<UploadMetadata> {
+  const expectedCurrentProduction = dependencies.manifest().currentProduction;
+  const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
+  assertReleasePair(initialLivePair, expectedCurrentProduction, 'Release preflight');
+
+  dependencies.validate();
+  dependencies.triggerDryRun(input.checkEnvironment);
+
+  const candidateSmoke: SmokeApiOptions = {
+    expectedInventoryDropId: expectedReleaseDropId,
+    forbiddenInventoryDropId: forbiddenReleaseDropId,
+    includeDevnet: true,
+    owner: input.smokeOwner,
+  };
+  const metadata = await dependencies.upload({
+    apiToken: input.apiToken,
+    candidateSmoke,
+    heliusApiKey: input.heliusApiKey,
+    logsDirectory: input.logsDirectory,
+    smokeOwner: input.smokeOwner,
+    wranglerEnvironment: input.wranglerEnvironment,
+  });
+  await dependencies.production({
+    candidateSmoke,
+    expectedCurrentVersionId: expectedCurrentProduction.apiVersionId,
+    heliusApiKey: input.heliusApiKey,
+    previewUrl: metadata.previewUrl,
+    smokeOwner: input.smokeOwner,
+    verifyBeforePromotion: async () => {
+      const frontendVersionId = stableCloudflareVersionId(
+        await dependencies.frontendDeployment(input.wranglerEnvironment),
+      );
+      if (frontendVersionId !== expectedCurrentProduction.frontendVersionId.toLowerCase()) {
+        fail(
+          `Frontend changed before API promotion: expected ${expectedCurrentProduction.frontendVersionId}, ` +
+          `but Cloudflare reported ${frontendVersionId}.`,
+        );
+      }
+    },
+    versionId: metadata.versionId,
+    wranglerEnvironment: input.wranglerEnvironment,
+  });
+
+  const finalLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
+  assertReleasePair(finalLivePair, {
+    apiVersionId: metadata.versionId,
+    frontendVersionId: expectedCurrentProduction.frontendVersionId,
+  }, 'Release commit verification');
+  try {
+    dependencies.record(metadata.versionId, { expectedCurrentProduction });
+  } catch (error) {
+    const command = `npm run release:finalize -- --api-version-id ${metadata.versionId} ` +
+      `--frontend-version-id ${expectedCurrentProduction.frontendVersionId} --confirm`;
+    throw new Error(
+      `API version ${metadata.versionId} is live and verified, but cloud/release-manifest.json was not updated. ` +
+      `After verifying fresh production evidence, reconcile it with: ${command}`,
+      { cause: error },
+    );
+  }
+  return metadata;
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10);
@@ -972,56 +1248,38 @@ async function main(): Promise<void> {
   const logsDirectory = resolve(repoRoot, '.cache', 'wrangler-logs');
   mkdirSync(logsDirectory, { recursive: true });
   const checkEnvironment = validationEnvironment();
-  const heliusApiKey = String(process.env.HELIUS_API_KEY || '').trim();
+  const heliusApiKey = resolveHeliusApiKey();
   console.log(`[api-deploy] Mode: ${options.mode}`);
 
+  if (options.mode === 'release') {
+    if (!heliusApiKey) fail('Release requires HELIUS_API_KEY in the process environment.');
+    const apiToken = readApiToken(options.tokenFile);
+    const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    const metadata = await runCompleteApiRelease({
+      apiToken,
+      checkEnvironment,
+      heliusApiKey,
+      logsDirectory,
+      smokeOwner: options.smokeOwner,
+      wranglerEnvironment,
+    });
+    console.log(`[api-deploy] Production version ${metadata.versionId} deployed, verified, and recorded.`);
+    return;
+  }
+
   if (options.mode === 'preview') {
-    if (!heliusApiKey) fail('Preview mode requires HELIUS_API_KEY in the invoking shell.');
+    if (!heliusApiKey) fail('Preview mode requires HELIUS_API_KEY in the process environment.');
     runApiValidation();
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
-    const secretFile = createSecretFile();
-    const removeTerminationCleanup = installTerminationCleanup(secretFile.dispose);
-    const outputFile = resolve(logsDirectory, `api-upload-${process.pid}-${Date.now()}.json`);
-    let releaseError: unknown;
-    try {
-      if (!await workerExists(apiToken)) {
-        const bootstrapConfig = createBootstrapConfig(secretFile.directory);
-        console.log('[api-deploy] Bootstrapping route-free Worker before candidate upload.');
-        runWrangler([
-          'deploy', '--strict', '--secrets-file', secretFile.path, '--config', bootstrapConfig, '--env-file', releaseEnvPath,
-        ], wranglerEnvironment, 'Route-free Worker bootstrap');
-      }
-      const uploadEnvironment = { ...wranglerEnvironment, WRANGLER_OUTPUT_FILE_PATH: outputFile };
-      runWrangler([
-        'versions', 'upload', '--strict', '--preview-alias', 'candidate', '--secrets-file', secretFile.path, ...configArgs,
-      ], uploadEnvironment, 'Candidate version upload');
-      const metadata = parseUploadMetadata(outputFile);
-      console.log(`[api-deploy] Version: ${metadata.versionId}`);
-      console.log(`[api-deploy] Preview: ${metadata.previewUrl}`);
-      await smokeApi(metadata.previewUrl, options.smokeOwner);
-      const benchmark = await benchmarkApi({ apiOrigin: metadata.previewUrl, owner: options.smokeOwner, runs: 5 }, heliusApiKey);
-      writeCandidateRecord(metadata, options.smokeOwner, benchmark);
-      console.log(`[api-deploy] Candidate smoke checks and benchmark passed; record written for ${metadata.versionId}.`);
-    } catch (error) {
-      releaseError = error;
-    }
-    removeTerminationCleanup();
-    let secretCleanupError: unknown;
-    let outputCleanupError: unknown;
-    try {
-      secretFile.dispose();
-    } catch (error) {
-      secretCleanupError = error;
-    }
-    try {
-      rmSync(outputFile, { force: true });
-    } catch (error) {
-      outputCleanupError = error;
-    }
-    const errors = [releaseError, secretCleanupError, outputCleanupError].filter((error) => error !== undefined);
-    if (errors.length > 1) throw new AggregateError(errors, 'Candidate release cleanup failed after another release error.');
-    if (errors.length === 1) throw errors[0];
+    await uploadApiCandidate({
+      apiToken,
+      candidateSmoke: { includeDevnet: true, owner: options.smokeOwner },
+      heliusApiKey,
+      logsDirectory,
+      smokeOwner: options.smokeOwner,
+      wranglerEnvironment,
+    });
     return;
   }
 
@@ -1037,7 +1295,7 @@ async function main(): Promise<void> {
       fail('API rollback version is not the approved target in cloud/release-manifest.json.');
     }
     runWrangler(['rollback', options.versionId!, '--yes', '--message', 'Explicit mons-shop-api rollback', ...configArgs], wranglerEnvironment, 'Worker rollback');
-    await smokeApi(productionUrl, options.smokeOwner);
+    await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
     console.log(`[api-deploy] Rolled back and verified version ${options.versionId}.`);
     return;
   }
@@ -1052,6 +1310,7 @@ async function main(): Promise<void> {
       wranglerEnvironment,
     });
     await runProductionSequence({
+      candidateSmoke: { includeDevnet: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       previewUrl,
@@ -1063,16 +1322,19 @@ async function main(): Promise<void> {
     return;
   }
   runWrangler(['triggers', 'deploy', ...configArgs], wranglerEnvironment, 'Reviewed trigger deployment');
-  await smokeApi(productionUrl, options.smokeOwner);
+  await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
   console.log('[api-deploy] Custom-domain trigger verified.');
 }
 
 export const deployApiTestHooks = {
   assertApiDeploymentConfig,
+  assertInventorySmokeDrops,
   authenticatedWranglerEnvironment,
   candidateRecordPath,
   createSecretFile,
+  defaultSmokeOwner,
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
+  expectedReleaseDropId,
   expectedPreviewOrigin,
   installTerminationCleanup,
   inventorySmokeTimeoutMs: INVENTORY_SMOKE_TIMEOUT_MS,
@@ -1083,9 +1345,12 @@ export const deployApiTestHooks = {
   parseUploadMetadata,
   removeSecretDirectory,
   readReleaseManifest,
+  readStableReleasePair,
   requireCandidateRecord,
+  resolveHeliusApiKey,
   resolveApiProductionPreviewUrl,
   runApiValidation,
+  runCompleteApiRelease,
   runProductionSequence,
   secretFileOperations,
   smokeApi,

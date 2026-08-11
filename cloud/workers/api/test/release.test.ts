@@ -31,6 +31,7 @@ import {
   finalizeReleaseManifest,
   isProductionEvidence,
   parseFinalizeReleaseArgs,
+  recordApiProductionVersion,
   writeProductionEvidence,
 } from '../../../../scripts/finalize-cloudflare-release.ts';
 import {
@@ -297,7 +298,11 @@ test('standalone benchmark requires an explicit HTTPS API origin and a valid own
   );
   assert.deepEqual(
     parseApiBenchmarkArgs(['--api-origin', 'https://api.mons.shop/', '--owner', OWNER, '--runs', '5']),
-    { apiOrigin: 'https://api.mons.shop', owner: OWNER, runs: 5 },
+    { apiOrigin: 'https://api.mons.shop', includeDevnet: false, owner: OWNER, runs: 5 },
+  );
+  assert.deepEqual(
+    parseApiBenchmarkArgs(['--include-devnet', '--api-origin', 'https://api.mons.shop', '--owner', OWNER]),
+    { apiOrigin: 'https://api.mons.shop', includeDevnet: true, owner: OWNER, runs: 5 },
   );
 });
 
@@ -306,6 +311,7 @@ test('candidate promotion evidence is exact, version-keyed, and owner-bound', ()
   const path = deployApiTestHooks.candidateRecordPath(versionId);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const record = {
+    includeDevnet: true,
     workerName: 'mons-shop-api',
     versionId,
     previewUrl: deployApiTestHooks.expectedPreviewOrigin(versionId),
@@ -967,6 +973,7 @@ test('validation environments exclude deployment and provider credentials', () =
     CLOUDFLARE_API_TOKEN: 'cloudflare-secret',
     CF_API_TOKEN: 'cloudflare-secret-two',
     HELIUS_API_KEY: 'helius-secret',
+    VITE_HELIUS_API_KEY: 'vite-helius-secret',
     WRANGLER_OUTPUT_FILE_PATH: '/tmp/output',
     DOTENV_KEY: 'dotenv-secret',
   };
@@ -975,6 +982,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.CLOUDFLARE_API_TOKEN, undefined);
   assert.equal(validation.CF_API_TOKEN, undefined);
   assert.equal(validation.HELIUS_API_KEY, undefined);
+  assert.equal(validation.VITE_HELIUS_API_KEY, undefined);
   assert.equal(validation.WRANGLER_OUTPUT_FILE_PATH, undefined);
   assert.equal(validation.DOTENV_KEY, undefined);
   let childEnvironment: NodeJS.ProcessEnv | undefined;
@@ -984,9 +992,11 @@ test('validation environments exclude deployment and provider credentials', () =
   });
   assert.equal(childEnvironment?.CLOUDFLARE_API_TOKEN, undefined);
   assert.equal(childEnvironment?.HELIUS_API_KEY, undefined);
+  assert.equal(childEnvironment?.VITE_HELIUS_API_KEY, undefined);
   const authenticated = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token', source);
   assert.equal(authenticated.CLOUDFLARE_API_TOKEN, 'scoped-token');
   assert.equal(authenticated.HELIUS_API_KEY, undefined);
+  assert.equal(authenticated.VITE_HELIUS_API_KEY, undefined);
   const frontendValidation = frontendDeployTestHooks.credentialFreeEnvironment({
     ...source,
     VITE_MONS_API_ORIGIN: 'https://untrusted.example',
@@ -1078,25 +1088,29 @@ test('API observability samples custom logs without automatic invocation logs', 
 
 test('benchmark warms both paths and alternates measured request order', async () => {
   const calls: string[] = [];
+  const includeDevnetValues: boolean[] = [];
   let clock = 0;
   const result = await benchmarkApi(
-    { apiOrigin: 'https://api.mons.shop', owner: OWNER, runs: 3 },
+    { apiOrigin: 'https://api.mons.shop', includeDevnet: true, owner: OWNER, runs: 3 },
     'helius-test-key',
     {
       now: () => clock,
-      workerInventory: async () => {
+      workerInventory: async (_origin, _owner, _network, includeDevnet) => {
         calls.push('worker');
+        includeDevnetValues.push(includeDevnet === true);
         clock += 1;
         return [];
       },
-      legacyInventory: async () => {
+      legacyInventory: async (_apiKey, _owner, _network, includeDevnet) => {
         calls.push('legacy');
+        includeDevnetValues.push(includeDevnet === true);
         clock += 3;
         return [];
       },
     },
   );
   assert.deepEqual(calls, ['worker', 'legacy', 'worker', 'legacy', 'legacy', 'worker', 'worker', 'legacy']);
+  assert.equal(includeDevnetValues.every((value) => value === true), true);
   assert.equal(result.runs, 3);
   assert.equal(result.workerMedianMs, 1);
   assert.equal(result.legacyMedianMs, 3);
@@ -1169,6 +1183,24 @@ test('direct benchmark never invokes whole-wallet fallback for successful empty 
   assert.equal(requests.some((request) => !request.params.grouping), false);
 });
 
+test('direct benchmark includes both Helius clusters when devnet is enabled', async () => {
+  const origins = new Set<string>();
+  let nextTimer = 0;
+  await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+    clearTimer: () => undefined,
+    fetch: async (input, init) => {
+      origins.add(new URL(String(input)).hostname);
+      const rpc = JSON.parse(String(init?.body)) as { id: string };
+      return Response.json({ jsonrpc: '2.0', id: rpc.id, result: { items: [] } });
+    },
+    scheduleTimer: () => {
+      nextTimer += 1;
+      return nextTimer;
+    },
+  }, true);
+  assert.deepEqual([...origins].sort(), ['devnet.helius-rpc.com', 'mainnet.helius-rpc.com']);
+});
+
 test('direct benchmark retains cluster fallback after an initial grouped provider failure', async () => {
   const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
   const retryDelays: number[] = [];
@@ -1225,28 +1257,40 @@ test('direct benchmark does not hide a malformed grouped result behind whole-wal
 test('benchmark Worker inventory request outlives the Worker overall deadline', async () => {
   const scheduledTimeouts: number[] = [];
   const clearedTimers: unknown[] = [];
+  let requestBody: unknown;
   await benchmarkApiTestHooks.workerInventory('https://preview.example', OWNER, {
     clearTimer: (handle) => clearedTimers.push(handle),
     fetch: async (_input, init) => {
       assert.ok(init?.signal instanceof AbortSignal);
+      requestBody = JSON.parse(String(init?.body)) as unknown;
       return Response.json({ ok: true, items: [] });
     },
     scheduleTimer: (_callback, milliseconds) => {
       scheduledTimeouts.push(milliseconds);
       return milliseconds;
     },
-  });
+  }, true);
   assert.deepEqual(scheduledTimeouts, [benchmarkApiTestHooks.workerInventoryTimeoutMs]);
   assert.deepEqual(clearedTimers, [benchmarkApiTestHooks.workerInventoryTimeoutMs]);
+  assert.deepEqual(requestBody, { owner: OWNER, includeDevnet: true });
 });
 
 test('API smoke grants inventory routes the Worker deadline while keeping other checks short', async () => {
+  const bodies = new Map<string, unknown>();
   const timeouts = new Map<string, number>();
-  await deployApiTestHooks.smokeApi('https://preview.example', OWNER, {
+  await deployApiTestHooks.smokeApi('https://preview.example', {
+    expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+    forbiddenInventoryDropId: 'clear_cards_devnet',
+    includeDevnet: true,
+    owner: OWNER,
+  }, {
     fetchSmoke: async (url, init, _label, timeoutMs = deployApiTestHooks.defaultSmokeTimeoutMs) => {
       const pathname = new URL(url).pathname;
       const method = init.method || 'GET';
       timeouts.set(`${method}:${pathname}`, timeoutMs);
+      if (method === 'POST' && (pathname === '/inventory' || pathname === '/pending-open-boxes')) {
+        bodies.set(pathname, JSON.parse(String(init.body)) as unknown);
+      }
       const headers = new Headers({
         'Cache-Control': 'no-store',
         'Server-Timing': 'app;dur=1',
@@ -1263,11 +1307,17 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         headers.set('Access-Control-Allow-Headers', 'content-type, solana-client');
         return { response: new Response(null, { status: 204, headers }), durationMs: 1 };
       }
-      if (method === 'POST' && (pathname === '/inventory' || pathname === '/pending-open-boxes')) {
+      if (method === 'POST' && pathname === '/inventory') {
         return {
-          response: Response.json({ ok: true, items: [] }, { status: 200, headers }),
+          response: Response.json({
+            ok: true,
+            items: [{ id: OWNER, dropId: deployApiTestHooks.expectedReleaseDropId, name: 'Clear Card', kind: 'box' }],
+          }, { status: 200, headers }),
           durationMs: 1,
         };
+      }
+      if (method === 'POST' && pathname === '/pending-open-boxes') {
+        return { response: Response.json({ ok: true, items: [] }, { status: 200, headers }), durationMs: 1 };
       }
       if (method === 'POST' && pathname.startsWith('/rpc/')) {
         const cluster = pathname.endsWith('/devnet') ? 'devnet' : 'mainnet-beta';
@@ -1286,10 +1336,249 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
   });
   assert.equal(timeouts.get('POST:/inventory'), deployApiTestHooks.inventorySmokeTimeoutMs);
   assert.equal(timeouts.get('POST:/pending-open-boxes'), deployApiTestHooks.inventorySmokeTimeoutMs);
+  assert.deepEqual(bodies.get('/inventory'), { owner: OWNER, includeDevnet: true });
+  assert.deepEqual(bodies.get('/pending-open-boxes'), { owner: OWNER, includeDevnet: true });
   for (const [request, timeoutMs] of timeouts) {
     if (request === 'POST:/inventory' || request === 'POST:/pending-open-boxes') continue;
     assert.equal(timeoutMs, deployApiTestHooks.defaultSmokeTimeoutMs);
   }
+  assert.throws(
+    () => deployApiTestHooks.assertInventorySmokeDrops([], {
+      expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+    }),
+    /did not contain clear_cards_devnet_v2/,
+  );
+  assert.throws(
+    () => deployApiTestHooks.assertInventorySmokeDrops([{ dropId: 'clear_cards_devnet' }], {
+      forbiddenInventoryDropId: 'clear_cards_devnet',
+    }),
+    /still contained clear_cards_devnet/,
+  );
+});
+
+test('complete API release blocks stale API or frontend state before upload', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  for (const livePair of [
+    { apiVersionId: randomUUID(), frontendVersionId },
+    { apiVersionId, frontendVersionId: randomUUID() },
+  ]) {
+    let uploaded = false;
+    await assert.rejects(
+      () => deployApiTestHooks.runCompleteApiRelease({
+        apiToken: 'scoped-token',
+        checkEnvironment: { HELIUS_API_KEY: '' },
+        heliusApiKey: 'helius-test-key',
+        logsDirectory: '/tmp/logs',
+        smokeOwner: OWNER,
+        wranglerEnvironment: { HELIUS_API_KEY: '' },
+      }, {
+        apiDeployment: async () => stableDeployment(livePair.apiVersionId),
+        frontendDeployment: async () => stableDeployment(livePair.frontendVersionId),
+        manifest: () => manifest,
+        production: async () => assert.fail('stale preflight reached production'),
+        record: () => assert.fail('stale preflight wrote release metadata'),
+        triggerDryRun: () => assert.fail('stale preflight ran trigger validation'),
+        upload: async () => {
+          uploaded = true;
+          assert.fail('stale preflight uploaded a candidate');
+        },
+        validate: () => assert.fail('stale preflight ran local validation'),
+      }),
+      /Release preflight expected API/,
+    );
+    assert.equal(uploaded, false);
+  }
+});
+
+test('complete API release verifies the full pair around one exact API promotion', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const events: string[] = [];
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  const apiStatuses = [apiVersionId, candidateVersionId];
+  const frontendStatuses = [frontendVersionId, frontendVersionId, frontendVersionId];
+  const metadata = await deployApiTestHooks.runCompleteApiRelease({
+    apiToken: 'scoped-token',
+    checkEnvironment: { CI: 'true', HELIUS_API_KEY: '' },
+    heliusApiKey: 'helius-test-key',
+    logsDirectory: '/tmp/logs',
+    smokeOwner: OWNER,
+    wranglerEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+  }, {
+    apiDeployment: async () => {
+      events.push('api-status');
+      return stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read'));
+    },
+    frontendDeployment: async () => {
+      events.push('frontend-status');
+      return stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read'));
+    },
+    manifest: () => {
+      events.push('manifest');
+      return manifest;
+    },
+    production: async (input) => {
+      events.push('production');
+      assert.deepEqual(input.candidateSmoke, {
+        expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+        forbiddenInventoryDropId: 'clear_cards_devnet',
+        includeDevnet: true,
+        owner: OWNER,
+      });
+      await input.verifyBeforePromotion?.();
+      events.push('promotion-guard-passed');
+    },
+    record: (versionId, options) => {
+      events.push('record');
+      assert.equal(versionId, candidateVersionId);
+      assert.deepEqual(options.expectedCurrentProduction, { apiVersionId, frontendVersionId });
+      return {
+        ...manifest,
+        currentProduction: { apiVersionId: versionId, frontendVersionId },
+      };
+    },
+    triggerDryRun: (environment) => {
+      assert.equal(environment.CI, 'true');
+      events.push('trigger-dry-run');
+    },
+    upload: async (input) => {
+      events.push('upload');
+      assert.equal(input.candidateSmoke.includeDevnet, true);
+      return {
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        versionId: candidateVersionId,
+      };
+    },
+    validate: () => events.push('validate'),
+  });
+  assert.equal(metadata.versionId, candidateVersionId);
+  assert.deepEqual(events, [
+    'manifest',
+    'api-status',
+    'frontend-status',
+    'validate',
+    'trigger-dry-run',
+    'upload',
+    'production',
+    'frontend-status',
+    'promotion-guard-passed',
+    'api-status',
+    'frontend-status',
+    'record',
+  ]);
+});
+
+test('complete API release refuses post-promotion pair drift and manifest-write ambiguity', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  {
+    const frontendStatuses = [frontendVersionId, randomUUID()];
+    let recorded = false;
+    await assert.rejects(
+      () => deployApiTestHooks.runCompleteApiRelease({
+        apiToken: 'scoped-token',
+        checkEnvironment: { HELIUS_API_KEY: '' },
+        heliusApiKey: 'helius-test-key',
+        logsDirectory: '/tmp/logs',
+        smokeOwner: OWNER,
+        wranglerEnvironment: { HELIUS_API_KEY: '' },
+      }, {
+        apiDeployment: async () => stableDeployment(apiVersionId),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: async (input) => input.verifyBeforePromotion?.(),
+        record: () => {
+          recorded = true;
+          return manifest;
+        },
+        triggerDryRun: () => undefined,
+        upload: async () => ({
+          previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+          versionId: candidateVersionId,
+        }),
+        validate: () => undefined,
+      }),
+      /Frontend changed before API promotion/,
+    );
+    assert.equal(recorded, false);
+  }
+  for (const finalPair of [
+    { apiVersionId, frontendVersionId },
+    { apiVersionId: candidateVersionId, frontendVersionId: randomUUID() },
+  ]) {
+    const apiStatuses = [apiVersionId, finalPair.apiVersionId];
+    const frontendStatuses = [frontendVersionId, frontendVersionId, finalPair.frontendVersionId];
+    let recorded = false;
+    await assert.rejects(
+      () => deployApiTestHooks.runCompleteApiRelease({
+        apiToken: 'scoped-token',
+        checkEnvironment: { HELIUS_API_KEY: '' },
+        heliusApiKey: 'helius-test-key',
+        logsDirectory: '/tmp/logs',
+        smokeOwner: OWNER,
+        wranglerEnvironment: { HELIUS_API_KEY: '' },
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: async (input) => input.verifyBeforePromotion?.(),
+        record: () => {
+          recorded = true;
+          return manifest;
+        },
+        triggerDryRun: () => undefined,
+        upload: async () => ({
+          previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+          versionId: candidateVersionId,
+        }),
+        validate: () => undefined,
+      }),
+      /Release commit verification expected API/,
+    );
+    assert.equal(recorded, false);
+  }
+
+  const apiStatuses = [apiVersionId, candidateVersionId];
+  const frontendStatuses = [frontendVersionId, frontendVersionId, frontendVersionId];
+  await assert.rejects(
+    () => deployApiTestHooks.runCompleteApiRelease({
+      apiToken: 'scoped-token',
+      checkEnvironment: { HELIUS_API_KEY: '' },
+      heliusApiKey: 'helius-test-key',
+      logsDirectory: '/tmp/logs',
+      smokeOwner: OWNER,
+      wranglerEnvironment: { HELIUS_API_KEY: '' },
+    }, {
+      apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+      frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+      manifest: () => manifest,
+      production: async (input) => input.verifyBeforePromotion?.(),
+      record: () => {
+        throw new Error('injected manifest write failure');
+      },
+      triggerDryRun: () => undefined,
+      upload: async () => ({
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        versionId: candidateVersionId,
+      }),
+      validate: () => undefined,
+    }),
+    new RegExp(`API version ${candidateVersionId} is live and verified[\\s\\S]*release:finalize[\\s\\S]*${frontendVersionId}`),
+  );
 });
 
 test('API production benchmarks the exact preview before mutation and writes evidence last', async () => {
@@ -1297,9 +1586,16 @@ test('API production benchmarks the exact preview before mutation and writes evi
   const candidateVersionId = randomUUID();
   const previewUrl = deployApiTestHooks.expectedPreviewOrigin(candidateVersionId);
   const events: string[] = [];
+  const smokeOptions: Array<{ expectedInventoryDropId?: string; forbiddenInventoryDropId?: string }> = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
     {
+      candidateSmoke: {
+        expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+        forbiddenInventoryDropId: 'clear_cards_devnet',
+        includeDevnet: true,
+        owner: OWNER,
+      },
       expectedCurrentVersionId: baselineVersionId,
       heliusApiKey: 'helius-test-key',
       previewUrl,
@@ -1314,12 +1610,14 @@ test('API production benchmarks the exact preview before mutation and writes evi
         candidateVersionId,
         candidateVersionId,
       ], events),
-      smoke: async (origin, owner) => {
-        assert.equal(owner, OWNER);
+      smoke: async (origin, options) => {
+        assert.equal(options.owner, OWNER);
+        assert.equal(options.includeDevnet, true);
+        smokeOptions.push(options);
         events.push(`smoke:${origin}`);
       },
       benchmark: async (options, apiKey) => {
-        assert.deepEqual(options, { apiOrigin: previewUrl, owner: OWNER, runs: 5 });
+        assert.deepEqual(options, { apiOrigin: previewUrl, includeDevnet: true, owner: OWNER, runs: 5 });
         assert.equal(apiKey, 'helius-test-key');
         events.push(`benchmark:${options.apiOrigin}`);
         return { runs: 5, workerMedianMs: 10, legacyMedianMs: 20 };
@@ -1362,6 +1660,20 @@ test('API production benchmarks the exact preview before mutation and writes evi
     'smoke:https://api.mons.shop',
     'deployment-status',
     `evidence:${candidateVersionId}`,
+  ]);
+  assert.deepEqual(smokeOptions.map((options) => ({
+    expectedInventoryDropId: options.expectedInventoryDropId,
+    forbiddenInventoryDropId: options.forbiddenInventoryDropId,
+  })), [
+    {
+      expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+      forbiddenInventoryDropId: 'clear_cards_devnet',
+    },
+    { expectedInventoryDropId: undefined, forbiddenInventoryDropId: undefined },
+    {
+      expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
+      forbiddenInventoryDropId: 'clear_cards_devnet',
+    },
   ]);
 });
 
@@ -1834,6 +2146,37 @@ test('release CLI requires exact production version metadata', () => {
   );
 });
 
+test('release CLI defaults to a complete release with no arguments', () => {
+  assert.deepEqual(deployApiTestHooks.parseArgs([]), {
+    mode: 'release',
+    smokeOwner: deployApiTestHooks.defaultSmokeOwner,
+    tokenFile: undefined,
+    versionId: undefined,
+  });
+  assert.deepEqual(deployApiTestHooks.parseArgs(['release']), {
+    mode: 'release',
+    smokeOwner: deployApiTestHooks.defaultSmokeOwner,
+    tokenFile: undefined,
+    versionId: undefined,
+  });
+  assert.deepEqual(deployApiTestHooks.parseArgs(['--smoke-owner', OWNER]), {
+    mode: 'release',
+    smokeOwner: OWNER,
+    tokenFile: undefined,
+    versionId: undefined,
+  });
+  assert.throws(
+    () => deployApiTestHooks.parseArgs(['release', '--version-id', randomUUID()]),
+    /not valid in release mode/,
+  );
+});
+
+test('API release resolves the Helius key without exposing it as an argument', () => {
+  assert.equal(deployApiTestHooks.resolveHeliusApiKey({}), '');
+  assert.equal(deployApiTestHooks.resolveHeliusApiKey({ VITE_HELIUS_API_KEY: 'browser-secret' }), '');
+  assert.equal(deployApiTestHooks.resolveHeliusApiKey({ HELIUS_API_KEY: ' server-secret ' }), 'server-secret');
+});
+
 test('tracked release metadata is exact and excludes direct-Helius frontend rollback', () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
@@ -1901,6 +2244,66 @@ test('release finalization atomically updates production IDs while preserving ro
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);
     assert.deepEqual(readdirSync(directory).sort(), ['evidence', 'release-manifest.json']);
     assert.equal(statSync(path).mode & 0o777, 0o640);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('one-step API release advances only the verified API production baseline', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-api-release-manifest-test-'));
+  const path = join(directory, 'release-manifest.json');
+  const evidenceDirectory = join(directory, 'evidence');
+  const before = deployApiTestHooks.readReleaseManifest();
+  const apiVersionId = randomUUID();
+  const now = new Date('2026-08-11T12:34:56.000Z');
+  try {
+    writeFileSync(path, `${JSON.stringify(before, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    assert.throws(
+      () => recordApiProductionVersion(apiVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: before.currentProduction,
+        manifestPath: path,
+        now,
+      }),
+      /requires api evidence/,
+    );
+    writeProductionEvidence('api', apiVersionId, { directory: evidenceDirectory, now });
+    assert.throws(
+      () => recordApiProductionVersion(apiVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: {
+          ...before.currentProduction,
+          apiVersionId: randomUUID(),
+        },
+        manifestPath: path,
+        now,
+      }),
+      /changed during deployment/,
+    );
+    assert.throws(
+      () => recordApiProductionVersion(apiVersionId, {
+        evidenceDirectory,
+        expectedCurrentProduction: {
+          ...before.currentProduction,
+          frontendVersionId: randomUUID(),
+        },
+        manifestPath: path,
+        now,
+      }),
+      /changed during deployment/,
+    );
+    const after = recordApiProductionVersion(apiVersionId, {
+      evidenceDirectory,
+      expectedCurrentProduction: before.currentProduction,
+      manifestPath: path,
+      now,
+    });
+    assert.equal(after.currentProduction.apiVersionId, apiVersionId);
+    assert.equal(after.currentProduction.frontendVersionId, before.currentProduction.frontendVersionId);
+    assert.deepEqual(after.approvedRollback, before.approvedRollback);
+    assert.equal(after.recordedAt, now.toISOString());
+    assert.equal(statSync(path).mode & 0o777, 0o640);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);
   } finally {
     rmSync(directory, { recursive: true });
   }
