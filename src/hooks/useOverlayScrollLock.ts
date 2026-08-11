@@ -1,5 +1,9 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { acquireBodyScrollLock, releaseBodyScrollLock } from '../lib/bodyScrollLock';
+import {
+  captureViewportScrollPosition,
+  restoreViewportScrollPosition,
+} from '../lib/viewportScroll';
 
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
@@ -42,9 +46,10 @@ export function useOverlayScrollLock({
   escapeEnabled = true,
   onEscape,
 }: UseOverlayScrollLockOptions) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return undefined;
 
+    const scrollPosition = captureViewportScrollPosition();
     const onKeyDown = (evt: KeyboardEvent) => {
       if ((evt.metaKey || evt.ctrlKey) && OVERLAY_ZOOM_SHORTCUT_KEYS.has(evt.key)) {
         evt.preventDefault();
@@ -80,6 +85,7 @@ export function useOverlayScrollLock({
     body.classList.add('overlay-scroll-lock');
     html.style.overflow = 'hidden';
     acquireBodyScrollLock();
+    restoreViewportScrollPosition(scrollPosition);
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
@@ -90,6 +96,7 @@ export function useOverlayScrollLock({
       body.classList.remove('overlay-scroll-lock');
       html.style.overflow = previousHtmlOverflow;
       releaseBodyScrollLock();
+      restoreViewportScrollPosition(scrollPosition);
     };
   }, [active, escapeEnabled, onEscape]);
 }

@@ -21,6 +21,11 @@ import {
   type BackgroundBlurState,
   type ResolvedBackgroundBlurState,
 } from '../lib/backgroundBlur';
+import {
+  captureViewportScrollPosition,
+  restoreViewportScrollPosition,
+  type ViewportScrollPosition,
+} from '../lib/viewportScroll';
 
 export type { BackgroundBlurState } from '../lib/backgroundBlur';
 
@@ -62,6 +67,7 @@ export function BackgroundBlurProvider({ children }: { children: ReactNode }) {
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const requestsRef = useRef(new Map<symbol, ResolvedBackgroundBlurState>());
+  const preservedScrollPositionRef = useRef<ViewportScrollPosition | null>(null);
   const stateRef = useRef<ResolvedBackgroundBlurState>({
     open: false,
     active: false,
@@ -79,13 +85,15 @@ export function BackgroundBlurProvider({ children }: { children: ReactNode }) {
     if (sameBackgroundBlurState(previous, next)) return;
 
     if (next.open && !previous.open) {
+      const scrollPosition = captureViewportScrollPosition();
+      preservedScrollPositionRef.current = scrollPosition;
       const activeElement = document.activeElement;
       returnFocusRef.current =
         activeElement instanceof HTMLElement && layerRef.current?.contains(activeElement)
           ? activeElement
           : lastFocusedElementRef.current;
       setMetrics({
-        scrollY: window.scrollY,
+        scrollY: scrollPosition.top,
         containerHeight: layerRef.current?.getBoundingClientRect().height ?? 0,
       });
     }
@@ -138,7 +146,15 @@ export function BackgroundBlurProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const wasOpen = wasOpenRef.current;
     wasOpenRef.current = state.open;
+    const preservedScrollPosition = preservedScrollPositionRef.current;
+    if (!wasOpen && state.open) {
+      if (preservedScrollPosition) restoreViewportScrollPosition(preservedScrollPosition);
+      return;
+    }
     if (!wasOpen || state.open) return;
+
+    if (preservedScrollPosition) restoreViewportScrollPosition(preservedScrollPosition);
+    preservedScrollPositionRef.current = null;
 
     const preferredTarget = returnFocusRef.current;
     returnFocusRef.current = null;
