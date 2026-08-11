@@ -21,9 +21,11 @@ test('pending-open resolution requires the selected drop to match the placeholde
   assert.ok(sharedScope);
   const runtimes = listShopCollectionQueryRuntimes(false);
   const cardDrop = runtimes.find((drop) => drop.dropId === 'card_nft_2');
+  const clearCardsDrop = runtimes.find((drop) => drop.dropId === 'clear_cards');
   const littleSwagDrop = runtimes.find((drop) => drop.dropId === 'little_swag_boxes');
   const shirtDrop = runtimes.find((drop) => drop.dropId === 'drifella_shirt');
   assert.ok(cardDrop?.boxMinterConfigPda);
+  assert.ok(clearCardsDrop?.boxMinterConfigPda);
   assert.ok(littleSwagDrop);
   assert.ok(shirtDrop);
 
@@ -57,8 +59,9 @@ test('pending-open resolution requires the selected drop to match the placeholde
   assert.equal(resolvePendingOpenDropId(entry([cardDrop], 3)), 'card_nft_2');
   assert.equal(resolvePendingOpenDropId(entry([cardDrop], 1)), null);
   assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 3)), 'card_nft_2');
+  assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 1)), 'clear_cards');
   assert.equal(resolvePendingOpenDropId(entry([cardDrop, littleSwagDrop], 3), cardAsset), 'card_nft_2');
-  assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 1), shirtAsset), null);
+  assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 2), shirtAsset), null);
 });
 
 test('shared receipt collections resolve drops by metadata base and share one query scope', () => {

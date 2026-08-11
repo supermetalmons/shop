@@ -1824,7 +1824,8 @@ test('pending opens keep valid legacy rows while omitting count-mismatched and n
   const nonOpenableBoxAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-non-openable-box')], PublicKey.default)[0];
   const dudeAssets = Array.from({ length: 3 }, (_, index) =>
     PublicKey.findProgramAddressSync([Buffer.from(`shop-api-dude-${index}`)], PublicKey.default)[0]);
-  const mismatchedDudeAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-mismatched-dude')], PublicKey.default)[0];
+  const mismatchedDudeAssets = Array.from({ length: 2 }, (_, index) =>
+    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-mismatched-dude-${index}`)], PublicKey.default)[0]);
   const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.length > 1);
   assert.ok(sharedScope);
   const nonOpenableDrop = sharedScope.drops.find((drop) => drop.dropId === 'drifella_shirt');
@@ -1842,7 +1843,7 @@ test('pending opens keep valid legacy rows while omitting count-mismatched and n
         },
         {
           pubkey: PublicKey.findProgramAddressSync([Buffer.from('shop-api-mismatched-pending')], PublicKey.default)[0].toBase58(),
-          account: { data: [buildPendingRecord(owner, mismatchedBoxAsset, [mismatchedDudeAsset]), 'base64'] },
+          account: { data: [buildPendingRecord(owner, mismatchedBoxAsset, mismatchedDudeAssets), 'base64'] },
         },
         {
           pubkey: PublicKey.findProgramAddressSync([Buffer.from('shop-api-non-openable-pending')], PublicKey.default)[0].toBase58(),
@@ -1956,7 +1957,8 @@ test('pending opens intentionally filter structurally valid records for unknown 
 test('pending opens omit missing or unresolved assets but reject unexpected and duplicate identifiers', async (context) => {
   const owner = new PublicKey(OWNER);
   const boxAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-ambiguous-box')], PublicKey.default)[0];
-  const dudeAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-ambiguous-dude')], PublicKey.default)[0];
+  const dudeAssets = Array.from({ length: 2 }, (_, index) =>
+    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-ambiguous-dude-${index}`)], PublicKey.default)[0]);
   const otherAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-other-asset')], PublicKey.default)[0];
   const pendingPda = PublicKey.findProgramAddressSync([Buffer.from('shop-api-ambiguous-pending')], PublicKey.default)[0].toBase58();
   const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.length > 1);
@@ -1983,7 +1985,7 @@ test('pending opens omit missing or unresolved assets but reject unexpected and 
         if (body.method === 'getProgramAccounts') {
           return rpcResult(body.id, body.params[0] === sharedScope.boxMinterProgramId ? [{
             pubkey: pendingPda,
-            account: { data: [buildPendingRecord(owner, boxAsset, [dudeAsset]), 'base64'] },
+            account: { data: [buildPendingRecord(owner, boxAsset, dudeAssets), 'base64'] },
           }] : []);
         }
         if (body.method === 'getAssetBatch') {
