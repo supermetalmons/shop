@@ -37,6 +37,15 @@ test('card_nft_2 delivery charges 0.4 SOL internationally up to three cards plus
   assert.equal(calculateDeliveryLamports([box, dude], 'INTL', 3, 'card_nft_2'), 460_000_000);
 });
 
+test('clear_cards delivery uses the card_nft_2 redeem fees', () => {
+  assert.equal(calculateDeliveryLamports([dude], 'US', 1, 'clear_cards'), 200_000_000);
+  assert.equal(calculateDeliveryLamports([dude, dude, dude], 'US', 1, 'clear_cards'), 200_000_000);
+  assert.equal(calculateDeliveryLamports([dude, dude, dude, dude], 'US', 1, 'clear_cards'), 260_000_000);
+  assert.equal(calculateDeliveryLamports([dude], 'TR', 1, 'clear_cards'), 400_000_000);
+  assert.equal(calculateDeliveryLamports([dude, dude, dude], 'TR', 1, 'clear_cards'), 400_000_000);
+  assert.equal(calculateDeliveryLamports([dude, dude, dude, dude], 'TR', 1, 'clear_cards'), 460_000_000);
+});
+
 test('drifella_shirt delivery is flat at 0.1 SOL in the US and 0.25 SOL internationally', () => {
   assert.equal(calculateDeliveryLamports([box], 'US', 0, 'drifella_shirt'), 100_000_000);
   assert.equal(calculateDeliveryLamports([box, box, box], 'US', 0, 'drifella_shirt'), 100_000_000);

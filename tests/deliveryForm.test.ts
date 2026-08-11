@@ -26,3 +26,29 @@ test('drifella shirt delivery form describes flat US and international shipping'
   assert.match(internationalMarkup, /International delivery: 0\.25 SOL\./);
   assert.doesNotMatch(internationalMarkup, /up to 1 shirt|additional shirt/);
 });
+
+test('clear cards delivery form describes the card_nft_2 redeem fees', () => {
+  const usMarkup = renderToStaticMarkup(
+    createElement(DeliveryForm, {
+      onSubmit: async () => undefined,
+      itemsPerBox: 1,
+      boxNamePrefix: 'pack',
+      figureNamePrefix: 'card',
+      dropFamily: 'clear_cards',
+      countryCode: 'US',
+    }),
+  );
+  assert.match(usMarkup, /US delivery: 0\.2 SOL up to 3 cards\. 0\.06 SOL each additional card\./);
+
+  const internationalMarkup = renderToStaticMarkup(
+    createElement(DeliveryForm, {
+      onSubmit: async () => undefined,
+      itemsPerBox: 1,
+      boxNamePrefix: 'pack',
+      figureNamePrefix: 'card',
+      dropFamily: 'clear_cards',
+      countryCode: 'TR',
+    }),
+  );
+  assert.match(internationalMarkup, /International delivery: 0\.4 SOL up to 3 cards\. 0\.06 SOL each additional card\./);
+});

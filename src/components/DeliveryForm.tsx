@@ -2,7 +2,11 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { type DropFamily } from '../config/deployment';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
-import { isDirectDeliveryItemsPerBox, normalizeDeliveryUnitsPerBox } from '../lib/shipping';
+import {
+  isDirectDeliveryItemsPerBox,
+  normalizeDeliveryUnitsPerBox,
+  usesCardNft2DeliveryFees,
+} from '../lib/shipping';
 
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
@@ -47,7 +51,8 @@ export function DeliveryForm({
   const selectedCountryCode = countryCode ?? localCountryCode;
   const directDelivery = isDirectDeliveryItemsPerBox(itemsPerBox);
   const unitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
-  const baseDeliveryUnitCount = dropFamily === 'card_nft_2' ? 3 : unitsPerBox;
+  const cardNft2DeliveryFees = usesCardNft2DeliveryFees(dropFamily);
+  const baseDeliveryUnitCount = cardNft2DeliveryFees ? 3 : unitsPerBox;
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
@@ -68,7 +73,7 @@ export function DeliveryForm({
       selectedCountryCode === 'US'
         ? 'Free US shipping'
         : `International delivery: 0.6 SOL for the first ${singleDeliveryUnitLabel}. 0.5 SOL each additional ${singleDeliveryUnitLabel}.`;
-  } else if (dropFamily === 'card_nft_2') {
+  } else if (cardNft2DeliveryFees) {
     shippingNote =
       selectedCountryCode === 'US'
         ? `US delivery: 0.2 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.06 SOL each additional ${singleDeliveryUnitLabel}.`

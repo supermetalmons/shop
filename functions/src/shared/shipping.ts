@@ -19,6 +19,10 @@ export type DeliveryItemKind = 'box' | 'dude' | 'certificate';
 export type DeliveryItem = { kind: DeliveryItemKind };
 export type InvalidDeliveryUnitsPolicy = 'fallback-one' | 'arithmetic';
 
+export function usesCardNft2DeliveryFees(dropFamily: DropFamily | undefined): boolean {
+  return dropFamily === 'card_nft_2' || dropFamily === 'clear_cards';
+}
+
 export function canDeliverItemKind(
   dropFamily: DropFamily | undefined,
   kind: DeliveryItemKind,
@@ -70,7 +74,7 @@ function calculateUsDeliveryLamports(
     return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS +
       extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
   }
-  if (dropFamily === 'card_nft_2') {
+  if (usesCardNft2DeliveryFees(dropFamily)) {
     const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
     return CARD_NFT_2_US_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
   }
@@ -110,7 +114,7 @@ export function calculateDeliveryLamports(
       invalidPolicy,
     );
   }
-  if (dropFamily === 'card_nft_2') {
+  if (usesCardNft2DeliveryFees(dropFamily)) {
     const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
     return CARD_NFT_2_INTL_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
   }

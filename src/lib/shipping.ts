@@ -6,6 +6,7 @@ export {
   canDeliverItemKind,
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
+  usesCardNft2DeliveryFees,
 } from '../../functions/src/shared/shipping.ts';
 
 export function calculateDeliveryLamports(
