@@ -780,7 +780,23 @@ function createFinalV3LightingConfig(packAlpha: number) {
   return config;
 }
 
+function createFinalV4LightingConfig(packAlpha: number) {
+  const config = createFinalV3LightingConfig(packAlpha);
+  config.hemisphere.enabled = false;
+  config.area.enabled = false;
+  config.point.enabled = false;
+  config.spot.enabled = false;
+  return config;
+}
+
 export const CLEAR_CARD_LIGHTING_PRESETS = [
+  {
+    id: 'final_v4',
+    label: 'final_v4',
+    description: 'Final v4 lighting without hemisphere, area, point, or spot lights.',
+    config: createFinalV4LightingConfig(0.55),
+    darkModeConfig: createFinalV4LightingConfig(0.76),
+  },
   {
     id: 'final_v3',
     label: 'final_v3',
@@ -811,7 +827,7 @@ export const CLEAR_CARD_LIGHTING_PRESETS = [
 
 export type ClearCardLightingPresetId = (typeof CLEAR_CARD_LIGHTING_PRESETS)[number]['id'];
 
-export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v3';
+export const DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID: ClearCardLightingPresetId = 'final_v4';
 const CLEAR_CARD_LIGHTING_CONFIG_VERSION = 1;
 
 export function createClearCardLightingPreset(

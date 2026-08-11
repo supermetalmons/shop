@@ -49,7 +49,7 @@ test('final v2 duplicates final v1 with lower pack alpha', () => {
   assert.deepEqual(finalV2, expected);
 });
 
-test('final v3 adapts pack alpha to the color scheme and is the default', () => {
+test('final v3 adapts pack alpha to the color scheme', () => {
   const expectedLight = createClearCardLightingPreset('final_v1');
   expectedLight.transmission.packAlpha = 0.55;
   const expectedDark = createClearCardLightingPreset('final_v1');
@@ -58,7 +58,26 @@ test('final v3 adapts pack alpha to the color scheme and is the default', () => 
   const light = createClearCardLightingPreset('final_v3');
   const dark = createClearCardLightingPreset('final_v3', { darkMode: true });
 
-  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v3');
+  assert.deepEqual(light, expectedLight);
+  assert.deepEqual(dark, expectedDark);
+});
+
+test('final v4 duplicates final v3 with four physical lights disabled and is the default', () => {
+  const expectedLight = createClearCardLightingPreset('final_v3');
+  expectedLight.hemisphere.enabled = false;
+  expectedLight.area.enabled = false;
+  expectedLight.point.enabled = false;
+  expectedLight.spot.enabled = false;
+  const expectedDark = createClearCardLightingPreset('final_v3', { darkMode: true });
+  expectedDark.hemisphere.enabled = false;
+  expectedDark.area.enabled = false;
+  expectedDark.point.enabled = false;
+  expectedDark.spot.enabled = false;
+
+  const light = createClearCardLightingPreset('final_v4');
+  const dark = createClearCardLightingPreset('final_v4', { darkMode: true });
+
+  assert.equal(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, 'final_v4');
   assert.deepEqual(light, expectedLight);
   assert.deepEqual(dark, expectedDark);
   assert.deepEqual(createClearCardLightingPreset(), light);
