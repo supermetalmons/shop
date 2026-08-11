@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   FRONTEND_DROPS,
   defaultDropFamilyForDropId as defaultFrontendDropFamilyForDropId,
@@ -62,6 +63,16 @@ test('upcoming routes expose their exact preview configuration', () => {
   for (const expected of UPCOMING_ROUTES) {
     assert.deepEqual(routesByPath.get(expected.path), expected);
   }
+});
+
+test('Clear Cards keeps its public upcoming route separate from its WIP route', () => {
+  const router = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+  assert.match(router, /const canonicalClearCardsWipPath = '\/clear_cards\/wip';/);
+  assert.match(app, /\{ path: '\/clear_cards\/wip' \}/);
+  assert.deepEqual(resolveUpcomingDropRouteByPath('/clear_cards'), UPCOMING_ROUTES[0]);
+  assert.equal(resolveUpcomingDropRouteByPath('/clear_cards/wip'), null);
 });
 
 test('legacy binder route redirects to the canonical family route', () => {

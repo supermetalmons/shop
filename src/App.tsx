@@ -300,7 +300,7 @@ const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQ
 const BUILD_INFO = getBuildInfo();
 const ADMIN_MENU_WIP_PATHS: { path: string; dropId?: string }[] = [
   { path: '/card_nft_2/wip', dropId: 'card_nft_2' },
-  { path: '/clear_cards' },
+  { path: '/clear_cards/wip' },
 ];
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const RECEIPT_SIGNED_SEND_TIMEOUT_MS = 10_000;
