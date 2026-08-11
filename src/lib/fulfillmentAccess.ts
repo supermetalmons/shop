@@ -8,7 +8,10 @@ import {
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentAppAccess,
 } from '../../functions/src/shared/fulfillmentAccess';
-import { DEPLOYMENT_DROPS } from '../../functions/src/shared/deploymentRegistry';
+import {
+  DEPLOYMENT_DROPS,
+  deploymentTreasuryAlias,
+} from '../../functions/src/shared/deploymentRegistry';
 
 export const ADMIN_WALLETS = new Set<string>(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 
@@ -28,7 +31,7 @@ export const DEVNET_INVENTORY_WALLETS = new Set<string>([
   ...FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
-  ...Object.values(DEPLOYMENT_DROPS).map(({ treasury }) => treasury),
+  ...Object.values(DEPLOYMENT_DROPS).map(deploymentTreasuryAlias),
   '8cC8yaEuoTRfmxEopJ9ttUq8JoKR6QkNnm7UqUXPymDw',
 ]);
 

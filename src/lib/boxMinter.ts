@@ -96,8 +96,27 @@ export interface BoxMinterConfigAccount {
   mintVariantStartIds: BoxMinterMintVariantTuple;
   mintVariantEndIds: BoxMinterMintVariantTuple;
   mintVariantNextIds: BoxMinterMintVariantTuple;
+  paymentRouting: BoxMinterPaymentRouting;
   dropSeed?: Uint8Array;
 }
+
+type BoxMinterMintProceedsRecipient = {
+  address: PublicKey;
+  percentage: number;
+};
+
+type BoxMinterPaymentRouting =
+  | {
+      schema: 'legacy';
+      mintProceeds: BoxMinterMintProceedsRecipient[];
+      deliveryPaymentReceiver: PublicKey;
+    }
+  | {
+      schema: 'split-payments-v1';
+      version: 1;
+      mintProceeds: BoxMinterMintProceedsRecipient[];
+      deliveryPaymentReceiver: PublicKey;
+    };
 
 export interface BuiltMintTx {
   tx: VersionedTransaction;
@@ -120,10 +139,16 @@ type BuiltStartOpenBoxInstructionPlan = {
 };
 
 type DropProgramScopeConfig = Pick<FrontendDeploymentConfig, 'boxMinterProgramId' | 'boxMinterConfigPda'>;
-type DropProgramValidationConfig = Partial<Pick<
-  FrontendDeploymentConfig,
-  'collectionMint' | 'metadataBase' | 'metadataBaseAliases'
->>;
+type DropProgramValidationConfig = Partial<
+  Pick<
+    FrontendDeploymentConfig,
+    | 'collectionMint'
+    | 'metadataBase'
+    | 'metadataBaseAliases'
+    | 'treasury'
+    | 'paymentRouting'
+  >
+>;
 type DropProgramConfig = DropProgramScopeConfig &
   DropProgramValidationConfig &
   Pick<FrontendDeploymentConfig, 'maxPerTx' | 'mintSelection'>;
@@ -151,6 +176,15 @@ function assertStandardMintConfig(cfg: BoxMinterConfigAccount): void {
   if (cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
     throw new Error(SIZE_SELECTION_REQUIRED_ERROR);
   }
+}
+
+function splitPaymentRecipientMetas(cfg: BoxMinterConfigAccount) {
+  if (cfg.paymentRouting.schema !== 'split-payments-v1') return [];
+  return cfg.paymentRouting.mintProceeds.map(({ address }) => ({
+    pubkey: address,
+    isSigner: false,
+    isWritable: true,
+  }));
 }
 
 async function buildComputeBudgetTransaction(
@@ -193,7 +227,8 @@ function resolveConfiguredBoxMinterConfigPda(dropConfig: DropProgramScopeConfig,
 }
 
 export function assertBoxMinterConfigMatchesDropConfig(
-  cfg: Pick<BoxMinterConfigAccount, 'coreCollection' | 'uriBase'>,
+  cfg: Pick<BoxMinterConfigAccount, 'coreCollection' | 'uriBase'> &
+    Partial<Pick<BoxMinterConfigAccount, 'treasury' | 'paymentRouting'>>,
   dropConfig: DropProgramValidationConfig,
 ): void {
   const expectedCollectionMint =
@@ -213,6 +248,68 @@ export function assertBoxMinterConfigMatchesDropConfig(
     )
   ) {
     throw new Error('Deployment config is out of sync with the on-chain metadata base');
+  }
+
+  const expectedTreasury = String(dropConfig.treasury || '').trim();
+  if (
+    expectedTreasury &&
+    cfg.treasury &&
+    cfg.treasury.toBase58() !== expectedTreasury
+  ) {
+    throw new Error(
+      'Deployment config is out of sync with the on-chain delivery payment receiver',
+    );
+  }
+
+  if (!cfg.paymentRouting) {
+    if (dropConfig.paymentRouting) {
+      throw new Error(
+        'On-chain split payment routing was not available for validation',
+      );
+    }
+    return;
+  }
+  const expectedRouting = dropConfig.paymentRouting;
+  if (!expectedRouting) {
+    if (cfg.paymentRouting.schema !== 'legacy') {
+      throw new Error(
+        'Deployment config is missing the on-chain split payment routing',
+      );
+    }
+    return;
+  }
+  if (cfg.paymentRouting.schema !== 'split-payments-v1') {
+    throw new Error(
+      'Deployment config specifies split payments but the on-chain config is legacy',
+    );
+  }
+  if (
+    cfg.paymentRouting.deliveryPaymentReceiver.toBase58() !==
+    expectedRouting.deliveryPaymentReceiver
+  ) {
+    throw new Error(
+      'Deployment config is out of sync with the on-chain delivery payment receiver',
+    );
+  }
+  if (
+    cfg.paymentRouting.mintProceeds.length !==
+    expectedRouting.mintProceeds.length
+  ) {
+    throw new Error(
+      'Deployment config is out of sync with the on-chain mint proceeds routing',
+    );
+  }
+  for (let index = 0; index < expectedRouting.mintProceeds.length; index += 1) {
+    const actual = cfg.paymentRouting.mintProceeds[index];
+    const expected = expectedRouting.mintProceeds[index];
+    if (
+      actual.address.toBase58() !== expected.address ||
+      actual.percentage !== expected.percentage
+    ) {
+      throw new Error(
+        'Deployment config is out of sync with the on-chain mint proceeds routing',
+      );
+    }
   }
 }
 
@@ -322,6 +419,19 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     throw error;
   }
   const dropSeed = decoded.dropSeed;
+  if (!decoded.paymentRouting) {
+    throw new Error('Box minter payment routing was not decoded');
+  }
+  const paymentRouting: BoxMinterPaymentRouting = {
+    ...decoded.paymentRouting,
+    mintProceeds: decoded.paymentRouting.mintProceeds.map((recipient) => ({
+      address: new PublicKey(recipient.address),
+      percentage: recipient.percentage,
+    })),
+    deliveryPaymentReceiver: new PublicKey(
+      decoded.paymentRouting.deliveryPaymentReceiver,
+    ),
+  };
 
   return {
     pubkey,
@@ -346,6 +456,7 @@ export function decodeBoxMinterConfigAccount(pubkey: PublicKey, data: Uint8Array
     mintVariantStartIds: decoded.mintVariantStartIds,
     mintVariantEndIds: decoded.mintVariantEndIds,
     mintVariantNextIds: decoded.mintVariantNextIds,
+    paymentRouting,
     ...(dropSeed ? { dropSeed } : {}),
   };
 }
@@ -404,6 +515,9 @@ export async function fetchBoxMinterConfig(
     maxDelayMs: 2_000,
   });
   if (!info?.data) throw new Error('Box minter is not initialized on this cluster');
+  if (!info.owner.equals(programId)) {
+    throw new Error('Invalid box minter config account owner');
+  }
   const cfg = decodeBoxMinterConfigAccount(pda, info.data);
   assertBoxMinterConfigMatchesDropConfig(cfg, dropConfig);
   return cfg;
@@ -565,6 +679,7 @@ function buildMintBoxesInstructionPlan(
         { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+        ...splitPaymentRecipientMetas(cfg),
       ],
       data: encodeMintBoxesData(quantity, mintId, boxBumps, maxMintsPerTx),
     }),
@@ -600,6 +715,7 @@ function buildMintDiscountedBoxInstructionPlan(
         { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ...boxAccounts.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+        ...splitPaymentRecipientMetas(cfg),
       ],
       data: encodeMintDiscountedBoxData(mintId, boxBumps, proof),
     }),
@@ -627,6 +743,7 @@ function buildMintVariantInstructionPlan(
         { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+        ...splitPaymentRecipientMetas(cfg),
       ],
       data: encodeMintVariantBoxData(variantIndex, mintId, boxBumps[0]),
     }),
@@ -657,6 +774,7 @@ function buildMintDiscountedVariantInstructionPlan(
         { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: boxAccounts[0], isSigner: false, isWritable: true },
+        ...splitPaymentRecipientMetas(cfg),
       ],
       data: encodeMintDiscountedVariantBoxData(variantIndex, mintId, boxBumps[0], proof),
     }),

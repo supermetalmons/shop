@@ -1609,6 +1609,18 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false):
       { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
     );
   }
+  if (!configInfo.owner.equals(dropRuntime.boxMinterProgramId)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'BOX_MINTER_CONFIG_PDA is not owned by the configured box minter program.',
+      {
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        expectedOwner: dropRuntime.boxMinterProgramId.toBase58(),
+        actualOwner: configInfo.owner.toBase58(),
+        dropId: dropRuntime.dropId,
+      },
+    );
+  }
   const decoded = decodeBoxMinterConfigData(Buffer.from(configInfo.data));
   if (decoded.itemsPerBox !== dropRuntime.itemsPerBox) {
     throw new HttpsError(
@@ -1663,6 +1675,7 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false):
       },
     );
   }
+  assertConfiguredPaymentRoutingMatchesOnchain(dropRuntime, decoded);
 
   onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true, config: decoded });
   return decoded;
@@ -2313,9 +2326,88 @@ type DecodedBoxMinterConfig = {
   mintVariantStartIds: BoxMinterMintVariantTuple;
   mintVariantEndIds: BoxMinterMintVariantTuple;
   mintVariantNextIds: BoxMinterMintVariantTuple;
+  paymentRouting: DecodedBoxMinterPaymentRouting;
   uriBase: string;
   dropSeed?: Buffer;
 };
+
+type DecodedBoxMinterPaymentRouting =
+  | {
+      schema: 'legacy';
+      mintProceeds: Array<{ address: PublicKey; percentage: number }>;
+      deliveryPaymentReceiver: PublicKey;
+    }
+  | {
+      schema: 'split-payments-v1';
+      version: 1;
+      mintProceeds: Array<{ address: PublicKey; percentage: number }>;
+      deliveryPaymentReceiver: PublicKey;
+    };
+
+function assertConfiguredPaymentRoutingMatchesOnchain(
+  dropRuntime: DropRuntime,
+  cfg: DecodedBoxMinterConfig,
+): void {
+  const configured = dropRuntime.config;
+  if (cfg.treasury.toBase58() !== configured.treasury) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Configured delivery payment receiver does not match the on-chain config.',
+      {
+        configured: configured.treasury,
+        onchain: cfg.treasury.toBase58(),
+        dropId: dropRuntime.dropId,
+      },
+    );
+  }
+  if (!configured.paymentRouting) {
+    if (cfg.paymentRouting.schema !== 'legacy') {
+      throw new HttpsError(
+        'failed-precondition',
+        'Configured payment routing is missing for an on-chain split-payment drop.',
+        { dropId: dropRuntime.dropId },
+      );
+    }
+    return;
+  }
+  if (cfg.paymentRouting.schema !== 'split-payments-v1') {
+    throw new HttpsError(
+      'failed-precondition',
+      'Configured split payment routing does not match the legacy on-chain config.',
+      { dropId: dropRuntime.dropId },
+    );
+  }
+  if (
+    cfg.paymentRouting.deliveryPaymentReceiver.toBase58() !==
+      configured.paymentRouting.deliveryPaymentReceiver ||
+    cfg.paymentRouting.mintProceeds.length !==
+      configured.paymentRouting.mintProceeds.length
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Configured payment routing does not match the on-chain config.',
+      { dropId: dropRuntime.dropId },
+    );
+  }
+  for (
+    let index = 0;
+    index < configured.paymentRouting.mintProceeds.length;
+    index += 1
+  ) {
+    const actual = cfg.paymentRouting.mintProceeds[index];
+    const expected = configured.paymentRouting.mintProceeds[index];
+    if (
+      actual.address.toBase58() !== expected.address ||
+      actual.percentage !== expected.percentage
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Configured payment routing does not match the on-chain config.',
+        { dropId: dropRuntime.dropId, recipientIndex: index },
+      );
+    }
+  }
+}
 
 function throwBoxMinterConfigHttpsError(error: BoxMinterConfigCodecError): never {
   switch (error.reason) {
@@ -2351,6 +2443,20 @@ function throwBoxMinterConfigHttpsError(error: BoxMinterConfigCodecError): never
         'failed-precondition',
         'Unexpected trailing data after the box minter drop seed',
       );
+    case 'empty':
+    case 'invalid-discriminator':
+    case 'unsupported-config-account-size':
+    case 'invalid-payment-routing-magic':
+    case 'unsupported-payment-routing-version':
+    case 'invalid-payment-routing-recipient-count':
+    case 'invalid-payment-routing-recipient':
+    case 'invalid-payment-routing-percentage':
+    case 'invalid-payment-routing-reserved-data':
+      throw new HttpsError(
+        'failed-precondition',
+        error.message,
+        error.details,
+      );
     default:
       throw error;
   }
@@ -2360,7 +2466,9 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
   let decoded;
   try {
-    decoded = decodeBoxMinterConfigDataShared(buf, { validateDiscriminator: false });
+    decoded = decodeBoxMinterConfigDataShared(buf, {
+      validateDiscriminator: true,
+    });
   } catch (error) {
     if (error instanceof BoxMinterConfigCodecError) {
       throwBoxMinterConfigHttpsError(error);
@@ -2369,6 +2477,22 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
   }
 
   const dropSeed = decoded.dropSeed ? Buffer.from(decoded.dropSeed) : undefined;
+  if (!decoded.paymentRouting) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Box minter payment routing was not decoded.',
+    );
+  }
+  const paymentRouting: DecodedBoxMinterPaymentRouting = {
+    ...decoded.paymentRouting,
+    mintProceeds: decoded.paymentRouting.mintProceeds.map((recipient) => ({
+      address: new PublicKey(recipient.address),
+      percentage: recipient.percentage,
+    })),
+    deliveryPaymentReceiver: new PublicKey(
+      decoded.paymentRouting.deliveryPaymentReceiver,
+    ),
+  };
   return {
     admin: new PublicKey(decoded.admin),
     treasury: new PublicKey(decoded.treasury),
@@ -2383,6 +2507,7 @@ function decodeBoxMinterConfigData(data: Buffer | Uint8Array): DecodedBoxMinterC
     mintVariantStartIds: decoded.mintVariantStartIds,
     mintVariantEndIds: decoded.mintVariantEndIds,
     mintVariantNextIds: decoded.mintVariantNextIds,
+    paymentRouting,
     uriBase: decoded.uriBase,
     ...(dropSeed ? { dropSeed } : {}),
   };
@@ -2404,6 +2529,18 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
       'failed-precondition',
       'Box minter config PDA not found. Re-run `npm run deploy-all-onchain -- <dropId>`, update env, and redeploy.',
       { configPda: dropRuntime.boxMinterConfigPda.toBase58(), dropId: dropRuntime.dropId },
+    );
+  }
+  if (!cfgInfo.owner.equals(dropRuntime.boxMinterProgramId)) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Box minter config PDA has an unexpected owner.',
+      {
+        configPda: dropRuntime.boxMinterConfigPda.toBase58(),
+        expectedOwner: dropRuntime.boxMinterProgramId.toBase58(),
+        actualOwner: cfgInfo.owner.toBase58(),
+        dropId: dropRuntime.dropId,
+      },
     );
   }
   return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
@@ -8697,6 +8834,7 @@ export const prepareDeliveryTx = onCallLogged(
     conn,
     context: 'getAccountInfo:boxMinterConfig',
   });
+  assertConfiguredPaymentRoutingMatchesOnchain(dropRuntime, cfg);
   const cfgAdmin = cfg.admin;
   const cfgTreasury = cfg.treasury;
   const cfgCoreCollection = cfg.coreCollection;

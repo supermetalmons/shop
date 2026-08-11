@@ -93,6 +93,16 @@ const MAX_ITEMS_PER_BOX: u8 = 5;
 const MINT_VARIANT_OPTION_COUNT: usize = 3;
 const MINT_VARIANT_KIND_NONE: u8 = 0;
 const MINT_VARIANT_KIND_SIZE: u8 = 1;
+const SPLIT_PAYMENTS_V1_MAGIC: [u8; 8] = *b"MONSPAY\0";
+const SPLIT_PAYMENTS_V1_VERSION: u8 = 1;
+const SPLIT_PAYMENTS_V1_MIN_RECIPIENTS: usize = 2;
+const SPLIT_PAYMENTS_V1_MAX_RECIPIENTS: usize = 3;
+const SPLIT_PAYMENTS_V1_PERCENT_TOTAL: u16 = 100;
+const SPLIT_PAYMENTS_V1_TAIL_SPACE: usize = 112;
+const SPLIT_PAYMENTS_V1_CONFIG_SPACE: usize = 488;
+const SPLIT_PAYMENTS_V1_RECIPIENTS_OFFSET: usize = 10;
+const SPLIT_PAYMENTS_V1_PERCENTAGES_OFFSET: usize = 106;
+const SPLIT_PAYMENTS_V1_RESERVED_OFFSET: usize = 109;
 
 // Asset PDA namespaces (owned by mpl-core; signed for via our program).
 const SEED_BOX_ASSET: &[u8] = b"box";
@@ -250,6 +260,196 @@ fn validate_mint_prices(price_lamports: u64, discount_price_lamports: u64) -> Re
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SplitPaymentsV1 {
+    recipient_count: u8,
+    recipients: [Pubkey; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS],
+    percentages: [u8; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS],
+}
+
+fn validate_split_payments_v1(split: &SplitPaymentsV1) -> Result<()> {
+    let recipient_count = usize::from(split.recipient_count);
+    if !(SPLIT_PAYMENTS_V1_MIN_RECIPIENTS..=SPLIT_PAYMENTS_V1_MAX_RECIPIENTS)
+        .contains(&recipient_count)
+    {
+        return Err(BoxMinterError::InvalidSplitPaymentsRecipients.into());
+    }
+
+    let mut percentage_total = 0u16;
+    for index in 0..recipient_count {
+        if split.recipients[index] == Pubkey::default() {
+            return Err(BoxMinterError::InvalidSplitPaymentsRecipients.into());
+        }
+        if split.percentages[index] == 0 {
+            return Err(BoxMinterError::InvalidSplitPaymentsPercentages.into());
+        }
+        percentage_total = percentage_total
+            .checked_add(u16::from(split.percentages[index]))
+            .ok_or(BoxMinterError::MathOverflow)?;
+        for prior_index in 0..index {
+            if split.recipients[index] == split.recipients[prior_index] {
+                return Err(BoxMinterError::InvalidSplitPaymentsRecipients.into());
+            }
+        }
+    }
+
+    for index in recipient_count..SPLIT_PAYMENTS_V1_MAX_RECIPIENTS {
+        if split.recipients[index] != Pubkey::default() {
+            return Err(BoxMinterError::InvalidSplitPaymentsRecipients.into());
+        }
+        if split.percentages[index] != 0 {
+            return Err(BoxMinterError::InvalidSplitPaymentsPercentages.into());
+        }
+    }
+
+    if percentage_total != SPLIT_PAYMENTS_V1_PERCENT_TOTAL {
+        return Err(BoxMinterError::InvalidSplitPaymentsPercentages.into());
+    }
+    Ok(())
+}
+
+fn parse_split_payments_v1_tail(tail: &[u8]) -> Result<SplitPaymentsV1> {
+    if tail.len() != SPLIT_PAYMENTS_V1_TAIL_SPACE
+        || tail[..SPLIT_PAYMENTS_V1_MAGIC.len()] != SPLIT_PAYMENTS_V1_MAGIC
+        || tail[SPLIT_PAYMENTS_V1_MAGIC.len()] != SPLIT_PAYMENTS_V1_VERSION
+        || tail[SPLIT_PAYMENTS_V1_RESERVED_OFFSET..]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err(BoxMinterError::InvalidSplitPaymentsConfig.into());
+    }
+
+    let mut recipients = [Pubkey::default(); SPLIT_PAYMENTS_V1_MAX_RECIPIENTS];
+    for (index, recipient) in recipients.iter_mut().enumerate() {
+        let start = SPLIT_PAYMENTS_V1_RECIPIENTS_OFFSET + index * 32;
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&tail[start..start + 32]);
+        *recipient = Pubkey::new_from_array(bytes);
+    }
+
+    let mut percentages = [0u8; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS];
+    percentages.copy_from_slice(
+        &tail[SPLIT_PAYMENTS_V1_PERCENTAGES_OFFSET..SPLIT_PAYMENTS_V1_RESERVED_OFFSET],
+    );
+    let split = SplitPaymentsV1 {
+        recipient_count: tail[SPLIT_PAYMENTS_V1_MAGIC.len() + 1],
+        recipients,
+        percentages,
+    };
+    validate_split_payments_v1(&split)?;
+    Ok(split)
+}
+
+fn write_split_payments_v1_tail(tail: &mut [u8], split: &SplitPaymentsV1) -> Result<()> {
+    validate_split_payments_v1(split)?;
+    if tail.len() != SPLIT_PAYMENTS_V1_TAIL_SPACE {
+        return Err(BoxMinterError::InvalidSplitPaymentsConfig.into());
+    }
+
+    tail.fill(0);
+    tail[..SPLIT_PAYMENTS_V1_MAGIC.len()].copy_from_slice(&SPLIT_PAYMENTS_V1_MAGIC);
+    tail[SPLIT_PAYMENTS_V1_MAGIC.len()] = SPLIT_PAYMENTS_V1_VERSION;
+    tail[SPLIT_PAYMENTS_V1_MAGIC.len() + 1] = split.recipient_count;
+    for (index, recipient) in split.recipients.iter().enumerate() {
+        let start = SPLIT_PAYMENTS_V1_RECIPIENTS_OFFSET + index * 32;
+        tail[start..start + 32].copy_from_slice(recipient.as_ref());
+    }
+    tail[SPLIT_PAYMENTS_V1_PERCENTAGES_OFFSET..SPLIT_PAYMENTS_V1_RESERVED_OFFSET]
+        .copy_from_slice(&split.percentages);
+    Ok(())
+}
+
+fn parse_split_payments_v1_config_data(data: &[u8]) -> Result<Option<SplitPaymentsV1>> {
+    match data.len() {
+        BoxMinterConfig::SPACE => Ok(None),
+        SPLIT_PAYMENTS_V1_CONFIG_SPACE => parse_split_payments_v1_tail(
+            &data[BoxMinterConfig::SPACE..SPLIT_PAYMENTS_V1_CONFIG_SPACE],
+        )
+        .map(Some),
+        _ => Err(BoxMinterError::InvalidSplitPaymentsConfig.into()),
+    }
+}
+
+fn load_split_payments_v1(config: &Account<BoxMinterConfig>) -> Result<Option<SplitPaymentsV1>> {
+    let config_ai = config.to_account_info();
+    let data = config_ai.try_borrow_data()?;
+    parse_split_payments_v1_config_data(&data)
+}
+
+fn write_split_payments_v1_config(
+    config: &Account<BoxMinterConfig>,
+    split: &SplitPaymentsV1,
+) -> Result<()> {
+    let config_ai = config.to_account_info();
+    if config_ai.data_len() != SPLIT_PAYMENTS_V1_CONFIG_SPACE {
+        return Err(BoxMinterError::InvalidSplitPaymentsConfig.into());
+    }
+    let mut data = config_ai.try_borrow_mut_data()?;
+    write_split_payments_v1_tail(
+        &mut data[BoxMinterConfig::SPACE..SPLIT_PAYMENTS_V1_CONFIG_SPACE],
+        split,
+    )
+}
+
+fn resize_split_payments_v1_config<'info>(
+    config: &Account<'info, BoxMinterConfig>,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let config_ai = config.to_account_info();
+    if config_ai.data_len() != BoxMinterConfig::SPACE {
+        return Err(BoxMinterError::InvalidSplitPaymentsConfig.into());
+    }
+    let minimum_balance = Rent::get()?.minimum_balance(SPLIT_PAYMENTS_V1_CONFIG_SPACE);
+    let funding = minimum_balance.saturating_sub(config_ai.lamports());
+    if funding > 0 {
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &payer.key(),
+            &config_ai.key(),
+            funding,
+        );
+        invoke(
+            &ix,
+            &[payer.clone(), config_ai.clone(), system_program.clone()],
+        )?;
+    }
+    config_ai.resize(SPLIT_PAYMENTS_V1_CONFIG_SPACE)?;
+    Ok(())
+}
+
+fn split_payment_amounts(total_lamports: u64, split: &SplitPaymentsV1) -> Result<[u64; 3]> {
+    validate_split_payments_v1(split)?;
+    let recipient_count = usize::from(split.recipient_count);
+    let total = u128::from(total_lamports);
+    let mut amounts = [0u64; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS];
+    let mut allocated = 0u128;
+
+    for index in 0..recipient_count {
+        let amount = if index + 1 == recipient_count {
+            total
+                .checked_sub(allocated)
+                .ok_or(BoxMinterError::MathOverflow)?
+        } else {
+            let percentage = u128::from(split.percentages[index]);
+            let whole = u128::from(total_lamports / 100u64)
+                .checked_mul(percentage)
+                .ok_or(BoxMinterError::MathOverflow)?;
+            let fractional = (total_lamports % 100u64)
+                .checked_mul(u64::from(split.percentages[index]))
+                .ok_or(BoxMinterError::MathOverflow)?
+                / 100u64;
+            whole
+                .checked_add(u128::from(fractional))
+                .ok_or(BoxMinterError::MathOverflow)?
+        };
+        allocated = allocated
+            .checked_add(amount)
+            .ok_or(BoxMinterError::MathOverflow)?;
+        amounts[index] = u64::try_from(amount).map_err(|_| error!(BoxMinterError::MathOverflow))?;
+    }
+    Ok(amounts)
+}
+
 struct MintBoxesInnerAccounts<'info> {
     payer: AccountInfo<'info>,
     treasury: AccountInfo<'info>,
@@ -306,28 +506,102 @@ fn charge_mint_payment<'info>(
     accounts: &MintBoxesInnerAccounts<'info>,
     unit_price_lamports: u64,
     quantity: u8,
+    split: Option<&SplitPaymentsV1>,
+    recipient_accounts: &[AccountInfo<'info>],
 ) -> Result<()> {
-    let cost = (unit_price_lamports as u128)
-        .checked_mul(quantity as u128)
+    let cost = u128::from(unit_price_lamports)
+        .checked_mul(u128::from(quantity))
         .ok_or(BoxMinterError::MathOverflow)?;
-    require!(cost <= u64::MAX as u128, BoxMinterError::MathOverflow);
-    let cost_u64 = cost as u64;
-    if cost_u64 > 0 {
+    let cost_u64 = u64::try_from(cost).map_err(|_| error!(BoxMinterError::MathOverflow))?;
+
+    if let Some(split) = split {
+        let amounts = split_payment_amounts(cost_u64, split)?;
+        for (recipient, amount) in recipient_accounts.iter().zip(amounts.iter().copied()) {
+            transfer_mint_payment(accounts, recipient, amount)?;
+        }
+    } else {
+        transfer_mint_payment(accounts, &accounts.treasury, cost_u64)?;
+    }
+    Ok(())
+}
+
+fn transfer_mint_payment<'info>(
+    accounts: &MintBoxesInnerAccounts<'info>,
+    recipient: &AccountInfo<'info>,
+    amount: u64,
+) -> Result<()> {
+    if amount > 0 {
         let ix = anchor_lang::solana_program::system_instruction::transfer(
             &accounts.payer.key(),
-            &accounts.treasury.key(),
-            cost_u64,
+            &recipient.key(),
+            amount,
         );
         invoke(
             &ix,
             &[
                 accounts.payer.clone(),
-                accounts.treasury.clone(),
+                recipient.clone(),
                 accounts.system_program.clone(),
             ],
         )?;
     }
     Ok(())
+}
+
+fn resolve_and_validate_mint_remaining_accounts<'a, 'info>(
+    config: &Account<BoxMinterConfig>,
+    payer_key: Pubkey,
+    remaining_accounts: &'a [AccountInfo<'info>],
+    mint_id: u64,
+    asset_bumps: &[u8],
+    program_id: &Pubkey,
+) -> Result<(
+    Option<SplitPaymentsV1>,
+    &'a [AccountInfo<'info>],
+    &'a [AccountInfo<'info>],
+)> {
+    let asset_count = asset_bumps.len();
+    let split = load_split_payments_v1(config)?;
+    let recipient_count = split
+        .as_ref()
+        .map(|routing| usize::from(routing.recipient_count))
+        .unwrap_or(0);
+    let expected_count = asset_count
+        .checked_add(recipient_count)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    if remaining_accounts.len() != expected_count {
+        return Err(BoxMinterError::InvalidRemainingAccounts.into());
+    }
+
+    let (asset_accounts, recipient_accounts) = remaining_accounts.split_at(asset_count);
+    if asset_accounts.iter().any(|account| !account.is_writable) {
+        return Err(BoxMinterError::InvalidRemainingAccounts.into());
+    }
+    for (index, asset_account) in asset_accounts.iter().enumerate() {
+        let asset_seed_index =
+            u8::try_from(index).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
+        validate_mint_box_asset_account(
+            config.key(),
+            payer_key,
+            asset_account,
+            program_id,
+            mint_id,
+            asset_seed_index,
+            asset_bumps[index],
+        )?;
+    }
+
+    if let Some(routing) = split.as_ref() {
+        for (index, recipient_account) in recipient_accounts.iter().enumerate() {
+            if !recipient_account.is_writable
+                || recipient_account.key() != routing.recipients[index]
+            {
+                return Err(BoxMinterError::InvalidSplitPaymentsRecipients.into());
+            }
+        }
+    }
+
+    Ok((split, asset_accounts, recipient_accounts))
 }
 
 fn new_mint_box_asset_buffers<'info>(
@@ -382,11 +656,40 @@ fn new_mint_box_asset_buffers<'info>(
     }
 }
 
+fn validate_mint_box_asset_account(
+    config_key: Pubkey,
+    payer_key: Pubkey,
+    asset_ai: &AccountInfo,
+    program_id: &Pubkey,
+    mint_id: u64,
+    asset_seed_index: u8,
+    asset_bump: u8,
+) -> Result<()> {
+    let expected = Pubkey::create_program_address(
+        &[
+            SEED_BOX_ASSET,
+            config_key.as_ref(),
+            payer_key.as_ref(),
+            &mint_id.to_le_bytes(),
+            &[asset_seed_index],
+            &[asset_bump],
+        ],
+        program_id,
+    )
+    .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
+    require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
+    require_keys_eq!(
+        *asset_ai.owner,
+        anchor_lang::solana_program::system_program::ID,
+        BoxMinterError::InvalidAssetPda
+    );
+    Ok(())
+}
+
 fn mint_one_box_asset<'info>(
     cfg: &Account<'info, BoxMinterConfig>,
     accounts: &MintBoxesInnerAccounts<'info>,
     asset_ai: &AccountInfo<'info>,
-    program_id: &Pubkey,
     mint_id: u64,
     asset_seed_index: u8,
     asset_bump: u8,
@@ -398,25 +701,6 @@ fn mint_one_box_asset<'info>(
     let mint_id_bytes = mint_id.to_le_bytes();
     let i_seed = [asset_seed_index];
     let asset_bump_bytes = [asset_bump];
-    let expected = Pubkey::create_program_address(
-        &[
-            SEED_BOX_ASSET,
-            config_key.as_ref(),
-            payer_key.as_ref(),
-            &mint_id_bytes,
-            &i_seed,
-            &asset_bump_bytes,
-        ],
-        program_id,
-    )
-    .map_err(|_| error!(BoxMinterError::InvalidAssetPda))?;
-
-    require_keys_eq!(asset_ai.key(), expected, BoxMinterError::InvalidAssetPda);
-    require_keys_eq!(
-        *asset_ai.owner,
-        anchor_lang::solana_program::system_program::ID,
-        BoxMinterError::InvalidAssetPda
-    );
 
     let asset_seeds: &[&[u8]] = &[
         SEED_BOX_ASSET,
@@ -534,17 +818,26 @@ fn mint_standard_boxes_inner<'info>(
         .checked_add(qty_u32)
         .ok_or(BoxMinterError::MathOverflow)?;
     require!(new_total <= cfg.max_supply, BoxMinterError::SoldOut);
-
-    charge_mint_payment(accounts, unit_price_lamports, quantity)?;
-
-    require!(
-        remaining_accounts.len() == quantity as usize,
-        BoxMinterError::InvalidRemainingAccounts
-    );
     require!(
         box_bumps.len() == quantity as usize,
         BoxMinterError::InvalidRemainingAccounts
     );
+
+    let (split, asset_accounts, recipient_accounts) = resolve_and_validate_mint_remaining_accounts(
+        cfg,
+        accounts.payer.key(),
+        remaining_accounts,
+        mint_id,
+        &box_bumps,
+        program_id,
+    )?;
+    charge_mint_payment(
+        accounts,
+        unit_price_lamports,
+        quantity,
+        split.as_ref(),
+        recipient_accounts,
+    )?;
 
     let start_index = cfg.minted + 1;
     let mut buffers = new_mint_box_asset_buffers(cfg, accounts);
@@ -556,8 +849,7 @@ fn mint_standard_boxes_inner<'info>(
         mint_one_box_asset(
             cfg,
             accounts,
-            &remaining_accounts[i as usize],
-            program_id,
+            &asset_accounts[i as usize],
             mint_id,
             i_u8,
             box_bumps[i as usize],
@@ -587,23 +879,33 @@ fn mint_variant_box_inner<'info>(
         BoxMinterError::InvalidMplCoreProgram
     );
     require!(
-        remaining_accounts.len() == 1,
-        BoxMinterError::InvalidRemainingAccounts
-    );
-    require!(
         cfg.requires_variant_selection(),
         BoxMinterError::MintVariantSelectionRequired
     );
 
+    let asset_bumps = [box_bump];
+    let (split, asset_accounts, recipient_accounts) = resolve_and_validate_mint_remaining_accounts(
+        cfg,
+        accounts.payer.key(),
+        remaining_accounts,
+        mint_id,
+        &asset_bumps,
+        program_id,
+    )?;
     let metadata_id = reserve_variant_metadata_ids(&mut *cfg, variant_index, 1)?;
-    charge_mint_payment(accounts, unit_price_lamports, 1)?;
+    charge_mint_payment(
+        accounts,
+        unit_price_lamports,
+        1,
+        split.as_ref(),
+        recipient_accounts,
+    )?;
 
     let mut buffers = new_mint_box_asset_buffers(cfg, accounts);
     mint_one_box_asset(
         cfg,
         accounts,
-        &remaining_accounts[0],
-        program_id,
+        &asset_accounts[0],
         mint_id,
         0,
         box_bump,
@@ -1126,155 +1428,208 @@ fn reserve_admin_delivery_metadata_ids(
     }
 }
 
+fn initialize_box_minter_config(
+    cfg: &mut Account<BoxMinterConfig>,
+    admin: Pubkey,
+    treasury: Pubkey,
+    core_collection_ai: &AccountInfo,
+    bump: u8,
+    args: InitializeArgs,
+) -> Result<()> {
+    require_keys_eq!(
+        admin,
+        EXPECTED_INITIALIZER,
+        BoxMinterError::UnauthorizedInitializer
+    );
+    require!(args.max_supply > 0, BoxMinterError::InvalidMaxSupply);
+    require!(args.max_per_tx > 0, BoxMinterError::InvalidMaxPerTx);
+    require!(
+        args.max_per_tx <= MAX_SAFE_MINTS_PER_TX,
+        BoxMinterError::InvalidMaxPerTx
+    );
+    require!(
+        args.items_per_box <= MAX_ITEMS_PER_BOX,
+        BoxMinterError::InvalidItemsPerBox
+    );
+    let max_figure_id = (args.max_supply as u64)
+        .checked_mul(args.items_per_box as u64)
+        .ok_or(BoxMinterError::MathOverflow)?;
+    require!(
+        max_figure_id <= u16::MAX as u64,
+        BoxMinterError::InvalidItemsPerBox
+    );
+    validate_mint_prices(args.price_lamports, args.discount_price_lamports)?;
+    require!(
+        args.mint_variant_kind == MINT_VARIANT_KIND_NONE
+            || args.mint_variant_kind == MINT_VARIANT_KIND_SIZE,
+        BoxMinterError::InvalidMintVariantConfig
+    );
+    require!(
+        args.discount_merkle_root != [0u8; 32],
+        BoxMinterError::DiscountNotConfigured
+    );
+    require!(
+        args.discount_mints_per_wallet >= MIN_DISCOUNT_MINTS_PER_WALLET
+            && args.discount_mints_per_wallet <= MAX_DISCOUNT_MINTS_PER_WALLET,
+        BoxMinterError::InvalidDiscountMintsPerWallet
+    );
+    require!(
+        args.name_prefix.len() <= BoxMinterConfig::MAX_NAME_PREFIX,
+        BoxMinterError::NameTooLong
+    );
+    require!(
+        args.figure_name_prefix.len() <= BoxMinterConfig::MAX_FIGURE_NAME_PREFIX,
+        BoxMinterError::FigureNameTooLong
+    );
+    require!(
+        args.symbol.len() <= BoxMinterConfig::MAX_SYMBOL,
+        BoxMinterError::SymbolTooLong
+    );
+    require!(
+        args.uri_base.len() <= BoxMinterConfig::MAX_URI_BASE,
+        BoxMinterError::UriTooLong
+    );
+    require!(
+        has_any_non_zero_byte(args.drop_seed.as_ref()),
+        BoxMinterError::InvalidDropSeed
+    );
+    let drop_base = normalized_metadata_base(&args.uri_base)?;
+    if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
+        require!(
+            args.items_per_box == 0,
+            BoxMinterError::MintVariantDirectDeliveryOnly
+        );
+        require!(
+            args.max_supply < u32::MAX,
+            BoxMinterError::InvalidMintVariantConfig
+        );
+        for i in 0..MINT_VARIANT_OPTION_COUNT {
+            let start_id = args.mint_variant_start_ids[i];
+            let end_id = args.mint_variant_end_ids[i];
+            let next_id = args.mint_variant_next_ids[i];
+            require!(start_id >= 1, BoxMinterError::InvalidMintVariantConfig);
+            require!(end_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
+            require!(
+                next_id == start_id,
+                BoxMinterError::InvalidMintVariantConfig
+            );
+            if i == 0 {
+                require!(start_id == 1, BoxMinterError::InvalidMintVariantConfig);
+            } else {
+                require!(
+                    start_id
+                        == args.mint_variant_end_ids[i - 1]
+                            .checked_add(1)
+                            .ok_or(BoxMinterError::MathOverflow)?,
+                    BoxMinterError::InvalidMintVariantConfig
+                );
+            }
+        }
+        require!(
+            args.mint_variant_end_ids[MINT_VARIANT_OPTION_COUNT - 1] == args.max_supply,
+            BoxMinterError::InvalidMintVariantConfig
+        );
+    } else {
+        require!(
+            args.mint_variant_start_ids == [0; MINT_VARIANT_OPTION_COUNT]
+                && args.mint_variant_end_ids == [0; MINT_VARIANT_OPTION_COUNT]
+                && args.mint_variant_next_ids == [0; MINT_VARIANT_OPTION_COUNT],
+            BoxMinterError::InvalidMintVariantConfig
+        );
+    }
+
+    require!(
+        core_collection_ai.key() != Pubkey::default(),
+        BoxMinterError::InvalidCoreCollection
+    );
+    require_keys_eq!(
+        *core_collection_ai.owner,
+        MPL_CORE_PROGRAM_ID,
+        BoxMinterError::InvalidCoreCollection
+    );
+
+    cfg.admin = admin;
+    cfg.treasury = treasury;
+    cfg.core_collection = core_collection_ai.key();
+    cfg.price_lamports = args.price_lamports;
+    cfg.discount_price_lamports = args.discount_price_lamports;
+    cfg.discount_merkle_root = args.discount_merkle_root;
+    cfg.max_supply = args.max_supply;
+    cfg.max_per_tx = args.max_per_tx;
+    cfg.items_per_box = args.items_per_box;
+    cfg.discount_mints_per_wallet = args.discount_mints_per_wallet;
+    cfg.started = false;
+    cfg.minted = 0;
+    cfg.name_prefix = args.name_prefix;
+    cfg.symbol = args.symbol;
+    cfg.uri_base = drop_base.to_string();
+    cfg.bump = bump;
+    cfg.figure_name_prefix = args.figure_name_prefix;
+    cfg.mint_variant_kind = args.mint_variant_kind;
+    cfg.mint_variant_start_ids = args.mint_variant_start_ids;
+    cfg.mint_variant_end_ids = args.mint_variant_end_ids;
+    cfg.mint_variant_next_ids = args.mint_variant_next_ids;
+    cfg.drop_seed = args.drop_seed;
+    Ok(())
+}
+
 #[program]
 pub mod box_minter {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
-        require_keys_eq!(
-            ctx.accounts.admin.key(),
-            EXPECTED_INITIALIZER,
-            BoxMinterError::UnauthorizedInitializer
-        );
-        require!(args.max_supply > 0, BoxMinterError::InvalidMaxSupply);
-        require!(args.max_per_tx > 0, BoxMinterError::InvalidMaxPerTx);
-        require!(
-            args.max_per_tx <= MAX_SAFE_MINTS_PER_TX,
-            BoxMinterError::InvalidMaxPerTx
-        );
-        require!(
-            args.items_per_box <= MAX_ITEMS_PER_BOX,
-            BoxMinterError::InvalidItemsPerBox
-        );
-        let max_figure_id = (args.max_supply as u64)
-            .checked_mul(args.items_per_box as u64)
-            .ok_or(BoxMinterError::MathOverflow)?;
-        require!(
-            max_figure_id <= u16::MAX as u64,
-            BoxMinterError::InvalidItemsPerBox
-        );
-        validate_mint_prices(args.price_lamports, args.discount_price_lamports)?;
-        require!(
-            args.mint_variant_kind == MINT_VARIANT_KIND_NONE
-                || args.mint_variant_kind == MINT_VARIANT_KIND_SIZE,
-            BoxMinterError::InvalidMintVariantConfig
-        );
-        require!(
-            args.discount_merkle_root != [0u8; 32],
-            BoxMinterError::DiscountNotConfigured
-        );
-        require!(
-            args.discount_mints_per_wallet >= MIN_DISCOUNT_MINTS_PER_WALLET
-                && args.discount_mints_per_wallet <= MAX_DISCOUNT_MINTS_PER_WALLET,
-            BoxMinterError::InvalidDiscountMintsPerWallet
-        );
-        require!(
-            args.name_prefix.len() <= BoxMinterConfig::MAX_NAME_PREFIX,
-            BoxMinterError::NameTooLong
-        );
-        require!(
-            args.figure_name_prefix.len() <= BoxMinterConfig::MAX_FIGURE_NAME_PREFIX,
-            BoxMinterError::FigureNameTooLong
-        );
-        require!(
-            args.symbol.len() <= BoxMinterConfig::MAX_SYMBOL,
-            BoxMinterError::SymbolTooLong
-        );
-        require!(
-            args.uri_base.len() <= BoxMinterConfig::MAX_URI_BASE,
-            BoxMinterError::UriTooLong
-        );
-        require!(
-            has_any_non_zero_byte(args.drop_seed.as_ref()),
-            BoxMinterError::InvalidDropSeed
-        );
-        // Canonical config: `uri_base` is the DROP BASE (not a legacy `/json/...` prefix and not a `.json` file).
-        // Example: `https://cdn.lil.org/nft/little_swag_boxes` or `ipfs://bafy...`
-        let drop_base = normalized_metadata_base(&args.uri_base)?;
-        if args.mint_variant_kind == MINT_VARIANT_KIND_SIZE {
-            require!(
-                args.items_per_box == 0,
-                BoxMinterError::MintVariantDirectDeliveryOnly
-            );
-            require!(
-                args.max_supply < u32::MAX,
-                BoxMinterError::InvalidMintVariantConfig
-            );
-            for i in 0..MINT_VARIANT_OPTION_COUNT {
-                let start_id = args.mint_variant_start_ids[i];
-                let end_id = args.mint_variant_end_ids[i];
-                let next_id = args.mint_variant_next_ids[i];
-                require!(start_id >= 1, BoxMinterError::InvalidMintVariantConfig);
-                require!(end_id >= start_id, BoxMinterError::InvalidMintVariantConfig);
-                require!(
-                    next_id == start_id,
-                    BoxMinterError::InvalidMintVariantConfig
-                );
-                if i == 0 {
-                    require!(start_id == 1, BoxMinterError::InvalidMintVariantConfig);
-                } else {
-                    require!(
-                        start_id
-                            == args.mint_variant_end_ids[i - 1]
-                                .checked_add(1)
-                                .ok_or(BoxMinterError::MathOverflow)?,
-                        BoxMinterError::InvalidMintVariantConfig
-                    );
-                }
-            }
-            require!(
-                args.mint_variant_end_ids[MINT_VARIANT_OPTION_COUNT - 1] == args.max_supply,
-                BoxMinterError::InvalidMintVariantConfig
-            );
-        } else {
-            require!(
-                args.mint_variant_start_ids == [0; MINT_VARIANT_OPTION_COUNT]
-                    && args.mint_variant_end_ids == [0; MINT_VARIANT_OPTION_COUNT]
-                    && args.mint_variant_next_ids == [0; MINT_VARIANT_OPTION_COUNT],
-                BoxMinterError::InvalidMintVariantConfig
-            );
-        }
-
         let core_collection_ai = ctx.accounts.core_collection.to_account_info();
-        require!(
-            core_collection_ai.key() != Pubkey::default(),
-            BoxMinterError::InvalidCoreCollection
-        );
-        require_keys_eq!(
-            *core_collection_ai.owner,
-            MPL_CORE_PROGRAM_ID,
-            BoxMinterError::InvalidCoreCollection
-        );
+        initialize_box_minter_config(
+            &mut ctx.accounts.config,
+            ctx.accounts.admin.key(),
+            ctx.accounts.treasury.key(),
+            &core_collection_ai,
+            ctx.bumps.config,
+            args,
+        )
+    }
 
-        let cfg = &mut ctx.accounts.config;
-        cfg.admin = ctx.accounts.admin.key();
-        cfg.treasury = ctx.accounts.treasury.key();
-        cfg.core_collection = core_collection_ai.key();
-        cfg.price_lamports = args.price_lamports;
-        cfg.discount_price_lamports = args.discount_price_lamports;
-        cfg.discount_merkle_root = args.discount_merkle_root;
-        cfg.max_supply = args.max_supply;
-        cfg.max_per_tx = args.max_per_tx;
-        cfg.items_per_box = args.items_per_box;
-        cfg.discount_mints_per_wallet = args.discount_mints_per_wallet;
-        // Minting is paused by default until the admin explicitly starts it.
-        cfg.started = false;
-        cfg.minted = 0;
-        cfg.name_prefix = args.name_prefix;
-        cfg.symbol = args.symbol;
-        // Store normalized drop base (no trailing slash).
-        cfg.uri_base = drop_base.to_string();
-        cfg.bump = ctx.bumps.config;
-        cfg.figure_name_prefix = args.figure_name_prefix;
-        cfg.mint_variant_kind = args.mint_variant_kind;
-        cfg.mint_variant_start_ids = args.mint_variant_start_ids;
-        cfg.mint_variant_end_ids = args.mint_variant_end_ids;
-        cfg.mint_variant_next_ids = args.mint_variant_next_ids;
-        cfg.drop_seed = args.drop_seed;
+    pub fn initialize_split_payments_v1(
+        ctx: Context<Initialize>,
+        args: InitializeArgs,
+        split_args: SplitPaymentsV1Args,
+    ) -> Result<()> {
+        if ctx.accounts.treasury.key() == Pubkey::default() {
+            return Err(BoxMinterError::InvalidDeliveryReceiver.into());
+        }
+        let split = SplitPaymentsV1 {
+            recipient_count: split_args.recipient_count,
+            recipients: split_args.recipients,
+            percentages: split_args.percentages,
+        };
+        validate_split_payments_v1(&split)?;
+        let core_collection_ai = ctx.accounts.core_collection.to_account_info();
+        initialize_box_minter_config(
+            &mut ctx.accounts.config,
+            ctx.accounts.admin.key(),
+            ctx.accounts.treasury.key(),
+            &core_collection_ai,
+            ctx.bumps.config,
+            args,
+        )?;
+        resize_split_payments_v1_config(
+            &ctx.accounts.config,
+            &ctx.accounts.admin.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        write_split_payments_v1_config(&ctx.accounts.config, &split)
+    }
+
+    pub fn split_payments_v1_capability(_ctx: Context<SplitPaymentsV1Capability>) -> Result<()> {
         Ok(())
     }
 
     pub fn set_treasury(ctx: Context<SetTreasury>, treasury: Pubkey) -> Result<()> {
+        if treasury == Pubkey::default()
+            && ctx.accounts.config.to_account_info().data_len() == SPLIT_PAYMENTS_V1_CONFIG_SPACE
+        {
+            return Err(BoxMinterError::InvalidDeliveryReceiver.into());
+        }
         let cfg = &mut ctx.accounts.config;
         cfg.treasury = treasury;
         Ok(())
@@ -1371,6 +1726,14 @@ pub mod box_minter {
         let quantity =
             u8::try_from(box_bumps.len()).map_err(|_| error!(BoxMinterError::InvalidQuantity))?;
         let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
+        resolve_and_validate_mint_remaining_accounts(
+            &ctx.accounts.config,
+            payer_key,
+            ctx.remaining_accounts,
+            mint_id,
+            &box_bumps,
+            ctx.program_id,
+        )?;
         let discount_ai = ctx.accounts.discount_record.to_account_info();
         let (mut discount_record, discount_bump) = load_or_create_discount_record(
             ctx.accounts.config.key(),
@@ -1427,6 +1790,15 @@ pub mod box_minter {
             BoxMinterError::InvalidDiscountProof
         );
         let discount_limit = ctx.accounts.config.discount_mints_per_wallet;
+        let asset_bumps = [box_bump];
+        resolve_and_validate_mint_remaining_accounts(
+            &ctx.accounts.config,
+            payer_key,
+            ctx.remaining_accounts,
+            mint_id,
+            &asset_bumps,
+            ctx.program_id,
+        )?;
         let discount_ai = ctx.accounts.discount_record.to_account_info();
         let (mut discount_record, discount_bump) = load_or_create_discount_record(
             ctx.accounts.config.key(),
@@ -2340,6 +2712,13 @@ pub struct InitializeArgs {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct SplitPaymentsV1Args {
+    pub recipient_count: u8,
+    pub recipients: [Pubkey; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS],
+    pub percentages: [u8; SPLIT_PAYMENTS_V1_MAX_RECIPIENTS],
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct FinalizeOpenBoxArgs {
     pub dude_ids: Vec<u16>,
 }
@@ -2694,6 +3073,9 @@ pub struct Initialize<'info> {
 
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+pub struct SplitPaymentsV1Capability {}
 
 #[derive(Accounts)]
 pub struct SetTreasury<'info> {
@@ -3358,6 +3740,14 @@ pub enum BoxMinterError {
     InvalidAdminOrder,
     #[msg("Invalid receipt owner")]
     InvalidReceiptOwner,
+    #[msg("Invalid split payments config")]
+    InvalidSplitPaymentsConfig,
+    #[msg("Invalid split payments recipients")]
+    InvalidSplitPaymentsRecipients,
+    #[msg("Invalid split payments percentages")]
+    InvalidSplitPaymentsPercentages,
+    #[msg("Invalid delivery receiver")]
+    InvalidDeliveryReceiver,
 }
 
 #[cfg(test)]
@@ -3399,6 +3789,200 @@ mod tests {
         cfg.mint_variant_end_ids = [0; MINT_VARIANT_OPTION_COUNT];
         cfg.mint_variant_next_ids = [0; MINT_VARIANT_OPTION_COUNT];
         cfg
+    }
+
+    fn test_split_payments_v1_two() -> SplitPaymentsV1 {
+        SplitPaymentsV1 {
+            recipient_count: 2,
+            recipients: [
+                Pubkey::new_from_array([1u8; 32]),
+                Pubkey::new_from_array([2u8; 32]),
+                Pubkey::default(),
+            ],
+            percentages: [40, 60, 0],
+        }
+    }
+
+    fn test_split_payments_v1_three() -> SplitPaymentsV1 {
+        SplitPaymentsV1 {
+            recipient_count: 3,
+            recipients: [
+                Pubkey::new_from_array([1u8; 32]),
+                Pubkey::new_from_array([2u8; 32]),
+                Pubkey::new_from_array([3u8; 32]),
+            ],
+            percentages: [33, 33, 34],
+        }
+    }
+
+    #[test]
+    fn split_payments_v1_tail_layout_round_trips() {
+        let split = test_split_payments_v1_three();
+        let mut tail = [0xffu8; SPLIT_PAYMENTS_V1_TAIL_SPACE];
+        write_split_payments_v1_tail(&mut tail, &split).unwrap();
+
+        assert_eq!(&tail[..8], b"MONSPAY\0");
+        assert_eq!(tail[8], 1);
+        assert_eq!(tail[9], 3);
+        assert_eq!(&tail[10..42], split.recipients[0].as_ref());
+        assert_eq!(&tail[42..74], split.recipients[1].as_ref());
+        assert_eq!(&tail[74..106], split.recipients[2].as_ref());
+        assert_eq!(&tail[106..109], &[33, 33, 34]);
+        assert_eq!(&tail[109..112], &[0, 0, 0]);
+        assert_eq!(parse_split_payments_v1_tail(&tail).unwrap(), split);
+    }
+
+    #[test]
+    fn split_payments_v1_validation_rejects_noncanonical_values() {
+        assert!(validate_split_payments_v1(&test_split_payments_v1_two()).is_ok());
+        assert!(validate_split_payments_v1(&test_split_payments_v1_three()).is_ok());
+
+        let mut invalid = test_split_payments_v1_two();
+        invalid.recipient_count = 1;
+        assert!(validate_split_payments_v1(&invalid).is_err());
+
+        invalid = test_split_payments_v1_three();
+        invalid.recipients[1] = invalid.recipients[0];
+        assert!(validate_split_payments_v1(&invalid).is_err());
+
+        invalid = test_split_payments_v1_two();
+        invalid.recipients[2] = Pubkey::new_unique();
+        assert!(validate_split_payments_v1(&invalid).is_err());
+
+        invalid = test_split_payments_v1_two();
+        invalid.percentages = [0, 100, 0];
+        assert!(validate_split_payments_v1(&invalid).is_err());
+
+        invalid = test_split_payments_v1_two();
+        invalid.percentages = [40, 59, 0];
+        assert!(validate_split_payments_v1(&invalid).is_err());
+
+        invalid = test_split_payments_v1_two();
+        invalid.percentages[2] = 1;
+        assert!(validate_split_payments_v1(&invalid).is_err());
+    }
+
+    #[test]
+    fn split_payments_v1_allocation_conserves_every_lamport() {
+        let three = test_split_payments_v1_three();
+        assert_eq!(split_payment_amounts(101, &three).unwrap(), [33, 33, 35]);
+
+        let clear_cards_split = SplitPaymentsV1 {
+            recipient_count: 2,
+            recipients: [three.recipients[0], three.recipients[1], Pubkey::default()],
+            percentages: [70, 30, 0],
+        };
+        assert_eq!(
+            split_payment_amounts(69_000_000, &clear_cards_split).unwrap(),
+            [48_300_000, 20_700_000, 0]
+        );
+        assert_eq!(
+            split_payment_amounts(10_000_000, &clear_cards_split).unwrap(),
+            [7_000_000, 3_000_000, 0]
+        );
+
+        let future_three_recipient_split = SplitPaymentsV1 {
+            recipient_count: 3,
+            recipients: three.recipients,
+            percentages: [70, 20, 10],
+        };
+        assert_eq!(
+            split_payment_amounts(69_000_000, &future_three_recipient_split).unwrap(),
+            [48_300_000, 13_800_000, 6_900_000]
+        );
+
+        let mut two = test_split_payments_v1_two();
+        two.percentages = [50, 50, 0];
+        assert_eq!(split_payment_amounts(1, &two).unwrap(), [0, 1, 0]);
+
+        let amounts = split_payment_amounts(u64::MAX, &three).unwrap();
+        assert_eq!(
+            u128::from(amounts[0]) + u128::from(amounts[1]) + u128::from(amounts[2]),
+            u128::from(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn split_payments_v1_config_length_and_header_fail_closed() {
+        let split = test_split_payments_v1_two();
+        let mut legacy = vec![0xa5; BoxMinterConfig::SPACE];
+        assert_eq!(parse_split_payments_v1_config_data(&legacy).unwrap(), None);
+
+        legacy.resize(SPLIT_PAYMENTS_V1_CONFIG_SPACE, 0);
+        write_split_payments_v1_tail(&mut legacy[BoxMinterConfig::SPACE..], &split).unwrap();
+        assert_eq!(
+            parse_split_payments_v1_config_data(&legacy).unwrap(),
+            Some(split)
+        );
+
+        let mut invalid = legacy.clone();
+        invalid[BoxMinterConfig::SPACE] ^= 1;
+        assert!(parse_split_payments_v1_config_data(&invalid).is_err());
+
+        invalid = legacy.clone();
+        invalid[BoxMinterConfig::SPACE + 8] = 2;
+        assert!(parse_split_payments_v1_config_data(&invalid).is_err());
+
+        invalid = legacy.clone();
+        invalid[SPLIT_PAYMENTS_V1_CONFIG_SPACE - 1] = 1;
+        assert!(parse_split_payments_v1_config_data(&invalid).is_err());
+
+        assert!(parse_split_payments_v1_config_data(&legacy[..legacy.len() - 1]).is_err());
+        invalid.push(0);
+        assert!(parse_split_payments_v1_config_data(&invalid).is_err());
+    }
+
+    #[test]
+    fn box_minter_serialization_preserves_split_payments_v1_tail() {
+        use std::io::Cursor;
+
+        let mut cfg = test_standard_cfg();
+        cfg.name_prefix = "12345678".to_string();
+        cfg.symbol = "1234567890".to_string();
+        cfg.uri_base = "u".repeat(BoxMinterConfig::MAX_URI_BASE);
+        cfg.figure_name_prefix = "123456789012".to_string();
+
+        let split = test_split_payments_v1_three();
+        let mut data = vec![0u8; SPLIT_PAYMENTS_V1_CONFIG_SPACE];
+        let mut writer = Cursor::new(data.as_mut_slice());
+        cfg.try_serialize(&mut writer).unwrap();
+        assert_eq!(writer.position() as usize, BoxMinterConfig::SPACE);
+        write_split_payments_v1_tail(&mut data[BoxMinterConfig::SPACE..], &split).unwrap();
+        let expected_tail = data[BoxMinterConfig::SPACE..].to_vec();
+
+        cfg.minted = 9;
+        cfg.uri_base = "https://example.com/drop".to_string();
+        let mut writer = Cursor::new(data.as_mut_slice());
+        cfg.try_serialize(&mut writer).unwrap();
+
+        assert_eq!(&data[BoxMinterConfig::SPACE..], expected_tail.as_slice());
+        assert_eq!(
+            parse_split_payments_v1_config_data(&data).unwrap(),
+            Some(split)
+        );
+        let mut readable = data.as_slice();
+        let decoded = BoxMinterConfig::try_deserialize(&mut readable).unwrap();
+        assert_eq!(decoded.minted, 9);
+        assert_eq!(decoded.uri_base, "https://example.com/drop");
+    }
+
+    #[test]
+    fn split_payments_v1_args_borsh_order_is_stable() {
+        let split = test_split_payments_v1_three();
+        let args = SplitPaymentsV1Args {
+            recipient_count: split.recipient_count,
+            recipients: split.recipients,
+            percentages: split.percentages,
+        };
+        let mut encoded = Vec::new();
+        args.serialize(&mut encoded).unwrap();
+
+        assert_eq!(encoded.len(), 100);
+        assert_eq!(encoded[0], 3);
+        assert_eq!(&encoded[1..33], split.recipients[0].as_ref());
+        assert_eq!(&encoded[33..65], split.recipients[1].as_ref());
+        assert_eq!(&encoded[65..97], split.recipients[2].as_ref());
+        assert_eq!(&encoded[97..100], &[33, 33, 34]);
     }
 
     #[test]

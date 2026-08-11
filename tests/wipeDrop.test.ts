@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PublicKey } from '@solana/web3.js';
 
 import {
   abortPreparedRepoWipe,
@@ -38,6 +39,7 @@ import {
 } from '../functions/scripts/wipeDrop.ts';
 import {
   DeploymentRegistryPostCommitVerificationError,
+  readDeploymentDropRegistry,
   type DropFamily,
 } from '../scripts/shared/deploymentRegistry.ts';
 
@@ -2691,6 +2693,109 @@ function completeRegistryDrop(
   };
 }
 
+test('wipe atomically replaces current-generation active rows with config tombstones', async (t) => {
+  const programs = [
+    '7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU',
+    '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6',
+  ];
+  for (const [index, boxMinterProgramId] of programs.entries()) {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'mons-shop-wipe-tombstone-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const dropId = `tombstone_drop_${index}`;
+    const dropSeed = createHash('sha256').update(dropId).digest();
+    const boxMinterConfigPda = PublicKey.findProgramAddressSync(
+      [Buffer.from('config'), dropSeed],
+      new PublicKey(boxMinterProgramId),
+    )[0].toBase58();
+    const base = {
+      ...completeRegistryDrop(dropId, 'default', ROOT_A),
+      solanaCluster: index === 0 ? 'mainnet-beta' : 'devnet',
+      boxMinterProgramId,
+      boxMinterConfigPda,
+      collectionMint: 'FdcFWHrrjn2yy2Ce7d9ZfgJnrxP7nVzpAUqcJPT3wRJP',
+    };
+    const row =
+      index === 0
+        ? {
+            ...base,
+            treasury: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE',
+          }
+        : {
+            ...base,
+            treasury: undefined,
+            paymentRouting: {
+              mintProceeds: [
+                {
+                  address:
+                    'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE',
+                  percentage: 70,
+                },
+                {
+                  address:
+                    'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+                  percentage: 30,
+                },
+              ],
+              deliveryPaymentReceiver:
+                'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+            },
+          };
+    if (row.treasury === undefined) delete row.treasury;
+    const registryPath = path.join(
+      root,
+      'functions',
+      'src',
+      'shared',
+      'deploymentRegistry.ts',
+    );
+    mkdirSync(path.dirname(registryPath), { recursive: true });
+    writeFileSync(
+      registryPath,
+      `export const DEPLOYMENT_DROPS = ${JSON.stringify(
+        {
+          [dropId]: row,
+          sibling: completeRegistryDrop('sibling', 'default', ROOT_A),
+        },
+        null,
+        2,
+      )};\nexport const BOX_MINTER_CONFIG_TOMBSTONES = {};\n`,
+      'utf8',
+    );
+    for (const args of [['init'], ['add', '.']]) {
+      const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    }
+
+    const plan = await buildRepoPlan({ root, dropId });
+    assert.match(plan.registryNextContent, /BOX_MINTER_CONFIG_TOMBSTONES/);
+    writeFileSync(registryPath, plan.registryNextContent, 'utf8');
+    const registry = await readDeploymentDropRegistry(registryPath);
+    assert.equal(dropId in registry.drops, false);
+    assert.deepEqual(registry.tombstones[dropId], {
+      solanaCluster: base.solanaCluster,
+      dropId,
+      dropSeed: dropSeed.toString('hex'),
+      boxMinterProgramId,
+      boxMinterConfigPda,
+      collectionMint: base.collectionMint,
+      ...(index === 0
+        ? {
+            accountSize: 376,
+            schema: 'legacy',
+            treasury: row.treasury,
+          }
+        : {
+            accountSize: 488,
+            schema: 'split-payments-v1',
+            paymentRouting: (
+              row as { paymentRouting: Record<string, unknown> }
+            ).paymentRouting,
+          }),
+      reason: 'drop-wiped',
+    });
+  }
+});
+
 test('untracked legacy Merkle cleanup requires exact journal provenance', async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'mons-shop-wipe-owned-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -2725,6 +2830,7 @@ test('untracked legacy Merkle cleanup requires exact journal provenance', async 
     registryPath,
     [
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
+      'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
       '',
     ].join('\n'),
     'utf8',
@@ -2964,6 +3070,7 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
     registryPath,
     [
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
+      'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
       '',
     ].join('\n'),
     'utf8',
@@ -3141,6 +3248,7 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
     registryPath,
     [
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
+      'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
       '',
     ].join('\n'),
     'utf8',
@@ -3353,6 +3461,7 @@ test('row-absent recovery restores rather than deletes a family Merkle quarantin
   ) =>
     [
       `export const DEPLOYMENT_DROPS = ${JSON.stringify(rows, null, 2)};`,
+      'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
       '',
     ].join('\n');
 

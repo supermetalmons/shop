@@ -7,7 +7,9 @@
 
 import {
   DEPLOYMENT_DROPS,
+  projectDeploymentPaymentRouting,
   type DeploymentRegistryDrop,
+  type PaymentRoutingConfig,
 } from '../shared/deploymentRegistry.js';
 import {
   canonicalizeDropAssetUrl as canonicalizeSharedDropAssetUrl,
@@ -50,6 +52,7 @@ export type FunctionsDropConfig = {
   metadataPathFormat: 'legacy' | 'compact';
   mintSelection?: MintSelectionConfig;
   treasury: string;
+  paymentRouting?: PaymentRoutingConfig;
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
@@ -133,7 +136,7 @@ function projectFunctionsDrop(
     ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
     metadataPathFormat,
     ...(mintSelection ? { mintSelection } : {}),
-    treasury: config.treasury,
+    ...projectDeploymentPaymentRouting(config),
     priceSol: config.priceSol,
     discountPriceSol: config.discountPriceSol,
     ...(config.stripeLiveUnitAmountCents != null

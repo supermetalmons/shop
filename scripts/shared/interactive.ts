@@ -2,9 +2,23 @@ import bs58 from 'bs58';
 import { createInterface } from 'node:readline/promises';
 import { Keypair } from '@solana/web3.js';
 
-export async function promptMaskedInput(prompt: string): Promise<string> {
+export function createPromptCancelledError(): Error & { exitCode: 130 } {
+  const error = new Error('Cancelled') as Error & { exitCode: 130 };
+  error.exitCode = 130;
+  return error;
+}
+
+export async function promptMaskedInput(
+  prompt: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error('Cannot prompt for private key: stdin is not a TTY. Run this script in an interactive terminal.');
+  }
+  if (options.signal?.aborted) {
+    throw options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new Error('Cancelled');
   }
 
   const stdin = process.stdin;
@@ -22,10 +36,21 @@ export async function promptMaskedInput(prompt: string): Promise<string> {
   return await new Promise((resolve, reject) => {
     function cleanup() {
       stdin.removeListener('data', onData);
+      options.signal?.removeEventListener('abort', onAbort);
       try {
         stdin.setRawMode(Boolean(wasRaw));
       } catch {}
       stdin.pause();
+    }
+
+    function onAbort() {
+      stdout.write('\n');
+      cleanup();
+      reject(
+        options.signal?.reason instanceof Error
+          ? options.signal.reason
+          : new Error('Cancelled'),
+      );
     }
 
     function onData(chunk: string) {
@@ -33,7 +58,7 @@ export async function promptMaskedInput(prompt: string): Promise<string> {
         if (ch === '\u0003') {
           stdout.write('\n');
           cleanup();
-          reject(new Error('Cancelled'));
+          reject(createPromptCancelledError());
           return;
         }
 
@@ -60,6 +85,8 @@ export async function promptMaskedInput(prompt: string): Promise<string> {
     }
 
     stdin.on('data', onData);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
   });
 }
 

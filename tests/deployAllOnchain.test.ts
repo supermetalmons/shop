@@ -10,16 +10,24 @@ import {
 } from '@solana/web3.js';
 import {
   assertMplCoreCollectionHasUpdateDelegates,
+  assertCollectionRoyaltyCreatorsUnchanged,
   assertExistingConfigMatchesResume,
   assertReceiptPoolCollectionUpdateDelegatePolicy,
   assertReceiptPoolCapacity,
   assertReceiptMetadataRange,
   commitDeploymentRegistry,
+  buildCreateMplCoreCollectionV2Ix,
+  buildInitializeIx,
+  buildInitializeSplitPaymentsV1Ix,
+  buildSplitPaymentsV1CapabilityIx,
   decodeBoxMinterConfigForDeployPreflight,
   decodeReceiptTreeState,
   decodeMplCoreCollectionUpdateDelegates,
   finalizeDiscountMerkleAndDeploymentRegistry,
   formatFreshProgramKeypairNotice,
+  IX_INITIALIZE_SPLIT_PAYMENTS_V1,
+  IX_SPLIT_PAYMENTS_V1_CAPABILITY,
+  parseCollectionRoyaltyCreators,
   prepareStripeCheckoutConfig,
   registerDeploymentCleanup,
   revalidateReusableProgramResolution,
@@ -29,7 +37,10 @@ import {
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
+  BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC,
+  BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
 } from '../functions/src/shared/boxMinterConfigCodec.ts';
 import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
 import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
@@ -218,6 +229,232 @@ test('exact resume accepts only an identical unstarted zero-mint config', () => 
   );
 });
 
+function initializeInstructionArgs() {
+  return {
+    programId: pubkey(20),
+    admin: pubkey(21),
+    treasury: pubkey(22),
+    coreCollection: pubkey(23),
+    priceLamports: 69_000_000n,
+    discountPriceLamports: 10_000_000n,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: Buffer.alloc(32, 7),
+    maxSupply: 192,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: 'pack',
+    figureNamePrefix: 'card',
+    symbol: 'clear',
+    metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
+    dropSeed: Buffer.alloc(32, 9),
+  };
+}
+
+test('split initialize preserves legacy accounts and appends exact routing args', () => {
+  const args = initializeInstructionArgs();
+  const mintProceeds = [
+    { address: pubkey(31), percentage: 70 },
+    { address: pubkey(32), percentage: 20 },
+    { address: pubkey(33), percentage: 10 },
+  ];
+  const legacy = buildInitializeIx(args);
+  const split = buildInitializeSplitPaymentsV1Ix({ ...args, mintProceeds });
+
+  assert.deepEqual(split.keys, legacy.keys);
+  assert.deepEqual(split.data.subarray(0, 8), IX_INITIALIZE_SPLIT_PAYMENTS_V1);
+  assert.deepEqual(
+    split.data.subarray(8, legacy.data.length),
+    legacy.data.subarray(8),
+  );
+  assert.equal(split.data.length, legacy.data.length + 100);
+  let offset = legacy.data.length;
+  assert.equal(split.data[offset], 3);
+  offset += 1;
+  for (const recipient of mintProceeds) {
+    assert.deepEqual(
+      split.data.subarray(offset, offset + 32),
+      recipient.address.toBuffer(),
+    );
+    offset += 32;
+  }
+  assert.deepEqual(split.data.subarray(offset, offset + 3), Buffer.from([70, 20, 10]));
+});
+
+test('split initialize zeroes the unused third recipient slot', () => {
+  const args = initializeInstructionArgs();
+  const split = buildInitializeSplitPaymentsV1Ix({
+    ...args,
+    mintProceeds: [
+      { address: pubkey(31), percentage: 70 },
+      { address: pubkey(32), percentage: 30 },
+    ],
+  });
+  const routingOffset = buildInitializeIx(args).data.length;
+  assert.equal(split.data[routingOffset], 2);
+  assert.deepEqual(
+    split.data.subarray(routingOffset + 65, routingOffset + 97),
+    PublicKey.default.toBuffer(),
+  );
+  assert.deepEqual(
+    split.data.subarray(routingOffset + 97, routingOffset + 100),
+    Buffer.from([70, 30, 0]),
+  );
+});
+
+test('split initialize rejects a default delivery receiver before encoding', () => {
+  assert.throws(
+    () =>
+      buildInitializeSplitPaymentsV1Ix({
+        ...initializeInstructionArgs(),
+        treasury: PublicKey.default,
+        mintProceeds: [
+          { address: pubkey(31), percentage: 70 },
+          { address: pubkey(32), percentage: 30 },
+        ],
+      }),
+    /delivery receiver must not be the default address/,
+  );
+});
+
+test('split capability instruction is the no-account Anchor discriminator', () => {
+  const programId = pubkey(44);
+  const instruction = buildSplitPaymentsV1CapabilityIx(programId);
+  assert.equal(instruction.programId.toBase58(), programId.toBase58());
+  assert.deepEqual(instruction.keys, []);
+  assert.deepEqual(instruction.data, IX_SPLIT_PAYMENTS_V1_CAPABILITY);
+});
+
+test('split resume requires the exact immutable routing tail', () => {
+  const expected = exactResumeArgs();
+  const mintProceeds = [
+    { address: pubkey(41), percentage: 70 },
+    { address: pubkey(42), percentage: 20 },
+    { address: pubkey(43), percentage: 10 },
+  ];
+  const splitData = Buffer.alloc(BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1);
+  expected.data.copy(splitData);
+  let offset = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED;
+  Buffer.from(BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC).copy(splitData, offset);
+  offset += BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC.length;
+  splitData[offset] = BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION;
+  splitData[offset + 1] = mintProceeds.length;
+  offset += 2;
+  for (const recipient of mintProceeds) {
+    recipient.address.toBuffer().copy(splitData, offset);
+    offset += 32;
+  }
+  splitData.set(mintProceeds.map((recipient) => recipient.percentage), offset);
+
+  assert.doesNotThrow(() =>
+    assertExistingConfigMatchesResume({
+      ...expected,
+      data: splitData,
+      mintProceeds,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertExistingConfigMatchesResume({
+        ...expected,
+        data: splitData,
+        mintProceeds: mintProceeds.map((recipient, index) => ({
+          ...recipient,
+          percentage: index === 0 ? 69 : recipient.percentage,
+        })),
+      }),
+    /paymentRouting differ/,
+  );
+});
+
+test('collection royalty creators are parsed independently from payment routing', () => {
+  const first = pubkey(50);
+  const second = pubkey(51);
+  const creators = parseCollectionRoyaltyCreators({
+    properties: {
+      creators: [
+        { address: first.toBase58(), share: 60 },
+        { address: second.toBase58(), share: 40 },
+      ],
+    },
+  });
+  assert.deepEqual(
+    creators.map((creator) => ({
+      address: creator.address.toBase58(),
+      percentage: creator.percentage,
+    })),
+    [
+      { address: first.toBase58(), percentage: 60 },
+      { address: second.toBase58(), percentage: 40 },
+    ],
+  );
+  assert.doesNotThrow(() =>
+    assertCollectionRoyaltyCreatorsUnchanged(creators, [
+      { address: first, percentage: 60 },
+      { address: second, percentage: 40 },
+    ]),
+  );
+  assert.throws(
+    () => assertCollectionRoyaltyCreatorsUnchanged(creators, [...creators].reverse()),
+    /changed during deployment/,
+  );
+  assert.throws(
+    () =>
+      assertCollectionRoyaltyCreatorsUnchanged(creators, [
+        { address: first, percentage: 59 },
+        { address: second, percentage: 41 },
+      ]),
+    /changed during deployment/,
+  );
+  assert.throws(
+    () =>
+      parseCollectionRoyaltyCreators({
+        properties: {
+          creators: [
+            { address: first.toBase58(), share: 60 },
+            { address: first.toBase58(), share: 40 },
+          ],
+        },
+      }),
+    /duplicate address/,
+  );
+  assert.throws(
+    () =>
+      parseCollectionRoyaltyCreators({
+        properties: {
+          creators: [{ address: first.toBase58(), share: 99 }],
+        },
+      }),
+    /must total 100/,
+  );
+});
+
+test('MPL Core collection creation encodes every collection.json creator', () => {
+  const first = pubkey(54);
+  const second = pubkey(55);
+  const instruction = buildCreateMplCoreCollectionV2Ix({
+    collection: pubkey(56),
+    updateAuthority: pubkey(57),
+    updateDelegates: [pubkey(58)],
+    payer: pubkey(59),
+    systemProgram: pubkey(60),
+    name: 'collection',
+    uri: 'https://assets.example.com/collection.json',
+    royaltiesBps: 500,
+    royaltiesCreators: [
+      { address: first, percentage: 60 },
+      { address: second, percentage: 40 },
+    ],
+  });
+  assert.notEqual(
+    instruction.data.indexOf(Buffer.concat([first.toBuffer(), u8(60)])),
+    -1,
+  );
+  assert.notEqual(
+    instruction.data.indexOf(Buffer.concat([second.toBuffer(), u8(40)])),
+    -1,
+  );
+});
+
 test('receipt pool tree decoder reads Bubblegum V2 capacity and mint state', () => {
   const creator = pubkey(44);
   const authority = pubkey(45);
@@ -387,6 +624,7 @@ function makeDeploymentRegistryFixture(
       registryPath,
       [
         `export const DEPLOYMENT_DROPS = ${serialized};`,
+        'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
         '',
       ].join('\n'),
       'utf8',

@@ -47,6 +47,12 @@ const BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS =
   4 * BOX_MINTER_MINT_VARIANT_OPTION_COUNT * 3;
 export const BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED =
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS + 32;
+export const BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1 = 488;
+export const BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC = Uint8Array.from([
+  0x4d, 0x4f, 0x4e, 0x53, 0x50, 0x41, 0x59, 0x00,
+]);
+export const BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION = 1;
+const BOX_MINTER_SPLIT_PAYMENTS_MAX_RECIPIENTS = 3;
 
 export type BoxMinterConfigCodecErrorReason =
   | 'empty'
@@ -56,7 +62,14 @@ export type BoxMinterConfigCodecErrorReason =
   | 'variant-data-truncated'
   | 'drop-seed-truncated'
   | 'unexpected-config-trailing-data'
-  | 'unexpected-drop-seed-trailing-data';
+  | 'unexpected-drop-seed-trailing-data'
+  | 'unsupported-config-account-size'
+  | 'invalid-payment-routing-magic'
+  | 'unsupported-payment-routing-version'
+  | 'invalid-payment-routing-recipient-count'
+  | 'invalid-payment-routing-recipient'
+  | 'invalid-payment-routing-percentage'
+  | 'invalid-payment-routing-reserved-data';
 
 export class BoxMinterConfigCodecError extends Error {
   readonly reason: BoxMinterConfigCodecErrorReason;
@@ -73,6 +86,24 @@ export class BoxMinterConfigCodecError extends Error {
     this.details = details;
   }
 }
+
+type DecodedBoxMinterMintProceedsRecipient = {
+  address: Uint8Array;
+  percentage: number;
+};
+
+type DecodedBoxMinterPaymentRouting =
+  | {
+      schema: 'legacy';
+      mintProceeds: DecodedBoxMinterMintProceedsRecipient[];
+      deliveryPaymentReceiver: Uint8Array;
+    }
+  | {
+      schema: 'split-payments-v1';
+      version: typeof BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION;
+      mintProceeds: DecodedBoxMinterMintProceedsRecipient[];
+      deliveryPaymentReceiver: Uint8Array;
+    };
 
 export type DecodedBoxMinterConfigData = {
   admin: Uint8Array;
@@ -97,6 +128,7 @@ export type DecodedBoxMinterConfigData = {
   mintVariantEndIds: BoxMinterMintVariantTuple;
   mintVariantNextIds: BoxMinterMintVariantTuple;
   dropSeed?: Uint8Array;
+  paymentRouting?: DecodedBoxMinterPaymentRouting;
 };
 
 export type DecodeBoxMinterConfigDataOptions = {
@@ -226,6 +258,110 @@ function decodeOptionalTrailingDropSeed(
   return dropSeed;
 }
 
+function decodeSplitPaymentsV1(
+  data: Uint8Array,
+  deliveryPaymentReceiver: Uint8Array,
+): DecodedBoxMinterPaymentRouting {
+  const extensionOffset = BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED;
+  const magicEnd = extensionOffset + BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC.length;
+  if (
+    !bytesEqual(
+      data.subarray(extensionOffset, magicEnd),
+      BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC,
+    )
+  ) {
+    throw new BoxMinterConfigCodecError(
+      'invalid-payment-routing-magic',
+      'Invalid split payment routing magic',
+    );
+  }
+
+  const version = data[magicEnd] ?? 0;
+  if (version !== BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION) {
+    throw new BoxMinterConfigCodecError(
+      'unsupported-payment-routing-version',
+      `Unsupported split payment routing version: ${version}`,
+      { version },
+    );
+  }
+
+  const recipientCount = data[magicEnd + 1] ?? 0;
+  if (recipientCount < 2 || recipientCount > BOX_MINTER_SPLIT_PAYMENTS_MAX_RECIPIENTS) {
+    throw new BoxMinterConfigCodecError(
+      'invalid-payment-routing-recipient-count',
+      `Invalid split payment recipient count: ${recipientCount}`,
+      { recipientCount },
+    );
+  }
+
+  const recipientAddressesOffset = magicEnd + 2;
+  const percentagesOffset =
+    recipientAddressesOffset + 32 * BOX_MINTER_SPLIT_PAYMENTS_MAX_RECIPIENTS;
+  const recipients: DecodedBoxMinterMintProceedsRecipient[] = [];
+  let percentageTotal = 0;
+  for (let index = 0; index < BOX_MINTER_SPLIT_PAYMENTS_MAX_RECIPIENTS; index += 1) {
+    const address = data.slice(
+      recipientAddressesOffset + index * 32,
+      recipientAddressesOffset + (index + 1) * 32,
+    );
+    const percentage = data[percentagesOffset + index] ?? 0;
+    if (index >= recipientCount) {
+      if (hasAnyNonZeroByte(address) || percentage !== 0) {
+        throw new BoxMinterConfigCodecError(
+          'invalid-payment-routing-recipient',
+          'Inactive split payment recipient slots must be zeroed',
+          { index },
+        );
+      }
+      continue;
+    }
+    if (
+      !hasAnyNonZeroByte(address) ||
+      recipients.some((recipient) => bytesEqual(recipient.address, address))
+    ) {
+      throw new BoxMinterConfigCodecError(
+        'invalid-payment-routing-recipient',
+        'Split payment recipients must be non-default and distinct',
+        { index },
+      );
+    }
+    if (percentage <= 0) {
+      throw new BoxMinterConfigCodecError(
+        'invalid-payment-routing-percentage',
+        'Split payment percentages must be positive',
+        { index, percentage },
+      );
+    }
+    percentageTotal += percentage;
+    recipients.push({ address, percentage });
+  }
+
+  if (percentageTotal !== 100) {
+    throw new BoxMinterConfigCodecError(
+      'invalid-payment-routing-percentage',
+      `Split payment percentages must total 100, got ${percentageTotal}`,
+      { percentageTotal },
+    );
+  }
+
+  const reserved = data.subarray(
+    percentagesOffset + BOX_MINTER_SPLIT_PAYMENTS_MAX_RECIPIENTS,
+  );
+  if (hasAnyNonZeroByte(reserved)) {
+    throw new BoxMinterConfigCodecError(
+      'invalid-payment-routing-reserved-data',
+      'Split payment reserved bytes must be zeroed',
+    );
+  }
+
+  return {
+    schema: 'split-payments-v1',
+    version: BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
+    mintProceeds: recipients,
+    deliveryPaymentReceiver: deliveryPaymentReceiver.slice(),
+  };
+}
+
 export function decodeBoxMinterConfigData(
   data: Uint8Array,
   options: DecodeBoxMinterConfigDataOptions = {},
@@ -235,11 +371,27 @@ export function decodeBoxMinterConfigData(
   const normalizeDiscountLimit =
     options.normalizeDiscountMintsPerWallet !== false;
   const decodeExtensions = options.decodeExtensions !== false;
+  if (
+    decodeExtensions &&
+    data.length > BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED &&
+    data.length !== BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1
+  ) {
+    throw new BoxMinterConfigCodecError(
+      'unsupported-config-account-size',
+      `Unsupported box minter config account size: ${data.length}`,
+      { actualBytes: data.length },
+    );
+  }
+  const baseData =
+    decodeExtensions &&
+    data.length === BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1
+      ? data.subarray(0, BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED)
+      : data;
   if (validateDiscriminator) {
-    if (data.length < 8) {
+    if (baseData.length < 8) {
       throw new BoxMinterConfigCodecError('empty', 'Invalid config account: empty');
     }
-    if (!bytesEqual(data.subarray(0, 8), BOX_MINTER_CONFIG_DISCRIMINATOR)) {
+    if (!bytesEqual(baseData.subarray(0, 8), BOX_MINTER_CONFIG_DISCRIMINATOR)) {
       throw new BoxMinterConfigCodecError(
         'invalid-discriminator',
         'Invalid config account discriminator',
@@ -247,37 +399,37 @@ export function decodeBoxMinterConfigData(
     }
   }
 
-  if (data.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
+  if (baseData.length < BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS) {
     throw new BoxMinterConfigCodecError(
       'config-truncated',
       'Unsupported box minter config schema. Config data is truncated.',
       {
         expectedMinBytes: BOX_MINTER_CONFIG_ACCOUNT_SIZE_LEGACY_FIXED_ITEMS,
-        actualBytes: data.length,
+        actualBytes: baseData.length,
       },
     );
   }
 
   let offset = 8;
-  const admin = data.subarray(offset, offset + 32);
+  const admin = baseData.subarray(offset, offset + 32);
   offset += 32;
-  const treasury = data.subarray(offset, offset + 32);
+  const treasury = baseData.subarray(offset, offset + 32);
   offset += 32;
-  const coreCollection = data.subarray(offset, offset + 32);
+  const coreCollection = baseData.subarray(offset, offset + 32);
   offset += 32;
-  const priceLamports = readU64LE(data, offset);
+  const priceLamports = readU64LE(baseData, offset);
   offset += 8;
-  const discountPriceLamports = readU64LE(data, offset);
+  const discountPriceLamports = readU64LE(baseData, offset);
   offset += 8;
-  const discountMerkleRoot = data.subarray(offset, offset + 32);
+  const discountMerkleRoot = baseData.subarray(offset, offset + 32);
   offset += 32;
-  const maxSupply = readU32LE(data, offset);
+  const maxSupply = readU32LE(baseData, offset);
   offset += 4;
-  const maxPerTx = data[offset] ?? 0;
+  const maxPerTx = baseData[offset] ?? 0;
   offset += 1;
   let itemsPerBox = LEGACY_FIXED_ITEMS_PER_BOX;
-  if (data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
-    itemsPerBox = data[offset] ?? 0;
+  if (baseData.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS) {
+    itemsPerBox = baseData[offset] ?? 0;
     offset += 1;
   }
   if (
@@ -290,45 +442,45 @@ export function decodeBoxMinterConfigData(
       { itemsPerBox },
     );
   }
-  const minted = readU32LE(data, offset);
+  const minted = readU32LE(baseData, offset);
   offset += 4;
 
   const namePrefix = readBorshString(
-    data,
+    baseData,
     offset,
     options.stringDecodeErrorMessages,
   );
   offset = namePrefix.next;
   const symbol = readBorshString(
-    data,
+    baseData,
     offset,
     options.stringDecodeErrorMessages,
   );
   offset = symbol.next;
   const uriBase = readBorshString(
-    data,
+    baseData,
     offset,
     options.stringDecodeErrorMessages,
   );
   offset = uriBase.next;
-  if (offset + 2 > data.length) {
-    throwConfigTruncated(data.length, offset + 2);
+  if (offset + 2 > baseData.length) {
+    throwConfigTruncated(baseData.length, offset + 2);
   }
-  const started = Boolean(data[offset]);
+  const started = Boolean(baseData[offset]);
   offset += 1;
-  const bump = data[offset] ?? 0;
+  const bump = baseData[offset] ?? 0;
   offset += 1;
   let discountMintsPerWallet = 1;
   if (
-    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT ||
+    baseData.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DISCOUNT_LIMIT ||
     !decodeExtensions
   ) {
-    if (decodeExtensions && offset + 1 > data.length) {
-      throwConfigTruncated(data.length, offset + 1);
+    if (decodeExtensions && offset + 1 > baseData.length) {
+      throwConfigTruncated(baseData.length, offset + 1);
     }
     const rawDiscountMintsPerWallet = decodeExtensions
-      ? data[offset] ?? 1
-      : data[offset];
+      ? baseData[offset] ?? 1
+      : baseData[offset];
     discountMintsPerWallet = normalizeDiscountLimit
       ? normalizeDiscountMintsPerWallet(rawDiscountMintsPerWallet)
       : rawDiscountMintsPerWallet;
@@ -337,9 +489,9 @@ export function decodeBoxMinterConfigData(
   let figureNamePrefix = 'figure';
   if (
     decodeExtensions &&
-    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX
+    baseData.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_FIGURE_NAME_PREFIX
   ) {
-    const decoded = readBorshString(data, offset);
+    const decoded = readBorshString(baseData, offset);
     figureNamePrefix = decoded.value;
     offset = decoded.next;
   }
@@ -349,32 +501,41 @@ export function decodeBoxMinterConfigData(
   let mintVariantNextIds: BoxMinterMintVariantTuple = [0, 0, 0];
   if (
     decodeExtensions &&
-    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS
+    baseData.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_MINT_VARIANTS
   ) {
     const mintVariantBytes = 1 + 4 * BOX_MINTER_MINT_VARIANT_OPTION_COUNT * 3;
-    if (offset + mintVariantBytes > data.length) {
+    if (offset + mintVariantBytes > baseData.length) {
       throw new BoxMinterConfigCodecError(
         'variant-data-truncated',
         'Unsupported box minter config schema. Variant mint data is truncated.',
       );
     }
-    mintVariantKind = data[offset] ?? BOX_MINTER_MINT_VARIANT_KIND_NONE;
+    mintVariantKind = baseData[offset] ?? BOX_MINTER_MINT_VARIANT_KIND_NONE;
     offset += 1;
-    const startIds = readU32Tuple(data, offset);
+    const startIds = readU32Tuple(baseData, offset);
     mintVariantStartIds = startIds.value;
     offset = startIds.next;
-    const endIds = readU32Tuple(data, offset);
+    const endIds = readU32Tuple(baseData, offset);
     mintVariantEndIds = endIds.value;
     offset = endIds.next;
-    const nextIds = readU32Tuple(data, offset);
+    const nextIds = readU32Tuple(baseData, offset);
     mintVariantNextIds = nextIds.value;
     offset = nextIds.next;
   }
   const dropSeed =
     decodeExtensions &&
-    data.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED
-      ? decodeOptionalTrailingDropSeed(data, offset)
+    baseData.length >= BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED
+      ? decodeOptionalTrailingDropSeed(baseData, offset)
       : undefined;
+  const paymentRouting = decodeExtensions
+    ? data.length === BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1
+      ? decodeSplitPaymentsV1(data, treasury)
+      : {
+          schema: 'legacy' as const,
+          mintProceeds: [{ address: treasury.slice(), percentage: 100 }],
+          deliveryPaymentReceiver: treasury.slice(),
+        }
+    : undefined;
 
   return {
     admin,
@@ -399,5 +560,6 @@ export function decodeBoxMinterConfigData(
     mintVariantEndIds,
     mintVariantNextIds,
     ...(dropSeed ? { dropSeed } : {}),
+    ...(paymentRouting ? { paymentRouting } : {}),
   };
 }

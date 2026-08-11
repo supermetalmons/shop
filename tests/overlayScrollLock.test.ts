@@ -150,8 +150,8 @@ function NestedLockFixture({ modalOpen, overlayOpen }: { modalOpen: boolean; ove
       open: modalOpen,
       title: 'Nested modal',
       onClose: () => {},
+      children: createElement('button', { type: 'button' }, 'Action'),
     },
-    createElement('button', { type: 'button' }, 'Action'),
   );
 }
 
@@ -177,8 +177,11 @@ function BlurFixture({ open }: { open: boolean }) {
     createElement('main', null, 'Background'),
     createElement(
       BackgroundBlurPortal,
-      { open, active: open },
-      createElement('div', null, 'Foreground'),
+      {
+        open,
+        active: open,
+        children: createElement('div', null, 'Foreground'),
+      },
     ),
   );
 }
@@ -208,13 +211,19 @@ function NestedBlurFixture({ firstOpen, secondOpen }: { firstOpen: boolean; seco
     createElement('main', null, 'Background'),
     createElement(
       BackgroundBlurPortal,
-      { open: firstOpen, active: firstOpen },
-      createElement('div', null, 'First foreground'),
+      {
+        open: firstOpen,
+        active: firstOpen,
+        children: createElement('div', null, 'First foreground'),
+      },
     ),
     createElement(
       BackgroundBlurPortal,
-      { open: secondOpen, active: secondOpen },
-      createElement('div', null, 'Second foreground'),
+      {
+        open: secondOpen,
+        active: secondOpen,
+        children: createElement('div', null, 'Second foreground'),
+      },
     ),
   );
 }

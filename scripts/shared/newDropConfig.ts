@@ -1,7 +1,9 @@
 import {
   normalizeAndValidateMetadataBaseInput,
+  normalizeAndValidatePaymentRouting,
   type DropFamily,
   type MintSelectionConfigSerialized,
+  type PaymentRoutingConfig,
 } from './deploymentRegistry.ts';
 import {
   normalizeDropSalesMode,
@@ -18,7 +20,7 @@ type NewDropDeployConfig = {
   reuseProgramIdFromDropId?: string;
 };
 
-export type NewDropOnchainConfig = {
+type NewDropOnchainConfigBase = {
   dropId: string;
   dropFamily: DropFamily;
   displayName?: string;
@@ -34,6 +36,10 @@ export type NewDropOnchainConfig = {
     description?: string;
     externalUrl?: string;
     image?: string;
+    creators?: readonly {
+      address: string;
+      share: number;
+    }[];
   };
   discountWhitelistCsvRelativePath: string;
   receiptsTree?: {
@@ -42,7 +48,6 @@ export type NewDropOnchainConfig = {
     canopyDepth: number;
   };
   coreCollectionRoyaltiesBps?: number;
-  treasury?: string;
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
@@ -57,11 +62,27 @@ export type NewDropOnchainConfig = {
   symbol?: string;
 };
 
+export type NewDropOnchainConfig = NewDropOnchainConfigBase &
+  (
+    | {
+        treasury?: string;
+        paymentRouting?: never;
+      }
+    | {
+        treasury?: never;
+        paymentRouting: PaymentRoutingConfig;
+      }
+  );
+
 type NewDropSharedConfig = {
   isMainnet: boolean;
   dropSymbol?: string;
   sellerFeeBasisPoints?: number;
 };
+
+type DistributiveOmit<T, Keys extends PropertyKey> = T extends unknown
+  ? Omit<T, Keys & keyof T>
+  : never;
 
 export type NewDropConfig = {
   shared: NewDropSharedConfig;
@@ -72,7 +93,7 @@ export type NewDropConfig = {
 type NewDropConfigInputBase = {
   shared: NewDropSharedConfig;
   deploy: Omit<NewDropDeployConfig, 'solanaCluster'>;
-  onchain: Omit<
+  onchain: DistributiveOmit<
     NewDropOnchainConfig,
     | 'collectionMetadata'
     | 'coreCollectionRoyaltiesBps'
@@ -117,6 +138,20 @@ export type NewDropConfigInput =
 
 export const defineNewDropConfig = (config: NewDropConfigInput): NewDropConfig => {
   const { shared, deploy, onchain } = config;
+  const hasTreasury = Object.prototype.hasOwnProperty.call(
+    onchain,
+    'treasury',
+  );
+  const hasPaymentRouting = Object.prototype.hasOwnProperty.call(
+    onchain,
+    'paymentRouting',
+  );
+  if (hasTreasury && hasPaymentRouting) {
+    throw new Error('treasury and paymentRouting are mutually exclusive');
+  }
+  const paymentRouting = hasPaymentRouting
+    ? normalizeAndValidatePaymentRouting(onchain.paymentRouting)
+    : undefined;
   const solanaCluster: SolanaCluster = shared.isMainnet ? 'mainnet-beta' : 'devnet';
   const receiptPoolId = String(onchain.receiptPoolId || '')
     .trim()
@@ -183,6 +218,7 @@ export const defineNewDropConfig = (config: NewDropConfigInput): NewDropConfig =
           }
         : {}),
       metadataBase: normalizeAndValidateMetadataBaseInput(onchain.metadataBase),
+      ...(paymentRouting ? { paymentRouting } : {}),
       ...dedicatedResources,
       ...(String(shared.dropSymbol || '').trim()
         ? { symbol: String(shared.dropSymbol).trim() }

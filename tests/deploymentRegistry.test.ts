@@ -29,11 +29,13 @@ import {
   assertReceiptPoolDropRelations,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
+  clonePaymentRoutingConfig,
   DeploymentRegistryPostCommitVerificationError,
   defaultDropFamilyForDropId,
   dropPathsFromBase,
   isDeploymentRegistryPostCommitVerificationError,
   normalizeAndValidateMetadataBaseInput,
+  normalizeAndValidatePaymentRouting,
   normalizeAndValidateDropId,
   normalizeDropBase,
   readDeploymentDropRegistry,
@@ -51,10 +53,14 @@ import { defineNewDropConfig } from '../scripts/shared/newDropConfig.ts';
 import { resolveDeploymentConfig } from '../scripts/startMint.ts';
 import { decodeBoxMinterConfigForPriceUpdate } from '../scripts/setMintPrices.ts';
 import {
+  BOX_MINTER_CONFIG_TOMBSTONES,
   DEPLOYMENT_DROPS,
   DEPLOYMENT_REGISTRY_DROP_FIELDS,
+  deploymentTreasuryAlias,
   getDeploymentDrop,
+  projectDeploymentPaymentRouting,
   type DeploymentRegistryDrop,
+  type PaymentRoutingConfig,
 } from '../functions/src/shared/deploymentRegistry.ts';
 import {
   FUNCTIONS_DROPS,
@@ -73,6 +79,17 @@ import {
 
 const VALID_IPFS_CID =
   'bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku';
+const ROUTING_ADDRESS_A = 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE';
+const ROUTING_ADDRESS_B = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
+const ROUTING_ADDRESS_C = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const VALID_PAYMENT_ROUTING = {
+  mintProceeds: [
+    { address: ROUTING_ADDRESS_A, percentage: 70 },
+    { address: ROUTING_ADDRESS_B, percentage: 20 },
+    { address: ROUTING_ADDRESS_C, percentage: 10 },
+  ],
+  deliveryPaymentReceiver: ROUTING_ADDRESS_B,
+} satisfies PaymentRoutingConfig;
 const CANONICAL_SOURCE_URL = new URL(
   '../functions/src/shared/deploymentRegistry.ts',
   import.meta.url,
@@ -181,7 +198,7 @@ function registryDrop(
     receiptsMerkleTree: 'Tree111111111111111111111111111111111111',
     deliveryLookupTable: 'Lookup1111111111111111111111111111111111',
     ...overrides,
-  };
+  } as DeploymentDropConfigSerialized;
 }
 
 type OptionalDeploymentRegistryDropField = {
@@ -223,7 +240,11 @@ const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
     DeploymentRegistryDrop,
     Exclude<
       OptionalDeploymentRegistryDropField,
-      'salesMode' | 'receiptPoolId' | 'receiptMaxId'
+      | 'salesMode'
+      | 'receiptPoolId'
+      | 'receiptMaxId'
+      | 'treasury'
+      | 'paymentRouting'
     >
   >
 >;
@@ -262,6 +283,7 @@ function registrySource(declaration: string): string {
   return [
     'const preservedHeader = true;',
     declaration,
+    'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
     'void preservedHeader;',
     '',
   ].join('\n');
@@ -269,10 +291,14 @@ function registrySource(declaration: string): string {
 
 function deploymentDropsDeclarationSource(source: string): string {
   const start = source.indexOf('export const DEPLOYMENT_DROPS');
-  const nextDeclaration = source.indexOf(
-    '\nfunction assertRegistryKeysMatchDropIds',
+  const tombstonesDeclaration = source.indexOf(
+    '\nexport const BOX_MINTER_CONFIG_TOMBSTONES',
     start,
   );
+  const nextDeclaration =
+    tombstonesDeclaration === -1
+      ? source.indexOf('\nfunction assertRegistryKeysMatchDropIds', start)
+      : tombstonesDeclaration;
   return source.slice(
     start,
     nextDeclaration === -1 ? source.length : nextDeclaration,
@@ -370,13 +396,16 @@ test('one nonempty canonical registry owns both public projections', async () =>
     assert.equal(canonical.dropId, dropId);
     assert.equal(frontend.dropId, dropId);
     assert.equal(functionsDrop.dropId, dropId);
+    assert.equal(frontend.treasury, deploymentTreasuryAlias(canonical));
+    assert.equal(functionsDrop.treasury, deploymentTreasuryAlias(canonical));
+    assert.deepEqual(frontend.paymentRouting, canonical.paymentRouting);
+    assert.deepEqual(functionsDrop.paymentRouting, canonical.paymentRouting);
     for (const field of [
       'solanaCluster',
       'dropFamily',
       'collectionName',
       'metadataBase',
       'metadataPathFormat',
-      'treasury',
       'priceSol',
       'discountPriceSol',
       'discountMintsPerWallet',
@@ -405,6 +434,102 @@ test('one nonempty canonical registry owns both public projections', async () =>
   }
 });
 
+test('historical BoxMinter configs remain tombstoned and never project as drops', async () => {
+  assert.deepEqual(BOX_MINTER_CONFIG_TOMBSTONES.clear_cards_devnet, {
+    solanaCluster: 'devnet',
+    dropId: 'clear_cards_devnet',
+    dropSeed:
+      '0bedb02e16088cdc90077bde942099db106f9e7c2fb64ba8b15af51fd6984bf6',
+    boxMinterProgramId:
+      '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6',
+    boxMinterConfigPda:
+      'DPBJSPawzRnSnrPkahbcFGMgYRZafn3dNgetUMQiKorW',
+    collectionMint: 'FdcFWHrrjn2yy2Ce7d9ZfgJnrxP7nVzpAUqcJPT3wRJP',
+    accountSize: 376,
+    schema: 'legacy',
+    treasury: ROUTING_ADDRESS_A,
+    reason: 'historical-orphan',
+  });
+  const canonicalPath = fileURLToPath(CANONICAL_SOURCE_URL);
+  const registry = await readDeploymentDropRegistry(canonicalPath);
+  assert.deepEqual(registry.tombstones, BOX_MINTER_CONFIG_TOMBSTONES);
+  assert.equal('clear_cards_devnet' in registry.drops, false);
+  assert.equal('clear_cards_devnet' in FRONTEND_DROPS, false);
+  assert.equal('clear_cards_devnet' in FUNCTIONS_DROPS, false);
+});
+
+test('canonical registry rejects active and tombstoned config identity collisions', async () => {
+  const base = DEPLOYMENT_DROPS.clear_cards_devnet_v2;
+  const templatePath = fileURLToPath(CANONICAL_SOURCE_URL);
+  const template = await readFile(templatePath, 'utf8');
+  const dropIdCollision = renderDeploymentRegistryFileFromSource({
+    filePath: templatePath,
+    existingContent: template,
+    drops: {
+      clear_cards_devnet: {
+        ...base,
+        dropId: 'clear_cards_devnet',
+      },
+    },
+  });
+  await withTempCanonical(dropIdCollision, async (filePath) => {
+    await assert.rejects(
+      readDeploymentDropRegistry(filePath),
+      /cannot also be.*tombstone/i,
+    );
+  });
+
+  const pdaCollision = renderDeploymentRegistryFileFromSource({
+    filePath: templatePath,
+    existingContent: template,
+    drops: {
+      collision_drop: {
+        ...base,
+        dropId: 'collision_drop',
+        boxMinterConfigPda:
+          BOX_MINTER_CONFIG_TOMBSTONES.clear_cards_devnet.boxMinterConfigPda,
+      },
+    },
+  });
+  await withTempCanonical(pdaCollision, async (filePath) => {
+    await assert.rejects(
+      readDeploymentDropRegistry(filePath),
+      /config PDA collision.*tombstone/i,
+    );
+  });
+});
+
+test('canonical tombstones validate their drop seed and config PDA derivation', async () => {
+  const source = renderDeploymentRegistryFile({
+    drops: {},
+    tombstones: BOX_MINTER_CONFIG_TOMBSTONES,
+  });
+  await withTempCanonical(
+    source.replace(
+      BOX_MINTER_CONFIG_TOMBSTONES.clear_cards_devnet.dropSeed,
+      '0'.repeat(64),
+    ),
+    async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /dropSeed must equal sha256\(dropId\)/,
+      );
+    },
+  );
+  await withTempCanonical(
+    source.replace(
+      BOX_MINTER_CONFIG_TOMBSTONES.clear_cards_devnet.boxMinterConfigPda,
+      ROUTING_ADDRESS_C,
+    ),
+    async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /boxMinterConfigPda must derive/,
+      );
+    },
+  );
+});
+
 test('canonical field descriptor owns allowed fields and requiredness', () => {
   const knownFields = new Set(
     Object.keys(DEPLOYMENT_REGISTRY_DROP_FIELDS),
@@ -414,6 +539,11 @@ test('canonical field descriptor owns allowed fields and requiredness', () => {
   )
     .filter(([, descriptor]) => descriptor.required)
     .map(([field]) => field);
+  assert.equal(DEPLOYMENT_REGISTRY_DROP_FIELDS.treasury.required, false);
+  assert.equal(
+    DEPLOYMENT_REGISTRY_DROP_FIELDS.paymentRouting.required,
+    false,
+  );
 
   for (const [dropId, drop] of Object.entries(DEPLOYMENT_DROPS)) {
     for (const field of Object.keys(drop)) {
@@ -682,6 +812,31 @@ test('canonical registry reader requires its own object-valued DEPLOYMENT_DROPS 
   }
 });
 
+test('canonical registry requires one object-valued tombstone export', async () => {
+  await withTempCanonical(
+    'export const DEPLOYMENT_DROPS = {};\n',
+    async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /exactly one top-level exported const BOX_MINTER_CONFIG_TOMBSTONES declaration/,
+      );
+    },
+  );
+  await withTempCanonical(
+    [
+      'export const DEPLOYMENT_DROPS = {};',
+      'export const BOX_MINTER_CONFIG_TOMBSTONES = [];',
+      '',
+    ].join('\n'),
+    async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /must export BOX_MINTER_CONFIG_TOMBSTONES as an object/,
+      );
+    },
+  );
+});
+
 test('canonical registry reader rejects invalid rows and exact key/dropId mismatches', async () => {
   const invalidRows = [
     {
@@ -847,6 +1002,7 @@ test('canonical registry reader rejects source mutation during module import', a
     "import { appendFileSync } from 'node:fs';",
     "import { fileURLToPath } from 'node:url';",
     'export const DEPLOYMENT_DROPS = {};',
+    'export const BOX_MINTER_CONFIG_TOMBSTONES = {};',
     "appendFileSync(fileURLToPath(import.meta.url), '\\nvoid 0;\\n');",
     '',
   ].join('\n');
@@ -902,6 +1058,51 @@ test('canonical renderer round-trips every optional deployment field', async () 
       drops: registry.drops,
     }), source);
   });
+});
+
+test('canonical renderer round-trips payment routing without a treasury field', async () => {
+  const routedRecord = {
+    ...registryDrop('routed_payments'),
+    secondaryMarketHref:
+      'https://www.tensor.trade/trade/routed_payments',
+    paymentRouting: VALID_PAYMENT_ROUTING,
+  } as Record<string, unknown>;
+  delete routedRecord.treasury;
+  const routed = routedRecord as DeploymentDropConfigSerialized;
+  const source = renderDeploymentRegistryFile({
+    drops: { [routed.dropId]: routed },
+  });
+
+  assert.match(source, /paymentRouting: \{/);
+  assert.match(source, /percentage: 70/);
+  assert.doesNotMatch(deploymentDropsDeclarationSource(source), /\n    treasury:/);
+  await withTempCanonical(source, async (filePath) => {
+    const registry = await readDeploymentDropRegistry(filePath);
+    assert.deepEqual(registry.drops[routed.dropId], routed);
+    assert.equal(
+      deploymentTreasuryAlias(registry.drops[routed.dropId]),
+      ROUTING_ADDRESS_B,
+    );
+    assert.equal(renderDeploymentRegistryFile(registry), source);
+  });
+});
+
+test('canonical registry rejects treasury and paymentRouting together', async () => {
+  const invalid = {
+    ...registryDrop('ambiguous_payments'),
+    paymentRouting: VALID_PAYMENT_ROUTING,
+  };
+  await withTempCanonical(
+    registrySource(
+      `export const DEPLOYMENT_DROPS = { ambiguous_payments: ${JSON.stringify(invalid)} };`,
+    ),
+    async (filePath) => {
+      await assert.rejects(
+        readDeploymentDropRegistry(filePath),
+        /exactly one of treasury or paymentRouting is required/,
+      );
+    },
+  );
 });
 
 test('receipt pool relations bind pooled drops to one cluster-scoped identity', () => {
@@ -1792,7 +1993,155 @@ test('metadata base and asset URL helpers preserve legacy and compact behavior',
   );
 });
 
-function defineDropWithMetadataBase(metadataBase: string) {
+test('payment routing accepts two or three recipients and allows delivery overlap', () => {
+  assert.deepEqual(
+    normalizeAndValidatePaymentRouting(VALID_PAYMENT_ROUTING),
+    VALID_PAYMENT_ROUTING,
+  );
+  const twoRecipients = {
+    mintProceeds: [
+      { address: ROUTING_ADDRESS_A, percentage: 60 },
+      { address: ROUTING_ADDRESS_B, percentage: 40 },
+    ],
+    deliveryPaymentReceiver: ROUTING_ADDRESS_A,
+  };
+  assert.deepEqual(
+    normalizeAndValidatePaymentRouting(twoRecipients),
+    twoRecipients,
+  );
+  const firstClone = clonePaymentRoutingConfig(VALID_PAYMENT_ROUTING);
+  const secondClone = clonePaymentRoutingConfig(VALID_PAYMENT_ROUTING);
+  assert.notEqual(firstClone, VALID_PAYMENT_ROUTING);
+  assert.notEqual(firstClone.mintProceeds, VALID_PAYMENT_ROUTING.mintProceeds);
+  assert.notEqual(firstClone.mintProceeds[0], VALID_PAYMENT_ROUTING.mintProceeds[0]);
+  assert.notEqual(firstClone, secondClone);
+  assert.notEqual(firstClone.mintProceeds, secondClone.mintProceeds);
+  (firstClone.mintProceeds[0] as { percentage: number }).percentage = 1;
+  assert.equal(secondClone.mintProceeds[0].percentage, 70);
+});
+
+test('payment projections validate and isolate the compatibility alias', () => {
+  const routedRecord = {
+    ...registryDrop('projection_routed'),
+    paymentRouting: VALID_PAYMENT_ROUTING,
+  } as Record<string, unknown>;
+  delete routedRecord.treasury;
+  const routed = routedRecord as DeploymentRegistryDrop;
+  const first = projectDeploymentPaymentRouting(routed);
+  const second = projectDeploymentPaymentRouting(routed);
+  assert.equal(first.treasury, ROUTING_ADDRESS_B);
+  assert.deepEqual(first.paymentRouting, VALID_PAYMENT_ROUTING);
+  assert.notEqual(first.paymentRouting, routed.paymentRouting);
+  assert.notEqual(first.paymentRouting, second.paymentRouting);
+  assert.notEqual(
+    first.paymentRouting?.mintProceeds,
+    second.paymentRouting?.mintProceeds,
+  );
+  (first.paymentRouting?.mintProceeds[0] as { percentage: number }).percentage =
+    1;
+  assert.equal(second.paymentRouting?.mintProceeds[0].percentage, 70);
+  assert.deepEqual(
+    projectDeploymentPaymentRouting(registryDrop('projection_legacy')),
+    { treasury: 'Treasury11111111111111111111111111111111' },
+  );
+});
+
+test('payment routing rejects unsafe recipients and invalid percentages', () => {
+  const invalidCases: Array<{ value: unknown; message: RegExp }> = [
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: VALID_PAYMENT_ROUTING.mintProceeds.slice(0, 1),
+      },
+      message: /must contain 2 or 3 recipients/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          ...VALID_PAYMENT_ROUTING.mintProceeds,
+          { address: 'So11111111111111111111111111111111111111112', percentage: 1 },
+        ],
+      },
+      message: /must contain 2 or 3 recipients/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          { address: ROUTING_ADDRESS_A, percentage: 70 },
+          { address: ROUTING_ADDRESS_A, percentage: 30 },
+        ],
+      },
+      message: /addresses must be distinct/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          { address: '11111111111111111111111111111111', percentage: 70 },
+          { address: ROUTING_ADDRESS_B, percentage: 30 },
+        ],
+      },
+      message: /must not be the default public key/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          { address: 'invalid', percentage: 70 },
+          { address: ROUTING_ADDRESS_B, percentage: 30 },
+        ],
+      },
+      message: /must be a valid Solana public key/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          { address: ROUTING_ADDRESS_A, percentage: 70.5 },
+          { address: ROUTING_ADDRESS_B, percentage: 29.5 },
+        ],
+      },
+      message: /positive whole integer/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        mintProceeds: [
+          { address: ROUTING_ADDRESS_A, percentage: 70 },
+          { address: ROUTING_ADDRESS_B, percentage: 20 },
+        ],
+      },
+      message: /percentages must total 100/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        deliveryPaymentReceiver: '11111111111111111111111111111111',
+      },
+      message: /must not be the default public key/,
+    },
+    {
+      value: {
+        ...VALID_PAYMENT_ROUTING,
+        deliveryPaymentReceiver: 'invalid',
+      },
+      message: /must be a valid Solana public key/,
+    },
+  ];
+
+  invalidCases.forEach(({ value, message }) => {
+    assert.throws(() => normalizeAndValidatePaymentRouting(value), message);
+  });
+});
+
+function defineDropWithMetadataBase(
+  metadataBase: string,
+  payment:
+    | { treasury?: string; paymentRouting?: never }
+    | { treasury?: never; paymentRouting: PaymentRoutingConfig } = {},
+) {
   return defineNewDropConfig({
     shared: {
       isMainnet: false,
@@ -1823,6 +2172,7 @@ function defineDropWithMetadataBase(metadataBase: string) {
       maxPerTx: 5,
       namePrefix: 'box',
       figureNamePrefix: 'figure',
+      ...payment,
     },
   });
 }
@@ -1856,6 +2206,27 @@ test('defineNewDropConfig accepts compact-like terminal metadata-base segments',
       metadataBase,
     );
   }
+});
+
+test('defineNewDropConfig preserves routed payments and rejects a treasury alias', () => {
+  const routed = defineDropWithMetadataBase(
+    'https://assets.example.com/drops/routed',
+    { paymentRouting: VALID_PAYMENT_ROUTING },
+  );
+  assert.deepEqual(routed.onchain.paymentRouting, VALID_PAYMENT_ROUTING);
+  assert.equal(routed.onchain.treasury, undefined);
+
+  assert.throws(
+    () =>
+      defineDropWithMetadataBase(
+        'https://assets.example.com/drops/ambiguous',
+        {
+          treasury: ROUTING_ADDRESS_A,
+          paymentRouting: VALID_PAYMENT_ROUTING,
+        } as never,
+      ),
+    /treasury and paymentRouting are mutually exclusive/,
+  );
 });
 
 async function writeStartMintCanonical(

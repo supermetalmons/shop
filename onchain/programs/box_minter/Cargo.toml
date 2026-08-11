@@ -26,11 +26,22 @@ shared-devnet-program-id = []
 little-swag-boxes-devnet-program-id = []
 poncho-mainnet-program-id = []
 poncho-devnet-program-id = []
+sbf-tests = []
 idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = { version = "0.32.1" }
 solana-sha256-hasher = "2.3.0"
+
+[dev-dependencies]
+litesvm = "=0.7.1"
+solana-program-runtime = "=2.3.13"
+solana-sdk = { version = "=2.3.1", default-features = false, features = ["full"] }
+
+[[test]]
+name = "split_payments_sbf"
+path = "tests/split_payments_sbf.rs"
+required-features = ["sbf-tests"]
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -9,16 +10,25 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { PublicKey } from '@solana/web3.js';
 import ts from 'typescript';
 import {
   defaultBoxMediaConfigForDropFamily,
   defaultFigureMediaConfigForDropFamily,
 } from '../../functions/src/shared/dropMediaDefaults.ts';
 import {
+  BOX_MINTER_CONFIG_TOMBSTONES,
   DEPLOYMENT_REGISTRY_DROP_FIELDS,
+  clonePaymentRoutingConfig,
+  deploymentTreasuryAlias,
   getDeploymentDrop,
+  normalizeAndValidatePaymentRouting,
+  projectDeploymentPaymentRouting,
+  type BoxMinterConfigTombstone,
+  type BoxMinterConfigTombstonesMap,
   type DeploymentMediaMapConfig,
   type DeploymentRegistryDrop,
+  type PaymentRoutingConfig,
   type ReceiptPoolDeployment,
 } from '../../functions/src/shared/deploymentRegistry.ts';
 import {
@@ -37,6 +47,7 @@ import {
   type StripeCheckoutEnabledResolution,
 } from '../../functions/src/shared/stripeCheckoutCore.ts';
 import {
+  BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
   BOX_MINTER_MAX_ITEMS_PER_BOX,
   BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
@@ -69,6 +80,7 @@ import {
 } from './optimisticTextFile.ts';
 
 export {
+  BOX_MINTER_CONFIG_TOMBSTONES,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
   defaultDropFamilyForDropId,
@@ -79,6 +91,10 @@ export {
   normalizeDropId,
   normalizeDropSalesMode,
   normalizeMetadataBaseAliases,
+  deploymentTreasuryAlias,
+  clonePaymentRoutingConfig,
+  normalizeAndValidatePaymentRouting,
+  projectDeploymentPaymentRouting,
   resolveStripeCheckoutEnabledForDropFamily,
   resolveStripeProductTaxCodeForDropFamily,
 };
@@ -88,6 +104,9 @@ export type {
   DropPaths,
   MetadataPathFormat,
   MintSelectionConfig,
+  BoxMinterConfigTombstone,
+  BoxMinterConfigTombstonesMap,
+  PaymentRoutingConfig,
   ReceiptPoolDeployment,
   SolanaCluster,
   StripeCheckoutEnabledResolution,
@@ -99,15 +118,22 @@ export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
 export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
 export type MintSelectionConfigSerialized = MintSelectionConfig;
 
-export type FrontendDropConfigSerialized = Omit<
+type DeploymentDropWithTreasuryAlias = Omit<
   DeploymentRegistryDrop,
+  'treasury'
+> & {
+  treasury: string;
+};
+
+export type FrontendDropConfigSerialized = Omit<
+  DeploymentDropWithTreasuryAlias,
   | 'stripeProductTaxCode'
   | 'receiptsTreeMaxDepth'
   | 'receiptsTreeCanopyDepth'
   | 'deliveryLookupTable'
 >;
 
-export type FunctionsDropConfigSerialized = DeploymentRegistryDrop;
+export type FunctionsDropConfigSerialized = DeploymentDropWithTreasuryAlias;
 
 export type DeploymentDropConfigSerialized = DeploymentRegistryDrop;
 
@@ -121,6 +147,7 @@ export type FunctionsDropRegistry = {
 
 export type DeploymentDropRegistry = {
   drops: Record<string, DeploymentDropConfigSerialized>;
+  tombstones: Record<string, BoxMinterConfigTombstone>;
   receiptPools: Record<string, ReceiptPoolDeployment>;
   sourceContent: string;
 };
@@ -404,6 +431,10 @@ function normalizeDeploymentDropForRegistry(
       ? object.metadataBaseAliases.map(asTrimmedString)
       : undefined,
   );
+  const paymentRouting =
+    object.paymentRouting == null
+      ? undefined
+      : normalizeAndValidatePaymentRouting(object.paymentRouting);
 
   return {
     solanaCluster,
@@ -423,7 +454,9 @@ function normalizeDeploymentDropForRegistry(
     ...(boxMedia ? { boxMedia } : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
     ...(mintSelection ? { mintSelection } : {}),
-    treasury: asTrimmedString(object.treasury),
+    ...(paymentRouting
+      ? { paymentRouting }
+      : { treasury: asTrimmedString(object.treasury) }),
     priceSol: asFiniteNumber(object.priceSol),
     discountPriceSol: asFiniteNumber(object.discountPriceSol),
     ...(stripeCheckout.enabled
@@ -489,6 +522,7 @@ function projectFrontendSerialized(
   const defaultMarket = defaultSecondaryMarketHref(drop.dropId);
   return {
     ...frontend,
+    ...projectDeploymentPaymentRouting(drop),
     ...(secondaryMarketHref && secondaryMarketHref !== defaultMarket
       ? { secondaryMarketHref }
       : {}),
@@ -938,7 +972,29 @@ function assertValidCanonicalRegistryRow(args: {
     invalid('metadataPathFormat is unsupported');
   }
 
-  requireString('treasury');
+  const hasTreasury = Object.prototype.hasOwnProperty.call(row, 'treasury');
+  const hasPaymentRouting = Object.prototype.hasOwnProperty.call(
+    row,
+    'paymentRouting',
+  );
+  if (hasTreasury === hasPaymentRouting) {
+    invalid('exactly one of treasury or paymentRouting is required');
+  }
+  if (hasTreasury) {
+    requireString('treasury');
+  } else {
+    let normalizedPaymentRouting: PaymentRoutingConfig;
+    try {
+      normalizedPaymentRouting = normalizeAndValidatePaymentRouting(
+        row['paymentRouting'],
+      );
+    } catch (error) {
+      invalid(error instanceof Error ? error.message : String(error));
+    }
+    if (!isDeepStrictEqual(normalizedPaymentRouting, row['paymentRouting'])) {
+      invalid('paymentRouting must be canonical');
+    }
+  }
   requireNumber('priceSol', { min: 0 });
   requireNumber('discountPriceSol', { min: 0 });
   requireNumber('discountMintsPerWallet', {
@@ -1092,6 +1148,215 @@ function assertValidCanonicalRegistryRow(args: {
   }
 }
 
+const BOX_MINTER_CONFIG_TOMBSTONE_FIELDS = new Set([
+  'solanaCluster',
+  'dropId',
+  'dropSeed',
+  'boxMinterProgramId',
+  'boxMinterConfigPda',
+  'collectionMint',
+  'accountSize',
+  'schema',
+  'treasury',
+  'paymentRouting',
+  'reason',
+]);
+
+function normalizeCanonicalPublicKey(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value !== value.trim() || !value) {
+    throw new Error(`${label} must be a non-empty trimmed Solana public key`);
+  }
+  let normalized: string;
+  try {
+    normalized = new PublicKey(value).toBase58();
+  } catch {
+    throw new Error(`${label} must be a valid Solana public key`);
+  }
+  if (normalized === PublicKey.default.toBase58()) {
+    throw new Error(`${label} must not be the default public key`);
+  }
+  if (normalized !== value) {
+    throw new Error(`${label} must be canonical base58`);
+  }
+  return normalized;
+}
+
+function normalizeBoxMinterConfigTombstone(args: {
+  registryKey: string;
+  value: unknown;
+  filePath: string;
+}): BoxMinterConfigTombstone {
+  const invalid = (reason: string): never => {
+    throw new Error(
+      `Invalid BoxMinter config tombstone ${args.registryKey}: ${reason}: ${args.filePath}`,
+    );
+  };
+  if (!isPlainRecord(args.value)) invalid('expected an object');
+  const row = args.value as Record<string, unknown>;
+  const unknownField = Object.keys(row).find(
+    (field) => !BOX_MINTER_CONFIG_TOMBSTONE_FIELDS.has(field),
+  );
+  if (unknownField) invalid(`unknown field ${unknownField}`);
+  const requireTrimmedString = (field: string): string => {
+    const value = row[field];
+    if (typeof value !== 'string' || value !== value.trim() || !value) {
+      invalid(`${field} must be a non-empty trimmed string`);
+    }
+    return value as string;
+  };
+
+  let dropId: string;
+  try {
+    dropId = normalizeAndValidateDropId(requireTrimmedString('dropId'));
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : String(error));
+  }
+  if (dropId !== args.registryKey) {
+    invalid('registry key must equal dropId');
+  }
+  const solanaClusterValue = requireTrimmedString('solanaCluster');
+  if (
+    solanaClusterValue !== 'devnet' &&
+    solanaClusterValue !== 'testnet' &&
+    solanaClusterValue !== 'mainnet-beta'
+  ) {
+    invalid('solanaCluster is unsupported');
+  }
+  const solanaCluster = solanaClusterValue as SolanaCluster;
+  const dropSeed = requireTrimmedString('dropSeed');
+  const expectedDropSeed = createHash('sha256')
+    .update(dropId, 'utf8')
+    .digest('hex');
+  if (dropSeed !== expectedDropSeed) {
+    invalid(`dropSeed must equal sha256(dropId), expected ${expectedDropSeed}`);
+  }
+  let boxMinterProgramId: string;
+  let boxMinterConfigPda: string;
+  let collectionMint: string;
+  try {
+    boxMinterProgramId = normalizeCanonicalPublicKey(
+      row.boxMinterProgramId,
+      'boxMinterProgramId',
+    );
+    boxMinterConfigPda = normalizeCanonicalPublicKey(
+      row.boxMinterConfigPda,
+      'boxMinterConfigPda',
+    );
+    collectionMint = normalizeCanonicalPublicKey(
+      row.collectionMint,
+      'collectionMint',
+    );
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : String(error));
+  }
+  const expectedConfigPda = PublicKey.findProgramAddressSync(
+    [Buffer.from(BOX_MINTER_CONFIG_SEED), Buffer.from(dropSeed, 'hex')],
+    new PublicKey(boxMinterProgramId),
+  )[0].toBase58();
+  if (boxMinterConfigPda !== expectedConfigPda) {
+    invalid(`boxMinterConfigPda must derive to ${expectedConfigPda}`);
+  }
+  const reasonValue = requireTrimmedString('reason');
+  if (reasonValue !== 'historical-orphan' && reasonValue !== 'drop-wiped') {
+    invalid('reason is unsupported');
+  }
+  const reason = reasonValue as BoxMinterConfigTombstone['reason'];
+  const hasTreasury = Object.prototype.hasOwnProperty.call(row, 'treasury');
+  const hasPaymentRouting = Object.prototype.hasOwnProperty.call(
+    row,
+    'paymentRouting',
+  );
+  if (hasTreasury === hasPaymentRouting) {
+    invalid('exactly one of treasury or paymentRouting is required');
+  }
+  if (hasTreasury) {
+    if (row.accountSize !== 376 || row.schema !== 'legacy') {
+      invalid('legacy tombstones require accountSize=376 and schema=legacy');
+    }
+    let treasury: string;
+    try {
+      treasury = normalizeCanonicalPublicKey(row.treasury, 'treasury');
+    } catch (error) {
+      invalid(error instanceof Error ? error.message : String(error));
+    }
+    return {
+      solanaCluster,
+      dropId,
+      dropSeed,
+      boxMinterProgramId,
+      boxMinterConfigPda,
+      collectionMint,
+      accountSize: 376,
+      schema: 'legacy',
+      treasury,
+      reason,
+    };
+  }
+  if (row.accountSize !== 488 || row.schema !== 'split-payments-v1') {
+    invalid(
+      'split-payment tombstones require accountSize=488 and schema=split-payments-v1',
+    );
+  }
+  let paymentRouting: PaymentRoutingConfig;
+  try {
+    paymentRouting = clonePaymentRoutingConfig(
+      row.paymentRouting,
+      'paymentRouting',
+    );
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : String(error));
+  }
+  if (!isDeepStrictEqual(paymentRouting, row.paymentRouting)) {
+    invalid('paymentRouting must be canonical');
+  }
+  return {
+    solanaCluster,
+    dropId,
+    dropSeed,
+    boxMinterProgramId,
+    boxMinterConfigPda,
+    collectionMint,
+    accountSize: 488,
+    schema: 'split-payments-v1',
+    paymentRouting,
+    reason,
+  };
+}
+
+function assertNoBoxMinterConfigRegistryCollisions(args: {
+  drops: Record<string, DeploymentDropConfigSerialized>;
+  tombstones: Record<string, BoxMinterConfigTombstone>;
+  filePath: string;
+}): void {
+  const configOwners = new Map<string, string>();
+  Object.entries(args.drops).forEach(([dropId, drop]) => {
+    if (Object.prototype.hasOwnProperty.call(args.tombstones, dropId)) {
+      throw new Error(
+        `Deployment registry drop ${dropId} cannot also be a BoxMinter config tombstone: ${args.filePath}`,
+      );
+    }
+    if (!drop.boxMinterConfigPda) return;
+    const key = `${drop.solanaCluster}:${drop.boxMinterConfigPda}`;
+    const duplicate = configOwners.get(key);
+    if (duplicate) {
+      throw new Error(
+        `Deployment registry config PDA collision between ${duplicate} and ${dropId}: ${args.filePath}`,
+      );
+    }
+    configOwners.set(key, `active drop ${dropId}`);
+  });
+  Object.entries(args.tombstones).forEach(([dropId, tombstone]) => {
+    const key = `${tombstone.solanaCluster}:${tombstone.boxMinterConfigPda}`;
+    const duplicate = configOwners.get(key);
+    if (duplicate) {
+      throw new Error(
+        `Deployment registry config PDA collision between ${duplicate} and tombstone ${dropId}: ${args.filePath}`,
+      );
+    }
+    configOwners.set(key, `tombstone ${dropId}`);
+  });
+}
+
 export async function readDeploymentDropRegistry(
   filePath: string,
 ): Promise<DeploymentDropRegistry> {
@@ -1103,7 +1368,12 @@ export async function readDeploymentDropRegistry(
     filePath,
     content: sourceBeforeImport,
   });
+  findUniqueBoxMinterConfigTombstonesExport({
+    filePath,
+    content: sourceBeforeImport,
+  });
   const drops: Record<string, DeploymentDropConfigSerialized> = {};
+  const tombstones: Record<string, BoxMinterConfigTombstone> = {};
   const mod = await readModule(filePath, 'deployment registry');
   const sourceContent = readFileSync(filePath, 'utf8');
   if (sourceContent !== sourceBeforeImport) {
@@ -1164,6 +1434,37 @@ export async function readDeploymentDropRegistry(
     });
   }
 
+  const tombstoneCandidate = mod.BOX_MINTER_CONFIG_TOMBSTONES;
+  if (!isPlainRecord(tombstoneCandidate)) {
+    throw new Error(
+      `Canonical deployment registry must export BOX_MINTER_CONFIG_TOMBSTONES as an object: ${filePath}`,
+    );
+  }
+  findUniqueBoxMinterConfigTombstonesExport({
+    filePath,
+    content: sourceContent,
+  });
+  for (const [registryKey, value] of Object.entries(
+    tombstoneCandidate,
+  )) {
+    const tombstone = normalizeBoxMinterConfigTombstone({
+      registryKey,
+      value,
+      filePath,
+    });
+    Object.defineProperty(tombstones, registryKey, {
+      value: tombstone,
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+  }
+  assertNoBoxMinterConfigRegistryCollisions({
+    drops,
+    tombstones,
+    filePath,
+  });
+
   const receiptPools: Record<string, ReceiptPoolDeployment> = {};
   const receiptPoolCandidate = mod.RECEIPT_POOL_DEPLOYMENTS;
   if (
@@ -1195,6 +1496,7 @@ export async function readDeploymentDropRegistry(
     filePath,
     existingContent: sourceContent,
     drops,
+    tombstones,
   });
   if (receiptPoolCandidate !== undefined) {
     renderReceiptPoolDeploymentsFileFromSource({
@@ -1204,7 +1506,7 @@ export async function readDeploymentDropRegistry(
     });
   }
   assertReceiptPoolDropRelations({ drops, receiptPools });
-  return { drops, receiptPools, sourceContent };
+  return { drops, tombstones, receiptPools, sourceContent };
 }
 
 function canonicalForceSoldOutForLegacyDropId(dropId: string): boolean {
@@ -1431,8 +1733,24 @@ function renderDeploymentDropEntry(
   if (drop.mintSelection) {
     lines.push(...renderMintSelectionConfigLiteral(drop.mintSelection));
   }
+  if (drop.paymentRouting) {
+    lines.push('    paymentRouting: {', '      mintProceeds: [');
+    drop.paymentRouting.mintProceeds.forEach((recipient) => {
+      lines.push(
+        `        { address: ${tsStringLiteral(recipient.address)}, percentage: ${recipient.percentage} },`,
+      );
+    });
+    lines.push(
+      '      ],',
+      `      deliveryPaymentReceiver: ${tsStringLiteral(drop.paymentRouting.deliveryPaymentReceiver)},`,
+      '    },',
+    );
+  } else {
+    lines.push(
+      `    treasury: ${tsStringLiteral(deploymentTreasuryAlias(drop))},`,
+    );
+  }
   lines.push(
-    `    treasury: ${tsStringLiteral(drop.treasury)},`,
     `    priceSol: ${Number(drop.priceSol)},`,
     `    discountPriceSol: ${Number(drop.discountPriceSol)},`,
   );
@@ -1547,6 +1865,71 @@ ${entries}
 };`;
 }
 
+function renderBoxMinterConfigTombstoneEntry(
+  tombstone: BoxMinterConfigTombstone,
+): string {
+  const lines = [
+    `  ${tsPropertyName(tombstone.dropId)}: {`,
+    `    solanaCluster: ${tsStringLiteral(tombstone.solanaCluster)},`,
+    `    dropId: ${tsStringLiteral(tombstone.dropId)},`,
+    `    dropSeed: ${tsStringLiteral(tombstone.dropSeed)},`,
+    `    boxMinterProgramId: ${tsStringLiteral(tombstone.boxMinterProgramId)},`,
+    `    boxMinterConfigPda: ${tsStringLiteral(tombstone.boxMinterConfigPda)},`,
+    `    collectionMint: ${tsStringLiteral(tombstone.collectionMint)},`,
+    `    accountSize: ${tombstone.accountSize},`,
+    `    schema: ${tsStringLiteral(tombstone.schema)},`,
+  ];
+  if (tombstone.paymentRouting) {
+    lines.push('    paymentRouting: {', '      mintProceeds: [');
+    tombstone.paymentRouting.mintProceeds.forEach((recipient) => {
+      lines.push(
+        `        { address: ${tsStringLiteral(recipient.address)}, percentage: ${recipient.percentage} },`,
+      );
+    });
+    lines.push(
+      '      ],',
+      `      deliveryPaymentReceiver: ${tsStringLiteral(tombstone.paymentRouting.deliveryPaymentReceiver)},`,
+      '    },',
+    );
+  } else {
+    lines.push(`    treasury: ${tsStringLiteral(tombstone.treasury)},`);
+  }
+  lines.push(
+    `    reason: ${tsStringLiteral(tombstone.reason)},`,
+    '  },',
+  );
+  return lines.join('\n');
+}
+
+function renderBoxMinterConfigTombstonesSection(args: {
+  tombstones: Record<string, BoxMinterConfigTombstone>;
+}): string {
+  const entries = Object.keys(args.tombstones)
+    .sort((left, right) => left.localeCompare(right))
+    .map((registryKey) => {
+      if (!Object.prototype.hasOwnProperty.call(args.tombstones, registryKey)) {
+        throw new Error(
+          `BoxMinter config tombstone is not an own property: ${registryKey}`,
+        );
+      }
+      const tombstone = normalizeBoxMinterConfigTombstone({
+        registryKey,
+        value: args.tombstones[registryKey],
+        filePath: 'rendered deployment registry',
+      });
+      if (!isDeepStrictEqual(tombstone, args.tombstones[registryKey])) {
+        throw new Error(
+          `BoxMinter config tombstone ${registryKey} must be canonical`,
+        );
+      }
+      return renderBoxMinterConfigTombstoneEntry(tombstone);
+    })
+    .join('\n');
+  return `export const BOX_MINTER_CONFIG_TOMBSTONES: BoxMinterConfigTombstonesMap = {
+${entries}
+};`;
+}
+
 function renderReceiptPoolDeploymentEntry(
   registryKey: string,
   pool: ReceiptPoolDeployment,
@@ -1654,6 +2037,60 @@ function replaceDeploymentDropsExport(args: {
   }`;
 }
 
+function findUniqueBoxMinterConfigTombstonesExport(args: {
+  filePath: string;
+  content: string;
+}): DeploymentDropsExportBounds {
+  const sourceFile = ts.createSourceFile(
+    args.filePath,
+    args.content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declarations = sourceFile.statements.flatMap((statement) => {
+    if (
+      !ts.isVariableStatement(statement) ||
+      !(statement.declarationList.flags & ts.NodeFlags.Const) ||
+      statement.declarationList.declarations.length !== 1 ||
+      !statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    ) {
+      return [];
+    }
+    return statement.declarationList.declarations
+      .filter(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'BOX_MINTER_CONFIG_TOMBSTONES',
+      )
+      .map(() => statement);
+  });
+  const declaration = declarations[0];
+  if (declarations.length !== 1) {
+    throw new Error(
+      `Canonical deployment registry must contain exactly one top-level exported const BOX_MINTER_CONFIG_TOMBSTONES declaration: ${args.filePath}`,
+    );
+  }
+  return {
+    start: declaration.getStart(sourceFile),
+    end: declaration.end,
+  };
+}
+
+function replaceBoxMinterConfigTombstonesExport(args: {
+  filePath: string;
+  existingContent: string;
+  nextDeclaration: string;
+}): string {
+  const bounds = findUniqueBoxMinterConfigTombstonesExport({
+    filePath: args.filePath,
+    content: args.existingContent,
+  });
+  return `${args.existingContent.slice(0, bounds.start)}${args.nextDeclaration}${args.existingContent.slice(bounds.end)}`;
+}
+
 function findUniqueReceiptPoolDeploymentsExport(args: {
   filePath: string;
   content: string;
@@ -1723,12 +2160,14 @@ function canonicalRegistryTemplatePath(): string {
 
 export function renderDeploymentRegistryFile(args: {
   drops: Record<string, DeploymentDropConfigSerialized>;
+  tombstones?: Record<string, BoxMinterConfigTombstone>;
 }): string {
   const templatePath = canonicalRegistryTemplatePath();
   return renderDeploymentRegistryFileFromSource({
     filePath: templatePath,
     existingContent: readFileSync(templatePath, 'utf8'),
     drops: args.drops,
+    tombstones: args.tombstones ?? BOX_MINTER_CONFIG_TOMBSTONES,
   });
 }
 
@@ -1736,12 +2175,29 @@ export function renderDeploymentRegistryFileFromSource(args: {
   filePath: string;
   existingContent: string;
   drops: Record<string, DeploymentDropConfigSerialized>;
+  tombstones?: Record<string, BoxMinterConfigTombstone>;
 }): string {
-  const next = replaceDeploymentDropsExport({
+  if (args.tombstones) {
+    assertNoBoxMinterConfigRegistryCollisions({
+      drops: args.drops,
+      tombstones: args.tombstones,
+      filePath: args.filePath,
+    });
+  }
+  const dropsNext = replaceDeploymentDropsExport({
     filePath: args.filePath,
     existingContent: args.existingContent,
     nextDeclaration: renderDeploymentRegistrySection({ drops: args.drops }),
   });
+  const next = args.tombstones
+    ? replaceBoxMinterConfigTombstonesExport({
+        filePath: args.filePath,
+        existingContent: dropsNext,
+        nextDeclaration: renderBoxMinterConfigTombstonesSection({
+          tombstones: args.tombstones,
+        }),
+      })
+    : dropsNext;
   return next.endsWith('\n') ? next : `${next}\n`;
 }
 

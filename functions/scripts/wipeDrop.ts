@@ -42,6 +42,7 @@ import {
 } from '../../scripts/shared/optimisticTextFile.ts';
 import {
   acquireDeploymentRegistryMutationLock,
+  clonePaymentRoutingConfig,
   defaultDropFamilyForDropId,
   isDeploymentRegistryPostCommitVerificationError,
   normalizeDropId,
@@ -51,6 +52,7 @@ import {
   requireDropFamily,
   writeDeploymentRegistryFile,
   type DeploymentDropConfigSerialized,
+  type BoxMinterConfigTombstone,
   type FrontendDropConfigSerialized,
   type FunctionsDropConfigSerialized,
 } from '../../scripts/shared/deploymentRegistry.ts';
@@ -1186,11 +1188,56 @@ export async function buildRepoPlan(args: {
   const registryDrop = registryWillChange
     ? registry.drops[dropId]
     : undefined;
+  const tombstonesNext = { ...registry.tombstones };
+  if (
+    registryDrop &&
+    ((registryDrop.solanaCluster === 'mainnet-beta' &&
+      registryDrop.boxMinterProgramId ===
+        '7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU') ||
+      (registryDrop.solanaCluster === 'devnet' &&
+        registryDrop.boxMinterProgramId ===
+          '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6'))
+  ) {
+    const boxMinterConfigPda = String(
+      registryDrop.boxMinterConfigPda || '',
+    ).trim();
+    if (!boxMinterConfigPda) {
+      fail(
+        `Cannot tombstone current-generation drop ${dropId} without boxMinterConfigPda.`,
+      );
+    }
+    const base = {
+      solanaCluster: registryDrop.solanaCluster,
+      dropId,
+      dropSeed: createHash('sha256').update(dropId, 'utf8').digest('hex'),
+      boxMinterProgramId: registryDrop.boxMinterProgramId,
+      boxMinterConfigPda,
+      collectionMint: registryDrop.collectionMint,
+      reason: 'drop-wiped' as const,
+    };
+    const tombstone: BoxMinterConfigTombstone = registryDrop.paymentRouting
+      ? {
+          ...base,
+          accountSize: 488,
+          schema: 'split-payments-v1',
+          paymentRouting: clonePaymentRoutingConfig(
+            registryDrop.paymentRouting,
+          ),
+        }
+      : {
+          ...base,
+          accountSize: 376,
+          schema: 'legacy',
+          treasury: registryDrop.treasury,
+        };
+    tombstonesNext[dropId] = tombstone;
+  }
   const registryNextContent = registryWillChange
     ? renderDeploymentRegistryFileFromSource({
         filePath: registryPath,
         existingContent: registry.sourceContent,
         drops: dropsNext,
+        tombstones: tombstonesNext,
       })
     : registry.sourceContent;
   const preservedDropFamily = registryDrop

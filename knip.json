@@ -18,7 +18,7 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer"],
-      "ignoreBinaries": ["mkfifo", "solana"]
+      "ignoreBinaries": ["anchor", "mkfifo", "solana"]
     },
     "functions": {
       "entry": ["scripts/*.ts", "../tests/*.test.ts"],

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEPLOYMENT_DROPS } from '../functions/src/shared/deploymentRegistry.ts';
+import {
+  DEPLOYMENT_DROPS,
+  deploymentTreasuryAlias,
+} from '../functions/src/shared/deploymentRegistry.ts';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
@@ -104,8 +107,11 @@ test('devnet inventory access includes operational, treasury, and explicitly add
   SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet }) => {
     assert.equal(hasDevnetInventoryAccess(wallet), true);
   });
-  Object.values(DEPLOYMENT_DROPS).forEach(({ treasury }) => {
-    assert.equal(hasDevnetInventoryAccess(treasury), true);
+  Object.values(DEPLOYMENT_DROPS).forEach((drop) => {
+    assert.equal(
+      hasDevnetInventoryAccess(deploymentTreasuryAlias(drop)),
+      true,
+    );
   });
 
   assert.equal(DEVNET_INVENTORY_WALLETS.has(ADDITIONAL_DEVNET_INVENTORY_WALLET), true);

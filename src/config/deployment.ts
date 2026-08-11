@@ -9,10 +9,14 @@ import {
   defaultBoxMediaConfigForDropFamily,
   defaultFigureMediaConfigForDropFamily,
 } from '../../functions/src/shared/dropMediaDefaults.js';
-import { DEPLOYMENT_DROPS } from '../../functions/src/shared/deploymentRegistry.js';
+import {
+  DEPLOYMENT_DROPS,
+  projectDeploymentPaymentRouting,
+} from '../../functions/src/shared/deploymentRegistry.js';
 import type {
   DeploymentMediaMapConfig,
   DeploymentRegistryDrop,
+  PaymentRoutingConfig,
 } from '../../functions/src/shared/deploymentRegistry.js';
 import {
   canonicalizeDropAssetUrl as canonicalizeSharedDropAssetUrl,
@@ -65,6 +69,7 @@ export type FrontendDropConfig = {
   forceSoldOut?: boolean;
   mintSelection?: MintSelectionConfig;
   treasury: string;
+  paymentRouting?: PaymentRoutingConfig;
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
@@ -214,7 +219,7 @@ function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig
     metadataBase,
     ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
     metadataPathFormat,
-    treasury: config.treasury,
+    ...projectDeploymentPaymentRouting(config),
     priceSol: config.priceSol,
     discountPriceSol: config.discountPriceSol,
     ...(config.stripeLiveUnitAmountCents != null

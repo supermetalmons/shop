@@ -18,7 +18,149 @@ import type { SharedMediaMapConfig } from './mediaMap.js';
 
 export type DeploymentMediaMapConfig = SharedMediaMapConfig;
 
-export type DeploymentRegistryDrop = {
+export type PaymentRoutingMintProceedsRecipient = {
+  readonly address: string;
+  readonly percentage: number;
+};
+
+export type PaymentRoutingMintProceeds =
+  | readonly [
+      PaymentRoutingMintProceedsRecipient,
+      PaymentRoutingMintProceedsRecipient,
+    ]
+  | readonly [
+      PaymentRoutingMintProceedsRecipient,
+      PaymentRoutingMintProceedsRecipient,
+      PaymentRoutingMintProceedsRecipient,
+    ];
+
+export type PaymentRoutingConfig = {
+  readonly mintProceeds: PaymentRoutingMintProceeds;
+  readonly deliveryPaymentReceiver: string;
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+const BASE58_ALPHABET =
+  '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function decodeBase58PublicKey(value: string): Uint8Array | undefined {
+  let numericValue = 0n;
+  for (const character of value) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) return undefined;
+    numericValue = numericValue * 58n + BigInt(digit);
+  }
+  const decoded: number[] = [];
+  while (numericValue > 0n) {
+    decoded.push(Number(numericValue & 0xffn));
+    numericValue >>= 8n;
+  }
+  decoded.reverse();
+  const leadingZeroes = value.length - value.replace(/^1+/, '').length;
+  if (leadingZeroes + decoded.length !== 32) return undefined;
+  return Uint8Array.from([
+    ...Array.from({ length: leadingZeroes }, () => 0),
+    ...decoded,
+  ]);
+}
+
+function normalizePaymentRoutingAddress(value: unknown, label: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  const bytes = trimmed ? decodeBase58PublicKey(trimmed) : undefined;
+  if (!bytes) {
+    throw new Error(`${label} must be a valid Solana public key`);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new Error(`${label} must not be the default public key`);
+  }
+  return trimmed;
+}
+
+export function normalizeAndValidatePaymentRouting(
+  value: unknown,
+  label = 'paymentRouting',
+): PaymentRoutingConfig {
+  if (!isPlainRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const unknownField = Object.keys(value).find(
+    (field) =>
+      field !== 'mintProceeds' && field !== 'deliveryPaymentReceiver',
+  );
+  if (unknownField) {
+    throw new Error(`${label} has unknown field ${unknownField}`);
+  }
+  if (!Array.isArray(value.mintProceeds)) {
+    throw new Error(`${label}.mintProceeds must be an array`);
+  }
+  if (value.mintProceeds.length < 2 || value.mintProceeds.length > 3) {
+    throw new Error(`${label}.mintProceeds must contain 2 or 3 recipients`);
+  }
+  const seenAddresses = new Set<string>();
+  let percentageTotal = 0;
+  const mintProceeds = value.mintProceeds.map((recipient, index) => {
+    const recipientLabel = `${label}.mintProceeds[${index}]`;
+    if (!isPlainRecord(recipient)) {
+      throw new Error(`${recipientLabel} must be an object`);
+    }
+    const unknownRecipientField = Object.keys(recipient).find(
+      (field) => field !== 'address' && field !== 'percentage',
+    );
+    if (unknownRecipientField) {
+      throw new Error(
+        `${recipientLabel} has unknown field ${unknownRecipientField}`,
+      );
+    }
+    const address = normalizePaymentRoutingAddress(
+      recipient.address,
+      `${recipientLabel}.address`,
+    );
+    if (seenAddresses.has(address)) {
+      throw new Error(`${label}.mintProceeds addresses must be distinct`);
+    }
+    seenAddresses.add(address);
+    const percentage = recipient.percentage;
+    if (
+      typeof percentage !== 'number' ||
+      !Number.isInteger(percentage) ||
+      percentage <= 0 ||
+      percentage > 100
+    ) {
+      throw new Error(
+        `${recipientLabel}.percentage must be a positive whole integer`,
+      );
+    }
+    percentageTotal += percentage;
+    return { address, percentage };
+  });
+  if (percentageTotal !== 100) {
+    throw new Error(`${label}.mintProceeds percentages must total 100`);
+  }
+  const deliveryPaymentReceiver = normalizePaymentRoutingAddress(
+    value.deliveryPaymentReceiver,
+    `${label}.deliveryPaymentReceiver`,
+  );
+  const normalizedMintProceeds: PaymentRoutingMintProceeds =
+    mintProceeds.length === 2
+      ? [mintProceeds[0], mintProceeds[1]]
+      : [mintProceeds[0], mintProceeds[1], mintProceeds[2]];
+  return {
+    mintProceeds: normalizedMintProceeds,
+    deliveryPaymentReceiver,
+  };
+}
+
+export function clonePaymentRoutingConfig(
+  value: unknown,
+  label = 'paymentRouting',
+): PaymentRoutingConfig {
+  return normalizeAndValidatePaymentRouting(value, label);
+}
+
+type DeploymentRegistryDropBase = {
   solanaCluster: SolanaCluster;
   dropId: string;
   dropFamily: DropFamily;
@@ -36,7 +178,6 @@ export type DeploymentRegistryDrop = {
   forceSoldOut?: boolean;
   mintSelection?: MintSelectionConfig;
 
-  treasury: string;
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
@@ -60,6 +201,36 @@ export type DeploymentRegistryDrop = {
   receiptsTreeCanopyDepth?: number;
   deliveryLookupTable: string;
 };
+
+export type DeploymentRegistryDrop = DeploymentRegistryDropBase &
+  (
+    | {
+        treasury: string;
+        paymentRouting?: never;
+      }
+    | {
+        treasury?: never;
+        paymentRouting: PaymentRoutingConfig;
+      }
+  );
+
+export function deploymentTreasuryAlias(
+  drop: DeploymentRegistryDrop,
+): string {
+  if (drop.paymentRouting) return drop.paymentRouting.deliveryPaymentReceiver;
+  return drop.treasury;
+}
+
+export function projectDeploymentPaymentRouting(
+  drop: DeploymentRegistryDrop,
+): { treasury: string; paymentRouting?: PaymentRoutingConfig } {
+  if (!drop.paymentRouting) return { treasury: drop.treasury };
+  const paymentRouting = clonePaymentRoutingConfig(drop.paymentRouting);
+  return {
+    treasury: paymentRouting.deliveryPaymentReceiver,
+    paymentRouting,
+  };
+}
 
 export type DeploymentRegistryDropFieldSpecs = {
   readonly [Field in keyof DeploymentRegistryDrop]-?: {
@@ -92,7 +263,8 @@ export const DEPLOYMENT_REGISTRY_DROP_FIELDS = {
   boxMedia: { required: false },
   forceSoldOut: { required: false },
   mintSelection: { required: false },
-  treasury: { required: true },
+  treasury: { required: false },
+  paymentRouting: { required: false },
   priceSol: { required: true },
   discountPriceSol: { required: true },
   stripeCheckoutEnabled: { required: false },
@@ -138,6 +310,37 @@ export type ReceiptPoolDeploymentsMap = Record<
 >;
 
 export type DeploymentDropsMap = Record<string, DeploymentRegistryDrop>;
+
+type BoxMinterConfigTombstoneBase = {
+  readonly solanaCluster: SolanaCluster;
+  readonly dropId: string;
+  readonly dropSeed: string;
+  readonly boxMinterProgramId: string;
+  readonly boxMinterConfigPda: string;
+  readonly collectionMint: string;
+  readonly reason: 'historical-orphan' | 'drop-wiped';
+};
+
+export type BoxMinterConfigTombstone = BoxMinterConfigTombstoneBase &
+  (
+    | {
+        readonly accountSize: 376;
+        readonly schema: 'legacy';
+        readonly treasury: string;
+        readonly paymentRouting?: never;
+      }
+    | {
+        readonly accountSize: 488;
+        readonly schema: 'split-payments-v1';
+        readonly treasury?: never;
+        readonly paymentRouting: PaymentRoutingConfig;
+      }
+  );
+
+export type BoxMinterConfigTombstonesMap = Record<
+  string,
+  BoxMinterConfigTombstone
+>;
 
 export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
   card_nft_2: {
@@ -257,6 +460,38 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     receiptsTreeMaxDepth: 14,
     receiptsTreeCanopyDepth: 0,
     deliveryLookupTable: '6hkRkFkksqqfgzdBcJGJhbANcH1THRKqJpkwdAFtzFRM',
+  },
+  clear_cards_devnet_v3: {
+    solanaCluster: 'devnet',
+    dropId: 'clear_cards_devnet_v3',
+    dropFamily: 'clear_cards',
+    collectionName: 'Clear Cards',
+    metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
+    metadataPathFormat: 'compact',
+    paymentRouting: {
+      mintProceeds: [
+        { address: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE', percentage: 70 },
+        { address: 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz', percentage: 30 },
+      ],
+      deliveryPaymentReceiver: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+    },
+    priceSol: 0.069,
+    discountPriceSol: 0.01,
+    discountMintsPerWallet: 1,
+    discountMerkleRoot: 'b46cf8075518cffa82093f5903c7295659ef0e609b1f20fc3946159625aad91c',
+    maxSupply: 192,
+    itemsPerBox: 1,
+    maxPerTx: 15,
+    namePrefix: 'pack',
+    figureNamePrefix: 'card',
+    symbol: 'clear',
+    boxMinterProgramId: '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6',
+    boxMinterConfigPda: 'dWd4jHmVQLKhiKEzqnsdYRee5v5Ud4WGf3RfZb6KJ4j',
+    collectionMint: '8idJjHp1PhE1a4UuzaapYFpA9PBuFCbmz2KZMKDMjd1M',
+    receiptsMerkleTree: '5zXH3hzqUtzmWVyhug8wz29oSQhyAq57By4nqmdUh6h2',
+    receiptsTreeMaxDepth: 14,
+    receiptsTreeCanopyDepth: 0,
+    deliveryLookupTable: '4YYy2b7u77MMHqrywsu1sSgBfkQ4QdZ6ff4MgMSq7MVR',
   },
   drifella_shirt: {
     solanaCluster: 'mainnet-beta',
@@ -444,6 +679,21 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
   },
 };
 
+export const BOX_MINTER_CONFIG_TOMBSTONES: BoxMinterConfigTombstonesMap = {
+  clear_cards_devnet: {
+    solanaCluster: 'devnet',
+    dropId: 'clear_cards_devnet',
+    dropSeed: '0bedb02e16088cdc90077bde942099db106f9e7c2fb64ba8b15af51fd6984bf6',
+    boxMinterProgramId: '8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6',
+    boxMinterConfigPda: 'DPBJSPawzRnSnrPkahbcFGMgYRZafn3dNgetUMQiKorW',
+    collectionMint: 'FdcFWHrrjn2yy2Ce7d9ZfgJnrxP7nVzpAUqcJPT3wRJP',
+    accountSize: 376,
+    schema: 'legacy',
+    treasury: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE',
+    reason: 'historical-orphan',
+  },
+};
+
 export const RECEIPT_POOL_DEPLOYMENTS: ReceiptPoolDeploymentsMap = {
   'devnet:mons_shop_receipts': {
     solanaCluster: 'devnet',
@@ -494,7 +744,9 @@ export function getReceiptPoolDeployment(
     : undefined;
 }
 
-function assertRegistryKeysMatchDropIds(drops: DeploymentDropsMap): void {
+function assertRegistryKeysMatchDropIds<T extends { dropId: string }>(
+  drops: Record<string, T>,
+): void {
   Object.entries(drops).forEach(([registryKey, drop]) => {
     if (registryKey !== drop.dropId) {
       throw new Error(`Deployment registry key ${registryKey} does not match embedded dropId ${drop.dropId}.`);
@@ -520,6 +772,12 @@ function assertSharedProgramDropsUseExplicitConfigPdas(drops: DeploymentDropsMap
 
 assertRegistryKeysMatchDropIds(DEPLOYMENT_DROPS);
 assertSharedProgramDropsUseExplicitConfigPdas(DEPLOYMENT_DROPS);
+assertRegistryKeysMatchDropIds(BOX_MINTER_CONFIG_TOMBSTONES);
+Object.keys(BOX_MINTER_CONFIG_TOMBSTONES).forEach((dropId) => {
+  if (Object.prototype.hasOwnProperty.call(DEPLOYMENT_DROPS, dropId)) {
+    throw new Error(`Deployment registry drop ${dropId} cannot also be tombstoned.`);
+  }
+});
 
 export function getDeploymentDrop(dropId: string): DeploymentRegistryDrop | undefined {
   const normalizedDropId = String(dropId || '').trim().toLowerCase();

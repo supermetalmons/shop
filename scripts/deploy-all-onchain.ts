@@ -32,6 +32,7 @@ import {
   type DropSalesMode,
   type MetadataPathFormat,
   type MintSelectionConfigSerialized,
+  type PaymentRoutingConfig,
   type ReceiptPoolDeployment,
 } from './shared/deploymentRegistry.ts';
 import {
@@ -753,6 +754,7 @@ type PreparedCollectionMetadata = {
   description?: string;
   externalUrl?: string;
   image?: string;
+  creators?: MplCoreRoyaltyCreator[];
 };
 
 function prepareCollectionMetadata(
@@ -781,6 +783,11 @@ function prepareCollectionMetadata(
     min: 0,
     max: 10_000,
   });
+  const creators = collectionMetadataCfg.creators
+    ? parseCollectionRoyaltyCreators({
+        properties: { creators: collectionMetadataCfg.creators },
+      })
+    : undefined;
   return {
     name,
     symbol,
@@ -788,6 +795,7 @@ function prepareCollectionMetadata(
     description: trimToUndefined(collectionMetadataCfg.description),
     externalUrl: trimToUndefined(collectionMetadataCfg.externalUrl),
     image: trimToUndefined(collectionMetadataCfg.image),
+    ...(creators ? { creators } : {}),
   };
 }
 
@@ -809,12 +817,101 @@ function extractIntegerField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
 }
 
+export type MplCoreRoyaltyCreator = {
+  address: PublicKey;
+  percentage: number;
+};
+
+export function parseCollectionRoyaltyCreators(
+  collectionJson: unknown,
+): MplCoreRoyaltyCreator[] {
+  if (
+    !collectionJson ||
+    typeof collectionJson !== 'object' ||
+    Array.isArray(collectionJson)
+  ) {
+    throw new Error('collection.json must be an object');
+  }
+  const json = collectionJson as Record<string, unknown>;
+  if (
+    !json.properties ||
+    typeof json.properties !== 'object' ||
+    Array.isArray(json.properties)
+  ) {
+    throw new Error('collection.json properties must be an object');
+  }
+  const properties = json.properties as Record<string, unknown>;
+  if (!Array.isArray(properties.creators) || properties.creators.length === 0) {
+    throw new Error('collection.json properties.creators must contain at least one creator');
+  }
+
+  const seen = new Set<string>();
+  const creators = properties.creators.map((value, index) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`collection.json properties.creators[${index}] must be an object`);
+    }
+    const creator = value as Record<string, unknown>;
+    const addressValue = extractTrimmedStringField(creator.address);
+    if (!addressValue) {
+      throw new Error(`collection.json properties.creators[${index}].address must be a Solana address`);
+    }
+    let address: PublicKey;
+    try {
+      address = new PublicKey(addressValue);
+    } catch {
+      throw new Error(`collection.json properties.creators[${index}].address is not a valid Solana address`);
+    }
+    if (address.equals(PublicKey.default)) {
+      throw new Error(`collection.json properties.creators[${index}].address must not be the default address`);
+    }
+    const normalizedAddress = address.toBase58();
+    if (seen.has(normalizedAddress)) {
+      throw new Error(`collection.json properties.creators contains duplicate address ${normalizedAddress}`);
+    }
+    seen.add(normalizedAddress);
+    const percentage = extractIntegerField(creator.share);
+    if (percentage == null || percentage <= 0 || percentage > 100) {
+      throw new Error(`collection.json properties.creators[${index}].share must be a positive whole percentage`);
+    }
+    return { address, percentage };
+  });
+  const total = creators.reduce((sum, creator) => sum + creator.percentage, 0);
+  if (total !== 100) {
+    throw new Error(`collection.json properties.creators shares must total 100, got ${total}`);
+  }
+  return creators;
+}
+
+export function assertCollectionRoyaltyCreatorsUnchanged(
+  expected: readonly MplCoreRoyaltyCreator[],
+  actual: readonly MplCoreRoyaltyCreator[],
+): void {
+  const expectedFingerprint = collectionRoyaltyCreatorsFingerprint(expected);
+  const actualFingerprint = collectionRoyaltyCreatorsFingerprint(actual);
+  if (actualFingerprint !== expectedFingerprint) {
+    throw new Error(
+      `collection.json properties.creators changed during deployment: expected ${expectedFingerprint}, got ${actualFingerprint}`,
+    );
+  }
+}
+
+function collectionRoyaltyCreatorsFingerprint(
+  creators: readonly MplCoreRoyaltyCreator[],
+): string {
+  return JSON.stringify(
+    creators.map((creator) => [
+      creator.address.toBase58(),
+      creator.percentage,
+    ]),
+  );
+}
+
 async function assertCollectionMetadataJsonMatchesNewDrop(args: {
   metadataBase: string;
   collectionMetadataUri?: string;
   expectedCreator?: string;
   expected: PreparedCollectionMetadata;
-}) {
+}): Promise<{ creators: MplCoreRoyaltyCreator[] }> {
   const collectionJsonUrl =
     trimToUndefined(args.collectionMetadataUri) ||
     `${args.metadataBase}/collection.json`;
@@ -867,6 +964,17 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
   }
 
   const json = parsed as Record<string, unknown>;
+  let creators: MplCoreRoyaltyCreator[];
+  try {
+    creators = parseCollectionRoyaltyCreators(json);
+  } catch (err) {
+    throw new Error(
+      `collection.json preflight validation failed.\n` +
+        `- url: ${collectionJsonUrl}\n` +
+        `- fetch url: ${collectionJsonFetchUrl}\n` +
+        `- ${errorMessage(err)}`,
+    );
+  }
   const mismatches: string[] = [];
   const checkStringField = (field: string, expected: string, actualValue: unknown) => {
     const actual = extractTrimmedStringField(actualValue);
@@ -897,25 +1005,24 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
     checkStringField('image', args.expected.image, json.image);
   }
   if (args.expectedCreator) {
-    const properties =
-      json.properties &&
-      typeof json.properties === 'object' &&
-      !Array.isArray(json.properties)
-        ? (json.properties as Record<string, unknown>)
-        : {};
-    const creators = Array.isArray(properties.creators)
-      ? properties.creators
-      : [];
-    const creator = creators[0] as Record<string, unknown> | undefined;
     if (
       creators.length !== 1 ||
-      creator?.address !== args.expectedCreator ||
-      creator?.share !== 100
+      creators[0].address.toBase58() !== args.expectedCreator ||
+      creators[0].percentage !== 100
     ) {
       mismatches.push(
         `properties.creators: expected ${args.expectedCreator} (100%)`,
       );
     }
+  }
+  if (
+    args.expected.creators &&
+    collectionRoyaltyCreatorsFingerprint(creators) !==
+      collectionRoyaltyCreatorsFingerprint(args.expected.creators)
+  ) {
+    mismatches.push(
+      `properties.creators: expected ${collectionRoyaltyCreatorsFingerprint(args.expected.creators)}, got ${collectionRoyaltyCreatorsFingerprint(creators)}`,
+    );
   }
 
   if (mismatches.length) {
@@ -928,6 +1035,7 @@ async function assertCollectionMetadataJsonMatchesNewDrop(args: {
         `Fix ${getActiveNewDropConfigPath()} or the collection.json content before deploying.`,
     );
   }
+  return { creators };
 }
 
 export async function assertReceiptMetadataRange(args: {
@@ -1333,6 +1441,17 @@ async function assertDropIdNotConfiguredInDeploymentRegistry(args: {
     throw new Error(
       `Drop ${normalizedDropId} already exists in deployment registry (${path.relative(process.cwd(), args.registryPath)}).\n` +
         `This script only supports fresh deployments and will not update an existing drop.\n` +
+      `Choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()}.`,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      registry.tombstones,
+      normalizedDropId,
+    )
+  ) {
+    throw new Error(
+      `Drop ${normalizedDropId} has a tombstoned BoxMinter config in the deployment registry (${path.relative(process.cwd(), args.registryPath)}).\n` +
         `Choose a new NEW_DROP.onchain.dropId in ${getActiveNewDropConfigPath()}.`,
     );
   }
@@ -1379,7 +1498,8 @@ async function prepareDeploymentRegistry(args: {
   metadataBase: string;
   metadataPathFormat: MetadataPathFormat;
   mintSelection?: MintSelectionConfigSerialized;
-  treasury: string;
+  treasury?: string;
+  paymentRouting?: PaymentRoutingConfig;
   priceSol: number;
   discountPriceSol: number;
   stripeCheckoutEnabled?: boolean;
@@ -1432,6 +1552,16 @@ async function prepareDeploymentRegistry(args: {
       `Drop ${normalizedDropId} already exists in ${filePath}. Append-only deploy refuses duplicates.`,
     );
   }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      existing.tombstones,
+      normalizedDropId,
+    )
+  ) {
+    throw new Error(
+      `Drop ${normalizedDropId} has a tombstoned BoxMinter config in ${filePath}. Append-only deploy refuses reuse.`,
+    );
+  }
   const nextDrops = { ...existing.drops };
   const collectionName =
     String(args.collectionName ?? '').trim() || normalizedDropId;
@@ -1469,7 +1599,9 @@ async function prepareDeploymentRegistry(args: {
     metadataBase: normalizeDropBase(args.metadataBase),
     metadataPathFormat: args.metadataPathFormat,
     ...(args.mintSelection ? { mintSelection: args.mintSelection } : {}),
-    treasury: args.treasury,
+    ...(args.paymentRouting
+      ? { paymentRouting: args.paymentRouting }
+      : { treasury: requireNonEmptyString(args.treasury, 'treasury') }),
     priceSol: Number(args.priceSol),
     discountPriceSol: Number(args.discountPriceSol),
     ...(stripeCheckout.enabled ? { stripeCheckoutEnabled: true } : stripeCheckout.disabledOverride ? { stripeCheckoutEnabled: false } : {}),
@@ -1511,6 +1643,7 @@ async function prepareDeploymentRegistry(args: {
     filePath,
     existingContent: sourceSnapshot.content,
     drops: nextDrops,
+    tombstones: existing.tombstones,
   });
   return {
     filePath,
@@ -1617,7 +1750,7 @@ function mplCoreBaseRuleSetNone(): Buffer {
 
 function mplCoreCreator(address: PublicKey, percentage: number): Buffer {
   const pct = Number(percentage);
-  if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error(`Invalid creator percentage: ${percentage}`);
+  if (!Number.isInteger(pct) || pct <= 0 || pct > 100) throw new Error(`Invalid creator percentage: ${percentage}`);
   return Buffer.concat([address.toBuffer(), u8(pct)]);
 }
 
@@ -1625,6 +1758,25 @@ function mplCorePluginRoyalties(args: { basisPoints: number; creators: { address
   const bps = Number(args.basisPoints);
   if (!Number.isFinite(bps) || bps < 0 || bps > 10_000) throw new Error(`Invalid royalties basisPoints: ${args.basisPoints}`);
   const creators = Array.isArray(args.creators) ? args.creators : [];
+  const creatorAddresses = new Set<string>();
+  let creatorPercentageTotal = 0;
+  for (const creator of creators) {
+    if (creator.address.equals(PublicKey.default)) {
+      throw new Error('Royalty creator must not be the default address');
+    }
+    const address = creator.address.toBase58();
+    if (creatorAddresses.has(address)) {
+      throw new Error(`Duplicate royalty creator: ${address}`);
+    }
+    creatorAddresses.add(address);
+    if (!Number.isInteger(creator.percentage) || creator.percentage <= 0) {
+      throw new Error(`Invalid creator percentage: ${creator.percentage}`);
+    }
+    creatorPercentageTotal += creator.percentage;
+  }
+  if (creators.length === 0 || creatorPercentageTotal !== 100) {
+    throw new Error(`Royalty creator percentages must total 100, got ${creatorPercentageTotal}`);
+  }
 
   // BaseRoyalties = { basisPoints: u16, creators: Vec<Creator>, ruleSet: BaseRuleSet }
   const baseRoyalties = Buffer.concat([
@@ -1683,21 +1835,27 @@ export function buildCreateMplCoreCollectionV2Ix(args: {
   name: string;
   uri: string;
   royaltiesBps: number;
-  royaltiesRecipient: PublicKey;
+  royaltiesCreators?: MplCoreRoyaltyCreator[];
+  royaltiesRecipient?: PublicKey;
   royaltiesAuthority?: PublicKey | null;
 }): TransactionInstruction {
   const royaltiesAuthority =
     args.royaltiesAuthority === undefined
       ? args.payer
       : args.royaltiesAuthority;
+  const royaltiesCreators =
+    args.royaltiesCreators ||
+    (args.royaltiesRecipient
+      ? [{ address: args.royaltiesRecipient, percentage: 100 }]
+      : []);
+  if (royaltiesCreators.length === 0) {
+    throw new Error('At least one royalties creator is required');
+  }
   const pluginsOpt = borshOption(
     encodeUmiArray([
-      // Collection-level royalties to the same treasury used for primary mint payments.
-      // IMPORTANT: we set the *plugin authority* to the deployer key so this script can later
-      // update royalties if the on-chain payment treasury is changed.
       mplCorePluginAuthorityPairRoyalties({
         basisPoints: args.royaltiesBps,
-        creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+        creators: royaltiesCreators,
         authority: royaltiesAuthority,
       }),
       mplCorePluginAuthorityPairBubblegumV2(),
@@ -1735,11 +1893,11 @@ function buildUpdateMplCoreCollectionRoyaltiesV1Ix(args: {
   payer: PublicKey;
   authority: PublicKey;
   royaltiesBps: number;
-  royaltiesRecipient: PublicKey;
+  royaltiesCreators: MplCoreRoyaltyCreator[];
 }): TransactionInstruction {
   const plugin = mplCorePluginRoyalties({
     basisPoints: args.royaltiesBps,
-    creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+    creators: args.royaltiesCreators,
   });
   const data = Buffer.concat([u8(IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1), plugin]);
   return new TransactionInstruction({
@@ -1760,11 +1918,11 @@ function buildAddMplCoreCollectionRoyaltiesV1Ix(args: {
   payer: PublicKey;
   authority: PublicKey;
   royaltiesBps: number;
-  royaltiesRecipient: PublicKey;
+  royaltiesCreators: MplCoreRoyaltyCreator[];
 }): TransactionInstruction {
   const plugin = mplCorePluginRoyalties({
     basisPoints: args.royaltiesBps,
-    creators: [{ address: args.royaltiesRecipient, percentage: 100 }],
+    creators: args.royaltiesCreators,
   });
   // initAuthority: Some(BasePluginAuthority::Address(authority))
   const initAuthority = borshOption(mplCoreBasePluginAuthorityAddress(args.authority));
@@ -1787,9 +1945,9 @@ async function upsertMplCoreCollectionRoyalties(args: {
   payer: Keypair;
   collection: PublicKey;
   royaltiesBps: number;
-  royaltiesRecipient: PublicKey;
+  royaltiesCreators: MplCoreRoyaltyCreator[];
 }) {
-  const { connection, payer, collection, royaltiesBps, royaltiesRecipient } = args;
+  const { connection, payer, collection, royaltiesBps, royaltiesCreators } = args;
 
   // Try update first (common path once the plugin exists).
   try {
@@ -1798,7 +1956,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
       payer: payer.publicKey,
       authority: payer.publicKey,
       royaltiesBps,
-      royaltiesRecipient,
+      royaltiesCreators,
     });
     const tx = new Transaction().add(updateIx);
     tx.feePayer = payer.publicKey;
@@ -1822,7 +1980,7 @@ async function upsertMplCoreCollectionRoyalties(args: {
     payer: payer.publicKey,
     authority: payer.publicKey,
     royaltiesBps,
-    royaltiesRecipient,
+    royaltiesCreators,
   });
   const tx = new Transaction().add(addIx);
   tx.feePayer = payer.publicKey;
@@ -2054,10 +2212,10 @@ export function assertReceiptPoolCollectionUpdateDelegatePolicy(args: {
 async function assertMplCoreCollectionRoyalties(args: {
   connection: Connection;
   coreCollection: PublicKey;
-  treasury: PublicKey;
+  creators: MplCoreRoyaltyCreator[];
   royaltiesBps: number;
 }) {
-  const { connection, coreCollection, treasury, royaltiesBps } = args;
+  const { connection, coreCollection, creators, royaltiesBps } = args;
   const info = await retryRpcRead(`getAccountInfo(core collection royalties ${coreCollection.toBase58()})`, () =>
     connection.getAccountInfo(coreCollection, { commitment: 'confirmed' }),
   );
@@ -2071,22 +2229,29 @@ async function assertMplCoreCollectionRoyalties(args: {
   const ok =
     royalties.basisPoints === royaltiesBps &&
     royalties.ruleSetKind === 0 &&
-    royalties.creators.length === 1 &&
-    royalties.creators[0].address.equals(treasury) &&
-    royalties.creators[0].percentage === 100;
+    royalties.creators.length === creators.length &&
+    royalties.creators.every(
+      (creator, index) =>
+        creator.address.equals(creators[index].address) &&
+        creator.percentage === creators[index].percentage,
+    );
+
+  const expectedCreators = creators
+    .map((creator) => `${creator.address.toBase58()} (${creator.percentage}%)`)
+    .join(', ');
 
   if (!ok) {
     throw new Error(
       `Core collection royalties mismatch.\n` +
         `Collection: ${coreCollection.toBase58()}\n` +
-        `Expected: ${royaltiesBps} bps -> ${treasury.toBase58()} (100%)\n` +
+        `Expected: ${royaltiesBps} bps -> ${expectedCreators}\n` +
         `Actual  : ${royalties.basisPoints} bps -> ${royalties.creators.map((c) => `${c.address.toBase58()} (${c.percentage}%)`).join(', ') || '(none)'}\n`,
     );
   }
 
   console.log('\n✅ Core collection royalties verified');
   console.log(`  basisPoints: ${royalties.basisPoints}`);
-  console.log(`  recipient : ${treasury.toBase58()} (100%)`);
+  console.log(`  creators  : ${expectedCreators}`);
   console.log(`  ruleSet   : ${royalties.ruleSetKind === 0 ? 'None' : `kind=${royalties.ruleSetKind}`}`);
 }
 
@@ -2115,15 +2280,15 @@ async function ensureMplCoreCollectionRoyalties(args: {
   connection: Connection;
   payer: Keypair;
   collection: PublicKey;
-  treasury: PublicKey;
+  creators: MplCoreRoyaltyCreator[];
   royaltiesBps: number;
 }) {
-  const { connection, payer, collection, treasury, royaltiesBps } = args;
+  const { connection, payer, collection, creators, royaltiesBps } = args;
   try {
     await assertMplCoreCollectionRoyalties({
       connection,
       coreCollection: collection,
-      treasury,
+      creators,
       royaltiesBps,
     });
     return;
@@ -2139,12 +2304,12 @@ async function ensureMplCoreCollectionRoyalties(args: {
     payer,
     collection,
     royaltiesBps,
-    royaltiesRecipient: treasury,
+    royaltiesCreators: creators,
   });
   await assertMplCoreCollectionRoyalties({
     connection,
     coreCollection: collection,
-    treasury,
+    creators,
     royaltiesBps,
   });
 }
@@ -2193,6 +2358,7 @@ export function assertExistingConfigMatchesResume(args: {
   symbol: string;
   metadataBase: string;
   mintSelection?: MintSelectionConfigSerialized;
+  mintProceeds?: MplCoreRoyaltyCreator[];
   dropSeed: Buffer;
 }): void {
   const decodedRaw = decodeBoxMinterConfigData(args.data, {
@@ -2217,6 +2383,20 @@ export function assertExistingConfigMatchesResume(args: {
     ? args.mintSelection.options.map((option) => option.endId)
     : [0, 0, 0];
   const expectedNext = expectedStarts;
+  const routingMatches = args.mintProceeds
+    ? decodedRaw.paymentRouting?.schema === 'split-payments-v1' &&
+      decodedRaw.paymentRouting.mintProceeds.length === args.mintProceeds.length &&
+      decodedRaw.paymentRouting.mintProceeds.every(
+        (recipient, index) =>
+          new PublicKey(recipient.address).equals(
+            args.mintProceeds![index].address,
+          ) &&
+          recipient.percentage === args.mintProceeds![index].percentage,
+      ) &&
+      new PublicKey(
+        decodedRaw.paymentRouting.deliveryPaymentReceiver,
+      ).equals(args.treasury)
+    : decodedRaw.paymentRouting?.schema === 'legacy';
   const mismatches = [
     decoded.admin.equals(args.admin) ? '' : 'admin',
     decoded.treasury.equals(args.treasury) ? '' : 'treasury',
@@ -2261,6 +2441,7 @@ export function assertExistingConfigMatchesResume(args: {
     Buffer.from(decoded.dropSeed).equals(args.dropSeed)
       ? ''
       : 'dropSeed',
+    routingMatches ? '' : 'paymentRouting',
     !decoded.started ? '' : 'started',
     decoded.minted === 0 ? '' : 'minted',
   ].filter(Boolean);
@@ -2362,8 +2543,52 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
 
 // Anchor instruction discriminator: sha256("global:initialize")[0..8]
 const IX_INITIALIZE = Buffer.from('afaf6d1f0d989bed', 'hex');
+export const IX_INITIALIZE_SPLIT_PAYMENTS_V1 = createHash('sha256')
+  .update('global:initialize_split_payments_v1')
+  .digest()
+  .subarray(0, 8);
+export const IX_SPLIT_PAYMENTS_V1_CAPABILITY = createHash('sha256')
+  .update('global:split_payments_v1_capability')
+  .digest()
+  .subarray(0, 8);
 
-function buildInitializeIx(args: {
+export function buildSplitPaymentsV1CapabilityIx(
+  programId: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId,
+    keys: [],
+    data: IX_SPLIT_PAYMENTS_V1_CAPABILITY,
+  });
+}
+
+async function assertSplitPaymentsV1Capability(args: {
+  connection: Connection;
+  programId: PublicKey;
+  feePayer: PublicKey;
+}): Promise<void> {
+  const tx = new Transaction().add(
+    buildSplitPaymentsV1CapabilityIx(args.programId),
+  );
+  tx.feePayer = args.feePayer;
+  tx.recentBlockhash = (
+    await retryRpcRead('getLatestBlockhash(split payments v1 capability)', () =>
+      args.connection.getLatestBlockhash('confirmed'),
+    )
+  ).blockhash;
+  const simulated = await args.connection.simulateTransaction(tx);
+  if (simulated.value.err) {
+    throw new Error(
+      `Program ${args.programId.toBase58()} does not support split-payments-v1.\n` +
+        `Upgrade the shared program with upgrade-onchain before deploying this drop.\n` +
+        `Simulation error: ${JSON.stringify(simulated.value.err)}\n` +
+        `Logs:\n${(simulated.value.logs || []).join('\n')}`,
+    );
+  }
+  console.log('✅ split-payments-v1 program capability verified');
+}
+
+export function buildInitializeIx(args: {
   programId: PublicKey;
   admin: PublicKey;
   treasury: PublicKey;
@@ -2415,6 +2640,68 @@ function buildInitializeIx(args: {
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,
+  });
+}
+
+export function buildInitializeSplitPaymentsV1Ix(
+  args: Parameters<typeof buildInitializeIx>[0] & {
+    mintProceeds: MplCoreRoyaltyCreator[];
+  },
+): TransactionInstruction {
+  if (args.treasury.equals(PublicKey.default)) {
+    throw new Error(
+      'split-payments-v1 delivery receiver must not be the default address',
+    );
+  }
+  if (args.mintProceeds.length < 2 || args.mintProceeds.length > 3) {
+    throw new Error('split-payments-v1 requires 2 or 3 mint recipients');
+  }
+  const seen = new Set<string>();
+  let totalPercentage = 0;
+  for (const [index, recipient] of args.mintProceeds.entries()) {
+    if (recipient.address.equals(PublicKey.default)) {
+      throw new Error(`split-payments-v1 recipient ${index} must not be the default address`);
+    }
+    const address = recipient.address.toBase58();
+    if (seen.has(address)) {
+      throw new Error(`split-payments-v1 recipient ${index} duplicates ${address}`);
+    }
+    seen.add(address);
+    if (
+      !Number.isInteger(recipient.percentage) ||
+      recipient.percentage <= 0 ||
+      recipient.percentage > 100
+    ) {
+      throw new Error(`split-payments-v1 recipient ${index} has an invalid percentage`);
+    }
+    totalPercentage += recipient.percentage;
+  }
+  if (totalPercentage !== 100) {
+    throw new Error(`split-payments-v1 percentages must total 100, got ${totalPercentage}`);
+  }
+
+  const legacy = buildInitializeIx(args);
+  const recipients = [
+    ...args.mintProceeds.map((recipient) => recipient.address),
+    ...Array.from(
+      { length: 3 - args.mintProceeds.length },
+      () => PublicKey.default,
+    ),
+  ];
+  const percentages = [
+    ...args.mintProceeds.map((recipient) => recipient.percentage),
+    ...Array.from({ length: 3 - args.mintProceeds.length }, () => 0),
+  ];
+  return new TransactionInstruction({
+    programId: legacy.programId,
+    keys: legacy.keys,
+    data: Buffer.concat([
+      IX_INITIALIZE_SPLIT_PAYMENTS_V1,
+      legacy.data.subarray(IX_INITIALIZE.length),
+      u8(args.mintProceeds.length),
+      ...recipients.map((recipient) => recipient.toBuffer()),
+      Buffer.from(percentages),
+    ]),
   });
 }
 
@@ -3334,7 +3621,7 @@ async function main() {
   if (solanaBinDir) console.log('solana bin:', solanaBinDir);
   console.log('');
 
-  await assertCollectionMetadataJsonMatchesNewDrop({
+  let collectionMetadataJson = await assertCollectionMetadataJsonMatchesNewDrop({
     metadataBase: dropMetadataBase,
     collectionMetadataUri: receiptPoolSpec?.collectionMetadataUri,
     expectedCreator: receiptPoolSpec?.royaltiesRecipient,
@@ -3660,6 +3947,26 @@ async function main() {
     }
   }
 
+  if (dropCfg.paymentRouting) {
+    await assertSplitPaymentsV1Capability({
+      connection,
+      programId: new PublicKey(programId),
+      feePayer: payer.publicKey,
+    });
+  }
+  const refreshedCollectionMetadataJson =
+    await assertCollectionMetadataJsonMatchesNewDrop({
+      metadataBase: dropMetadataBase,
+      collectionMetadataUri: receiptPoolSpec?.collectionMetadataUri,
+      expectedCreator: receiptPoolSpec?.royaltiesRecipient,
+      expected: collectionMetadata,
+    });
+  assertCollectionRoyaltyCreatorsUnchanged(
+    collectionMetadataJson.creators,
+    refreshedCollectionMetadataJson.creators,
+  );
+  collectionMetadataJson = refreshedCollectionMetadataJson;
+
   // 2) Deploy on-chain prerequisites + initialize config PDA.
   // ---------------------------------------------------------------------------
   const programPk = new PublicKey(programId);
@@ -3681,6 +3988,7 @@ async function main() {
     // Custody/vault: boxes and delivered assets still transfer to the deployer/admin key (config.admin).
     // Set to `undefined` to default payments to the deployer/admin key.
     treasury: dropCfg.treasury,
+    paymentRouting: dropCfg.paymentRouting,
     priceSol: dropCfg.priceSol,
     discountPriceSol: dropCfg.discountPriceSol,
     stripeCheckoutEnabled: stripeCheckoutConfig.stripeCheckoutEnabled,
@@ -3708,8 +4016,17 @@ async function main() {
     mintSelection: prepareMintSelectionConfig(dropCfg),
   };
 
-  // Payment treasury (defaults to deployer/admin key if unset).
-  const treasury = new PublicKey(boxMinterConfig.treasury || payer.publicKey.toBase58());
+  const mintProceeds = boxMinterConfig.paymentRouting?.mintProceeds.map(
+    (recipient) => ({
+      address: new PublicKey(recipient.address),
+      percentage: recipient.percentage,
+    }),
+  );
+  const treasury = new PublicKey(
+    boxMinterConfig.paymentRouting?.deliveryPaymentReceiver ||
+      boxMinterConfig.treasury ||
+      payer.publicKey.toBase58(),
+  );
   const priceLamports = BigInt(Math.round(Number(boxMinterConfig.priceSol) * LAMPORTS_PER_SOL));
   const discountPriceLamports = BigInt(Math.round(Number(boxMinterConfig.discountPriceSol) * LAMPORTS_PER_SOL));
   const discountMerkleRoot = boxMinterConfig.discountMerkleRoot;
@@ -3781,7 +4098,7 @@ async function main() {
       name: coreCollectionConfig.name,
       uri: coreCollectionConfig.uri,
       royaltiesBps: coreCollectionRoyaltiesBps,
-      royaltiesRecipient: treasury,
+      royaltiesCreators: collectionMetadataJson.creators,
     });
     const createCollectionTx = new Transaction().add(createCollectionIx);
     createCollectionTx.feePayer = payer.publicKey;
@@ -3821,54 +4138,6 @@ async function main() {
     });
   }
 
-  // If we are using a pre-existing collection (NEW_DROP.deploy.coreCollectionPubkey), enforce royalties here.
-  // For freshly created collections, royalties are already set in `create_collection_v2`.
-  if (coreCollection && !receiptPoolDeployment) {
-    await ensureMplCoreCollectionRoyalties({
-      connection,
-      payer,
-      collection: resolvedCoreCollection,
-      treasury,
-      royaltiesBps: coreCollectionRoyaltiesBps,
-    });
-  }
-  if (!coreCollection && !receiptPoolDeployment) {
-    // Read-only check: newly-created collections should already contain the expected royalties plugin.
-    await assertMplCoreCollectionRoyalties({
-      connection,
-      coreCollection: resolvedCoreCollection,
-      treasury,
-      royaltiesBps: coreCollectionRoyaltiesBps,
-    });
-  }
-
-  console.log('\n[3/3] Initializing box minter…');
-
-  const initIx = buildInitializeIx({
-    programId: programPk,
-    admin: payer.publicKey,
-    treasury,
-    coreCollection: resolvedCoreCollection,
-    priceLamports,
-    discountPriceLamports,
-    discountMintsPerWallet: boxMinterConfig.discountMintsPerWallet,
-    discountMerkleRoot,
-    maxSupply,
-    itemsPerBox,
-    maxPerTx,
-    namePrefix: boxMinterConfig.namePrefix,
-    figureNamePrefix: boxMinterConfig.figureNamePrefix,
-    symbol: boxMinterConfig.symbol,
-    metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
-    mintSelection: boxMinterConfig.mintSelection,
-    dropSeed,
-  });
-
-  writeDiscountMerkleJson({
-    root: discountMerkleRoot,
-    proofs: discountMerkle.proofs,
-    filePath: discountMerkleDataset.filePath,
-  });
   if (existingCfg) {
     assertExistingConfigMatchesResume({
       data: existingCfg.data,
@@ -3888,10 +4157,67 @@ async function main() {
       symbol: boxMinterConfig.symbol,
       metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
       mintSelection: boxMinterConfig.mintSelection,
+      ...(mintProceeds ? { mintProceeds } : {}),
       dropSeed,
     });
     console.log('✅ Existing unstarted box minter config matches exactly');
-  } else {
+  }
+
+  // If we are using a pre-existing collection (NEW_DROP.deploy.coreCollectionPubkey), enforce royalties here.
+  // For freshly created collections, royalties are already set in `create_collection_v2`.
+  if (coreCollection && !receiptPoolDeployment) {
+    await ensureMplCoreCollectionRoyalties({
+      connection,
+      payer,
+      collection: resolvedCoreCollection,
+      creators: collectionMetadataJson.creators,
+      royaltiesBps: coreCollectionRoyaltiesBps,
+    });
+  }
+  if (!coreCollection && !receiptPoolDeployment) {
+    // Read-only check: newly-created collections should already contain the expected royalties plugin.
+    await assertMplCoreCollectionRoyalties({
+      connection,
+      coreCollection: resolvedCoreCollection,
+      creators: collectionMetadataJson.creators,
+      royaltiesBps: coreCollectionRoyaltiesBps,
+    });
+  }
+
+  console.log('\n[3/3] Initializing box minter…');
+
+  const initializeArgs = {
+    programId: programPk,
+    admin: payer.publicKey,
+    treasury,
+    coreCollection: resolvedCoreCollection,
+    priceLamports,
+    discountPriceLamports,
+    discountMintsPerWallet: boxMinterConfig.discountMintsPerWallet,
+    discountMerkleRoot,
+    maxSupply,
+    itemsPerBox,
+    maxPerTx,
+    namePrefix: boxMinterConfig.namePrefix,
+    figureNamePrefix: boxMinterConfig.figureNamePrefix,
+    symbol: boxMinterConfig.symbol,
+    metadataBase: normalizeDropBase(boxMinterConfig.metadataBase),
+    mintSelection: boxMinterConfig.mintSelection,
+    dropSeed,
+  };
+  const initIx = mintProceeds
+    ? buildInitializeSplitPaymentsV1Ix({
+        ...initializeArgs,
+        mintProceeds,
+      })
+    : buildInitializeIx(initializeArgs);
+
+  writeDiscountMerkleJson({
+    root: discountMerkleRoot,
+    proofs: discountMerkle.proofs,
+    filePath: discountMerkleDataset.filePath,
+  });
+  if (!existingCfg) {
     const setupTx = new Transaction().add(initIx);
     setupTx.feePayer = payer.publicKey;
     setupTx.recentBlockhash = (await retryRpcRead('getLatestBlockhash(initialize box minter)', () => connection.getLatestBlockhash('confirmed'))).blockhash;
@@ -3915,7 +4241,18 @@ async function main() {
     }
   }
   console.log('  Config PDA:', configPda.toBase58());
-  console.log('  Payment treasury:', treasury.toBase58());
+  console.log('  Delivery payment receiver:', treasury.toBase58());
+  if (mintProceeds) {
+    console.log(
+      '  Mint proceeds:',
+      mintProceeds
+        .map(
+          (recipient) =>
+            `${recipient.address.toBase58()} (${recipient.percentage}%)`,
+        )
+        .join(', '),
+    );
+  }
   console.log('  Price (lamports):', priceLamports.toString());
   console.log('  Discount price (lamports):', discountPriceLamports.toString());
   console.log('  Discount mints per wallet:', boxMinterConfig.discountMintsPerWallet);
@@ -3984,7 +4321,9 @@ async function main() {
     metadataBase: requiredDropMetadataBase,
     metadataPathFormat,
     mintSelection: boxMinterConfig.mintSelection,
-    treasury: treasury.toBase58(),
+    ...(boxMinterConfig.paymentRouting
+      ? { paymentRouting: boxMinterConfig.paymentRouting }
+      : { treasury: treasury.toBase58() }),
     priceSol: Number(boxMinterConfig.priceSol),
     discountPriceSol: Number(boxMinterConfig.discountPriceSol),
     stripeCheckoutEnabled: boxMinterConfig.stripeCheckoutEnabled,
