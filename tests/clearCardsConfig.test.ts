@@ -50,7 +50,7 @@ test('mainnet Clear Cards locks the rehearsed drop values and routed payments', 
     MAINNET_CLEAR_CARDS.onchain.receiptsTree,
     DEVNET_CLEAR_CARDS.onchain.receiptsTree,
   );
-  assert.equal(MAINNET_CLEAR_CARDS.onchain.priceSol, 0.069);
+  assert.equal(MAINNET_CLEAR_CARDS.onchain.priceSol, 0.5);
   assert.equal(MAINNET_CLEAR_CARDS.onchain.discountPriceSol, 0.01);
   assert.equal(MAINNET_CLEAR_CARDS.onchain.maxSupply, 192);
   assert.equal(MAINNET_CLEAR_CARDS.onchain.itemsPerBox, 1);

@@ -701,7 +701,7 @@ test('frontend production reconciles exact state and retries hash propagation be
       smoke: async (origin) => {
         smokeCalls += 1;
         events.push(`smoke:${origin}`);
-        if (smokeCalls === 3 || smokeCalls === 4) return 'b'.repeat(64);
+        if (smokeCalls >= 3 && smokeCalls <= 6) return 'b'.repeat(64);
         return candidateHtmlSha256;
       },
       sleep: async (milliseconds) => {
@@ -721,7 +721,7 @@ test('frontend production reconciles exact state and retries hash propagation be
       },
     },
   );
-  assert.deepEqual(sleeps, [500, 1_500]);
+  assert.deepEqual(sleeps, [500, 1_500, 3_000, 5_000]);
   assert.deepEqual(events, [
     'deployment-status',
     'Frontend trigger deployment',
@@ -730,6 +730,8 @@ test('frontend production reconciles exact state and retries hash propagation be
     'deployment-status',
     'Frontend exact-version promotion',
     'deployment-status',
+    'smoke:https://mons.shop',
+    'smoke:https://mons.shop',
     'smoke:https://mons.shop',
     'smoke:https://mons.shop',
     'smoke:https://mons.shop',

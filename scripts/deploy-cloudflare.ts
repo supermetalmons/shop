@@ -143,6 +143,7 @@ const frontendCandidateClockSkewMs = 5 * 60 * 1000;
 const frontendSmokeResponseLimit = 256 * 1024;
 const frontendSmokeAssetResponseLimit = 2 * 1024 * 1024;
 const frontendSmokeRetryDelaysMs = [0, 500, 1_500] as const;
+const frontendProductionPropagationDelaysMs = [0, 500, 1_500, 3_000, 5_000, 10_000, 20_000, 30_000] as const;
 const frontendValidationSteps = [
   { args: ['run', 'typecheck'], label: 'Frontend typecheck' },
   { args: ['test'], label: 'Frontend tests' },
@@ -771,7 +772,7 @@ async function smokeExactFrontendProduction(
   for (const origin of frontendProductionOrigins) {
     let lastError: unknown;
     let lastHash: string | undefined;
-    for (const delayMs of cloudflareStatusReconciliationDelaysMs) {
+    for (const delayMs of frontendProductionPropagationDelaysMs) {
       if (delayMs) await dependencies.sleep(delayMs);
       try {
         console.log(`[deploy] Exact production smoke: ${origin}`);

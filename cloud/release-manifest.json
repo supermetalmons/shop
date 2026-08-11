@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-08-11T23:04:23.443Z",
+  "recordedAt": "2026-08-11T23:17:14.103Z",
   "currentProduction": {
     "apiVersionId": "09962732-3cca-4b03-921a-c69a7157f6de",
-    "frontendVersionId": "2d2c1e29-9553-44e1-9353-405fec542f0b"
+    "frontendVersionId": "7a44d1f3-3557-4a9e-8925-af2d9b78ad13"
   },
   "approvedRollback": {
     "apiVersionId": "5ca5a74a-a68b-43b3-a6fb-6e218d2a3950",
