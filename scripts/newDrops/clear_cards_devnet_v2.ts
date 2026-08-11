@@ -14,16 +14,16 @@ export const NEW_DROP = defineNewDropConfig({
     reuseProgramIdFromDropId: 'little_swag_hoodies_devnet',
   },
   onchain: {
-    dropId: 'clear_cards_devnet',
+    dropId: 'clear_cards_devnet_v2',
     dropFamily: 'clear_cards',
     metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
     collectionMetadata: {
       name: 'Clear Cards',
-      description: 'clear cards · physical on mons dot shop',
+      description: 'clear cards by duguccipourmonchat · physical on mons dot shop',
       externalUrl: 'https://mons.shop',
       image: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/admin_only.csv',
+    discountWhitelistCsvRelativePath: 'scripts/discounts/clear_cards.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
@@ -31,7 +31,7 @@ export const NEW_DROP = defineNewDropConfig({
     },
     treasury: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE',
     priceSol: 0.069,
-    discountPriceSol: 0.042,
+    discountPriceSol: 0.01,
     discountMintsPerWallet: 1,
     maxSupply: 192,
     itemsPerBox: 1,
