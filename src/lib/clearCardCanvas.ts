@@ -15,8 +15,23 @@ export type ClearCardRenderQualityByStage = Record<
 
 export function resolveClearCardRevealRenderQuality(
   viewerOnly: boolean,
-): ClearCardRenderQualityByStage | undefined {
-  if (viewerOnly) return undefined;
+): ClearCardRenderQualityByStage {
+  if (viewerOnly) {
+    return {
+      pack: {
+        maxPixelRatio: 3,
+        transmissionResolutionScale: 1,
+      },
+      breaking: {
+        maxPixelRatio: 3,
+        transmissionResolutionScale: 1,
+      },
+      revealed: {
+        maxPixelRatio: 3,
+        transmissionResolutionScale: 1,
+      },
+    };
+  }
   return {
     pack: {
       maxPixelRatio: 3,
