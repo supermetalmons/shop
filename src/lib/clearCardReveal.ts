@@ -14,6 +14,13 @@ export type ClearCardGatedHitResult = {
 
 export type ClearCardRevealRequestState = 'idle' | 'pending' | 'sent';
 
+export function isClearCardFreeMovementEnabled(
+  viewerOnly: boolean,
+  displayStage: 'pack' | 'breaking' | 'revealed',
+): boolean {
+  return viewerOnly || displayStage === 'revealed';
+}
+
 export function isClearCardImpactPointer({
   isPrimary,
   button,

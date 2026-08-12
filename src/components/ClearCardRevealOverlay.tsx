@@ -25,6 +25,7 @@ import {
   beginClearCardRevealRequest,
   createClearCardRevealRequestState,
   isClearCardFallbackImagePoint,
+  isClearCardFreeMovementEnabled,
   settleClearCardRevealRequest,
   shouldProtectClearCardOverlayClick,
   type ClearCardRevealRequestState,
@@ -129,6 +130,7 @@ export default function ClearCardRevealOverlay({
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const viewerOnly = Boolean(viewerMode);
   const revealComplete = viewerOnly || displayStage === 'revealed';
+  const freeMovementEnabled = isClearCardFreeMovementEnabled(viewerOnly, displayStage);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -273,24 +275,26 @@ export default function ClearCardRevealOverlay({
                   cardModelUrl={cardModelUrl}
                   packModelUrl={viewerMode === 'card' ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                   lightingConfig={lightingConfig}
-                  unrestrictedMovement={viewerOnly}
+                  unrestrictedMovement={freeMovementEnabled}
                   axisLockedOrbit={false}
-                  snapBackOnRelease={viewerOnly}
+                  snapBackOnRelease={freeMovementEnabled}
                   interactionFrameRateMode="adaptive"
                   interactionEnabled={(viewerOnly || phase === 'ready') && !closing && !suspended}
                   interactionBounds="parent"
-                  pointerActivationEnabled={!viewerOnly}
+                  pointerActivationEnabled={!freeMovementEnabled}
                   keyboardActivationEnabled={!viewerOnly && displayStage === 'pack'}
-                  keyboardRotationEnabled={viewerOnly}
+                  keyboardRotationEnabled={freeMovementEnabled}
                   hitProgressionMode="reveal-gated"
                   revealReady={cardReady}
                   initiallyRevealed={viewerMode === 'card'}
                   ariaLabel={
                     viewerOnly
                       ? `Interactive 3D ${boxName || (viewerMode === 'pack' ? 'Clear Cards pack' : 'Clear card')}; drag or use arrow keys to rotate`
-                      : displayStage === 'pack'
-                        ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
-                        : `Interactive 3D ${boxName} card`
+                      : freeMovementEnabled
+                        ? `Interactive 3D ${boxName} card; drag or use arrow keys to rotate`
+                        : displayStage === 'pack'
+                          ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
+                          : `Interactive 3D ${boxName} unpacking`
                   }
                   onStatusChange={setViewerStatus}
                   onCardModelLoadStatusChange={setCardLoadStatus}

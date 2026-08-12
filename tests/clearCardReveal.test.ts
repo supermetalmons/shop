@@ -7,6 +7,7 @@ import {
   createClearCardGatedHitState,
   createClearCardRevealRequestState,
   isClearCardFallbackImagePoint,
+  isClearCardFreeMovementEnabled,
   isClearCardInteractionPoint,
   isClearCardImpactKey,
   isClearCardImpactPointer,
@@ -60,6 +61,14 @@ test('clear card impacts accept only the primary activation pointer', () => {
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 1 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: true, button: 2 }), false);
   assert.equal(isClearCardImpactPointer({ isPrimary: false, button: 0 }), false);
+});
+
+test('clear card free movement starts only after unpacking or in a dedicated viewer', () => {
+  assert.equal(isClearCardFreeMovementEnabled(false, 'pack'), false);
+  assert.equal(isClearCardFreeMovementEnabled(false, 'breaking'), false);
+  assert.equal(isClearCardFreeMovementEnabled(false, 'revealed'), true);
+  assert.equal(isClearCardFreeMovementEnabled(true, 'pack'), true);
+  assert.equal(isClearCardFreeMovementEnabled(true, 'revealed'), true);
 });
 
 test('clear card nominal interaction bounds include their edges', () => {
