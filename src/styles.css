@@ -1556,6 +1556,11 @@ header.top--shop.top--spacer {
   white-space: nowrap;
 }
 
+.mint-panel__submit-quantity {
+  display: none;
+  font-weight: 500;
+}
+
 .mint-panel__submit-price {
   align-self: baseline;
   min-width: 0;
@@ -1669,9 +1674,13 @@ header.top--shop.top--spacer {
   }
 
   .mint-panel__label-text {
-    display: block;
+    display: none;
     font-size: 13px;
     line-height: 1.2;
+  }
+
+  .mint-panel__submit-quantity {
+    display: inline;
   }
 
   .mint-panel__sizes-row {

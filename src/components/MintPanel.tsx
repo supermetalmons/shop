@@ -997,6 +997,7 @@ export function MintPanel({
     showSolanaMintButton,
     submitBusy,
     useDiscountMint,
+    quantityLabel,
     totalPriceLabel,
     totalDiscountPriceLabel,
   ]);
@@ -1350,6 +1351,7 @@ export function MintPanel({
                 <span className="mint-panel__label-text muted small">{quantityLabel}</span>
                 <input
                   type="range"
+                  aria-label="Mint quantity"
                   min={1}
                   max={maxSelectable}
                   value={quantity}
@@ -1414,7 +1416,12 @@ export function MintPanel({
                     <span className="mint-panel__submit-text" data-mint-action-fit="label">Minting…</span>
                   ) : (
                     <>
-                      <span className="mint-panel__submit-text" data-mint-action-fit="label">Mint</span>
+                      <span className="mint-panel__submit-text" data-mint-action-fit="label">
+                        Mint
+                        {showQuantitySlider ? (
+                          <span className="mint-panel__submit-quantity"> {quantityLabel}</span>
+                        ) : null}
+                      </span>
                       {useDiscountMint ? (
                         <span
                           className="mint-panel__submit-price mint-panel__submit-price--discounted"

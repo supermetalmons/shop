@@ -35,6 +35,31 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });
 
+test('quantity slider panels include the quantity in the responsive mint label', () => {
+  const markup = renderToStaticMarkup(
+    createElement(MintPanel, {
+      stats: {
+        minted: 0,
+        total: 15,
+        remaining: 15,
+        maxPerTx: 5,
+      },
+      onMint: () => undefined,
+      busy: false,
+      boxNamePrefix: 'pack',
+      priceSol: 1,
+      discountPriceSol: 1,
+      maxSupply: 15,
+      maxPerTx: 5,
+    }),
+  );
+
+  assert.match(markup, /<span class="mint-panel__label-text muted small">1 pack<\/span>/);
+  assert.match(markup, /<input type="range" aria-label="Mint quantity"/);
+  assert.match(markup, /Mint<span class="mint-panel__submit-quantity"> 1 pack<\/span>/);
+  assert.match(markup, /<span class="mint-panel__submit-price"[^>]*>1 SOL<\/span>/);
+});
+
 test('drop X profile is grouped with the drop name while availability stays separate', () => {
   const markup = renderToStaticMarkup(
     createElement(MintPanel, {
