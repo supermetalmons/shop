@@ -6,6 +6,7 @@ import {
 } from '../functions/src/shared/deploymentRegistry.ts';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  CARD_FULFILLMENT_DROP_IDS,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
   FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
@@ -29,7 +30,7 @@ const ALL_DROP_IDS = [
   'poncho_drifella',
   'drifella_shirt',
   'little_swag_hoodies',
-  'card_nft_2',
+  ...CARD_FULFILLMENT_DROP_IDS,
   ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
 ];
 const ADMIN_ONLY_DROP_ID = 'card_nft_binder_devnet';
@@ -45,6 +46,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
   assert.equal(Object.isFrozen(FULFILLMENT_ADMIN_WALLET_ADDRESSES), true);
   assert.equal(Object.isFrozen(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES), true);
   assert.equal(Object.isFrozen(ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES), true);
+  assert.equal(Object.isFrozen(CARD_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(CARD_NFT_BINDER_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(SHIPPER_FULFILLMENT_ACCESS), true);
   SHIPPER_FULFILLMENT_ACCESS.forEach((entry) => {
@@ -67,7 +69,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
         [
           'poncho_drifella',
           'drifella_shirt',
-          'card_nft_2',
+          ...CARD_FULFILLMENT_DROP_IDS,
           ...SHIPPER_BINDER_DROP_IDS,
         ],
       ],
@@ -130,7 +132,7 @@ test('frontend allowed-drop lists retain caller and configured array references'
   assert.deepEqual(firstShipperResult, [
     'poncho_drifella',
     'drifella_shirt',
-    'card_nft_2',
+    ...CARD_FULFILLMENT_DROP_IDS,
     ...SHIPPER_BINDER_DROP_IDS,
   ]);
 
@@ -153,6 +155,10 @@ test('sensitive fulfillment addresses remain visible only to an authorized non-a
   assert.equal(walletCanViewSensitiveFulfillmentAddress(ADMIN_WALLET, 'card_nft_2', admins, shipperGrants), false);
   assert.equal(
     walletCanViewSensitiveFulfillmentAddress(LIMITED_SHIPPER_WALLET, 'card_nft_2', admins, shipperGrants),
+    true,
+  );
+  assert.equal(
+    walletCanViewSensitiveFulfillmentAddress(LIMITED_SHIPPER_WALLET, 'clear_cards', admins, shipperGrants),
     true,
   );
   SHIPPER_BINDER_DROP_IDS.forEach((dropId) => {
