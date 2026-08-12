@@ -31,6 +31,64 @@ export function isClearCardInteractionPoint(
   return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
 }
 
+export function isClearCardFallbackImagePoint(
+  { clientX, clientY }: { clientX: number; clientY: number },
+  {
+    left,
+    top,
+    width,
+    height,
+  }: { left: number; top: number; width: number; height: number },
+  {
+    naturalWidth,
+    naturalHeight,
+  }: { naturalWidth: number; naturalHeight: number },
+): boolean {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    !Number.isFinite(naturalWidth) ||
+    !Number.isFinite(naturalHeight) ||
+    width <= 0 ||
+    height <= 0 ||
+    naturalWidth <= 0 ||
+    naturalHeight <= 0
+  ) {
+    return false;
+  }
+  const scale = Math.min(width / naturalWidth, height / naturalHeight);
+  const renderedWidth = naturalWidth * scale;
+  const renderedHeight = naturalHeight * scale;
+  const renderedLeft = left + (width - renderedWidth) / 2;
+  const renderedTop = top + (height - renderedHeight) / 2;
+  return isClearCardInteractionPoint(
+    { clientX, clientY },
+    {
+      left: renderedLeft,
+      top: renderedTop,
+      right: renderedLeft + renderedWidth,
+      bottom: renderedTop + renderedHeight,
+    },
+  );
+}
+
+export function shouldProtectClearCardOverlayClick(
+  objectHit: boolean | undefined,
+  fallbackHit = false,
+): boolean {
+  return objectHit === true || fallbackHit;
+}
+
+export function canStartClearCardPointerInteraction({
+  withinBounds,
+  objectHit,
+}: {
+  withinBounds: boolean;
+  objectHit: boolean | undefined;
+}): boolean {
+  return withinBounds || objectHit === true;
+}
+
 export function isClearCardImpactKey({
   key,
   repeat,

@@ -3,12 +3,15 @@ import assert from 'node:assert/strict';
 import {
   advanceClearCardGatedHit,
   beginClearCardRevealRequest,
+  canStartClearCardPointerInteraction,
   createClearCardGatedHitState,
   createClearCardRevealRequestState,
+  isClearCardFallbackImagePoint,
   isClearCardInteractionPoint,
   isClearCardImpactKey,
   isClearCardImpactPointer,
   settleClearCardRevealRequest,
+  shouldProtectClearCardOverlayClick,
 } from '../src/lib/clearCardReveal.ts';
 import {
   CLEAR_CARD_MODEL_COUNT,
@@ -59,7 +62,7 @@ test('clear card impacts accept only the primary activation pointer', () => {
   assert.equal(isClearCardImpactPointer({ isPrimary: false, button: 0 }), false);
 });
 
-test('clear card interactions stay within the nominal viewer frame', () => {
+test('clear card nominal interaction bounds include their edges', () => {
   const bounds = { left: 10, top: 20, right: 110, bottom: 220 };
   for (const point of [
     { clientX: 10, clientY: 20 },
@@ -76,6 +79,65 @@ test('clear card interactions stay within the nominal viewer frame', () => {
   ]) {
     assert.equal(isClearCardInteractionPoint(point, bounds), false);
   }
+});
+
+test('clear card overlay clicks are protected by confirmed object or fallback hits', () => {
+  assert.equal(shouldProtectClearCardOverlayClick(true), true);
+  assert.equal(shouldProtectClearCardOverlayClick(false), false);
+  assert.equal(shouldProtectClearCardOverlayClick(undefined), false);
+  assert.equal(shouldProtectClearCardOverlayClick(false, true), true);
+  assert.equal(shouldProtectClearCardOverlayClick(undefined, true), true);
+});
+
+test('clear card fallback hits follow the contained image instead of its full element', () => {
+  const bounds = { left: 10, top: 20, width: 300, height: 200 };
+  const portraitImage = { naturalWidth: 100, naturalHeight: 200 };
+  for (const point of [
+    { clientX: 110, clientY: 20 },
+    { clientX: 160, clientY: 120 },
+    { clientX: 210, clientY: 220 },
+  ]) {
+    assert.equal(isClearCardFallbackImagePoint(point, bounds, portraitImage), true);
+  }
+  for (const point of [
+    { clientX: 109, clientY: 120 },
+    { clientX: 211, clientY: 120 },
+    { clientX: 160, clientY: 19 },
+    { clientX: 160, clientY: 221 },
+  ]) {
+    assert.equal(isClearCardFallbackImagePoint(point, bounds, portraitImage), false);
+  }
+  assert.equal(
+    isClearCardFallbackImagePoint(
+      { clientX: 160, clientY: 120 },
+      bounds,
+      { naturalWidth: 0, naturalHeight: 0 },
+    ),
+    false,
+  );
+});
+
+test('clear card pointer interactions accept nominal bounds or object overhangs', () => {
+  assert.equal(
+    canStartClearCardPointerInteraction({ withinBounds: true, objectHit: false }),
+    true,
+  );
+  assert.equal(
+    canStartClearCardPointerInteraction({ withinBounds: true, objectHit: undefined }),
+    true,
+  );
+  assert.equal(
+    canStartClearCardPointerInteraction({ withinBounds: false, objectHit: true }),
+    true,
+  );
+  assert.equal(
+    canStartClearCardPointerInteraction({ withinBounds: false, objectHit: false }),
+    false,
+  );
+  assert.equal(
+    canStartClearCardPointerInteraction({ withinBounds: false, objectHit: undefined }),
+    false,
+  );
 });
 
 test('clear card impacts accept normal keyboard activation only', () => {

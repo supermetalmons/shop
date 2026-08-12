@@ -38,6 +38,7 @@ import {
 } from './lib/adaptiveFrameRate';
 import {
   advanceClearCardGatedHit,
+  canStartClearCardPointerInteraction,
   createClearCardGatedHitState,
   isClearCardInteractionPoint,
   isClearCardImpactKey,
@@ -238,6 +239,7 @@ export type ClearCardSnapshotOptions = {
 export type ClearCardThreeViewerHandle = {
   reset: () => void;
   hit: () => void;
+  isClientPointOnObject: (clientX: number, clientY: number) => boolean | undefined;
   retryCardModel: () => void;
   captureSnapshot: (options?: ClearCardSnapshotOptions) => Promise<ClearCardSnapshot>;
 };
@@ -641,6 +643,9 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const hitProgressionModeRef = useRef(hitProgressionMode);
     const revealReadyRef = useRef(revealReady);
     const triggerHitRef = useRef<((clientX?: number, clientY?: number) => void) | null>(null);
+    const objectHitTestRef = useRef<
+      ((clientX: number, clientY: number) => boolean | undefined) | null
+    >(null);
     const performResetRef = useRef<(() => void) | null>(null);
     const loadCardModelRef = useRef<((modelUrl: string | undefined, force?: boolean) => void) | null>(null);
     const retryCardModelRef = useRef<(() => void) | null>(null);
@@ -702,6 +707,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       () => ({
         reset: () => performResetRef.current?.(),
         hit: () => triggerHitRef.current?.(),
+        isClientPointOnObject: (clientX, clientY) => objectHitTestRef.current?.(clientX, clientY),
         retryCardModel: () => retryCardModelRef.current?.(),
         captureSnapshot: (options) => {
           const captureSnapshot = captureSnapshotRef.current;
@@ -963,7 +969,17 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
         suppressNextCanvasClickRef.current = false;
-        if (!pointerIsWithinInteractionBounds(event)) return;
+        const withinBounds = pointerIsWithinInteractionBounds(event);
+        if (
+          !canStartClearCardPointerInteraction({
+            withinBounds,
+            objectHit: withinBounds
+              ? undefined
+              : objectHitTestRef.current?.(event.clientX, event.clientY),
+          })
+        ) {
+          return;
+        }
         if (viewModeRef.current !== 'tilt') {
           if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
           if (!isClearCardImpactPointer(event)) return;
@@ -1819,6 +1835,25 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
         point.set(0, 0, packSize.z / 2);
         return { point, normal };
+      };
+
+      const isClientPointOnObject = (clientX: number, clientY: number): boolean | undefined => {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return undefined;
+        if (!isClearCardInteractionPoint({ clientX, clientY }, rect)) return false;
+        pointerNdc.set(
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          -(((clientY - rect.top) / rect.height) * 2 - 1),
+        );
+        scene.updateMatrixWorld(true);
+        camera.updateMatrixWorld(true);
+        raycaster.setFromCamera(pointerNdc, camera);
+        if (stageRef.current === 'pack') {
+          if (!packReady) return undefined;
+          return raycaster.intersectObjects(packMeshes, false).length > 0;
+        }
+        if (stageRef.current !== 'revealed' || !cardReady || !cardRoot) return undefined;
+        return raycaster.intersectObject(cardRoot, true).length > 0;
       };
 
       const finishBreakInstant = () => {
@@ -2739,6 +2774,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           }
           registerHit(x, y);
         };
+        objectHitTestRef.current = isClientPointOnObject;
         performResetRef.current = performReset;
         loadCardModelRef.current = loadCardModel;
         retryCardModelRef.current = () => {
@@ -2936,6 +2972,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         beginInteractionThrottleRef.current = null;
         releaseInteractionThrottleRef.current = null;
         triggerHitRef.current = null;
+        objectHitTestRef.current = null;
         performResetRef.current = null;
         loadCardModelRef.current = null;
         retryCardModelRef.current = null;

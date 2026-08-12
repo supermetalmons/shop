@@ -24,8 +24,9 @@ import { resolveColorSchemeImageSources } from '../lib/colorSchemeImages';
 import {
   beginClearCardRevealRequest,
   createClearCardRevealRequestState,
-  isClearCardInteractionPoint,
+  isClearCardFallbackImagePoint,
   settleClearCardRevealRequest,
+  shouldProtectClearCardOverlayClick,
   type ClearCardRevealRequestState,
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
@@ -102,6 +103,7 @@ export default function ClearCardRevealOverlay({
 }: ClearCardRevealOverlayProps) {
   const darkMode = useDarkColorScheme();
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
+  const fallbackImageRef = useRef<HTMLImageElement | null>(null);
   const requestStateRef = useRef<ClearCardRevealRequestState>('idle');
   const requestGenerationRef = useRef(0);
   const [ClearCardThreeViewer, setClearCardThreeViewer] = useState(
@@ -185,10 +187,21 @@ export default function ClearCardRevealOverlay({
   }, [closing, onDismiss, revealComplete, suspended]);
 
   const handleFrameClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isClearCardInteractionPoint(event, event.currentTarget.getBoundingClientRect())) {
+    const objectHit = viewerRef.current?.isClientPointOnObject(event.clientX, event.clientY);
+    const fallbackImage = fallbackImageRef.current;
+    const fallbackHit = Boolean(
+      !packReady &&
+      fallbackImage &&
+      isClearCardFallbackImagePoint(
+        event,
+        fallbackImage.getBoundingClientRect(),
+        fallbackImage,
+      ),
+    );
+    if (shouldProtectClearCardOverlayClick(objectHit, fallbackHit)) {
       event.stopPropagation();
     }
-  }, []);
+  }, [packReady]);
 
   const handleRetryCard = useCallback(() => {
     setCardLoadStatus('loading');
@@ -237,6 +250,7 @@ export default function ClearCardRevealOverlay({
           <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
             {resolvedLoadingImageSrc ? (
               <img
+                ref={fallbackImageRef}
                 className={`clear-card-reveal-overlay__fallback${
                   viewerMode === 'card'
                     ? ' clear-card-reveal-overlay__fallback--card-viewer'
@@ -291,7 +305,10 @@ export default function ClearCardRevealOverlay({
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
-              onClick={handleRetryViewer}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleRetryViewer();
+              }}
             >
               Retry 3D
             </button>
@@ -299,7 +316,10 @@ export default function ClearCardRevealOverlay({
             <button
               type="button"
               className="clear-card-reveal-overlay__retry"
-              onClick={handleRetryCard}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleRetryCard();
+              }}
             >
               Retry card
             </button>
