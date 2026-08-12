@@ -14,9 +14,9 @@ export type ClearCardRenderQualityByStage = Record<
 >;
 
 export function resolveClearCardRevealRenderQuality(
-  viewerOnly: boolean,
+  viewerMode?: 'card' | 'pack',
 ): ClearCardRenderQualityByStage | undefined {
-  if (viewerOnly) return undefined;
+  if (viewerMode === 'card') return undefined;
   return {
     pack: {
       maxPixelRatio: 3,

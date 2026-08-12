@@ -131,8 +131,8 @@ export default function ClearCardRevealOverlay({
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const viewerOnly = Boolean(viewerMode);
   const renderQualityByStage = useMemo(
-    () => resolveClearCardRevealRenderQuality(viewerOnly),
-    [viewerOnly],
+    () => resolveClearCardRevealRenderQuality(viewerMode),
+    [viewerMode],
   );
   const revealComplete = viewerOnly || displayStage === 'revealed';
   const freeMovementEnabled = isClearCardFreeMovementEnabled(viewerOnly, displayStage);

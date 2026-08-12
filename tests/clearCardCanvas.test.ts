@@ -5,8 +5,8 @@ import {
   resolveClearCardRevealRenderQuality,
 } from '../src/lib/clearCardCanvas.ts';
 
-test('clear card unpacking keeps reduced render quality after the pack breaks', () => {
-  assert.deepEqual(resolveClearCardRevealRenderQuality(false), {
+test('clear card unpacking and pack viewing share the same render quality', () => {
+  const expectedQuality = {
     pack: {
       maxPixelRatio: 3,
       transmissionResolutionScale: 1,
@@ -19,8 +19,10 @@ test('clear card unpacking keeps reduced render quality after the pack breaks', 
       maxPixelRatio: 1.5,
       transmissionResolutionScale: 0.65,
     },
-  });
-  assert.equal(resolveClearCardRevealRenderQuality(true), undefined);
+  };
+  assert.deepEqual(resolveClearCardRevealRenderQuality(), expectedQuality);
+  assert.deepEqual(resolveClearCardRevealRenderQuality('pack'), expectedQuality);
+  assert.equal(resolveClearCardRevealRenderQuality('card'), undefined);
 });
 
 test('resolveClearCardRenderSize keeps canvases that fit within the viewport unchanged', () => {
