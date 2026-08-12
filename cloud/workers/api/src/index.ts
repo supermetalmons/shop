@@ -60,7 +60,6 @@ const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
 const EXPECTED_ASSET_RECOVERY_TIMEOUT_MS = 5_000;
 const MAX_REQUEST_BODY_BYTES = 1024;
 const PROVIDER_CONCURRENCY = 3;
-const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -981,11 +980,6 @@ const defaultDependencies: WorkerDependencies = {
   validatePendingOpenBoxesResponse: isExactShopPendingOpenBoxesResponse,
 };
 
-async function applyRateLimit(binding: RateLimit, key: string): Promise<boolean> {
-  const outcome = await binding.limit({ key });
-  return outcome.success;
-}
-
 async function handlePost(
   request: Request,
   env: Env,
@@ -993,15 +987,6 @@ async function handlePost(
   dependencies: WorkerDependencies,
   metrics: WorkerRequestMetrics,
 ): Promise<{ response: Response; includeDevnet: boolean }> {
-  const connectingIp = request.headers.get('CF-Connecting-IP')?.trim() || 'unknown';
-  try {
-    if (!await applyRateLimit(env.IP_RATE_LIMITER, `${pathname}:${connectingIp}`)) {
-      return {
-        response: jsonResponse({ ok: false, error: 'rate-limited' }, 429, { 'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS) }),
-        includeDevnet: false,
-      };
-    }
-  } catch {}
   let parsedRequest:
     | { kind: 'inventory'; body: ShopInventoryRequest }
     | { kind: 'pending-open-boxes'; body: ShopPendingOpenBoxesRequest };
@@ -1013,14 +998,6 @@ async function handlePost(
     return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400), includeDevnet: false };
   }
   const requestBody = parsedRequest.body;
-  try {
-    if (!await applyRateLimit(env.OWNER_RATE_LIMITER, `${pathname}:${requestBody.owner}`)) {
-      return {
-        response: jsonResponse({ ok: false, error: 'rate-limited' }, 429, { 'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS) }),
-        includeDevnet: requestBody.includeDevnet === true,
-      };
-    }
-  } catch {}
   const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
   if (!apiKey) {
     return {

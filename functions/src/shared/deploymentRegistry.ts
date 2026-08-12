@@ -442,6 +442,8 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     collectionName: 'Clear Cards',
     metadataBase: 'https://cdn.lil.org/nft/clear_cards/json',
     metadataPathFormat: 'compact',
+    secondaryMarketHref: 'https://www.tensor.trade/trade/2d2bceeb-51ae-4d2a-a57e-cdb5509d6300',
+    forceSoldOut: true,
     paymentRouting: {
       mintProceeds: [
         { address: 'AWmNR6t5g5zipT2NMkSPRBXxB9Th8LsZcJX71yNyzsgE', percentage: 70 },

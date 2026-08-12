@@ -624,6 +624,10 @@ test('API deployment validates exact Worker and custom-domain targets before mut
     false,
   );
   assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({ ...config, ratelimits: [] }),
+    false,
+  );
+  assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({
       ...config,
       routes: [

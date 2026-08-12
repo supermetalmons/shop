@@ -10,9 +10,7 @@ import {
 
 const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
-const RATE_LIMIT_RETRY_AFTER_SECONDS = 60;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-const EXPENSIVE_METHODS = new Set<ShopRpcMethod>(['simulateTransaction', 'sendTransaction']);
 
 export type RpcProviderFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -300,10 +298,6 @@ function requireRpcRequest(value: unknown) {
   return value;
 }
 
-async function applyRateLimit(binding: RateLimit, key: string): Promise<boolean> {
-  return (await binding.limit({ key })).success;
-}
-
 export function handleRpcPreflight(request: Request): Response {
   const origin = request.headers.get('Origin');
   if (!origin || !isAllowedRpcOrigin(origin)) {
@@ -331,10 +325,6 @@ export async function handleRpcPost(
   if (origin && !isAllowedRpcOrigin(origin)) {
     return { response: rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403) };
   }
-  const connectingIp = request.headers.get('CF-Connecting-IP')?.trim();
-  if (!connectingIp) {
-    return { response: rpcErrorResponse(origin, null, -32097, 'Rate limit unavailable', 503) };
-  }
   let rawBody: unknown;
   let invalid: { id: ShopRpcId | null; code: number; message: string } | undefined;
   try {
@@ -360,44 +350,10 @@ export async function handleRpcPost(
     }
   }
   if (invalid) {
-    try {
-      if (!await applyRateLimit(env.RPC_IP_RATE_LIMITER, `${cluster}:invalid:${connectingIp}`)) {
-        return {
-          response: rpcErrorResponse(origin, invalid.id, -32005, 'Rate limit exceeded', 429, {
-            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
-          }),
-        };
-      }
-    } catch {}
     return { response: rpcErrorResponse(origin, invalid.id, invalid.code, invalid.message, 400) };
   }
   if (!requestBody) {
     return { response: rpcErrorResponse(origin, null, -32600, 'Invalid request', 400) };
-  }
-  try {
-    if (!await applyRateLimit(env.RPC_IP_RATE_LIMITER, `${cluster}:${requestBody.method}:${connectingIp}`)) {
-      return {
-        response: rpcErrorResponse(origin, requestBody.id, -32005, 'Rate limit exceeded', 429, {
-          'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
-        }),
-        rpcMethod: requestBody.method,
-      };
-    }
-  } catch {}
-  if (EXPENSIVE_METHODS.has(requestBody.method)) {
-    try {
-      if (!await applyRateLimit(
-        env.RPC_EXPENSIVE_RATE_LIMITER,
-        `${cluster}:${requestBody.method}:${connectingIp}`,
-      )) {
-        return {
-          response: rpcErrorResponse(origin, requestBody.id, -32005, 'Rate limit exceeded', 429, {
-            'Retry-After': String(RATE_LIMIT_RETRY_AFTER_SECONDS),
-          }),
-          rpcMethod: requestBody.method,
-        };
-      }
-    } catch {}
   }
   const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
   if (!apiKey) {

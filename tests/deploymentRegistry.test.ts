@@ -623,6 +623,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
   const soldOutDropIds = [
     'card_nft_2',
     'card_nft_binder',
+    'clear_cards',
     'drifella_shirt',
     'little_swag_boxes',
     'poncho_drifella',
@@ -745,6 +746,18 @@ test('drifella shirt secondary marketplaces use the mainnet collection address',
         href: `https://www.tensor.trade/trade/${collectionAddress}`,
       },
     ],
+  );
+});
+
+test('clear cards Tensor marketplace uses the configured collection URL', () => {
+  const tensorHref = 'https://www.tensor.trade/trade/2d2bceeb-51ae-4d2a-a57e-cdb5509d6300';
+  assert.equal(DEPLOYMENT_DROPS.clear_cards.secondaryMarketHref, tensorHref);
+  assert.equal(FRONTEND_DROPS.clear_cards.secondaryMarketHref, tensorHref);
+  assert.equal(
+    secondaryMarketplaceLinksForDropId('clear_cards').find(
+      ({ key }) => key === 'tensor',
+    )?.href,
+    tensorHref,
   );
 });
 

@@ -161,15 +161,8 @@ const providerFetch: ProviderFetch = async (_input, init) => {
   }
 };
 
-const rateLimiter: RateLimit = {
-  limit: async () => ({ success: true }),
-};
 const env: Env = {
   HELIUS_API_KEY: 'memory-test-key',
-  IP_RATE_LIMITER: rateLimiter,
-  OWNER_RATE_LIMITER: rateLimiter,
-  RPC_IP_RATE_LIMITER: rateLimiter,
-  RPC_EXPENSIVE_RATE_LIMITER: rateLimiter,
 };
 const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
   method: 'POST',

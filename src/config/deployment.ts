@@ -141,6 +141,14 @@ function ownMarketplaceOverride(
 export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMarketplaceLink[] {
   const normalizedDropId = normalizeDropId(dropId);
   if (!normalizedDropId) return [];
+  const configuredSecondaryMarketHref = Object.prototype.hasOwnProperty.call(
+    DEPLOYMENT_DROPS,
+    normalizedDropId,
+  )
+    ? normalizeOptionalString(
+        DEPLOYMENT_DROPS[normalizedDropId]?.secondaryMarketHref,
+      )
+    : undefined;
   return [
     {
       key: 'magiceden',
@@ -155,6 +163,7 @@ export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMar
       key: 'tensor',
       label: 'Tensor',
       href:
+        configuredSecondaryMarketHref ||
         ownMarketplaceOverride(
           TENSOR_MARKETPLACE_HREF_OVERRIDES,
           normalizedDropId,

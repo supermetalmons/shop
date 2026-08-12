@@ -22,36 +22,10 @@ const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(1));
 const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 
-function rateLimiter(success = true, error?: Error): RateLimit {
-  return {
-    limit: async () => {
-      if (error) throw error;
-      return { success };
-    },
-  } as RateLimit;
-}
-
-function recordingRateLimiter(keys: string[]): RateLimit {
-  return {
-    limit: async ({ key }: { key: string }) => {
-      keys.push(key);
-      return { success: true };
-    },
-  } as RateLimit;
-}
-
 function env(options: {
-  ip?: RateLimit;
-  owner?: RateLimit;
-  rpcIp?: RateLimit;
-  rpcExpensive?: RateLimit;
   apiKey?: string;
 } = {}): Env {
   return {
-    IP_RATE_LIMITER: options.ip || rateLimiter(),
-    OWNER_RATE_LIMITER: options.owner || rateLimiter(),
-    RPC_IP_RATE_LIMITER: options.rpcIp || rateLimiter(),
-    RPC_EXPENSIVE_RATE_LIMITER: options.rpcExpensive || rateLimiter(),
     HELIUS_API_KEY: options.apiKey === undefined ? 'test-key' : options.apiKey,
   };
 }
@@ -180,18 +154,9 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
   assert.equal(JSON.stringify(logs).includes(OWNER), false);
 });
 
-test('production rate-limit bindings are permissive emergency fuses', () => {
+test('production config has no Worker rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
-  const limits = Object.fromEntries(config.ratelimits.map((binding: any) => [
-    binding.name,
-    binding.simple,
-  ]));
-  assert.deepEqual(limits, {
-    IP_RATE_LIMITER: { limit: 60_000, period: 60 },
-    OWNER_RATE_LIMITER: { limit: 60_000, period: 60 },
-    RPC_IP_RATE_LIMITER: { limit: 120_000, period: 60 },
-    RPC_EXPENSIVE_RATE_LIMITER: { limit: 12_000, period: 60 },
-  });
+  assert.equal(Object.hasOwn(config, 'ratelimits'), false);
 });
 
 test('RPC routing applies its restricted CORS policy and HTTP-only contract', async () => {
@@ -419,37 +384,15 @@ test('RPC permits one 2 MiB account slice but rejects aggregate slices above 2.9
   assert.equal(calls, 1);
 });
 
-test('RPC rate limits reject explicit exhaustion but fail open on binding errors', async () => {
+test('RPC requests do not depend on Cloudflare connecting IP metadata', async () => {
   const body = rpcBody('simulateTransaction', [TRANSACTION, { commitment: 'confirmed', encoding: 'base64', sigVerify: false }]);
   const providerFetch: ProviderFetch = async (_input, init) => rpcResult(JSON.parse(String(init?.body)).id, null);
-
-  const globalLimited = await handleRequest(rpcRequest('/rpc/mainnet-beta', body), env({ rpcIp: rateLimiter(false) }), quietDependencies(providerFetch));
-  assert.equal(globalLimited.status, 429);
-  assert.equal((await globalLimited.json() as any).error.code, -32005);
-
-  const expensiveLimited = await handleRequest(rpcRequest('/rpc/mainnet-beta', body), env({ rpcExpensive: rateLimiter(false) }), quietDependencies(providerFetch));
-  assert.equal(expensiveLimited.status, 429);
-
-  const unavailable = await handleRequest(
-    rpcRequest('/rpc/mainnet-beta', body),
-    env({ rpcIp: rateLimiter(true, new Error('binding failed')) }),
-    quietDependencies(providerFetch),
-  );
-  assert.equal(unavailable.status, 200);
-
-  const expensiveUnavailable = await handleRequest(
-    rpcRequest('/rpc/mainnet-beta', body),
-    env({ rpcExpensive: rateLimiter(true, new Error('binding failed')) }),
-    quietDependencies(providerFetch),
-  );
-  assert.equal(expensiveUnavailable.status, 200);
-
   const noIp = new Request('https://api.mons.shop/rpc/mainnet-beta', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
     body: JSON.stringify(body),
   });
-  assert.equal((await handleRequest(noIp, env(), quietDependencies(providerFetch))).status, 503);
+  assert.equal((await handleRequest(noIp, env(), quietDependencies(providerFetch))).status, 200);
 
   let called = false;
   const missingSecret = await handleRequest(
@@ -463,73 +406,6 @@ test('RPC rate limits reject explicit exhaustion but fail open on binding errors
   assert.equal(missingSecret.status, 502);
   assert.equal(called, false);
   assert.equal((await missingSecret.json() as any).error.code, -32099);
-});
-
-test('rate-limit keys isolate routes, owners, clusters, and expensive methods', async () => {
-  const routeIpKeys: string[] = [];
-  const ownerKeys: string[] = [];
-  const routeEnv = env({
-    ip: recordingRateLimiter(routeIpKeys),
-    owner: recordingRateLimiter(ownerKeys),
-  });
-  const routeProvider: ProviderFetch = async (_input, init) => {
-    const body = JSON.parse(String(init?.body));
-    return body.method === 'getProgramAccounts'
-      ? rpcResult(body.id, [])
-      : rpcCursorSearchResult(body, []);
-  };
-  assert.equal((await handleRequest(request('/inventory'), routeEnv, quietDependencies(routeProvider))).status, 200);
-  assert.equal((await handleRequest(request('/pending-open-boxes'), routeEnv, quietDependencies(routeProvider))).status, 200);
-  assert.deepEqual(routeIpKeys, [
-    '/inventory:203.0.113.8',
-    '/pending-open-boxes:203.0.113.8',
-  ]);
-  assert.deepEqual(ownerKeys, [
-    `/inventory:${OWNER}`,
-    `/pending-open-boxes:${OWNER}`,
-  ]);
-
-  const rpcIpKeys: string[] = [];
-  const expensiveKeys: string[] = [];
-  const rpcEnv = env({
-    rpcIp: recordingRateLimiter(rpcIpKeys),
-    rpcExpensive: recordingRateLimiter(expensiveKeys),
-  });
-  const body = rpcBody('simulateTransaction', [
-    TRANSACTION,
-    { commitment: 'confirmed', encoding: 'base64', sigVerify: false },
-  ]);
-  const rpcProvider: ProviderFetch = async (_input, init) => {
-    const requestBody = JSON.parse(String(init?.body));
-    return rpcResult(
-      requestBody.id,
-      requestBody.method === 'getLatestBlockhash'
-        ? { blockhash: OWNER, lastValidBlockHeight: 1 }
-        : null,
-    );
-  };
-  assert.equal((await handleRequest(rpcRequest('/rpc/mainnet-beta', body), rpcEnv, quietDependencies(rpcProvider))).status, 200);
-  assert.equal((await handleRequest(rpcRequest('/rpc/devnet', body), rpcEnv, quietDependencies(rpcProvider))).status, 200);
-  assert.equal((await handleRequest(
-    rpcRequest('/rpc/mainnet-beta', rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }])),
-    rpcEnv,
-    quietDependencies(rpcProvider),
-  )).status, 200);
-  assert.equal((await handleRequest(
-    rpcRequest('/rpc/mainnet-beta', rpcBody('getLatestBlockhash', [])),
-    rpcEnv,
-    quietDependencies(rpcProvider),
-  )).status, 400);
-  assert.deepEqual(rpcIpKeys, [
-    'mainnet-beta:simulateTransaction:203.0.113.8',
-    'devnet:simulateTransaction:203.0.113.8',
-    'mainnet-beta:getLatestBlockhash:203.0.113.8',
-    'mainnet-beta:invalid:203.0.113.8',
-  ]);
-  assert.deepEqual(expensiveKeys, [
-    'mainnet-beta:simulateTransaction:203.0.113.8',
-    'devnet:simulateTransaction:203.0.113.8',
-  ]);
 });
 
 test('RPC reads retry once, submissions never retry, and deterministic JSON-RPC errors pass through', async () => {
@@ -831,27 +707,6 @@ test('inventory expected asset IDs use an exact bounded cluster contract', async
     expectedAssetIds: { 'mainnet-beta': [expectedIds[0]] },
   }), env(), quietDependencies(providerFetch));
   assert.equal(pending.status, 400);
-});
-
-test('inventory rate limits reject explicit exhaustion but fail open on binding errors', async () => {
-  const providerFetch: ProviderFetch = async (_input, init) => {
-    const body = JSON.parse(String(init?.body));
-    return rpcCursorSearchResult(body, []);
-  };
-  const ipLimited = await handleRequest(request('/inventory'), env({ ip: rateLimiter(false) }), quietDependencies(providerFetch));
-  assert.equal(ipLimited.status, 429);
-  assert.equal(ipLimited.headers.get('retry-after'), '60');
-
-  const ownerLimited = await handleRequest(request('/inventory'), env({ owner: rateLimiter(false) }), quietDependencies(providerFetch));
-  assert.equal(ownerLimited.status, 429);
-
-  const unavailable = await handleRequest(
-    request('/inventory'),
-    env({ ip: rateLimiter(true, new Error('binding failed')) }),
-    quietDependencies(providerFetch),
-  );
-  assert.equal(unavailable.status, 200);
-  assert.deepEqual(await unavailable.json(), { ok: true, items: [] });
 });
 
 test('missing provider secrets fail before an upstream request', async () => {

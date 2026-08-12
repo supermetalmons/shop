@@ -428,6 +428,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     value.main !== 'src/index.ts' ||
     value.workers_dev !== false ||
     value.preview_urls !== true ||
+    Object.hasOwn(value, 'ratelimits') ||
     !Array.isArray(value.routes) ||
     value.routes.length !== 1
   ) {
