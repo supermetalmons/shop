@@ -797,7 +797,7 @@ type RevealOverlayState = {
   revealedIds?: number[];
   packMediaId?: number;
   interactiveRevealCardId?: number;
-  viewerMode?: 'poncho-card' | 'clear-card' | 'receipt-image';
+  viewerMode?: 'poncho-card' | 'clear-card' | 'clear-pack' | 'receipt-image';
   imageViewerSize?: ImageViewerSize;
   receiptImages?: ReceiptViewerImage[];
   adminIrlRedeemReceipt?: InventoryItem;
@@ -3318,6 +3318,7 @@ function App({
     if (
       overlay.viewerMode === 'poncho-card' ||
       overlay.viewerMode === 'clear-card' ||
+      overlay.viewerMode === 'clear-pack' ||
       overlay.viewerMode === 'receipt-image'
     ) return true;
     if (usesAssetGatedRevealForDropId(overlay.dropId)) {
@@ -4328,9 +4329,13 @@ function App({
     selectedCount > 0 &&
     deliverableItems.length === selectedCount &&
     selectionHasSingleDrop;
-  const selectedViewableCardFigure = useMemo(() => {
+  const selectedViewableItem = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
-    if (!item || item.kind !== 'dude') return null;
+    if (!item) return null;
+    if (item.kind === 'box') {
+      return usesClearCard3dRevealForDropId(item.dropId) ? item : null;
+    }
+    if (item.kind !== 'dude') return null;
     if (typeof item.dudeId !== 'number') return null;
     if (
       usesInteractiveCardPackRevealForDropId(item.dropId) &&
@@ -4351,7 +4356,7 @@ function App({
     usesClearCard3dRevealForDropId,
     usesInteractiveCardPackRevealForDropId,
   ]);
-  const canViewSelected = Boolean(selectedViewableCardFigure);
+  const canViewSelected = Boolean(selectedViewableItem);
 
   useEffect(() => {
     if (!pendingRevealIds.size) return;
@@ -5045,6 +5050,7 @@ function App({
     if (
       revealOverlay.viewerMode === 'poncho-card' ||
       revealOverlay.viewerMode === 'clear-card' ||
+      revealOverlay.viewerMode === 'clear-pack' ||
       revealOverlay.viewerMode === 'receipt-image'
     ) {
       closeRevealOverlay();
@@ -5234,13 +5240,14 @@ function App({
     usesInteractiveCardPackRevealForDropId,
   ]);
 
-  const openClearCardViewer = useCallback((
+  const openClearCardModelViewer = useCallback((
     {
       overlayId,
       dropId,
       name,
       image,
       figureId,
+      viewerMode,
       originRect,
       clearSelection = false,
     }: {
@@ -5248,13 +5255,14 @@ function App({
       dropId: string;
       name: string;
       image?: string;
-      figureId: number;
+      figureId?: number;
+      viewerMode: 'clear-card' | 'clear-pack';
       originRect?: DOMRect | null;
       clearSelection?: boolean;
     },
   ) => {
     if (!usesClearCard3dRevealForDropId(dropId)) return false;
-    if (!clearCardModelUrl(figureId)) return false;
+    if (viewerMode === 'clear-card' && !clearCardModelUrl(figureId)) return false;
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
@@ -5270,7 +5278,13 @@ function App({
       viewport,
     );
     const resolvedOriginRect = originRect
-      ? calcAspectLockedRevealOriginRect(originRect, targetRect)
+      ? viewerMode === 'clear-pack'
+        ? calcContainedMediaRevealOriginRect(
+            toRevealOverlayRect(originRect),
+            targetRect,
+            boxAspectRatioForDropId(dropId),
+          )
+        : calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(
           targetRect.left,
           targetRect.top,
@@ -5287,11 +5301,13 @@ function App({
       phase: 'revealed',
       frame: 1,
       advanceClicks: 0,
-      revealedIds: [figureId],
+      revealedIds: viewerMode === 'clear-card' && typeof figureId === 'number'
+        ? [figureId]
+        : undefined,
       packMediaId: undefined,
       interactiveRevealCardId: undefined,
-      viewerMode: 'clear-card',
-      viewerFigureId: figureId,
+      viewerMode,
+      viewerFigureId: viewerMode === 'clear-card' ? figureId : undefined,
       hasRevealAttempted: true,
       autoOpening: false,
       autoMode: undefined,
@@ -5301,6 +5317,7 @@ function App({
     }
     return true;
   }, [
+    boxAspectRatioForDropId,
     clearRevealOverlayCloseTimeout,
     inventory,
     pendingOpenBoxes,
@@ -5433,27 +5450,50 @@ function App({
     });
   }, [openReceiptImageViewerGroup]);
 
-  const handleViewSelectedCard = useCallback(() => {
-    if (!selectedViewableCardFigure) return;
-    const figureId = selectedViewableCardFigure.dudeId;
+  const handleViewSelectedItem = useCallback(() => {
+    if (!selectedViewableItem) return;
+    const originRect = findInventoryRect(selectedViewableItem.id);
+    if (selectedViewableItem.kind === 'box') {
+      openClearCardModelViewer({
+        overlayId: selectedViewableItem.id,
+        dropId: selectedViewableItem.dropId,
+        name: selectedViewableItem.name,
+        image: selectedViewableItem.image,
+        viewerMode: 'clear-pack',
+        originRect,
+        clearSelection: true,
+      });
+      return;
+    }
+    const figureId = selectedViewableItem.dudeId;
     if (typeof figureId !== 'number') return;
-    const openViewer = usesClearCard3dRevealForDropId(selectedViewableCardFigure.dropId)
-      ? openClearCardViewer
-      : openInteractiveCardViewer;
-    openViewer({
-      overlayId: selectedViewableCardFigure.id,
-      dropId: selectedViewableCardFigure.dropId,
-      name: selectedViewableCardFigure.name,
-      image: selectedViewableCardFigure.image,
+    if (usesClearCard3dRevealForDropId(selectedViewableItem.dropId)) {
+      openClearCardModelViewer({
+        overlayId: selectedViewableItem.id,
+        dropId: selectedViewableItem.dropId,
+        name: selectedViewableItem.name,
+        image: selectedViewableItem.image,
+        figureId,
+        viewerMode: 'clear-card',
+        originRect,
+        clearSelection: true,
+      });
+      return;
+    }
+    openInteractiveCardViewer({
+      overlayId: selectedViewableItem.id,
+      dropId: selectedViewableItem.dropId,
+      name: selectedViewableItem.name,
+      image: selectedViewableItem.image,
       figureId,
-      originRect: findInventoryRect(selectedViewableCardFigure.id),
+      originRect,
       clearSelection: true,
     });
   }, [
     findInventoryRect,
-    openClearCardViewer,
+    openClearCardModelViewer,
     openInteractiveCardViewer,
-    selectedViewableCardFigure,
+    selectedViewableItem,
     usesClearCard3dRevealForDropId,
   ]);
 
@@ -6724,7 +6764,13 @@ function App({
   );
 
   const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
-  const revealOverlayUsesClearCardViewer = revealOverlay?.viewerMode === 'clear-card';
+  const revealOverlayClearCardViewerMode =
+    revealOverlay?.viewerMode === 'clear-card'
+      ? 'card'
+      : revealOverlay?.viewerMode === 'clear-pack'
+        ? 'pack'
+        : undefined;
+  const revealOverlayUsesClearCardViewer = Boolean(revealOverlayClearCardViewerMode);
   const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
   const revealOverlayHasInteractiveCardPackRenderer = Boolean(
     revealOverlay &&
@@ -7159,7 +7205,7 @@ function App({
         active={revealOverlayActive}
         closing={revealOverlayClosing}
         suspended={revealOverlaySuspended}
-        viewerOnly={revealOverlayUsesClearCardViewer}
+        viewerMode={revealOverlayClearCardViewerMode}
         phase={revealOverlay.phase}
         cardId={clearCardRevealId}
         loadingImageSrc={revealOverlay.image}
@@ -7812,7 +7858,7 @@ function App({
                 <button
                   type="button"
                   className="selection-panel__view"
-                  onClick={handleViewSelectedCard}
+                  onClick={handleViewSelectedItem}
                 >
                   <svg
                     aria-hidden="true"

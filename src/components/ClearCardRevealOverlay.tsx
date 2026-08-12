@@ -66,7 +66,7 @@ type ClearCardRevealOverlayProps = {
   active: boolean;
   closing: boolean;
   suspended?: boolean;
-  viewerOnly?: boolean;
+  viewerMode?: 'card' | 'pack';
   phase: 'preparing' | 'ready' | 'revealed';
   cardId?: number;
   loadingImageSrc?: string;
@@ -86,7 +86,7 @@ export default function ClearCardRevealOverlay({
   active,
   closing,
   suspended = false,
-  viewerOnly = false,
+  viewerMode,
   phase,
   cardId,
   loadingImageSrc,
@@ -111,7 +111,7 @@ export default function ClearCardRevealOverlay({
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>(
-    viewerOnly ? 'revealed' : 'pack',
+    viewerMode === 'card' ? 'revealed' : 'pack',
   );
   const lightingConfig = useMemo(
     () => createClearCardLightingPreset(undefined, { darkMode }),
@@ -125,6 +125,7 @@ export default function ClearCardRevealOverlay({
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
+  const viewerOnly = Boolean(viewerMode);
   const revealComplete = viewerOnly || displayStage === 'revealed';
 
   useEffect(() => {
@@ -133,8 +134,8 @@ export default function ClearCardRevealOverlay({
     setViewerAttempt(0);
     setViewerStatus('loading');
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
-    setDisplayStage(viewerOnly ? 'revealed' : 'pack');
-  }, [resetKey, viewerOnly]);
+    setDisplayStage(viewerMode === 'card' ? 'revealed' : 'pack');
+  }, [resetKey, viewerMode]);
 
   useEffect(() => {
     if (cardModelUrl) requestStateRef.current = 'sent';
@@ -197,10 +198,10 @@ export default function ClearCardRevealOverlay({
   const handleRetryViewer = useCallback(() => {
     setViewerStatus('loading');
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
-    setDisplayStage(viewerOnly ? 'revealed' : 'pack');
+    setDisplayStage(viewerMode === 'card' ? 'revealed' : 'pack');
     setClearCardThreeViewer(() => createClearCardThreeViewerComponent());
     setViewerAttempt((attempt) => attempt + 1);
-  }, [cardModelUrl, viewerOnly]);
+  }, [cardModelUrl, viewerMode]);
 
   const handleViewerError = useCallback(() => {
     setViewerStatus('error');
@@ -210,7 +211,7 @@ export default function ClearCardRevealOverlay({
     <ModalFocusScope
       ariaLabel={
         viewerOnly
-          ? `${boxName || 'Clear card'} 3D viewer`
+          ? `${boxName || (viewerMode === 'pack' ? 'Clear Cards pack' : 'Clear card')} 3D viewer`
           : boxName
             ? `${boxName} unboxing`
             : 'Clear card unboxing'
@@ -252,7 +253,7 @@ export default function ClearCardRevealOverlay({
                   ref={viewerRef}
                   ready={packReady}
                   cardModelUrl={cardModelUrl}
-                  packModelUrl={viewerOnly ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
+                  packModelUrl={viewerMode === 'card' ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                   lightingConfig={lightingConfig}
                   unrestrictedMovement={viewerOnly}
                   axisLockedOrbit={false}
@@ -260,14 +261,15 @@ export default function ClearCardRevealOverlay({
                   interactionFrameRateMode="adaptive"
                   interactionEnabled={(viewerOnly || phase === 'ready') && !closing && !suspended}
                   interactionBounds="parent"
+                  pointerActivationEnabled={!viewerOnly}
                   keyboardActivationEnabled={!viewerOnly && displayStage === 'pack'}
                   keyboardRotationEnabled={viewerOnly}
                   hitProgressionMode="reveal-gated"
                   revealReady={cardReady}
-                  initiallyRevealed={viewerOnly}
+                  initiallyRevealed={viewerMode === 'card'}
                   ariaLabel={
                     viewerOnly
-                      ? `Interactive 3D ${boxName || 'Clear card'}; drag or use arrow keys to rotate`
+                      ? `Interactive 3D ${boxName || (viewerMode === 'pack' ? 'Clear Cards pack' : 'Clear card')}; drag or use arrow keys to rotate`
                       : displayStage === 'pack'
                         ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
                         : `Interactive 3D ${boxName} card`

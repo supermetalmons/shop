@@ -253,6 +253,7 @@ type ClearCardThreeViewerProps = {
   interactionFrameRateMode?: InteractionFrameRateMode;
   interactionEnabled?: boolean;
   interactionBounds?: 'canvas' | 'parent';
+  pointerActivationEnabled?: boolean;
   keyboardActivationEnabled?: boolean;
   keyboardRotationEnabled?: boolean;
   hitProgressionMode?: ClearCardHitProgressionMode;
@@ -605,6 +606,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       interactionFrameRateMode = 'unrestricted',
       interactionEnabled = true,
       interactionBounds = 'canvas',
+      pointerActivationEnabled = true,
       keyboardActivationEnabled = false,
       keyboardRotationEnabled = false,
       hitProgressionMode = 'fixed',
@@ -979,12 +981,16 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           event.preventDefault();
           return;
         }
-        if (stageRef.current === 'pack' && isClearCardImpactPointer(event)) {
+        if (
+          pointerActivationEnabled &&
+          stageRef.current === 'pack' &&
+          isClearCardImpactPointer(event)
+        ) {
           triggerHitRef.current?.(event.clientX, event.clientY);
         }
         updateTilt(event);
       },
-      [pointerIsWithinInteractionBounds, updateTilt],
+      [pointerActivationEnabled, pointerIsWithinInteractionBounds, updateTilt],
     );
 
     const handlePointerUp = useCallback(
@@ -1006,7 +1012,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           }
           startSnapBack(event.timeStamp);
           releaseInteractionThrottleRef.current?.();
-          if (!dragged && stageRef.current === 'pack') {
+          if (pointerActivationEnabled && !dragged && stageRef.current === 'pack') {
             triggerHitRef.current?.(event.clientX, event.clientY);
           }
           return;
@@ -1015,7 +1021,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         releaseInteractionThrottleRef.current?.();
         resetTilt();
       },
-      [resetTilt, startSnapBack],
+      [pointerActivationEnabled, resetTilt, startSnapBack],
     );
 
     const handlePointerLeave = useCallback(() => {
