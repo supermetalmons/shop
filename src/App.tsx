@@ -30,7 +30,6 @@ import {
   BackgroundLayerPortal,
   BodyPortal,
 } from './components/BackgroundBlurLayer';
-import ClearCardDropPreview from './components/ClearCardDropPreview';
 import ClearCardRevealOverlay from './components/ClearCardRevealOverlay';
 import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './components/ColorSchemeImage';
 import { shouldFetchMintProgress, useMintProgress } from './hooks/useMintProgress';
@@ -7324,11 +7323,6 @@ function App({
             busy={false}
             title={upcomingDropRoute.title}
             boxMedia={upcomingMintPreviewMedia}
-            previewContent={
-              upcomingDropRoute.dropFamily === 'clear_cards' ? (
-                <ClearCardDropPreview fallbackImageSrc={upcomingMintPreviewMedia.imageSrc} />
-              ) : undefined
-            }
             boxNamePrefix={upcomingDropRoute.boxNamePrefix}
             dropId={upcomingDropRoute.dropFamily}
             priceSol={0}

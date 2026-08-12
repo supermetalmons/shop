@@ -72,6 +72,7 @@ test('Clear Cards keeps its public upcoming route separate from its WIP route', 
 
   assert.match(router, /const canonicalClearCardsWipPath = '\/clear_cards\/wip';/);
   assert.match(app, /\{ path: '\/clear_cards\/wip' \}/);
+  assert.doesNotMatch(app, /ClearCardDropPreview/);
   assert.deepEqual(resolveUpcomingDropRouteByPath('/clear_cards'), UPCOMING_ROUTES[0]);
   assert.equal(resolveUpcomingDropRouteByPath('/clear_cards/wip'), null);
 });
