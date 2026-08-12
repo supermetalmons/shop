@@ -22,7 +22,6 @@ import {
 } from './finalize-cloudflare-release.ts';
 import {
   cloudflareReleaseExitCode,
-  cloudflareStatusReconciliationDelaysMs,
   formatCloudflareReleaseError,
   guardCloudflareReleaseStart,
   readWranglerDeploymentStatus,
