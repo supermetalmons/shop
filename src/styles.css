@@ -832,15 +832,8 @@ header.top--shop.top--spacer {
   width: 150%;
   height: 150%;
   opacity: 0;
-  filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
   transition: opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
   outline: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  .clear-card-drop-preview .clear-card-wip__canvas {
-    filter: none;
-  }
 }
 
 .clear-card-drop-preview .clear-card-wip__canvas--unrestricted {
@@ -3008,7 +3001,6 @@ button.no-focus-style:focus-visible {
   height: 150%;
   opacity: 0;
   transform: translate3d(0, 8px, 0) scale(0.97);
-  filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.18));
   transition:
     opacity 360ms ease,
     transform 520ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -3078,12 +3070,6 @@ button.clear-card-reveal-overlay__retry:hover:not(:disabled),
 button.clear-card-reveal-overlay__retry:focus-visible {
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   color: var(--fg);
-}
-
-@media (prefers-color-scheme: dark) {
-  .clear-card-reveal-overlay .clear-card-wip__canvas {
-    filter: drop-shadow(0 22px 30px rgba(0, 0, 0, 0.38));
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
