@@ -50,6 +50,7 @@ import {
   type ClearCardRenderQualityByStage,
 } from './lib/clearCardCanvas';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
+import { releaseObjectGeometryCpuBuffersAfterUpload } from './lib/threeGpuOnlyGeometry';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -1896,7 +1897,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return raycaster.intersectObjects(packMeshes, false).length > 0;
         }
         if (stageRef.current !== 'revealed' || !cardReady || !cardRoot) return undefined;
-        return raycaster.intersectObject(cardRoot, true).length > 0;
+        return raycaster.ray.intersectsBox(new THREE.Box3().setFromObject(cardRoot));
       };
 
       const finishBreakInstant = () => {
@@ -2749,6 +2750,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               fitCamera();
               cardReady = false;
             }
+            releaseObjectGeometryCpuBuffersAfterUpload(cardRoot);
             if (!prewarmCardModel()) {
               throw new Error('The clear-card model could not be prewarmed.');
             }
@@ -2895,21 +2897,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             onStatusChange('error');
             return;
           }
-          if (cardRoot && cardReady) {
-            reportCardModelLoadStatus('loading');
-            try {
-              if (!prewarmCardModel()) {
-                throw new Error('The restored clear-card model could not be prewarmed.');
-              }
-              reportCardModelLoadStatus('ready');
-            } catch (error) {
-              console.error('[mons] failed to prewarm the restored clear-card model', error);
-              rendererRecoveryFailed = true;
-              reportCardModelLoadStatus('ready');
-              updateViewerStatus();
-              return;
-            }
-          }
+          if (activeCardModelUrl) loadCardModel(activeCardModelUrl, true);
           updateViewerStatus();
           requestRender();
         };
