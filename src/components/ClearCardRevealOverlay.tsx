@@ -20,6 +20,7 @@ import type {
   ViewerStatus,
 } from '../ClearCardThreeViewer';
 import { DEFAULT_CLEAR_PACK_MODEL_URL, clearCardModelUrl } from '../lib/clearCardModels';
+import { resolveColorSchemeImageSources } from '../lib/colorSchemeImages';
 import {
   beginClearCardRevealRequest,
   createClearCardRevealRequestState,
@@ -65,6 +66,7 @@ type ClearCardRevealOverlayProps = {
   active: boolean;
   closing: boolean;
   suspended?: boolean;
+  viewerOnly?: boolean;
   phase: 'preparing' | 'ready' | 'revealed';
   cardId?: number;
   loadingImageSrc?: string;
@@ -84,6 +86,7 @@ export default function ClearCardRevealOverlay({
   active,
   closing,
   suspended = false,
+  viewerOnly = false,
   phase,
   cardId,
   loadingImageSrc,
@@ -107,15 +110,22 @@ export default function ClearCardRevealOverlay({
   const [viewerAttempt, setViewerAttempt] = useState(0);
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
-  const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
+  const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>(
+    viewerOnly ? 'revealed' : 'pack',
+  );
   const lightingConfig = useMemo(
     () => createClearCardLightingPreset(undefined, { darkMode }),
     [darkMode],
   );
+  const resolvedLoadingImageSrc = useMemo(() => {
+    if (!loadingImageSrc) return undefined;
+    const sources = resolveColorSchemeImageSources('clear_cards', loadingImageSrc);
+    return darkMode ? sources.darkSrc || sources.lightSrc : sources.lightSrc;
+  }, [darkMode, loadingImageSrc]);
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
-  const revealComplete = displayStage === 'revealed';
+  const revealComplete = viewerOnly || displayStage === 'revealed';
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -123,8 +133,8 @@ export default function ClearCardRevealOverlay({
     setViewerAttempt(0);
     setViewerStatus('loading');
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
-    setDisplayStage('pack');
-  }, [resetKey]);
+    setDisplayStage(viewerOnly ? 'revealed' : 'pack');
+  }, [resetKey, viewerOnly]);
 
   useEffect(() => {
     if (cardModelUrl) requestStateRef.current = 'sent';
@@ -187,10 +197,10 @@ export default function ClearCardRevealOverlay({
   const handleRetryViewer = useCallback(() => {
     setViewerStatus('loading');
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
-    setDisplayStage('pack');
+    setDisplayStage(viewerOnly ? 'revealed' : 'pack');
     setClearCardThreeViewer(() => createClearCardThreeViewerComponent());
     setViewerAttempt((attempt) => attempt + 1);
-  }, [cardModelUrl]);
+  }, [cardModelUrl, viewerOnly]);
 
   const handleViewerError = useCallback(() => {
     setViewerStatus('error');
@@ -198,7 +208,13 @@ export default function ClearCardRevealOverlay({
 
   return (
     <ModalFocusScope
-      ariaLabel={boxName ? `${boxName} unboxing` : 'Clear card unboxing'}
+      ariaLabel={
+        viewerOnly
+          ? `${boxName || 'Clear card'} 3D viewer`
+          : boxName
+            ? `${boxName} unboxing`
+            : 'Clear card unboxing'
+      }
       suspended={closing || suspended}
       focusKey={`${viewerStatus}:${cardLoadStatus}:${displayStage}`}
       className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
@@ -218,10 +234,10 @@ export default function ClearCardRevealOverlay({
           aria-busy={!packReady || cardLoadStatus === 'loading'}
         >
           <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
-            {loadingImageSrc ? (
+            {resolvedLoadingImageSrc ? (
               <img
                 className="clear-card-reveal-overlay__fallback"
-                src={loadingImageSrc}
+                src={resolvedLoadingImageSrc}
                 alt=""
                 draggable={false}
                 aria-hidden="true"
@@ -236,21 +252,25 @@ export default function ClearCardRevealOverlay({
                   ref={viewerRef}
                   ready={packReady}
                   cardModelUrl={cardModelUrl}
-                  packModelUrl={DEFAULT_CLEAR_PACK_MODEL_URL}
+                  packModelUrl={viewerOnly ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                   lightingConfig={lightingConfig}
-                  unrestrictedMovement={false}
+                  unrestrictedMovement={viewerOnly}
                   axisLockedOrbit={false}
+                  snapBackOnRelease={viewerOnly}
                   interactionFrameRateMode="adaptive"
-                  interactionEnabled={phase === 'ready' && !closing && !suspended}
+                  interactionEnabled={(viewerOnly || phase === 'ready') && !closing && !suspended}
                   interactionBounds="parent"
-                  keyboardActivationEnabled={displayStage === 'pack'}
+                  keyboardActivationEnabled={!viewerOnly && displayStage === 'pack'}
+                  keyboardRotationEnabled={viewerOnly}
                   hitProgressionMode="reveal-gated"
                   revealReady={cardReady}
-                  initiallyRevealed={false}
+                  initiallyRevealed={viewerOnly}
                   ariaLabel={
-                    displayStage === 'pack'
-                      ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
-                      : `Interactive 3D ${boxName} card`
+                    viewerOnly
+                      ? `Interactive 3D ${boxName || 'Clear card'}; drag or use arrow keys to rotate`
+                      : displayStage === 'pack'
+                        ? `Interactive 3D ${boxName}; press Enter or Space to hit the pack`
+                        : `Interactive 3D ${boxName} card`
                   }
                   onStatusChange={setViewerStatus}
                   onCardModelLoadStatusChange={setCardLoadStatus}

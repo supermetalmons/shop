@@ -3015,6 +3015,14 @@ button.no-focus-style:focus-visible {
   outline: none;
 }
 
+.clear-card-reveal-overlay .clear-card-wip__canvas--unrestricted {
+  cursor: grab;
+}
+
+.clear-card-reveal-overlay .clear-card-wip__canvas--unrestricted:active {
+  cursor: grabbing;
+}
+
 .clear-card-reveal-overlay .clear-card-wip__canvas[role='button']:focus-visible {
   outline: none;
 }

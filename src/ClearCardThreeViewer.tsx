@@ -63,6 +63,7 @@ const SPRING_STIFFNESS = 60;
 const SPRING_DAMPING = 11;
 const SPRING_EPSILON = 0.0001;
 const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
+const KEYBOARD_ROTATION_STEP = THREE.MathUtils.degToRad(12);
 const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
 const MAX_VERTICAL_ORBIT = THREE.MathUtils.degToRad(45);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
@@ -253,6 +254,7 @@ type ClearCardThreeViewerProps = {
   interactionEnabled?: boolean;
   interactionBounds?: 'canvas' | 'parent';
   keyboardActivationEnabled?: boolean;
+  keyboardRotationEnabled?: boolean;
   hitProgressionMode?: ClearCardHitProgressionMode;
   revealReady?: boolean;
   initiallyRevealed: boolean;
@@ -604,6 +606,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       interactionEnabled = true,
       interactionBounds = 'canvas',
       keyboardActivationEnabled = false,
+      keyboardRotationEnabled = false,
       hitProgressionMode = 'fixed',
       revealReady = true,
       initiallyRevealed,
@@ -671,6 +674,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       lockedAxis: null,
     });
     const snapBackRef = useRef(createSnapBackState());
+    const suppressNextCanvasClickRef = useRef(false);
     const orbitYawRef = useRef(0);
     const orbitElevationRef = useRef(0);
 
@@ -897,22 +901,55 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handleKeyDown = useCallback(
       (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
-        if (
-          event.defaultPrevented ||
-          !keyboardActivationEnabled ||
-          !isClearCardImpactKey(event)
-        ) {
-          return;
+        if (event.defaultPrevented) return;
+
+        if (keyboardRotationEnabled) {
+          const pitch =
+            event.key === 'ArrowUp'
+              ? -KEYBOARD_ROTATION_STEP
+              : event.key === 'ArrowDown'
+                ? KEYBOARD_ROTATION_STEP
+                : 0;
+          const yaw =
+            event.key === 'ArrowLeft'
+              ? -KEYBOARD_ROTATION_STEP
+              : event.key === 'ArrowRight'
+                ? KEYBOARD_ROTATION_STEP
+                : 0;
+          if (
+            (pitch || yaw) &&
+            viewerReadyRef.current &&
+            interactionEnabledRef.current &&
+            stageRef.current !== 'breaking'
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            const rotation = unrestrictedRotationRef.current;
+            resetSnapBackTracking(snapBackRef.current, event.timeStamp);
+            rotation.deltaEuler.set(pitch, yaw, 0);
+            rotation.deltaQuaternion.setFromEuler(rotation.deltaEuler);
+            rotation.quaternion.premultiply(rotation.deltaQuaternion).normalize();
+            requestRenderRef.current?.();
+            return;
+          }
         }
+
+        if (!keyboardActivationEnabled || !isClearCardImpactKey(event)) return;
         event.preventDefault();
         event.stopPropagation();
         triggerHitRef.current?.();
       },
-      [keyboardActivationEnabled],
+      [keyboardActivationEnabled, keyboardRotationEnabled],
     );
 
     const handleSyntheticClick = useCallback(
       (event: ReactMouseEvent<HTMLCanvasElement>) => {
+        if (suppressNextCanvasClickRef.current) {
+          suppressNextCanvasClickRef.current = false;
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (event.defaultPrevented || !keyboardActivationEnabled || event.detail !== 0) return;
         event.preventDefault();
         event.stopPropagation();
@@ -923,6 +960,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
     const handlePointerDown = useCallback(
       (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        suppressNextCanvasClickRef.current = false;
         if (!pointerIsWithinInteractionBounds(event)) return;
         if (viewModeRef.current !== 'tilt') {
           if (!viewerReadyRef.current || stageRef.current === 'breaking') return;
@@ -959,6 +997,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           const dragged =
             rotation.dragged ||
             totalX * totalX + totalY * totalY > UNRESTRICTED_DRAG_THRESHOLD_SQ;
+          suppressNextCanvasClickRef.current = dragged;
           rotation.pointerId = null;
           rotation.dragged = false;
           rotation.lockedAxis = null;
@@ -2961,9 +3000,23 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               : 'Interactive 3D clear card unboxing')
         }
         aria-hidden={!ready}
-        aria-disabled={keyboardActivationEnabled ? !ready || !interactionEnabled : undefined}
-        aria-keyshortcuts={keyboardActivationEnabled ? 'Enter Space' : undefined}
-        tabIndex={keyboardActivationEnabled && ready && interactionEnabled ? 0 : undefined}
+        aria-disabled={
+          keyboardActivationEnabled || keyboardRotationEnabled
+            ? !ready || !interactionEnabled
+            : undefined
+        }
+        aria-keyshortcuts={
+          keyboardActivationEnabled
+            ? 'Enter Space'
+            : keyboardRotationEnabled
+              ? 'ArrowLeft ArrowRight ArrowUp ArrowDown'
+              : undefined
+        }
+        tabIndex={
+          (keyboardActivationEnabled || keyboardRotationEnabled) && ready && interactionEnabled
+            ? 0
+            : undefined
+        }
         onKeyDown={handleKeyDown}
         onClick={handleSyntheticClick}
         onPointerEnter={handlePointerEnter}

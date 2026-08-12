@@ -797,7 +797,7 @@ type RevealOverlayState = {
   revealedIds?: number[];
   packMediaId?: number;
   interactiveRevealCardId?: number;
-  viewerMode?: 'poncho-card' | 'receipt-image';
+  viewerMode?: 'poncho-card' | 'clear-card' | 'receipt-image';
   imageViewerSize?: ImageViewerSize;
   receiptImages?: ReceiptViewerImage[];
   adminIrlRedeemReceipt?: InventoryItem;
@@ -3315,7 +3315,11 @@ function App({
   const canDismissRevealOverlayFromKeyboard = useCallback(() => {
     const overlay = revealOverlayRef.current;
     if (!overlay) return false;
-    if (overlay.viewerMode === 'poncho-card' || overlay.viewerMode === 'receipt-image') return true;
+    if (
+      overlay.viewerMode === 'poncho-card' ||
+      overlay.viewerMode === 'clear-card' ||
+      overlay.viewerMode === 'receipt-image'
+    ) return true;
     if (usesAssetGatedRevealForDropId(overlay.dropId)) {
       return canDismissAssetGatedRevealOverlay(overlay);
     }
@@ -4324,15 +4328,30 @@ function App({
     selectedCount > 0 &&
     deliverableItems.length === selectedCount &&
     selectionHasSingleDrop;
-  const selectedInteractiveCardFigure = useMemo(() => {
+  const selectedViewableCardFigure = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
     if (!item || item.kind !== 'dude') return null;
     if (typeof item.dudeId !== 'number') return null;
-    if (!usesInteractiveCardPackRevealForDropId(item.dropId)) return null;
-    if (!getInteractiveCardPackCardByFigureId(item.dropId, item.dudeId)) return null;
-    return item;
-  }, [selectedCount, selectedItems, usesInteractiveCardPackRevealForDropId]);
-  const canViewSelected = Boolean(selectedInteractiveCardFigure);
+    if (
+      usesInteractiveCardPackRevealForDropId(item.dropId) &&
+      getInteractiveCardPackCardByFigureId(item.dropId, item.dudeId)
+    ) {
+      return item;
+    }
+    if (
+      usesClearCard3dRevealForDropId(item.dropId) &&
+      clearCardModelUrl(item.dudeId)
+    ) {
+      return item;
+    }
+    return null;
+  }, [
+    selectedCount,
+    selectedItems,
+    usesClearCard3dRevealForDropId,
+    usesInteractiveCardPackRevealForDropId,
+  ]);
+  const canViewSelected = Boolean(selectedViewableCardFigure);
 
   useEffect(() => {
     if (!pendingRevealIds.size) return;
@@ -5023,7 +5042,11 @@ function App({
 
   const handleRevealOverlayDismiss = () => {
     if (!revealOverlay || revealOverlayClosing) return;
-    if (revealOverlay.viewerMode === 'poncho-card' || revealOverlay.viewerMode === 'receipt-image') {
+    if (
+      revealOverlay.viewerMode === 'poncho-card' ||
+      revealOverlay.viewerMode === 'clear-card' ||
+      revealOverlay.viewerMode === 'receipt-image'
+    ) {
       closeRevealOverlay();
       return;
     }
@@ -5211,6 +5234,83 @@ function App({
     usesInteractiveCardPackRevealForDropId,
   ]);
 
+  const openClearCardViewer = useCallback((
+    {
+      overlayId,
+      dropId,
+      name,
+      image,
+      figureId,
+      originRect,
+      clearSelection = false,
+    }: {
+      overlayId: string;
+      dropId: string;
+      name: string;
+      image?: string;
+      figureId: number;
+      originRect?: DOMRect | null;
+      clearSelection?: boolean;
+    },
+  ) => {
+    if (!usesClearCard3dRevealForDropId(dropId)) return false;
+    if (!clearCardModelUrl(figureId)) return false;
+    if (revealOverlayRef.current || revealLoading) return false;
+    if (startOpenLoading) return false;
+    if (typeof window === 'undefined') return false;
+
+    resetAssetGatedRevealDismissState();
+    clearRevealOverlayCloseTimeout();
+    setInventorySnapshot(inventory);
+    setPendingOpenSnapshot(pendingOpenBoxes);
+
+    const viewport = getOverlayViewport();
+    const targetRect = offsetRevealOverlayRectForViewport(
+      calcClearCardRevealTargetRect(viewport.width, viewport.height),
+      viewport,
+    );
+    const resolvedOriginRect = originRect
+      ? calcAspectLockedRevealOriginRect(originRect, targetRect)
+      : new DOMRect(
+          targetRect.left,
+          targetRect.top,
+          targetRect.width,
+          targetRect.height,
+        );
+    presentRevealOverlay({
+      id: overlayId,
+      dropId,
+      name,
+      image,
+      originRect: toRevealOverlayRect(resolvedOriginRect),
+      targetRect,
+      phase: 'revealed',
+      frame: 1,
+      advanceClicks: 0,
+      revealedIds: [figureId],
+      packMediaId: undefined,
+      interactiveRevealCardId: undefined,
+      viewerMode: 'clear-card',
+      viewerFigureId: figureId,
+      hasRevealAttempted: true,
+      autoOpening: false,
+      autoMode: undefined,
+    });
+    if (clearSelection) {
+      setSelected(new Set());
+    }
+    return true;
+  }, [
+    clearRevealOverlayCloseTimeout,
+    inventory,
+    pendingOpenBoxes,
+    presentRevealOverlay,
+    resetAssetGatedRevealDismissState,
+    revealLoading,
+    startOpenLoading,
+    usesClearCard3dRevealForDropId,
+  ]);
+
   const openImageViewer = useCallback((
     item: ReceiptViewerSource,
     originRect?: DOMRect | null,
@@ -5333,20 +5433,29 @@ function App({
     });
   }, [openReceiptImageViewerGroup]);
 
-  const handleViewSelectedInteractiveCard = useCallback(() => {
-    if (!selectedInteractiveCardFigure) return;
-    const figureId = selectedInteractiveCardFigure.dudeId;
+  const handleViewSelectedCard = useCallback(() => {
+    if (!selectedViewableCardFigure) return;
+    const figureId = selectedViewableCardFigure.dudeId;
     if (typeof figureId !== 'number') return;
-    openInteractiveCardViewer({
-      overlayId: selectedInteractiveCardFigure.id,
-      dropId: selectedInteractiveCardFigure.dropId,
-      name: selectedInteractiveCardFigure.name,
-      image: selectedInteractiveCardFigure.image,
+    const openViewer = usesClearCard3dRevealForDropId(selectedViewableCardFigure.dropId)
+      ? openClearCardViewer
+      : openInteractiveCardViewer;
+    openViewer({
+      overlayId: selectedViewableCardFigure.id,
+      dropId: selectedViewableCardFigure.dropId,
+      name: selectedViewableCardFigure.name,
+      image: selectedViewableCardFigure.image,
       figureId,
-      originRect: findInventoryRect(selectedInteractiveCardFigure.id),
+      originRect: findInventoryRect(selectedViewableCardFigure.id),
       clearSelection: true,
     });
-  }, [findInventoryRect, openInteractiveCardViewer, selectedInteractiveCardFigure]);
+  }, [
+    findInventoryRect,
+    openClearCardViewer,
+    openInteractiveCardViewer,
+    selectedViewableCardFigure,
+    usesClearCard3dRevealForDropId,
+  ]);
 
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
@@ -6615,6 +6724,7 @@ function App({
   );
 
   const revealOverlayUsesPonchoViewer = revealOverlay?.viewerMode === 'poncho-card';
+  const revealOverlayUsesClearCardViewer = revealOverlay?.viewerMode === 'clear-card';
   const revealOverlayUsesReceiptImage = revealOverlay?.viewerMode === 'receipt-image';
   const revealOverlayHasInteractiveCardPackRenderer = Boolean(
     revealOverlay &&
@@ -7049,18 +7159,29 @@ function App({
         active={revealOverlayActive}
         closing={revealOverlayClosing}
         suspended={revealOverlaySuspended}
+        viewerOnly={revealOverlayUsesClearCardViewer}
         phase={revealOverlay.phase}
         cardId={clearCardRevealId}
         loadingImageSrc={revealOverlay.image}
         resetKey={revealOverlay.id}
         boxName={revealOverlay.name}
-        onRequestReveal={handlePonchoOverlayRequestReveal}
-        onPlayHit={handlePonchoOverlayPlayClick}
-        onPlayBreak={handlePonchoOverlayPlayReveal}
+        onRequestReveal={
+          revealOverlayUsesClearCardViewer ? undefined : handlePonchoOverlayRequestReveal
+        }
+        onPlayHit={
+          revealOverlayUsesClearCardViewer ? undefined : handlePonchoOverlayPlayClick
+        }
+        onPlayBreak={
+          revealOverlayUsesClearCardViewer ? undefined : handlePonchoOverlayPlayReveal
+        }
         onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
-        onRevealCompleteChange={updateAssetGatedRevealComplete}
-        onDismissReadyChange={updateClearCardDismissReady}
+        onRevealCompleteChange={
+          revealOverlayUsesClearCardViewer ? undefined : updateAssetGatedRevealComplete
+        }
+        onDismissReadyChange={
+          revealOverlayUsesClearCardViewer ? undefined : updateClearCardDismissReady
+        }
       />
     ) : revealOverlayCanRenderInteractiveCardPack ? (
       <InteractiveCardPackRevealOverlay
@@ -7691,7 +7812,7 @@ function App({
                 <button
                   type="button"
                   className="selection-panel__view"
-                  onClick={handleViewSelectedInteractiveCard}
+                  onClick={handleViewSelectedCard}
                 >
                   <svg
                     aria-hidden="true"
