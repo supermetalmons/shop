@@ -14,6 +14,8 @@ let scrollLeft = 0;
 let scrollTop = 0;
 const scrollCalls: Array<[number, number]> = [];
 const scrollBehaviors: string[] = [];
+let nextAnimationFrameId = 1;
+let animationFrameCallbacks = new Map<number, FrameRequestCallback>();
 
 Object.defineProperty(dom.window, 'scrollX', { configurable: true, get: () => scrollLeft });
 Object.defineProperty(dom.window, 'scrollY', { configurable: true, get: () => scrollTop });
@@ -24,6 +26,21 @@ Object.defineProperty(dom.window, 'scrollTo', {
     scrollTop = top;
     scrollCalls.push([left, top]);
     scrollBehaviors.push(document.documentElement.style.scrollBehavior);
+  },
+});
+Object.defineProperty(dom.window, 'requestAnimationFrame', {
+  configurable: true,
+  value: (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrameId;
+    nextAnimationFrameId += 1;
+    animationFrameCallbacks.set(id, callback);
+    return id;
+  },
+});
+Object.defineProperty(dom.window, 'cancelAnimationFrame', {
+  configurable: true,
+  value: (id: number) => {
+    animationFrameCallbacks.delete(id);
   },
 });
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
@@ -51,7 +68,14 @@ afterEach(() => {
   scrollTop = 0;
   scrollCalls.length = 0;
   scrollBehaviors.length = 0;
+  animationFrameCallbacks.clear();
 });
+
+function flushAnimationFrame() {
+  const callbacks = animationFrameCallbacks;
+  animationFrameCallbacks = new Map();
+  callbacks.forEach((callback) => callback(0));
+}
 
 test('overlay scroll locking preserves coordinates and existing overflow styles', () => {
   scrollLeft = 9;
@@ -140,6 +164,41 @@ test('overlay Escape ownership updates without changing its dismissal policy', (
 
   assert.equal(firstHandlerCalls, 0);
   assert.equal(secondHandlerCalls, 1);
+});
+
+test('page freezing leaves the viewport untouched and hides the scrollbar through unlock', () => {
+  scrollLeft = 9;
+  scrollTop = 720;
+  const { rerender } = renderHook(
+    ({ active }) => {
+      useOverlayScrollLock({ active, freezePage: true });
+    },
+    { initialProps: { active: false } },
+  );
+
+  rerender({ active: true });
+
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--page-frozen'), true);
+  assert.equal(document.body.classList.contains('overlay-scroll-lock--page-frozen'), true);
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--scrollbar-hidden'), true);
+  assert.equal(document.body.classList.contains('overlay-scroll-lock--scrollbar-hidden'), true);
+  assert.equal(scrollCalls.length, 0);
+
+  rerender({ active: false });
+
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--page-frozen'), false);
+  assert.equal(document.body.classList.contains('overlay-scroll-lock--page-frozen'), false);
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--scrollbar-hidden'), true);
+  assert.equal(document.body.classList.contains('overlay-scroll-lock--scrollbar-hidden'), true);
+  assert.equal(scrollLeft, 9);
+  assert.equal(scrollTop, 720);
+  assert.equal(scrollCalls.length, 0);
+
+  flushAnimationFrame();
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--scrollbar-hidden'), true);
+  flushAnimationFrame();
+  assert.equal(document.documentElement.classList.contains('overlay-scroll-lock--scrollbar-hidden'), false);
+  assert.equal(document.body.classList.contains('overlay-scroll-lock--scrollbar-hidden'), false);
 });
 
 function NestedLockFixture({ modalOpen, overlayOpen }: { modalOpen: boolean; overlayOpen: boolean }) {

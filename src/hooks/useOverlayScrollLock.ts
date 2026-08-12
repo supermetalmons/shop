@@ -8,6 +8,25 @@ import {
 const OVERLAY_BLOCKED_EVENTS = ['touchmove', 'gesturestart', 'gesturechange', 'gestureend', 'wheel'] as const;
 const OVERLAY_ZOOM_SHORTCUT_KEYS = new Set(['+', '=', '-', '_', '0']);
 const OVERLAY_SCROLL_ALLOWED_SELECTOR = '[data-overlay-scroll-allow]';
+const OVERLAY_SCROLLBAR_HIDDEN_CLASS = 'overlay-scroll-lock--scrollbar-hidden';
+let scrollbarReleaseFrame: number | null = null;
+
+function cancelScrollbarRelease() {
+  if (scrollbarReleaseFrame === null) return;
+  window.cancelAnimationFrame(scrollbarReleaseFrame);
+  scrollbarReleaseFrame = null;
+}
+
+function releaseScrollbarAfterPaint(html: HTMLElement, body: HTMLElement) {
+  cancelScrollbarRelease();
+  scrollbarReleaseFrame = window.requestAnimationFrame(() => {
+    scrollbarReleaseFrame = window.requestAnimationFrame(() => {
+      scrollbarReleaseFrame = null;
+      html.classList.remove(OVERLAY_SCROLLBAR_HIDDEN_CLASS);
+      body.classList.remove(OVERLAY_SCROLLBAR_HIDDEN_CLASS);
+    });
+  });
+}
 
 function eventAllowsNestedOverlayScroll(evt: Event): boolean {
   if (evt.type !== 'touchmove' && evt.type !== 'wheel') return false;
@@ -24,6 +43,7 @@ function eventAllowsNestedOverlayScroll(evt: Event): boolean {
 type UseOverlayScrollLockOptions = {
   active: boolean;
   escapeEnabled?: boolean;
+  freezePage?: boolean;
   onEscape?: () => void;
 };
 
@@ -44,6 +64,7 @@ export function shouldHandleOverlayEscape({
 export function useOverlayScrollLock({
   active,
   escapeEnabled = true,
+  freezePage = false,
   onEscape,
 }: UseOverlayScrollLockOptions) {
   useLayoutEffect(() => {
@@ -85,18 +106,34 @@ export function useOverlayScrollLock({
     body.classList.add('overlay-scroll-lock');
     html.style.overflow = 'hidden';
     acquireBodyScrollLock();
-    restoreViewportScrollPosition(scrollPosition);
+    if (freezePage) {
+      cancelScrollbarRelease();
+      html.classList.add('overlay-scroll-lock--page-frozen');
+      body.classList.add('overlay-scroll-lock--page-frozen');
+      html.classList.add(OVERLAY_SCROLLBAR_HIDDEN_CLASS);
+      body.classList.add(OVERLAY_SCROLLBAR_HIDDEN_CLASS);
+    } else {
+      restoreViewportScrollPosition(scrollPosition);
+    }
 
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       OVERLAY_BLOCKED_EVENTS.forEach((eventName) => {
         document.removeEventListener(eventName, preventDefault, nonPassiveOptions);
       });
+      if (freezePage) {
+        html.classList.remove('overlay-scroll-lock--page-frozen');
+        body.classList.remove('overlay-scroll-lock--page-frozen');
+      }
       html.classList.remove('overlay-scroll-lock');
       body.classList.remove('overlay-scroll-lock');
       html.style.overflow = previousHtmlOverflow;
       releaseBodyScrollLock();
-      restoreViewportScrollPosition(scrollPosition);
+      if (freezePage) {
+        releaseScrollbarAfterPaint(html, body);
+      } else {
+        restoreViewportScrollPosition(scrollPosition);
+      }
     };
-  }, [active, escapeEnabled, onEscape]);
+  }, [active, escapeEnabled, freezePage, onEscape]);
 }

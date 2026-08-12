@@ -1832,6 +1832,11 @@ function App({
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const revealOverlayOpen = Boolean(revealOverlay);
+  const freezeClearCardUnpackingPage = Boolean(
+    revealOverlay &&
+    revealOverlay.viewerMode === undefined &&
+    usesClearCard3dRevealForDropId(revealOverlay.dropId),
+  );
   const handleOpenNotify = useCallback(() => {
     if (revealOverlayOpen) return;
     setNotifyOpen(true);
@@ -3770,6 +3775,7 @@ function App({
   useOverlayScrollLock({
     active: revealOverlayOpen,
     escapeEnabled: !walletModalVisible && !receiptTransferTarget,
+    freezePage: freezeClearCardUnpackingPage,
     onEscape: handleRevealOverlayEscape,
   });
 
