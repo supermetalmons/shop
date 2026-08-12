@@ -29,7 +29,6 @@ export type UpcomingDropRouteConfig = {
   path: string;
   dropFamily: DropFamily;
   solanaCluster: SolanaCluster;
-  notifyOnly?: boolean;
   label: string;
   title: string;
   previewDropId?: string;
@@ -50,7 +49,6 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     path: '/clear_cards',
     dropFamily: 'clear_cards',
     solanaCluster: 'mainnet-beta',
-    notifyOnly: true,
     label: 'Clear Cards',
     title: 'Clear Cards',
     previewImageUrl: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
@@ -140,7 +138,6 @@ export function resolveFrontendDropByPath(
   if (normalizedPath === '/') return null;
 
   const upcomingRoute = resolveUpcomingDropRouteByPath(normalizedPath);
-  if (upcomingRoute?.notifyOnly) return null;
 
   const candidate = normalizedPath.slice(1);
   const exactDrop = resolveFrontendDropById(candidate, options?.drops);
