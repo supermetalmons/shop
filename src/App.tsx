@@ -807,6 +807,16 @@ type RevealOverlayState = {
   autoMode?: 'normal' | 'fast';
 };
 
+type EarlyClearCardRevealGate = {
+  boxAssetId: string;
+  dropId: string;
+  owner: string | undefined;
+  revealSession: number;
+  wallet: string;
+  confirmation: Promise<boolean>;
+  settleConfirmation: (confirmed: boolean) => void;
+};
+
 type ReceiptImageViewerOverlayProps = {
   dropId: string;
   overlayStyle?: CSSProperties;
@@ -1837,6 +1847,8 @@ function App({
   const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
   const localAccountWalletRef = useRef<string | null>(localAccountWallet || null);
   const pendingRevealHydrationWalletRef = useRef<string | null>(null);
   const recentRevealHydrationWalletRef = useRef<string | null>(null);
@@ -1880,6 +1892,7 @@ function App({
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<DeferredOverlayAction[]>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
+  const earlyClearCardRevealGateRef = useRef<EarlyClearCardRevealGate | null>(null);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const revealOverlaySessionRef = useRef(0);
@@ -4823,10 +4836,28 @@ function App({
       dropId: item.dropId,
     });
     setStartOpenLoading(item.id);
+    let earlyRevealGate: EarlyClearCardRevealGate | null = null;
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
       const targetConnection = getDropConnection(targetDrop.dropId);
       const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop);
+      const enablesEarlyPackInteraction = isDropFamily(targetDrop, 'clear_cards');
+      if (enablesEarlyPackInteraction) {
+        let settleConfirmation!: (confirmed: boolean) => void;
+        const confirmation = new Promise<boolean>((resolve) => {
+          settleConfirmation = resolve;
+        });
+        earlyRevealGate = {
+          boxAssetId: item.id,
+          dropId: targetDrop.dropId,
+          owner,
+          revealSession: revealOverlaySessionRef.current,
+          wallet: connectedWallet,
+          confirmation,
+          settleConfirmation,
+        };
+        earlyClearCardRevealGateRef.current = earlyRevealGate;
+      }
       const sendOnce = async () => {
         const { tx, pendingPda } = await buildStartOpenBoxTxWithPending(
           targetConnection,
@@ -4835,12 +4866,19 @@ function App({
           new PublicKey(item.id),
           targetDrop,
         );
+        if (enablesEarlyPackInteraction) {
+          setRevealOverlay((prev) => {
+            if (!prev || prev.id !== item.id || prev.phase !== 'preparing') return prev;
+            return { ...prev, phase: 'ready' };
+          });
+        }
         return sendAndConfirmViaConnection(tx, targetConnection, {
           onAlreadyProcessedWithoutSignature: (err) =>
             recoverAlreadyProcessedAccounts(targetConnection, [pendingPda], err),
         });
       };
       await retryAfterBlockhashExpiry(sendOnce, 'Transaction expired before you approved it. Please approve again…');
+      earlyRevealGate?.settleConfirmation(true);
       console.info('[mons] inventory asset sent to the vault', {
         assetId: item.id,
         dropId: item.dropId,
@@ -4848,6 +4886,9 @@ function App({
       queueOverlayAction(() => addLocalPendingReveal(item));
       setRevealOverlay((prev) => {
         if (!prev || prev.id !== item.id) return prev;
+        if (enablesEarlyPackInteraction) {
+          return { ...prev, phase: 'ready' };
+        }
         return {
           ...prev,
           phase: 'ready',
@@ -4867,12 +4908,16 @@ function App({
         void Promise.all([refetchInventory(), refetchPendingOpenBoxes()]);
       });
     } catch (err) {
+      earlyRevealGate?.settleConfirmation(false);
       console.error(err);
       if (!isUserRejectedError(err)) {
         showToast(err instanceof Error ? err.message : `Failed to open ${boxLabelForDropId(item.dropId)}`);
       }
       dismissRevealOverlay();
     } finally {
+      if (earlyClearCardRevealGateRef.current === earlyRevealGate) {
+        earlyClearCardRevealGateRef.current = null;
+      }
       setStartOpenLoading(null);
     }
   };
@@ -6834,6 +6879,24 @@ function App({
   const revealOverlayCanRenderClearCard3d = revealOverlayHasClearCard3dRenderer;
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
+    const earlyRevealGate = earlyClearCardRevealGateRef.current;
+    if (
+      earlyRevealGate?.boxAssetId === revealOverlay.id &&
+      earlyRevealGate.dropId === revealOverlay.dropId
+    ) {
+      return earlyRevealGate.confirmation.then((confirmed) =>
+        confirmed &&
+        !suspendedRef.current &&
+        ownerRef.current === earlyRevealGate.owner &&
+        connectedWalletRef.current === earlyRevealGate.wallet &&
+        revealOverlaySessionRef.current === earlyRevealGate.revealSession &&
+        revealOverlayRef.current?.id === earlyRevealGate.boxAssetId &&
+        revealOverlayRef.current.dropId === earlyRevealGate.dropId &&
+        !revealOverlayClosingRef.current
+          ? handleRevealDudes(revealOverlay.id, revealOverlay.dropId)
+          : 'resolved' as const,
+      );
+    }
     return handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
   }, [handleRevealDudes, revealOverlay?.dropId, revealOverlay?.id]);
   const handlePonchoOverlayPlayClick = useCallback(() => {
