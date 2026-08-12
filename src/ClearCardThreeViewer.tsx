@@ -45,6 +45,7 @@ import {
   isClearCardImpactPointer,
   type ClearCardGatedHitState,
 } from './lib/clearCardReveal';
+import { resolveClearCardRenderSize } from './lib/clearCardCanvas';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
@@ -2783,11 +2784,17 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
         syncRendererSize = () => {
           if (disposed || !renderer) return;
-          const width = Math.max(1, canvas.clientWidth);
-          const height = Math.max(1, canvas.clientHeight);
+          const canvasWidth = Math.max(1, canvas.clientWidth);
+          const canvasHeight = Math.max(1, canvas.clientHeight);
+          const renderSize = resolveClearCardRenderSize(
+            canvasWidth,
+            canvasHeight,
+            window.innerWidth,
+            window.innerHeight,
+          );
           renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
-          renderer.setSize(width, height, false);
-          cameraAspect = width / height;
+          renderer.setSize(renderSize.width, renderSize.height, false);
+          cameraAspect = canvasWidth / canvasHeight;
           fitCamera();
         };
         resize = () => {
