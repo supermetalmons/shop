@@ -47,7 +47,6 @@ import {
 } from './lib/clearCardReveal';
 import {
   resolveClearCardRenderSize,
-  shouldDeferClearCardRevealQualityRestore,
   type ClearCardRenderQualityByStage,
 } from './lib/clearCardCanvas';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
@@ -1164,7 +1163,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let handleContextRestored: (() => void) | null = null;
       let syncRendererSize: (() => void) | null = null;
       let resize: (() => void) | null = null;
-      let pendingRenderQualityStage: ClearCardDisplayStage | null = null;
       const rendererLogicalSize = new THREE.Vector2();
 
       const packMeshes: THREE.Mesh[] = [];
@@ -1406,14 +1404,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       applyRenderQualityForStageRef.current = applyRenderQualityForStage;
 
       const setStage = (nextStage: ClearCardDisplayStage) => {
-        const previousStage = stageRef.current;
         stageRef.current = nextStage;
-        if (shouldDeferClearCardRevealQualityRestore(previousStage, nextStage)) {
-          pendingRenderQualityStage = nextStage;
-        } else {
-          pendingRenderQualityStage = null;
-          applyRenderQualityForStage(nextStage);
-        }
+        applyRenderQualityForStage(nextStage);
         syncLightVisibility(nextStage, lightingConfigRef.current);
         syncTransmissionBackdrop(nextStage, lightingConfigRef.current);
         onStageChangeRef.current?.(nextStage);
@@ -2195,13 +2187,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return;
         }
         if (interactionThrottleActive) lastInteractionFrameTime = now;
-        if (pendingRenderQualityStage !== null) {
-          const nextQualityStage = pendingRenderQualityStage;
-          pendingRenderQualityStage = null;
-          if (stageRef.current === nextQualityStage) {
-            applyRenderQualityForStage(nextQualityStage);
-          }
-        }
         if (interactionProbeActive) {
           const decision = adaptiveFrameRateMonitor.addFrame(now);
           if (decision !== 'sampling') interactionProbeActive = false;
@@ -2385,7 +2370,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (
           tiltUnsettled ||
           effectsActive ||
-          pendingRenderQualityStage !== null ||
           snapBackRef.current.active ||
           interactionThrottleReleasePending ||
           interactionProbeActive
@@ -3037,7 +3021,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       return () => {
         cancelUnrestrictedDrag();
         disposed = true;
-        pendingRenderQualityStage = null;
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
         applyRenderQualityForStageRef.current = null;

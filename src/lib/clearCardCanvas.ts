@@ -27,17 +27,10 @@ export function resolveClearCardRevealRenderQuality(
       transmissionResolutionScale: 0.65,
     },
     revealed: {
-      maxPixelRatio: 2,
-      transmissionResolutionScale: 1,
+      maxPixelRatio: 1.5,
+      transmissionResolutionScale: 0.65,
     },
   };
-}
-
-export function shouldDeferClearCardRevealQualityRestore(
-  previousStage: 'pack' | 'breaking' | 'revealed',
-  nextStage: 'pack' | 'breaking' | 'revealed',
-): boolean {
-  return previousStage === 'breaking' && nextStage === 'revealed';
 }
 
 export function resolveClearCardRenderSize(
