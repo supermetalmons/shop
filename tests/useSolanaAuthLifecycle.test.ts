@@ -56,12 +56,17 @@ type Subscription<T> = {
 };
 
 class RuntimeHarness {
-  uid = 'firebase-a';
+  uid: string | null = 'firebase-a';
+  anonymousUidCounter = 0;
+  signOutCalls = 0;
   nowMs = 1_000;
   sessionSubscriptions = new Map<string, Subscription<SessionBinding | null>[]>();
   profileSubscriptions = new Map<string, Subscription<Profile>[]>();
   shipmentSubscriptions = new Map<string, Subscription<DeliveryOrderSummary[]>[]>();
   authListeners = new Set<(uid: string | null) => void>();
+  signOutImpl: () => Promise<void> = async () => {
+    this.emitAuthUid(null);
+  };
   reconcileImpl: () => Promise<ReconcileProfileStateResponse> = async () => ({
     mergedStripeDeliveryOrders: 0,
   });
@@ -76,8 +81,14 @@ class RuntimeHarness {
       this.authListeners.add(listener);
       return () => this.authListeners.delete(listener);
     },
-    ensureAuthenticated: async () => this.uid,
-    getIdToken: async () => `token:${this.uid}`,
+    ensureAuthenticated: async () => {
+      if (!this.uid) {
+        this.anonymousUidCounter += 1;
+        this.emitAuthUid(`firebase-anonymous-${this.anonymousUidCounter}`);
+      }
+      return this.uid!;
+    },
+    getIdToken: async () => (this.uid ? `token:${this.uid}` : null),
     listenToSessionBinding: (uid, handlers) => this.subscribe(this.sessionSubscriptions, uid, handlers, true),
     listenToProfile: (wallet, handlers) => this.subscribe(this.profileSubscriptions, wallet, handlers),
     listenToProfileShipments: (wallet, handlers) =>
@@ -87,7 +98,10 @@ class RuntimeHarness {
       return this.reconcileImpl();
     },
     authenticateWallet: async (wallet) => ({ wallet }),
-    signOut: async () => {},
+    signOut: async () => {
+      this.signOutCalls += 1;
+      await this.signOutImpl();
+    },
     now: () => this.nowMs,
     setTimer: (callback, delay) => {
       const id = this.nextTimerId++;
@@ -115,7 +129,7 @@ class RuntimeHarness {
     };
   }
 
-  latestSession(uid = this.uid) {
+  latestSession(uid = this.uid || '') {
     return this.latest(this.sessionSubscriptions, uid);
   }
 
@@ -132,7 +146,7 @@ class RuntimeHarness {
     return [...values].reverse().find((subscription) => subscription.active) || null;
   }
 
-  emitAuthUid(uid: string) {
+  emitAuthUid(uid: string | null) {
     this.uid = uid;
     this.authListeners.forEach((listener) => listener(uid));
   }
@@ -177,33 +191,20 @@ async function activateSession(
   harness: RuntimeHarness,
   result: { current: ReturnType<typeof useSolanaAuthWithRuntime> },
   wallet = WALLET_A,
-  expiresAt = harness.nowMs + 10_000,
 ) {
   await waitFor(() => assert.ok(harness.latestSession()));
   await act(async () => {
-    harness.latestSession()!.handlers.next(serverUpdate({ wallet, expiresAt }));
+    harness.latestSession()!.handlers.next(serverUpdate({ wallet }));
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, wallet));
 }
 
-test('disconnected session observation is opt-in and never grants signing authority', async () => {
-  const disabledHarness = new RuntimeHarness();
-  const disabled = renderHook(() =>
-    useSolanaAuthWithRuntime(walletState(null), disabledHarness.runtime),
-  );
-  assert.equal(disabled.result.current.sessionResolution, 'disabled');
-  assert.equal(disabledHarness.sessionSubscribeCount, 0);
-  disabled.unmount();
-
+test('disconnected sessions restore unconditionally without granting signing authority', async () => {
   const harness = new RuntimeHarness();
-  const { result } = renderHook(() =>
-    useSolanaAuthWithRuntime(walletState(null), harness.runtime, {
-      observeDisconnectedSession: true,
-    }),
-  );
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
   await waitFor(() => assert.ok(harness.latestSession()));
   assert.equal(result.current.sessionResolution, 'resolving');
-  const binding = { wallet: WALLET_A, expiresAt: harness.nowMs + 10_000 };
+  const binding = { wallet: WALLET_A };
   await act(async () => {
     harness.latestSession()!.handlers.next(cacheUpdate(binding));
     harness.latestSession()!.handlers.next(pendingUpdate(binding));
@@ -216,7 +217,7 @@ test('disconnected session observation is opt-in and never grants signing author
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
   assert.equal(result.current.sessionResolution, 'settled');
-  assert.equal(result.current.hasCurrentWalletSession(WALLET_A), false);
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
   await assert.rejects(result.current.signIn(), /Connect a wallet first/);
   await waitFor(() => assert.ok(harness.latestProfile(WALLET_A)));
   await act(async () => {
@@ -230,80 +231,142 @@ test('disconnected session observation is opt-in and never grants signing author
   assert.deepEqual(result.current.profile, { wallet: WALLET_A, email: 'owner@example.com' });
   assert.equal(Object.hasOwn(result.current.profile || {}, 'orders'), false);
   assert.equal(result.current.shipments.length, 1);
-  assert.equal(harness.reconcileCalls, 0);
+  assert.equal(harness.reconcileCalls, 1);
 });
 
-test('connecting another wallet immediately hides a disconnected restored owner', async () => {
+test('connecting another wallet ends Firebase once and rejects stale owner callbacks', async () => {
   const harness = new RuntimeHarness();
+  let signatureCount = 0;
   const { result, rerender } = renderHook(
-    ({ wallet }: { wallet: string | null }) =>
-      useSolanaAuthWithRuntime(walletState(wallet), harness.runtime, {
-        observeDisconnectedSession: wallet === null,
-      }),
+    ({ wallet }: { wallet: string | null }) => {
+      const state = walletState(wallet);
+      state.signMessage = async () => {
+        signatureCount += 1;
+        return new Uint8Array([1, 2, 3]);
+      };
+      return useSolanaAuthWithRuntime(state, harness.runtime);
+    },
     { initialProps: { wallet: null as string | null } },
   );
   await activateSession(harness, result, WALLET_A);
+  const staleProfile = harness.latestProfile(WALLET_A)!;
   rerender({ wallet: WALLET_B });
   assert.equal(result.current.sessionWallet, null);
   assert.equal(result.current.token, null);
-  await waitFor(() => assert.ok(harness.latestSession()));
+  await waitFor(() => assert.equal(harness.signOutCalls, 1));
+  await waitFor(() => assert.ok(harness.latestSession('firebase-anonymous-1')));
+  await act(async () => {
+    staleProfile.handlers.next(serverUpdate({ wallet: WALLET_A, email: 'stale@example.com' }));
+  });
+  assert.equal(result.current.profile, null);
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), false);
+  assert.equal(harness.signOutCalls, 1);
+
+  await act(async () => {
+    harness.latestSession('firebase-anonymous-1')!.handlers.next(serverUpdate(null));
+  });
+  assert.equal(result.current.sessionResolution, 'settled');
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(signatureCount, 0);
+
+  await act(async () => {
+    await result.current.signIn();
+  });
+  assert.equal(result.current.sessionWallet, WALLET_B);
+  assert.equal(signatureCount, 1);
+  assert.equal(harness.signOutCalls, 1);
 });
 
-test('disconnecting requires a fresh authoritative binding before restoring reads', async () => {
+test('a transient mismatch sign-out failure retries without restoring the old owner', async () => {
   const harness = new RuntimeHarness();
+  let signOutAttempts = 0;
+  harness.signOutImpl = async () => {
+    signOutAttempts += 1;
+    if (signOutAttempts === 1) throw new Error('temporary sign-out failure');
+    harness.emitAuthUid(null);
+  };
   const { result, rerender } = renderHook(
     ({ wallet }: { wallet: string | null }) =>
-      useSolanaAuthWithRuntime(walletState(wallet), harness.runtime, {
-        observeDisconnectedSession: wallet === null,
-      }),
+      useSolanaAuthWithRuntime(walletState(wallet), harness.runtime),
+    { initialProps: { wallet: null as string | null } },
+  );
+  await activateSession(harness, result, WALLET_A);
+  const staleSession = harness.latestSession()!;
+
+  rerender({ wallet: WALLET_B });
+  await waitFor(() => assert.equal(harness.signOutCalls, 1));
+  await waitFor(() => assert.equal(result.current.error, 'temporary sign-out failure'));
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.sessionResolution, 'resolving');
+  assert.equal(harness.timers.size, 1);
+
+  rerender({ wallet: null });
+  await act(async () => {
+    staleSession.handlers.next(serverUpdate({ wallet: WALLET_A }));
+  });
+  assert.equal(result.current.sessionWallet, null);
+
+  await act(async () => harness.advance(400));
+  await waitFor(() => assert.equal(harness.signOutCalls, 2));
+  await waitFor(() => assert.ok(harness.latestSession('firebase-anonymous-1')));
+  assert.equal(result.current.sessionWallet, null);
+});
+
+test('disconnecting and reconnecting the same wallet preserve the validated account', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result, rerender } = renderHook(
+    ({ wallet }: { wallet: string | null }) =>
+      useSolanaAuthWithRuntime(walletState(wallet), harness.runtime),
     { initialProps: { wallet: WALLET_A as string | null } },
   );
   await activateSession(harness, result, WALLET_A);
 
+  const commitAfterDisconnect = result.current.beginDeliveryRecoveryScheduleUpdate();
   rerender({ wallet: null });
-  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+  assert.equal(result.current.sessionResolution, 'settled');
+  await act(async () => {
+    assert.equal(commitAfterDisconnect(2_000), true);
+  });
+  assert.equal(result.current.deliveryRecoveryNextCheckAt, 2_000);
   await waitFor(() => assert.ok(harness.latestSession()));
   await act(async () => {
-    harness.latestSession()!.handlers.next(cacheUpdate({
-      wallet: WALLET_A,
-      expiresAt: harness.nowMs + 10_000,
-    }));
+    harness.latestSession()!.handlers.next(serverUpdate({ wallet: WALLET_A }));
   });
-  assert.equal(result.current.sessionWallet, null);
-
+  const commitAfterReconnect = result.current.beginDeliveryRecoveryScheduleUpdate();
+  rerender({ wallet: WALLET_A });
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.equal(result.current.sessionResolution, 'settled');
   await act(async () => {
-    harness.latestSession()!.handlers.next(serverUpdate({
-      wallet: WALLET_A,
-      expiresAt: harness.nowMs + 10_000,
-    }));
+    assert.equal(commitAfterReconnect(3_000), true);
   });
-  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  assert.equal(result.current.deliveryRecoveryNextCheckAt, 3_000);
+  await waitFor(() => assert.ok(harness.latestSession()));
+  await act(async () => {
+    harness.latestSession()!.handlers.next(serverUpdate({ wallet: WALLET_A }));
+  });
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  assert.equal(harness.signOutCalls, 0);
 });
 
-test('disconnected session listener retries three transient failures before settling absent', async () => {
+test('session listener retries transient failures indefinitely without clearing a validated account', async () => {
   const harness = new RuntimeHarness();
-  const { result } = renderHook(() =>
-    useSolanaAuthWithRuntime(walletState(null), harness.runtime, {
-      observeDisconnectedSession: true,
-    }),
-  );
-  await waitFor(() => assert.ok(harness.latestSession()));
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
+  await activateSession(harness, result, WALLET_A);
 
-  for (const delay of [400, 800, 1_600]) {
+  for (const delay of [400, 800, 1_600, 5_000, 5_000]) {
     await act(async () => {
       harness.latestSession()!.handlers.error({ code: 'unavailable', message: 'offline' });
     });
-    assert.equal(result.current.sessionResolution, 'resolving');
+    assert.equal(result.current.sessionResolution, 'settled');
+    assert.equal(result.current.sessionWallet, WALLET_A);
     await act(async () => harness.advance(delay));
     await waitFor(() => assert.ok(harness.latestSession()));
   }
-  await act(async () => {
-    harness.latestSession()!.handlers.error({ code: 'unavailable', message: 'offline' });
-  });
-  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
-  assert.equal(result.current.sessionWallet, null);
-  assert.equal(harness.sessionSubscribeCount, 4);
-  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.sessionSubscribeCount, 6);
+  assert.equal(result.current.sessionWallet, WALLET_A);
 });
 
 test('disconnected session setup retries a transient token failure', async () => {
@@ -314,13 +377,9 @@ test('disconnected session setup retries a transient token failure', async () =>
     if (tokenAttempts === 1) {
       throw Object.assign(new Error('network unavailable'), { code: 'auth/network-request-failed' });
     }
-    return `token:${harness.uid}`;
+    return harness.uid ? `token:${harness.uid}` : null;
   };
-  const { result } = renderHook(() =>
-    useSolanaAuthWithRuntime(walletState(null), harness.runtime, {
-      observeDisconnectedSession: true,
-    }),
-  );
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
 
   await waitFor(() => assert.equal(harness.timers.size, 1));
   assert.equal(result.current.sessionResolution, 'resolving');
@@ -328,10 +387,7 @@ test('disconnected session setup retries a transient token failure', async () =>
   await waitFor(() => assert.ok(harness.latestSession()));
   assert.equal(tokenAttempts, 2);
   await act(async () => {
-    harness.latestSession()!.handlers.next(serverUpdate({
-      wallet: WALLET_A,
-      expiresAt: harness.nowMs + 10_000,
-    }));
+    harness.latestSession()!.handlers.next(serverUpdate({ wallet: WALLET_A }));
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
 });
@@ -341,10 +397,8 @@ test('session snapshots own identity, shipments settle independently, and stale 
   harness.reconcileImpl = () => new Promise(() => {});
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
 
-  await activateSession(harness, result, WALLET_A, harness.nowMs + 30 * 24 * 60 * 60 * 1_000);
+  await activateSession(harness, result, WALLET_A);
   await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
-  const firstTimer = [...harness.timers.values()][0];
-  assert.equal(firstTimer.delay, 0x7fffffff);
   assert.equal(result.current.profileReady, false);
 
   const staleProfile = harness.latestProfile(WALLET_A)!;
@@ -360,7 +414,7 @@ test('session snapshots own identity, shipments settle independently, and stale 
 
   await act(async () => {
     harness.latestSession()!.handlers.next(
-      serverUpdate({ wallet: WALLET_B, expiresAt: harness.nowMs + 10_000 }),
+      serverUpdate({ wallet: WALLET_B }),
     );
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, null));
@@ -374,30 +428,14 @@ test('session snapshots own identity, shipments settle independently, and stale 
   });
   assert.equal(result.current.profile, null);
   assert.deepEqual(result.current.shipments, []);
-
-  await act(async () => {
-    harness.latestSession()!.handlers.next(
-      serverUpdate({ wallet: WALLET_A, expiresAt: harness.nowMs + 100 }),
-    );
-  });
-  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
-  await act(async () => harness.advance(50));
-  await act(async () => {
-    harness.latestSession()!.handlers.next(
-      serverUpdate({ wallet: WALLET_A, expiresAt: harness.nowMs + 200 }),
-    );
-  });
-  await act(async () => harness.advance(50));
-  assert.equal(result.current.sessionWallet, WALLET_A);
-  await act(async () => harness.advance(150));
-  assert.equal(result.current.sessionWallet, null);
+  assert.equal(harness.signOutCalls, 1);
 });
 
 test('cached and pending session snapshots wait for identical authoritative metadata', async () => {
   const harness = new RuntimeHarness();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
   await waitFor(() => assert.ok(harness.latestSession()));
-  const binding = { wallet: WALLET_A, expiresAt: harness.nowMs + 5_000 };
+  const binding = { wallet: WALLET_A };
 
   await act(async () => {
     harness.latestSession()!.handlers.next(cacheUpdate(binding));
@@ -411,7 +449,7 @@ test('cached and pending session snapshots wait for identical authoritative meta
     harness.latestSession()!.handlers.next(serverUpdate(binding));
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
-  assert.equal(harness.timers.size, 1);
+  assert.equal(harness.timers.size, 0);
 });
 
 test('fast authentication survives cached bindings until the server observer confirms or rejects them', async () => {
@@ -425,11 +463,11 @@ test('fast authentication survives cached bindings until the server observer con
   assert.equal(result.current.sessionWallet, WALLET_A);
   await waitFor(() => assert.ok(harness.sessionSubscribeCount >= 2));
   const observer = harness.latestSession()!;
-  const binding = { wallet: WALLET_A, expiresAt: harness.nowMs + 5_000 };
+  const binding = { wallet: WALLET_A };
 
   await act(async () => {
     observer.handlers.next(cacheUpdate(null));
-    observer.handlers.next(cacheUpdate({ wallet: WALLET_B, expiresAt: binding.expiresAt }));
+    observer.handlers.next(cacheUpdate({ wallet: WALLET_B }));
     observer.handlers.next(pendingUpdate(binding));
   });
   assert.equal(result.current.sessionWallet, WALLET_A);
@@ -439,7 +477,7 @@ test('fast authentication survives cached bindings until the server observer con
     observer.handlers.next(serverUpdate(binding));
   });
   assert.equal(result.current.sessionWallet, WALLET_A);
-  assert.equal(harness.timers.size, 1);
+  assert.equal(harness.timers.size, 0);
 
   await act(async () => {
     observer.handlers.next(serverUpdate(null));

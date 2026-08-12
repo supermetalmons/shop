@@ -16,6 +16,7 @@ import {
   runVerifiedSolanaAuthProfileFlow,
 } from '../functions/src/profileLifecycle.ts';
 import {
+  WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
   WalletSessionWriteSupersededError,
   establishVerifiedWalletSession,
   readWalletSessionBaseline,
@@ -752,14 +753,12 @@ test('wallet recovery scheduling selects the earliest deadline across drops and 
   );
 });
 
-test('wallet session resolution accepts only absent-document legacy fallback or active bound sessions', () => {
-  const nowMs = 10_000;
+test('wallet session resolution accepts absent-document legacy fallback or canonical bound sessions', () => {
   assert.deepEqual(
     resolveWalletSessionBinding({
       uid: OWNER_ONE,
       sessionExists: false,
       sessionData: null,
-      nowMs,
     }),
     { wallet: OWNER_ONE, source: 'legacy_uid' },
   );
@@ -768,7 +767,6 @@ test('wallet session resolution accepts only absent-document legacy fallback or 
       uid: 'firebase-uid',
       sessionExists: false,
       sessionData: null,
-      nowMs,
     }),
     { wallet: null, reason: 'legacy_uid_invalid' },
   );
@@ -776,21 +774,19 @@ test('wallet session resolution accepts only absent-document legacy fallback or 
     resolveWalletSessionBinding({
       uid: 'firebase-uid',
       sessionExists: true,
-      sessionData: { wallet: OWNER_TWO, expiresAt: timestamp(nowMs + 1) },
-      nowMs,
+      sessionData: { wallet: OWNER_TWO },
     }),
     { wallet: OWNER_TWO, source: 'session' },
   );
 });
 
 test('wallet session resolution rejects existing unbound or invalid wallet documents without UID fallback', () => {
-  const nowMs = 10_000;
   for (const sessionData of [
     {},
     { wallet: '' },
   ]) {
     assert.deepEqual(
-      resolveWalletSessionBinding({ uid: OWNER_ONE, sessionExists: true, sessionData, nowMs }),
+      resolveWalletSessionBinding({ uid: OWNER_ONE, sessionExists: true, sessionData }),
       { wallet: null, reason: 'missing_wallet' },
     );
   }
@@ -798,8 +794,7 @@ test('wallet session resolution rejects existing unbound or invalid wallet docum
     resolveWalletSessionBinding({
       uid: OWNER_ONE,
       sessionExists: true,
-      sessionData: { wallet: 'not-a-wallet', expiresAt: timestamp(nowMs + 1) },
-      nowMs,
+      sessionData: { wallet: 'not-a-wallet' },
     }),
     { wallet: null, reason: 'invalid_wallet' },
   );
@@ -807,37 +802,30 @@ test('wallet session resolution rejects existing unbound or invalid wallet docum
     resolveWalletSessionBinding({
       uid: OWNER_ONE,
       sessionExists: true,
-      sessionData: { wallet: ` ${OWNER_ONE}`, expiresAt: timestamp(nowMs + 1) },
-      nowMs,
+      sessionData: { wallet: ` ${OWNER_ONE}` },
     }),
     { wallet: null, reason: 'invalid_wallet' },
   );
 });
 
-test('wallet session resolution requires finite Timestamp-like expiry strictly after now', () => {
-  const nowMs = 10_000;
-  const resolveExpiry = (expiresAt: unknown) =>
-    resolveWalletSessionBinding({
-      uid: 'firebase-uid',
-      sessionExists: true,
-      sessionData: { wallet: OWNER_ONE, ...(expiresAt === undefined ? {} : { expiresAt }) },
-      nowMs,
-    });
-
-  assert.deepEqual(resolveExpiry(undefined), { wallet: null, reason: 'missing_expiry' });
-  assert.deepEqual(resolveExpiry(new Date(nowMs + 1)), { wallet: null, reason: 'invalid_expiry' });
-  assert.deepEqual(resolveExpiry(timestamp(Number.NaN)), { wallet: null, reason: 'invalid_expiry' });
-  assert.deepEqual(resolveExpiry(timestamp(Number.POSITIVE_INFINITY)), {
-    wallet: null,
-    reason: 'invalid_expiry',
-  });
-  assert.deepEqual(resolveExpiry({ toMillis: () => { throw new Error('malformed'); } }), {
-    wallet: null,
-    reason: 'invalid_expiry',
-  });
-  assert.deepEqual(resolveExpiry(timestamp(nowMs)), { wallet: null, reason: 'expired' });
-  assert.deepEqual(resolveExpiry(timestamp(nowMs - 1)), { wallet: null, reason: 'expired' });
-  assert.deepEqual(resolveExpiry(timestamp(nowMs + 1)), { wallet: OWNER_ONE, source: 'session' });
+test('wallet session resolution ignores missing, malformed, and past legacy expiry metadata', () => {
+  for (const expiresAt of [
+    undefined,
+    new Date(10_001),
+    timestamp(Number.NaN),
+    timestamp(Number.POSITIVE_INFINITY),
+    { toMillis: () => { throw new Error('malformed'); } },
+    timestamp(0),
+  ]) {
+    assert.deepEqual(
+      resolveWalletSessionBinding({
+        uid: 'firebase-uid',
+        sessionExists: true,
+        sessionData: { wallet: OWNER_ONE, ...(expiresAt === undefined ? {} : { expiresAt }) },
+      }),
+      { wallet: OWNER_ONE, source: 'session' },
+    );
+  }
 });
 
 test('wallet session baselines make overlapping different-wallet writes first-committer safe', async () => {
@@ -858,7 +846,6 @@ test('wallet session baselines make overlapping different-wallet writes first-co
     uid,
     wallet: OWNER_TWO,
     baseline: firstBaseline,
-    expiresAtMs: 60_000,
   });
   await assert.rejects(
     writeWalletSessionAndProfileIfCurrent({
@@ -866,7 +853,6 @@ test('wallet session baselines make overlapping different-wallet writes first-co
       uid,
       wallet: OWNER_THREE,
       baseline: secondBaseline,
-      expiresAtMs: 70_000,
     }),
     WalletSessionWriteSupersededError,
   );
@@ -891,11 +877,13 @@ test('wallet session baseline changes do not block same-wallet renewal', async (
     uid,
     wallet: OWNER_TWO,
     baseline,
-    expiresAtMs: 70_000,
   });
 
   assert.equal(state.data(sessionPath)?.wallet, OWNER_TWO);
-  assert.equal((state.data(sessionPath)?.expiresAt as any).toMillis(), 70_000);
+  assert.equal(
+    (state.data(sessionPath)?.expiresAt as any).toMillis(),
+    WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
+  );
   assert.ok(state.data(sessionPath)?.updatedAt);
   assert.equal(state.data(`profiles/${OWNER_TWO}`)?.wallet, OWNER_TWO);
 });
@@ -915,7 +903,6 @@ test('wallet session and profile writes fail atomically', async () => {
       uid,
       wallet: OWNER_TWO,
       baseline,
-      expiresAtMs: 70_000,
     }),
     /transaction commit failed/,
   );
@@ -935,7 +922,6 @@ test('wallet session writers reject noncanonical wallet text before opening a tr
       uid,
       wallet: ` ${OWNER_ONE}`,
       baseline,
-      expiresAtMs: 70_000,
     }),
     /must be canonical/,
   );
@@ -955,7 +941,6 @@ test('wallet session baseline rejects a competing creation after an absent read'
       uid,
       wallet: OWNER_ONE,
       baseline,
-      expiresAtMs: 70_000,
     }),
     WalletSessionWriteSupersededError,
   );

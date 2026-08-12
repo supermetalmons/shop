@@ -102,6 +102,7 @@ import {
   type FrontendDeploymentConfig,
 } from './config/deployment';
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
+import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
 import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
@@ -1085,8 +1086,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
-  const { sessionWallet, token, signIn, loading: authLoading, error: authError } = useSolanaAuth();
-  const walletAddress = publicKey?.toBase58() || '';
+  const {
+    sessionWallet,
+    token,
+    signIn,
+    loading: authLoading,
+    error: authError,
+    sessionResolution,
+  } = useSolanaAuth();
+  const connectedWallet = walletAdapter.connected ? publicKey?.toBase58() || '' : '';
+  const authenticatedWallet = token && sessionWallet ? sessionWallet : '';
+  const walletAddress = connectedWallet || authenticatedWallet;
   const allowedDropIds = useMemo(
     () => listAllowedFulfillmentDropIds(walletAddress, allDrops.map((drop) => drop.dropId)),
     [allDrops, walletAddress],
@@ -1112,7 +1122,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   );
   const duplicateDropContent = useMemo(() => (duplicateDrop ? resolveDropContent(duplicateDrop) : null), [duplicateDrop]);
   const duplicateFigureMediaBase = duplicateDropContent?.figures.fulfillmentMediaBaseUrl;
-  const signedIn = Boolean(token && sessionWallet && sessionWallet === walletAddress);
+  const signedIn = Boolean(authenticatedWallet && authenticatedWallet === walletAddress);
+  const signInReadiness = walletSessionSignInReadiness({
+    hasAuthenticatedSession: signedIn,
+    sessionResolution,
+    authLoading,
+  });
   const walletHasFulfillmentAccess = visibleDrops.length > 0;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
   const canAdminEditFulfillmentAddress = signedIn && hasFulfillmentAddressAdminAccess(walletAddress);
@@ -1167,8 +1182,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationPurchaseUnknown, setShipstationPurchaseUnknown] = useState(false);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
-  const authLoadingSeenRef = useRef(false);
-  const [authReady, setAuthReady] = useState(() => !walletAddress);
+  const authReady = sessionResolution === 'settled';
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const manualReviewMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1209,22 +1223,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       setWalletReady(true);
     }
   }, [autoConnectPossible, publicKey, walletAdapter.connecting, walletAdapter.wallet]);
-
-  useEffect(() => {
-    authLoadingSeenRef.current = false;
-    setAuthReady(!walletAddress);
-  }, [walletAddress]);
-
-  useEffect(() => {
-    if (!walletAddress) return;
-    if (authLoading) {
-      authLoadingSeenRef.current = true;
-      return;
-    }
-    if (sessionWallet === walletAddress || authLoadingSeenRef.current) {
-      setAuthReady(true);
-    }
-  }, [authLoading, sessionWallet, walletAddress]);
 
   useEffect(() => {
     if (!walletAddress) {
@@ -2184,31 +2182,30 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   ]);
 
   const handleSolanaSignIn = useCallback(() => {
-    if (authLoading) return;
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setPendingSignIn(true);
       setWalletModalVisible(true);
       return;
     }
-    if (!walletHasFulfillmentAccess || signedIn) return;
+    if (!walletHasFulfillmentAccess || signInReadiness !== 'sign') return;
     void signIn();
-  }, [authLoading, publicKey, setWalletModalVisible, signIn, signedIn, walletHasFulfillmentAccess]);
+  }, [connectedWallet, publicKey, setWalletModalVisible, signIn, signInReadiness, walletHasFulfillmentAccess]);
 
   useEffect(() => {
-    if (!pendingSignIn || !publicKey) return;
+    if (!pendingSignIn || !connectedWallet || !publicKey) return;
     if (!walletHasFulfillmentAccess || signedIn) {
       setPendingSignIn(false);
       return;
     }
-    if (authLoading) return;
+    if (signInReadiness !== 'sign') return;
     setPendingSignIn(false);
     void signIn();
-  }, [authLoading, pendingSignIn, publicKey, signIn, signedIn, walletHasFulfillmentAccess]);
+  }, [connectedWallet, pendingSignIn, publicKey, signIn, signedIn, signInReadiness, walletHasFulfillmentAccess]);
 
   useEffect(() => {
-    if (!pendingSignIn || walletModalVisible || publicKey) return;
+    if (!pendingSignIn || walletModalVisible || connectedWallet) return;
     setPendingSignIn(false);
-  }, [pendingSignIn, publicKey, walletModalVisible]);
+  }, [connectedWallet, pendingSignIn, walletModalVisible]);
 
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
   const showManualReviewDropId = selectedDropIds.length > 1;
@@ -2674,7 +2671,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     <div className="page fulfillment-page">
       <ShopHeader scrollHomeToTop />
 
-      {!walletBusy && walletReady && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : true) ? (
+      {!walletBusy && (walletReady || signedIn) && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : authReady) ? (
         !walletAddress ? (
           <section className="card">
             <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>

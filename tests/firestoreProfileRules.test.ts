@@ -26,6 +26,7 @@ function compact(source: string): string {
 
 test('Firestore profile rules encode owner-only session, profile, and shipment access', () => {
   const hasSession = compact(extractBlock(rules, 'function hasSession(uid)'));
+  const walletAddressShape = compact(extractBlock(rules, 'function hasWalletAddressShape(wallet)'));
   const ownerCheck = compact(extractBlock(rules, 'function canReadOwnProfile(wallet)'));
   const profile = compact(extractBlock(rules, 'match /profiles/{wallet}'));
   const profileDirect = profile.slice(0, profile.indexOf('match /addresses/{addressId}'));
@@ -34,11 +35,15 @@ test('Firestore profile rules encode owner-only session, profile, and shipment a
   const sessions = compact(extractBlock(rules, 'match /authSessions/{uid}'));
 
   assert.match(hasSession, /exists\(\/databases\/\$\(database\)\/documents\/authSessions\/\$\(uid\)\)/);
+  assert.match(walletAddressShape, /wallet is string/);
+  assert.match(walletAddressShape, /wallet\.size\(\) >= 32/);
+  assert.match(walletAddressShape, /wallet\.size\(\) <= 44/);
+  assert.match(walletAddressShape, /wallet\.matches/);
   assert.match(ownerCheck, /request\.auth != null/);
+  assert.match(ownerCheck, /hasWalletAddressShape\(wallet\)/);
   assert.match(ownerCheck, /hasSession\(request\.auth\.uid\)/);
   assert.match(ownerCheck, /\.data\.wallet == wallet/);
-  assert.match(ownerCheck, /\.data\.expiresAt is timestamp/);
-  assert.match(ownerCheck, /\.data\.expiresAt > request\.time/);
+  assert.doesNotMatch(ownerCheck, /expiresAt/);
   assert.match(ownerCheck, /request\.auth\.uid == wallet && !hasSession\(request\.auth\.uid\)/);
 
   assert.match(profileDirect, /allow get: if canReadOwnProfile\(wallet\)/);
@@ -89,14 +94,17 @@ test(
     } = await import('firebase/firestore');
     const projectId = 'demo-mons-profile-rules';
     const environment = await initializeTestEnvironment({ projectId, firestore: { rules } });
-    const activeWallet = 'active-wallet';
-    const otherWallet = 'other-wallet';
-    const legacyWallet = 'legacy-wallet';
-    const absentLegacyWallet = 'absent-legacy-wallet';
-    const expiredWallet = 'expired-wallet';
-    const blockedLegacyWallet = 'blocked-legacy-wallet';
-    const expiredLegacyWallet = 'expired-legacy-wallet';
-    const malformedLegacyWallet = 'malformed-legacy-wallet';
+    const activeWallet = '11111111111111111111111111111111';
+    const otherWallet = 'So11111111111111111111111111111111111111112';
+    const legacyWallet = 'Stake11111111111111111111111111111111111111';
+    const absentLegacyWallet = 'Vote111111111111111111111111111111111111111';
+    const expiredWallet = 'ComputeBudget111111111111111111111111111111';
+    const blockedLegacyWallet = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const expiredLegacyWallet = 'AddressLookupTab1e1111111111111111111111111';
+    const malformedLegacyWallet = 'BPFLoaderUpgradeab1e11111111111111111111111';
+    const malformedWallet = 'not-a-solana-wallet';
+    const oversizedBase58Wallet = 'z'.repeat(44);
+    const maximumWallet = 'JEKNVnkbo3jma5nREBBJCDoXFVeKkD56V3xKrvRmWxFG';
 
     try {
       await environment.withSecurityRulesDisabled(async (context) => {
@@ -107,6 +115,9 @@ test(
           setDoc(doc(firestore, 'authSessions', 'active-user'), { wallet: activeWallet, expiresAt: future }),
           setDoc(doc(firestore, 'authSessions', 'expired-user'), { wallet: expiredWallet, expiresAt: past }),
           setDoc(doc(firestore, 'authSessions', 'missing-wallet-user'), { expiresAt: future }),
+          setDoc(doc(firestore, 'authSessions', 'malformed-wallet-user'), { wallet: malformedWallet }),
+          setDoc(doc(firestore, 'authSessions', 'oversized-wallet-user'), { wallet: oversizedBase58Wallet }),
+          setDoc(doc(firestore, 'authSessions', 'maximum-wallet-user'), { wallet: maximumWallet }),
           setDoc(doc(firestore, 'authSessions', 'missing-expiry-user'), { wallet: activeWallet }),
           setDoc(doc(firestore, 'authSessions', 'malformed-expiry-user'), { wallet: activeWallet, expiresAt: 'later' }),
           setDoc(doc(firestore, 'authSessions', 'mismatched-user'), { wallet: otherWallet, expiresAt: future }),
@@ -120,6 +131,9 @@ test(
           setDoc(doc(firestore, 'profiles', blockedLegacyWallet), { wallet: blockedLegacyWallet }),
           setDoc(doc(firestore, 'profiles', expiredLegacyWallet), { wallet: expiredLegacyWallet }),
           setDoc(doc(firestore, 'profiles', malformedLegacyWallet), { wallet: malformedLegacyWallet }),
+          setDoc(doc(firestore, 'profiles', malformedWallet), { wallet: malformedWallet }),
+          setDoc(doc(firestore, 'profiles', oversizedBase58Wallet), { wallet: oversizedBase58Wallet }),
+          setDoc(doc(firestore, 'profiles', maximumWallet), { wallet: maximumWallet }),
           setDoc(doc(firestore, 'profiles', activeWallet, 'shipments', 'shipment-1'), { deliveryId: 1, sortAt: 1 }),
           setDoc(doc(firestore, 'profiles', otherWallet, 'shipments', 'shipment-2'), { deliveryId: 2, sortAt: 2 }),
           setDoc(doc(firestore, 'profiles', legacyWallet, 'shipments', 'shipment-3'), { deliveryId: 3, sortAt: 3 }),
@@ -226,25 +240,31 @@ test(
 
       const expired = environment.authenticatedContext('expired-user').firestore();
       await assertSucceeds(getDoc(doc(expired, 'authSessions', 'expired-user')));
-      await assertFails(getDoc(doc(expired, 'profiles', expiredWallet)));
+      await assertSucceeds(getDoc(doc(expired, 'profiles', expiredWallet)));
 
       const missingWallet = environment.authenticatedContext('missing-wallet-user').firestore();
       await assertFails(getDoc(doc(missingWallet, 'profiles', activeWallet)));
 
+      const malformedWalletUser = environment.authenticatedContext('malformed-wallet-user').firestore();
+      await assertFails(getDoc(doc(malformedWalletUser, 'profiles', malformedWallet)));
+
+      const oversizedWalletUser = environment.authenticatedContext('oversized-wallet-user').firestore();
+      await assertFails(getDoc(doc(oversizedWalletUser, 'profiles', oversizedBase58Wallet)));
+
+      const maximumWalletUser = environment.authenticatedContext('maximum-wallet-user').firestore();
+      await assertSucceeds(getDoc(doc(maximumWalletUser, 'profiles', maximumWallet)));
+
       const missingExpiry = environment.authenticatedContext('missing-expiry-user').firestore();
-      await assertFails(getDoc(doc(missingExpiry, 'profiles', activeWallet)));
+      await assertSucceeds(getDoc(doc(missingExpiry, 'profiles', activeWallet)));
 
       const malformedExpiry = environment.authenticatedContext('malformed-expiry-user').firestore();
-      await assertFails(getDoc(doc(malformedExpiry, 'profiles', activeWallet)));
+      await assertSucceeds(getDoc(doc(malformedExpiry, 'profiles', activeWallet)));
 
       const mismatched = environment.authenticatedContext('mismatched-user').firestore();
       await assertFails(getDoc(doc(mismatched, 'profiles', activeWallet)));
 
       const invalidShipmentReaders = [
-        { firestore: expired, wallet: expiredWallet },
         { firestore: missingWallet, wallet: activeWallet },
-        { firestore: missingExpiry, wallet: activeWallet },
-        { firestore: malformedExpiry, wallet: activeWallet },
         { firestore: mismatched, wallet: activeWallet },
       ];
       for (const reader of invalidShipmentReaders) {
@@ -264,15 +284,14 @@ test(
       await assertSucceeds(getDoc(doc(absentLegacy, 'authSessions', absentLegacyWallet)));
       await assertSucceeds(getDoc(doc(absentLegacy, 'profiles', absentLegacyWallet)));
 
-      const blockedLegacyReaders = [
-        { uid: blockedLegacyWallet, wallet: blockedLegacyWallet },
-        { uid: expiredLegacyWallet, wallet: expiredLegacyWallet },
-        { uid: malformedLegacyWallet, wallet: malformedLegacyWallet },
-      ];
-      for (const reader of blockedLegacyReaders) {
-        const firestore = environment.authenticatedContext(reader.uid).firestore();
-        await assertFails(getDoc(doc(firestore, 'profiles', reader.wallet)));
-        await assertFails(getDocs(collection(firestore, 'profiles', reader.wallet, 'shipments')));
+      const blockedLegacy = environment.authenticatedContext(blockedLegacyWallet).firestore();
+      await assertFails(getDoc(doc(blockedLegacy, 'profiles', blockedLegacyWallet)));
+      await assertFails(getDocs(collection(blockedLegacy, 'profiles', blockedLegacyWallet, 'shipments')));
+
+      for (const wallet of [expiredLegacyWallet, malformedLegacyWallet]) {
+        const firestore = environment.authenticatedContext(wallet).firestore();
+        await assertSucceeds(getDoc(doc(firestore, 'profiles', wallet)));
+        await assertSucceeds(getDocs(collection(firestore, 'profiles', wallet, 'shipments')));
       }
 
       const admin = environment.authenticatedContext('admin-user', { admin: true }).firestore();

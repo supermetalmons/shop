@@ -16,13 +16,8 @@ import type { DeliveryOrderSummary, Profile, ProfileShipment } from '../types';
 import { isPositiveSafeInteger } from '../../functions/src/shared/positiveInteger';
 import type { StripeCheckoutProfileRecoveryStatus } from './stripeCheckoutRecovery';
 
-type TimestampValue = {
-  toMillis?: () => number;
-};
-
 export type SessionBinding = {
   wallet: string;
-  expiresAt: number | null;
 };
 
 export type SnapshotUpdate<T> = {
@@ -123,30 +118,13 @@ function normalizeWallet(value: unknown): string | null {
   }
 }
 
-function timestampMillis(value: unknown): number | null {
-  if (!value || typeof value !== 'object') return null;
-  const toMillis = (value as TimestampValue).toMillis;
-  if (typeof toMillis !== 'function') return null;
-  const millis = toMillis.call(value);
-  return Number.isFinite(millis) ? millis : null;
-}
-
 export function sessionBindingFromDocument(args: {
   uid?: string;
   exists: boolean;
   data?: DocumentData;
-  now?: number;
 }): SessionBinding | null {
-  if (!args.exists) return null;
-  const wallet = normalizeWallet(args.data?.wallet);
-  const expiresAt = timestampMillis(args.data?.expiresAt);
-  if (!wallet || expiresAt === null || expiresAt <= (args.now ?? Date.now())) return null;
-  return { wallet, expiresAt };
-}
-
-export function sessionExpiryDelay(expiresAt: number, now: number, maximumDelay = 0x7fffffff): number {
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) return 0;
-  return Math.min(expiresAt - now, maximumDelay);
+  const wallet = normalizeWallet(args.exists ? args.data?.wallet : args.uid);
+  return wallet ? { wallet } : null;
 }
 
 export function firestoreErrorInvalidatesSession(error: unknown): boolean {
@@ -296,6 +274,7 @@ export function listenToSessionBinding(
     (snapshot) => {
       handlers.next({
         value: sessionBindingFromDocument({
+          uid,
           exists: snapshot.exists(),
           data: snapshot.exists() ? snapshot.data() : undefined,
         }),

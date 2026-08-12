@@ -11,71 +11,33 @@ import {
   profileShipmentFromDocument,
   profileShipmentsFromDocuments,
   sessionBindingFromDocument,
-  sessionExpiryDelay,
   stripeProfileRecoveryAfterSnapshot,
   stripeMergeReconciliationOptions,
 } from '../src/lib/profileFirestore.ts';
 
 const WALLET = '11111111111111111111111111111111';
 
-test('session wallet restoration requires a live server session', () => {
-  const now = 10_000;
+test('session wallet restoration ignores legacy expiry metadata', () => {
+  for (const expiresAt of [undefined, { toMillis: () => 0 }, 'later']) {
+    assert.deepEqual(
+      sessionBindingFromDocument({
+        exists: true,
+        data: { wallet: WALLET, ...(expiresAt === undefined ? {} : { expiresAt }) },
+      }),
+      { wallet: WALLET },
+    );
+  }
+  assert.equal(sessionBindingFromDocument({ exists: false }), null);
+  assert.deepEqual(sessionBindingFromDocument({ uid: WALLET, exists: false }), { wallet: WALLET });
+  assert.equal(sessionBindingFromDocument({ uid: 'firebase-uid', exists: false }), null);
   assert.equal(
     sessionBindingFromDocument({
+      uid: WALLET,
       exists: true,
-      data: { wallet: WALLET, expiresAt: { toMillis: () => now + 1 } },
-      now,
-    })?.wallet,
-    WALLET,
-  );
-  assert.equal(
-    sessionBindingFromDocument({
-      exists: true,
-      data: { wallet: WALLET, expiresAt: { toMillis: () => now } },
-      now,
+      data: { wallet: ` ${WALLET}` },
     }),
     null,
   );
-  assert.equal(
-    sessionBindingFromDocument({ exists: true, data: { wallet: WALLET }, now }),
-    null,
-  );
-});
-
-test('session bindings preserve expiry and reject malformed documents', () => {
-  const now = 10_000;
-  assert.deepEqual(
-    sessionBindingFromDocument({
-      exists: true,
-      data: { wallet: WALLET, expiresAt: { toMillis: () => now + 5_000 } },
-      now,
-    }),
-    { wallet: WALLET, expiresAt: now + 5_000 },
-  );
-  assert.equal(
-    sessionBindingFromDocument({
-      exists: true,
-      data: { wallet: WALLET, expiresAt: { toMillis: () => Number.NaN } },
-      now,
-    }),
-    null,
-  );
-  assert.equal(sessionBindingFromDocument({ exists: false, now }), null);
-  assert.equal(
-    sessionBindingFromDocument({
-      exists: true,
-      data: { wallet: ` ${WALLET}`, expiresAt: { toMillis: () => now + 5_000 } },
-      now,
-    }),
-    null,
-  );
-});
-
-test('session expiry delays are safe for browser timers', () => {
-  const now = 1_000;
-  assert.equal(sessionExpiryDelay(now, now), 0);
-  assert.equal(sessionExpiryDelay(now + 10_000, now), 10_000);
-  assert.equal(sessionExpiryDelay(now + 30 * 24 * 60 * 60 * 1_000, now), 0x7fffffff);
 });
 
 test('only authorization listener failures invalidate a wallet session', () => {

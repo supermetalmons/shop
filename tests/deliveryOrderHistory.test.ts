@@ -262,7 +262,7 @@ test('Stripe owner merge stops before a later batch after a session rebind', asy
   assert.equal(docs.at(-1)?.data.owner, firebaseOwner);
 });
 
-test('Stripe owner merge rejects inactive and mismatched sessions before writes', async () => {
+test('Stripe owner merge rejects mismatched sessions and ignores legacy expiry', async () => {
   const uid = 'anon_uid_session';
   const docs = firebaseOwnedDocs(uid, 1);
   const mismatchedDb = fakeDb(docs, { sessionWallet: OWNER_TWO });
@@ -273,11 +273,8 @@ test('Stripe owner merge rejects inactive and mismatched sessions before writes'
   assert.equal(mismatchedDb.writeCommits, 0);
 
   const expiredDb = fakeDb(docs, { sessionExpiresAt: Date.now() - 1 });
-  await assert.rejects(
-    mergeFirebaseStripeDeliveryOrdersToWalletInDb(expiredDb as any, uid, OWNER_ONE),
-    (err: unknown) => err instanceof StripeOwnerMergeSessionChangedError && err.reason === 'expired',
-  );
-  assert.equal(expiredDb.writeCommits, 0);
+  assert.equal(await mergeFirebaseStripeDeliveryOrdersToWalletInDb(expiredDb as any, uid, OWNER_ONE), 1);
+  assert.equal(expiredDb.writeCommits, 1);
 });
 
 test('Stripe owner merge preserves the absent-session legacy wallet UID fallback', async () => {

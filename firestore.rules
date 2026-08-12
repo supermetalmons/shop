@@ -5,13 +5,19 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/authSessions/$(uid));
     }
 
+    function hasWalletAddressShape(wallet) {
+      return wallet is string &&
+        wallet.size() >= 32 &&
+        wallet.size() <= 44 &&
+        wallet.matches('^[1-9A-HJ-NP-Za-km-z]+$') &&
+        (wallet.size() < 44 || wallet.matches('^[1-9A-HJ][1-9A-HJ-NP-Za-km-z]{43}$'));
+    }
+
     function canReadOwnProfile(wallet) {
-      return request.auth != null && (
+      return request.auth != null && hasWalletAddressShape(wallet) && (
         (
           hasSession(request.auth.uid) &&
-          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.wallet == wallet &&
-          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.expiresAt is timestamp &&
-          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.expiresAt > request.time
+          get(/databases/$(database)/documents/authSessions/$(request.auth.uid)).data.wallet == wallet
         ) || (
           request.auth.uid == wallet &&
           !hasSession(request.auth.uid)

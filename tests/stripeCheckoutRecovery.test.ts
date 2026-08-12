@@ -4,15 +4,15 @@ import {
   mergeStripeCheckoutRecoverySessionIds,
   pendingStripeCheckoutRecoverySessionIds,
   resolveStripeCheckoutDataOwner,
-  shouldObserveDisconnectedStripeSession,
   stripeCheckoutRetryDelay,
   shouldUseAnonymousStripeHistory,
 } from '../src/lib/stripeCheckoutRecovery.ts';
 
-test('connected wallet takes precedence over the recovered Stripe owner', () => {
-  assert.equal(resolveStripeCheckoutDataOwner('connected', 'recovered'), 'connected');
-  assert.equal(resolveStripeCheckoutDataOwner(null, 'recovered'), 'recovered');
-  assert.equal(resolveStripeCheckoutDataOwner(undefined, null), undefined);
+test('connected and authenticated wallets take precedence over the recovered Stripe owner', () => {
+  assert.equal(resolveStripeCheckoutDataOwner('connected', 'authenticated', 'recovered'), 'connected');
+  assert.equal(resolveStripeCheckoutDataOwner(null, 'authenticated', 'recovered'), 'authenticated');
+  assert.equal(resolveStripeCheckoutDataOwner(null, null, 'recovered'), 'recovered');
+  assert.equal(resolveStripeCheckoutDataOwner(undefined, null, null), undefined);
 });
 
 test('Stripe recovery session ids are normalized and deduplicated', () => {
@@ -61,48 +61,6 @@ test('Stripe recovery backs off adaptively and schedules a final deadline attemp
     stripeCheckoutRetryDelay({ ...base, retryable: false, retryIndex: 0 }),
     null,
   );
-});
-
-test('disconnected session observation survives fallback only for a previously bound session', () => {
-  const pending = { key: 'uid:cs_1', phase: 'pending' as const };
-  const fallback = { key: 'uid:cs_1', phase: 'fallback' as const };
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: null,
-    recoveryKey: pending.key,
-    recoveryStatus: null,
-    recoveredWallet: null,
-  }), true);
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: null,
-    recoveryKey: pending.key,
-    recoveryStatus: pending,
-    recoveredWallet: null,
-  }), true);
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: null,
-    recoveryKey: fallback.key,
-    recoveryStatus: fallback,
-    recoveredWallet: null,
-  }), false);
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: null,
-    recoveryKey: fallback.key,
-    recoveryStatus: fallback,
-    recoveredWallet: null,
-    hasObservedSession: true,
-  }), true);
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: null,
-    recoveryKey: fallback.key,
-    recoveryStatus: fallback,
-    recoveredWallet: 'wallet',
-  }), true);
-  assert.equal(shouldObserveDisconnectedStripeSession({
-    connectedWallet: 'connected',
-    recoveryKey: pending.key,
-    recoveryStatus: pending,
-    recoveredWallet: 'wallet',
-  }), false);
 });
 
 test('anonymous Stripe history is limited to returns without a connected or recovered owner', () => {

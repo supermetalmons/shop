@@ -72,7 +72,6 @@ export async function mergeFirebaseStripeDeliveryOrdersToWalletInDb(
         uid,
         sessionExists: sessionSnap.exists,
         sessionData: sessionSnap.exists ? sessionSnap.data() : null,
-        nowMs: Date.now(),
       });
       if ('reason' in resolution) {
         throw new StripeOwnerMergeSessionChangedError(resolution.reason);

@@ -9,6 +9,18 @@ export type WalletScopedSerialRunRef<Request> = {
   current: WalletScopedSerialRun<Request> | null;
 };
 
+export type WalletSessionSignInReadiness = 'authenticated' | 'resolving' | 'sign';
+
+export function walletSessionSignInReadiness(args: {
+  hasAuthenticatedSession: boolean;
+  sessionResolution: 'disabled' | 'resolving' | 'settled';
+  authLoading: boolean;
+}): WalletSessionSignInReadiness {
+  if (args.hasAuthenticatedSession) return 'authenticated';
+  if (args.sessionResolution !== 'settled' || args.authLoading) return 'resolving';
+  return 'sign';
+}
+
 export function invalidateWalletScopedSerialRun<Request>(runRef: WalletScopedSerialRunRef<Request>): void {
   if (runRef.current) {
     runRef.current.cancelled = true;

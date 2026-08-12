@@ -15,6 +15,7 @@ import {
   settleKeyedInventoryRecovery,
   stripeInventoryRecoveryTargetForResolvedSessions,
   walletDeliveryRecoveryNextCheckAt,
+  walletSessionSignInReadiness,
   type WalletScopedSerialRun,
 } from '../src/lib/profileClientLifecycle.ts';
 import { stripeProfileRecoveryAfterSnapshot } from '../src/lib/profileFirestore.ts';
@@ -28,6 +29,41 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+test('wallet signing waits for authoritative session resolution', () => {
+  assert.equal(
+    walletSessionSignInReadiness({
+      hasAuthenticatedSession: true,
+      sessionResolution: 'resolving',
+      authLoading: true,
+    }),
+    'authenticated',
+  );
+  assert.equal(
+    walletSessionSignInReadiness({
+      hasAuthenticatedSession: false,
+      sessionResolution: 'resolving',
+      authLoading: false,
+    }),
+    'resolving',
+  );
+  assert.equal(
+    walletSessionSignInReadiness({
+      hasAuthenticatedSession: false,
+      sessionResolution: 'settled',
+      authLoading: true,
+    }),
+    'resolving',
+  );
+  assert.equal(
+    walletSessionSignInReadiness({
+      hasAuthenticatedSession: false,
+      sessionResolution: 'settled',
+      authLoading: false,
+    }),
+    'sign',
+  );
+});
 
 test('wallet-scoped recovery starts the rebound wallet and stale completion cannot clear it', async () => {
   type Request = { id: string };

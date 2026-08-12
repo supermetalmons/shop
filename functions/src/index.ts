@@ -430,7 +430,6 @@ function requireAuth(request: CallableReq<any>): string {
   return uid;
 }
 
-const WALLET_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
 // Issue-receipts tx retry/confirm tuning.
@@ -691,12 +690,8 @@ async function requireWalletSession(request: CallableReq<any>): Promise<{ uid: s
     uid,
     sessionExists: snap.exists,
     sessionData: snap.exists ? snap.data() : null,
-    nowMs: Date.now(),
   });
   if ('reason' in resolution) {
-    if (resolution.reason === 'expired') {
-      throw new HttpsError('unauthenticated', 'Wallet session expired. Sign in again.');
-    }
     throw new HttpsError('unauthenticated', 'Sign in with your wallet first.');
   }
   return { uid, wallet: resolution.wallet };
@@ -6180,7 +6175,6 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
               uid,
               wallet,
               baseline,
-              expiresAtMs: Date.now() + WALLET_SESSION_TTL_MS,
             });
           } catch (error) {
             if (error instanceof WalletSessionWriteSupersededError) {

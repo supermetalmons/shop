@@ -89,6 +89,7 @@ import {
   stripeInventoryRecoveryTargetForResolvedSessions,
   stripeRecoveryKeyForResolvedSessions,
   walletDeliveryRecoveryNextCheckAt,
+  walletSessionSignInReadiness,
   type KeyedInventoryRecovery,
   type KeyedInventoryRefreshRun,
   type OwnerRecoveryKey,
@@ -110,7 +111,6 @@ import {
   mergeStripeCheckoutRecoverySessionIds,
   pendingStripeCheckoutRecoverySessionIds,
   resolveStripeCheckoutDataOwner,
-  shouldObserveDisconnectedStripeSession,
   stripeCheckoutRetryDelay,
   shouldUseAnonymousStripeHistory,
   type StripeCheckoutProfileRecoveryStatus,
@@ -1243,15 +1243,13 @@ function App({
   const statusUiSuspendedRef = useRef(statusUiSuspended);
   statusUiSuspendedRef.current = statusUiSuspended;
   const { publicKey, sendTransaction } = wallet;
-  const connectedWallet = publicKey?.toBase58();
+  const connectedWallet = wallet.connected ? publicKey?.toBase58() : undefined;
   const [firebaseUid, setFirebaseUid] = useState<string | null>(() => auth?.currentUser?.uid || null);
   const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
   const [stripeCheckoutReturnSessionId, setStripeCheckoutReturnSessionId] = useState<string | null>(null);
   const [stripeRecoveryOwner, setStripeRecoveryOwner] = useState<string | null>(null);
   const [stripeCheckoutProfileRecovery, setStripeCheckoutProfileRecovery] =
     useState<StripeCheckoutProfileRecoveryStatus | null>(null);
-  const [stripeCheckoutObservedSessionKey, setStripeCheckoutObservedSessionKey] =
-    useState<string | null>(null);
   const anonymousStripeHistoryCompletion = useMemo(
     () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
     [firebaseUid, stripeCheckoutMarkers],
@@ -1270,13 +1268,6 @@ function App({
     firebaseUid,
     stripeCheckoutRecoverySessionIds,
   );
-  const observeDisconnectedSession = shouldObserveDisconnectedStripeSession({
-    connectedWallet,
-    recoveryKey: stripeCheckoutRecoveryKey,
-    recoveryStatus: stripeCheckoutProfileRecovery,
-    recoveredWallet: stripeRecoveryOwner,
-    hasObservedSession: stripeCheckoutObservedSessionKey === stripeCheckoutRecoveryKey,
-  });
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
   const cardNft2PackInventoryPreviewVideo = useMemo(
     () => createCardNft2PackInventoryPreviewVideo(cardNft2PackVideoSources),
@@ -1540,24 +1531,29 @@ function App({
     signIn,
     reconcileProfile,
     beginDeliveryRecoveryScheduleUpdate,
-    hasCurrentWalletSession,
-  } = useSolanaAuth({ observeDisconnectedSession });
+    hasAuthenticatedWalletSession,
+  } = useSolanaAuth();
   const queryClient = useQueryClient();
   const [stripeCheckoutRecoveredProfile, setStripeCheckoutRecoveredProfile] =
     useState<StripeCheckoutRecoveredProfile | null>(null);
   const [stripeCheckoutInventoryRecovery, setStripeCheckoutInventoryRecovery] =
     useState<StripeCheckoutInventoryRecovery | null>(null);
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
-  const isAdminWallet = Boolean(connectedWallet && ADMIN_WALLETS.has(connectedWallet));
+  const authenticatedWallet = token && sessionWallet ? sessionWallet : undefined;
+  const hasAuthenticatedAccount = Boolean(authenticatedWallet);
+  const localAccountWallet = connectedWallet || authenticatedWallet;
+  const isAdminWallet = Boolean(authenticatedWallet && ADMIN_WALLETS.has(authenticatedWallet));
   const isSignedInWallet = Boolean(token && connectedWallet && sessionWallet === connectedWallet);
-  const canUseAdminMenu = Boolean(isSignedInWallet && hasFulfillmentAppAccess(connectedWallet));
-  const canUseAdminViewer = isAdminWallet && isSignedInWallet;
+  const canUseAdminMenu = Boolean(
+    authenticatedWallet && hasFulfillmentAppAccess(authenticatedWallet),
+  );
+  const canUseAdminViewer = isAdminWallet && hasAuthenticatedAccount;
   const owner =
     canUseAdminViewer && adminViewedOwner
       ? adminViewedOwner
-      : resolveStripeCheckoutDataOwner(connectedWallet, stripeRecoveryOwner);
+      : resolveStripeCheckoutDataOwner(connectedWallet, authenticatedWallet, stripeRecoveryOwner);
   const includeDevnetInventory = hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner);
-  const isViewerMode = Boolean(owner && connectedWallet && owner !== connectedWallet);
+  const isViewerMode = Boolean(owner && authenticatedWallet && owner !== authenticatedWallet);
   const canReadOwnProfile = Boolean(
     token && owner && sessionWallet === owner && !isViewerMode,
   );
@@ -1597,7 +1593,7 @@ function App({
     fetchNextPage: fetchNextDeliveryOrderOwners,
     error: deliveryOrderOwnersError,
   } = useInfiniteQuery({
-    queryKey: ['adminDeliveryOrderOwners', connectedWallet],
+    queryKey: ['adminDeliveryOrderOwners', authenticatedWallet],
     enabled: Boolean(canUseAdminViewer && settingsOpen && ownerPickerOpened),
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) =>
@@ -1610,22 +1606,22 @@ function App({
   });
   const deliveryOrderOwners = useMemo(() => {
     const unique = new Set<string>();
-    if (connectedWallet) unique.add(connectedWallet);
+    if (authenticatedWallet) unique.add(authenticatedWallet);
     const fromApi =
       deliveryOrderOwnersData?.pages?.flatMap((page) => (Array.isArray(page?.owners) ? page.owners : [])) || [];
     fromApi.forEach((entry) => {
       if (typeof entry === 'string' && entry) unique.add(entry);
     });
     return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [connectedWallet, deliveryOrderOwnersData]);
+  }, [authenticatedWallet, deliveryOrderOwnersData]);
 
   const {
     data: viewedProfileData,
     isFetching: viewedProfileLoading,
     error: viewedProfileError,
   } = useQuery({
-    queryKey: ['viewedProfile', connectedWallet, owner, isSignedInWallet],
-    enabled: Boolean(isSignedInWallet && canUseAdminViewer && isViewerMode && owner),
+    queryKey: ['viewedProfile', authenticatedWallet, owner, hasAuthenticatedAccount],
+    enabled: Boolean(hasAuthenticatedAccount && canUseAdminViewer && isViewerMode && owner),
     queryFn: () => getAdminProfileView(owner || ''),
     staleTime: 10_000,
   });
@@ -1646,7 +1642,7 @@ function App({
     viewedProfileData?.profile,
   ]);
   const currentOwnerDeliveryRecoveryNextCheckAt =
-    isSignedInWallet && !isViewerMode ? deliveryRecoveryNextCheckAt : null;
+    hasAuthenticatedAccount && !isViewerMode ? deliveryRecoveryNextCheckAt : null;
 
   const inventory = inventoryData ?? EMPTY_INVENTORY;
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;
@@ -1725,8 +1721,7 @@ function App({
     useSuccessHud(statusUiSuspended);
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
-  const authLoadingSeenRef = useRef(false);
-  const [authReady, setAuthReady] = useState(false);
+  const authReady = sessionResolution === 'settled';
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
   const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
@@ -1763,7 +1758,7 @@ function App({
     : 0;
   const anonymousStripeHistoryEnabled = shouldUseAnonymousStripeHistory({
     connectedWallet,
-    recoveredWallet: stripeRecoveryOwner,
+    recoveredWallet: authenticatedWallet || stripeRecoveryOwner,
     hasCompletedCheckout: hasLocalCompletedStripeCheckout,
     recoveryFallbackReady: stripeCheckoutAnonymousFallbackReady,
   });
@@ -1816,12 +1811,12 @@ function App({
     receiptTransferWalletAdapter?.supportedTransactionVersions,
   );
   const walletBusy = wallet.connecting || wallet.disconnecting;
-  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(connectedWallet));
+  const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(localAccountWallet));
   const [receiptOperations, setReceiptOperations] = useState<ReceiptOperationRegistry>(() => new Map());
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
-    loadPendingReveals(connectedWallet),
+    loadPendingReveals(localAccountWallet),
   );
-  const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(connectedWallet));
+  const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(localAccountWallet));
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [inventorySnapshot, setInventorySnapshot] = useState<InventoryItem[]>([]);
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
@@ -1843,6 +1838,9 @@ function App({
   const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
+  const localAccountWalletRef = useRef<string | null>(localAccountWallet || null);
+  const pendingRevealHydrationWalletRef = useRef<string | null>(null);
+  const recentRevealHydrationWalletRef = useRef<string | null>(null);
   const profileShipmentsRef = useRef({
     shipments: profileShipments,
     ready: profileShipmentsReady,
@@ -1850,8 +1848,6 @@ function App({
   const signInPromiseRef = useRef<Promise<boolean> | null>(null);
   const deliveryRecoveryRunRef = useRef<WalletScopedSerialRun<RecoverDeliveryOrdersArgs> | null>(null);
   const lastTriggeredDeliveryRecoveryAtRef = useRef<number | null>(null);
-  const authReadyRef = useRef(false);
-  const authLoadingRef = useRef(false);
   const receiptTransferWalletSupportedRef = useRef(receiptTransferWalletSupported);
   const receiptTransferWalletAdapterRef = useRef(receiptTransferWalletAdapter);
   const receiptTransferReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -2185,7 +2181,6 @@ function App({
       return;
     }
     if (
-      observeDisconnectedSession &&
       sessionResolution === 'settled' &&
       stripeRecoveryOwner &&
       sessionWallet !== stripeRecoveryOwner
@@ -2194,33 +2189,9 @@ function App({
     }
   }, [
     connectedWallet,
-    observeDisconnectedSession,
     sessionResolution,
     sessionWallet,
     stripeRecoveryOwner,
-  ]);
-
-  useEffect(() => {
-    if (connectedWallet || !stripeCheckoutRecoveryKey) {
-      setStripeCheckoutObservedSessionKey(null);
-      return;
-    }
-    if (sessionWallet) {
-      setStripeCheckoutObservedSessionKey(stripeCheckoutRecoveryKey);
-      return;
-    }
-    if (
-      sessionResolution === 'settled' &&
-      stripeCheckoutObservedSessionKey === stripeCheckoutRecoveryKey
-    ) {
-      setStripeCheckoutObservedSessionKey(null);
-    }
-  }, [
-    connectedWallet,
-    sessionResolution,
-    sessionWallet,
-    stripeCheckoutObservedSessionKey,
-    stripeCheckoutRecoveryKey,
   ]);
 
   useEffect(() => {
@@ -2299,13 +2270,7 @@ function App({
     if (!firebaseUid || !stripeCheckoutRecoveryKey || !stripeCheckoutRecoverySessionIds.length) return;
     if (!sessionWallet) {
       if (connectedWallet && (!authReady || authLoading)) return;
-      if (
-        !connectedWallet &&
-        observeDisconnectedSession &&
-        sessionResolution !== 'settled'
-      ) {
-        return;
-      }
+      if (!connectedWallet && sessionResolution !== 'settled') return;
       setStripeCheckoutProfileRecovery({ key: stripeCheckoutRecoveryKey, phase: 'fallback' });
       return;
     }
@@ -2411,7 +2376,6 @@ function App({
     authReady,
     connectedWallet,
     firebaseUid,
-    observeDisconnectedSession,
     profileShipmentsReady,
     reconcileProfile,
     sessionWallet,
@@ -2505,15 +2469,15 @@ function App({
   };
 
   useEffect(() => {
-    if (!connectedWallet) {
+    if (!authenticatedWallet) {
       setAdminViewedOwner(null);
       setSettingsOpen(false);
       return;
     }
-    if (adminViewedOwner === connectedWallet) {
+    if (adminViewedOwner === authenticatedWallet) {
       setAdminViewedOwner(null);
     }
-  }, [adminViewedOwner, connectedWallet]);
+  }, [adminViewedOwner, authenticatedWallet]);
 
   useEffect(() => {
     if (canUseAdminMenu) return;
@@ -2537,8 +2501,8 @@ function App({
       setOwnerPickerOpened(false);
       return;
     }
-    setOwnerPickerOpened(Boolean(adminViewedOwner && adminViewedOwner !== connectedWallet));
-  }, [adminViewedOwner, connectedWallet, settingsOpen]);
+    setOwnerPickerOpened(Boolean(adminViewedOwner && adminViewedOwner !== authenticatedWallet));
+  }, [adminViewedOwner, authenticatedWallet, settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -2594,53 +2558,37 @@ function App({
     updateReceiptOperations,
   ]);
 
+  useLayoutEffect(() => {
+    localAccountWalletRef.current = localAccountWallet || null;
+  }, [localAccountWallet]);
+
   useEffect(() => {
     signInPromiseRef.current = null;
-    invalidateWalletScopedSerialRun(deliveryRecoveryRunRef);
-    lastTriggeredDeliveryRecoveryAtRef.current = null;
   }, [connectedWallet, sessionWallet]);
 
   useEffect(() => {
-    authReadyRef.current = authReady;
-  }, [authReady]);
-
-  useEffect(() => {
-    authLoadingRef.current = authLoading;
-  }, [authLoading]);
+    invalidateWalletScopedSerialRun(deliveryRecoveryRunRef);
+    lastTriggeredDeliveryRecoveryAtRef.current = null;
+  }, [authenticatedWallet]);
 
   const ensureSignedIn = async (): Promise<boolean> => {
     const hasCurrentSession =
-      Boolean(connectedWallet) && hasCurrentWalletSession(connectedWallet);
-    if (!publicKey) {
+      Boolean(connectedWallet) && hasAuthenticatedWalletSession(connectedWallet);
+    if (!connectedWallet || !publicKey) {
       setVisible(true);
       return false;
     }
-    if (isSignedInWallet && token) return true;
-    if (hasCurrentSession) return true;
+    const readiness = walletSessionSignInReadiness({
+      hasAuthenticatedSession: Boolean((isSignedInWallet && token) || hasCurrentSession),
+      sessionResolution,
+      authLoading,
+    });
+    if (readiness === 'authenticated') return true;
     if (signInPromiseRef.current) return signInPromiseRef.current;
-
-    if (typeof window !== 'undefined' && (!authReadyRef.current || authLoadingRef.current)) {
-      const deadline = Date.now() + 1500;
-      while (Date.now() < deadline) {
-        if (
-          connectedWallet &&
-          hasCurrentWalletSession(connectedWallet)
-        ) {
-          return true;
-        }
-        if (signInPromiseRef.current) return signInPromiseRef.current;
-        if (authReadyRef.current && !authLoadingRef.current) break;
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
-      }
+    if (readiness === 'resolving') {
+      showToast('Restoring wallet session…');
+      return false;
     }
-
-    if (
-      connectedWallet &&
-      hasCurrentWalletSession(connectedWallet)
-    ) {
-      return true;
-    }
-    if (signInPromiseRef.current) return signInPromiseRef.current;
 
     let promise: Promise<boolean>;
     promise = signIn()
@@ -2662,7 +2610,7 @@ function App({
   };
 
   useEffect(() => {
-    if (!pendingShipmentsSignIn || !publicKey) return;
+    if (!pendingShipmentsSignIn || !connectedWallet || !publicKey) return;
     if (isSignedInWallet) {
       setPendingShipmentsSignIn(false);
       return;
@@ -2670,15 +2618,15 @@ function App({
     if (!authReady || authLoading) return;
     setPendingShipmentsSignIn(false);
     void ensureSignedIn();
-  }, [authLoading, authReady, isSignedInWallet, pendingShipmentsSignIn, publicKey]);
+  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingShipmentsSignIn, publicKey]);
 
   useEffect(() => {
-    if (!pendingShipmentsSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    if (!pendingShipmentsSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
     setPendingShipmentsSignIn(false);
-  }, [pendingShipmentsSignIn, publicKey, wallet.connecting, walletModalVisible]);
+  }, [connectedWallet, pendingShipmentsSignIn, wallet.connecting, walletModalVisible]);
 
   useEffect(() => {
-    if (!pendingHeaderWalletSignIn || !publicKey) return;
+    if (!pendingHeaderWalletSignIn || !connectedWallet || !publicKey) return;
     if (isSignedInWallet) {
       setPendingHeaderWalletSignIn(false);
       return;
@@ -2686,15 +2634,15 @@ function App({
     if (!authReady || authLoading) return;
     setPendingHeaderWalletSignIn(false);
     void ensureSignedIn();
-  }, [authLoading, authReady, isSignedInWallet, pendingHeaderWalletSignIn, publicKey]);
+  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingHeaderWalletSignIn, publicKey]);
 
   useEffect(() => {
-    if (!pendingHeaderWalletSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    if (!pendingHeaderWalletSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
     setPendingHeaderWalletSignIn(false);
-  }, [pendingHeaderWalletSignIn, publicKey, wallet.connecting, walletModalVisible]);
+  }, [connectedWallet, pendingHeaderWalletSignIn, wallet.connecting, walletModalVisible]);
 
   useEffect(() => {
-    if (!pendingClaimSignIn || !publicKey) return;
+    if (!pendingClaimSignIn || !connectedWallet || !publicKey) return;
     if (isSignedInWallet) {
       setPendingClaimSignIn(false);
       return;
@@ -2702,12 +2650,12 @@ function App({
     if (!authReady || authLoading) return;
     setPendingClaimSignIn(false);
     void ensureSignedIn();
-  }, [authLoading, authReady, isSignedInWallet, pendingClaimSignIn, publicKey]);
+  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingClaimSignIn, publicKey]);
 
   useEffect(() => {
-    if (!pendingClaimSignIn || walletModalVisible || publicKey || wallet.connecting) return;
+    if (!pendingClaimSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
     setPendingClaimSignIn(false);
-  }, [pendingClaimSignIn, publicKey, wallet.connecting, walletModalVisible]);
+  }, [connectedWallet, pendingClaimSignIn, wallet.connecting, walletModalVisible]);
 
   useEffect(() => {
     if (!claimOpen) setPendingClaimSignIn(false);
@@ -2762,15 +2710,14 @@ function App({
 
   const runDeliveryRecovery = useCallback(
     async (request: RecoverDeliveryOrdersArgs = {}) => {
-      const recoveryWallet = connectedWallet;
-      if (!recoveryWallet || !isSignedInWallet || isViewerMode) return;
+      const recoveryWallet = authenticatedWallet;
+      if (!recoveryWallet || !hasAuthenticatedAccount || isViewerMode) return;
 
       return runWalletScopedSerial({
         runRef: deliveryRecoveryRunRef,
         wallet: recoveryWallet,
         request,
-        isContextCurrent: () =>
-          connectedWalletRef.current === recoveryWallet && hasCurrentWalletSession(recoveryWallet),
+        isContextCurrent: () => hasAuthenticatedWalletSession(recoveryWallet),
         execute: async (activeRequest, isCurrentRun) => {
           const commitRecoverySchedule = beginDeliveryRecoveryScheduleUpdate();
 
@@ -2778,8 +2725,7 @@ function App({
             const result = await recoverMyDeliveryOrders(activeRequest);
             const stillCurrent =
               isCurrentRun() &&
-              connectedWalletRef.current === recoveryWallet &&
-              hasCurrentWalletSession(recoveryWallet);
+              hasAuthenticatedWalletSession(recoveryWallet);
 
             if (stillCurrent) {
               const nextCheckAt = walletDeliveryRecoveryNextCheckAt(result);
@@ -2796,8 +2742,7 @@ function App({
             console.warn('Delivery recovery failed', err);
             if (
               isCurrentRun() &&
-              connectedWalletRef.current === recoveryWallet &&
-              hasCurrentWalletSession(recoveryWallet)
+              hasAuthenticatedWalletSession(recoveryWallet)
             ) {
               commitRecoverySchedule(Date.now() + 30_000);
             }
@@ -2807,9 +2752,9 @@ function App({
     },
     [
       beginDeliveryRecoveryScheduleUpdate,
-      connectedWallet,
-      hasCurrentWalletSession,
-      isSignedInWallet,
+      authenticatedWallet,
+      hasAuthenticatedAccount,
+      hasAuthenticatedWalletSession,
       isViewerMode,
       reconcileProfile,
       refetchInventory,
@@ -2819,7 +2764,7 @@ function App({
   const scheduledDeliveryRecoveryAt = currentOwnerDeliveryRecoveryNextCheckAt;
 
   useEffect(() => {
-    if (!connectedWallet || !isSignedInWallet || isViewerMode) {
+    if (!authenticatedWallet || !hasAuthenticatedAccount || isViewerMode) {
       return;
     }
     if (scheduledDeliveryRecoveryAt == null) {
@@ -2846,7 +2791,7 @@ function App({
       cancelled = true;
       if (timeoutId !== null) window.clearTimeout(timeoutId);
     };
-  }, [connectedWallet, isSignedInWallet, isViewerMode, runDeliveryRecovery, scheduledDeliveryRecoveryAt]);
+  }, [authenticatedWallet, hasAuthenticatedAccount, isViewerMode, runDeliveryRecovery, scheduledDeliveryRecoveryAt]);
 
   const queueOverlayAction = useCallback(
     (run: () => void, kind: DeferredOverlayActionKind = 'reconcile') => {
@@ -3506,8 +3451,8 @@ function App({
   }, [closeRevealOverlay, connectedWallet, discardRevealOverlay, owner]);
 
   useEffect(() => {
-    setHiddenAssets(loadHiddenAssets(connectedWallet));
-  }, [connectedWallet]);
+    setHiddenAssets(loadHiddenAssets(localAccountWallet));
+  }, [localAccountWallet]);
 
   useEffect(() => {
     const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
@@ -3518,8 +3463,11 @@ function App({
 
   useEffect(() => {
     resetRevealRequestState();
-    setLocalPendingReveals(loadPendingReveals(connectedWallet));
-    setRecentRevealedBoxes(loadRecentReveals(connectedWallet).slice(0, RECENT_REVEALS_LIMIT));
+    const hydrationWallet = localAccountWallet || '';
+    pendingRevealHydrationWalletRef.current = hydrationWallet;
+    recentRevealHydrationWalletRef.current = hydrationWallet;
+    setLocalPendingReveals(loadPendingReveals(localAccountWallet));
+    setRecentRevealedBoxes(loadRecentReveals(localAccountWallet).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
     setInventorySnapshot([]);
     setPendingOpenSnapshot([]);
@@ -3545,7 +3493,7 @@ function App({
       videoPreloadRootRef.current = null;
     }
     deferredOverlayActionsRef.current = [];
-  }, [connectedWallet, resetRevealRequestState]);
+  }, [localAccountWallet, resetRevealRequestState]);
 
   useEffect(() => {
     if (revealOverlay) return;
@@ -3570,14 +3518,24 @@ function App({
   }, [revealOverlayClosing, suspended]);
 
   useEffect(() => {
-    if (!connectedWallet || isViewerMode) return;
-    persistPendingReveals(connectedWallet, localPendingReveals);
-  }, [connectedWallet, localPendingReveals, isViewerMode]);
+    const hydrationWallet = localAccountWallet || '';
+    if (pendingRevealHydrationWalletRef.current === hydrationWallet) {
+      pendingRevealHydrationWalletRef.current = null;
+      return;
+    }
+    if (!localAccountWallet || isViewerMode) return;
+    persistPendingReveals(localAccountWallet, localPendingReveals);
+  }, [localAccountWallet, localPendingReveals, isViewerMode]);
 
   useEffect(() => {
-    if (!connectedWallet || isViewerMode) return;
-    persistRecentReveals(connectedWallet, recentRevealedBoxes);
-  }, [connectedWallet, recentRevealedBoxes, isViewerMode]);
+    const hydrationWallet = localAccountWallet || '';
+    if (recentRevealHydrationWalletRef.current === hydrationWallet) {
+      recentRevealHydrationWalletRef.current = null;
+      return;
+    }
+    if (!localAccountWallet || isViewerMode) return;
+    persistRecentReveals(localAccountWallet, recentRevealedBoxes);
+  }, [localAccountWallet, recentRevealedBoxes, isViewerMode]);
 
   useEffect(() => {
     figureMetadataRef.current = figureMetadataByKey;
@@ -3849,22 +3807,6 @@ function App({
   }, [boxAspectRatioForDropId, revealOverlayOpen, revealRendererForDropId]);
 
   useEffect(() => {
-    authLoadingSeenRef.current = false;
-    setAuthReady(false);
-  }, [connectedWallet]);
-
-  useEffect(() => {
-    if (!connectedWallet) return;
-    if (authLoading) {
-      authLoadingSeenRef.current = true;
-      return;
-    }
-    if (sessionWallet || authLoadingSeenRef.current) {
-      setAuthReady(true);
-    }
-  }, [authLoading, connectedWallet, sessionWallet]);
-
-  useEffect(() => {
     if (connectedWallet || walletBusy) {
       setWalletIdleReady(false);
       return;
@@ -3910,9 +3852,9 @@ function App({
     if (nextStored.size !== stored.size) {
       persistHiddenAssets(wallet, nextStored);
     }
-    if (connectedWalletRef.current !== wallet) return;
+    if (localAccountWalletRef.current !== wallet) return;
     setHiddenAssets((prev) => {
-      if (connectedWalletRef.current !== wallet) return prev;
+      if (localAccountWalletRef.current !== wallet) return prev;
       const next = removeHiddenAssetIds(prev, ids);
       if (next.size === prev.size) return prev;
       persistHiddenAssets(wallet, next);
@@ -4194,7 +4136,7 @@ function App({
     ? inventoryFetched && !stripeCheckoutInventoryRefreshPending
       ? 'visible'
       : 'hidden'
-    : walletIdleReady && !stripeCheckoutProfileRecoveryPending
+    : walletIdleReady && authReady && !stripeCheckoutProfileRecoveryPending
       ? 'visible'
       : 'hidden';
   const inventoryInitialResponseReady = !owner || inventoryFetched;
@@ -4551,10 +4493,15 @@ function App({
   }, [effectiveMintStats]);
 
   const discountAvailable =
-    Boolean(publicKey) && !mintedOut && !walletBusy && !discountChecking && discountEligible && discountRemainingCount > 0;
+    Boolean(connectedWallet && publicKey) &&
+    !mintedOut &&
+    !walletBusy &&
+    !discountChecking &&
+    discountEligible &&
+    discountRemainingCount > 0;
 
   useEffect(() => {
-    if (!routeDrop || routeStripeOnly || !routeConnection || !publicKey || mintedOut) {
+    if (!routeDrop || routeStripeOnly || !routeConnection || !connectedWallet || !publicKey || mintedOut) {
       setDiscountEligible(false);
       setDiscountRemainingCount(0);
       setDiscountChecking(false);
@@ -4596,6 +4543,7 @@ function App({
     activeDiscountAllowance,
     activeDiscountScope,
     activeDiscountVersion,
+    connectedWallet,
     mintedOut,
     publicKey,
     routeConnection,
@@ -4619,7 +4567,7 @@ function App({
       showToast('This drop is available through Stripe checkout only');
       return;
     }
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setVisible(true);
       return;
     }
@@ -4687,7 +4635,7 @@ function App({
       showToast('This drop is available through Stripe checkout only');
       return;
     }
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setVisible(true);
       return;
     }
@@ -4844,7 +4792,9 @@ function App({
       showToast(`${boxLabelForDropId(item.dropId)} does not support opening.`);
       return;
     }
-    if (!publicKey) throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
+    if (!connectedWallet || !publicKey) {
+      throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
+    }
     console.info('[mons] sending inventory asset to the vault', {
       assetId: item.id,
       dropId: item.dropId,
@@ -4910,7 +4860,7 @@ function App({
     const requestSession = revealOverlaySessionRef.current;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return 'retry';
-    if (!publicKey) return 'retry';
+    if (!connectedWallet || !publicKey) return 'retry';
     if (revealOverlaySessionRef.current !== requestSession) {
       return 'resolved';
     }
@@ -5010,12 +4960,12 @@ function App({
 
   const ensureRevealOverlayAdvanceAllowed = useCallback(() => {
     if (blockViewerModeAction()) return false;
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       showToast('Connect wallet first');
       return false;
     }
     return true;
-  }, [blockViewerModeAction, publicKey, showToast]);
+  }, [blockViewerModeAction, connectedWallet, publicKey, showToast]);
 
   const handleRevealOverlayClick = () => {
     if (!revealOverlay || revealOverlayClosing) return;
@@ -5137,7 +5087,7 @@ function App({
       if (blockViewerModeAction()) return;
 	    if (!selectedBox) return;
       if (!canOpenBoxesForDropId(selectedBox.dropId)) return;
-	    if (!publicKey) {
+	    if (!connectedWallet || !publicKey) {
 	      setVisible(true);
 	      return;
 	    }
@@ -5423,7 +5373,7 @@ function App({
       setDeliveryOpen(false);
       return;
     }
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setVisible(true);
       return;
     }
@@ -5457,7 +5407,8 @@ function App({
     try {
       const deliveryDrop = requireKnownDropConfig(deliveryDropId, 'delivery selection');
       const deliveryConnection = getDropConnection(deliveryDrop.dropId);
-      if (!isSignedInWallet) await signIn();
+      const signedIn = await ensureSignedIn();
+      if (!signedIn) return;
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
 
@@ -5690,7 +5641,7 @@ function App({
       showToast('Finish the receipt transfer first');
       return;
     }
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setVisible(true);
       return;
     }
@@ -6019,7 +5970,7 @@ function App({
     }
     const operationWalletAdapter = receiptTransferWalletAdapter;
     const operationWalletSessionGeneration = receiptTransferWalletSessionGenerationRef.current;
-    const wallet = publicKey?.toBase58();
+    const wallet = connectedWallet;
     if (!wallet || owner !== wallet) {
       throw new Error('Connect the receipt owner wallet to transfer');
     }
@@ -6203,7 +6154,7 @@ function App({
   };
 
   const handleSignInForShipments = async () => {
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setPendingShipmentsSignIn(true);
       setVisible(true);
       return;
@@ -6214,7 +6165,7 @@ function App({
 
   const handleHeaderWalletSignIn = async () => {
     if (authLoading || walletBusy || pendingHeaderWalletSignIn) return;
-    if (!publicKey) {
+    if (!connectedWallet || !publicKey) {
       setPendingHeaderWalletSignIn(true);
       setVisible(true);
       return;
@@ -6261,9 +6212,9 @@ function App({
     if (hasAlphabeticClaimCodeCharacters(code)) {
       throw new Error('Invalid receipt claim code');
     }
-    if (!publicKey) setPendingClaimSignIn(true);
+    if (!connectedWallet || !publicKey) setPendingClaimSignIn(true);
     const signedIn = await ensureSignedIn();
-    if (!signedIn || !publicKey) return { deferred: true };
+    if (!signedIn || !connectedWallet || !publicKey) return { deferred: true };
     if (!claimUiIsCurrent()) return { deferred: true };
     const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
     const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
@@ -6385,7 +6336,7 @@ function App({
     anonymousStripeHistoryPollActive && anonymousStripeHistoryLoading && !anonymousStripeHistoryData;
   const anonymousStripeHistoryVisible = shouldUseAnonymousStripeHistory({
     connectedWallet,
-    recoveredWallet: stripeRecoveryOwner,
+    recoveredWallet: authenticatedWallet || stripeRecoveryOwner,
     hasCompletedCheckout: anonymousStripeHistoryPollActive || anonymousStripeHistoryHasOrders,
     recoveryFallbackReady: stripeCheckoutAnonymousFallbackReady,
   });
@@ -6469,7 +6420,7 @@ function App({
         ? !anonymousStripeHistoryInitialLoading
         : connectedWallet
           ? authReady
-          : walletIdleReady && !stripeCheckoutProfileRecoveryPending;
+          : walletIdleReady && authReady && !stripeCheckoutProfileRecoveryPending;
   const shipmentsEmptyStateVisibility = shipmentsEmptyStateReady ? 'visible' : 'hidden';
   const profileSectionsReady = profileSectionReadiness({
     shipmentCount: deliveryOrders.length,
@@ -7170,7 +7121,7 @@ function App({
         type="button"
         className="top__wallet-button secondary-light"
         onClick={interactive ? handleHeaderWalletSignIn : undefined}
-        aria-label={interactive ? (publicKey ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana') : undefined}
+        aria-label={interactive ? (connectedWallet ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana') : undefined}
         tabIndex={interactive ? undefined : -1}
       >
         <span>Connect Wallet</span>
@@ -7212,21 +7163,21 @@ function App({
                 value={ownerPickerValue}
                 onChange={(evt) => {
                   const value = evt.target.value.trim();
-                  if (!connectedWallet || !value || value === connectedWallet) {
+                  if (!authenticatedWallet || !value || value === authenticatedWallet) {
                     setAdminViewedOwner(null);
                     return;
                   }
                   setAdminViewedOwner(value);
                 }}
               >
-                {connectedWallet ? (
-                  <option value={connectedWallet}>{connectedWallet}</option>
+                {authenticatedWallet ? (
+                  <option value={authenticatedWallet}>{authenticatedWallet}</option>
                 ) : null}
                 {adminViewedOwner && !deliveryOrderOwners.includes(adminViewedOwner) ? (
                   <option value={adminViewedOwner}>{adminViewedOwner}</option>
                 ) : null}
                 {deliveryOrderOwners
-                  .filter((entry) => entry !== connectedWallet)
+                  .filter((entry) => entry !== authenticatedWallet)
                   .map((entry) => (
                     <option key={entry} value={entry}>
                       {entry}
@@ -7409,7 +7360,7 @@ function App({
             maxSupply={routeDrop.maxSupply}
             maxPerTx={routeDrop.maxPerTx}
             discountAvailable={!routeStripeOnly && discountAvailable}
-            discountMaxQuantity={!routeStripeOnly && publicKey ? discountRemainingCount : undefined}
+            discountMaxQuantity={!routeStripeOnly && connectedWallet && publicKey ? discountRemainingCount : undefined}
             onDiscountMint={routeStripeOnly ? undefined : handleDiscountMint}
             discountBusy={discountMinting || minting || walletBusy}
             onStripePaymentClick={handleStripePayment}
@@ -7439,7 +7390,7 @@ function App({
           canRevealItem={(item) => canOpenBoxesForDropId(item.dropId)}
           onReveal={async (id, rect) => {
             if (blockViewerModeAction()) return;
-            if (!publicKey) {
+            if (!connectedWallet || !publicKey) {
               setVisible(true);
               return;
             }
@@ -7535,7 +7486,7 @@ function App({
             </div>
           </div>
 
-          {!publicKey ? <div className="muted small">Connect a wallet to ship items.</div> : null}
+          {!connectedWallet || !publicKey ? <div className="muted small">Connect a wallet to ship items.</div> : null}
           <DeliveryForm
             mode="modal"
             onSubmit={handleShip}
@@ -7544,7 +7495,7 @@ function App({
             boxNamePrefix={selectedDropConfig?.namePrefix}
             figureNamePrefix={selectedDropConfig?.figureNamePrefix}
             dropFamily={selectedDropConfig?.dropFamily}
-            submitDisabled={!canShipSelected || !publicKey || adminIrlRedeeming}
+            submitDisabled={!canShipSelected || !connectedWallet || !publicKey || adminIrlRedeeming}
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
             submitLabel={deliveryCtaLabel}

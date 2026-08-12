@@ -2,6 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 
 export const WALLET_SESSION_COLLECTION = 'authSessions';
+export const WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS = 253_402_300_799_999;
 
 export class WalletSessionWriteSupersededError extends Error {
   constructor() {
@@ -17,10 +18,7 @@ export type WalletSessionResolution =
       reason:
         | 'legacy_uid_invalid'
         | 'missing_wallet'
-        | 'invalid_wallet'
-        | 'missing_expiry'
-        | 'invalid_expiry'
-        | 'expired';
+        | 'invalid_wallet';
     };
 
 export type WalletSessionBaseline = {
@@ -85,7 +83,6 @@ export async function writeWalletSessionAndProfileIfCurrent(params: {
   uid: string;
   wallet: string;
   baseline: WalletSessionBaseline;
-  expiresAtMs: number;
 }): Promise<void> {
   if (params.baseline.uid !== params.uid) {
     throw new Error('Wallet session baseline does not match the authenticated user');
@@ -108,7 +105,7 @@ export async function writeWalletSessionAndProfileIfCurrent(params: {
       {
         wallet: params.wallet,
         updatedAt: FieldValue.serverTimestamp(),
-        expiresAt: Timestamp.fromMillis(params.expiresAtMs),
+        expiresAt: Timestamp.fromMillis(WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS),
       },
       { merge: true },
     );
@@ -120,7 +117,6 @@ export function resolveWalletSessionBinding(params: {
   uid: string;
   sessionExists: boolean;
   sessionData: unknown;
-  nowMs: number;
 }): WalletSessionResolution {
   if (!params.sessionExists) {
     const wallet = normalizeWalletMaybe(params.uid);
@@ -135,18 +131,5 @@ export function resolveWalletSessionBinding(params: {
   }
   const wallet = normalizeWalletMaybe(data.wallet);
   if (!wallet) return { wallet: null, reason: 'invalid_wallet' };
-
-  if (data.expiresAt == null) return { wallet: null, reason: 'missing_expiry' };
-  if (typeof data.expiresAt?.toMillis !== 'function') {
-    return { wallet: null, reason: 'invalid_expiry' };
-  }
-  let expiresAtMs: number;
-  try {
-    expiresAtMs = Number(data.expiresAt.toMillis());
-  } catch {
-    return { wallet: null, reason: 'invalid_expiry' };
-  }
-  if (!Number.isFinite(expiresAtMs)) return { wallet: null, reason: 'invalid_expiry' };
-  if (expiresAtMs <= params.nowMs) return { wallet: null, reason: 'expired' };
   return { wallet, source: 'session' };
 }

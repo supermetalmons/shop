@@ -21,7 +21,6 @@ import {
   listenToProfileShipments,
   listenToSessionBinding,
   profileListenerIsCurrent,
-  sessionExpiryDelay,
   type SessionBinding,
   type SnapshotUpdate,
 } from '../lib/profileFirestore';
@@ -40,10 +39,6 @@ export type SolanaAuthState = {
 };
 
 export type SessionResolution = 'disabled' | 'resolving' | 'settled';
-
-export type SolanaAuthOptions = {
-  observeDisconnectedSession?: boolean;
-};
 
 type SnapshotHandlers<T> = {
   next: (update: SnapshotUpdate<T>) => void;
@@ -167,7 +162,6 @@ function persistentRetryDelay(retryCount: number): number {
 export function useSolanaAuthWithRuntime(
   walletState: SolanaAuthWalletState,
   runtime: SolanaAuthRuntime,
-  options: SolanaAuthOptions = {},
 ) {
   const { publicKey, signMessage, connected } = walletState;
   const connectedWallet = connected ? publicKey?.toBase58() || null : null;
@@ -186,7 +180,10 @@ export function useSolanaAuthWithRuntime(
   const connectedWalletRef = useRef<string | null>(connectedWallet);
   const connectedRef = useRef<boolean>(connected);
   const sessionWalletRef = useRef<string | null>(null);
+  const sessionUidRef = useRef<string | null>(null);
   const firebaseUidRef = useRef<string | null>(runtime.currentUid());
+  const mismatchSignOutRef = useRef<string | null>(null);
+  const mismatchSignOutTimerRef = useRef<unknown>(null);
   const contextGenerationRef = useRef(0);
   const ownerGenerationRef = useRef(0);
   const deliveryRecoveryRequestGenerationRef = useRef(0);
@@ -196,26 +193,35 @@ export function useSolanaAuthWithRuntime(
   connectedWalletRef.current = connectedWallet;
   connectedRef.current = connected;
 
+  const clearMismatchSignOutTimer = useCallback(() => {
+    if (mismatchSignOutTimerRef.current === null) return;
+    runtime.clearTimer(mismatchSignOutTimerRef.current);
+    mismatchSignOutTimerRef.current = null;
+  }, [runtime]);
+
   useLayoutEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       contextGenerationRef.current += 1;
       signInAttemptRef.current = null;
+      clearMismatchSignOutTimer();
     };
-  }, []);
+  }, [clearMismatchSignOutTimer]);
 
   const deactivateOwner = useCallback((loading = false) => {
     sessionWalletRef.current = null;
+    sessionUidRef.current = null;
     ownerGenerationRef.current += 1;
     deliveryRecoveryRequestGenerationRef.current = 0;
     deliveryRecoveryAppliedGenerationRef.current = 0;
     setState({ ...EMPTY_AUTH_STATE, loading });
   }, []);
 
-  const activateOwner = useCallback((wallet: string, token: string) => {
+  const activateOwner = useCallback((wallet: string, token: string, uid: string) => {
     const previousWallet = sessionWalletRef.current;
     sessionWalletRef.current = wallet;
+    sessionUidRef.current = uid;
     if (previousWallet !== wallet) {
       ownerGenerationRef.current += 1;
       deliveryRecoveryRequestGenerationRef.current = 0;
@@ -232,14 +238,15 @@ export function useSolanaAuthWithRuntime(
 
   const beginDeliveryRecoveryScheduleUpdate = useCallback(() => {
     const wallet = sessionWalletRef.current;
-    const contextGeneration = contextGenerationRef.current;
+    const uid = sessionUidRef.current;
     const ownerGeneration = ownerGenerationRef.current;
-    if (!wallet) return (_nextCheckAt: number | null) => false;
+    if (!wallet || !uid) return (_nextCheckAt: number | null) => false;
     const requestGeneration = deliveryRecoveryRequestGenerationRef.current + 1;
     deliveryRecoveryRequestGenerationRef.current = requestGeneration;
     return (nextCheckAt: number | null) => {
       if (
-        contextGenerationRef.current !== contextGeneration ||
+        sessionUidRef.current !== uid ||
+        firebaseUidRef.current !== uid ||
         ownerGenerationRef.current !== ownerGeneration ||
         sessionWalletRef.current !== wallet ||
         requestGeneration <= deliveryRecoveryAppliedGenerationRef.current
@@ -292,57 +299,102 @@ export function useSolanaAuthWithRuntime(
         activeSignInUid: activeSignIn?.uid ?? null,
       });
       firebaseUidRef.current = nextUid;
+      if (previousUid !== nextUid) {
+        clearMismatchSignOutTimer();
+        mismatchSignOutRef.current = null;
+      }
       if (!invalidatesSession) return;
       contextGenerationRef.current += 1;
       deactivateOwner(false);
       setError(null);
       setAuthUserRevision((revision) => revision + 1);
     });
-  }, [deactivateOwner, runtime]);
+  }, [clearMismatchSignOutTimer, deactivateOwner, runtime]);
+
+  const endMismatchedFirebaseSession = useCallback(
+    (uid: string, boundWallet: string, nextWallet: string) => {
+      const mismatchKey = `${uid}:${boundWallet}:${nextWallet}`;
+      if (mismatchSignOutRef.current === mismatchKey) return;
+      mismatchSignOutRef.current = mismatchKey;
+      contextGenerationRef.current += 1;
+      deactivateOwner(true);
+      setError(null);
+      setSessionResolution('resolving');
+      clearMismatchSignOutTimer();
+      let retryCount = 0;
+      const attemptSignOut = () => {
+        if (!mountedRef.current || mismatchSignOutRef.current !== mismatchKey) return;
+        void runtime.signOut().catch((signOutError) => {
+          if (!mountedRef.current || mismatchSignOutRef.current !== mismatchKey) return;
+          setError(errorMessage(signOutError, 'Unable to end the previous wallet session'));
+          const delay = persistentRetryDelay(retryCount);
+          retryCount += 1;
+          clearMismatchSignOutTimer();
+          mismatchSignOutTimerRef.current = runtime.setTimer(() => {
+            mismatchSignOutTimerRef.current = null;
+            attemptSignOut();
+          }, delay);
+        });
+      };
+      attemptSignOut();
+    },
+    [clearMismatchSignOutTimer, deactivateOwner, runtime],
+  );
 
   useEffect(() => {
-    const allowDisconnected = !connectedWallet && options.observeDisconnectedSession === true;
-    const shouldObserve = Boolean(connectedWallet || allowDisconnected);
+    const currentUid = firebaseUidRef.current;
+    const activeWallet = sessionWalletRef.current;
+    if (mismatchSignOutRef.current) {
+      setSessionResolution('resolving');
+      return;
+    }
+    if (
+      connectedWallet &&
+      activeWallet &&
+      activeWallet !== connectedWallet &&
+      currentUid &&
+      sessionUidRef.current === currentUid
+    ) {
+      endMismatchedFirebaseSession(currentUid, activeWallet, connectedWallet);
+      return;
+    }
+
     const contextGeneration = contextGenerationRef.current + 1;
     contextGenerationRef.current = contextGeneration;
-    if (sessionWalletRef.current !== connectedWallet) {
-      deactivateOwner(Boolean(connectedWallet));
+    if (!activeWallet && connectedWallet) {
+      setState((current) => ({ ...current, loading: true }));
     }
     setError(null);
-    setSessionResolution(shouldObserve ? 'resolving' : 'disabled');
-    if (!shouldObserve) return;
+    const hasValidatedSession = Boolean(
+      activeWallet &&
+        currentUid &&
+        sessionUidRef.current === currentUid &&
+        (!connectedWallet || activeWallet === connectedWallet),
+    );
+    setSessionResolution(hasValidatedSession ? 'settled' : 'resolving');
 
     let cancelled = false;
     let unsubscribeSession = () => {};
-    let expiryTimer: unknown = null;
     let retryTimer: unknown = null;
     let retryCount = 0;
     let subscriptionGeneration = 0;
-    const retryDelays = [400, 800, 1_600];
     const isCurrentContext = () =>
       !cancelled &&
       contextGenerationRef.current === contextGeneration &&
       connectedWalletRef.current === connectedWallet;
-    const clearExpiryTimer = () => {
-      if (expiryTimer === null) return;
-      runtime.clearTimer(expiryTimer);
-      expiryTimer = null;
-    };
     const clearRetryTimer = () => {
       if (retryTimer === null) return;
       runtime.clearTimer(retryTimer);
       retryTimer = null;
     };
     const scheduleRetry = (sessionError: unknown, retry: () => void) => {
-      if (
-        !firestoreListenerErrorIsRetryable(sessionError) ||
-        retryCount >= retryDelays.length
-      ) {
-        return false;
-      }
-      const delay = retryDelays[retryCount];
+      if (!firestoreListenerErrorIsRetryable(sessionError)) return false;
+      const delay = persistentRetryDelay(retryCount);
       retryCount += 1;
-      setSessionResolution('resolving');
+      const hasValidatedSession = Boolean(
+        sessionWalletRef.current && sessionUidRef.current === firebaseUidRef.current,
+      );
+      setSessionResolution(hasValidatedSession ? 'settled' : 'resolving');
       clearRetryTimer();
       retryTimer = runtime.setTimer(() => {
         retryTimer = null;
@@ -352,29 +404,10 @@ export function useSolanaAuthWithRuntime(
     };
     const invalidateBinding = (message?: string) => {
       if (!isCurrentContext()) return;
-      clearExpiryTimer();
       clearRetryTimer();
       deactivateOwner(false);
       setSessionResolution('settled');
       if (message) setError(message);
-    };
-    const armExpiry = (binding: SessionBinding) => {
-      clearExpiryTimer();
-      if (binding.expiresAt === null) {
-        invalidateBinding();
-        return;
-      }
-      const expiresAt = binding.expiresAt;
-      const scheduleNext = () => {
-        if (!isCurrentContext() || sessionWalletRef.current !== binding.wallet) return;
-        const delay = sessionExpiryDelay(expiresAt, runtime.now());
-        if (delay === 0) {
-          invalidateBinding('Wallet session expired. Sign in again.');
-          return;
-        }
-        expiryTimer = runtime.setTimer(scheduleNext, delay);
-      };
-      scheduleNext();
     };
 
     const subscribe = (uid: string, token: string) => {
@@ -394,21 +427,19 @@ export function useSolanaAuthWithRuntime(
               return;
             }
             const binding = update.value;
-            if (
-              !binding ||
-              binding.expiresAt === null ||
-              binding.expiresAt <= runtime.now() ||
-              (connectedWallet !== null && binding.wallet !== connectedWallet)
-            ) {
+            if (!binding) {
               invalidateBinding();
+              return;
+            }
+            if (connectedWallet !== null && binding.wallet !== connectedWallet) {
+              endMismatchedFirebaseSession(uid, binding.wallet, connectedWallet);
               return;
             }
             retryCount = 0;
             clearRetryTimer();
             setError(null);
-            activateOwner(binding.wallet, token);
+            activateOwner(binding.wallet, token, uid);
             setSessionResolution('settled');
-            armExpiry(binding);
           },
           error: (sessionError) => {
             if (!isCurrentContext() || generation !== subscriptionGeneration) return;
@@ -455,7 +486,6 @@ export function useSolanaAuthWithRuntime(
     return () => {
       cancelled = true;
       subscriptionGeneration += 1;
-      clearExpiryTimer();
       clearRetryTimer();
       unsubscribeSession();
     };
@@ -464,15 +494,14 @@ export function useSolanaAuthWithRuntime(
     authUserRevision,
     connectedWallet,
     deactivateOwner,
-    options.observeDisconnectedSession,
+    endMismatchedFirebaseSession,
     runtime,
     sessionListenerRevision,
   ]);
 
   useEffect(() => {
     const wallet = state.sessionWallet;
-    const allowDisconnected =
-      !connectedWallet && options.observeDisconnectedSession === true;
+    const allowDisconnected = !connectedWallet;
     if (!wallet || (connectedWallet !== wallet && !allowDisconnected)) return;
     const ownerGeneration = ownerGenerationRef.current;
     let cancelled = false;
@@ -627,7 +656,7 @@ export function useSolanaAuthWithRuntime(
       reconcileRetryTimer = null;
     };
     const reconcileWhenCurrent = () => {
-      if (!isCurrent() || connectedWallet !== wallet) return;
+      if (!isCurrent()) return;
       clearReconcileRetryTimer();
       void reconcileProfile()
         .then(() => {
@@ -655,7 +684,6 @@ export function useSolanaAuthWithRuntime(
   }, [
     connectedWallet,
     deactivateOwner,
-    options.observeDisconnectedSession,
     reconcileProfile,
     runtime,
     state.sessionWallet,
@@ -767,7 +795,7 @@ export function useSolanaAuthWithRuntime(
         ensureAttemptCurrent();
         if (!token) throw new Error('Missing Firebase auth token');
         setError(null);
-        activateOwner(wallet, token);
+        activateOwner(wallet, token, attempt.uid);
         setSessionResolution('settled');
         setSessionListenerRevision((revision) => revision + 1);
         resolveAttempt({ wallet, token });
@@ -799,42 +827,46 @@ export function useSolanaAuthWithRuntime(
 
   const signOut = useCallback(async () => {
     contextGenerationRef.current += 1;
+    clearMismatchSignOutTimer();
+    mismatchSignOutRef.current = null;
     deactivateOwner(false);
     setError(null);
     lastSignedRef.current = null;
     await runtime.signOut();
-  }, [deactivateOwner, runtime]);
+  }, [clearMismatchSignOutTimer, deactivateOwner, runtime]);
 
-  const hasCurrentWalletSession = useCallback(
+  const hasAuthenticatedWalletSession = useCallback(
     (wallet: string | null | undefined) =>
       Boolean(
         wallet &&
-          connectedRef.current &&
-          connectedWalletRef.current === wallet &&
-          sessionWalletRef.current === wallet,
+          sessionWalletRef.current === wallet &&
+          sessionUidRef.current === firebaseUidRef.current,
       ),
     [],
   );
 
   const stateIsVisible = Boolean(
-    (connectedWallet && state.sessionWallet === connectedWallet) ||
-      (!connectedWallet && options.observeDisconnectedSession && state.sessionWallet),
+    state.sessionWallet && (!connectedWallet || state.sessionWallet === connectedWallet),
   );
+  const exposedSessionResolution =
+    connectedWallet && state.sessionWallet && state.sessionWallet !== connectedWallet
+      ? 'resolving'
+      : sessionResolution;
   return {
     ...(stateIsVisible
       ? state
       : { ...EMPTY_AUTH_STATE, loading: Boolean(connectedWallet && state.loading) }),
-    sessionResolution,
+    sessionResolution: exposedSessionResolution,
     error,
     signIn,
     signOut,
     reconcileProfile,
     beginDeliveryRecoveryScheduleUpdate,
-    hasCurrentWalletSession,
+    hasAuthenticatedWalletSession,
   };
 }
 
-export function useSolanaAuth(options: SolanaAuthOptions = {}) {
+export function useSolanaAuth() {
   const walletState = useWallet();
-  return useSolanaAuthWithRuntime(walletState, DEFAULT_RUNTIME, options);
+  return useSolanaAuthWithRuntime(walletState, DEFAULT_RUNTIME);
 }

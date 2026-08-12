@@ -9,9 +9,15 @@ export type StripeCheckoutProfileRecoveryStatus = {
 
 export function resolveStripeCheckoutDataOwner(
   connectedWallet: string | null | undefined,
+  authenticatedWallet: string | null | undefined,
   recoveredWallet: string | null | undefined,
 ): string | undefined {
-  return normalizedString(connectedWallet) || normalizedString(recoveredWallet) || undefined;
+  return (
+    normalizedString(connectedWallet) ||
+    normalizedString(authenticatedWallet) ||
+    normalizedString(recoveredWallet) ||
+    undefined
+  );
 }
 
 export function mergeStripeCheckoutRecoverySessionIds(
@@ -29,23 +35,6 @@ export function pendingStripeCheckoutRecoverySessionIds(
 ): string[] {
   const present = new Set(profileSessionIds.map(normalizedString).filter(Boolean));
   return targetSessionIds.map(normalizedString).filter((sessionId) => sessionId && !present.has(sessionId));
-}
-
-export function shouldObserveDisconnectedStripeSession(args: {
-  connectedWallet: string | null | undefined;
-  recoveryKey: string;
-  recoveryStatus: StripeCheckoutProfileRecoveryStatus | null;
-  recoveredWallet: string | null | undefined;
-  hasObservedSession?: boolean;
-}): boolean {
-  if (normalizedString(args.connectedWallet)) return false;
-  if (normalizedString(args.recoveredWallet)) return true;
-  if (!args.recoveryKey) return false;
-  return (
-    args.recoveryStatus?.key !== args.recoveryKey ||
-    args.recoveryStatus.phase === 'pending' ||
-    args.hasObservedSession === true
-  );
 }
 
 const STRIPE_CHECKOUT_RETRY_INTERVALS_MS = [3_000, 6_000, 12_000] as const;
