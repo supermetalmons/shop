@@ -3,6 +3,22 @@ export type ClearCardRenderSize = {
   height: number;
 };
 
+export type ClearCardRenderQuality = {
+  maxPixelRatio?: number;
+  transmissionResolutionScale?: number;
+};
+
+export function resolveClearCardRevealRenderQuality(
+  viewerOnly: boolean,
+  displayStage: 'pack' | 'breaking' | 'revealed',
+): ClearCardRenderQuality {
+  if (viewerOnly) return {};
+  return {
+    maxPixelRatio: displayStage === 'pack' ? 3 : 1.5,
+    transmissionResolutionScale: displayStage === 'pack' ? 1 : 0.65,
+  };
+}
+
 export function resolveClearCardRenderSize(
   canvasWidth: number,
   canvasHeight: number,

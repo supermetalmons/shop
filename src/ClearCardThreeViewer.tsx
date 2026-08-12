@@ -250,6 +250,8 @@ type ClearCardThreeViewerProps = {
   cardModelUrl?: string;
   packModelUrl?: string;
   lightingConfig: ClearCardLightingConfig;
+  maxPixelRatio?: number;
+  transmissionResolutionScale?: number;
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   snapBackOnRelease?: boolean;
@@ -603,6 +605,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       cardModelUrl,
       packModelUrl,
       lightingConfig,
+      maxPixelRatio = MAX_PIXEL_RATIO,
+      transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT,
       unrestrictedMovement,
       axisLockedOrbit,
       snapBackOnRelease = false,
@@ -628,8 +632,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const cardOnly = !packModelUrl;
     const requestRenderRef = useRef<(() => void) | null>(null);
+    const syncRendererSizeRef = useRef<(() => void) | null>(null);
+    const setTransmissionResolutionScaleRef = useRef<((scale: number) => void) | null>(null);
     const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
     const lightingConfigRef = useRef(lightingConfig);
+    const maxPixelRatioRef = useRef(maxPixelRatio);
+    const transmissionResolutionScaleRef = useRef(transmissionResolutionScale);
     const reducedMotionRef = useRef(false);
     const axisLockedOrbitRef = useRef(axisLockedOrbit);
     const snapBackOnReleaseRef = useRef(snapBackOnRelease);
@@ -702,6 +710,18 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       lightingConfigRef.current = lightingConfig;
       applyLightingRef.current?.(lightingConfig);
     }, [lightingConfig]);
+
+    useEffect(() => {
+      maxPixelRatioRef.current = maxPixelRatio;
+      syncRendererSizeRef.current?.();
+      requestRenderRef.current?.();
+    }, [maxPixelRatio]);
+
+    useEffect(() => {
+      transmissionResolutionScaleRef.current = transmissionResolutionScale;
+      setTransmissionResolutionScaleRef.current?.(transmissionResolutionScale);
+      requestRenderRef.current?.();
+    }, [transmissionResolutionScale]);
 
     useImperativeHandle(
       ref,
@@ -2283,7 +2303,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           try {
             renderer.render(scene, shardCamera);
           } finally {
-            renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+            renderer.transmissionResolutionScale = transmissionResolutionScaleRef.current;
             fragmentsGroup.visible = false;
           }
         }
@@ -2305,7 +2325,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             renderer.render(scene, shardCamera);
           } finally {
             renderer.autoClear = true;
-            renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+            renderer.transmissionResolutionScale = transmissionResolutionScaleRef.current;
           }
           camera.layers.set(0);
           camera.layers.enable(SHARD_LAYER);
@@ -2792,11 +2812,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             window.innerWidth,
             window.innerHeight,
           );
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
+          renderer.setPixelRatio(
+            Math.min(window.devicePixelRatio || 1, maxPixelRatioRef.current),
+          );
           renderer.setSize(renderSize.width, renderSize.height, false);
           cameraAspect = canvasWidth / canvasHeight;
           fitCamera();
         };
+        syncRendererSizeRef.current = syncRendererSize;
         resize = () => {
           syncRendererSize?.();
           requestRender();
@@ -2811,7 +2834,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           });
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
-          renderer.transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+          renderer.transmissionResolutionScale = transmissionResolutionScaleRef.current;
+          setTransmissionResolutionScaleRef.current = (scale) => {
+            if (renderer) renderer.transmissionResolutionScale = scale;
+          };
           applyLightingRef.current = (config) => applyLightingConfiguration(config);
           applyLightingConfiguration(lightingConfigRef.current, true);
           captureSnapshotRef.current = captureSnapshot;
@@ -2973,6 +2999,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         disposed = true;
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
+        syncRendererSizeRef.current = null;
+        setTransmissionResolutionScaleRef.current = null;
         applyLightingRef.current = null;
         applyAxisLockedOrbitRef.current = null;
         updateCameraViewRef.current = null;

@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveClearCardRenderSize } from '../src/lib/clearCardCanvas.ts';
+import {
+  resolveClearCardRenderSize,
+  resolveClearCardRevealRenderQuality,
+} from '../src/lib/clearCardCanvas.ts';
+
+test('clear card reveal quality preserves pack detail before reducing break cost', () => {
+  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'pack'), {
+    maxPixelRatio: 3,
+    transmissionResolutionScale: 1,
+  });
+  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'breaking'), {
+    maxPixelRatio: 1.5,
+    transmissionResolutionScale: 0.65,
+  });
+  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'revealed'), {
+    maxPixelRatio: 1.5,
+    transmissionResolutionScale: 0.65,
+  });
+  assert.deepEqual(resolveClearCardRevealRenderQuality(true, 'pack'), {});
+});
 
 test('resolveClearCardRenderSize keeps canvases that fit within the viewport unchanged', () => {
   assert.deepEqual(resolveClearCardRenderSize(600, 800, 1200, 900), {
