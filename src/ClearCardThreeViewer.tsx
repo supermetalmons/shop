@@ -47,7 +47,7 @@ import {
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
-const MAX_PIXEL_RATIO = 3;
+const MAX_PIXEL_RATIO = 2;
 const CANVAS_OVERSCAN = 1.5;
 const INTERACTION_FRAME_INTERVAL_MS = 1_000 / 30;
 const ADAPTIVE_INTERACTION_THROTTLE_SESSION_KEY =
