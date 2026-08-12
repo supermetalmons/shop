@@ -6722,6 +6722,9 @@ function App({
             const canViewInteractiveCard =
               usesInteractiveCardPackRevealForDropId(order.dropId) &&
               Boolean(getInteractiveCardPackCardByFigureId(order.dropId, item.refId));
+            const canViewClearCardModel =
+              usesClearCard3dRevealForDropId(order.dropId) &&
+              Boolean(clearCardModelUrl(item.refId));
             const previewImage = primarySrc || fallbackSrc;
 
             return (
@@ -6736,6 +6739,18 @@ function App({
                 onClick={(evt) => {
                   const originRect = getInventoryRevealRect(evt.currentTarget);
                   const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
+                  if (canViewClearCardModel) {
+                    openClearCardModelViewer({
+                      overlayId: previewId,
+                      dropId: order.dropId,
+                      name: label,
+                      image: renderedPreviewImage.src,
+                      figureId: item.refId,
+                      viewerMode: 'clear-card',
+                      originRect,
+                    });
+                    return;
+                  }
                   if (canViewInteractiveCard) {
                     openInteractiveCardViewer({
                       overlayId: previewId,
@@ -6762,6 +6777,18 @@ function App({
                   evt.preventDefault();
                   const originRect = getInventoryRevealRect(evt.currentTarget);
                   const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
+                  if (canViewClearCardModel) {
+                    openClearCardModelViewer({
+                      overlayId: previewId,
+                      dropId: order.dropId,
+                      name: label,
+                      image: renderedPreviewImage.src,
+                      figureId: item.refId,
+                      viewerMode: 'clear-card',
+                      originRect,
+                    });
+                    return;
+                  }
                   if (canViewInteractiveCard) {
                     openInteractiveCardViewer({
                       overlayId: previewId,
@@ -6802,8 +6829,10 @@ function App({
       figureMetadataByKey,
       getDropContent,
       mergeLoadedFigureMetadata,
+      openClearCardModelViewer,
       openImageViewer,
       openInteractiveCardViewer,
+      usesClearCard3dRevealForDropId,
       usesInteractiveCardPackRevealForDropId,
     ],
   );
