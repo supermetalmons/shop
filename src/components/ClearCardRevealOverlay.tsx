@@ -130,7 +130,10 @@ export default function ClearCardRevealOverlay({
   const packReady = viewerStatus === 'ready';
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const viewerOnly = Boolean(viewerMode);
-  const renderQuality = resolveClearCardRevealRenderQuality(viewerOnly, displayStage);
+  const renderQualityByStage = useMemo(
+    () => resolveClearCardRevealRenderQuality(viewerOnly),
+    [viewerOnly],
+  );
   const revealComplete = viewerOnly || displayStage === 'revealed';
   const freeMovementEnabled = isClearCardFreeMovementEnabled(viewerOnly, displayStage);
 
@@ -277,8 +280,7 @@ export default function ClearCardRevealOverlay({
                   cardModelUrl={cardModelUrl}
                   packModelUrl={viewerMode === 'card' ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                   lightingConfig={lightingConfig}
-                  maxPixelRatio={renderQuality.maxPixelRatio}
-                  transmissionResolutionScale={renderQuality.transmissionResolutionScale}
+                  renderQualityByStage={renderQualityByStage}
                   unrestrictedMovement={freeMovementEnabled}
                   axisLockedOrbit={false}
                   snapBackOnRelease={freeMovementEnabled}

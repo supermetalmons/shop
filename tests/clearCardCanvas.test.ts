@@ -3,22 +3,32 @@ import test from 'node:test';
 import {
   resolveClearCardRenderSize,
   resolveClearCardRevealRenderQuality,
+  shouldDeferClearCardRevealQualityRestore,
 } from '../src/lib/clearCardCanvas.ts';
 
-test('clear card reveal quality preserves pack detail before reducing break cost', () => {
-  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'pack'), {
-    maxPixelRatio: 3,
-    transmissionResolutionScale: 1,
+test('clear card reveal quality reduces only the break stage before restoring card detail', () => {
+  assert.deepEqual(resolveClearCardRevealRenderQuality(false), {
+    pack: {
+      maxPixelRatio: 3,
+      transmissionResolutionScale: 1,
+    },
+    breaking: {
+      maxPixelRatio: 1.5,
+      transmissionResolutionScale: 0.65,
+    },
+    revealed: {
+      maxPixelRatio: 2,
+      transmissionResolutionScale: 1,
+    },
   });
-  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'breaking'), {
-    maxPixelRatio: 1.5,
-    transmissionResolutionScale: 0.65,
-  });
-  assert.deepEqual(resolveClearCardRevealRenderQuality(false, 'revealed'), {
-    maxPixelRatio: 1.5,
-    transmissionResolutionScale: 0.65,
-  });
-  assert.deepEqual(resolveClearCardRevealRenderQuality(true, 'pack'), {});
+  assert.equal(resolveClearCardRevealRenderQuality(true), undefined);
+});
+
+test('clear card reveal defers only the animated post-break quality restoration', () => {
+  assert.equal(shouldDeferClearCardRevealQualityRestore('breaking', 'revealed'), true);
+  assert.equal(shouldDeferClearCardRevealQualityRestore('pack', 'revealed'), false);
+  assert.equal(shouldDeferClearCardRevealQualityRestore('revealed', 'pack'), false);
+  assert.equal(shouldDeferClearCardRevealQualityRestore('pack', 'breaking'), false);
 });
 
 test('resolveClearCardRenderSize keeps canvases that fit within the viewport unchanged', () => {

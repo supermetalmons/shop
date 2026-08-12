@@ -45,7 +45,11 @@ import {
   isClearCardImpactPointer,
   type ClearCardGatedHitState,
 } from './lib/clearCardReveal';
-import { resolveClearCardRenderSize } from './lib/clearCardCanvas';
+import {
+  resolveClearCardRenderSize,
+  shouldDeferClearCardRevealQualityRestore,
+  type ClearCardRenderQualityByStage,
+} from './lib/clearCardCanvas';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
@@ -250,8 +254,7 @@ type ClearCardThreeViewerProps = {
   cardModelUrl?: string;
   packModelUrl?: string;
   lightingConfig: ClearCardLightingConfig;
-  maxPixelRatio?: number;
-  transmissionResolutionScale?: number;
+  renderQualityByStage?: ClearCardRenderQualityByStage;
   unrestrictedMovement: boolean;
   axisLockedOrbit: boolean;
   snapBackOnRelease?: boolean;
@@ -605,8 +608,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       cardModelUrl,
       packModelUrl,
       lightingConfig,
-      maxPixelRatio = MAX_PIXEL_RATIO,
-      transmissionResolutionScale = TRANSMISSION_RESOLUTION_SCALE_DEFAULT,
+      renderQualityByStage,
       unrestrictedMovement,
       axisLockedOrbit,
       snapBackOnRelease = false,
@@ -632,12 +634,19 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const cardOnly = !packModelUrl;
     const requestRenderRef = useRef<(() => void) | null>(null);
-    const syncRendererSizeRef = useRef<(() => void) | null>(null);
-    const setTransmissionResolutionScaleRef = useRef<((scale: number) => void) | null>(null);
+    const applyRenderQualityForStageRef = useRef<
+      ((stage: ClearCardDisplayStage) => void) | null
+    >(null);
     const applyLightingRef = useRef<((config: ClearCardLightingConfig) => void) | null>(null);
     const lightingConfigRef = useRef(lightingConfig);
-    const maxPixelRatioRef = useRef(maxPixelRatio);
-    const transmissionResolutionScaleRef = useRef(transmissionResolutionScale);
+    const renderQualityByStageRef = useRef(renderQualityByStage);
+    const maxPixelRatioRef = useRef(
+      renderQualityByStage?.pack.maxPixelRatio ?? MAX_PIXEL_RATIO,
+    );
+    const transmissionResolutionScaleRef = useRef(
+      renderQualityByStage?.pack.transmissionResolutionScale ??
+        TRANSMISSION_RESOLUTION_SCALE_DEFAULT,
+    );
     const reducedMotionRef = useRef(false);
     const axisLockedOrbitRef = useRef(axisLockedOrbit);
     const snapBackOnReleaseRef = useRef(snapBackOnRelease);
@@ -712,16 +721,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     }, [lightingConfig]);
 
     useEffect(() => {
-      maxPixelRatioRef.current = maxPixelRatio;
-      syncRendererSizeRef.current?.();
+      renderQualityByStageRef.current = renderQualityByStage;
+      applyRenderQualityForStageRef.current?.(stageRef.current);
       requestRenderRef.current?.();
-    }, [maxPixelRatio]);
-
-    useEffect(() => {
-      transmissionResolutionScaleRef.current = transmissionResolutionScale;
-      setTransmissionResolutionScaleRef.current?.(transmissionResolutionScale);
-      requestRenderRef.current?.();
-    }, [transmissionResolutionScale]);
+    }, [renderQualityByStage]);
 
     useImperativeHandle(
       ref,
@@ -1161,6 +1164,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let handleContextRestored: (() => void) | null = null;
       let syncRendererSize: (() => void) | null = null;
       let resize: (() => void) | null = null;
+      let pendingRenderQualityStage: ClearCardDisplayStage | null = null;
+      const rendererLogicalSize = new THREE.Vector2();
 
       const packMeshes: THREE.Mesh[] = [];
       let packUsesTransmission = false;
@@ -1382,8 +1387,33 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         applyTransmissionBackdrop(config, stage === 'pack' && packUsesTransmission);
       };
 
+      const applyRenderQualityForStage = (stage: ClearCardDisplayStage) => {
+        const quality = renderQualityByStageRef.current?.[stage];
+        const nextMaxPixelRatio = quality?.maxPixelRatio ?? MAX_PIXEL_RATIO;
+        const nextTransmissionResolutionScale =
+          quality?.transmissionResolutionScale ?? TRANSMISSION_RESOLUTION_SCALE_DEFAULT;
+        const pixelRatioChanged = maxPixelRatioRef.current !== nextMaxPixelRatio;
+        const transmissionScaleChanged =
+          transmissionResolutionScaleRef.current !== nextTransmissionResolutionScale;
+
+        maxPixelRatioRef.current = nextMaxPixelRatio;
+        transmissionResolutionScaleRef.current = nextTransmissionResolutionScale;
+        if (renderer && transmissionScaleChanged) {
+          renderer.transmissionResolutionScale = nextTransmissionResolutionScale;
+        }
+        if (pixelRatioChanged) syncRendererSize?.();
+      };
+      applyRenderQualityForStageRef.current = applyRenderQualityForStage;
+
       const setStage = (nextStage: ClearCardDisplayStage) => {
+        const previousStage = stageRef.current;
         stageRef.current = nextStage;
+        if (shouldDeferClearCardRevealQualityRestore(previousStage, nextStage)) {
+          pendingRenderQualityStage = nextStage;
+        } else {
+          pendingRenderQualityStage = null;
+          applyRenderQualityForStage(nextStage);
+        }
         syncLightVisibility(nextStage, lightingConfigRef.current);
         syncTransmissionBackdrop(nextStage, lightingConfigRef.current);
         onStageChangeRef.current?.(nextStage);
@@ -2165,6 +2195,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return;
         }
         if (interactionThrottleActive) lastInteractionFrameTime = now;
+        if (pendingRenderQualityStage !== null) {
+          const nextQualityStage = pendingRenderQualityStage;
+          pendingRenderQualityStage = null;
+          if (stageRef.current === nextQualityStage) {
+            applyRenderQualityForStage(nextQualityStage);
+          }
+        }
         if (interactionProbeActive) {
           const decision = adaptiveFrameRateMonitor.addFrame(now);
           if (decision !== 'sampling') interactionProbeActive = false;
@@ -2348,6 +2385,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (
           tiltUnsettled ||
           effectsActive ||
+          pendingRenderQualityStage !== null ||
           snapBackRef.current.active ||
           interactionThrottleReleasePending ||
           interactionProbeActive
@@ -2812,14 +2850,19 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             window.innerWidth,
             window.innerHeight,
           );
-          renderer.setPixelRatio(
-            Math.min(window.devicePixelRatio || 1, maxPixelRatioRef.current),
+          const nextPixelRatio = Math.min(
+            window.devicePixelRatio || 1,
+            maxPixelRatioRef.current,
           );
-          renderer.setSize(renderSize.width, renderSize.height, false);
+          const pixelRatioChanged = renderer.getPixelRatio() !== nextPixelRatio;
+          const currentSize = renderer.getSize(rendererLogicalSize);
+          const sizeChanged =
+            currentSize.x !== renderSize.width || currentSize.y !== renderSize.height;
+          if (pixelRatioChanged) renderer.setPixelRatio(nextPixelRatio);
+          if (sizeChanged) renderer.setSize(renderSize.width, renderSize.height, false);
           cameraAspect = canvasWidth / canvasHeight;
           fitCamera();
         };
-        syncRendererSizeRef.current = syncRendererSize;
         resize = () => {
           syncRendererSize?.();
           requestRender();
@@ -2835,9 +2878,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           renderer.setClearColor(0x000000, 0);
           renderer.outputColorSpace = THREE.SRGBColorSpace;
           renderer.transmissionResolutionScale = transmissionResolutionScaleRef.current;
-          setTransmissionResolutionScaleRef.current = (scale) => {
-            if (renderer) renderer.transmissionResolutionScale = scale;
-          };
           applyLightingRef.current = (config) => applyLightingConfiguration(config);
           applyLightingConfiguration(lightingConfigRef.current, true);
           captureSnapshotRef.current = captureSnapshot;
@@ -2997,10 +3037,10 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       return () => {
         cancelUnrestrictedDrag();
         disposed = true;
+        pendingRenderQualityStage = null;
         viewerReadyRef.current = false;
         requestRenderRef.current = null;
-        syncRendererSizeRef.current = null;
-        setTransmissionResolutionScaleRef.current = null;
+        applyRenderQualityForStageRef.current = null;
         applyLightingRef.current = null;
         applyAxisLockedOrbitRef.current = null;
         updateCameraViewRef.current = null;

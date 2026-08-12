@@ -8,15 +8,36 @@ export type ClearCardRenderQuality = {
   transmissionResolutionScale?: number;
 };
 
+export type ClearCardRenderQualityByStage = Record<
+  'pack' | 'breaking' | 'revealed',
+  ClearCardRenderQuality
+>;
+
 export function resolveClearCardRevealRenderQuality(
   viewerOnly: boolean,
-  displayStage: 'pack' | 'breaking' | 'revealed',
-): ClearCardRenderQuality {
-  if (viewerOnly) return {};
+): ClearCardRenderQualityByStage | undefined {
+  if (viewerOnly) return undefined;
   return {
-    maxPixelRatio: displayStage === 'pack' ? 3 : 1.5,
-    transmissionResolutionScale: displayStage === 'pack' ? 1 : 0.65,
+    pack: {
+      maxPixelRatio: 3,
+      transmissionResolutionScale: 1,
+    },
+    breaking: {
+      maxPixelRatio: 1.5,
+      transmissionResolutionScale: 0.65,
+    },
+    revealed: {
+      maxPixelRatio: 2,
+      transmissionResolutionScale: 1,
+    },
   };
+}
+
+export function shouldDeferClearCardRevealQualityRestore(
+  previousStage: 'pack' | 'breaking' | 'revealed',
+  nextStage: 'pack' | 'breaking' | 'revealed',
+): boolean {
+  return previousStage === 'breaking' && nextStage === 'revealed';
 }
 
 export function resolveClearCardRenderSize(
