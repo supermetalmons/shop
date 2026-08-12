@@ -237,7 +237,11 @@ export default function ClearCardRevealOverlay({
           <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
             {resolvedLoadingImageSrc ? (
               <img
-                className="clear-card-reveal-overlay__fallback"
+                className={`clear-card-reveal-overlay__fallback${
+                  viewerMode === 'card'
+                    ? ' clear-card-reveal-overlay__fallback--card-viewer'
+                    : ''
+                }`}
                 src={resolvedLoadingImageSrc}
                 alt=""
                 draggable={false}

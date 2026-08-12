@@ -3044,6 +3044,10 @@ button.no-focus-style:focus-visible {
   -webkit-user-drag: none;
 }
 
+.clear-card-reveal-overlay__fallback--card-viewer {
+  transform: scale(0.9434);
+}
+
 .clear-card-reveal-overlay__viewport--ready .clear-card-reveal-overlay__fallback {
   opacity: 0;
 }
@@ -3083,9 +3087,12 @@ button.clear-card-reveal-overlay__retry:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .clear-card-reveal-overlay .clear-card-wip__canvas {
+    transform: none;
+  }
+
   .clear-card-reveal-overlay .clear-card-wip__canvas,
   .clear-card-reveal-overlay__fallback {
-    transform: none;
     transition-duration: 1ms;
   }
 }
