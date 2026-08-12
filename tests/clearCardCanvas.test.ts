@@ -21,20 +21,7 @@ test('clear card reveal quality reduces only the break stage before restoring ca
       transmissionResolutionScale: 1,
     },
   });
-  assert.deepEqual(resolveClearCardRevealRenderQuality(true), {
-    pack: {
-      maxPixelRatio: 3,
-      transmissionResolutionScale: 1,
-    },
-    breaking: {
-      maxPixelRatio: 3,
-      transmissionResolutionScale: 1,
-    },
-    revealed: {
-      maxPixelRatio: 3,
-      transmissionResolutionScale: 1,
-    },
-  });
+  assert.equal(resolveClearCardRevealRenderQuality(true), undefined);
 });
 
 test('clear card reveal defers only the animated post-break quality restoration', () => {
