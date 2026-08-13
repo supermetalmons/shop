@@ -3690,7 +3690,24 @@ button.wip-reset-btn {
   user-select: none;
   touch-action: manipulation;
   opacity: 1;
-  transition: color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    opacity 160ms ease,
+    visibility 0s linear;
+}
+
+.wip-controls > .clear-card-wip__model-pickers,
+.wip-controls > .lighting-lab {
+  transition:
+    opacity 160ms ease,
+    visibility 0s linear;
+}
+
+.wip-controls--hidden > * {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition-delay: 0s, 160ms;
 }
 
 button.wip-close-btn {

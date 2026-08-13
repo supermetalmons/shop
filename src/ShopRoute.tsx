@@ -7,9 +7,10 @@ import { WalletContextProvider } from './wallet/WalletContext';
 import type { SolanaCluster } from './config/deployment';
 import { navigate } from './navigation';
 
-const CardNft2WipApp = React.lazy(() => import('./WipApp'));
+const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
-type ShopWipExperience = 'card_nft_2' | 'clear_cards';
+type PackWipExperience = 'card_nft_2' | 'little_swag_boxes' | 'poncho_drifella';
+type ShopWipExperience = PackWipExperience | 'clear_cards';
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;
@@ -148,7 +149,11 @@ export default function ShopRoute({
   const wip = wipExperience ? (
     <WipRouteErrorBoundary key={wipExperience} experience={wipExperience}>
       <React.Suspense fallback={<WipRouteShell experience={wipExperience} status="loading" />}>
-        {wipExperience === 'card_nft_2' ? <CardNft2WipApp /> : <ClearCardWipApp />}
+        {wipExperience === 'clear_cards' ? (
+          <ClearCardWipApp />
+        ) : (
+          <PackWipApp dropId={wipExperience} />
+        )}
       </React.Suspense>
     </WipRouteErrorBoundary>
   ) : null;

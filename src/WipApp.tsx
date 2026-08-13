@@ -31,31 +31,18 @@ import { soundPlayer } from './lib/SoundPlayer';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { navigate } from './navigation';
 import { ModalFocusScope } from './components/ModalFocusScope';
+import LittleSwagBoxesWipApp from './LittleSwagBoxesWipApp';
 
 const WIP_CARD_READY_MIN_DELAY_MS = 1_000;
 const WIP_CARD_READY_MAX_DELAY_MS = 1_300;
-const WIP_DROP = (() => {
-  const cardNft2Drop = getFrontendDrop('card_nft_2');
-  if (!cardNft2Drop) {
-    throw new Error('Missing card_nft_2 frontend drop config');
-  }
-  return cardNft2Drop;
-})();
-const WIP_REVEAL_SOUND_PROFILE = resolveDropContent(WIP_DROP).reveal.sound;
-const WIP_REVEAL_SOUND_URLS = interactiveCardPackRevealSoundUrlsForDropId(WIP_DROP.dropId);
-const WIP_CARD_MOTION_SOUND_URLS = [
-  WIP_REVEAL_SOUND_URLS.cardSwipe,
-  WIP_REVEAL_SOUND_URLS.cardSpread,
-].filter((soundUrl): soundUrl is string => Boolean(soundUrl));
-const WIP_BOX_SUPPLY_COUNT = Math.max(1, Math.floor(WIP_DROP.maxSupply));
-const WIP_ITEMS_PER_BOX = Math.max(1, Math.floor(WIP_DROP.itemsPerBox || 1));
-const WIP_CARD_COUNT = WIP_BOX_SUPPLY_COUNT * WIP_ITEMS_PER_BOX;
-const WIP_PACK_MEDIA_COUNT = Math.max(1, Math.floor(WIP_DROP.boxMedia?.count || CARD_NFT_2_PACK_INITIAL_COUNT));
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
+export type PackWipDropId = 'card_nft_2' | 'little_swag_boxes' | 'poncho_drifella';
+
 type WipLocalPlayProps = {
   mode?: 'local-play';
+  dropId?: PackWipDropId;
 };
 
 export type WipAppProps = WipLocalPlayProps | InteractiveCardPackRevealOverlayProps;
@@ -77,27 +64,27 @@ function randomWipRevealDelayMs() {
   return WIP_CARD_READY_MIN_DELAY_MS + Math.floor(Math.random() * (WIP_CARD_READY_MAX_DELAY_MS - WIP_CARD_READY_MIN_DELAY_MS + 1));
 }
 
-function randomWipCardId() {
-  return Math.floor(Math.random() * WIP_CARD_COUNT) + 1;
+function randomWipCardId(cardCount: number) {
+  return Math.floor(Math.random() * cardCount) + 1;
 }
 
-function randomWipCardIds(count = WIP_ITEMS_PER_BOX) {
-  const targetUniqueCount = Math.min(count, WIP_CARD_COUNT);
+function randomWipCardIds(cardCount: number, count: number) {
+  const targetUniqueCount = Math.min(count, cardCount);
   const ids: number[] = [];
   while (ids.length < targetUniqueCount) {
-    const nextId = randomWipCardId();
+    const nextId = randomWipCardId(cardCount);
     if (!ids.includes(nextId)) {
       ids.push(nextId);
     }
   }
   while (ids.length < count) {
-    ids.push(randomWipCardId());
+    ids.push(randomWipCardId(cardCount));
   }
   return ids;
 }
 
-function randomWipPackMediaId() {
-  return Math.floor(Math.random() * WIP_PACK_MEDIA_COUNT) + 1;
+function randomWipPackMediaId(packMediaCount: number) {
+  return Math.floor(Math.random() * packMediaCount) + 1;
 }
 
 function nextRandomWipValue(currentValue: number, count: number) {
@@ -109,34 +96,63 @@ function nextRandomWipValue(currentValue: number, count: number) {
   return nextValue;
 }
 
-function nextRandomWipCardIds(currentIds: readonly number[]) {
-  if (WIP_CARD_COUNT < 2) return [...currentIds];
+function nextRandomWipCardIds(
+  currentIds: readonly number[],
+  cardCount: number,
+  itemsPerBox: number,
+) {
+  if (cardCount < 2) return [...currentIds];
   const currentKey = currentIds.join(',');
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const nextIds = randomWipCardIds(currentIds.length || WIP_ITEMS_PER_BOX);
+    const nextIds = randomWipCardIds(cardCount, currentIds.length || itemsPerBox);
     if (nextIds.join(',') !== currentKey) return nextIds;
   }
-  return randomWipCardIds(currentIds.length || WIP_ITEMS_PER_BOX);
+  return randomWipCardIds(cardCount, currentIds.length || itemsPerBox);
 }
 
-function LocalPlayWipApp() {
+function LocalPlayWipApp({ dropId }: { dropId: Exclude<PackWipDropId, 'little_swag_boxes'> }) {
+  const wipDrop = getFrontendDrop(dropId);
+  if (!wipDrop) {
+    throw new Error(`Missing ${dropId} frontend drop config`);
+  }
+  const revealSoundProfile = resolveDropContent(wipDrop).reveal.sound;
+  const revealSoundUrls = useMemo(
+    () => interactiveCardPackRevealSoundUrlsForDropId(wipDrop.dropId),
+    [wipDrop.dropId],
+  );
+  const cardMotionSoundUrls = useMemo(
+    () => [revealSoundUrls.cardSwipe, revealSoundUrls.cardSpread]
+      .filter((soundUrl): soundUrl is string => Boolean(soundUrl)),
+    [revealSoundUrls.cardSpread, revealSoundUrls.cardSwipe],
+  );
+  const boxSupplyCount = Math.max(1, Math.floor(wipDrop.maxSupply));
+  const itemsPerBox = Math.max(1, Math.floor(wipDrop.itemsPerBox || 1));
+  const cardCount = boxSupplyCount * itemsPerBox;
+  const packMediaCount = Math.max(
+    1,
+    Math.floor(
+      wipDrop.boxMedia?.count ||
+        (wipDrop.dropId === 'card_nft_2' ? CARD_NFT_2_PACK_INITIAL_COUNT : 1),
+    ),
+  );
   const [targetRect, setTargetRect] = useState<OverlayRect>(calcWipTargetRect);
-  const [cardIds, setCardIds] = useState(() => randomWipCardIds());
-  const [packMediaId, setPackMediaId] = useState(() => randomWipPackMediaId());
+  const [cardIds, setCardIds] = useState(() => randomWipCardIds(cardCount, itemsPerBox));
+  const [packMediaId, setPackMediaId] = useState(() => randomWipPackMediaId(packMediaCount));
   const [cardReady, setCardReady] = useState(false);
+  const [focusedMode, setFocusedMode] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const ponchoImageCacheRef = useRef(createPonchoDrifellaImageCache());
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
-  const revealContainerLabel = dropAssetLabel(WIP_DROP, 'box', 1);
+  const revealContainerLabel = dropAssetLabel(wipDrop, 'box', 1);
   const mysteryContainerName = `Mystery ${revealContainerLabel}`;
   const packSequence = useMemo(
-    () => getInteractiveCardPackRevealSequenceForDropId(WIP_DROP.dropId, packMediaId),
-    [packMediaId],
+    () => getInteractiveCardPackRevealSequenceForDropId(wipDrop.dropId, packMediaId),
+    [packMediaId, wipDrop.dropId],
   );
   const currentCards = useMemo(() => {
-    return getInteractiveCardPackCardsByFigureIds(WIP_DROP.dropId, cardIds);
-  }, [cardIds]);
+    return getInteractiveCardPackCardsByFigureIds(wipDrop.dropId, cardIds);
+  }, [cardIds, wipDrop.dropId]);
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -151,10 +167,10 @@ function LocalPlayWipApp() {
   }, []);
 
   const preloadCardMotionSounds = useCallback(() => {
-    WIP_CARD_MOTION_SOUND_URLS.forEach((motionUrl) => {
+    cardMotionSoundUrls.forEach((motionUrl) => {
       void soundPlayer.preloadSound(motionUrl);
     });
-  }, []);
+  }, [cardMotionSoundUrls]);
   const scheduleCardMotionSoundPreload = useCallback(() => {
     if (typeof window === 'undefined') {
       preloadCardMotionSounds();
@@ -163,24 +179,24 @@ function LocalPlayWipApp() {
     window.setTimeout(preloadCardMotionSounds, 0);
   }, [preloadCardMotionSounds]);
   const preloadRevealSounds = useCallback(() => {
-    void soundPlayer.preloadSound(WIP_REVEAL_SOUND_URLS.reveal);
-    WIP_REVEAL_SOUND_URLS.click.forEach((clickUrl) => {
+    void soundPlayer.preloadSound(revealSoundUrls.reveal);
+    revealSoundUrls.click.forEach((clickUrl) => {
       void soundPlayer.preloadSound(clickUrl);
     });
     preloadCardMotionSounds();
-  }, [preloadCardMotionSounds]);
+  }, [preloadCardMotionSounds, revealSoundUrls.click, revealSoundUrls.reveal]);
   const playClickSound = useCallback(() => {
     void ensureSoundReady().then(() => {
       void soundPlayer.playSound(
-        pickRandomInteractiveCardPackClickSoundUrl(WIP_DROP.dropId),
-        WIP_REVEAL_SOUND_PROFILE.clickVolume,
+        pickRandomInteractiveCardPackClickSoundUrl(wipDrop.dropId),
+        revealSoundProfile.clickVolume,
       );
       scheduleCardMotionSoundPreload();
     });
-  }, [ensureSoundReady, scheduleCardMotionSoundPreload]);
+  }, [ensureSoundReady, revealSoundProfile.clickVolume, scheduleCardMotionSoundPreload, wipDrop.dropId]);
   const playRevealSound = useCallback(() => {
     const play = () => {
-      void soundPlayer.playSound(WIP_REVEAL_SOUND_URLS.reveal, WIP_REVEAL_SOUND_PROFILE.revealVolume);
+      void soundPlayer.playSound(revealSoundUrls.reveal, revealSoundProfile.revealVolume);
     };
     if (soundPlayer.isInitialized) {
       play();
@@ -190,12 +206,12 @@ function LocalPlayWipApp() {
     if (pending) {
       void pending.then(play);
     }
-  }, []);
+  }, [revealSoundProfile.revealVolume, revealSoundUrls.reveal]);
   const playCardMotionSound = useCallback(
     (motionUrl: string | undefined) => {
       if (!motionUrl) return;
       const play = () => {
-        void soundPlayer.playSound(motionUrl, WIP_REVEAL_SOUND_PROFILE.clickVolume);
+        void soundPlayer.playSound(motionUrl, revealSoundProfile.clickVolume);
       };
       if (soundPlayer.isInitialized) {
         play();
@@ -208,14 +224,14 @@ function LocalPlayWipApp() {
       }
       void ensureSoundReady().then(play);
     },
-    [ensureSoundReady],
+    [ensureSoundReady, revealSoundProfile.clickVolume],
   );
   const playCardSwipeSound = useCallback(() => {
-    playCardMotionSound(WIP_REVEAL_SOUND_URLS.cardSwipe);
-  }, [playCardMotionSound]);
+    playCardMotionSound(revealSoundUrls.cardSwipe);
+  }, [playCardMotionSound, revealSoundUrls.cardSwipe]);
   const playCardSpreadSound = useCallback(() => {
-    playCardMotionSound(WIP_REVEAL_SOUND_URLS.cardSpread);
-  }, [playCardMotionSound]);
+    playCardMotionSound(revealSoundUrls.cardSpread);
+  }, [playCardMotionSound, revealSoundUrls.cardSpread]);
 
   const revealOverlayStyle = useMemo<React.CSSProperties>(
     () => ponchoDrifellaRevealOverlayStyleVars({
@@ -286,13 +302,24 @@ function LocalPlayWipApp() {
 
   const handleReset = useCallback(() => {
     setResetKey((prev) => prev + 1);
-    const nextCardIds = nextRandomWipCardIds(cardIds);
-    const nextPackMediaId = nextRandomWipValue(packMediaId, WIP_PACK_MEDIA_COUNT);
+    const nextCardIds = nextRandomWipCardIds(cardIds, cardCount, itemsPerBox);
+    const nextPackMediaId = nextRandomWipValue(packMediaId, packMediaCount);
     setCardIds(nextCardIds);
     setPackMediaId(nextPackMediaId);
-  }, [cardIds, packMediaId]);
+  }, [cardCount, cardIds, itemsPerBox, packMediaCount, packMediaId]);
   const handleClose = useCallback(() => {
     navigate('/');
+  }, []);
+  const handleBackdropPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (
+      !event.isPrimary ||
+      (event.pointerType === 'mouse' && event.button !== 0) ||
+      !(event.target instanceof Element) ||
+      !event.target.classList.contains('reveal-overlay__backdrop')
+    ) {
+      return;
+    }
+    setFocusedMode((current) => !current);
   }, []);
 
   useEffect(() => {
@@ -324,10 +351,11 @@ function LocalPlayWipApp() {
 
   return (
     <ModalFocusScope
-      className="wip-page"
-      ariaLabel="Card pack preview"
+      className={`wip-page${focusedMode ? ' wip-page--focused' : ''}`}
+      ariaLabel={`${wipDrop.collectionName} pack preview`}
       focusTarget="scope"
       onEscape={handleClose}
+      onPointerUpCapture={handleBackdropPointerUp}
     >
       <PonchoRevealOverlay
         modal={false}
@@ -347,19 +375,24 @@ function LocalPlayWipApp() {
         onPlayReveal={playRevealSound}
         onPlayCardSwipe={playCardSwipeSound}
         onPlayCardSpread={playCardSpreadSound}
-        onDismiss={handleClose}
       />
-      <button
-        type="button"
-        className="wip-close-btn"
-        onClick={handleClose}
-        aria-label="Close wip overlay"
+      <div
+        className={`wip-controls${focusedMode ? ' wip-controls--hidden' : ''}`}
+        aria-hidden={focusedMode || undefined}
+        inert={focusedMode || undefined}
       >
-        Close
-      </button>
-      <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">
-        Reset
-      </button>
+        <button
+          type="button"
+          className="wip-close-btn"
+          onClick={handleClose}
+          aria-label="Close wip overlay"
+        >
+          Close
+        </button>
+        <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">
+          Reset
+        </button>
+      </div>
     </ModalFocusScope>
   );
 }
@@ -368,5 +401,9 @@ export default function WipApp(props: WipAppProps) {
   if (props.mode === 'inventory-unbox') {
     return <InteractiveCardPackRevealOverlay {...props} />;
   }
-  return <LocalPlayWipApp />;
+  const dropId = props.dropId || 'card_nft_2';
+  if (dropId === 'little_swag_boxes') {
+    return <LittleSwagBoxesWipApp />;
+  }
+  return <LocalPlayWipApp dropId={dropId} />;
 }

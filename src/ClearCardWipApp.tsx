@@ -41,6 +41,7 @@ const CARD_MODEL_OPTIONS = Array.from({ length: CLEAR_CARD_MODEL_COUNT }, (_, in
   const cardId = index + 1;
   return { label: `Card: ${cardId}`, url: clearCardModelUrl(cardId)! };
 });
+const DEFAULT_CARD_MODEL_URL = clearCardModelUrl(46)!;
 
 function getSnapshotFilename(modelUrl: string, objectKind: 'pack' | 'card') {
   const fallback = objectKind === 'pack' ? 'clear-pack-snapshot' : 'clear-card-snapshot';
@@ -69,8 +70,9 @@ function downloadSnapshotBlob(blob: Blob, filename: string) {
 export default function ClearCardWipApp() {
   const darkMode = useDarkColorScheme();
   const [status, setStatus] = useState<ViewerStatus>('loading');
-  const [cardModelUrl, setCardModelUrl] = useState<string>(CARD_MODEL_OPTIONS[0].url);
+  const [cardModelUrl, setCardModelUrl] = useState<string>(DEFAULT_CARD_MODEL_URL);
   const [cardRevealed, setCardRevealed] = useState(false);
+  const [focusedMode, setFocusedMode] = useState(false);
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>('pack');
   const [unrestrictedMovement, setUnrestrictedMovement] = useState(false);
   const [axisLockedOrbit, setAxisLockedOrbit] = useState(false);
@@ -95,6 +97,9 @@ export default function ClearCardWipApp() {
   }, []);
   const handleClose = useCallback(() => {
     navigate('/');
+  }, []);
+  const handleBackdropClick = useCallback(() => {
+    setFocusedMode((current) => !current);
   }, []);
   const handleReset = useCallback(() => {
     setCardRevealed(false);
@@ -227,12 +232,12 @@ export default function ClearCardWipApp() {
 
   return (
     <ModalFocusScope
-      className="clear-card-wip"
+      className={`clear-card-wip${focusedMode ? ' clear-card-wip--focused' : ''}`}
       ariaLabel="Clear card sample"
       focusTarget="scope"
       onEscape={handleClose}
     >
-      <div className="clear-card-wip__backdrop" aria-hidden="true" />
+      <div className="clear-card-wip__backdrop" aria-hidden="true" onClick={handleBackdropClick} />
       <div
         className={`clear-card-wip__stage${
           upcomingDropPreview ? ' clear-card-wip__stage--upcoming-drop' : ''
@@ -274,50 +279,56 @@ export default function ClearCardWipApp() {
           </div>
         </div>
       </div>
-      <div className="clear-card-wip__model-pickers">
-        <select
-          className="clear-card-wip__model-picker"
-          aria-label="Card model"
-          value={cardModelUrl}
-          onChange={handleModelChange}
+      <div
+        className={`wip-controls${focusedMode ? ' wip-controls--hidden' : ''}`}
+        aria-hidden={focusedMode || undefined}
+        inert={focusedMode || undefined}
+      >
+        <div className="clear-card-wip__model-pickers">
+          <select
+            className="clear-card-wip__model-picker"
+            aria-label="Card model"
+            value={cardModelUrl}
+            onChange={handleModelChange}
+          >
+            {CARD_MODEL_OPTIONS.map((option) => (
+              <option key={option.url} value={option.url}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <ClearCardLightingPanel
+          config={lightingConfig}
+          presetId={lightingPresetId}
+          unrestrictedMovement={unrestrictedMovement}
+          axisLockedOrbit={axisLockedOrbit}
+          upcomingDropPreview={upcomingDropPreview}
+          snapshotDisabled={!ready || displayStage === 'breaking'}
+          onChange={handleLightingChange}
+          onPresetChange={handleLightingPresetChange}
+          onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
+          onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
+          onUpcomingDropPreviewChange={handleUpcomingDropPreviewChange}
+          onSnapshot={handleSnapshot}
+        />
+        <button
+          type="button"
+          className="wip-close-btn"
+          onClick={handleClose}
+          aria-label="Close clear card viewer"
         >
-          {CARD_MODEL_OPTIONS.map((option) => (
-            <option key={option.url} value={option.url}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          Close
+        </button>
+        <button
+          type="button"
+          className="wip-reset-btn"
+          onClick={handleReset}
+          aria-label="Reset unboxing"
+        >
+          Reset
+        </button>
       </div>
-      <ClearCardLightingPanel
-        config={lightingConfig}
-        presetId={lightingPresetId}
-        unrestrictedMovement={unrestrictedMovement}
-        axisLockedOrbit={axisLockedOrbit}
-        upcomingDropPreview={upcomingDropPreview}
-        snapshotDisabled={!ready || displayStage === 'breaking'}
-        onChange={handleLightingChange}
-        onPresetChange={handleLightingPresetChange}
-        onUnrestrictedMovementChange={handleUnrestrictedMovementChange}
-        onAxisLockedOrbitChange={handleAxisLockedOrbitChange}
-        onUpcomingDropPreviewChange={handleUpcomingDropPreviewChange}
-        onSnapshot={handleSnapshot}
-      />
-      <button
-        type="button"
-        className="wip-close-btn"
-        onClick={handleClose}
-        aria-label="Close clear card viewer"
-      >
-        Close
-      </button>
-      <button
-        type="button"
-        className="wip-reset-btn"
-        onClick={handleReset}
-        aria-label="Reset unboxing"
-      >
-        Reset
-      </button>
     </ModalFocusScope>
   );
 }

@@ -76,6 +76,20 @@ test('Clear Cards keeps its public upcoming route separate from its WIP route', 
   assert.equal(resolveUpcomingDropRouteByPath('/clear_cards/wip'), null);
 });
 
+test('pack WIP routes stay separate from their live drop routes', () => {
+  const router = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
+  assert.match(router, /const canonicalLittleSwagBoxesWipPath = '\/little_swag_boxes\/wip';/);
+  assert.match(router, /const canonicalPonchoDrifellaWipPath = '\/poncho_drifella\/wip';/);
+  assert.match(app, /\{ path: '\/little_swag_boxes\/wip', dropId: 'little_swag_boxes' \}/);
+  assert.match(app, /\{ path: '\/poncho_drifella\/wip', dropId: 'poncho_drifella' \}/);
+  assert.equal(resolveFrontendDropByPath('/little_swag_boxes/wip'), null);
+  assert.equal(resolveFrontendDropByPath('/poncho_drifella/wip'), null);
+  assert.equal(resolveFrontendDropByPath('/little_swag_boxes'), FRONTEND_DROPS.little_swag_boxes);
+  assert.equal(resolveFrontendDropByPath('/poncho_drifella'), FRONTEND_DROPS.poncho_drifella);
+});
+
 test('Clear Cards resolves its live drop instead of the notify-only state', () => {
   assert.equal(resolveFrontendDropByPath('/clear_cards'), FRONTEND_DROPS.clear_cards);
   assert.equal(resolveFrontendDropByPath('/clear_cards/'), FRONTEND_DROPS.clear_cards);

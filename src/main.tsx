@@ -29,8 +29,16 @@ const canonicalDrifPath = '/notify_me';
 const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
 const canonicalCardNft2WipPath = '/card_nft_2/wip';
 const canonicalClearCardsWipPath = '/clear_cards/wip';
+const canonicalLittleSwagBoxesWipPath = '/little_swag_boxes/wip';
+const canonicalPonchoDrifellaWipPath = '/poncho_drifella/wip';
 const canonicalClaimPath = '/claim';
 const drifPaths = new Set([canonicalDrifPath]);
+const wipExperiencesByPath = {
+  [canonicalCardNft2WipPath]: 'card_nft_2',
+  [canonicalClearCardsWipPath]: 'clear_cards',
+  [canonicalLittleSwagBoxesWipPath]: 'little_swag_boxes',
+  [canonicalPonchoDrifellaWipPath]: 'poncho_drifella',
+} as const;
 const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
@@ -75,8 +83,7 @@ const resolveCurrentRoute = (): CurrentRoute => {
     normalizedPath === '/' ||
     normalizedPath === canonicalFulfillmentPath ||
     normalizedPath === canonicalCardNft2UnrevealedPath ||
-    normalizedPath === canonicalCardNft2WipPath ||
-    normalizedPath === canonicalClearCardsWipPath ||
+    normalizedPath in wipExperiencesByPath ||
     drifPaths.has(normalizedPath) ||
     resolveUpcomingDropRouteByPath(normalizedPath) ||
     resolveFrontendDropByPath(normalizedPath)
@@ -120,11 +127,7 @@ function RoutedContent({ route }: RoutedContentProps) {
   const { path } = route;
   const isDrifRoute = drifPaths.has(path);
   const wipExperience =
-    path === canonicalCardNft2WipPath
-      ? 'card_nft_2'
-      : path === canonicalClearCardsWipPath
-        ? 'clear_cards'
-        : null;
+    wipExperiencesByPath[path as keyof typeof wipExperiencesByPath] || null;
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
   const isCardNft2UnrevealedRoute = path === canonicalCardNft2UnrevealedPath;
   const routeDrop = isCardNft2UnrevealedRoute ? null : resolveFrontendDropByPath(path);
