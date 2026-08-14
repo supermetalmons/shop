@@ -52,6 +52,7 @@ type FrontendCandidateRecord = FrontendUploadMetadata & {
   workerName: 'mons-shop';
   testedAt: string;
   htmlSha256: string;
+  sourceCommit: string;
 };
 
 type FrontendSmokeDependencies = {
@@ -62,6 +63,7 @@ type FrontendSmokeDependencies = {
 type FrontendProductionSequenceInput = {
   candidateHtmlSha256: string;
   expectedCurrentVersionId: string;
+  verifyBeforeMutation?: () => Promise<void>;
   verifyBeforePromotion?: () => Promise<void>;
   versionId: string;
   wranglerEnvironment: NodeJS.ProcessEnv;
@@ -76,12 +78,12 @@ type FrontendProductionSequenceDependencies = {
 };
 
 type FrontendProductionCandidateDependencies = {
-  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   readCandidate: (versionId: string) => FrontendCandidateRecord | undefined;
 };
 
 type FrontendCandidateUploadInput = {
   authenticatedEnvironment: NodeJS.ProcessEnv;
+  sourceCommit?: string;
   unauthenticatedEnvironment: NodeJS.ProcessEnv;
   validationEnvironment: NodeJS.ProcessEnv;
   wranglerLogDirectory: string;
@@ -90,6 +92,7 @@ type FrontendCandidateUploadInput = {
 type FrontendCandidateUploadDependencies = {
   run: typeof run;
   smoke: typeof smokeFrontendOrigin;
+  sourceCommit: typeof readCleanSourceCommit;
   validate: typeof runFrontendValidation;
   writeCandidate: typeof writeFrontendCandidateRecord;
 };
@@ -101,14 +104,27 @@ type CompleteFrontendReleaseInput = FrontendCandidateUploadInput & {
 
 type CompleteFrontendReleaseDependencies = {
   apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  commit: typeof commitFrontendReleaseManifest;
   frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   manifest: () => ReleaseManifest;
   production: typeof runFrontendProductionSequence;
   record: typeof recordFrontendProductionVersion;
   resolveCandidate: typeof resolveFrontendProductionCandidate;
   smoke: typeof smokeFrontendOrigin;
+  source: typeof readCleanProductionSource;
   triggerDryRun: (environment: NodeJS.ProcessEnv) => void;
   upload: typeof uploadFrontendCandidate;
+};
+
+type GitWorktreeInspection = {
+  error?: Error;
+  output: string;
+  status: number | null;
+};
+
+type GitSource = {
+  branch: string;
+  commit: string;
 };
 
 class DeployFailure extends Error {
@@ -143,6 +159,8 @@ const frontendSmokeResponseLimit = 256 * 1024;
 const frontendSmokeAssetResponseLimit = 2 * 1024 * 1024;
 const frontendSmokeRetryDelaysMs = [0, 500, 1_500] as const;
 const frontendProductionPropagationDelaysMs = [0, 500, 1_500, 3_000, 5_000, 10_000, 20_000, 30_000] as const;
+const gitCommitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const releaseManifestRelativePath = 'cloud/release-manifest.json';
 const frontendValidationSteps = [
   { args: ['run', 'typecheck'], label: 'Frontend typecheck' },
   { args: ['test'], label: 'Frontend tests' },
@@ -160,8 +178,8 @@ function usage(): string {
     '  npm run deploy -- production [--token-file /path/to/cloudflare-token]',
     '  npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token',
     '',
-    'Production without --version-id validates, uploads, verifies, promotes, and records one exact frontend version.',
-    'Use --version-id to promote or resume an existing exact candidate.',
+    'Production without --version-id validates, uploads, verifies, promotes, records, and commits one exact frontend version.',
+    'Use --version-id to promote or resume an existing candidate from the same clean Git commit.',
     '',
     'Authentication:',
     '  Pass --token-file, or set CLOUDFLARE_API_TOKEN in the shell.',
@@ -257,6 +275,114 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, label: str
   if (result.status !== 0) {
     fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
   }
+}
+
+function inspectGitWorktree(): GitWorktreeInspection {
+  const result = spawnSync(
+    'git',
+    ['status', '--porcelain', '--untracked-files=normal'],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: credentialFreeEnvironment(process.env),
+      shell: false,
+    },
+  );
+  return {
+    ...(result.error ? { error: result.error } : {}),
+    output: result.stdout || '',
+    status: result.status,
+  };
+}
+
+function assertCleanProductionWorktree(
+  inspect: () => GitWorktreeInspection = inspectGitWorktree,
+): void {
+  const result = inspect();
+  if (result.error) fail(`Git worktree check could not start: ${result.error.message}`);
+  if (result.status !== 0) fail(`Git worktree check failed with exit code ${result.status ?? 1}.`);
+  if (result.output.trim()) {
+    fail('Production deployment requires a clean Git worktree. Commit or stash all changes first.');
+  }
+}
+
+function inspectGitHead(): GitWorktreeInspection {
+  const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: credentialFreeEnvironment(process.env),
+    shell: false,
+  });
+  return {
+    ...(result.error ? { error: result.error } : {}),
+    output: result.stdout || '',
+    status: result.status,
+  };
+}
+
+function inspectGitBranch(): GitWorktreeInspection {
+  const result = spawnSync('git', ['symbolic-ref', '--quiet', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: credentialFreeEnvironment(process.env),
+    shell: false,
+  });
+  return {
+    ...(result.error ? { error: result.error } : {}),
+    output: result.stdout || '',
+    status: result.status,
+  };
+}
+
+function readAttachedProductionBranch(
+  inspect: () => GitWorktreeInspection = inspectGitBranch,
+): string {
+  const result = inspect();
+  if (result.error) fail(`Git branch check could not start: ${result.error.message}`);
+  if (result.status === 1) fail('Production deployment requires an attached Git branch.');
+  if (result.status !== 0) fail(`Git branch check failed with exit code ${result.status ?? 1}.`);
+  if (!result.output.trim().startsWith('refs/heads/')) fail('Production deployment requires an attached Git branch.');
+  return result.output.trim();
+}
+
+function readGitHeadCommit(
+  inspect: () => GitWorktreeInspection = inspectGitHead,
+): string {
+  const result = inspect();
+  if (result.error) fail(`Git HEAD check could not start: ${result.error.message}`);
+  if (result.status !== 0) fail(`Git HEAD check failed with exit code ${result.status ?? 1}.`);
+  const sourceCommit = result.output.trim().toLowerCase();
+  if (!gitCommitPattern.test(sourceCommit)) fail('Git HEAD did not resolve to an exact commit.');
+  return sourceCommit;
+}
+
+function readCleanSourceCommit(
+  inspectWorktree: () => GitWorktreeInspection = inspectGitWorktree,
+  inspectHead: () => GitWorktreeInspection = inspectGitHead,
+): string {
+  assertCleanProductionWorktree(inspectWorktree);
+  return readGitHeadCommit(inspectHead);
+}
+
+function readProductionGitPosition(
+  inspectBranch: () => GitWorktreeInspection = inspectGitBranch,
+  inspectHead: () => GitWorktreeInspection = inspectGitHead,
+): GitSource {
+  return {
+    branch: readAttachedProductionBranch(inspectBranch),
+    commit: readGitHeadCommit(inspectHead),
+  };
+}
+
+function readCleanProductionSource(
+  inspectBranch: () => GitWorktreeInspection = inspectGitBranch,
+  inspectWorktree: () => GitWorktreeInspection = inspectGitWorktree,
+  inspectHead: () => GitWorktreeInspection = inspectGitHead,
+): GitSource {
+  return {
+    branch: readAttachedProductionBranch(inspectBranch),
+    commit: readCleanSourceCommit(inspectWorktree, inspectHead),
+  };
 }
 
 function readFrontendDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
@@ -380,7 +506,7 @@ export function isFrontendCandidateRecord(
 ): value is FrontendCandidateRecord {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['workerName', 'versionId', 'previewUrl', 'testedAt', 'htmlSha256'])
+    !hasExactKeys(value, ['workerName', 'versionId', 'previewUrl', 'testedAt', 'htmlSha256', 'sourceCommit'])
   ) {
     return false;
   }
@@ -392,7 +518,9 @@ export function isFrontendCandidateRecord(
     value.previewUrl !== expectedFrontendPreviewOrigin(value.versionId) ||
     typeof value.testedAt !== 'string' ||
     typeof value.htmlSha256 !== 'string' ||
-    !/^[0-9a-f]{64}$/.test(value.htmlSha256)
+    !/^[0-9a-f]{64}$/.test(value.htmlSha256) ||
+    typeof value.sourceCommit !== 'string' ||
+    !gitCommitPattern.test(value.sourceCommit)
   ) {
     return false;
   }
@@ -405,7 +533,7 @@ export function isFrontendCandidateRecord(
 }
 
 export function writeFrontendCandidateRecord(
-  metadata: FrontendUploadMetadata & { htmlSha256: string },
+  metadata: FrontendUploadMetadata & { htmlSha256: string; sourceCommit: string },
   options: { directory?: string; now?: Date } = {},
 ): FrontendCandidateRecord {
   const now = options.now ?? new Date();
@@ -415,6 +543,7 @@ export function writeFrontendCandidateRecord(
     previewUrl: metadata.previewUrl,
     testedAt: now.toISOString(),
     htmlSha256: metadata.htmlSha256,
+    sourceCommit: metadata.sourceCommit.toLowerCase(),
   };
   if (!isFrontendCandidateRecord(record, now)) fail('Refusing to write invalid frontend candidate evidence.');
   const directory = options.directory ?? frontendCandidateRecordDirectory;
@@ -469,26 +598,19 @@ async function resolveFrontendProductionCandidate(
     wranglerEnvironment: NodeJS.ProcessEnv;
   },
   dependencies: FrontendProductionCandidateDependencies = {
-    deployment: readFrontendDeploymentStatus,
     readCandidate: readFrontendCandidateRecordIfValid,
   },
-): Promise<{ previewUrl: string; recordedHtmlSha256?: string }> {
+): Promise<{ previewUrl: string; recordedHtmlSha256: string; sourceCommit: string }> {
   const candidateVersionId = normalizeVersionId(input.versionId);
   const candidate = dependencies.readCandidate(candidateVersionId);
   if (candidate) {
-    return { previewUrl: candidate.previewUrl, recordedHtmlSha256: candidate.htmlSha256 };
+    return {
+      previewUrl: candidate.previewUrl,
+      recordedHtmlSha256: candidate.htmlSha256,
+      sourceCommit: candidate.sourceCommit,
+    };
   }
-  const liveVersionId = stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
-  const releaseStart = guardCloudflareReleaseStart({
-    candidateVersionId,
-    expectedCurrentVersionId: input.expectedCurrentVersionId,
-    liveVersionId,
-    workerLabel: frontendWorkerName,
-  });
-  if (!releaseStart.resumeCandidate) {
-    fail(`Frontend production promotion requires fresh candidate evidence for version ${candidateVersionId}.`);
-  }
-  return { previewUrl: expectedFrontendPreviewOrigin(candidateVersionId) };
+  fail(`Frontend production promotion requires source-bound candidate evidence for version ${candidateVersionId}.`);
 }
 
 async function readBoundedSmokeBody(
@@ -937,12 +1059,14 @@ async function runFrontendProductionSequence(
 
   if (releaseStart.resumeCandidate) {
     try {
+      await input.verifyBeforeMutation?.();
       deployFrontendTriggers(input, dependencies);
       await input.verifyBeforePromotion?.();
     } catch (error) {
       throw resumedFrontendReleaseFailure(error, candidateVersionId);
     }
   } else {
+    await input.verifyBeforeMutation?.();
     deployFrontendTriggers(input, dependencies);
     await smokeFrontendProduction(dependencies);
     await assertFrontendLiveVersion(
@@ -1055,10 +1179,12 @@ async function uploadFrontendCandidate(
   dependencies: FrontendCandidateUploadDependencies = {
     run,
     smoke: smokeFrontendOrigin,
+    sourceCommit: readCleanSourceCommit,
     validate: runFrontendValidation,
     writeCandidate: writeFrontendCandidateRecord,
   },
 ): Promise<VerifiedFrontendCandidate> {
+  const sourceCommit = input.sourceCommit || dependencies.sourceCommit();
   dependencies.validate(input.validationEnvironment);
   dependencies.run(
     wranglerBinary,
@@ -1066,6 +1192,13 @@ async function uploadFrontendCandidate(
     input.unauthenticatedEnvironment,
     'Frontend trigger dry run',
   );
+  const validatedSourceCommit = dependencies.sourceCommit();
+  if (validatedSourceCommit !== sourceCommit) {
+    fail(
+      `Frontend source changed during validation: expected Git commit ${sourceCommit}, ` +
+      `but found ${validatedSourceCommit}.`,
+    );
+  }
   mkdirSync(input.wranglerLogDirectory, { recursive: true });
   const outputFile = resolve(
     input.wranglerLogDirectory,
@@ -1103,7 +1236,7 @@ async function uploadFrontendCandidate(
   console.log(`[deploy] Frontend version ID: ${metadata.versionId}`);
   console.log(`[deploy] Version Preview: ${metadata.previewUrl}`);
   const htmlSha256 = await dependencies.smoke(metadata.previewUrl);
-  dependencies.writeCandidate({ ...metadata, htmlSha256 });
+  dependencies.writeCandidate({ ...metadata, htmlSha256, sourceCommit });
   console.log('[deploy] Exact-version frontend candidate evidence recorded.');
   return { ...metadata, htmlSha256 };
 }
@@ -1162,20 +1295,64 @@ function frontendManifestRecoveryCommand(versionId: string, tokenFile?: string):
   return `npm run deploy -- production --version-id ${versionId}${tokenFileArgument}`;
 }
 
+function frontendManifestCommitMessage(versionId: string): string {
+  return `release frontend ${normalizeVersionId(versionId)}`;
+}
+
+function frontendManifestCommitRecoveryCommand(versionId: string): string {
+  return `git commit --only -m ${JSON.stringify(frontendManifestCommitMessage(versionId))} -- ${releaseManifestRelativePath}`;
+}
+
+function commitFrontendReleaseManifest(
+  versionId: string,
+  expectedSource: GitSource,
+  runCommand: typeof run = run,
+  readPosition: typeof readProductionGitPosition = readProductionGitPosition,
+): void {
+  const normalizedVersionId = normalizeVersionId(versionId);
+  const currentSource = readPosition();
+  if (
+    currentSource.branch !== expectedSource.branch ||
+    currentSource.commit !== expectedSource.commit
+  ) {
+    fail(
+      `Git position changed before the release manifest commit: expected ${expectedSource.branch} at ` +
+      `${expectedSource.commit}, but found ${currentSource.branch} at ${currentSource.commit}.`,
+    );
+  }
+  runCommand(
+    'git',
+    [
+      'commit',
+      '--only',
+      '-m',
+      frontendManifestCommitMessage(normalizedVersionId),
+      '--',
+      releaseManifestRelativePath,
+    ],
+    credentialFreeEnvironment(process.env),
+    'Release manifest commit',
+  );
+  console.log(`[deploy] Committed release manifest for frontend ${normalizedVersionId}.`);
+}
+
 async function runCompleteFrontendRelease(
   input: CompleteFrontendReleaseInput,
   dependencies: CompleteFrontendReleaseDependencies = {
     apiDeployment: readApiDeploymentStatus,
+    commit: commitFrontendReleaseManifest,
     frontendDeployment: readFrontendDeploymentStatus,
     manifest: readReleaseManifest,
     production: runFrontendProductionSequence,
     record: recordFrontendProductionVersion,
     resolveCandidate: resolveFrontendProductionCandidate,
     smoke: smokeFrontendOrigin,
+    source: readCleanProductionSource,
     triggerDryRun: runFrontendTriggerDryRun,
     upload: uploadFrontendCandidate,
   },
 ): Promise<VerifiedFrontendCandidate> {
+  const source = dependencies.source();
   const expectedCurrentProduction = dependencies.manifest().currentProduction;
   const initialLivePair = await readStableReleasePair(input.authenticatedEnvironment, dependencies);
   const requestedVersionId = input.versionId ? normalizeVersionId(input.versionId) : undefined;
@@ -1193,6 +1370,12 @@ async function runCompleteFrontendRelease(
       versionId: requestedVersionId,
       wranglerEnvironment: input.authenticatedEnvironment,
     });
+    if (resolved.sourceCommit !== source.commit) {
+      fail(
+        `Frontend candidate ${requestedVersionId} was built from Git commit ${resolved.sourceCommit}, ` +
+        `but the current commit is ${source.commit}.`,
+      );
+    }
     console.log(`[deploy] Re-smoke exact Version Preview: ${resolved.previewUrl}`);
     const htmlSha256 = await dependencies.smoke(resolved.previewUrl);
     if (resolved.recordedHtmlSha256 && htmlSha256 !== resolved.recordedHtmlSha256) {
@@ -1200,13 +1383,24 @@ async function runCompleteFrontendRelease(
     }
     candidate = { versionId: requestedVersionId, previewUrl: resolved.previewUrl, htmlSha256 };
   } else {
-    candidate = await dependencies.upload(input);
+    candidate = await dependencies.upload({ ...input, sourceCommit: source.commit });
   }
 
+  const assertSourceUnchanged = (phase: string): void => {
+    const current = dependencies.source();
+    if (current.branch !== source.branch || current.commit !== source.commit) {
+      fail(
+        `Frontend source changed ${phase}: expected ${source.branch} at Git commit ${source.commit}, ` +
+        `but found ${current.branch} at Git commit ${current.commit}.`,
+      );
+    }
+  };
   await dependencies.production({
     candidateHtmlSha256: candidate.htmlSha256,
     expectedCurrentVersionId: expectedCurrentProduction.frontendVersionId,
+    verifyBeforeMutation: async () => assertSourceUnchanged('before production mutation'),
     verifyBeforePromotion: async () => {
+      assertSourceUnchanged('before promotion');
       const apiVersionId = stableCloudflareVersionId(
         await dependencies.apiDeployment(input.authenticatedEnvironment),
       );
@@ -1227,12 +1421,33 @@ async function runCompleteFrontendRelease(
     frontendVersionId: candidate.versionId,
   }, 'Frontend release commit verification');
   try {
+    assertSourceUnchanged('during release');
+  } catch (error) {
+    throw new Error(
+      `Frontend version ${candidate.versionId} is live and verified, but release metadata was not updated because ` +
+      `the source changed. Restore ${source.branch} at Git commit ${source.commit}, then reconcile it by running: ` +
+      frontendManifestRecoveryCommand(candidate.versionId, input.tokenFile),
+      { cause: error },
+    );
+  }
+  try {
     dependencies.record(candidate.versionId, { expectedCurrentProduction });
   } catch (error) {
     throw new Error(
-      `Frontend version ${candidate.versionId} is live and verified, but cloud/release-manifest.json was not updated. ` +
+      `Frontend version ${candidate.versionId} is live and verified, but ${releaseManifestRelativePath} was not updated. ` +
       `Reconcile it with the same authentication by running: ` +
       frontendManifestRecoveryCommand(candidate.versionId, input.tokenFile),
+      { cause: error },
+    );
+  }
+  try {
+    dependencies.commit(candidate.versionId, source);
+  } catch (error) {
+    throw new Error(
+      `Frontend version ${candidate.versionId} is live and verified and ${releaseManifestRelativePath} was updated, ` +
+      `but the release manifest was not committed. Restore ${source.branch} at Git commit ${source.commit}, ` +
+      `then commit it by running: ` +
+      frontendManifestCommitRecoveryCommand(candidate.versionId),
       { cause: error },
     );
   }
@@ -1311,10 +1526,12 @@ async function main(): Promise<void> {
     versionId: options.versionId,
     wranglerLogDirectory,
   });
-  console.log(`[deploy] Frontend production version ${candidate.versionId} deployed, verified, and recorded.`);
+  console.log(`[deploy] Frontend production version ${candidate.versionId} deployed, verified, recorded, and committed.`);
 }
 
 export const frontendDeployTestHooks = {
+  assertCleanProductionWorktree,
+  commitFrontendReleaseManifest,
   frontendValidationSteps,
   credentialFreeEnvironment,
   expectedFrontendPreviewOrigin,
@@ -1323,6 +1540,9 @@ export const frontendDeployTestHooks = {
   frontendProductionWranglerCommands,
   isExactFrontendDeploymentConfig,
   isFrontendCandidateRecord,
+  readAttachedProductionBranch,
+  readCleanSourceCommit,
+  readCleanProductionSource,
   readStableReleasePair,
   requireFrontendCandidateRecord,
   resolveFrontendProductionCandidate,

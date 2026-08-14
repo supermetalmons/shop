@@ -34,13 +34,13 @@ Firebase, Firestore, and Cloud Functions remain independently deployed to Fireba
   - `npm run deploy -- dry-run`
 - Run the complete guarded frontend release without an intermediate preview command or version argument:
   - `npm run deploy -- production`
-  - The command verifies the tracked API/frontend pair, validates and uploads the frontend, smoke-tests its exact Version Preview, promotes only that version, verifies both production domains and the unchanged API version, then updates `cloud/release-manifest.json`.
+  - The command verifies the tracked API/frontend pair, validates and uploads the frontend, smoke-tests its exact Version Preview, promotes only that version, verifies both production domains and the unchanged API version, then updates and commits only `cloud/release-manifest.json`.
 
 Advanced frontend release controls remain available for recovery or separately managed releases:
 
 - Upload a non-production Worker version, smoke-test its exact Version Preview, and write an ignored version-keyed candidate record:
   - `npm run deploy -- preview --token-file /path/to/cloudflare-token`
-- Promote or resume an exact candidate, re-verify production, and update the local release manifest:
+- Promote or resume an exact candidate, re-verify production, and update and commit the local release manifest:
   - `npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token`
 - Atomically reconcile an already verified API/frontend pair when fresh production evidence exists:
   - `npm run release:finalize -- --api-version-id <uuid> --frontend-version-id <uuid> --confirm`
@@ -93,13 +93,12 @@ Wrangler can upload a preview version only after the Worker exists. The
 subsequent releases can use the preview command directly.
 
 Both deployment helpers keep short-lived, exact-version verification records
-under the ignored `.cache` directory. A new production promotion requires the
-matching fresh candidate record created by the preview command and never rebuilds
-the candidate. If that exact version is already live at 100%, guarded resume does
-not depend on the local cache: it derives the immutable Version Preview again and
-reruns the frontend hash checks or API smoke and benchmark before touching
-triggers or evidence. Production evidence is written only after both `mons.shop`
-and `www.mons.shop` pass their smoke tests. The release finalization command
+under the ignored `.cache` directory. A frontend candidate record is bound to the
+clean Git commit that created it, and production promotion requires the same clean
+commit. Promotion never rebuilds the candidate. Guarded resume reruns the frontend
+hash checks or API smoke and benchmark before touching triggers or evidence.
+Production evidence is written only after both `mons.shop` and `www.mons.shop`
+pass their smoke tests. The release finalization command
 requires both IDs, matching fresh evidence, and a deliberate `--confirm`; it never
 deploys or changes the approved rollback pair.
 

@@ -50,6 +50,8 @@ import {
 } from '../../../../scripts/cloudflare-deployment-state.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const SOURCE_BRANCH = 'refs/heads/main';
+const SOURCE_COMMIT = 'a'.repeat(40);
 
 type DeploymentObservation = CloudflareDeploymentStatus | Error | string;
 
@@ -85,6 +87,14 @@ function splitDeployment(firstVersionId: string, secondVersionId: string): Cloud
       { percentage: 50, versionId: secondVersionId },
     ],
   };
+}
+
+async function verifyFrontendProductionGuards(input: {
+  verifyBeforeMutation?: () => Promise<void>;
+  verifyBeforePromotion?: () => Promise<void>;
+}): Promise<void> {
+  await input.verifyBeforeMutation?.();
+  await input.verifyBeforePromotion?.();
 }
 
 test('release CLI starts under its production TypeScript runner', () => {
@@ -417,6 +427,7 @@ test('frontend production supports one-step release and exact version-keyed reco
     versionId,
     previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(versionId),
     htmlSha256: 'a'.repeat(64),
+    sourceCommit: SOURCE_COMMIT,
   };
   try {
     assert.deepEqual(
@@ -458,6 +469,100 @@ test('frontend production supports one-step release and exact version-keyed reco
   }
 });
 
+test('frontend release manifest commit includes only the tracked manifest', () => {
+  const versionId = randomUUID();
+  const source = { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT };
+  let invocation: {
+    command: string;
+    args: string[];
+    label: string;
+  } | undefined;
+  frontendDeployTestHooks.commitFrontendReleaseManifest(
+    versionId.toUpperCase(),
+    source,
+    (command, args, _environment, label) => {
+      invocation = { command, args, label };
+    },
+    () => source,
+  );
+  assert.deepEqual(invocation, {
+    command: 'git',
+    args: [
+      'commit',
+      '--only',
+      '-m',
+      `release frontend ${versionId}`,
+      '--',
+      'cloud/release-manifest.json',
+    ],
+    label: 'Release manifest commit',
+  });
+  assert.throws(
+    () => frontendDeployTestHooks.commitFrontendReleaseManifest(
+      versionId,
+      source,
+      () => assert.fail('source drift reached Git commit'),
+      () => ({ branch: 'refs/heads/release', commit: SOURCE_COMMIT }),
+    ),
+    /Git position changed before the release manifest commit/,
+  );
+});
+
+test('frontend production requires a clean Git worktree and attached branch', () => {
+  assert.doesNotThrow(() => frontendDeployTestHooks.assertCleanProductionWorktree(
+    () => ({ output: '', status: 0 }),
+  ));
+  for (const output of [' M src/App.tsx', 'M  src/App.tsx', '?? src/new.ts']) {
+    assert.throws(
+      () => frontendDeployTestHooks.assertCleanProductionWorktree(
+        () => ({ output, status: 0 }),
+      ),
+      /requires a clean Git worktree/,
+    );
+  }
+  assert.throws(
+    () => frontendDeployTestHooks.assertCleanProductionWorktree(
+      () => ({ error: new Error('missing git'), output: '', status: null }),
+    ),
+    /could not start/,
+  );
+  assert.throws(
+    () => frontendDeployTestHooks.assertCleanProductionWorktree(
+      () => ({ output: '', status: 128 }),
+    ),
+    /failed with exit code 128/,
+  );
+  assert.equal(
+    frontendDeployTestHooks.readCleanSourceCommit(
+      () => ({ output: '', status: 0 }),
+      () => ({ output: SOURCE_COMMIT.toUpperCase(), status: 0 }),
+    ),
+    SOURCE_COMMIT,
+  );
+  assert.equal(
+    frontendDeployTestHooks.readAttachedProductionBranch(
+      () => ({ output: `${SOURCE_BRANCH}\n`, status: 0 }),
+    ),
+    SOURCE_BRANCH,
+  );
+  assert.deepEqual(
+    frontendDeployTestHooks.readCleanProductionSource(
+      () => ({ output: `${SOURCE_BRANCH}\n`, status: 0 }),
+      () => ({ output: '', status: 0 }),
+      () => ({ output: SOURCE_COMMIT, status: 0 }),
+    ),
+    { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT },
+  );
+  assert.throws(
+    () => frontendDeployTestHooks.readCleanProductionSource(
+      () => ({ output: '', status: 1 }),
+      () => ({ output: '', status: 0 }),
+      () => ({ output: SOURCE_COMMIT, status: 0 }),
+    ),
+    /requires an attached Git branch/,
+  );
+});
+
 test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, records, and cleans output', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'mons-shop-frontend-upload-test-'));
   const versionId = randomUUID();
@@ -495,13 +600,17 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
         assert.equal(origin, previewUrl);
         return htmlSha256;
       },
+      sourceCommit: () => {
+        events.push('source-commit');
+        return SOURCE_COMMIT;
+      },
       validate: (environment) => {
         events.push('validation');
         assert.equal(environment.CI, 'true');
       },
       writeCandidate: (metadata) => {
         events.push('candidate-evidence');
-        assert.deepEqual(metadata, { versionId, previewUrl, htmlSha256 });
+        assert.deepEqual(metadata, { versionId, previewUrl, htmlSha256, sourceCommit: SOURCE_COMMIT });
         return {
           ...metadata,
           workerName: 'mons-shop',
@@ -511,13 +620,36 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
     });
     assert.deepEqual(candidate, { versionId, previewUrl, htmlSha256 });
     assert.deepEqual(events, [
+      'source-commit',
       'validation',
       'Frontend trigger dry run',
+      'source-commit',
       'Frontend version upload',
       'preview-smoke',
       'candidate-evidence',
     ]);
     assert.deepEqual(readdirSync(directory), []);
+    let uploadReached = false;
+    await assert.rejects(
+      () => frontendDeployTestHooks.uploadFrontendCandidate({
+        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '' },
+        sourceCommit: SOURCE_COMMIT,
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: directory,
+      }, {
+        run: (_command, _args, _environment, label) => {
+          if (label === 'Frontend trigger dry run') return;
+          uploadReached = true;
+        },
+        smoke: async () => assert.fail('source drift reached preview smoke'),
+        sourceCommit: () => 'b'.repeat(40),
+        validate: () => {},
+        writeCandidate: () => assert.fail('source drift wrote candidate evidence'),
+      }),
+      /Frontend source changed during validation/,
+    );
+    assert.equal(uploadReached, false);
   } finally {
     rmSync(directory, { recursive: true });
   }
@@ -557,7 +689,7 @@ test('API production candidate resolution permits cache-free resume only for the
   );
 });
 
-test('frontend production candidate resolution revalidates an exact live version without local evidence', async () => {
+test('frontend production candidate resolution requires source-bound local evidence', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
@@ -569,24 +701,26 @@ test('frontend production candidate resolution revalidates an exact live version
 
   assert.deepEqual(
     await frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
-      deployment: deploymentReader([candidateVersionId]),
-      readCandidate: () => undefined,
+      readCandidate: () => ({
+        htmlSha256: 'b'.repeat(64),
+        previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId),
+        sourceCommit: SOURCE_COMMIT,
+        testedAt: new Date().toISOString(),
+        versionId: candidateVersionId,
+        workerName: 'mons-shop',
+      }),
     }),
-    { previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId) },
+    {
+      previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId),
+      recordedHtmlSha256: 'b'.repeat(64),
+      sourceCommit: SOURCE_COMMIT,
+    },
   );
   await assert.rejects(
     () => frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
-      deployment: deploymentReader([baselineVersionId]),
       readCandidate: () => undefined,
     }),
-    /requires fresh candidate evidence/,
-  );
-  await assert.rejects(
-    () => frontendDeployTestHooks.resolveFrontendProductionCandidate(input, {
-      deployment: deploymentReader([splitDeployment(baselineVersionId, candidateVersionId)]),
-      readCandidate: () => undefined,
-    }),
-    /not a stable single-version deployment/,
+    /requires source-bound candidate evidence/,
   );
 });
 
@@ -680,6 +814,9 @@ test('frontend production reconciles exact state and retries hash propagation be
     {
       candidateHtmlSha256,
       expectedCurrentVersionId: baselineVersionId,
+      verifyBeforeMutation: async () => {
+        events.push('mutation-guard');
+      },
       versionId: candidateVersionId,
       wranglerEnvironment,
     },
@@ -728,6 +865,7 @@ test('frontend production reconciles exact state and retries hash propagation be
   assert.deepEqual(sleeps, [500, 1_500, 3_000, 5_000]);
   assert.deepEqual(events, [
     'deployment-status',
+    'mutation-guard',
     'Frontend trigger deployment',
     'smoke:https://mons.shop',
     'smoke:https://www.mons.shop',
@@ -1467,7 +1605,7 @@ test('complete API release blocks stale API or frontend state before upload', as
   }
 });
 
-test('complete frontend release verifies the production pair around upload, promotion, and manifest recording', async () => {
+test('complete frontend release verifies the production pair around upload, promotion, manifest recording, and commit', async () => {
   const apiVersionId = randomUUID();
   const frontendVersionId = randomUUID();
   const candidateVersionId = randomUUID();
@@ -1493,6 +1631,11 @@ test('complete frontend release verifies the production pair around upload, prom
       events.push('api-status');
       return stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read'));
     },
+    commit: (versionId, source) => {
+      events.push('commit');
+      assert.equal(versionId, candidateVersionId);
+      assert.deepEqual(source, { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT });
+    },
     frontendDeployment: async () => {
       events.push('frontend-status');
       return stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read'));
@@ -1506,6 +1649,7 @@ test('complete frontend release verifies the production pair around upload, prom
       assert.equal(input.candidateHtmlSha256, candidate.htmlSha256);
       assert.equal(input.expectedCurrentVersionId, frontendVersionId);
       assert.equal(input.versionId, candidateVersionId);
+      await input.verifyBeforeMutation?.();
       await input.verifyBeforePromotion?.();
       events.push('promotion-guard-passed');
     },
@@ -1526,19 +1670,28 @@ test('complete frontend release verifies the production pair around upload, prom
       assert.equal(input.validationEnvironment.CI, 'true');
       return candidate;
     },
+    source: () => {
+      events.push('source-commit');
+      return { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT };
+    },
   });
   assert.deepEqual(result, candidate);
   assert.deepEqual(events, [
+    'source-commit',
     'manifest',
     'api-status',
     'frontend-status',
     'upload',
     'production',
+    'source-commit',
+    'source-commit',
     'api-status',
     'promotion-guard-passed',
     'api-status',
     'frontend-status',
+    'source-commit',
     'record',
+    'commit',
   ]);
 });
 
@@ -1561,6 +1714,7 @@ test('complete frontend release blocks stale state before uploading or promoting
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(livePair.apiVersionId),
+        commit: () => assert.fail('stale preflight committed release metadata'),
         frontendDeployment: async () => stableDeployment(livePair.frontendVersionId),
         manifest: () => manifest,
         production: async () => assert.fail('stale preflight reached production'),
@@ -1569,13 +1723,14 @@ test('complete frontend release blocks stale state before uploading or promoting
         smoke: async () => assert.fail('stale preflight smoked a candidate'),
         triggerDryRun: () => assert.fail('stale preflight ran trigger validation'),
         upload: async () => assert.fail('stale preflight uploaded a candidate'),
+        source: () => ({ branch: SOURCE_BRANCH, commit: SOURCE_COMMIT }),
       }),
       /Frontend release preflight expected API/,
     );
   }
 });
 
-test('complete frontend release retains exact-version recovery and records the resumed candidate', async () => {
+test('complete frontend release retains exact-version recovery and commits the resumed candidate', async () => {
   const apiVersionId = randomUUID();
   const frontendVersionId = randomUUID();
   const candidateVersionId = randomUUID();
@@ -1596,11 +1751,17 @@ test('complete frontend release retains exact-version recovery and records the r
     wranglerLogDirectory: '/tmp/logs',
   }, {
     apiDeployment: async () => stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read')),
+    commit: (versionId, source) => {
+      events.push('commit');
+      assert.equal(versionId, candidateVersionId);
+      assert.deepEqual(source, { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT });
+    },
     frontendDeployment: async () => stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read')),
     manifest: () => manifest,
     production: async (input) => {
       events.push('production');
       assert.equal(input.versionId, candidateVersionId);
+      await input.verifyBeforeMutation?.();
       await input.verifyBeforePromotion?.();
     },
     record: (versionId, options) => {
@@ -1614,7 +1775,7 @@ test('complete frontend release retains exact-version recovery and records the r
     },
     resolveCandidate: async () => {
       events.push('resolve-candidate');
-      return { previewUrl, recordedHtmlSha256: htmlSha256 };
+      return { previewUrl, recordedHtmlSha256: htmlSha256, sourceCommit: SOURCE_COMMIT };
     },
     smoke: async (origin) => {
       events.push('preview-smoke');
@@ -1623,17 +1784,62 @@ test('complete frontend release retains exact-version recovery and records the r
     },
     triggerDryRun: () => events.push('trigger-dry-run'),
     upload: async () => assert.fail('exact-version recovery uploaded a new candidate'),
+    source: () => {
+      events.push('source-commit');
+      return { branch: SOURCE_BRANCH, commit: SOURCE_COMMIT };
+    },
   });
   assert.deepEqual(events, [
+    'source-commit',
     'trigger-dry-run',
     'resolve-candidate',
     'preview-smoke',
     'production',
+    'source-commit',
+    'source-commit',
+    'source-commit',
     'record',
+    'commit',
   ]);
 });
 
-test('complete frontend release rejects API drift and reports exact recovery after manifest failure', async () => {
+test('complete frontend release rejects a candidate from another Git commit', async () => {
+  const apiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId, frontendVersionId },
+  };
+  await assert.rejects(
+    () => frontendDeployTestHooks.runCompleteFrontendRelease({
+      authenticatedEnvironment: { HELIUS_API_KEY: '' },
+      unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+      validationEnvironment: { HELIUS_API_KEY: '' },
+      versionId: candidateVersionId,
+      wranglerLogDirectory: '/tmp/logs',
+    }, {
+      apiDeployment: async () => stableDeployment(apiVersionId),
+      commit: () => assert.fail('source mismatch committed release metadata'),
+      frontendDeployment: async () => stableDeployment(frontendVersionId),
+      manifest: () => manifest,
+      production: async () => assert.fail('source mismatch reached production'),
+      record: () => assert.fail('source mismatch recorded release metadata'),
+      resolveCandidate: async () => ({
+        previewUrl: frontendDeployTestHooks.expectedFrontendPreviewOrigin(candidateVersionId),
+        recordedHtmlSha256: 'b'.repeat(64),
+        sourceCommit: SOURCE_COMMIT,
+      }),
+      smoke: async () => assert.fail('source mismatch smoked the candidate'),
+      source: () => ({ branch: SOURCE_BRANCH, commit: 'b'.repeat(40) }),
+      triggerDryRun: () => {},
+      upload: async () => assert.fail('source mismatch uploaded a candidate'),
+    }),
+    /was built from Git commit .* but the current commit is/,
+  );
+});
+
+test('complete frontend release rejects API drift and reports exact recovery after manifest or commit failure', async () => {
   const apiVersionId = randomUUID();
   const frontendVersionId = randomUUID();
   const candidateVersionId = randomUUID();
@@ -1656,14 +1862,16 @@ test('complete frontend release rejects API drift and reports exact recovery aft
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('API drift committed release metadata'),
         frontendDeployment: async () => stableDeployment(frontendVersionId),
         manifest: () => manifest,
-        production: async (input) => input.verifyBeforePromotion?.(),
+        production: verifyFrontendProductionGuards,
         record: () => assert.fail('API drift recorded release metadata'),
         resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
         smoke: async () => assert.fail('one-step release repeated preview smoke'),
         triggerDryRun: () => assert.fail('one-step release bypassed upload'),
         upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: SOURCE_COMMIT }),
       }),
       /API changed before frontend promotion/,
     );
@@ -1679,16 +1887,100 @@ test('complete frontend release rejects API drift and reports exact recovery aft
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('final pair drift committed release metadata'),
         frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
         manifest: () => manifest,
-        production: async (input) => input.verifyBeforePromotion?.(),
+        production: verifyFrontendProductionGuards,
         record: () => assert.fail('final pair drift recorded release metadata'),
         resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
         smoke: async () => assert.fail('one-step release repeated preview smoke'),
         triggerDryRun: () => assert.fail('one-step release bypassed upload'),
         upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: SOURCE_COMMIT }),
       }),
       /Frontend release commit verification expected API/,
+    );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, candidateVersionId];
+    const sourceBranches = [SOURCE_BRANCH, 'refs/heads/release'];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('source drift committed release metadata'),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: verifyFrontendProductionGuards,
+        record: () => assert.fail('source drift recorded release metadata'),
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+        source: () => ({ branch: sourceBranches.shift()!, commit: SOURCE_COMMIT }),
+      }),
+      /Frontend source changed before production mutation/,
+    );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, candidateVersionId];
+    const sourceCommits = [SOURCE_COMMIT, SOURCE_COMMIT, 'b'.repeat(40)];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('source drift committed release metadata'),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: verifyFrontendProductionGuards,
+        record: () => assert.fail('source drift recorded release metadata'),
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: sourceCommits.shift()! }),
+      }),
+      /Frontend source changed before promotion/,
+    );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, candidateVersionId];
+    const sourceCommits = [SOURCE_COMMIT, SOURCE_COMMIT, SOURCE_COMMIT, 'b'.repeat(40)];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('source drift committed release metadata'),
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: verifyFrontendProductionGuards,
+        record: () => assert.fail('source drift recorded release metadata'),
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: sourceCommits.shift()! }),
+      }),
+      new RegExp(
+        `Frontend version ${candidateVersionId} is live and verified[\\s\\S]*` +
+        `Restore ${SOURCE_BRANCH} at Git commit ${SOURCE_COMMIT}[\\s\\S]*` +
+        `production --version-id ${candidateVersionId}`,
+      ),
     );
   }
   {
@@ -1703,9 +1995,10 @@ test('complete frontend release rejects API drift and reports exact recovery aft
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => assert.fail('manifest write failure committed release metadata'),
         frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
         manifest: () => manifest,
-        production: async (input) => input.verifyBeforePromotion?.(),
+        production: verifyFrontendProductionGuards,
         record: () => {
           throw new Error('injected manifest write failure');
         },
@@ -1713,12 +2006,53 @@ test('complete frontend release rejects API drift and reports exact recovery aft
         smoke: async () => assert.fail('one-step release repeated preview smoke'),
         triggerDryRun: () => assert.fail('one-step release bypassed upload'),
         upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: SOURCE_COMMIT }),
       }),
       new RegExp(
         `Frontend version ${candidateVersionId} is live and verified[\\s\\S]*` +
         `production --version-id ${candidateVersionId}[\\s\\S]*cloudflare token`,
       ),
     );
+  }
+  {
+    const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
+    const frontendStatuses = [frontendVersionId, candidateVersionId];
+    const events: string[] = [];
+    await assert.rejects(
+      () => frontendDeployTestHooks.runCompleteFrontendRelease({
+        authenticatedEnvironment: { HELIUS_API_KEY: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '' },
+        validationEnvironment: { HELIUS_API_KEY: '' },
+        wranglerLogDirectory: '/tmp/logs',
+      }, {
+        apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
+        commit: () => {
+          events.push('commit');
+          throw new Error('injected commit failure');
+        },
+        frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
+        manifest: () => manifest,
+        production: verifyFrontendProductionGuards,
+        record: () => {
+          events.push('record');
+          return {
+            ...manifest,
+            currentProduction: { apiVersionId, frontendVersionId: candidateVersionId },
+          };
+        },
+        resolveCandidate: async () => assert.fail('one-step release resolved a candidate'),
+        smoke: async () => assert.fail('one-step release repeated preview smoke'),
+        triggerDryRun: () => assert.fail('one-step release bypassed upload'),
+        upload: async () => candidate,
+        source: () => ({ branch: SOURCE_BRANCH, commit: SOURCE_COMMIT }),
+      }),
+      new RegExp(
+        `Frontend version ${candidateVersionId} is live and verified[\\s\\S]*` +
+        `release manifest was not committed[\\s\\S]*${SOURCE_BRANCH}[\\s\\S]*${SOURCE_COMMIT}[\\s\\S]*` +
+        `git commit --only[\\s\\S]*cloud/release-manifest.json`,
+      ),
+    );
+    assert.deepEqual(events, ['record', 'commit']);
   }
 });
 

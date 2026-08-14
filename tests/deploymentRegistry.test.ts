@@ -749,9 +749,9 @@ test('drifella shirt secondary marketplaces use the mainnet collection address',
   );
 });
 
-test('clear cards Tensor marketplace uses the configured collection URL', () => {
-  const tensorHref = 'https://www.tensor.trade/trade/2d2bceeb-51ae-4d2a-a57e-cdb5509d6300';
-  assert.equal(DEPLOYMENT_DROPS.clear_cards.secondaryMarketHref, tensorHref);
+test('clear cards Tensor marketplace uses the drop slug URL', () => {
+  const tensorHref = 'https://www.tensor.trade/trade/clear_cards';
+  assert.equal(DEPLOYMENT_DROPS.clear_cards.secondaryMarketHref, undefined);
   assert.equal(FRONTEND_DROPS.clear_cards.secondaryMarketHref, tensorHref);
   assert.equal(
     secondaryMarketplaceLinksForDropId('clear_cards').find(
