@@ -2875,31 +2875,32 @@ button.no-focus-style:focus-visible {
 }
 
 .little-swag-boxes-wip__wordmark {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.14em;
   width: 100%;
-  color: #f8f9ff;
-  font-size: min(11.5vw, 21svh);
-  font-weight: 900;
-  line-height: 0.84;
-  letter-spacing: -0.04em;
+  color: var(--fg);
+  font-size: min(10.7vw, 19.5svh);
+  font-weight: 780;
+  line-height: 1;
+  letter-spacing: 0;
   text-align: center;
   white-space: nowrap;
-  background: linear-gradient(
-    112deg,
-    #8a9099 0%,
-    #ffffff 18%,
-    #c4c8cf 38%,
-    #ffffff 52%,
-    #9ba1aa 72%,
-    #f8f9ff 88%,
-    #b3b8c0 100%
-  );
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
   filter:
     drop-shadow(0 4px 7px rgba(0, 0, 0, 0.62))
     drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
+}
+
+.little-swag-boxes-wip__wordmark .brand-icon {
+  flex: none;
+  width: 1.08em;
+  height: 1.08em;
+  margin-top: 0;
+}
+
+.little-swag-boxes-wip__wordmark > span {
+  margin-top: -0.0667em;
 }
 
 @keyframes little-swag-boxes-wordmark-pop {

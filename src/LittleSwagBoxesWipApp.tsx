@@ -384,7 +384,15 @@ export default function LittleSwagBoxesWipApp() {
             }`}
             aria-hidden="true"
           >
-            <span className="little-swag-boxes-wip__wordmark">MONS.SHOP</span>
+            <span className="little-swag-boxes-wip__wordmark">
+              <img
+                src="https://cdn.lil.org/mons/shop/favicon/logo.webp"
+                alt=""
+                className="brand-icon"
+                draggable={false}
+              />
+              <span>mons.shop</span>
+            </span>
           </div>
           <button
             ref={revealButtonRef}
