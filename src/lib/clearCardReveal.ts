@@ -21,6 +21,14 @@ export function isClearCardFreeMovementEnabled(
   return viewerOnly || displayStage === 'revealed';
 }
 
+export function isClearCardRevealDismissReady(
+  viewerOnly: boolean,
+  displayStage: 'pack' | 'breaking' | 'revealed',
+  viewerFailed: boolean,
+): boolean {
+  return viewerOnly || displayStage === 'revealed' || viewerFailed;
+}
+
 export function isClearCardImpactPointer({
   isPrimary,
   button,

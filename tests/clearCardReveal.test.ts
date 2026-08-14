@@ -11,6 +11,7 @@ import {
   isClearCardInteractionPoint,
   isClearCardImpactKey,
   isClearCardImpactPointer,
+  isClearCardRevealDismissReady,
   settleClearCardRevealRequest,
   shouldProtectClearCardOverlayClick,
 } from '../src/lib/clearCardReveal.ts';
@@ -69,6 +70,15 @@ test('clear card free movement starts only after unpacking or in a dedicated vie
   assert.equal(isClearCardFreeMovementEnabled(false, 'revealed'), true);
   assert.equal(isClearCardFreeMovementEnabled(true, 'pack'), true);
   assert.equal(isClearCardFreeMovementEnabled(true, 'revealed'), true);
+});
+
+test('clear card viewer failures unlock ordinary unboxing dismissal', () => {
+  assert.equal(isClearCardRevealDismissReady(false, 'pack', false), false);
+  assert.equal(isClearCardRevealDismissReady(false, 'breaking', false), false);
+  assert.equal(isClearCardRevealDismissReady(false, 'pack', true), true);
+  assert.equal(isClearCardRevealDismissReady(false, 'breaking', true), true);
+  assert.equal(isClearCardRevealDismissReady(false, 'revealed', false), true);
+  assert.equal(isClearCardRevealDismissReady(true, 'pack', false), true);
 });
 
 test('clear card nominal interaction bounds include their edges', () => {

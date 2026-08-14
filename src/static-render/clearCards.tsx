@@ -1,5 +1,5 @@
 import { Buffer } from 'buffer';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import ClearCardThreeViewer, {
   type ClearCardThreeViewerHandle,
@@ -50,11 +50,29 @@ function ClearCardStaticRenderer() {
   const [error, setError] = useState<string>();
   const viewerRef = useRef<ClearCardThreeViewerHandle | null>(null);
   const capturingCardRef = useRef<number | undefined>(undefined);
+  const errorReportedRef = useRef(false);
   const lightingConfig = useMemo(
     () => createClearCardLightingPreset(DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID, { darkMode: false }),
     [],
   );
   const cardModelUrl = clearCardModelUrl(cardId);
+
+  const reportError = useCallback((cause: unknown) => {
+    if (errorReportedRef.current) return;
+    errorReportedRef.current = true;
+    const message = cause instanceof Error ? cause.message : String(cause);
+    setError(message);
+    void fetch(receiverEndpoint(config.receiverUrl, 'error'), {
+      method: 'POST',
+      body: message,
+    }).catch(() => undefined);
+  }, [config.receiverUrl]);
+
+  useEffect(() => {
+    if (viewerStatus === 'error') {
+      reportError(new Error(`3D viewer failed for card ${cardId}.`));
+    }
+  }, [cardId, reportError, viewerStatus]);
 
   useEffect(() => {
     if (viewerStatus !== 'ready' || !cardModelUrl || capturingCardRef.current === cardId) return;
@@ -91,19 +109,12 @@ function ClearCardStaticRenderer() {
       }
       setViewerStatus('loading');
       setCardId((value) => value + 1);
-    })().catch(async (cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      setError(message);
-      await fetch(receiverEndpoint(config.receiverUrl, 'error'), {
-        method: 'POST',
-        body: message,
-      }).catch(() => undefined);
-    });
+    })().catch(reportError);
 
     return () => {
       cancelled = true;
     };
-  }, [cardId, cardModelUrl, config, viewerStatus]);
+  }, [cardId, cardModelUrl, config, reportError, viewerStatus]);
 
   return (
     <main className="clear-card-static-renderer">

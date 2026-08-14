@@ -26,6 +26,7 @@ import {
   createClearCardRevealRequestState,
   isClearCardFallbackImagePoint,
   isClearCardFreeMovementEnabled,
+  isClearCardRevealDismissReady,
   settleClearCardRevealRequest,
   shouldProtectClearCardOverlayClick,
   type ClearCardRevealRequestState,
@@ -134,7 +135,11 @@ export default function ClearCardRevealOverlay({
     () => resolveClearCardRevealRenderQuality(viewerMode),
     [viewerMode],
   );
-  const revealComplete = viewerOnly || displayStage === 'revealed';
+  const dismissReady = isClearCardRevealDismissReady(
+    viewerOnly,
+    displayStage,
+    viewerStatus === 'error' || cardLoadStatus === 'error',
+  );
   const freeMovementEnabled = isClearCardFreeMovementEnabled(viewerOnly, displayStage);
 
   useEffect(() => {
@@ -151,9 +156,9 @@ export default function ClearCardRevealOverlay({
   }, [cardModelUrl]);
 
   useEffect(() => {
-    onRevealCompleteChange?.(revealComplete);
-    onDismissReadyChange?.(revealComplete);
-  }, [onDismissReadyChange, onRevealCompleteChange, revealComplete]);
+    onRevealCompleteChange?.(dismissReady);
+    onDismissReadyChange?.(dismissReady);
+  }, [dismissReady, onDismissReadyChange, onRevealCompleteChange]);
 
   useEffect(() => () => {
     onRevealCompleteChange?.(false);
@@ -189,9 +194,9 @@ export default function ClearCardRevealOverlay({
   }, [closing, onPlayBreak, suspended]);
 
   const handleBackdropClick = useCallback(() => {
-    if (!revealComplete || closing || suspended) return;
+    if (!dismissReady || closing || suspended) return;
     onDismiss?.();
-  }, [closing, onDismiss, revealComplete, suspended]);
+  }, [closing, dismissReady, onDismiss, suspended]);
 
   const handleFrameClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const objectHit = viewerRef.current?.isClientPointOnObject(event.clientX, event.clientY);
@@ -252,7 +257,9 @@ export default function ClearCardRevealOverlay({
       >
         <div
           className={`clear-card-reveal-overlay__viewport${packReady ? ' clear-card-reveal-overlay__viewport--ready' : ''}`}
-          aria-busy={!packReady || cardLoadStatus === 'loading'}
+          aria-busy={
+            viewerStatus !== 'error' && (!packReady || cardLoadStatus === 'loading')
+          }
         >
           <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
             {resolvedLoadingImageSrc ? (

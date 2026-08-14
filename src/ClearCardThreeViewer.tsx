@@ -49,6 +49,10 @@ import {
   resolveClearCardRenderSize,
   type ClearCardRenderQualityByStage,
 } from './lib/clearCardCanvas';
+import {
+  releaseClearCardModelLoadResources,
+  type ClearCardModelLoadResources,
+} from './lib/clearCardModelLoadResources';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 import { releaseObjectGeometryCpuBuffersAfterUpload } from './lib/threeGpuOnlyGeometry';
 
@@ -1121,7 +1125,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       let disposed = false;
       let contextLost = false;
-      let rendererRecoveryFailed = false;
       let packLoadFailed = false;
       let packReady = false;
       let cardLoadFailed = false;
@@ -1145,8 +1148,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let renderer: THREE.WebGLRenderer | null = null;
       let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
       let snapshotInFlight = false;
-      let packDracoLoader: DRACOLoader | null = null;
-      let cardDracoLoader: DRACOLoader | null = null;
+      let activePackLoad: ClearCardModelLoadResources | null = null;
+      let activeCardLoad: ClearCardModelLoadResources | null = null;
       let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
       let environmentUpdateTimer: number | null = null;
       let environmentSignature = '';
@@ -1154,14 +1157,11 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let lastToneMapping: THREE.ToneMapping | null = null;
       let rectAreaLightReady = false;
       let rectAreaLightLoadPending = false;
-      let packLoadingManager: THREE.LoadingManager | null = null;
-      let cardLoadingManager: THREE.LoadingManager | null = null;
       let resizeObserver: ResizeObserver | null = null;
       let motionQuery: MediaQueryList | null = null;
       let handleMotionPreference: (() => void) | null = null;
       let handleVisibilityChange: (() => void) | null = null;
       let handleContextLost: ((event: Event) => void) | null = null;
-      let handleContextRestored: (() => void) | null = null;
       let syncRendererSize: (() => void) | null = null;
       let resize: (() => void) | null = null;
       const rendererLogicalSize = new THREE.Vector2();
@@ -1420,10 +1420,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const updateViewerStatus = () => {
         if (disposed) return;
-        const failed =
-          rendererRecoveryFailed ||
-          packLoadFailed ||
-          (cardRequiredForViewerStatus() && cardLoadFailed);
+        const failed = packLoadFailed || (cardRequiredForViewerStatus() && cardLoadFailed);
         const statusReady = displayModelReady() && (!cardRequiredForViewerStatus() || cardReady);
         viewerReadyRef.current = !contextLost && !failed && statusReady;
         onStatusChange(contextLost || failed ? 'error' : statusReady ? 'ready' : 'loading');
@@ -2171,7 +2168,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
 
       const renderFrame = (now: number) => {
         frameId = null;
-        if (disposed || !renderer || document.visibilityState !== 'visible') return;
+        if (
+          disposed ||
+          !renderer ||
+          contextLost ||
+          document.visibilityState !== 'visible'
+        ) {
+          return;
+        }
         if (interactionThrottleReleasePending && !snapBackRef.current.active) {
           interactionThrottleReleasePending = false;
           interactionActive = false;
@@ -2387,7 +2391,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       };
 
       const requestRender = () => {
-        if (disposed || frameId !== null) return;
+        if (disposed || contextLost || frameId !== null) return;
         lastFrameTime = 0;
         frameId = window.requestAnimationFrame(renderFrame);
       };
@@ -2686,8 +2690,22 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         cardRoot = null;
       };
 
+      const releaseModelLoad = (load: ClearCardModelLoadResources, abort = false) => {
+        if (activePackLoad === load) activePackLoad = null;
+        if (activeCardLoad === load) activeCardLoad = null;
+        releaseClearCardModelLoadResources(load, abort);
+      };
+
+      const abortActivePackLoad = () => {
+        if (activePackLoad) releaseModelLoad(activePackLoad, true);
+      };
+
+      const abortActiveCardLoad = () => {
+        if (activeCardLoad) releaseModelLoad(activeCardLoad, true);
+      };
+
       const loadCardModel = (modelUrl: string | undefined, force = false) => {
-        if (disposed || !renderer) return;
+        if (disposed || !renderer || contextLost) return;
         if (!force && modelUrl && loadedCardModelUrl === modelUrl && cardReady) return;
         const loadDecision = clearCardModelLoadDecision({
           modelUrl,
@@ -2698,10 +2716,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         cardLoadGeneration += 1;
         const generation = cardLoadGeneration;
         activeCardModelUrl = modelUrl;
-        cardLoadingManager?.abort();
-        cardDracoLoader?.dispose();
-        cardLoadingManager = null;
-        cardDracoLoader = null;
+        abortActiveCardLoad();
         clearLoadedCard();
         loadedCardModelUrl = undefined;
         cardReady = false;
@@ -2720,15 +2735,22 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           requestRender();
           return;
         }
-        cardLoadingManager = new THREE.LoadingManager();
-        cardDracoLoader = new DRACOLoader(cardLoadingManager);
-        cardDracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-        cardDracoLoader.setWorkerLimit(1);
-        const loader = new GLTFLoader(cardLoadingManager);
-        loader.setDRACOLoader(cardDracoLoader);
+        const loadingManager = new THREE.LoadingManager();
+        const dracoLoader = new DRACOLoader(loadingManager);
+        const load: ClearCardModelLoadResources = {
+          loadingManager,
+          dracoLoader,
+          abortRequested: false,
+        };
+        activeCardLoad = load;
+        dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+        dracoLoader.setWorkerLimit(1);
+        const loader = new GLTFLoader(loadingManager);
+        loader.setDRACOLoader(dracoLoader);
 
         void loader.loadAsync(modelUrl)
           .then((cardGltf) => {
+            releaseModelLoad(load);
             if (disposed || generation !== cardLoadGeneration) {
               disposeObject3D(cardGltf.scene);
               return;
@@ -2750,7 +2772,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
               fitCamera();
               cardReady = false;
             }
-            releaseObjectGeometryCpuBuffersAfterUpload(cardRoot);
+            releaseObjectGeometryCpuBuffersAfterUpload(cardRoot, { immutable: true });
             if (!prewarmCardModel()) {
               throw new Error('The clear-card model could not be prewarmed.');
             }
@@ -2774,10 +2796,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             updateViewerStatus();
           })
           .finally(() => {
-            if (generation !== cardLoadGeneration) return;
-            cardDracoLoader?.dispose();
-            cardDracoLoader = null;
-            cardLoadingManager = null;
+            releaseModelLoad(load);
           });
       };
 
@@ -2827,7 +2846,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         };
 
         syncRendererSize = () => {
-          if (disposed || !renderer) return;
+          if (disposed || !renderer || contextLost) return;
           const canvasWidth = Math.max(1, canvas.clientWidth);
           const canvasHeight = Math.max(1, canvas.clientHeight);
           const renderSize = resolveClearCardRenderSize(
@@ -2879,30 +2898,23 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           if (disposed) return;
           cancelUnrestrictedDrag();
           contextLost = true;
-          rendererRecoveryFailed = false;
+          cardLoadGeneration += 1;
+          abortActivePackLoad();
+          abortActiveCardLoad();
+          stopDisplayCadenceCalibration();
+          if (frameId !== null) {
+            window.cancelAnimationFrame(frameId);
+            frameId = null;
+          }
+          if (environmentUpdateTimer !== null) {
+            window.clearTimeout(environmentUpdateTimer);
+            environmentUpdateTimer = null;
+          }
+          pendingEnvironmentConfig = null;
           viewerReadyRef.current = false;
           onStatusChange('error');
         };
-        handleContextRestored = () => {
-          if (disposed) return;
-          contextLost = false;
-          rendererRecoveryFailed = false;
-          shardTransmissionWarmed = false;
-          try {
-            applyLightingConfiguration(lightingConfigRef.current, true);
-          } catch (error) {
-            console.error('[mons] failed to restore the clear-card environment', error);
-            rendererRecoveryFailed = true;
-            viewerReadyRef.current = false;
-            onStatusChange('error');
-            return;
-          }
-          if (activeCardModelUrl) loadCardModel(activeCardModelUrl, true);
-          updateViewerStatus();
-          requestRender();
-        };
         canvas.addEventListener('webglcontextlost', handleContextLost);
-        canvas.addEventListener('webglcontextrestored', handleContextRestored);
 
         motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
         handleMotionPreference = () => {
@@ -2940,16 +2952,23 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           return;
         }
 
-        packLoadingManager = new THREE.LoadingManager();
-        packDracoLoader = new DRACOLoader(packLoadingManager);
-        packDracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-        packDracoLoader.setWorkerLimit(1);
-        const packLoader = new GLTFLoader(packLoadingManager);
-        packLoader.setDRACOLoader(packDracoLoader);
+        const loadingManager = new THREE.LoadingManager();
+        const dracoLoader = new DRACOLoader(loadingManager);
+        const load: ClearCardModelLoadResources = {
+          loadingManager,
+          dracoLoader,
+          abortRequested: false,
+        };
+        activePackLoad = load;
+        dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+        dracoLoader.setWorkerLimit(1);
+        const packLoader = new GLTFLoader(loadingManager);
+        packLoader.setDRACOLoader(dracoLoader);
 
         void packLoader.loadAsync(packModelUrl)
           .then((packGltf) => {
-            if (disposed) {
+            releaseModelLoad(load);
+            if (disposed || contextLost) {
               disposeObject3D(packGltf.scene);
               return;
             }
@@ -2991,16 +3010,14 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
             loadCardModel(cardModelUrlRef.current);
           })
           .catch((error: unknown) => {
-            if (disposed) return;
+            if (disposed || contextLost) return;
             packReady = false;
             packLoadFailed = true;
             console.error('[mons] failed to load the clear-card pack model', error);
             updateViewerStatus();
           })
           .finally(() => {
-            packDracoLoader?.dispose();
-            packDracoLoader = null;
-            packLoadingManager = null;
+            releaseModelLoad(load);
           });
       };
 
@@ -3024,8 +3041,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         retryCardModelRef.current = null;
         captureSnapshotRef.current = null;
         cardLoadGeneration += 1;
-        packLoadingManager?.abort();
-        cardLoadingManager?.abort();
+        abortActivePackLoad();
+        abortActiveCardLoad();
         if (initializationFrameId !== null) {
           window.cancelAnimationFrame(initializationFrameId);
         }
@@ -3039,9 +3056,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         if (handleContextLost) {
           canvas.removeEventListener('webglcontextlost', handleContextLost);
         }
-        if (handleContextRestored) {
-          canvas.removeEventListener('webglcontextrestored', handleContextRestored);
-        }
         if (resize) window.removeEventListener('resize', resize);
         resizeObserver?.disconnect();
         syncRendererSize = null;
@@ -3051,10 +3065,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           environmentUpdateTimer = null;
         }
         pendingEnvironmentConfig = null;
-        packDracoLoader?.dispose();
-        packDracoLoader = null;
-        cardDracoLoader?.dispose();
-        cardDracoLoader = null;
         environmentRenderTarget?.dispose();
         environmentRenderTarget = null;
         disposeObject3D(scene);
