@@ -304,7 +304,7 @@ export default function LittleSwagBoxesWipApp() {
       onPointerUpCapture={handleBackdropPointerUp}
     >
       <div
-        className={`reveal-overlay reveal-overlay--${
+        className={`reveal-overlay little-swag-boxes-wip reveal-overlay--${
           showRevealOutcome ? 'revealed' : 'ready'
         } reveal-overlay--active`}
         style={overlayStyle}
@@ -330,13 +330,16 @@ export default function LittleSwagBoxesWipApp() {
               const angle = -Math.PI / 2 + (index * Math.PI * 2) / revealItems.length;
               const left = 50 + Math.cos(angle) * 28;
               const top = 50 + Math.sin(angle) * 28;
+              const finalTop = index === 0
+                ? `${top}%`
+                : `calc(${top}% + var(--reveal-media-size))`;
               return (
                 <div
                   key={`${resetKey}:${figureId}:${index}`}
                   className="reveal-overlay__media-item"
                   style={{
                     left: showRevealOutcome ? `${left}%` : '50%',
-                    top: showRevealOutcome ? `${top}%` : '50%',
+                    top: showRevealOutcome ? finalTop : '50%',
                     ['--reveal-media-delay' as never]: `${index * 70}ms`,
                   }}
                 >
@@ -374,6 +377,14 @@ export default function LittleSwagBoxesWipApp() {
                 </div>
               );
             })}
+          </div>
+          <div
+            className={`little-swag-boxes-wip__wordmark-stage${
+              showRevealOutcome ? ' little-swag-boxes-wip__wordmark-stage--visible' : ''
+            }`}
+            aria-hidden="true"
+          >
+            <span className="little-swag-boxes-wip__wordmark">MONS.SHOP</span>
           </div>
           <button
             ref={revealButtonRef}

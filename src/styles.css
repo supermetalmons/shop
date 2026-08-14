@@ -2857,6 +2857,66 @@ button.no-focus-style:focus-visible {
   transform: translate3d(0, calc(4% + var(--reveal-media-shift-y, 0px)), 0);
 }
 
+.little-swag-boxes-wip__wordmark-stage {
+  position: absolute;
+  left: 50%;
+  top: calc(40% + min(10.35vw, 18.9svh));
+  z-index: 4;
+  width: 66.666vw;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-50%, 130%, 0) scale(0.12);
+  transform-origin: 50% 100%;
+  will-change: transform, opacity;
+}
+
+.little-swag-boxes-wip__wordmark-stage--visible {
+  animation: little-swag-boxes-wordmark-pop 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.little-swag-boxes-wip__wordmark {
+  display: block;
+  width: 100%;
+  color: #f8f9ff;
+  font-size: min(11.5vw, 21svh);
+  font-weight: 900;
+  line-height: 0.84;
+  letter-spacing: -0.04em;
+  text-align: center;
+  white-space: nowrap;
+  background: linear-gradient(
+    112deg,
+    #8a9099 0%,
+    #ffffff 18%,
+    #c4c8cf 38%,
+    #ffffff 52%,
+    #9ba1aa 72%,
+    #f8f9ff 88%,
+    #b3b8c0 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter:
+    drop-shadow(0 4px 7px rgba(0, 0, 0, 0.62))
+    drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
+}
+
+@keyframes little-swag-boxes-wordmark-pop {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, 130%, 0) scale(0.12);
+  }
+  62% {
+    opacity: 1;
+    transform: translate3d(-50%, -56%, 0) scale(1.045);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(-50%, -50%, 0) scale(1);
+  }
+}
+
 .reveal-overlay--closing .reveal-overlay__media {
   opacity: 0;
 }
@@ -2956,6 +3016,10 @@ button.no-focus-style:focus-visible {
 
 .reveal-overlay__box[aria-disabled='true'] {
   cursor: default;
+}
+
+.little-swag-boxes-wip .reveal-overlay__box[aria-disabled='true'] {
+  cursor: pointer;
 }
 
 .reveal-overlay__box:hover,
@@ -3793,6 +3857,10 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   }
 
   .reveal-overlay__media-float {
+    animation-duration: 1ms;
+  }
+
+  .little-swag-boxes-wip__wordmark-stage--visible {
     animation-duration: 1ms;
   }
 
