@@ -1997,12 +1997,6 @@ header.top--shop.top--spacer {
   aspect-ratio: var(--drops-panel-image-aspect-ratio);
 }
 
-.drops-panel__tile--clear_cards .drops-panel__image-frame {
-  width: auto;
-  height: var(--drops-panel-active-image-max-height);
-  max-width: var(--drops-panel-active-image-max-width);
-}
-
 .drops-panel__image {
   display: block;
   width: auto;

@@ -7597,7 +7597,7 @@ function App({
             maxSupply={1}
             maxPerTx={1}
             terminalAction={{
-              statusText: 'Soon',
+              statusText: upcomingDropRoute.statusText || 'Soon',
               buttonText: 'Notify Me',
               onClick: handleOpenNotify,
             }}

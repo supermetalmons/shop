@@ -233,6 +233,7 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
 
 export function DropsPanel() {
   const clearCards = resolveUpcomingTileSource('clear_cards', 'Clear Cards');
+  const tbd = resolveUpcomingTileSource('tbd', 'TBD');
   const littleSwagHoodies = resolveUpcomingTileSource('little_swag_hoodies', 'Little Swag Hoodies');
   const cardNft2 = resolveUpcomingTileSource('card_nft_2', 'Card NFT 2');
   const drifellaShirt = resolveUpcomingTileSource('drifella_shirt', 'Drifella Shirt');
@@ -240,23 +241,40 @@ export function DropsPanel() {
 
   const items: DropPanelItem[] = [
     {
+      key: 'tbd',
+      size: 'half',
+      image: tbd.image,
+      imageDimensions: tbd.imageDimensions,
+      alt: tbd.alt,
+      title: tbd.title,
+      path: tbd.path,
+      imageMaxWidth: '78%',
+      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
+      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
+      imageScale: 1,
+      compactImageScale: 1,
+      imageGap: 'clamp(26px, 3cqw, 34px)',
+      compactImageGap: 'clamp(10px, 3cqw, 16px)',
+      imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+    },
+    {
       key: 'clear_cards',
-      size: 'full',
+      size: 'half',
       image: clearCards.image,
       imageDimensions: clearCards.imageDimensions,
       alt: clearCards.alt,
       title: clearCards.title,
       path: clearCards.path,
-      imageMaxWidth: '72%',
-      imageMaxHeight: 'clamp(247px, 32.7cqw, 327px)',
-      compactImageMaxWidth: '74%',
-      compactImageMaxHeight: 'clamp(184px, 54.5cqw, 260px)',
+      imageMaxWidth: '78%',
+      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
+      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
       imageScale: 1,
       compactImageScale: 1,
-      imageGap: 'clamp(24px, 3cqw, 34px)',
+      imageGap: 'clamp(26px, 3cqw, 34px)',
       compactImageGap: 'clamp(10px, 3cqw, 16px)',
       imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
-      compactImageBottomSpace: 'clamp(12px, 3.4cqw, 18px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
     {
       key: 'card_nft_2',

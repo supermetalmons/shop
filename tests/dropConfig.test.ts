@@ -36,6 +36,17 @@ const UPCOMING_ROUTES = [
     boxNamePrefix: 'card',
   },
   {
+    path: '/tbd',
+    dropFamily: 'tbd',
+    solanaCluster: 'mainnet-beta',
+    label: 'TBD',
+    title: 'TBD',
+    previewImageUrl: '/tbd.webp',
+    previewAspectRatio: 1122 / 1286,
+    boxNamePrefix: 'drop',
+    statusText: 'Fall 2026',
+  },
+  {
     path: '/card_nft_binder',
     dropFamily: 'card_nft_binder',
     solanaCluster: 'mainnet-beta',
@@ -145,7 +156,7 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
 });
 
 test('drop family names normalize and default from IDs across registry contracts', () => {
-  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards'] as const) {
+  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd'] as const) {
     assert.equal(defaultFrontendDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(undefined, ` ${family.toUpperCase()} `), family);

@@ -35,6 +35,7 @@ export type UpcomingDropRouteConfig = {
   previewImageUrl?: string;
   previewAspectRatio?: number;
   boxNamePrefix?: string;
+  statusText?: string;
 };
 
 export const LEGACY_DROP_ROUTE_ALIASES = {
@@ -54,6 +55,17 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     previewImageUrl: CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
     previewAspectRatio: CLEAR_CARDS_PACK_PREVIEW_ASPECT_RATIO,
     boxNamePrefix: 'card',
+  },
+  {
+    path: '/tbd',
+    dropFamily: 'tbd',
+    solanaCluster: 'mainnet-beta',
+    label: 'TBD',
+    title: 'TBD',
+    previewImageUrl: '/tbd.webp',
+    previewAspectRatio: 1122 / 1286,
+    boxNamePrefix: 'drop',
+    statusText: 'Fall 2026',
   },
   {
     path: '/card_nft_2',
